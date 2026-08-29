@@ -542,7 +542,7 @@ describe("SearchRunView - artifact target (workspace.searchText)", () => {
     const opened = state.openTileIntoTargetGroup.mock.calls.at(0)?.[0];
     expect(opened?.ref.id).toBe("art-1");
     expect(opened?.ref.type).toBe("ticket");
-    expect(opened?.ref.name).toBe("Known");
+    expect(opened === undefined ? null : opened.ref.name).toBe("Known");
     expect(opened?.groupId).toBe("group-1");
     // Authoritative artifact open - NOT a workspace-file reveal of the mirror.
     expect(state.setReveal).not.toHaveBeenCalled();

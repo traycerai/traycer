@@ -123,6 +123,8 @@ function registerChatSession(): ChatSessionStoreHandle {
         streamClientFactory: () => ({
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => undefined,
         }),
       }),

@@ -2,6 +2,19 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-tile-xterm";
 import { __disposeAllXtermHostsForTests } from "@/components/epic-canvas/renderers/xterm-host-registry";
+import { BrowserLinkRoutingProvider } from "@/lib/browser-view/link-routing/browser-link-routing";
+import {
+  BrowserSessionsContext,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  isBrowserSessionTileRef,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { isMac } from "@/lib/keybindings/platform";
 
 type LinkActivate = (event: MouseEvent, uri: string) => void;
@@ -20,11 +33,23 @@ type MockTerminalInstance = {
   readonly scrollToBottom: Mock;
 };
 
+const VIEW_TAB_ID = "terminal-view-tab";
+const SOURCE_TILE: EpicCanvasTileRef = {
+  id: "terminal-source-ticket",
+  instanceId: "terminal-source-ticket-instance",
+  type: "ticket",
+  name: "Ticket",
+  hostId: "host-terminal",
+};
+
 const xtermMocks = vi.hoisted(() => ({
   terminals: [] as MockTerminalInstance[],
   customKeyHandlers: [] as Array<(event: KeyboardEvent) => boolean>,
   webLinksHandlers: [] as LinkActivate[],
   openExternalLink: vi.fn(() => Promise.resolve()),
+  openTab: vi.fn<BrowserSessionsState["openTab"]>(() =>
+    Promise.resolve({ sessionId: "session-terminal", tabId: "tab-terminal" }),
+  ),
 }));
 
 // Platform-dependent keyboard behavior (plain Home/End scroll history on macOS
@@ -171,6 +196,64 @@ function renderHost(): void {
   );
 }
 
+function renderHostWithBrowserRouting(): void {
+  const canvas = createSingleTileCanvas(SOURCE_TILE);
+  const pane = collectPanes(canvas.root).at(0);
+  if (pane === undefined) throw new Error("expected source pane");
+  useEpicCanvasStore.setState({
+    tabsById: {
+      [VIEW_TAB_ID]: {
+        tabId: VIEW_TAB_ID,
+        epicId: "epic-terminal",
+        name: "Terminal",
+      },
+    },
+    canvasByTabId: {
+      [VIEW_TAB_ID]: canvas,
+    },
+  });
+  render(
+    <BrowserSessionsContext.Provider
+      value={{
+        hostId: SOURCE_TILE.hostId,
+        lifecycle: "live",
+        inventoryReady: true,
+        items: [],
+        errorMessage: null,
+        retry: () => undefined,
+        openTab: xtermMocks.openTab,
+        closeTab: () => Promise.resolve(),
+      }}
+    >
+      <BrowserLinkRoutingProvider
+        source={{
+          viewTabId: VIEW_TAB_ID,
+          paneId: pane.id,
+          hostId: SOURCE_TILE.hostId,
+        }}
+      >
+        <TerminalXtermHost
+          hostId={SOURCE_TILE.hostId}
+          sessionId="test-session"
+          tileKind="terminal"
+          instanceId="test-instance"
+          effectiveCols={80}
+          effectiveRows={24}
+          onUserInput={vi.fn()}
+          onContainerResize={vi.fn()}
+          onWriterReady={vi.fn()}
+          onTerminalReady={null}
+          shouldFocusOnActivePane={false}
+          registerImperativeFocus
+          findTargetId={null}
+          keepAlive={false}
+          chrome="padded"
+        />
+      </BrowserLinkRoutingProvider>
+    </BrowserSessionsContext.Provider>,
+  );
+}
+
 describe("<TerminalXtermHost /> link handling", () => {
   afterEach(() => {
     platformMock.isMac = false;
@@ -180,6 +263,14 @@ describe("<TerminalXtermHost /> link handling", () => {
     xtermMocks.customKeyHandlers.length = 0;
     xtermMocks.webLinksHandlers.length = 0;
     xtermMocks.openExternalLink.mockClear();
+    xtermMocks.openTab.mockClear();
+    useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
+    useSettingsStore.setState({
+      browserLinkDefaultMode: "in-app",
+      terminalBrowserLinkOpenMode: "in-app",
+      markdownBrowserLinkOpenMode: "in-app",
+      browserDevOrigins: [],
+    });
   });
 
   // OSC 8 hyperlinks (e.g. Codex's OAuth sign-in URL) flow through xterm's
@@ -223,6 +314,43 @@ describe("<TerminalXtermHost /> link handling", () => {
     expect(xtermMocks.openExternalLink).toHaveBeenCalledWith(
       "https://example.test/plain",
     );
+  });
+
+  it("opens plain-text URLs through the host and places its session pointer", async () => {
+    renderHostWithBrowserRouting();
+
+    await waitFor(() => {
+      expect(xtermMocks.webLinksHandlers[0]).toBeDefined();
+    });
+
+    xtermMocks.webLinksHandlers[0](
+      new MouseEvent("click"),
+      "http://localhost:5173/plain",
+    );
+
+    expect(xtermMocks.openTab).toHaveBeenCalledWith(
+      null,
+      "http://localhost:5173/plain",
+    );
+    expect(xtermMocks.openExternalLink).not.toHaveBeenCalled();
+    await waitFor(() => {
+      const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+      expect(
+        Object.values(canvas?.tilesByInstanceId ?? {}).filter(
+          (tile) => tile !== undefined && isBrowserSessionTileRef(tile),
+        ),
+      ).toMatchObject([
+        {
+          type: "browser-session",
+          hostId: SOURCE_TILE.hostId,
+          sessionId: "session-terminal",
+          tabId: "tab-terminal",
+        },
+      ]);
+    });
+    expect(useSettingsStore.getState().browserDevOrigins).toEqual([
+      "http://localhost:5173",
+    ]);
   });
 
   it("scrolls terminal history instead of sending Page Up and Page Down to the PTY", async () => {

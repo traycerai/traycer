@@ -10,6 +10,7 @@ import {
 } from "../framework/ws-protocol";
 import type { SchemaVersion } from "../framework/versioned-rpc-types";
 import {
+  holdersRevisionWireFieldSchema,
   worktreeBusyHoldersWireFieldSchema,
   type WorktreeBusyHolder,
 } from "../framework/worktree-busy-holders";
@@ -329,6 +330,7 @@ export interface WireRpcErrorDetails {
   readonly code: string;
   readonly message: string;
   readonly holders?: readonly WorktreeBusyHolder[];
+  readonly holdersRevision?: string;
 }
 
 export interface UnaryResponsePayload {
@@ -411,6 +413,7 @@ export const unaryResponsePayloadSchema: z.ZodType<UnaryResponsePayload> =
         code: z.string(),
         message: z.string(),
         holders: worktreeBusyHoldersWireFieldSchema,
+        holdersRevision: holdersRevisionWireFieldSchema,
       })
       .nullable(),
   });

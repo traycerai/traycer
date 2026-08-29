@@ -362,6 +362,37 @@ describe("<ToolSegment /> input rendering", () => {
     cleanup();
   });
 
+  it("renders the Traycer browser REPL as browser activity", () => {
+    const view = render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="browser-repl-1"
+        toolName="mcp__browser__repl"
+        {...inputProps("mcp__browser__repl", {
+          title: "Inspect checkout",
+          code: "await page.snapshot()",
+        })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("Browser")).toBeTruthy();
+    expect(screen.getByText("Inspect checkout")).toBeTruthy();
+    expect(view.container.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByText("mcp__browser__repl")).toBeNull();
+  });
+
   it("expands a grep call into a reconstructed command, not JSON", () => {
     render(
       <ToolSegment

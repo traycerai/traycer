@@ -177,6 +177,7 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -226,6 +227,7 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
@@ -273,6 +275,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
+      { panelIds: ["browsers"] },
     ]);
   });
 
@@ -517,6 +520,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
+      { panelIds: ["browsers"] },
     ]);
 
     applyPanelGroupMove("comments", "chats", "after");
@@ -529,6 +533,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
+      { panelIds: ["browsers"] },
     ]);
   });
 
@@ -543,6 +548,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
+      { panelIds: ["browsers"] },
     ]);
   });
 
@@ -560,6 +566,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
+      { panelIds: ["browsers"] },
     ]);
     expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
       "artifacts",
@@ -589,6 +596,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["pull-requests"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["sharing"] },
     ]);
   });
@@ -613,6 +621,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["file-tree"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["sharing"] },
     ]);
   });
@@ -629,6 +638,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts", "chats"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -650,6 +660,7 @@ describe("useLeftPanelStore", () => {
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -683,6 +694,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
@@ -703,6 +715,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -720,6 +733,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -741,6 +755,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -758,6 +773,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["artifacts"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -776,6 +792,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["comments", "artifacts"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
@@ -846,6 +863,7 @@ describe("useLeftPanelStore", () => {
 
     expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
       ...PRE_PULL_REQUESTS_PANEL_GROUPS,
+      { panelIds: ["browsers"] },
       { panelIds: ["pull-requests"] },
     ]);
   });
@@ -862,6 +880,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
+      { panelIds: ["browsers"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
       { panelIds: ["pull-requests"] },

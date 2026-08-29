@@ -12,6 +12,7 @@ vi.mock("@/components/chat/chat-progress-icon", () => ({
   ChatProgressIcon: () => <span data-testid="chat-progress-icon" />,
 }));
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -35,7 +36,14 @@ import {
   installManagedCommandChatSession,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import {
+  BrowserSessionsContext,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 
 interface CapturedDraggableInput {
   readonly id: string;
@@ -50,11 +58,13 @@ interface CapturedDroppableInput {
 interface TabStripTestState {
   draggableInputs: CapturedDraggableInput[];
   droppableInputs: CapturedDroppableInput[];
+  isDragging: boolean;
 }
 
 const testState = vi.hoisted((): TabStripTestState => ({
   draggableInputs: [],
   droppableInputs: [],
+  isDragging: false,
 }));
 
 interface TerminalAuthorityTestState {
@@ -97,7 +107,7 @@ vi.mock("@dnd-kit/core", () => ({
     return {
       setNodeRef: () => undefined,
       listeners: undefined,
-      isDragging: false,
+      isDragging: testState.isDragging,
     };
   },
   useDroppable: (input: CapturedDroppableInput) => {
@@ -108,11 +118,13 @@ vi.mock("@dnd-kit/core", () => ({
   },
 }));
 
-vi.mock("@/lib/epic-selectors", () => ({
-  useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
-  useEpicLiveArtifactTitleGenerating: () => false,
-  useRegisteredEpicNodeArchived: () => false,
-}));
+vi.mock("@/lib/epic-selectors", () => {
+  return {
+    useEpicTabDisplayTitle: (node: EpicCanvasTileRef) => node.name,
+    useEpicLiveArtifactTitleGenerating: () => false,
+    useRegisteredEpicNodeArchived: () => false,
+  };
+});
 
 // TabItem resolves the tab's bound-host client for terminal renames; these
 // tests render outside a <HostRuntimeProvider>, so stub the host seam.
@@ -190,6 +202,21 @@ function createQueryClient(): QueryClient {
   });
 }
 
+function browserSessionsState(
+  items: readonly BrowserSessionInfo[],
+): BrowserSessionsState {
+  return {
+    hostId: "host-A",
+    lifecycle: "live",
+    inventoryReady: true,
+    items,
+    errorMessage: null,
+    retry: () => undefined,
+    openTab: () => Promise.reject(new Error("not used")),
+    closeTab: () => Promise.resolve(),
+  };
+}
+
 // TabItem reads its active/preview/globally-active state from the canvas store
 // (via `useTabActivation`), not from props, so seed a tab whose lone group has
 // `TAB` as the active + preview tab.
@@ -229,7 +256,7 @@ function renderTabStrip(input: {
     | ((groupId: string, direction: SplitDirection) => void)
     | undefined;
 }) {
-  renderTabStripForTab(TAB, input);
+  renderTabStripForTab(TAB, input, []);
 }
 
 function renderTabStripForTab(
@@ -244,6 +271,7 @@ function renderTabStripForTab(
       | ((groupId: string, direction: SplitDirection) => void)
       | undefined;
   },
+  browserSessions: readonly BrowserSessionInfo[],
 ) {
   seedActivePreviewTab(tab);
   if (input.inactive === true) {
@@ -269,35 +297,39 @@ function renderTabStripForTab(
   const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
   render(
     <QueryClientProvider client={queryClient}>
-      <NotificationConsumptionContext.Provider
-        value={consumeNotificationEntity}
+      <BrowserSessionsContext.Provider
+        value={browserSessionsState(browserSessions)}
       >
-        <TooltipProvider delayDuration={0}>
-          <TabStrip
-            epicId="epic-1"
-            tabId={VIEW_TAB_ID}
-            groupId="group-1"
-            tabs={[tab]}
-            activeTabId={tab.instanceId}
-            onSelectTab={() => undefined}
-            onCloseTab={input.onClose}
-            onPromotePreview={input.onPromotePreview}
-            onSplit={onSplit}
-            onCloseGroup={() => undefined}
-            onOpenBlankTab={input.onOpenBlankTab}
-            canRenameTabs
-            menuHandlers={{
-              onClose: input.onMenuClose ?? (() => undefined),
-              onCloseOthers: () => undefined,
-              onCloseRight: () => undefined,
-              onCloseAll: () => undefined,
-              onSplit: () => undefined,
-              onRevealInSidebar: () => undefined,
-              onRename: () => undefined,
-            }}
-          />
-        </TooltipProvider>
-      </NotificationConsumptionContext.Provider>
+        <NotificationConsumptionContext.Provider
+          value={consumeNotificationEntity}
+        >
+          <TooltipProvider delayDuration={0}>
+            <TabStrip
+              epicId="epic-1"
+              tabId={VIEW_TAB_ID}
+              groupId="group-1"
+              tabs={[tab]}
+              activeTabId={tab.instanceId}
+              onSelectTab={() => undefined}
+              onCloseTab={input.onClose}
+              onPromotePreview={input.onPromotePreview}
+              onSplit={onSplit}
+              onCloseGroup={() => undefined}
+              onOpenBlankTab={input.onOpenBlankTab}
+              canRenameTabs
+              menuHandlers={{
+                onClose: input.onMenuClose ?? (() => undefined),
+                onCloseOthers: () => undefined,
+                onCloseRight: () => undefined,
+                onCloseAll: () => undefined,
+                onSplit: () => undefined,
+                onRevealInSidebar: () => undefined,
+                onRename: () => undefined,
+              }}
+            />
+          </TooltipProvider>
+        </NotificationConsumptionContext.Provider>
+      </BrowserSessionsContext.Provider>
     </QueryClientProvider>,
   );
 }
@@ -308,6 +340,7 @@ describe("<TabStrip />", () => {
     vi.unstubAllGlobals();
     testState.draggableInputs = [];
     testState.droppableInputs = [];
+    testState.isDragging = false;
     terminalAuthorityState.capability = "legacy";
     terminalAuthorityState.canMutate = false;
     terminalAuthorityState.viewModel = null;
@@ -315,6 +348,106 @@ describe("<TabStrip />", () => {
     terminalAuthorityState.close.mockReset();
     consumeNotificationEntity.mockReset();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useEpicDndStore.setState(useEpicDndStore.getInitialState(), true);
+  });
+
+  it("shows the insertion separator when returning a tile to its own strip", () => {
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    act(() => {
+      useEpicDndStore.getState().canvasDragStarted(
+        {
+          kind: "artifact-tab",
+          epicId: "epic-1",
+          viewTabId: VIEW_TAB_ID,
+          sourceGroupId: "group-1",
+          tabId: TAB.instanceId,
+          isPreview: false,
+        },
+        TAB,
+      );
+      useEpicDndStore.getState().dropPreviewChanged({
+        kind: "artifact-tab-strip",
+        groupId: "group-1",
+        index: 0,
+      });
+    });
+
+    expect(screen.getByTestId("tab-strip-drop-indicator")).toBeTruthy();
+  });
+
+  it("retains a dimmed source tab in its strip while dragging", () => {
+    testState.isDragging = true;
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    const frame = screen
+      .getByTestId(`tab-item-${TAB.instanceId}`)
+      .closest("[data-tile-item-id]");
+    expect(frame).not.toBeNull();
+    expect((frame as HTMLElement).style.opacity).toBe("0.36");
+  });
+
+  it("uses the live browser tab title, URL, and favicon", () => {
+    const browserTab: EpicCanvasTileRef = {
+      id: "browser-session:session-1:browser-tab-1",
+      instanceId: "browser-instance-1",
+      type: "browser-session",
+      name: "Browser",
+      hostId: "host-A",
+      sessionId: "session-1",
+      tabId: "browser-tab-1",
+      viewportPreset: "responsive",
+    };
+    renderTabStripForTab(
+      browserTab,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: () => undefined,
+      },
+      [
+        {
+          sessionId: "session-1",
+          epicId: "epic-1",
+          hostId: "host-A",
+          profile: "primary",
+          lastActivityAt: 2,
+          runtime: { kind: "electron", revision: 0 },
+          tabs: [
+            {
+              tabId: "browser-tab-1",
+              url: "https://thepier5.com/",
+              originTier: "external",
+              status: "ready",
+              title: "Waterfront Hotel in Baltimore | Pier 5 Hotel",
+              viewed: true,
+              drivenBy: [],
+            },
+          ],
+        },
+      ],
+    );
+
+    const tab = screen.getByRole("tab", {
+      name: /Waterfront Hotel in Baltimore \| Pier 5 Hotel/,
+    });
+    expect(
+      tooltipTextFor(screen.getByTestId("tab-title-browser-instance-1")),
+    ).toContain("https://thepier5.com/");
+    expect(tab.querySelector("img")?.getAttribute("src")).toBe(
+      "https://thepier5.com/favicon.ico",
+    );
   });
 
   it("renders preview tabs with an overlaid close button that does not reserve flex space", () => {
@@ -354,12 +487,16 @@ describe("<TabStrip />", () => {
   });
 
   it("marks the clicked active chat tab's host-qualified notifications read", () => {
-    renderTabStripForTab(CHAT_TAB, {
-      onClose: () => undefined,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      CHAT_TAB,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     fireEvent.click(screen.getByRole("tab", { name: /Agent chat/ }));
 
@@ -370,13 +507,17 @@ describe("<TabStrip />", () => {
   });
 
   it("marks an inactive chat tab's notifications read when selecting it", () => {
-    renderTabStripForTab(CHAT_TAB, {
-      inactive: true,
-      onClose: () => undefined,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      CHAT_TAB,
+      {
+        inactive: true,
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     fireEvent.click(screen.getByRole("tab", { name: /Agent chat/ }));
 
@@ -406,12 +547,16 @@ describe("<TabStrip />", () => {
   });
 
   it("does not offer the file-path action for non-file tabs", () => {
-    renderTabStripForTab(ARTIFACT_TAB, {
-      onClose: () => undefined,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      ARTIFACT_TAB,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     fireEvent.contextMenu(
       screen.getByTestId(`tab-item-${ARTIFACT_TAB.instanceId}`),
@@ -453,12 +598,16 @@ describe("<TabStrip />", () => {
           .getState()
           .closeCanvasTab(VIEW_TAB_ID, groupId, instanceId);
       });
-      renderTabStripForTab(TERMINAL_TAB, {
-        onClose,
-        onPromotePreview: () => undefined,
-        onOpenBlankTab: () => undefined,
-        onSplit: undefined,
-      });
+      renderTabStripForTab(
+        TERMINAL_TAB,
+        {
+          onClose,
+          onPromotePreview: () => undefined,
+          onOpenBlankTab: () => undefined,
+          onSplit: undefined,
+        },
+        [],
+      );
 
       expect(
         screen.getByTestId(`tab-title-${TERMINAL_TAB.instanceId}`).textContent,
@@ -484,12 +633,16 @@ describe("<TabStrip />", () => {
       activeProcessName: "bun",
       liveCwd: "/repo/live",
     };
-    renderTabStripForTab(TERMINAL_TAB, {
-      onClose: () => undefined,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      TERMINAL_TAB,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     fireEvent.contextMenu(
       screen.getByTestId(`tab-item-${TERMINAL_TAB.instanceId}`),
@@ -511,12 +664,16 @@ describe("<TabStrip />", () => {
         .getState()
         .closeCanvasTab(VIEW_TAB_ID, groupId, instanceId);
     });
-    renderTabStripForTab(TERMINAL_TAB, {
-      onClose,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      TERMINAL_TAB,
+      {
+        onClose,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     fireEvent(
       screen.getByTestId(`tab-item-${TERMINAL_TAB.instanceId}`),
@@ -572,12 +729,16 @@ describe("<TabStrip />", () => {
           .getState()
           .closeCanvasTab(VIEW_TAB_ID, groupId, instanceId);
       });
-      renderTabStripForTab(tab, {
-        onClose,
-        onPromotePreview: () => undefined,
-        onOpenBlankTab: () => undefined,
-        onSplit: undefined,
-      });
+      renderTabStripForTab(
+        tab,
+        {
+          onClose,
+          onPromotePreview: () => undefined,
+          onOpenBlankTab: () => undefined,
+          onSplit: undefined,
+        },
+        [],
+      );
 
       fireEvent.click(
         screen.getByRole("button", { name: `Close ${tab.name}` }),
@@ -599,13 +760,17 @@ describe("<TabStrip />", () => {
         .getState()
         .closeCanvasTab(VIEW_TAB_ID, groupId, instanceId);
     });
-    renderTabStripForTab(TERMINAL_TAB, {
-      onClose: () => undefined,
-      onMenuClose,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      TERMINAL_TAB,
+      {
+        onClose: () => undefined,
+        onMenuClose,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     fireEvent.contextMenu(
       screen.getByTestId(`tab-item-${TERMINAL_TAB.instanceId}`),
@@ -765,12 +930,16 @@ describe("<TabStrip />", () => {
         repositoryLabel: "traycer",
       },
     });
-    renderTabStripForTab(gitTab, {
-      onClose: () => undefined,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      gitTab,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     const title = screen.getByTestId(`tab-title-${gitTab.instanceId}`);
     expect(title.textContent).toBe("traycer-internal › traycer · Changes");
@@ -839,12 +1008,16 @@ describe("<TabStrip /> shell output tabs", () => {
         }),
       ]);
     }
-    renderTabStripForTab(tab, {
-      onClose: () => undefined,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      tab,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
   }
 
   it("draws the shared shell glyph, following the live monitor flag", () => {
@@ -897,6 +1070,7 @@ describe("<TabStrip /> shell output tabs", () => {
         onOpenBlankTab: () => undefined,
         onSplit: undefined,
       },
+      [],
     );
 
     expect(document.querySelector("[data-monitor-icon='on']")).toBeNull();

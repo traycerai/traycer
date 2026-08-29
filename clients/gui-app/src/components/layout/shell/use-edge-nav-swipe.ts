@@ -25,11 +25,54 @@ const EDGE_ZONE_PX = 32;
 
 export type EdgeNavDirection = "back" | "forward";
 
+/**
+ * What activation leads to, answered by the owner of the gesture's effect.
+ *
+ * Three outcomes rather than a boolean, because "nothing will follow the
+ * finger" splits into two answers with OPPOSITE remedies: `instant` means this
+ * step cannot be animated but is still owed its navigation - the discrete step
+ * this gesture has always performed - while `decline` means the gesture must
+ * be consumed with NO navigation at all. Collapsing them into one `false`
+ * is how a swipe landing during a committed settle once fired a second,
+ * instant navigation under layers still showing the first.
+ */
+export type EdgeNavDragResponse = "follow" | "instant" | "decline";
+
+export interface EdgeNavSwipeRelease {
+  /** Inward travel when the pointer left, in px. */
+  readonly travelPx: number;
+  /** Speed along the inward axis at release, px per second, signed. */
+  readonly velocityPxPerS: number;
+  /**
+   * The system ended the gesture rather than the user - a call arriving, the
+   * notification shade, a palm on the glass. Nothing the pointer did on its way
+   * out was a choice, so none of it may be read as one.
+   */
+  readonly cancelled: boolean;
+}
+
 export interface EdgeNavSwipeHandlers {
   /**
-   * Called once, on the move that declares the drag a navigation swipe. The
-   * caller performs the navigation; nothing about the gesture survives past
-   * this call.
+   * Called once, on the move that declares the drag a navigation swipe, and
+   * answers what the rest of the pointer is spent on.
+   *
+   * `follow` keeps the pointer tracked to its release, and the drag becomes a
+   * continuous gesture reported through `onDragMove` / `onDragEnd`. `instant`
+   * says nothing can be shown travelling for this particular step, and the
+   * swipe falls back to `onNavigate` - a discrete step taken at this instant,
+   * which is the whole of what this gesture used to be. `decline` consumes
+   * the gesture outright: no follow, no step, nothing - the answer for a
+   * moment when a navigation is already in flight and a second one would
+   * land under it.
+   */
+  readonly onDragStart: (direction: EdgeNavDirection) => EdgeNavDragResponse;
+  /** Inward travel so far, on every move of a followed drag. */
+  readonly onDragMove: (travelPx: number) => void;
+  /** The release of a followed drag. Called exactly once per `follow` response. */
+  readonly onDragEnd: (release: EdgeNavSwipeRelease) => void;
+  /**
+   * The discrete step, for a swipe nothing can follow. The caller performs the
+   * navigation; nothing about the gesture survives past this call.
    */
   readonly onNavigate: (direction: EdgeNavDirection) => void;
   /**
@@ -48,6 +91,13 @@ interface EdgeNavSwipeTracking {
   readonly y: number;
   readonly at: number;
   readonly direction: EdgeNavDirection;
+  /** False until the classifier activates and something takes the drag. */
+  following: boolean;
+  /** Inward travel at the last move, in px. */
+  travelPx: number;
+  /** Timestamp of that move, for the speed the release is judged on. */
+  lastAt: number;
+  velocityPxPerS: number;
 }
 
 /**
@@ -73,9 +123,16 @@ interface EdgeNavSwipeTracking {
  * A pointer passes through two states. It is unclaimed until the motion
  * declares an axis (`classifyDirectionalIntent`), which is what lets a vertical
  * scroll that starts in a zone stay a scroll and a tap near the edge stay a
- * tap. Once it activates the classifier is never consulted again - the gesture
- * is over at that instant, since navigation is a discrete step rather than
- * something the finger drags.
+ * tap. Once it activates the classifier is never consulted again: the direction
+ * is locked, and a drag that curves downward afterwards is still this gesture's.
+ *
+ * What activation leads to is not fixed here. The navigation may be something
+ * the finger CARRIES - a screen travelling with it, released at a threshold -
+ * or a discrete step taken at the moment of activation, and which one it is
+ * depends on whether the app can put a destination on screen for this
+ * particular history entry. `onDragStart` answers that, so the recognizer
+ * neither knows nor needs to know what is being moved; it only reports travel
+ * and the release.
  *
  * Two surfaces are refused outright, both because the finger is already inside
  * a gesture of their own: anything that pans sideways
@@ -127,12 +184,35 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
     if (!isMobileApp()) return;
     let tracking: EdgeNavSwipeTracking | null = null;
 
+    /**
+     * Drops the tracked pointer, telling whatever is following the drag that it
+     * is over.
+     *
+     * TOTAL, by design: every path that stops tracking goes through here,
+     * including the ones that are not releases. A drag that is being followed
+     * has a surface travelling with it, and a path that merely forgot the
+     * pointer would leave that surface stranded on screen with nothing left to
+     * move it.
+     */
+    const stopTracking = (cancelled: boolean): void => {
+      const started = tracking;
+      tracking = null;
+      if (started === null) return;
+      if (!started.following) return;
+      handlersRef.current.onDragEnd({
+        travelPx: started.travelPx,
+        velocityPxPerS: started.velocityPxPerS,
+        cancelled,
+      });
+    };
+
     const handlePointerDown = (event: PointerEvent): void => {
       // A second pointer means a pinch or a two-finger pan; neither is a
       // navigation swipe, and the tracked pointer's coordinates stop describing
-      // the gesture as a whole.
+      // the gesture as a whole. A drag already under way did not choose to end
+      // here, so it ends the way the system ending it would.
       if (tracking !== null) {
-        tracking = null;
+        stopTracking(true);
         return;
       }
       if (!event.isPrimary) return;
@@ -147,6 +227,10 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
         y: event.clientY,
         at: event.timeStamp,
         direction,
+        following: false,
+        travelPx: 0,
+        lastAt: event.timeStamp,
+        velocityPxPerS: 0,
       };
     };
 
@@ -154,6 +238,32 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
       const started = tracking;
       if (started === null) return;
       if (event.pointerId !== started.pointerId) return;
+      // Travel along the swipe's own inward direction, so one classifier reads
+      // both edges and each is positive to itself.
+      const travelPx =
+        started.direction === "back"
+          ? event.clientX - started.x
+          : started.x - event.clientX;
+      if (started.following) {
+        // DIRECTION LOCK. Past activation the classifier is never consulted
+        // again and neither is the edge claim: the drag belongs to this gesture
+        // until the pointer leaves, and a surface arriving mid-flight cannot
+        // take a screen out from under a finger that is already carrying it.
+        //
+        // Speed is measured over the LAST move rather than averaged over the
+        // gesture, because a release is judged on what the hand was doing when
+        // it let go - a long slow drag finished with a flick is a flick, and an
+        // average would report it as the drag it mostly was.
+        const elapsedMs = event.timeStamp - started.lastAt;
+        if (elapsedMs > 0) {
+          started.velocityPxPerS =
+            ((travelPx - started.travelPx) / elapsedMs) * 1000;
+        }
+        started.travelPx = travelPx;
+        started.lastAt = event.timeStamp;
+        handlersRef.current.onDragMove(travelPx);
+        return;
+      }
       // Asked again on every undecided move, not only at pointer-down. A
       // blocking surface can arrive DURING the contact - a migration frame
       // lands, a dialog opens on a keystroke elsewhere - and the finger that
@@ -167,12 +277,6 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
         tracking = null;
         return;
       }
-      // Travel along the swipe's own inward direction, so one classifier reads
-      // both edges and each is positive to itself.
-      const travelPx =
-        started.direction === "back"
-          ? event.clientX - started.x
-          : started.x - event.clientX;
       const intent = classifyDirectionalIntent({
         primaryPx: travelPx,
         crossPx: event.clientY - started.y,
@@ -183,17 +287,66 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
         return;
       }
       if (intent === "wait") return;
-      // One navigation per pointer. The rest of the drag is nothing: the step
-      // has already happened, and a second one would take the user two
-      // surfaces back for a single swipe.
-      tracking = null;
-      handlersRef.current.onNavigate(started.direction);
+      // Activation asks what kind of gesture this can be, and the answer
+      // decides how the rest of the pointer is spent: followed to the release,
+      // spent on a discrete step here and now, or consumed with nothing owed.
+      const response = handlersRef.current.onDragStart(started.direction);
+      if (response !== "follow") {
+        tracking = null;
+        if (response === "instant") {
+          handlersRef.current.onNavigate(started.direction);
+        }
+        return;
+      }
+      started.following = true;
+      started.travelPx = travelPx;
+      started.lastAt = event.timeStamp;
+      // The ground covered reaching activation is the release's first speed
+      // sample. Without it, a flick fast enough to activate on its only move
+      // and release in place would be judged at zero velocity and spring back
+      // - the quicker the flick, the more likely nothing updates this again.
+      const elapsedMs = event.timeStamp - started.at;
+      if (elapsedMs > 0) {
+        started.velocityPxPerS = (travelPx / elapsedMs) * 1000;
+      }
+      handlersRef.current.onDragMove(travelPx);
     };
 
-    const endGesture = (event: PointerEvent): void => {
+    const handlePointerUp = (event: PointerEvent): void => {
+      const started = tracking;
+      if (started === null) return;
+      if (event.pointerId !== started.pointerId) return;
+      // The release is a sample too: a fast swipe covers real ground between
+      // the last delivered move and the up, and judging the release on the
+      // move's numbers alone can refuse a flick that crossed a threshold on
+      // its way out. The two halves of the sample have different guards.
+      // TRAVEL is taken whenever the up moved - even at a tied timestamp,
+      // which precision-clamped event clocks produce for samples dispatched
+      // together. VELOCITY additionally needs positive elapsed time: derived
+      // over zero it is unbounded, and a release at the last move's position
+      // carries no new motion to derive it from at all - either way the last
+      // real sample stands.
+      if (started.following) {
+        const travelPx =
+          started.direction === "back"
+            ? event.clientX - started.x
+            : started.x - event.clientX;
+        if (travelPx !== started.travelPx) {
+          const elapsedMs = event.timeStamp - started.lastAt;
+          if (elapsedMs > 0) {
+            started.velocityPxPerS =
+              ((travelPx - started.travelPx) / elapsedMs) * 1000;
+          }
+          started.travelPx = travelPx;
+        }
+      }
+      stopTracking(false);
+    };
+
+    const handlePointerCancel = (event: PointerEvent): void => {
       if (tracking === null) return;
       if (event.pointerId !== tracking.pointerId) return;
-      tracking = null;
+      stopTracking(true);
     };
 
     const releaseReservation = reserveEdgeGesture(handlersRef);
@@ -201,18 +354,24 @@ export function useEdgeNavSwipe(handlers: EdgeNavSwipeHandlers): void {
     const options = { capture: true, passive: true };
     document.addEventListener("pointerdown", handlePointerDown, options);
     document.addEventListener("pointermove", handlePointerMove, options);
-    document.addEventListener("pointerup", endGesture, options);
-    document.addEventListener("pointercancel", endGesture, options);
+    document.addEventListener("pointerup", handlePointerUp, options);
+    document.addEventListener("pointercancel", handlePointerCancel, options);
     return () => {
       releaseReservation();
+      // A drag surviving the listeners' teardown has nothing left to move it,
+      // so it is ended as the system ending it - the same answer a call
+      // arriving mid-swipe gets.
+      stopTracking(true);
       document.removeEventListener("pointerdown", handlePointerDown, {
         capture: true,
       });
       document.removeEventListener("pointermove", handlePointerMove, {
         capture: true,
       });
-      document.removeEventListener("pointerup", endGesture, { capture: true });
-      document.removeEventListener("pointercancel", endGesture, {
+      document.removeEventListener("pointerup", handlePointerUp, {
+        capture: true,
+      });
+      document.removeEventListener("pointercancel", handlePointerCancel, {
         capture: true,
       });
     };

@@ -28,7 +28,13 @@ vi.mock("../../host/free-port-kill", () => ({
     commandName: string;
   }) => {
     mocks.killCalls.push(opts);
-    return { killed: true, killError: null };
+    return {
+      killed: true,
+      killError: null,
+      release: "released",
+      releaseDetail: "pid 4242 exited after SIGTERM",
+      holderPid: null,
+    };
   },
 }));
 
@@ -160,7 +166,12 @@ describe.skipIf(process.platform === "win32")(
         writeFileSync(join(holdBarrierDir, "release"), "");
         const result = await pending;
         expect(mocks.killCalls).toEqual([
-          { pid: 4242, port: 51820, commandName: "host free-port" },
+          expect.objectContaining({
+            pid: 4242,
+            port: 51820,
+            commandName: "host free-port",
+            verifyMutationCapability: expect.any(Function),
+          }),
         ]);
         expect(result.data).toMatchObject({ killed: true });
       } finally {

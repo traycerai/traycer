@@ -7,11 +7,14 @@ import {
   chatSubscribeV16,
   chatSubscribeV17,
   chatSubscribeSnapshotServerFrameShallowSchemaV16,
+  chatSubscribeSnapshotServerFrameShallowSchema,
+  chatSubscribeServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   INTERVIEW_SETTLEMENT_METADATA_KEY,
-  normalizeInterviewBlocksInShallowSnapshot,
+  normalizeV16BrowserPayloadsInFrame,
+  normalizeV16MessagesInShallowSnapshot,
   projectChatClientFrameForVersion,
   projectChatServerFrameForVersion,
   supportsInterviewSettlementActions,
@@ -69,6 +72,25 @@ function resumeQueueFrame(): ChatSubscribeClientFrame {
   };
 }
 
+function sendFrame(): ChatSubscribeClientFrame {
+  return chatSubscribeV17.clientFrameSchema.parse({
+    kind: "send",
+    ...OWNER,
+    messageId: "message-1",
+    content: { type: "doc", content: [] },
+    sender: { type: "user", userId: "user-1" },
+    settings: {
+      harnessId: "codex",
+      model: "gpt-5.4",
+      permissionMode: "supervised",
+      reasoningEffort: "high",
+      agentMode: "epic",
+    },
+    accountContext: { type: "PERSONAL" },
+    browserAnnotations: [],
+  });
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -118,6 +140,7 @@ describe("projectChatClientFrameForVersion", () => {
     const answer = interviewAnswerFrame();
     const error = interviewErrorFrame();
     const resume = resumeQueueFrame();
+    const send = sendFrame();
     expect(
       projectChatClientFrameForVersion(answer, { major: 1, minor: 7 }),
     ).toBe(answer);
@@ -127,6 +150,20 @@ describe("projectChatClientFrameForVersion", () => {
     expect(
       projectChatClientFrameForVersion(resume, { major: 1, minor: 7 }),
     ).toBe(resume);
+    expect(projectChatClientFrameForVersion(send, { major: 1, minor: 7 })).toBe(
+      send,
+    );
+  });
+
+  it("removes browser payload fields from send on every pre-1.7 line", () => {
+    const frame = sendFrame();
+    for (const version of legacyLines()) {
+      const projected = projectChatClientFrameForVersion(frame, version);
+      expect(Object.hasOwn(projected, "browserAnnotations")).toBe(false);
+      expect(chatSubscribeV16.clientFrameSchema.parse(projected).kind).toBe(
+        "send",
+      );
+    }
   });
 
   it("removes the selection key from interviewAnswer answers on every pre-1.7 line", () => {
@@ -488,7 +525,7 @@ describe("chatSubscribeSnapshotServerFrameShallowSchemaV16", () => {
   });
 });
 
-describe("normalizeInterviewBlocksInShallowSnapshot", () => {
+describe("normalizeV16MessagesInShallowSnapshot", () => {
   it("neutralizes every interview settlement field in place and leaves non-interview blocks referentially unchanged", () => {
     const text = textBlock("text-1");
     const interview = legacyInterviewBlock("iv-1");
@@ -518,7 +555,10 @@ describe("normalizeInterviewBlocksInShallowSnapshot", () => {
       interview,
       populatedInterview,
     ]);
-    const messages: unknown[] = [message];
+    const user = userMessage();
+    const userPayload = asRecord(user.message, "user payload");
+    userPayload.browserAnnotations = [{ unvalidated: true }];
+    const messages: unknown[] = [user, message];
     const originalText = asRecord(message, "message").blocks;
     if (!Array.isArray(originalText)) {
       throw new Error("expected blocks array");
@@ -526,8 +566,10 @@ describe("normalizeInterviewBlocksInShallowSnapshot", () => {
     const textRef = originalText[0];
     const populatedRef = originalText[2];
 
-    normalizeInterviewBlocksInShallowSnapshot(messages);
+    normalizeV16MessagesInShallowSnapshot(messages);
 
+    expect(messages[0]).toBe(user);
+    expect(userPayload.browserAnnotations).toEqual([]);
     expect(originalText[0]).toBe(textRef);
     expect(originalText[2]).toBe(populatedRef);
 
@@ -574,7 +616,7 @@ describe("normalizeInterviewBlocksInShallowSnapshot", () => {
       draftAnswers: {},
     };
     const messages: unknown[] = [assistantMessage("assistant-1", [malformed])];
-    normalizeInterviewBlocksInShallowSnapshot(messages);
+    normalizeV16MessagesInShallowSnapshot(messages);
     expect(malformed.outcome).toBeNull();
     expect(malformed.settlement).toBeNull();
     expect(malformed.delivery).toBeNull();
@@ -597,13 +639,199 @@ describe("normalizeInterviewBlocksInShallowSnapshot", () => {
       },
       settlementExtensions: { escalation: { level: 2 } },
     };
-    normalizeInterviewBlocksInShallowSnapshot([
+    normalizeV16MessagesInShallowSnapshot([
       assistantMessage("assistant-1", [future]),
     ]);
     expect(future.outcome).toBeNull();
     expect(future.delivery).toBeNull();
     expect(future.settlement).toBeNull();
     expect(future.settlementExtensions).toEqual({});
+  });
+});
+
+/**
+ * The RECEIVE side of the `1.6` line, end to end, for the two surfaces the
+ * message normalizer does NOT walk: `snapshot.queue` and `messageAccepted`.
+ *
+ * These pin the pipeline `chat-stream-client` actually runs, because the
+ * hazard here is not visible from either schema alone. `chat.messages` needs
+ * `normalizeV16MessagesInShallowSnapshot` precisely because the shallow
+ * schemas leave it structural. The queue is the opposite: the frozen `1.6`
+ * schema DEEP-parses it (so a browser payload on a `1.6` queue item is
+ * stripped as an unknown key), and the live shallow re-parse then supplies
+ * `browserAnnotations: []` from the live payload schema's `.default([])`.
+ * Same for `messageAccepted`, which is not a snapshot and so takes the live
+ * deep parse directly.
+ *
+ * Net effect on a `1.6` peer: the array reads as `[]`, never as `undefined`.
+ * That is load-bearing for consumers typed as if it is present, and it rests
+ * entirely on that `.default([])` - swapping it for `.optional()` breaks this
+ * line silently, which is what these tests exist to catch.
+ *
+ * SMUGGLED payloads on `messageAccepted` / `queueChanged` are a separate
+ * matter: those frames get no frozen parse, so `normalizeV16BrowserPayloadsInFrame`
+ * is what neutralizes them, pinned in `chat-stream-client.test.ts`.
+ */
+describe("1.6 receive path: queue and messageAccepted browser payloads", () => {
+  function v16QueuePromptItem(
+    message: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      kind: "prompt",
+      queueItemId: "queue-1",
+      messageId: "user-1",
+      message,
+      sender: { type: "user", userId: "user-1" },
+      settings: {
+        harnessId: "codex",
+        model: "gpt-5.4",
+        permissionMode: "supervised",
+        reasoningEffort: "high",
+        agentMode: "epic",
+      },
+      accountContext: { type: "PERSONAL" },
+      delivery: "next_turn",
+      status: "pending",
+      targetTurnId: null,
+      steerRequest: null,
+      fallbackReason: null,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+  }
+
+  function v16SnapshotWithQueueItem(
+    message: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const envelope = v16SnapshotEnvelope([userMessage()]);
+    const snapshot = asRecord(envelope.snapshot, "snapshot");
+    return {
+      ...envelope,
+      snapshot: {
+        ...snapshot,
+        queue: { status: "idle", items: [v16QueuePromptItem(message)] },
+      },
+    };
+  }
+
+  /** Exactly what `chat-stream-client` does with a `1.6` snapshot frame. */
+  function receiveV16Snapshot(payload: Record<string, unknown>): {
+    readonly queuePayload: Record<string, unknown>;
+  } {
+    const shallowV16 =
+      chatSubscribeSnapshotServerFrameShallowSchemaV16.parse(payload);
+    normalizeV16MessagesInShallowSnapshot(shallowV16.snapshot.chat.messages);
+    const upgraded =
+      chatSubscribeSnapshotServerFrameShallowSchema.parse(shallowV16);
+    const item = asRecord(upgraded.snapshot.queue.items[0], "queue item");
+    return { queuePayload: asRecord(item.message, "queue payload") };
+  }
+
+  function expectBrowserPayloadEmpty(payload: Record<string, unknown>): void {
+    expect(payload.browserAnnotations).toEqual([]);
+  }
+
+  it("defaults the browser annotations array on a queue prompt item that carries none", () => {
+    // The frozen 1.6 shape: a user-authored payload with no browser keys.
+    const { queuePayload } = receiveV16Snapshot(
+      v16SnapshotWithQueueItem({
+        kind: "user",
+        content: { type: "doc", content: [] },
+      }),
+    );
+    expectBrowserPayloadEmpty(queuePayload);
+  });
+
+  it("neutralizes a browser payload smuggled onto a 1.6 queue prompt item", () => {
+    // A legal 1.6 frame cannot carry these, so a populated one did not come
+    // from a conforming 1.6 host. Same reading as the message normalizer's:
+    // on this line they are absent, whatever bytes arrived.
+    const { queuePayload } = receiveV16Snapshot(
+      v16SnapshotWithQueueItem({
+        kind: "user",
+        content: { type: "doc", content: [] },
+        browserAnnotations: [{ unvalidated: true }],
+      }),
+    );
+    expectBrowserPayloadEmpty(queuePayload);
+  });
+
+  it("defaults the browser annotations array on a 1.6 messageAccepted user message", () => {
+    // Non-snapshot frames on the 1.6 line take the live deep parse, so the
+    // defaults - not a normalizer pass - are what keep this off `undefined`.
+    const frame = chatSubscribeServerFrameSchema.parse({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      message: {
+        role: "user",
+        messageId: "user-1",
+        sender: { type: "user", userId: "user-1" },
+        message: { kind: "user", content: { type: "doc", content: [] } },
+        timestamp: 5,
+        sessionAnchor: null,
+      },
+    });
+    if (frame.kind !== "messageAccepted") {
+      throw new Error("expected messageAccepted");
+    }
+    expectBrowserPayloadEmpty(asRecord(frame.message.message, "user payload"));
+  });
+
+  it("normalizes only user-authored payloads, and only on the two live-parsed kinds", () => {
+    const agentPayload: Record<string, unknown> = {
+      kind: "agent",
+      content: { type: "doc", content: [] },
+      fromAgentId: "agent-1",
+      senderTitle: null,
+      senderHarnessId: null,
+      reply: { expectsReply: false },
+    };
+    const agentFrame = {
+      kind: "messageAccepted",
+      message: { role: "user", message: agentPayload },
+    };
+    normalizeV16BrowserPayloadsInFrame(agentFrame);
+    // An agent payload has no such fields on ANY line; inventing them would
+    // make the payload fail its own schema.
+    expect(Object.hasOwn(agentPayload, "browserAnnotations")).toBe(false);
+
+    const managedItem: Record<string, unknown> = { kind: "managed_command" };
+    normalizeV16BrowserPayloadsInFrame({
+      kind: "queueChanged",
+      queue: { status: "idle", items: [managedItem] },
+    });
+    expect(managedItem).toEqual({ kind: "managed_command" });
+
+    // Every other frame kind is left alone, so a caller can hand it each
+    // parsed frame unconditionally.
+    const carried = [{ annotationId: "ann-1" }];
+    const other = {
+      kind: "blockDelta",
+      message: {
+        role: "user",
+        message: { kind: "user", browserAnnotations: carried },
+      },
+    };
+    normalizeV16BrowserPayloadsInFrame(other);
+    expect(other.message.message.browserAnnotations).toBe(carried);
+  });
+
+  it("deep-validates the same browser payload on the live line instead of defaulting it away", () => {
+    // The mirror of the neutralizing case above, and why the `1.6` result is
+    // not merely "zod happened to strip something": on the live line this
+    // array is validated content, so an unvalidatable record is a parse
+    // error rather than a silently emptied field.
+    expect(() =>
+      chatSubscribeSnapshotServerFrameShallowSchema.parse(
+        v16SnapshotWithQueueItem({
+          kind: "user",
+          content: { type: "doc", content: [] },
+          browserAnnotations: [{ unvalidated: true }],
+        }),
+      ),
+    ).toThrow();
   });
 });
 
@@ -635,9 +863,7 @@ describe("1.6 shallow snapshot + normalizer vs deep 1.7 parse", () => {
     const shallowCopy = structuredClone(payload);
     const shallowParsed =
       chatSubscribeSnapshotServerFrameShallowSchemaV16.parse(shallowCopy);
-    normalizeInterviewBlocksInShallowSnapshot(
-      shallowParsed.snapshot.chat.messages,
-    );
+    normalizeV16MessagesInShallowSnapshot(shallowParsed.snapshot.chat.messages);
     const shallowInterviews = extractInterviewBlocks(
       shallowParsed.snapshot.chat.messages,
     ).map(interviewFields);
@@ -794,10 +1020,17 @@ function userMessage(): Record<string, unknown> {
     message: {
       kind: "user",
       content: { type: "doc", content: [] },
+      browserAnnotations: [],
     },
     timestamp: 5,
     sessionAnchor: null,
   };
+}
+
+function expectBrowserPayloadStripped(value: unknown): void {
+  const message = asRecord(value, "user message");
+  const payload = asRecord(message.message, "user payload");
+  expect(Object.hasOwn(payload, "browserAnnotations")).toBe(false);
 }
 
 function asProjectedServerFrame(
@@ -920,7 +1153,8 @@ describe("projectChatServerFrameForVersion", () => {
       if (!Array.isArray(chat.messages)) {
         throw new Error("expected messages");
       }
-      expect(chat.messages[0]).toBe(user);
+      expect(chat.messages[0]).not.toBe(user);
+      expectBrowserPayloadStripped(chat.messages[0]);
       const projectedAssistant = asRecord(chat.messages[1], "assistant");
       if (!Array.isArray(projectedAssistant.blocks)) {
         throw new Error("expected blocks");
@@ -976,8 +1210,13 @@ describe("projectChatServerFrameForVersion", () => {
         asRecord(projectedMessage.blocks[1], "interview"),
       );
 
-      expect(projectChatServerFrameForVersion(userFrame, version)).toBe(
+      const projectedUser = projectChatServerFrameForVersion(
         userFrame,
+        version,
+      );
+      expect(projectedUser).not.toBe(userFrame);
+      expectBrowserPayloadStripped(
+        asRecord(projectedUser, "projected user frame").message,
       );
 
       // messageAccepted's frozen schema is a user message, so an
@@ -986,9 +1225,62 @@ describe("projectChatServerFrameForVersion", () => {
       // parse-equals-projected proof for this kind is the user-message
       // identity below (no settlement keys to drop).
       for (const contract of frozenServerContracts()) {
-        const parsedUser = contract.parse(userFrame);
+        const parsedUser = contract.parse(projectedUser);
         expect(parsedUser.kind).toBe("messageAccepted");
       }
+    }
+  });
+
+  it("strips browser payload fields from queueChanged prompt items", () => {
+    const user = userMessage();
+    const frame = asProjectedServerFrame({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      queue: {
+        status: "idle",
+        items: [
+          {
+            kind: "prompt",
+            queueItemId: "queue-1",
+            messageId: "user-1",
+            message: asRecord(user.message, "user payload"),
+            sender: { type: "user", userId: "user-1" },
+            settings: {
+              harnessId: "codex",
+              model: "gpt-5.4",
+              permissionMode: "supervised",
+              reasoningEffort: "high",
+              agentMode: "epic",
+            },
+            accountContext: { type: "PERSONAL" },
+            delivery: "next_turn",
+            status: "pending",
+            targetTurnId: null,
+            steerRequest: null,
+            fallbackReason: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+
+    for (const version of legacyLines()) {
+      const projected = projectChatServerFrameForVersion(frame, version);
+      expect(projected).not.toBe(frame);
+      const queue = asRecord(
+        asRecord(projected, "projected queue frame").queue,
+        "queue",
+      );
+      if (!Array.isArray(queue.items)) throw new Error("expected queue items");
+      const item = asRecord(queue.items[0], "queue item");
+      const payload = asRecord(item.message, "queue payload");
+      expect(Object.hasOwn(payload, "browserAnnotations")).toBe(false);
+      expect(chatSubscribeV16.serverFrameSchema.parse(projected).kind).toBe(
+        "queueChanged",
+      );
     }
   });
 
@@ -1540,7 +1832,8 @@ describe("chat-event metadata projection", () => {
       if (!Array.isArray(projectedChat.messages)) {
         throw new Error("expected messages");
       }
-      expect(projectedChat.messages[0]).toBe(user);
+      expect(projectedChat.messages[0]).not.toBe(user);
+      expectBrowserPayloadStripped(projectedChat.messages[0]);
       const projectedAssistant = asRecord(
         projectedChat.messages[1],
         "assistant",

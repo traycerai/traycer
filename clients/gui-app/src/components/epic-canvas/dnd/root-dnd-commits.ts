@@ -13,7 +13,9 @@ import { v4 as uuidv4 } from "uuid";
 import {
   ACTIVE_AGENT_DND_TYPE,
   ARTIFACT_TAB_DND_TYPE,
+  BROWSER_TILE_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
+  EPIC_CANVAS_DND_SOURCE_TYPES,
   GIT_DIFF_TILE_DND_TYPE,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   MANAGED_COMMAND_OUTPUT_DND_TYPE,
@@ -36,6 +38,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
   makeOpenableNodeRef,
+  type BrowserSessionTileRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
   type GitDiffTileRef,
@@ -111,6 +114,7 @@ export function canDropOnHeaderStrip(
       | typeof ARTIFACT_TAB_DND_TYPE
       | typeof SIDEBAR_NODE_DND_TYPE
       | typeof TERMINAL_TILE_DND_TYPE
+      | typeof BROWSER_TILE_DND_TYPE
       | typeof GIT_DIFF_TILE_DND_TYPE
       | typeof WORKSPACE_FILE_DND_TYPE
       | typeof CHAT_ARTIFACT_DND_TYPE
@@ -123,16 +127,7 @@ export function canDropOnHeaderStrip(
   // sidebar nodes / workspace files: collision already offers them the header
   // slot (via EPIC_CANVAS_DND_SOURCE_TYPES -> CANVAS_TARGET_KINDS), so omitting
   // either would leave the header strip a silent dead zone.
-  return (
-    source?.kind === ARTIFACT_TAB_DND_TYPE ||
-    source?.kind === SIDEBAR_NODE_DND_TYPE ||
-    source?.kind === TERMINAL_TILE_DND_TYPE ||
-    source?.kind === GIT_DIFF_TILE_DND_TYPE ||
-    source?.kind === WORKSPACE_FILE_DND_TYPE ||
-    source?.kind === CHAT_ARTIFACT_DND_TYPE ||
-    source?.kind === ACTIVE_AGENT_DND_TYPE ||
-    source?.kind === MANAGED_COMMAND_OUTPUT_DND_TYPE
-  );
+  return source !== null && EPIC_CANVAS_DND_SOURCE_TYPES.includes(source.kind);
 }
 
 /**
@@ -144,16 +139,21 @@ export function canDropOnHeaderStrip(
  */
 export function sourceToTileRef(
   source: EpicCanvasDragSourceData,
-): EpicNodeRef | GitDiffTileRef | ManagedCommandOutputTileRef | null {
+):
+  | EpicNodeRef
+  | GitDiffTileRef
+  | ManagedCommandOutputTileRef
+  | BrowserSessionTileRef
+  | null {
   if (source.kind === SIDEBAR_NODE_DND_TYPE) {
     const handle = getOpenEpicRegistry().peek(source.epicId);
     if (handle === null) return null;
     // The payload's host, never the app-wide one. The sidebar producers stamp
-    // the Epic SESSION's host (or the row's owner host) into `source.hostId`
-    // precisely because chats and artifacts carry no intrinsic host id, and
-    // the ref minted here is bound for life: this root provider mounts at the
-    // app shell, so during an A->B re-point the app-wide client already
-    // answers B while the dragged row still belongs to the A-backed Epic.
+    // the chat owner (or the Epic session host for artifacts and legacy chats)
+    // into `source.hostId`, and the ref minted here is bound for life: this
+    // root provider mounts at the app shell, so during an A->B re-point the
+    // app-wide client already answers B while the dragged row still belongs
+    // to the A-backed Epic.
     return epicNodeRefForNodeId(
       handle.store.getState(),
       source.nodeId,
@@ -161,6 +161,7 @@ export function sourceToTileRef(
     );
   }
   if (source.kind === TERMINAL_TILE_DND_TYPE) return source.tile;
+  if (source.kind === BROWSER_TILE_DND_TYPE) return source.tile;
   if (source.kind === GIT_DIFF_TILE_DND_TYPE) return source.tile;
   // The ref was minted at the menu row; the drop dedupes on its content id
   // (the command id), so an already-open output window moves rather than
@@ -293,7 +294,11 @@ export function resolveCanvasDropPreview(
     target,
     targetRect,
     point,
-    source.kind === ARTIFACT_TAB_DND_TYPE,
+    // Product behavior: pane-body split actions are immediate across the whole
+    // pane for in-task tiles, matching the pre-parity interaction. Strip
+    // targets still win before this resolver runs, so tile reordering keeps its
+    // precise geometry without shrinking the pane's split affordance.
+    false,
   );
 }
 
@@ -442,7 +447,11 @@ function commitArtifactTabDrop(
 function placeResolvedCanvasTile(
   resolved: {
     readonly epicId: string;
-    readonly tile: EpicNodeRef | GitDiffTileRef | ManagedCommandOutputTileRef;
+    readonly tile:
+      | EpicNodeRef
+      | GitDiffTileRef
+      | ManagedCommandOutputTileRef
+      | BrowserSessionTileRef;
     readonly target: EpicCanvasDropTargetData;
     readonly preview: NonNullable<EpicCanvasDropPreview>;
   },

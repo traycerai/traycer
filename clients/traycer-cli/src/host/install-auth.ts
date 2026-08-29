@@ -39,20 +39,17 @@ import type { CommandContext } from "../runner/runner";
 //     host whose provisioning state was set by whichever command installed
 //     it - they create no new unprovisioned host, and a host that was
 //     already unprovisioned self-heals on the next minting client.
-//   - `maybeAutoBootstrap` (host/auto-bootstrap.ts) DOES start a host, so
-//     it belongs in this inventory even though it is not a command. Its
-//     only production caller is `host status` - a read - and both halves
-//     fit it badly: the pre-flight prompts, and a device-flow login inside
-//     a status read is indefensible, while the probe would put a
-//     deadline-bounded wait behind a command whose whole job is to answer
-//     quickly. Auto-bootstrap is a first-run convenience that makes the
-//     host exist so a read can be answered, not a lifecycle command, and
-//     the operator who wants a credentialed host has three explicit ones
-//     that provision. The host it starts self-heals on the next minting
-//     client - which for someone running `host status` is imminent, since
-//     that is what checking status precedes. This is the weakest exclusion
-//     of the four and the one to revisit first if auto-bootstrap ever
-//     grows a caller that is not a read.
+//
+// A fourth entry used to sit here: `maybeAutoBootstrap`, which started a
+// host implicitly off `traycer host status`. It was excluded on the grounds
+// that a device-flow login inside a status read is indefensible - and the
+// note called itself "the weakest exclusion of the four and the one to
+// revisit first". Revisiting it settled the question the other way round:
+// the problem was never that auto-bootstrap sat outside this pre-flight, it
+// was that a read installed software at all. The path is gone (audit finding
+// CLI-001), so every remaining host-starting entry point is either an
+// explicit lifecycle command that runs the pre-flight, or one of the three
+// exclusions above.
 //
 // Pre-flight: a signed-out interactive run is offered the device-flow
 // sign-in inline; a run that cannot prompt (JSON mode, CI, non-TTY stdout)

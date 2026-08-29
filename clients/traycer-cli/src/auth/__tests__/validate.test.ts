@@ -60,10 +60,29 @@ vi.mock("../../store/credentials", async (importOriginal) => {
   return { ...actual, readCredentials: vi.fn() };
 });
 
+// Mirrors the real `withCommitRetry`'s retry-on-`commit-failed` shape (see
+// `store/credentials-store.ts`) closely enough to exercise it: re-drive `op`
+// while the outcome is `commit-failed`, capped, no artificial delay. A flat
+// `(op) => op()` would call `store.rotate` at most once per test and could
+// never reproduce "a retried continuation lands and resurfaces as
+// `superseded`" - exactly the case the fix under test depends on.
+const RETRY_CAP = 3;
 vi.mock("../../store/credentials-store", () => ({
   createCliCredentialsStore: () => fakeStore,
   runWithCliStore: (fn: (store: unknown) => unknown) => fn(fakeStore),
-  withCommitRetry: (op: () => unknown) => op(),
+  withCommitRetry: async (
+    op: () => Promise<{ outcome: string }>,
+  ): Promise<{ outcome: string }> => {
+    let result = await op();
+    for (
+      let attempt = 0;
+      attempt < RETRY_CAP && result.outcome === "commit-failed";
+      attempt += 1
+    ) {
+      result = await op();
+    }
+    return result;
+  },
 }));
 
 const identityMock = vi.mocked(validateAuthTokenIdentityAccessOnly);
@@ -139,7 +158,59 @@ describe("validateStoredCredentials", () => {
       credentials: {
         user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
       },
+      effect: "profile-refreshed",
     });
+  });
+
+  it("reports effect='none' and keeps the file's own savedAt when the advisory write is superseded (never attempted, not merely unconfirmed)", async () => {
+    identityMock.mockResolvedValue({ kind: "valid", user: changedUser });
+    // `superseded` always carries the FILE's current pair - never `null` (see
+    // `protocol/src/config/credentials-mutation.ts`). A `null` fixture here
+    // would be an impossible shape that could hide a real bug in this branch
+    // (Codex review, PR #1501): give it a realistic sibling pair - a
+    // different token and a later `savedAt` than `storedCreds`, exactly what
+    // a sibling's rotation would leave in the file.
+    updateProfileMock.mockResolvedValue({
+      outcome: "superseded",
+      credentials: {
+        token: "sibling-token",
+        refreshToken: "sibling-refresh",
+        savedAt: "2026-03-01T00:00:00.000Z",
+        user: storedCreds.user,
+      },
+    });
+
+    const outcome = await validateStoredCredentials();
+
+    expect(outcome).toMatchObject({ kind: "valid", effect: "none" });
+    // A write that never ran must not report a save that did not happen -
+    // the timestamp has to stay the file's own, not a freshly minted one, and
+    // NOT the sibling's pair above (this branch ignores `result.credentials`
+    // entirely on a non-`applied` outcome).
+    if (outcome.kind === "valid") {
+      expect(outcome.credentials.savedAt).toBe(storedCreds.savedAt);
+    }
+  });
+
+  it("reports effect='profile-refresh-unconfirmed' (not 'none') when the advisory write's commit does not confirm - the bytes may already be on disk", async () => {
+    identityMock.mockResolvedValue({ kind: "valid", user: changedUser });
+    updateProfileMock.mockResolvedValue({
+      outcome: "commit-failed",
+      credentials: null,
+    });
+
+    const outcome = await validateStoredCredentials();
+
+    // This is the distinction the fix exists for: `superseded` above is a
+    // certainty (`none`) because the write never ran; `commit-failed` here
+    // cannot claim either way, so it must NOT collapse to the same `none`.
+    expect(outcome).toMatchObject({
+      kind: "valid",
+      effect: "profile-refresh-unconfirmed",
+    });
+    if (outcome.kind === "valid") {
+      expect(outcome.credentials.savedAt).toBe(storedCreds.savedAt);
+    }
   });
 
   it("validates against the configured authn URL outside a run slot too (the file carries no URL)", async () => {
@@ -172,6 +243,7 @@ describe("validateStoredCredentials", () => {
     expect(outcome).toMatchObject({
       kind: "valid",
       credentials: { user: { id: "u1", email: "old@traycer.ai", name: "Old" } },
+      effect: "none",
     });
   });
 
@@ -179,6 +251,7 @@ describe("validateStoredCredentials", () => {
     readMock.mockResolvedValue(null);
     expect(await validateStoredCredentials()).toEqual({
       kind: "no-credentials",
+      effect: "none",
     });
     expect(identityMock).not.toHaveBeenCalled();
   });
@@ -187,6 +260,7 @@ describe("validateStoredCredentials", () => {
     identityMock.mockResolvedValue({ kind: "network-error" });
     expect(await validateStoredCredentials()).toEqual({
       kind: "network-error",
+      effect: "none",
     });
     expect(rotateMock).not.toHaveBeenCalled();
   });
@@ -214,6 +288,7 @@ describe("validateStoredCredentials", () => {
     expect(outcome).toMatchObject({
       kind: "valid",
       credentials: { token: "fresh-token" },
+      effect: "token-rotated",
     });
   });
 
@@ -223,10 +298,19 @@ describe("validateStoredCredentials", () => {
       outcome: "refresh-rejected",
       credentials: null,
     });
-    expect(await validateStoredCredentials()).toEqual({ kind: "rejected" });
+    // The server refused the refresh token, so nothing was minted and nothing
+    // was written - `none` here is a fact, not an assumption.
+    expect(await validateStoredCredentials()).toEqual({
+      kind: "rejected",
+      effect: "none",
+    });
   });
 
-  it("maps a transient rotate failure to network-error", async () => {
+  // `refresh-network` is spend-AMBIGUOUS on its own: the refresh POST left the
+  // process and the reply was lost, so the server may have rotated. The store
+  // keeps its spent-base marker armed for that reason, and `none` is defined
+  // here as a certainty - so this outcome must never report it.
+  it("maps a lost refresh reply to network-error with an UNCONFIRMED rotation, never 'none'", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
     rotateMock.mockResolvedValue({
       outcome: "refresh-network",
@@ -234,8 +318,23 @@ describe("validateStoredCredentials", () => {
     });
     expect(await validateStoredCredentials()).toEqual({
       kind: "network-error",
+      effect: "token-rotation-unconfirmed",
     });
   });
+
+  // The contrast that gives the case above its meaning: these two are guards
+  // that return BEFORE the attempt spends anything, so `none` is a fact.
+  it.each(["lock-busy", "spend-pending"] as const)(
+    "maps %s to network-error with effect='none' - it returns before any spend",
+    async (outcome) => {
+      identityMock.mockResolvedValue({ kind: "rejected" });
+      rotateMock.mockResolvedValue({ outcome, credentials: null });
+      expect(await validateStoredCredentials()).toEqual({
+        kind: "network-error",
+        effect: "none",
+      });
+    },
+  );
 
   it("maps user-mismatch to rejected WITHOUT reporting the foreign account", async () => {
     // rotate carries the OTHER account's pair on user-mismatch; whoami must NOT
@@ -251,10 +350,13 @@ describe("validateStoredCredentials", () => {
         user: { id: "u2", email: "other@traycer.ai", name: "Other" },
       },
     });
-    expect(await validateStoredCredentials()).toEqual({ kind: "rejected" });
+    expect(await validateStoredCredentials()).toEqual({
+      kind: "rejected",
+      effect: "none",
+    });
   });
 
-  it("adopts a sibling's pair on superseded (valid)", async () => {
+  it("adopts a sibling's pair on superseded (valid) and reports effect='none' - nothing was spent or written here", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
     rotateMock.mockResolvedValue({
       outcome: "superseded",
@@ -268,12 +370,103 @@ describe("validateStoredCredentials", () => {
     expect(await validateStoredCredentials()).toMatchObject({
       kind: "valid",
       credentials: { token: "sibling-token" },
+      effect: "none",
     });
   });
+
+  it("reports effect='token-rotation-unconfirmed' on a terminal commit-failed - the spend happened but whether it landed is unknowable, not false", async () => {
+    identityMock.mockResolvedValue({ kind: "rejected" });
+    // Retries are exhausted (every attempt keeps failing the commit), so this
+    // is the terminal case: `withCommitRetry` gives up still holding
+    // `commit-failed`. `commitMutation` writes the file at its apply step and
+    // only then finalizes the sidecar, so a `commit-failed` here does NOT mean
+    // the pair never reached disk - it means this process cannot tell.
+    rotateMock.mockResolvedValue({
+      outcome: "commit-failed",
+      credentials: {
+        token: "orphaned-token",
+        refreshToken: "orphaned-refresh",
+        savedAt: "2026-02-01T00:00:00.000Z",
+        user: storedCreds.user,
+      },
+    });
+    expect(await validateStoredCredentials()).toMatchObject({
+      kind: "valid",
+      credentials: { token: "orphaned-token" },
+      effect: "token-rotation-unconfirmed",
+    });
+  });
+
+  it("reports effect='token-rotated' when a retried continuation lands and resurfaces as superseded", async () => {
+    // The bug Codex caught: `withCommitRetry` re-drives `rotate` after a
+    // `commit-failed`, and a landed continuation resurfaces as `superseded` -
+    // identical to the outcome a process that spent NOTHING gets when a
+    // sibling rotated first. The effect must come from whether THIS process
+    // spent (tracked across the retried attempts), not from the final
+    // outcome alone.
+    identityMock.mockResolvedValue({ kind: "rejected" });
+    rotateMock
+      .mockResolvedValueOnce({ outcome: "commit-failed", credentials: null })
+      .mockResolvedValueOnce({
+        outcome: "superseded",
+        credentials: {
+          token: "landed-continuation-token",
+          refreshToken: "landed-continuation-refresh",
+          savedAt: "2026-02-01T00:00:00.000Z",
+          user: storedCreds.user,
+        },
+      });
+
+    const outcome = await validateStoredCredentials();
+
+    expect(rotateMock).toHaveBeenCalledTimes(2);
+    expect(outcome).toMatchObject({
+      kind: "valid",
+      credentials: { token: "landed-continuation-token" },
+      effect: "token-rotated",
+    });
+  });
+
+  // A failure can arrive AFTER a spend: the first attempt mints a pair and
+  // loses the commit, and by the retry a concurrent logout/account switch has
+  // turned the file into something this rotate refuses. The command failed, but
+  // it did not fail without consuming the refresh token - and a caller auditing
+  // what this invocation touched has no other way to learn that.
+  it.each([
+    ["deleted", "rejected"],
+    ["tombstoned", "rejected"],
+    ["user-mismatch", "rejected"],
+    ["refresh-network", "network-error"],
+  ] as const)(
+    "carries the spend into a terminal %s: reports %s with effect='token-rotation-unconfirmed'",
+    async (outcome, kind) => {
+      identityMock.mockResolvedValue({ kind: "rejected" });
+      rotateMock
+        .mockResolvedValueOnce({
+          outcome: "commit-failed",
+          credentials: {
+            token: "minted-token",
+            refreshToken: "minted-refresh",
+            savedAt: "2026-03-01T00:00:00.000Z",
+            user: storedCreds.user,
+          },
+        })
+        .mockResolvedValueOnce({ outcome, credentials: null });
+
+      expect(await validateStoredCredentials()).toEqual({
+        kind,
+        effect: "token-rotation-unconfirmed",
+      });
+      expect(rotateMock).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("maps a tombstoned file (a sign-out stands) to rejected", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
     rotateMock.mockResolvedValue({ outcome: "tombstoned", credentials: null });
-    expect(await validateStoredCredentials()).toEqual({ kind: "rejected" });
+    expect(await validateStoredCredentials()).toEqual({
+      kind: "rejected",
+      effect: "none",
+    });
   });
 });

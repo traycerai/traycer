@@ -20,8 +20,7 @@ import {
   PromptStashMissingBlobError,
   readPromptStashRestoreBlobs,
 } from "@/lib/composer/prompt-stash-repository";
-
-type ImageBytes = Uint8Array<ArrayBuffer>;
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
 interface PreparedOwnedImage {
   readonly bytes: ImageBytes;

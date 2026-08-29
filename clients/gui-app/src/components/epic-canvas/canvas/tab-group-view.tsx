@@ -87,6 +87,7 @@ import {
   TILE_KIND_PR_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "@/stores/epics/canvas/tile-kinds";
+
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
 import {
@@ -108,12 +109,6 @@ function positionFor(
 ): "left" | "right" | "top" | "bottom" {
   if (axis === "horizontal") return leading ? "left" : "right";
   return leading ? "top" : "bottom";
-}
-
-function isProjectionBackedTileRef(
-  tile: EpicCanvasTileRef,
-): tile is EpicNodeRef {
-  return isTileRefRecordBacked(tile);
 }
 
 function panelIdForTabType(
@@ -819,15 +814,7 @@ function usePublishedChatFallbackRef(args: {
             hostId: readingHostId,
           })
         : null,
-    [
-      substitute,
-      activeTab.id,
-      activeTab.name,
-      activeTab.hostId,
-      ownerUserId,
-      readingHostId,
-      epicId,
-    ],
+    [substitute, activeTab, ownerUserId, readingHostId, epicId],
   );
   return {
     fallbackRef,
@@ -916,12 +903,14 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
         )
       : s.pendingCreateArtifactIds.has(activeTab.id),
   );
-  // Renderer-only tiles have no cloud-backed artifact projection, so a lookup
-  // miss cannot mean deletion. The schema registry is the canonical owner of
-  // that distinction; keeping this gate table-driven also makes new utility
-  // tiles safe by construction.
-  const isRemoteDeleted = isProjectionBackedTileRef(activeTab)
-    ? computeIsRemoteDeleted({
+  // Terminals, browser surfaces, diff/PR tiles, workspace files, output
+  // windows, the comm graph, and blank tabs are renderer-only, so a cloud
+  // artifact lookup miss is not deletion. A blank id is throwaway, the comm
+  // graph id is epic-derived, and an output id belongs to a managed command;
+  // each surface owns its own lifecycle instead.
+  const isRemoteDeleted = !isTileRefRecordBacked(activeTab)
+    ? false
+    : computeIsRemoteDeleted({
         snapshotLoaded,
         leafArtifact: activeTab,
         liveArtifact,
@@ -932,8 +921,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
         cloudListAuthorizesChatAbsence,
         recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
         retractedAsDeleted: chatRetraction === "deleted",
-      })
-    : false;
+      });
   const isActive = role !== null && props.selected && props.globallyActive;
 
   // Reports the SAME isRemoteDeleted value this render already uses for the

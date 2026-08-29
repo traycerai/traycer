@@ -32,6 +32,8 @@ function createHandle(epicId: string, chatId: string) {
       streamClientFactory: () => ({
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => {
           closeCount += 1;
         },

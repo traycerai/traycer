@@ -70,6 +70,7 @@ export function buildSyntheticTileSurfaceEnvironment(
     services: {
       openEpicHandle:
         {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
+      hostClient: null,
       geometryAnchorElement: createDefaultGeometryAnchor(),
       panePortalContainer: null,
       isPaneFocusedNow: () => false,
