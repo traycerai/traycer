@@ -12,9 +12,10 @@ import type {
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type {
-  HydratedSpan,
-  TranscriptWindow,
+import {
+  applyIndexChange,
+  type HydratedSpan,
+  type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import {
   transcriptListRows,
@@ -687,6 +688,48 @@ describe("transcriptListRows", () => {
     });
 
     expect(kinds(rows)).toEqual(["P:0", "H:pending-user"]);
+  });
+
+  it("a send-induced reindex keeps every drawn row on screen through the void", () => {
+    // An ordinary send can legitimately re-key a row - a queued steer's
+    // `queue-steer:<id>` becomes the persisted messageId, a growing turn's
+    // slices re-plan - which fails ordinal preservation, advances the epoch,
+    // and voids this client's index. Without the stale tier that rendered the
+    // WHOLE chat as placeholders for the void->resnapshot->rehydrate round
+    // trip: a full-screen flash on every such send. Each half of the mask is
+    // pinned on its own (the fold carries spans into `staleSpans`;
+    // `seatStaleRows` draws carries), but the halves have been green together
+    // while the composition was broken before - so this feeds the REAL fold's
+    // output straight into the real merge.
+    const before = windowOf({
+      rowCount: 3,
+      spans: [span(0, ["u-1", "a-1", "u-2"])],
+      skeleton: [
+        skeletonEntry("u-1"),
+        skeletonEntry("a-1"),
+        skeletonEntry("u-2"),
+      ],
+      skeletonComplete: true,
+      invalidated: false,
+    });
+    const rendered = [model("u-1"), model("a-1"), model("u-2")];
+    const drawn = kinds(transcriptListRows({ window: before, rendered }));
+    expect(drawn).toEqual(["H:u-1", "H:a-1", "H:u-2"]);
+
+    const voided = applyIndexChange(before, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    expect(voided.invalidated).toBe(true);
+
+    // Same rows under the same keys: the void is invisible, and the list
+    // never remounts a row it had already measured.
+    expect(kinds(transcriptListRows({ window: voided, rendered }))).toEqual(
+      drawn,
+    );
   });
 
   it("keeps an orphaned steer projected from the live assistant during invalidation", () => {

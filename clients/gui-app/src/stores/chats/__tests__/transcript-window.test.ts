@@ -782,6 +782,166 @@ describe("index deltas", () => {
   });
 });
 
+describe("idempotent voiding", () => {
+  // Hydrated on one span so `staleCarrySpans` has material to carry, matching
+  // the "wipes and invalidates on reindexed" setup above.
+  function heldWindowWithHydratedSpan(): TranscriptWindow {
+    return applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+      null,
+    );
+  }
+
+  it("a repeat same-epoch reindexed at unchanged rowCount returns the same window by identity", () => {
+    const held = heldWindowWithHydratedSpan();
+    const voided = applyIndexChange(held, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    expect(voided.staleSpans).toHaveLength(1);
+
+    const repeat = applyIndexChange(voided, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+
+    // The pin: without the no-op guard this rebuilds a fresh object every
+    // time, which is exactly what re-announcing at the current epoch would do
+    // to `projectedRowCache` and the rest of window-identity-keyed state.
+    expect(repeat).toBe(voided);
+    expect(repeat.staleSpans).toBe(voided.staleSpans);
+    expect(repeat.clock).toBe(voided.clock);
+  });
+
+  it("a repeat void with a moved rowCount takes the full void path and adopts it", () => {
+    const held = heldWindowWithHydratedSpan();
+    const voided = applyIndexChange(held, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+
+    const moved = applyIndexChange(voided, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 4,
+      indexRevision: 2,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(moved).not.toBe(voided);
+    expect(moved.rowCount).toBe(4);
+    expect(moved.invalidated).toBe(true);
+  });
+
+  it("a repeat void announcing zero rows drops the carry and live state", () => {
+    const held = heldWindowWithHydratedSpan();
+    const voided = applyIndexChange(held, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    expect(voided.staleSpans).toHaveLength(1);
+
+    const zeroed = applyIndexChange(voided, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 0,
+      indexRevision: 2,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(zeroed).not.toBe(voided);
+    expect(zeroed.staleSpans).toEqual([]);
+    expect(zeroed.liveEvents).toEqual([]);
+  });
+
+  it("a newer epoch is never a repeat", () => {
+    const held = heldWindowWithHydratedSpan();
+    const voided = applyIndexChange(held, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+
+    const ahead = applyIndexChange(voided, {
+      activeTurnId: null,
+      epoch: 3,
+      rowCount: 3,
+      indexRevision: 2,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(ahead).not.toBe(voided);
+    expect(ahead.epoch).toBe(3);
+  });
+
+  it("a same-epoch reindexed on a rebuilt (non-void) window still voids", () => {
+    // This is the wedge guard: matching epoch and rowCount is not enough on
+    // its own, `window.invalidated` has to hold too, or a window that was
+    // never voided (freshly rebuilt, ordinary hydrated state) would ignore a
+    // `reindexed` it has never actually applied.
+    const held = heldWindowWithHydratedSpan();
+    expect(held.invalidated).toBe(false);
+
+    const reindexed = applyIndexChange(held, {
+      activeTurnId: null,
+      epoch: 1,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(reindexed.invalidated).toBe(true);
+    expect(reindexed).not.toBe(held);
+  });
+
+  it("pending byte measurements force the full void path", () => {
+    const held = heldWindowWithHydratedSpan();
+    const voided = applyIndexChange(held, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    // `voidedTranscriptWindow` rebuilds from `emptyTranscriptWindow()`, which
+    // never carries a pending byte measurement - so this marker can only be
+    // organic here if something streamed into the window AFTER this void.
+    // Spread it in directly to isolate the guard from that timing.
+    const pending = { ...voided, unsettledByteMessageIds: ["m1"] };
+
+    const repeat = applyIndexChange(pending, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(repeat).not.toBe(pending);
+    expect(repeat.unsettledByteMessageIds).toEqual([]);
+  });
+});
+
 describe("isActiveTurnStreamingEcho", () => {
   const turnId = "T";
   const rowId = assistantRowId(turnId);

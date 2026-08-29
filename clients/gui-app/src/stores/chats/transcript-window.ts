@@ -3034,6 +3034,50 @@ function voidedTranscriptWindow(
 }
 
 /**
+ * The all-invalidating fold: void at the frame's coordinates - or, for a
+ * frame that merely REPEATS the void this window already is, the same window
+ * by identity.
+ *
+ * Voiding an already-void window is IDEMPOTENT, never frame-dropping. A
+ * same-epoch `reindexed` at an unchanged `rowCount` is legitimate repeat
+ * authority - `withholdOversizedWindowedSnapshot` emits up to three per epoch
+ * and the oversized-delta fallback and aux-only rebroadcast both re-announce
+ * at the current epoch - so dropping such a frame would wedge the client (the
+ * host records the index as held and suppresses further deltas), while
+ * re-voiding rebuilds the carry and discards every cache keyed on window
+ * identity once per repeat. Returning the SAME window is the whole point:
+ * `projectedRowCache` and the backing lookups survive, and the bounded stale
+ * carry is not re-bounded.
+ *
+ * Three exclusions, each load-bearing. A moved `rowCount` is ADVANCED
+ * authority, not a repeat - the void must adopt it. Pending byte measurements
+ * mean the full void's settle pass still owes work the no-op would silently
+ * skip. And a NEWER epoch is never a repeat, whatever else matches. The
+ * frame's `indexRevision` is deliberately not compared - the first void armed
+ * `indexRevisionRebuilding`, in which state the two counters may not be the
+ * same counter, and every consumer refuses that comparison.
+ *
+ * Scoped to the all-invalidating frame deliberately: the revision-gap and
+ * append-base voids stay unconditional - those frames are loss EVIDENCE, not
+ * repeat authority, and their adopted coordinates are the news.
+ */
+function idempotentlyVoidedTranscriptWindow(
+  window: TranscriptWindow,
+  input: {
+    readonly epoch: number;
+    readonly rowCount: number;
+    readonly indexRevision: number;
+  },
+): TranscriptWindow {
+  const repeat =
+    window.invalidated &&
+    input.epoch === window.epoch &&
+    input.rowCount === window.rowCount &&
+    window.unsettledByteMessageIds.length === 0;
+  return repeat ? window : voidedTranscriptWindow(window, input);
+}
+
+/**
  * Apply an `indexChanged` delta.
  *
  * The three cases are what the client can actually do to its row set, and each
@@ -3105,7 +3149,7 @@ export function applyIndexChange(
   if (input.epoch < window.epoch) return window;
   const invalidated = bodyInvalidatingOrdinals(input.changes);
   if (invalidated === "all" || input.epoch > window.epoch) {
-    return voidedTranscriptWindow(window, input);
+    return idempotentlyVoidedTranscriptWindow(window, input);
   }
 
   // Is this frame NEWS - and if so, is it the NEXT news? Revisions are
