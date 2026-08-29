@@ -2453,23 +2453,31 @@ export function recordSharingOrdinals(
  * the rows the reader was just looking at are the ones that survive.
  */
 function staleCarrySpans(window: TranscriptWindow): readonly HydratedSpan[] {
-  return boundedStaleSpans([...window.spans, ...window.staleSpans]);
+  // Zero live bytes: a rebase or void discards the fresh spans, so the whole
+  // window budget is headroom for the carry.
+  return boundedStaleSpans([...window.spans, ...window.staleSpans], 0);
 }
 
 /**
  * The dedupe-and-bound shared by every path that demotes spans to stale:
  * warmest first, a span earns its place only by contributing an uncovered row
  * id, and the total stays within the window budget.
+ *
+ * `liveBytes` is what the FRESH spans still hold, so stale and fresh share
+ * ONE budget rather than each claiming `TRANSCRIPT_WINDOW_MAX_BYTES` -
+ * without it a fully hydrated window that rebases retains roughly twice the
+ * budget until authority retires the carry.
  */
 function boundedStaleSpans(
   candidates: readonly HydratedSpan[],
+  liveBytes: number,
 ): readonly HydratedSpan[] {
   const sorted = [...candidates].sort(
     (left, right) => right.touchedAt - left.touchedAt,
   );
   const covered = new Set<string>();
   const carried: HydratedSpan[] = [];
-  let bytes = 0;
+  let bytes = liveBytes;
   for (const span of sorted) {
     if (bytes + span.bytes > TRANSCRIPT_WINDOW_MAX_BYTES) continue;
     if (!span.rowIds.some((rowId) => !covered.has(rowId))) continue;
@@ -2894,15 +2902,20 @@ function dropSpansForUpdatedOrdinals(
     }
   }
   if (dropped.length === 0) return window;
+  const hydratedBytes = totalBytes(kept);
   return {
     ...window,
     spans: kept,
     // The dropped bodies keep rendering while the refetch is in flight - a
     // rewrite's brief stale body beats a placeholder flash, and the gap the
-    // drop opens still refetches either way. See
+    // drop opens still refetches either way. Bounded against the bytes the
+    // KEPT spans still hold, so fresh and stale share one budget. See
     // {@link TranscriptWindow.staleSpans}.
-    staleSpans: boundedStaleSpans([...dropped, ...window.staleSpans]),
-    hydratedBytes: totalBytes(kept),
+    staleSpans: boundedStaleSpans(
+      [...dropped, ...window.staleSpans],
+      hydratedBytes,
+    ),
+    hydratedBytes,
   };
 }
 
@@ -2921,6 +2934,15 @@ function heldMessageCopy(
     if (message.messageId === messageId) return message;
   }
   for (const span of window.spans) {
+    for (const message of span.messages) {
+      if (message.messageId === messageId) return message;
+    }
+  }
+  // A copy demoted to stale is still rewritten in place, so it can be the
+  // freshest one the client holds - a same-epoch `updated` can demote the
+  // active turn's span while its deltas keep arriving (see
+  // {@link rewriteWindowMessage}).
+  for (const span of window.staleSpans) {
     for (const message of span.messages) {
       if (message.messageId === messageId) return message;
     }

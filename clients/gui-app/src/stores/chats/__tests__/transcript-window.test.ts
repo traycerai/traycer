@@ -1114,6 +1114,65 @@ describe("held-copy preference for the active turn", () => {
 
     expect(seatedAssistantBlocks(seated, messageId)).toEqual([firstBlock]);
   });
+
+  it("prefers a copy held only by a STALE span over a delayed range answer", () => {
+    // A same-epoch non-echo `updated` demotes the active turn's span while
+    // its deltas keep arriving - the stale copy is then the freshest one the
+    // client holds, and a delayed bulk-lane answer must not displace it.
+    const turnId = "turn-demoted";
+    const messageId = "assistant-demoted";
+    const seated = applyRangeResponse(
+      heldLongerCopyWindow(turnId, messageId),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          {
+            ...assistantMessage(messageId, turnId, 2),
+            blocks: [firstBlock, secondBlock],
+          },
+        ],
+      }),
+      turnId,
+    );
+    // A non-echo rewrite (no active turn from the store's point of view)
+    // demotes the turn's span to stale.
+    const demoted = applyIndexChange(seated, {
+      activeTurnId: null,
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 2,
+      changes: [
+        {
+          type: "updated",
+          entries: [
+            { ordinal: 0, entry: skeletonEntry(assistantRowId(turnId), 0) },
+          ],
+        },
+      ],
+    });
+    expect(demoted.spans).toEqual([]);
+    expect(demoted.staleSpans).toHaveLength(1);
+
+    const reserved = applyRangeResponse(
+      demoted,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          { ...assistantMessage(messageId, turnId, 2), blocks: [firstBlock] },
+        ],
+      }),
+      turnId,
+    );
+
+    expect(seatedAssistantBlocks(reserved, messageId)).toEqual([
+      firstBlock,
+      secondBlock,
+    ]);
+  });
 });
 
 describe("gaps and what to request next", () => {
