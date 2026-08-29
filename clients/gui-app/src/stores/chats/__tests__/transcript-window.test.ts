@@ -1798,6 +1798,257 @@ describe("stale spans", () => {
     );
     expect(held?.timestamp).toBe(1);
   });
+
+  it("retires a mixed stale span once the rows the replacement skeleton kept are served", () => {
+    // The span names one surviving row and one the complete replacement
+    // skeleton dropped, so `retireUnnamedStaleSpans` keeps it - correctly, for
+    // the survivor. The deleted row can then never appear in a fresh serve, so
+    // a coverage test that only asks "served yet?" pins the span in the tier
+    // for the rest of the session: holding shared budget, and keeping a record
+    // in `hydratedRecords` that the row merger will never draw.
+    const seeded = applySkeletonChunk(
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 2,
+          indexRevision: null,
+          tail: { fromOrdinal: 2, messages: [], events: [] },
+        },
+        null,
+      ),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [skeletonEntry("keep-0", 0), skeletonEntry("gone-1", 1)],
+        isFinal: true,
+      },
+    );
+    const hydrated = applyRangeResponse(
+      seeded,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["keep-0", "gone-1"],
+        messages: [userMessage("m-keep", 0), userMessage("m-gone", 1)],
+      }),
+      null,
+    );
+    expect(hydrated.spans).toHaveLength(1);
+
+    const reindexed = applyIndexChange(hydrated, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    const replacement = applySkeletonChunk(reindexed, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("keep-0", 0)],
+      isFinal: true,
+    });
+    // Kept for its survivor, exactly as the unnamed-span rule intends.
+    expect(replacement.skeletonComplete).toBe(true);
+    expect(replacement.staleSpans).toHaveLength(1);
+
+    const reserved = applyRangeResponse(
+      replacement,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 0,
+        rowIds: ["keep-0"],
+        messages: [userMessage("m-keep-new", 0)],
+      }),
+      null,
+    );
+
+    expect(reserved.staleSpans).toEqual([]);
+    expect(
+      hydratedRecords(reserved).messages.map((message) => message.messageId),
+    ).toEqual(["m-keep-new"]);
+  });
+
+  it("keeps a marker-only stale span through a seat, and lets the complete skeleton retire it", () => {
+    // The other side of the same rule. A tail the host served without row ids
+    // is seated on positional markers, and that tail is also where the ACTIVE
+    // turn's row lives - so "no resolvable row left, drop it" would destroy
+    // the only copy of a streaming body at the next seat. A marker proves
+    // neither served nor deleted; only the complete replacement skeleton does.
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 0,
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          events: [],
+        },
+      },
+      null,
+    );
+    expect(seeded.spans[0].rowIds).toEqual(["", ""]);
+
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 3,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [userMessage("m-2", 2)], events: [] },
+      },
+      null,
+    );
+
+    // The tail seat runs the coverage retirement, and the marker-only carry
+    // survives it with its bodies intact.
+    expect(rebased.staleSpans).toHaveLength(1);
+    expect(
+      hydratedRecords(rebased).messages.map((message) => message.messageId),
+    ).toEqual(["m-0", "m-1", "m-2"]);
+
+    const named = applySkeletonChunk(rebased, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: skeletonEntries(0, 3),
+      isFinal: true,
+    });
+
+    expect(named.staleSpans).toEqual([]);
+  });
+
+  it("retires a stale span mixing a marker with a survivor once the skeleton completes", () => {
+    // A tail the skeleton had only partly reached is seated on real ids AND
+    // markers, so this span is subject to both retirement rules at once.
+    // Keeping it for the survivor while treating the marker as permanently
+    // unproven would pin it for the rest of the session - the same defect as
+    // counting a deleted row as coverage still owed, reached from the other
+    // side. The complete skeleton settles the marker exactly as it settles any
+    // row it does not name.
+    const announced = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 3,
+        indexRevision: null,
+        tail: { fromOrdinal: 3, messages: [], events: [] },
+      },
+      null,
+    );
+    const partiallyNamed = applySkeletonChunk(announced, {
+      epoch: 1,
+      fromOrdinal: 1,
+      entries: [skeletonEntry("row-1", 1)],
+      isFinal: false,
+    });
+    const seeded = applyWindowedSnapshot(
+      partiallyNamed,
+      {
+        epoch: 1,
+        rowCount: 3,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 1,
+          messages: [userMessage("m-1", 1), userMessage("m-2", 2)],
+          events: [],
+        },
+      },
+      null,
+    );
+    expect(seeded.spans[0].rowIds).toEqual(["row-1", ""]);
+
+    const reindexed = applyIndexChange(seeded, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    expect(reindexed.staleSpans).toHaveLength(1);
+
+    const replacement = applySkeletonChunk(reindexed, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("row-1", 0)],
+      isFinal: true,
+    });
+    // Still held: the span names a survivor, so the unnamed-span rule keeps it.
+    expect(replacement.staleSpans).toHaveLength(1);
+
+    const reserved = applyRangeResponse(
+      replacement,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 0,
+        rowIds: ["row-1"],
+        messages: [userMessage("m-1-new", 0)],
+      }),
+      null,
+    );
+
+    expect(reserved.staleSpans).toEqual([]);
+  });
+
+  it("carries two positional stale spans that cover different ordinals", () => {
+    // Both candidates are seated on the unverified-identity marker, so a
+    // coverage set that folds the marker into the row-id space reads every
+    // unresolved row as the SAME row: the warmest span is admitted, and every
+    // other positional span reads as contributing nothing and is dropped
+    // however disjoint the ordinals it covers.
+    const first = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 20,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 18,
+          messages: [userMessage("m-18", 18), userMessage("m-19", 19)],
+          events: [],
+        },
+      },
+      null,
+    );
+    expect(first.spans[0].rowIds).toEqual(["", ""]);
+
+    const second = applyWindowedSnapshot(
+      first,
+      {
+        epoch: 2,
+        rowCount: 6,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 4,
+          messages: [userMessage("m-4", 4), userMessage("m-5", 5)],
+          events: [],
+        },
+      },
+      null,
+    );
+    expect(second.spans[0].rowIds).toEqual(["", ""]);
+    expect(second.staleSpans.map((span) => span.fromOrdinal)).toEqual([18]);
+
+    // A second rebase before either positional tail resolved: the epoch-2 tail
+    // is demoted beside the epoch-1 one, and they describe different rows.
+    const third = applyWindowedSnapshot(
+      second,
+      {
+        epoch: 3,
+        rowCount: 7,
+        indexRevision: null,
+        tail: { fromOrdinal: 6, messages: [userMessage("m-6", 6)], events: [] },
+      },
+      null,
+    );
+
+    expect(third.staleSpans.map((span) => span.fromOrdinal)).toEqual([4, 18]);
+    expect(
+      hydratedRecords(third).messages.map((message) => message.messageId),
+    ).toEqual(["m-4", "m-5", "m-6", "m-18", "m-19"]);
+  });
 });
 
 describe("eviction", () => {
@@ -2367,6 +2618,120 @@ describe("the streaming row's byte charge", () => {
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([0, 29]);
     // Settled on the way through, so the next read costs nothing.
     expect(evicted.unsettledByteMessageIds).toEqual([]);
+  });
+
+  it("re-bounds the stale tier when a streamed copy grows it past the shared budget", () => {
+    // The stale tier is bounded where it is BUILT, and that holds only while
+    // its spans keep their size. They do not: a rebase can leave the ACTIVE
+    // turn's row held only by a stale copy, and every delta grows that copy.
+    // `evictTranscriptWindowToBudget` judges `hydratedBytes`, which is the
+    // FRESH tier, so without a bound at settlement the carry stays over budget
+    // for the rest of the turn.
+    const bulk = "x".repeat(Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.55));
+    // The streaming row is seated FIRST, so the idle row is the warmer of the
+    // two by seat order. Only the rewrite makes the streaming span the warmest
+    // - and it has to, because warmth is the one thing that speaks for a stale
+    // span when the budget squeezes.
+    const withStream = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 10,
+        rowIds: ["row-10"],
+        messages: [userMessage("m-stream", 10)],
+      }),
+      null,
+    );
+    const seeded = applyRangeResponse(
+      withStream,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [messageWithText(userMessage("m-idle", 0), bulk)],
+      }),
+      null,
+    );
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 30,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 29,
+          messages: [userMessage("m-29", 29)],
+          events: [],
+        },
+      },
+      null,
+    );
+    // Both carried: each fits the budget on its own, and together they still
+    // do until the streamed row grows.
+    expect(rebased.staleSpans.map((span) => span.fromOrdinal)).toEqual([0, 10]);
+
+    const streamed = streamWindowMessage(rebased, "m-stream", (message) =>
+      messageWithText(message, bulk),
+    );
+    // Deferred by construction, so the figure is not yet true and the bound
+    // deliberately has nothing to act on.
+    expect(streamed.window.staleSpans).toHaveLength(2);
+
+    const settled = settleWindowBytes(streamed.window);
+
+    // Settling is where the figure becomes true, so it is the first moment the
+    // shared budget can be judged - and the streamed copy is what survives it.
+    expect(settled.staleSpans.map((span) => span.fromOrdinal)).toEqual([10]);
+    expect(
+      hydratedRecords(settled).messages.map((message) => message.messageId),
+    ).toEqual(["m-stream", "m-29"]);
+  });
+
+  it("re-measures a stale copy a remap rewrote", () => {
+    // `boundedStaleSpans` trusts `span.bytes`, so a remap that rewrites the
+    // stale records and leaves the figure behind puts the carry's share of the
+    // shared budget out by whatever the rewrite changed. Pinned as an equality
+    // against the same growth applied BEFORE the demotion, where the seat
+    // measured it: "bigger than before" would pass on any charge at all.
+    const grow = (message: Message): Message =>
+      message.messageId === "m-0"
+        ? messageWithText(message, "grown body ".repeat(400))
+        : message;
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(10),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+      null,
+    );
+    const rebase = (window: TranscriptWindow): TranscriptWindow =>
+      applyWindowedSnapshot(
+        window,
+        {
+          epoch: 2,
+          rowCount: 10,
+          indexRevision: null,
+          tail: {
+            fromOrdinal: 9,
+            messages: [userMessage("m-9", 9)],
+            events: [],
+          },
+        },
+        null,
+      );
+
+    const grownWhileFresh = rebase(mapWindowMessages(seeded, grow));
+    const grownWhileStale = mapWindowMessages(rebase(seeded), grow);
+
+    expect(grownWhileStale.staleSpans[0].bytes).toBe(
+      grownWhileFresh.staleSpans[0].bytes,
+    );
+    expect(grownWhileStale.staleSpans[0].bytes).toBeGreaterThan(
+      rebase(seeded).staleSpans[0].bytes,
+    );
   });
 });
 

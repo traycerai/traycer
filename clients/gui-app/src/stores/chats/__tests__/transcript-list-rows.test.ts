@@ -820,6 +820,49 @@ describe("transcriptListRows", () => {
     // rather than rendering beyond the end of the transcript.
     expect(kinds(rows)).toEqual(["P:0", "H:r-1", "H:r-2-past-end"]);
   });
+
+  it("keeps a streaming row at the tail when a stale span also backs it", () => {
+    // The row cannot take its old ordinal - the replacement skeleton has
+    // already filled that slot without naming it - so it reaches the tail
+    // gate as unplaced. It is also STREAMING, which makes it the newest thing
+    // the client holds, and "stale also backs it" is the ordinary condition
+    // for an active row: the turn streaming now is the turn a rebase most
+    // recently demoted. Suppressing it here is how an active row disappears
+    // until replacement hydration arrives.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 2,
+        spans: [],
+        skeleton: [skeletonEntry("r-0"), skeletonEntry("r-1")],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [span(0, ["streaming-row"])],
+      }),
+      rendered: [{ ...model("streaming-row"), statusLabel: "Streaming" }],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "P:1", "H:streaming-row"]);
+  });
+
+  it("still withholds a stale-only row that nothing live backs", () => {
+    // The other half of the same gate, and the reason it exists: pre-rebase
+    // history whose place in the new space is unknown stays behind its
+    // placeholder rather than being published at the tail, a position it
+    // never had.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 2,
+        spans: [],
+        skeleton: [skeletonEntry("r-0"), skeletonEntry("r-1")],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [span(0, ["history-row"])],
+      }),
+      rendered: [model("history-row")],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "P:1"]);
+  });
 });
 
 describe("visibleOrdinalRange", () => {

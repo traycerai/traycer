@@ -257,9 +257,16 @@ export interface TranscriptWindow {
    *
    * Retired by authority, never by trust: a freshly served span covering all
    * of a stale span's rows replaces it; a complete replacement skeleton
-   * retires every stale span it does not name; a zero-row authority clears
-   * them outright. Bounded by {@link TRANSCRIPT_WINDOW_MAX_BYTES} at the
-   * carry.
+   * retires every stale span it does not name, and settles the rows it does
+   * not name inside a span it keeps, so a span mixing survivors with deleted
+   * rows leaves once its survivors land; a zero-row authority clears them
+   * outright.
+   *
+   * Shares ONE {@link TRANSCRIPT_WINDOW_MAX_BYTES} with the fresh tier, and
+   * the share is re-applied wherever either side moves: at the carry, at every
+   * seat that grows the fresh tier, and - because a streamed copy can be held
+   * only here - wherever a rewrite grows a stale span
+   * ({@link boundStaleTierToBudget}).
    */
   readonly staleSpans: readonly HydratedSpan[];
   /**
@@ -921,7 +928,18 @@ export function mapWindowMessages(
   // rendering the pre-remap record for as long as it survives.
   const staleSpans = window.staleSpans.map((span) => {
     const messages = span.messages.map(update);
-    return changedFrom(span.messages, messages) ? { ...span, messages } : span;
+    // Re-measured on the same terms as the fresh branch. `boundedStaleSpans`
+    // trusts `span.bytes`, so a remap that rewrites the records and leaves the
+    // figure behind puts the carry's share of the shared budget out by however
+    // much the rewrite changed - and this function is explicitly off the
+    // streaming path, so it can afford exactly what the fresh branch affords.
+    return changedFrom(span.messages, messages)
+      ? {
+          ...span,
+          messages,
+          bytes: recordsByteLength(messages, span.events) + span.contextBytes,
+        }
+      : span;
   });
   const liveMessages = window.liveMessages.map(update);
   const touched =
@@ -929,13 +947,13 @@ export function mapWindowMessages(
     spans.some((span, index) => span !== window.spans[index]) ||
     staleSpans.some((span, index) => span !== window.staleSpans[index]);
   if (!touched) return window;
-  return {
+  return boundStaleTierToBudget({
     ...window,
     spans,
     staleSpans,
     liveMessages,
     hydratedBytes: totalBytes(spans),
-  };
+  });
 }
 
 /**
@@ -974,13 +992,49 @@ export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
         }
       : span,
   );
-  return {
+  // Bounded here rather than only where the tier is BUILT: settling is the
+  // moment a deferred stale figure becomes true, so it is the first moment the
+  // shared budget can be judged at all.
+  return boundStaleTierToBudget({
     ...window,
     spans,
     staleSpans,
     hydratedBytes: totalBytes(spans),
     unsettledByteMessageIds: [],
-  };
+  });
+}
+
+/**
+ * Re-apply the shared budget to the stale tier, but only when it is breached.
+ *
+ * The tier is bounded where it is BUILT ({@link staleCarrySpans},
+ * {@link retireCoveredStaleSpans}), and that holds only for as long as its
+ * spans do not change size. They do: while a turn streams, its row can be held
+ * ONLY by a stale copy, and {@link rewriteWindowMessage} grows that copy on
+ * every delta. Nothing else re-bounds it in between -
+ * {@link evictTranscriptWindowToBudget} judges `hydratedBytes`, which is the
+ * FRESH tier - so a long turn would otherwise hold the carry over budget for
+ * the rest of the turn.
+ *
+ * The cheap guard is the point. `boundedStaleSpans` scans every carried row id
+ * to build its coverage set, which is proportional to the CARRY rather than to
+ * the handful of records a rewrite touches; summing `span.bytes` is
+ * proportional to the SPANS, the same shape as the `totalBytes(spans)` these
+ * callers already compute. So the scan is paid at the crossing that needs it
+ * and nowhere else.
+ */
+function boundStaleTierToBudget(window: TranscriptWindow): TranscriptWindow {
+  if (window.staleSpans.length === 0) return window;
+  if (
+    window.hydratedBytes + totalBytes(window.staleSpans) <=
+    TRANSCRIPT_WINDOW_MAX_BYTES
+  ) {
+    return window;
+  }
+  const staleSpans = boundedStaleSpans(window.staleSpans, window.hydratedBytes);
+  return staleSpans.length === window.staleSpans.length
+    ? window
+    : { ...window, staleSpans };
 }
 
 function rewriteWindowMessage(
@@ -1037,6 +1091,15 @@ function rewriteWindowMessage(
               : span.bytes +
                 recordByteLength(next) -
                 recordByteLength(previous),
+          // A write, which is what `touchedAt` records. Bumped on the stale
+          // branch and not the fresh one because warmth is the ONLY thing
+          // protecting a stale span: the fresh tier has explicit protection
+          // (the tail, the viewport, the required ordinals), while
+          // `boundedStaleSpans` admits warmest-first and nothing else speaks
+          // for the carry. Without this, the squeeze that bound exists for
+          // could drop the very copy the reader is watching stream and leave
+          // an idle-but-warmer span in its place.
+          touchedAt: window.clock + 1,
         };
       });
   const spans = window.spans.map((span, spanIndex) => {
@@ -1067,7 +1130,11 @@ function rewriteWindowMessage(
           index === liveIndex ? update(message) : message,
         );
   return {
-    window: {
+    // A `now` charge lands on the stale tier immediately, so the budget can be
+    // judged immediately. A `deferred` one leaves `span.bytes` untouched by
+    // construction, so this is a no-op until {@link settleWindowBytes} makes
+    // the figure true - which is where the streaming path's bound lives.
+    window: boundStaleTierToBudget({
       ...window,
       spans,
       staleSpans,
@@ -1078,7 +1145,7 @@ function rewriteWindowMessage(
           ? window.unsettledByteMessageIds
           : [...window.unsettledByteMessageIds, messageId],
       clock: window.clock + 1,
-    },
+    }),
     held: true,
   };
 }
@@ -2186,21 +2253,41 @@ export function applySkeletonChunk(
  * restream ends. Whole spans: a kept span may still hold the odd unnamed row,
  * which the row merger simply never draws (it places by skeleton name or into
  * an entry-less hole, and a complete skeleton has no holes).
+ *
+ * That leniency is what makes {@link retireCoveredStaleSpans} the other half
+ * of the rule rather than a duplicate of it: this pass keeps a span for its
+ * survivors, and that one stops treating the unnamed rows beside them as
+ * coverage still owed, so the span leaves once the survivors are served
+ * instead of outliving the session.
  */
 function retireUnnamedStaleSpans(window: TranscriptWindow): TranscriptWindow {
   if (!window.skeletonComplete || window.staleSpans.length === 0) {
     return window;
   }
-  const named = new Set<string>();
-  for (const entry of window.skeleton) {
-    if (entry !== undefined) named.add(entry.rowId);
-  }
+  const named = skeletonNamedRowIds(window);
   const kept = window.staleSpans.filter((span) =>
     span.rowIds.some((rowId) => named.has(rowId)),
   );
   return kept.length === window.staleSpans.length
     ? window
     : { ...window, staleSpans: kept };
+}
+
+/**
+ * Every row id the skeleton currently names.
+ *
+ * Shared by the two retirement rules so they cannot disagree about what
+ * "the index names this row" means: {@link retireUnnamedStaleSpans} asks
+ * whether a span names any surviving row, {@link retireCoveredStaleSpans} asks
+ * the same question per row, and a second copy of the fold would be one edit
+ * away from answering them differently.
+ */
+function skeletonNamedRowIds(window: TranscriptWindow): ReadonlySet<string> {
+  const named = new Set<string>();
+  for (const entry of window.skeleton) {
+    if (entry !== undefined) named.add(entry.rowId);
+  }
+  return named;
 }
 
 function reconcileUnavailableRowsWithSkeleton(
@@ -2530,13 +2617,30 @@ function boundedStaleSpans(
   const sorted = [...candidates].sort(
     (left, right) => right.touchedAt - left.touchedAt,
   );
-  const covered = new Set<string>();
+  // Two spaces, deliberately not one set. The empty string is a positionally
+  // seated legacy tail's "identity unverified" MARKER rather than a row id
+  // (see {@link tailRowIdsFor}), so folding it into the id set would make
+  // every unresolved row in the window the same row: after the warmest
+  // positional span was admitted, every other one would read as contributing
+  // nothing and be dropped, however disjoint the ordinals it covers. Its old
+  // ordinal is the only thing known about such a row, so that is what it is
+  // deduplicated by - which still collapses two spans holding the SAME
+  // unresolved ordinal, the case the dedupe is actually for.
+  const coveredRowIds = new Set<string>();
+  const coveredOrdinals = new Set<number>();
   const carried: HydratedSpan[] = [];
   let bytes = liveBytes;
   for (const span of sorted) {
     if (bytes + span.bytes > TRANSCRIPT_WINDOW_MAX_BYTES) continue;
-    if (!span.rowIds.some((rowId) => !covered.has(rowId))) continue;
-    for (const rowId of span.rowIds) covered.add(rowId);
+    const uncovered = (rowId: string, offset: number): boolean =>
+      rowId === ""
+        ? !coveredOrdinals.has(span.fromOrdinal + offset)
+        : !coveredRowIds.has(rowId);
+    if (!span.rowIds.some(uncovered)) continue;
+    span.rowIds.forEach((rowId, offset) => {
+      if (rowId === "") coveredOrdinals.add(span.fromOrdinal + offset);
+      else coveredRowIds.add(rowId);
+    });
     carried.push(span);
     bytes += span.bytes;
   }
@@ -2553,15 +2657,42 @@ function boundedStaleSpans(
  * Runs after each seat. Coverage is judged by row id rather than ordinal
  * because that is the axis a stale span is consumed on - an ordinal
  * comparison would compare two different coordinate spaces.
+ *
+ * "Covered" therefore means SERVED or PROVEN GONE, not served alone. A
+ * complete replacement skeleton is authority on which rows exist, so a stale
+ * row it does not name is deleted rather than pending, and no future serve can
+ * ever cover it. Counting it as uncovered pins a mixed span - one naming both
+ * surviving and deleted rows, which {@link retireUnnamedStaleSpans} keeps
+ * precisely because it names a survivor - in the tier permanently: it holds
+ * shared budget and keeps obsolete records in {@link hydratedRecords} while
+ * the row merger never draws them.
+ *
+ * A row still carrying the unverified-identity marker settles on the same
+ * axis, and only there: until the replacement skeleton completes nothing has
+ * spoken about it, so it keeps its span; once the skeleton completes it can
+ * never be named, so it is gone like any other unnamed row. Both halves are
+ * load-bearing. The snapshot tail is where the marker comes from (see
+ * {@link tailRowIdsFor}) AND where the ACTIVE turn's row lives, so retiring on
+ * absence alone would destroy the only copy of a streaming body at the next
+ * seat - the loss this tier exists to prevent. Treating it as permanently
+ * unproven instead would pin any span that mixes a marker with a survivor for
+ * the rest of the session, which is the very defect the paragraph above fixes.
  */
 function retireCoveredStaleSpans(window: TranscriptWindow): TranscriptWindow {
   if (window.staleSpans.length === 0) return window;
   const fresh = new Set<string>();
   for (const span of window.spans) {
-    for (const rowId of span.rowIds) fresh.add(rowId);
+    for (const rowId of span.rowIds) {
+      if (rowId !== "") fresh.add(rowId);
+    }
   }
+  const named = window.skeletonComplete ? skeletonNamedRowIds(window) : null;
   const uncovered = window.staleSpans.filter((span) =>
-    span.rowIds.some((rowId) => !fresh.has(rowId)),
+    span.rowIds.some((rowId) =>
+      rowId === ""
+        ? named === null
+        : !fresh.has(rowId) && (named === null || named.has(rowId)),
+    ),
   );
   // Rebalanced against the bytes the fresh spans NOW hold, not only bounded
   // at the carry: every seat that grows the fresh tier shrinks the stale

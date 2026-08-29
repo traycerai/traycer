@@ -300,6 +300,57 @@ function isExplicitlyPendingOrStreaming(model: ChatMessageModel): boolean {
 }
 
 /**
+ * "Is this rendered model backed by something the client holds LIVE?"
+ *
+ * One predicate, because two callers ask it about the same models for the same
+ * reason and a second copy drifts: the invalidated merge asks it to decide
+ * which unplaced records still belong at the tail, and
+ * {@link appendUnplacedRenderedRows} asks it to decide whether a model the
+ * STALE tier also backs is nonetheless the newest thing the client holds. A
+ * narrower answer in either place hides an active row behind a placeholder
+ * until replacement hydration arrives, which is the failure the stale tier
+ * exists to prevent.
+ *
+ * The four backings are four different ways a live record reaches the
+ * renderer: as a row id, as a persistent id the row was projected under, as a
+ * setup card the event log materialized, and as a steer split inferred from a
+ * transient assistant's blocks. The status label is a fifth and cheapest
+ * answer - a model the renderer is itself calling Pending or Streaming is live
+ * whatever the record plumbing says.
+ *
+ * Returned as a closure over lazily-built sets rather than computed per model:
+ * `transientLiveSteerRowIds` projects the whole hydrated record set and
+ * `projectedLiveSetupRowIds` projects the live one, and this runs on the
+ * per-token path where most calls never get past the first two membership
+ * tests.
+ */
+function liveBackingLookup(
+  window: TranscriptWindow,
+  rendered: readonly ChatMessageModel[],
+): (model: ChatMessageModel) => boolean {
+  let liveRowIds: ReadonlySet<string> | null = null;
+  let setupRowIds: ReadonlySet<string> | null = null;
+  let steerRowIds: ReadonlySet<string> | null = null;
+  return (model) => {
+    if (isExplicitlyPendingOrStreaming(model)) return true;
+    liveRowIds ??= liveRecordRowIds(window);
+    if (liveRowIds.has(model.id)) return true;
+    setupRowIds ??= projectedLiveSetupRowIds(window, rendered);
+    if (setupRowIds.has(model.id)) return true;
+    // A model carrying a persistent id was projected FROM a record, so that id
+    // is where its liveness lives; one without a persistent id can only be an
+    // inference the renderer drew from a sibling's blocks, which is what the
+    // steer projection answers for. Neither test says anything about the other
+    // kind of model, so they are exclusive rather than a second disjunct.
+    if (model.persistentMessageId !== null) {
+      return liveRowIds.has(model.persistentMessageId);
+    }
+    steerRowIds ??= transientLiveSteerRowIds(window);
+    return steerRowIds.has(model.id);
+  };
+}
+
+/**
  * Placeholder rows already built, keyed by the skeleton they were built from.
  *
  * This function reruns on every block delta - `transcriptWindow` is replaced
@@ -468,9 +519,8 @@ function invalidatedTranscriptListRows(
   window: TranscriptWindow,
   rendered: readonly ChatMessageModel[],
 ): readonly TranscriptListRow[] {
-  const liveRowIds = liveRecordRowIds(window);
+  const isLiveBacked = liveBackingLookup(window, rendered);
   const retainedSpanRowIds = spanRowIds(window.spans);
-  const liveSetupRowIds = projectedLiveSetupRowIds(window, rendered);
   const staleByOrdinal = new Map<number, ChatMessageModel>();
   const staleSeatedRowIds = new Set<string>();
   seatStaleRows({
@@ -481,20 +531,9 @@ function invalidatedTranscriptListRows(
     placedRowIds: staleSeatedRowIds,
     suppressedOrdinals: new Set<number>(),
   });
-  let liveTransientSteerRowIds: ReadonlySet<string> | null = null;
   const unplacedRendered = rendered.filter((model) => {
     if (staleSeatedRowIds.has(model.id)) return false;
-    const liveBacked =
-      isExplicitlyPendingOrStreaming(model) ||
-      liveRowIds.has(model.id) ||
-      liveSetupRowIds.has(model.id) ||
-      (model.persistentMessageId === null &&
-        (liveTransientSteerRowIds ??= transientLiveSteerRowIds(window)).has(
-          model.id,
-        )) ||
-      (model.persistentMessageId !== null &&
-        liveRowIds.has(model.persistentMessageId));
-    return !retainedSpanRowIds.has(model.id) && liveBacked;
+    return !retainedSpanRowIds.has(model.id) && isLiveBacked(model);
   });
   const placeholders = invalidatedPlaceholderRows(window.rowCount);
   const ordinalRows =
@@ -682,9 +721,12 @@ export function transcriptListRows(input: {
  *
  * A model only a STALE span backs is pre-rebase history whose place in the
  * new space is not yet known - appending it to the tail would publish it at a
- * position it never had. It stays behind its placeholder unless a live record
- * also backs it, in which case it is the newest thing the client holds and
- * belongs at the tail exactly as any live record does.
+ * position it never had. It stays behind its placeholder unless it is also
+ * LIVE-backed ({@link liveBackingLookup}), in which case it is the newest
+ * thing the client holds and belongs at the tail exactly as any live record
+ * does. "Also backed by stale" is extremely ordinary for an active row: the
+ * turn that is streaming right now is the turn a rebase most recently
+ * demoted, so the narrow reading of that test is how an active row disappears.
  */
 function appendUnplacedRenderedRows(input: {
   readonly window: TranscriptWindow;
@@ -694,18 +736,19 @@ function appendUnplacedRenderedRows(input: {
   readonly rows: TranscriptListRow[];
 }): void {
   const { window } = input;
-  let unplacedLiveRowIds: ReadonlySet<string> | null = null;
+  let isLiveBacked: ((model: ChatMessageModel) => boolean) | null = null;
   const staleRowIds = spanRowIds(window.staleSpans);
   for (const model of input.rendered) {
     if (input.placedRowIds.has(model.id)) continue;
     if (input.skeletonOrdinals.has(model.id)) continue;
     if (staleRowIds.has(model.id)) {
-      unplacedLiveRowIds ??= liveRecordRowIds(window);
-      const liveBacked =
-        unplacedLiveRowIds.has(model.id) ||
-        (model.persistentMessageId !== null &&
-          unplacedLiveRowIds.has(model.persistentMessageId));
-      if (!liveBacked) continue;
+      // The SAME live-backed question the invalidated merge asks, from the
+      // same predicate. Asking a narrower one here - row ids only - suppresses
+      // a streaming assistant, a projected setup card or a steer split whose
+      // pre-rebase copy happens to sit in the stale tier, and the row vanishes
+      // from the tail until replacement hydration arrives.
+      isLiveBacked ??= liveBackingLookup(window, input.rendered);
+      if (!isLiveBacked(model)) continue;
     }
     input.rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
   }
