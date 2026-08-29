@@ -48,6 +48,7 @@ import {
 } from "@/stores/epics/artifact-version-history-panel-store";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useArtifactVersionHistoryAvailable } from "@/hooks/epic/use-artifact-version-history-available";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
@@ -378,7 +379,16 @@ function ArtifactVersionHistoryPanel(props: {
 }): ReactNode {
   const tileNavigation = useEpicTileNavigation();
   const viewTabId = useEpicViewTabId();
-  const canRestore = isEditableRole(useEpicPermissionRole());
+  const supportsRestore = useHostSupportsMethod(
+    props.hostId,
+    "epic.artifactVersions.restore",
+  );
+  const supportsSettings = useHostSupportsMethod(
+    props.hostId,
+    "epic.artifactVersionSettings.get",
+  );
+  const permissionRole = useEpicPermissionRole();
+  const canRestore = supportsRestore && isEditableRole(permissionRole);
   const [maximized, setMaximized] = useState(false);
   const panelWidthPx = useArtifactVersionHistoryPanelWidthPx();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -407,7 +417,7 @@ function ArtifactVersionHistoryPanel(props: {
     method: "epic.artifactVersionSettings.get",
     params: {},
     cacheKeyIdentity: undefined,
-    options: { enabled: true },
+    options: { enabled: supportsSettings },
   });
   const loadOlder = useHostScopedMutationForClient(props.client, {
     method: "epic.artifactVersions.list",

@@ -3,8 +3,8 @@ import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
 /**
- * Whether the tab's host negotiated every RPC the artifact version history
- * control needs, and an Epic session is actually open.
+ * Whether the tab's host negotiated the read RPCs the artifact version
+ * history control needs, and an Epic session is actually open.
  *
  * Shared by `ArtifactVersionHistoryEntryPointContent` (which gates the
  * trigger itself) and by tiles whose header contains only that trigger
@@ -23,19 +23,5 @@ export function useArtifactVersionHistoryAvailable(): boolean {
     hostId,
     "epic.artifactVersions.getBlob",
   );
-  const supportsRestore = useHostSupportsMethod(
-    hostId,
-    "epic.artifactVersions.restore",
-  );
-  const supportsSettings = useHostSupportsMethod(
-    hostId,
-    "epic.artifactVersionSettings.get",
-  );
-  return (
-    openEpicHandle !== null &&
-    supportsList &&
-    supportsBlob &&
-    supportsRestore &&
-    supportsSettings
-  );
+  return openEpicHandle !== null && supportsList && supportsBlob;
 }

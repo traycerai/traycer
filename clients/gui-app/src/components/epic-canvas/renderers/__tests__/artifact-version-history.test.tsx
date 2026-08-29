@@ -481,13 +481,32 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(consoleError).toHaveBeenCalled();
   });
 
-  it("stays hidden unless every negotiated history method is supported", () => {
-    state.supportedMethods.delete("epic.artifactVersions.restore");
+  it("stays hidden unless both negotiated history read methods are supported", () => {
+    state.supportedMethods.delete("epic.artifactVersions.getBlob");
 
     renderHistory();
 
-    expect(new Set(state.supportCalls)).toEqual(new Set(HISTORY_METHODS));
+    expect(new Set(state.supportCalls)).toEqual(
+      new Set(["epic.artifactVersions.list", "epic.artifactVersions.getBlob"]),
+    );
     expect(screen.queryByTestId("artifact-version-history-entry")).toBeNull();
+  });
+
+  it("keeps read-only history available without restore or settings RPCs", () => {
+    state.supportedMethods.delete("epic.artifactVersions.restore");
+    state.supportedMethods.delete("epic.artifactVersionSettings.get");
+    state.historyEntries = [observation("observation-a", "Read-only history")];
+
+    openHistory();
+
+    expect(new Set(state.supportCalls)).toEqual(new Set(HISTORY_METHODS));
+    expect(screen.getByText("Read-only history")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
+    expect(
+      state.queryCalls.find(
+        (call) => call.method === "epic.artifactVersionSettings.get",
+      )?.options.enabled,
+    ).toBe(false);
   });
 
   it("preserves capture order while using observation identity for duplicate content", () => {
