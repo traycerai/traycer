@@ -27,7 +27,12 @@ import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as Y from "yjs";
-import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+// The `@1.1` row, which is what the negotiated contract actually returns. Typing
+// the fixture against the LATEST row rather than a hand-picked field list is what
+// makes the next field added to this response fail HERE, at compile time, instead
+// of silently leaving the mock a shape no host can produce - which is exactly how
+// `docResident` slipped past this file.
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -84,11 +89,13 @@ interface Fixture {
   readonly queryClient: QueryClient;
   readonly handle: OpenEpicStoreHandle;
   readonly listCalls: { value: number };
-  readonly records: ChatRecordSummary[];
+  readonly records: ChatRecordSummaryV11[];
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 }
 
-function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
+function record(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
   return {
     chatId: "chat-1",
     ownerUserId: VIEWER_ID,
@@ -104,6 +111,11 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
     revision: 1,
     visibility: "private",
     origin: "own",
+    // Registry-backed, which is what this fixture's rows are: they are minted
+    // through the `epic.createChat` handler below. A `true` row would be one
+    // read out of the epic doc's `chats` subtree, which this fixture never
+    // exercises.
+    docResident: false,
     ...overrides,
   };
 }
@@ -167,7 +179,7 @@ function newSession(): OpenEpicStoreHandle {
 }
 
 function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
-  const records: ChatRecordSummary[] = [];
+  const records: ChatRecordSummaryV11[] = [];
   const listCalls = { value: 0 };
   const requestSeq = { value: 0 };
   const queryClient = new QueryClient({
