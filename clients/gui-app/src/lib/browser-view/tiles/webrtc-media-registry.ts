@@ -75,11 +75,41 @@ export interface WebrtcVideoStatsFields {
   readonly iceCandidatePairType: string;
 }
 
+/**
+ * The input DataChannels the helper (the OFFERER) creates, so they arrive here
+ * through `ondatachannel` rather than being opened from this side.
+ */
+export type BrowserInputChannelLabel = "input-lossy" | "input-reliable";
+
+const INPUT_CHANNEL_LABELS: readonly BrowserInputChannelLabel[] = [
+  "input-lossy",
+  "input-reliable",
+];
+
+function inputChannelLabel(label: string): BrowserInputChannelLabel | null {
+  return INPUT_CHANNEL_LABELS.find((known) => known === label) ?? null;
+}
+
+/**
+ * One inbound DataChannel, adapted the same way {@link MediaPeer} adapts the
+ * connection: the registry stays testable without an `RTCDataChannel`.
+ */
+export interface MediaDataChannel {
+  readonly label: string;
+  isOpen(): boolean;
+  send(payload: string): void;
+  close(): void;
+  /** Open/close, so the registry can republish its readiness. */
+  onStateChange: (() => void) | null;
+}
+
 export interface MediaPeerHandlers {
   /** A locally gathered candidate to trickle back. */
   readonly onLocalIceCandidate: (candidate: WebrtcIceCandidate) => void;
   /** The remote stream, once `ontrack` delivers it. */
   readonly onStream: (stream: MediaStream) => void;
+  /** An inbound DataChannel (ticket 15's input transport). */
+  readonly onDataChannel: (channel: MediaDataChannel) => void;
   /** Track death or a terminal connection state. */
   readonly onFailure: (reason: string) => void;
 }
@@ -114,6 +144,12 @@ export interface BrowserMediaSnapshot {
   /** Stable while a round streams - hand it straight to `video.srcObject`. */
   readonly stream: MediaStream | null;
   readonly failureReason: string | null;
+  /**
+   * Both input channels of the CURRENT round are open, so
+   * {@link BrowserMediaEntry.sendInput} can carry human input. Never true for
+   * a superseded round - its channels are closed on arrival or at supersede.
+   */
+  readonly inputReady: boolean;
 }
 
 export interface BrowserMediaEntry {
@@ -136,6 +172,13 @@ export interface BrowserMediaEntry {
   reportFirstDecodedFrame(): void;
   /** A sink-level failure the registry cannot observe (deadlines, decode). */
   reportFailure(reason: string): void;
+  /**
+   * Sends one already-encoded client frame on the current round's channel.
+   * `false` (a no-op) when the channel is absent, not open, or refuses the
+   * payload - the caller falls back to the mux, which is what keeps a
+   * discrete frame on exactly one transport.
+   */
+  sendInput(label: BrowserInputChannelLabel, payload: string): boolean;
   /**
    * The current round's raw stats report, or `null` when no round is in
    * flight (ticket 11's periodic sampler skips a tick rather than throwing).
@@ -213,6 +256,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     negotiationId: null,
     stream: null,
     failureReason: null,
+    inputReady: false,
   };
 
   let round: {
@@ -221,6 +265,8 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     readonly peer: MediaPeer;
     /** Candidates that arrived before the answer set the remote description. */
     readonly pendingCandidates: WebrtcIceCandidate[];
+    /** This round's input channels, by label. */
+    readonly channels: Map<BrowserInputChannelLabel, MediaDataChannel>;
     remoteReady: boolean;
     reportedLive: boolean;
     reportedFailed: boolean;
@@ -254,12 +300,37 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     });
   };
 
+  const closeChannels = (): void => {
+    for (const channel of round?.channels.values() ?? []) {
+      channel.onStateChange = null;
+      channel.close();
+    }
+    round?.channels.clear();
+  };
+
+  const syncInputReady = (): void => {
+    const channels = round?.channels;
+    const ready =
+      channels !== undefined &&
+      INPUT_CHANNEL_LABELS.every(
+        (label) => channels.get(label)?.isOpen() === true,
+      );
+    if (ready === snapshot.inputReady) return;
+    publish({ inputReady: ready });
+  };
+
   const fail = (reason: string): void => {
     if (round === null) return;
     report("failed", reason);
+    closeChannels();
     round.peer.close();
     round = null;
-    publish({ phase: "failed", stream: null, failureReason: reason });
+    publish({
+      phase: "failed",
+      stream: null,
+      failureReason: reason,
+      inputReady: false,
+    });
   };
 
   const entry: BrowserMediaEntry = {
@@ -280,6 +351,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
       ) {
         return;
       }
+      closeChannels();
       round?.peer.close();
 
       const peer = createPeer({
@@ -291,6 +363,18 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
           if (round?.negotiationId !== negotiationId) return;
           publish({ phase: "streaming", stream });
         },
+        onDataChannel: (channel) => {
+          const label = inputChannelLabel(channel.label);
+          // A channel from a superseded round (or one nothing here reads) is
+          // dropped on arrival - same discipline as a stale offer.
+          if (label === null || round?.negotiationId !== negotiationId) {
+            channel.close();
+            return;
+          }
+          round.channels.set(label, channel);
+          channel.onStateChange = syncInputReady;
+          syncInputReady();
+        },
         onFailure: (reason) => {
           if (round?.negotiationId !== negotiationId) return;
           fail(reason);
@@ -301,6 +385,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
         port,
         peer,
         pendingCandidates: [],
+        channels: new Map<BrowserInputChannelLabel, MediaDataChannel>(),
         remoteReady: false,
         reportedLive: false,
         reportedFailed: false,
@@ -311,6 +396,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
         negotiationId,
         stream: null,
         failureReason: null,
+        inputReady: false,
       });
 
       void peer
@@ -347,6 +433,23 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     },
 
     getStats: () => round?.peer.getStats() ?? Promise.resolve(null),
+
+    sendInput: (label, payload) => {
+      // Both or neither: with only one channel up, moves would take the
+      // channel while the clicks they precede took the mux, and the two
+      // transports have no ordering between them.
+      if (!snapshot.inputReady) return false;
+      const channel = round?.channels.get(label);
+      if (channel === undefined || !channel.isOpen()) return false;
+      try {
+        channel.send(payload);
+        return true;
+      } catch {
+        // A channel closing mid-send throws; the caller re-sends on the mux.
+        syncInputReady();
+        return false;
+      }
+    },
   };
 
   return {
@@ -354,6 +457,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     refCount: 0,
     closeTimer: null,
     dispose: () => {
+      closeChannels();
       round?.peer.close();
       round = null;
       listeners.clear();
@@ -395,6 +499,27 @@ export function createBrowserMediaPeer(handlers: MediaPeerHandlers): MediaPeer {
     };
     stream = received;
     handlers.onStream(received);
+  };
+  connection.ondatachannel = (event) => {
+    const channel = event.channel;
+    const adapted: MediaDataChannel = {
+      label: channel.label,
+      isOpen: () => channel.readyState === "open",
+      send: (payload) => {
+        channel.send(payload);
+      },
+      close: () => {
+        channel.close();
+      },
+      onStateChange: null,
+    };
+    const notify = (): void => {
+      adapted.onStateChange?.();
+    };
+    channel.onopen = notify;
+    channel.onclose = notify;
+    channel.onerror = notify;
+    handlers.onDataChannel(adapted);
   };
   connection.onconnectionstatechange = () => {
     if (connection.connectionState === "failed") {

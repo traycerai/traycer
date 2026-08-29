@@ -28,6 +28,7 @@ import {
   type ScreencastNavInput,
   type ScreencastPointerInput,
 } from "@/lib/browser-view/sessions/screencast-input-encoding";
+import type { BrowserInputChannelLabel } from "@/lib/browser-view/tiles/webrtc-media-registry";
 import { wheelDeltaToPixels } from "@/lib/wheel-delta-to-pixels";
 
 const WHEEL_LINE_HEIGHT_PX = 16;
@@ -80,6 +81,17 @@ export interface ScreencastControllerListeners {
   readonly onDialogSettled: () => void;
 }
 
+/**
+ * Ticket 15's input transport: the video plane's DataChannels, as one
+ * function. `false` means the channel could not take the frame, and the
+ * controller re-sends it on the mux - which is what keeps every discrete frame
+ * on exactly one transport across a switchover.
+ */
+export type ScreencastInputTransport = (
+  label: BrowserInputChannelLabel,
+  payload: string,
+) => boolean;
+
 export interface ScreencastController {
   readonly activeArmEpoch: () => number | null;
   readonly desiredArmEpoch: () => number | null;
@@ -104,6 +116,17 @@ export interface ScreencastController {
    * it (`captureMode` frame); nothing else about the mode lives here.
    */
   readonly setCaptureMode: (mode: BrowserScreencastCaptureMode) => void;
+  /**
+   * The DataChannel sink for human input, or `null` for mux-only. Only the
+   * high-frequency input frames ever look at it; arm/disarm, nav, dialog,
+   * viewport, ack and videoPlaneState stay on the mux unconditionally.
+   *
+   * A transport is adopted at the next `noteArmed`, not here - see the
+   * reordering hazard documented there. `null` takes effect immediately.
+   */
+  readonly setInputTransport: (
+    transport: ScreencastInputTransport | null,
+  ) => void;
   /** Frame arrived over the wire: freshness clock + the ack the host gates the next capture on. Fires before paint - a tile acks on arrival, same as PiP. */
   readonly noteFrameArrived: (sequence: number) => void;
   /** Allocates the next arm epoch without sending; the caller emits the frame. */
@@ -162,6 +185,8 @@ export function createScreencastController(options: {
   let presentedSequence: number | null = null;
   let viewportEpoch: number | null = null;
   let captureMode: BrowserScreencastCaptureMode = "jpeg";
+  let inputTransport: ScreencastInputTransport | null = null;
+  let pendingInputTransport: ScreencastInputTransport | null = null;
   let lastFrameAt: number | null = null;
   let activeDialog: ScreencastDialog | null = null;
   let composing = false;
@@ -220,13 +245,28 @@ export function createScreencastController(options: {
       if (frame.type === "rawKeyDown") forwardedKeyDowns.set(frame.code, frame);
       else if (frame.type === "keyUp") forwardedKeyDowns.delete(frame.code);
     }
-    sendFrame({
+    // One encoder, two sinks: the DataChannels carry the SAME wire frame the
+    // mux would have carried, so the host has a single parse path.
+    const wire: BrowserScreencastClientFrame = {
       ...frame,
       hasBinaryPayload: false,
       armEpoch: activeArmEpoch,
       seq: inputSequence,
-    });
+    };
     inputSequence += 1;
+    const transport = inputTransport;
+    const label =
+      transport === null || captureMode !== "video"
+        ? null
+        : inputTransportLabel(frame);
+    if (
+      label !== null &&
+      transport !== null &&
+      transport(label, JSON.stringify(wire))
+    ) {
+      return;
+    }
+    sendFrame(wire);
   };
 
   const releaseCapturedPointer = (): void => {
@@ -408,6 +448,16 @@ export function createScreencastController(options: {
   };
 
   const noteArmed = (armEpoch: number): void => {
+    // A promotion is adopted HERE, never mid-arm: the two transports have no
+    // ordering between them and the mux runs seconds behind the channel, so a
+    // frame already in flight on the mux would arrive after (and be
+    // stale-rejected against) the first channel frame that overtook it - a
+    // press left on the mux turns a drag into a hover. The host resets its
+    // `lastSeq` per arm, so nothing sent before this epoch can reorder against
+    // it. Cost: after a mid-arm promotion, input stays on the mux until the
+    // next arm. A host-side input ack carrying `lastSeq` would let the client
+    // promote as soon as the mux is drained instead.
+    if (pendingInputTransport !== null) inputTransport = pendingInputTransport;
     activeArmEpoch = armEpoch;
     deliverArmBuffer();
     const pending = pendingNav;
@@ -684,6 +734,12 @@ export function createScreencastController(options: {
       // a press held at `castSequence` 37 would replay against epoch 37.
       armBuffer.drop();
     },
+    setInputTransport: (transport) => {
+      pendingInputTransport = transport;
+      // Demotion is immediate and safe (the fast frames were sent first, so
+      // they arrive first); promotion waits for `noteArmed`.
+      if (transport === null) inputTransport = null;
+    },
     noteFrameArrived: (sequence) => {
       lastFrameAt = Date.now();
       sendFrame({ kind: "ack", hasBinaryPayload: false, sequence });
@@ -823,6 +879,24 @@ export function createScreencastController(options: {
       },
     },
   };
+}
+
+/**
+ * Which channel a frame belongs on, or `null` for the mux. Moves and wheels
+ * are droppable, so they take the unordered lossy channel; everything a page
+ * would mis-handle out of order or missing takes the reliable one. Nav frames
+ * ride `sendInput` too and are control - they stay on the mux.
+ */
+function inputTransportLabel(
+  frame: ScreencastInputFrame,
+): BrowserInputChannelLabel | null {
+  if (frame.kind === "keyboard" || frame.kind === "insertText") {
+    return "input-reliable";
+  }
+  if (frame.kind !== "pointer") return null;
+  return frame.type === "move" || frame.type === "wheel"
+    ? "input-lossy"
+    : "input-reliable";
 }
 
 function focusScreencastAddressBar(tile: HTMLElement): void {

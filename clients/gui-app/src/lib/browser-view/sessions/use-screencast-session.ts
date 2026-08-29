@@ -348,11 +348,12 @@ export function useScreencastSession(
     // with the PiP viewer. What is per-subscription is the SIGNALING: the
     // reply channel is this stream, and the host re-attaches (and re-offers)
     // on the next subscribe.
+    const media = acquireBrowserMediaEntry({
+      key: { hostId, sessionId, tabId },
+      createPeer: createBrowserMediaPeer,
+    });
     const videoPlane = createVideoPlaneSession({
-      media: acquireBrowserMediaEntry({
-        key: { hostId, sessionId, tabId },
-        createPeer: createBrowserMediaPeer,
-      }),
+      media,
       port: {
         sendSdpAnswer: ({ negotiationId, sdp }) => {
           send({
@@ -392,6 +393,22 @@ export function useScreencastSession(
       onVideoStats: setVideoStats,
     });
     videoPlaneRef.current = videoPlane;
+
+    // Ticket 15: human input rides the round's DataChannels while both are
+    // open, and reverts to the mux the moment they are not. Two independent
+    // reverts, deliberately - the entry publishes `inputReady: false` on
+    // channel close / round supersede / peer failure, and the controller's
+    // own `captureMode !== "video"` gate covers a plane fallback whose
+    // channels have not closed yet.
+    const syncInputTransport = (): void => {
+      controller.setInputTransport(
+        media.entry.getSnapshot().inputReady
+          ? (label, payload) => media.entry.sendInput(label, payload)
+          : null,
+      );
+    };
+    const unsubscribeInputTransport = media.entry.subscribe(syncInputTransport);
+    syncInputTransport();
 
     // The agent cursor's own view of the plane state, kept beside the
     // controller's rather than read back out of it: what an `agentCursor`
@@ -537,6 +554,8 @@ export function useScreencastSession(
       controller.notePresentedSequence(null);
       controller.noteViewportEpoch(null);
       controller.setCaptureMode("jpeg");
+      unsubscribeInputTransport();
+      controller.setInputTransport(null);
       videoPlane.close();
       if (videoPlaneRef.current === videoPlane) videoPlaneRef.current = null;
       setVideoStats(null);

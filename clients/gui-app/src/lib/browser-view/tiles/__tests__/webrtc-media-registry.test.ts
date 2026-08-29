@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireBrowserMediaEntry,
   activeBrowserMediaKeyIds,
+  type MediaDataChannel,
   type MediaPeer,
   type MediaPeerHandlers,
   type WebrtcIceCandidate,
@@ -91,6 +92,31 @@ function recordingPort(): RecordingPort {
 function fakeStream(id: string): MediaStream {
   const partial: Pick<MediaStream, "id"> = { id };
   return partial as MediaStream;
+}
+
+interface FakeChannel extends MediaDataChannel {
+  readonly sent: string[];
+  open: boolean;
+  closeCount: number;
+}
+
+function fakeChannel(label: string): FakeChannel {
+  const channel: FakeChannel = {
+    label,
+    sent: [],
+    open: true,
+    closeCount: 0,
+    isOpen: () => channel.open,
+    send: (payload) => {
+      channel.sent.push(payload);
+    },
+    close: () => {
+      channel.open = false;
+      channel.closeCount += 1;
+    },
+    onStateChange: null,
+  };
+  return channel;
 }
 
 let keyCounter = 0;
@@ -455,6 +481,84 @@ describe("webrtc media registry", () => {
     held.release();
     await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
     expect(harness.peers[1]?.closeCount).toBe(1);
+  });
+
+  it("carries input once both channels of the current round are open", async () => {
+    const key = nextKey();
+    const harness = peerHarness();
+    const port = recordingPort();
+    const held = acquireBrowserMediaEntry({
+      key,
+      createPeer: harness.createPeer,
+    });
+
+    held.entry.acceptOffer({ negotiationId: 1, sdp: "offer", port });
+    await vi.advanceTimersByTimeAsync(0);
+    const handlers = harness.peers[0].handlers;
+
+    const lossy = fakeChannel("input-lossy");
+    handlers.onDataChannel(lossy);
+    // One channel is not a transport: the reliable half has to be open too.
+    expect(held.entry.getSnapshot().inputReady).toBe(false);
+    expect(held.entry.sendInput("input-lossy", "{}")).toBe(false);
+
+    const reliable = fakeChannel("input-reliable");
+    handlers.onDataChannel(reliable);
+    expect(held.entry.getSnapshot().inputReady).toBe(true);
+    expect(held.entry.sendInput("input-reliable", '{"kind":"ping"}')).toBe(
+      true,
+    );
+    expect(reliable.sent).toEqual(['{"kind":"ping"}']);
+    expect(lossy.sent).toEqual([]);
+
+    reliable.open = false;
+    reliable.onStateChange?.();
+    expect(held.entry.getSnapshot().inputReady).toBe(false);
+    expect(held.entry.sendInput("input-reliable", "{}")).toBe(false);
+
+    held.release();
+    await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+  });
+
+  it("closes a superseded round's channels and ignores late ones", async () => {
+    const key = nextKey();
+    const harness = peerHarness();
+    const port = recordingPort();
+    const held = acquireBrowserMediaEntry({
+      key,
+      createPeer: harness.createPeer,
+    });
+
+    held.entry.acceptOffer({ negotiationId: 1, sdp: "offer-1", port });
+    await vi.advanceTimersByTimeAsync(0);
+    const stale = harness.peers[0].handlers;
+    const staleLossy = fakeChannel("input-lossy");
+    const staleReliable = fakeChannel("input-reliable");
+    stale.onDataChannel(staleLossy);
+    stale.onDataChannel(staleReliable);
+    expect(held.entry.getSnapshot().inputReady).toBe(true);
+
+    held.entry.acceptOffer({ negotiationId: 2, sdp: "offer-2", port });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(staleLossy.closeCount).toBe(1);
+    expect(staleReliable.closeCount).toBe(1);
+    expect(held.entry.getSnapshot().inputReady).toBe(false);
+
+    // A channel the superseded round negotiates after the fact is dropped on
+    // arrival - the same discipline stale signaling gets.
+    const late = fakeChannel("input-reliable");
+    stale.onDataChannel(late);
+    expect(late.closeCount).toBe(1);
+    expect(held.entry.getSnapshot().inputReady).toBe(false);
+    expect(held.entry.sendInput("input-reliable", "{}")).toBe(false);
+
+    const fresh = harness.peers[1].handlers;
+    fresh.onDataChannel(fakeChannel("input-lossy"));
+    fresh.onDataChannel(fakeChannel("input-reliable"));
+    expect(held.entry.getSnapshot().inputReady).toBe(true);
+
+    held.release();
+    await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
   });
 
   it("keeps separate keys on separate peers", async () => {
