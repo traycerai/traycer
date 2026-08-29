@@ -163,20 +163,30 @@ async function launchElectron(executable, pageUrl, debuggingPort) {
   const profilePath = await mkdtemp(path.join(tmpdir(), "traycer-tree-zoom-"));
   const electronEnv = { ...process.env };
   delete electronEnv.ELECTRON_RUN_AS_NODE;
+  const electronArgs = [
+    "--headless",
+    "--no-sandbox",
+    `--remote-debugging-port=${debuggingPort}`,
+    "--remote-allow-origins=*",
+    `--user-data-dir=${profilePath}`,
+    path.join(
+      projectRoot,
+      "src/__tests__/browser/pierre-tree-zoom-electron-app",
+    ),
+    pageUrl,
+  ];
+  const needsVirtualDisplay =
+    process.platform === "linux" && electronEnv.DISPLAY === undefined;
   const electronProcess = spawn(
-    executable,
-    [
-      "--headless",
-      "--no-sandbox",
-      `--remote-debugging-port=${debuggingPort}`,
-      "--remote-allow-origins=*",
-      `--user-data-dir=${profilePath}`,
-      path.join(
-        projectRoot,
-        "src/__tests__/browser/pierre-tree-zoom-electron-app",
-      ),
-      pageUrl,
-    ],
+    needsVirtualDisplay ? "xvfb-run" : executable,
+    needsVirtualDisplay
+      ? [
+          "--auto-servernum",
+          "--server-args=-screen 0 1280x1024x24",
+          executable,
+          ...electronArgs,
+        ]
+      : electronArgs,
     {
       cwd: projectRoot,
       env: electronEnv,
