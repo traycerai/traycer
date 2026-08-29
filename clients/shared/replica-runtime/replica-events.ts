@@ -126,10 +126,49 @@ export interface RecordPollAnswerEvent<TRow> {
   readonly issuedAtFence: number | null;
 }
 
+/**
+ * The serving node's trust in the rows it already sent CHANGED - it has
+ * reconciled with the cloud since the snapshot it served from its own replica.
+ *
+ * ## Why the snapshot's `trust` field is not enough on its own
+ *
+ * Seed-first serving means a node answers from its own replica immediately and
+ * reconciles upstream in the background, so the FIRST snapshot of a warm epic is
+ * routinely `"seed-only"`. That is a normal state, not an error - but it is one
+ * the node leaves, and a client with no event for the leaving would keep
+ * labelling healthy data as stale for the rest of the session and keep gating
+ * privileged actions on an authority check that is never relieved.
+ *
+ * A snapshot cannot carry the correction, and not merely as a matter of taste:
+ * re-issuing one would mean claiming a `basis` - a fresh open, a replaced
+ * replica, a refused resume - and none of those happened. Nor can a transaction
+ * carry it, because a trust change touches no row, and an envelope with no
+ * changes would consume a lane position for a commit that never happened.
+ *
+ * ## Addressed by epoch, cursored by nothing
+ *
+ * It carries `authorityEpoch` so a client can drop one that arrives for a
+ * replica it has already replaced, and deliberately NO cursor: this is not a
+ * point in the lane's history, it is a statement about the replica the history
+ * belongs to. Giving it a position would let a consumer advance a resume cursor
+ * past work no commit did.
+ *
+ * `null` trust is unrepresentable here on purpose. An adapter that cannot tell
+ * reports `trust: null` on its SNAPSHOT and simply never emits this - "I cannot
+ * distinguish seed from reconciled" is a property of the adapter's contract,
+ * not a transition its authority can announce.
+ */
+export interface RecordTrustEvent {
+  readonly kind: "record-trust";
+  readonly authorityEpoch: string;
+  readonly trust: SeedTrust;
+}
+
 export type RecordReplicaEvent<TRow> =
   | RecordSnapshotEvent<TRow>
   | RecordTransactionEvent<TRow>
-  | RecordPollAnswerEvent<TRow>;
+  | RecordPollAnswerEvent<TRow>
+  | RecordTrustEvent;
 
 // ─── Logs ─────────────────────────────────────────────────────────────────
 
@@ -476,8 +515,17 @@ export type MigrationStatus =
    * One-shot and terminal, and distinct from `"failed"` in the way that
    * matters: nothing was attempted, so a retry from THIS caller can never
    * succeed and must not be offered.
+   *
+   * Carries NO `reason`, unlike `"failed"`, and the asymmetry is the point.
+   * `"failed"` reports what went wrong during an attempt, which only the
+   * authority knows; here nothing was attempted and the STATE is the whole
+   * explanation. Neither `epic.status.subscribe@1.0`'s `migrationNotAllowed`
+   * frame nor its `migration: {state: "notAllowed"}` snapshot projection
+   * carries one, so an adapter asked for a reason here could only synthesise
+   * a string - and a synthesised authority-side fact is indistinguishable
+   * downstream from one the authority actually said.
    */
-  | { readonly status: "not-allowed"; readonly reason: string };
+  | { readonly status: "not-allowed" };
 
 /**
  * Control-plane facts. Records with barrier semantics on an urgent lane, kept
@@ -521,5 +569,26 @@ export type ControlEvent =
    * class's answer. It is one INPUT to a sync indicator, never the indicator.
    */
   | { readonly kind: "aggregate-dirty"; readonly dirty: boolean }
-  | { readonly kind: "epic-deleted" }
+  /**
+   * The epic is gone, with whatever attribution the authority has.
+   *
+   * The attribution is CARRIED rather than dropped because it is what the
+   * renderer says when it force-closes the tab - "deleted by Alice" against
+   * "it vanished" - and both delivery paths on the wire have it: the
+   * `epicDeleted` transition frame and the status snapshot's
+   * `deletion: {state: "deleted", attribution}` projection share one shape
+   * precisely so a transition and its current-state projection cannot
+   * disagree about it. An event that could not carry it would make the
+   * SNAPSHOT path (the one a reconnecting client takes) lossier than the
+   * transition path, which is the failure the projection exists to prevent.
+   *
+   * Both fields are nullable because attribution is best-effort: the
+   * authority may know the epic is gone without knowing who removed it, and
+   * "deleted by nobody we can name" must stay renderable.
+   */
+  | {
+      readonly kind: "epic-deleted";
+      readonly deletedByDisplayName: string | null;
+      readonly deletedByTraycerUserId: string | null;
+    }
   | { readonly kind: "migration"; readonly migration: MigrationStatus };

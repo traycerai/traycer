@@ -13,9 +13,23 @@ import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicCloudSyncStatus } from "@traycer/protocol/host/epic/subscribe";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 
-export function isWritablePermissionRole(role: PermissionRole | null): boolean {
-  return role !== "viewer" && role !== null;
-}
+/**
+ * Re-exported, not defined here.
+ *
+ * The lane adapters in `clients/shared` need the same predicate for the control
+ * event's `canWrite`, and `clients/shared` cannot import gui-app - so the
+ * canonical one moved down to `@traycer-clients/shared/epic/permission-role`
+ * and this is the renderer's name for it. Two copies of a permission predicate
+ * is the duplication class this layer's whole redesign is a reaction to, and it
+ * is the one that fails silently: a copy that drifts OPEN queues writes against
+ * an epic the user has lost access to, and nothing notices until the host
+ * refuses them.
+ *
+ * The shared version is written as an inclusion test over the writable roles
+ * rather than as an exclusion of `"viewer"`, so a fourth role added to the enum
+ * lands non-writable. Same truth table over today's three members.
+ */
+export { isWritablePermissionRole } from "@traycer-clients/shared/epic/permission-role";
 
 /**
  * Derives the VISIBLE connection status shown in the UI pill: an open

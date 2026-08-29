@@ -83,6 +83,7 @@ export type {
   RecordRow,
   RecordSnapshotEvent,
   RecordTransactionEvent,
+  RecordTrustEvent,
 } from "./replica-events";
 
 export type { GenerationGuard } from "./generation-guard";
