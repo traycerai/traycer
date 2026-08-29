@@ -280,7 +280,12 @@ describe("WorktreeDeleteStreamClient", () => {
       holders: HOLDERS,
       hasBinaryPayload: false,
     });
-    expect(onFailed).toHaveBeenCalledWith("Worktree is in use", HOLDERS);
+    expect(onFailed).toHaveBeenCalledWith(
+      "Worktree is in use",
+      HOLDERS,
+      undefined,
+      undefined,
+    );
     client.close();
   });
 });
