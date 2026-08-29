@@ -1137,17 +1137,17 @@ export function useEpicArtifactBodyAvailability(
  */
 export function useEpicArtifactBodyLease(artifactId: string | null): void {
   const handle = useOpenEpicHandle();
-  const artifactRoomId = useStore(handle.store, (s) =>
-    artifactId === null ? null : s.getArtifactRoomId(artifactId),
+  const bodyDocKey = useStore(handle.store, (s) =>
+    artifactId === null ? null : s.getArtifactBodyDocKey(artifactId),
   );
   // Layout, not passive: this is what materializes the room, and a passive
   // effect runs after paint - the tile would show its skeleton for a frame
   // before the fragment resolved. A layout effect lands the lease, and the
   // resulting store update, before the browser paints.
   useLayoutEffect(() => {
-    if (artifactId === null || artifactRoomId === null) return;
+    if (artifactId === null || bodyDocKey === null) return;
     return handle.store.getState().acquireArtifactBodyLease(artifactId);
-  }, [handle, artifactId, artifactRoomId]);
+  }, [handle, artifactId, bodyDocKey]);
 }
 
 // ─── Doc reference for editor binding ─────────────────────────────────────

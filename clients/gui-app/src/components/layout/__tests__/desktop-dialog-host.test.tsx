@@ -538,7 +538,7 @@ function createDirtyEpicHandle(
     getArtifactFragment: () => null,
     getArtifactBodyAwareness: () => null,
     getArtifactBodyAvailability: () => "unavailable",
-    getArtifactRoomId: () => null,
+    getArtifactBodyDocKey: () => null,
     acquireArtifactBodyLease: () => () => {},
     readArtifactTitle: () => null,
     detachTransport: () => undefined,

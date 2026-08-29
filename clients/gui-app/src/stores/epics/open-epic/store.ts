@@ -701,7 +701,13 @@ export interface OpenEpicState {
    * lease holder can re-acquire when the artifact's room changes underneath
    * it, which is not always visible in {@link getArtifactBodyAvailability}.
    */
-  getArtifactRoomId: (artifactId: string) => string | null;
+  /**
+   * The key the artifact-body tier holds this artifact's live doc under, for the
+   * one consumer that re-takes a lease when that doc's identity changes. The
+   * `@1` arm answers with the artifact's room; the lane arm answers with the
+   * artifact id, because `artifact.subscribe` has no rooms. See the runtime.
+   */
+  getArtifactBodyDocKey: (artifactId: string) => string | null;
   /**
    * Materialize the artifact-room backing `artifactId`'s body and hold it
    * materialized until the returned release is called.
@@ -1073,8 +1079,8 @@ export function createOpenEpicStore(
             runtime.getArtifactBodyAwareness(artifactId),
           getArtifactBodyAvailability: (artifactId) =>
             runtime.getArtifactBodyAvailability(artifactId),
-          getArtifactRoomId: (artifactId) =>
-            runtime.getArtifactRoomId(artifactId),
+          getArtifactBodyDocKey: (artifactId) =>
+            runtime.getArtifactBodyDocKey(artifactId),
           acquireArtifactBodyLease: (artifactId) =>
             runtime.acquireArtifactBodyLease(artifactId),
           readArtifactTitle: (artifactId) =>

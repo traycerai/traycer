@@ -78,7 +78,34 @@ export function useRenameCanvasTab(
           .mutateAsync({ epicId, artifactId: id, title: trimmed })
           .then(
             () => renameArtifactInTab(viewTabId, id, trimmed),
-            () => {},
+            () => {
+              // SUPERSEDED IS NOT LOST. `enqueueAndWait` throws for every
+              // non-committed terminal state, so a rename whose own
+              // authoritative echo beat its RPC ack arrives here having
+              // actually succeeded - and a bare swallow left the persisted tab
+              // snapshot holding the stale title, which a cold render then
+              // showed.
+              //
+              // The resolution cannot tell us which happened: the dead sweep
+              // fires both when this rename's echo landed and when a peer
+              // overwrote the row, and `metadata-overlay-store.ts` says so in
+              // as many words - "chain membership cannot [tell them apart],
+              // because the chain is gone in both". The authoritative ROW can.
+              // If it carries the title we sent, the write landed and the
+              // snapshot must follow it; if a peer won with a different title,
+              // theirs stands and ours must not be persisted over it; if a
+              // peer won with the same title, writing is a no-op.
+              //
+              // `noUncheckedIndexedAccess` is off, so the own-key check is
+              // what distinguishes a missing row from a present one.
+              const artifacts = epicHandle.store.getState().artifacts.byId;
+              if (
+                Object.hasOwn(artifacts, id) &&
+                artifacts[id].title === trimmed
+              ) {
+                renameArtifactInTab(viewTabId, id, trimmed);
+              }
+            },
           );
         return;
       }

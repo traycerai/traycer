@@ -257,7 +257,24 @@ export interface EpicReplicaRuntime {
   getArtifactFragment(artifactId: string): Y.XmlFragment | null;
   getArtifactBodyAwareness(artifactId: string): Awareness | null;
   getArtifactBodyAvailability(artifactId: string): EpicArtifactRoomAvailability;
-  getArtifactRoomId(artifactId: string): string | null;
+  /**
+   * The key the artifact-body tier holds this artifact's live `Y.Doc` under, or
+   * `null` when there is none.
+   *
+   * Deliberately NOT "the room id" any more, though that is what it returns on
+   * the `@1` arm. The two arms disagree about what a body's doc IS: `@1` serves
+   * an artifact ROOM whose doc carries one
+   * `artifactBodyFragmentName(artifactId)` fragment per artifact assigned to it,
+   * while `artifact.subscribe` serves ONE artifact's body as its own doc and has
+   * no rooms at all. The tier does not care - its keys are opaque strings - so
+   * the only thing that differs is what to key by, and this is that one fact.
+   *
+   * Callers use it for exactly one thing: re-taking a body lease when the doc
+   * behind an artifact changes identity. An artifact reassigned between two
+   * already-`ready` rooms produces no availability transition, so keying that on
+   * availability alone would strand the lease on the stale doc.
+   */
+  getArtifactBodyDocKey(artifactId: string): string | null;
   acquireArtifactBodyLease(artifactId: string): () => void;
   hasAttachmentBytes(hash: string): boolean;
   readAttachmentBytes(
@@ -1000,7 +1017,11 @@ export function createEpicReplicaRuntime(
       return rooms.availabilityOfArtifact(artifactId);
     },
 
-    getArtifactRoomId: (artifactId) => records.readArtifactRoomId(artifactId),
+    // On the `@1` arm the body doc is the artifact's ROOM. The lane arm keys the
+    // tier by artifact id instead, because `artifact.subscribe` serves one body
+    // per doc - that arm returns the artifact id here unchanged.
+    getArtifactBodyDocKey: (artifactId) =>
+      records.readArtifactRoomId(artifactId),
 
     acquireArtifactBodyLease(artifactId): () => void {
       const artifactRoomId = records.readArtifactRoomId(artifactId);
