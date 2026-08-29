@@ -67,6 +67,18 @@ export function classifyEpicWriteCommandFailure(
     return { kind: "unknown-outcome", reason: error.message };
   }
   if (error instanceof HostRpcError) {
+    if (error.code === "E_IDEMPOTENCY_CACHE_SATURATED") {
+      // The host emitted this only before resolver dispatch. Keep the command
+      // queued with its stable key: a later reconnect drain is safe and may
+      // succeed once replay capacity returns.
+      return { kind: "queued", reason: error.message, boundedRetry: true };
+    }
+    if (error.code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN") {
+      // The host retained the key but could not prove the original resolver's
+      // result by its in-flight ceiling. Never auto-retry an ambiguous write;
+      // the overlay's authoritative echo/TTL path owns reconciliation.
+      return { kind: "unknown-outcome", reason: error.message };
+    }
     return {
       kind: "rejected",
       resolution: {

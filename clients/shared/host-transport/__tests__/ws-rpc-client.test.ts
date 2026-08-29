@@ -61,6 +61,7 @@ import type {
   ClientRequestFrame,
   ClientFatalErrorFrame,
   HostFrame,
+  HostOpenAckFrame,
 } from "@traycer/protocol/framework/ws-protocol";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
@@ -356,7 +357,7 @@ function expectTerminalFrame(frame: ClientFrame): ClientFatalErrorFrame {
 function openAckWithOptionalHostEcho(version: {
   readonly major: number;
   readonly minor: number;
-}): HostFrame {
+}): HostOpenAckFrame {
   return {
     kind: "openAck",
     manifest: {
@@ -374,7 +375,7 @@ function openAckWithOptionalHostEchoAndCapabilities(
     readonly minor: number;
   },
   capabilities: readonly string[],
-): HostFrame {
+): HostOpenAckFrame {
   return {
     ...openAckWithOptionalHostEcho(version),
     capabilities,

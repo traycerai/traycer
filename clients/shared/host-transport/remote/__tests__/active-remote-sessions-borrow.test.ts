@@ -201,13 +201,7 @@ describe("tryAcquireReadyRemoteSession", () => {
     // an identity the sign-out retired, under the retired credential, for as
     // long as the owner held on. The handle must refuse on its own.
     await expect(
-      borrow.sendUnary(
-        "host.status" as never,
-        {} as never,
-        null,
-        null,
-        undefined,
-      ),
+      borrow.sendUnary("host.status" as never, {} as never, null, undefined),
     ).rejects.toThrow(/superseded/);
     expect(session.sendUnary).not.toHaveBeenCalled();
     // Refusing does not disturb the accounting the rest of this test asserts.
@@ -219,13 +213,7 @@ describe("tryAcquireReadyRemoteSession", () => {
 
     // A released handle's sendUnary rejects rather than dispatching.
     await expect(
-      borrow.sendUnary(
-        "host.status" as never,
-        {} as never,
-        null,
-        null,
-        undefined,
-      ),
+      borrow.sendUnary("host.status" as never, {} as never, null, undefined),
     ).rejects.toThrow();
 
     // The owner's release finds the entry superseded and closes it on the
@@ -263,7 +251,6 @@ describe("tryAcquireReadyRemoteSession", () => {
     await borrow.sendUnary(
       "host.status" as never,
       {} as never,
-      null,
       null,
       undefined,
     );
@@ -316,7 +303,6 @@ describe("tryAcquireReadyRemoteSession", () => {
       "host.status" as never,
       {} as never,
       null,
-      null,
       undefined,
     );
     // It really did dispatch: this is not the pre-send arm firing early, which
@@ -365,7 +351,6 @@ describe("tryAcquireReadyRemoteSession", () => {
     const pending = borrow.sendUnary(
       "host.status" as never,
       {} as never,
-      null,
       null,
       undefined,
     );

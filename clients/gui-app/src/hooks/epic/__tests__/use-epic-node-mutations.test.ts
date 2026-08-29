@@ -39,7 +39,7 @@ const commandFixture = vi.hoisted(() => {
   return { state, handle: { store } };
 });
 
-vi.mock("@/providers/epic-session-provider", () => ({
+vi.mock("@/providers/use-open-epic-handle", () => ({
   useOpenEpicHandle: () => commandFixture.handle,
 }));
 

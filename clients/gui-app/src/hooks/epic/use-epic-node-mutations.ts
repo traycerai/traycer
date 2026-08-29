@@ -2,7 +2,7 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { useOpenEpicHandle } from "@/providers/epic-session-provider";
+import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -125,8 +125,9 @@ export function useEpicDeleteArtifact() {
   ): void;
   function mutate(
     variables: Variables,
-    callbacks: CommandMutationCallbacks<Response, Variables> | undefined,
+    ...callbackList: CommandMutationCallbacks<Response, Variables>[]
   ): void {
+    const callbacks = callbackList[0];
     void mutateAsync(variables).then(
       (response) => callbacks?.onSuccess?.(response, variables),
       (error: Error) => callbacks?.onError?.(error, variables),

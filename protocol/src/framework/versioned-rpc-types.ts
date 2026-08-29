@@ -49,6 +49,17 @@ export const RPC_ERROR_CODES = [
   // be read safely. Distinct from FORBIDDEN: the caller may hold editor access
   // while the document itself is intentionally read-only.
   "E_EPIC_READ_ONLY",
+  // A keyed unary was refused before resolver dispatch because the bounded
+  // replay cache had no safe slot. The command definitely did not run and may
+  // retry with the SAME key once capacity returns. This meaning is part of the
+  // negotiated `unary.idempotencyKey` capability; changing it requires a new
+  // capability name, never a reinterpretation of this code.
+  "E_IDEMPOTENCY_CACHE_SATURATED",
+  // The original keyed unary exceeded the host's in-flight replay ceiling.
+  // The host will never dispatch the key again while that execution remains
+  // live, but it can no longer promise a committed or rejected answer to a
+  // later joiner. Clients reconcile this ambiguous outcome through echo/TTL.
+  "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
   "TERMINAL_ID_TAKEN",
   // A durable terminal is mid-delete. 409, not 500: the caller can retry
   // after the marker settles. Additive and degrade-safe like E_INVALID_ARGUMENT.
