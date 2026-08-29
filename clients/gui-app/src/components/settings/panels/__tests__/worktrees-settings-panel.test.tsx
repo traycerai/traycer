@@ -83,6 +83,7 @@ const streamMock = vi.hoisted(() => ({
   closeCount: 0,
   commandCount: 0,
   stopOwnersByPath: new Map<string, boolean>(),
+  expectedHoldersRevisionByPath: new Map<string, string | undefined>(),
 }));
 
 // Capture the confirm-time "dropped rows" toast so its class-summarized copy can
@@ -199,6 +200,7 @@ vi.mock(
         readonly worktreePath: string;
         readonly scripts: WorktreeEntryScripts | null;
         readonly stopOwners: boolean;
+        readonly expectedHoldersRevision: string | undefined;
         readonly callbacks: WorktreeDeleteStreamCallbacks;
       }) {
         streamMock.paths.push(options.worktreePath);
@@ -206,6 +208,10 @@ vi.mock(
         streamMock.stopOwnersByPath.set(
           options.worktreePath,
           options.stopOwners,
+        );
+        streamMock.expectedHoldersRevisionByPath.set(
+          options.worktreePath,
+          options.expectedHoldersRevision,
         );
         if (streamMock.throwForPaths.has(options.worktreePath)) {
           throw new Error(`cannot subscribe ${options.worktreePath}`);
@@ -810,6 +816,7 @@ describe("WorktreesList delete flow", () => {
     streamMock.closeCount = 0;
     streamMock.commandCount = 0;
     streamMock.stopOwnersByPath.clear();
+    streamMock.expectedHoldersRevisionByPath.clear();
     toastMock.messages = [];
   });
 
@@ -1885,7 +1892,12 @@ describe("WorktreesList delete flow", () => {
     // `/wt/clean` settles under the ORIGINAL command and releases its
     // reservation, so the user can act on that path again.
     act(() => {
-      callbacksFor("/wt/clean").onFailed("busy", undefined);
+      callbacksFor("/wt/clean").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
 
     // They do: a fresh single delete opens its own command, whose record sits
@@ -1982,7 +1994,12 @@ describe("WorktreesList delete flow", () => {
     // The queued third target starts only once a slot frees, and every target
     // releases its reservation as it settles.
     act(() => {
-      callbacksFor("/wt/clean").onFailed("busy", undefined);
+      callbacksFor("/wt/clean").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
     expect(streamMock.paths).toEqual([
       "/wt/clean",
@@ -1990,8 +2007,18 @@ describe("WorktreesList delete flow", () => {
       "/wt/api-clean",
     ]);
     act(() => {
-      callbacksFor("/wt/dirty").onFailed("busy", undefined);
-      callbacksFor("/wt/api-clean").onFailed("busy", undefined);
+      callbacksFor("/wt/dirty").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
+      callbacksFor("/wt/api-clean").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
 
     // All three failed, so all three are selectable and deletable again - a
@@ -2082,6 +2109,8 @@ describe("WorktreesList delete flow", () => {
       streamMock.callbacks?.onFailed(
         "Worktree /wt/clean is in use by an active agent session",
         undefined,
+        undefined,
+        undefined,
       );
     });
     expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
@@ -2094,18 +2123,96 @@ describe("WorktreesList delete flow", () => {
     renderDefault();
     confirmDelete("feat-clean");
     act(() => {
-      streamMock.callbacks?.onFailed("Worktree is in use", BUSY_HOLDERS);
+      streamMock.callbacks?.onFailed(
+        "Worktree is in use",
+        BUSY_HOLDERS,
+        undefined,
+        undefined,
+      );
     });
     expect(screen.queryByTestId("worktree-delete-error")).toBeNull();
     screen.getByRole("dialog", { name: "Delete worktree feat-clean?" });
     expect(
       screen.getByTestId("teardown-disclosure-working").textContent,
-    ).toContain("Claude Code agent polite-ocelot is working");
+    ).toContain(
+      "Terminal agent “Claude Code agent polite-ocelot” is working — will be stopped",
+    );
     expect(screen.getByTestId("teardown-disclosure").textContent).not.toMatch(
       /\bbusy\b/i,
     );
     fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
     expect(streamMock.legacyPaths).toEqual(["/wt/clean"]);
+    expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBe(true);
+  });
+
+  it("retries force-delete with the refusal's holdersRevision", () => {
+    const digest =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    streamMock.unsupportedForPaths.add("/wt/clean");
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Worktree is in use",
+        BUSY_HOLDERS,
+        "WORKTREE_BUSY",
+        digest,
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
+    expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBe(true);
+    expect(streamMock.expectedHoldersRevisionByPath.get("/wt/clean")).toBe(
+      digest,
+    );
+  });
+
+  it("surfaces HOLDERS_CHANGED on retry instead of stopping the new inventory", () => {
+    const digestA =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const digestB =
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const changedHolders: readonly WorktreeBusyHolder[] = [
+      {
+        ownerRef: {
+          epicId: "epic-1",
+          ownerKind: "chat",
+          ownerId: "chat-1",
+        },
+        holdKind: "chat-turn",
+        activity: "working",
+        label: "new actor is working",
+      },
+    ];
+    streamMock.unsupportedForPaths.add("/wt/clean");
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Worktree is in use",
+        BUSY_HOLDERS,
+        "WORKTREE_BUSY",
+        digestA,
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Holders changed",
+        changedHolders,
+        "WORKTREE_HOLDERS_CHANGED",
+        digestB,
+      );
+    });
+    expect(
+      screen.getByRole("dialog", { name: "Delete worktree feat-clean?" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("teardown-disclosure-working").textContent,
+    ).toContain("Agent “new actor” is working on a turn — will be stopped");
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
+    expect(streamMock.expectedHoldersRevisionByPath.get("/wt/clean")).toBe(
+      digestB,
+    );
     expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBe(true);
   });
 
@@ -2115,6 +2222,8 @@ describe("WorktreesList delete flow", () => {
     act(() => {
       streamMock.callbacks?.onFailed(
         "Worktree /wt/clean is in use by an active agent session",
+        undefined,
+        undefined,
         undefined,
       );
     });
@@ -2131,7 +2240,12 @@ describe("WorktreesList delete flow", () => {
     renderDefault();
     confirmDelete("feat-clean");
     act(() => {
-      streamMock.callbacks?.onFailed("Worktree is in use", BUSY_HOLDERS);
+      streamMock.callbacks?.onFailed(
+        "Worktree is in use",
+        BUSY_HOLDERS,
+        undefined,
+        undefined,
+      );
     });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(
@@ -2396,7 +2510,12 @@ describe("WorktreesList delete flow", () => {
     expect(screen.queryByTestId("worktree-delete-progress-modal")).toBeNull();
 
     act(() => {
-      streamMock.callbacks?.onFailed("Worktree /wt/clean is busy", undefined);
+      streamMock.callbacks?.onFailed(
+        "Worktree /wt/clean is busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
 
     // The failure brings the panel back so the error is visible.
@@ -2449,6 +2568,8 @@ describe("WorktreesList delete flow", () => {
       callbacksFor("/wt/clean").onComplete(true);
       callbacksFor("/wt/dirty").onFailed(
         "Worktree /wt/dirty is busy",
+        undefined,
+        undefined,
         undefined,
       );
     });

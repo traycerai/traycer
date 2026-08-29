@@ -6,7 +6,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   classifyWorktreeTier,
   type WorktreeTier,
@@ -23,6 +23,23 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { oldestResolvedAt } from "@/lib/worktree/oldest-resolved-at";
 import { sweepEligibleTier } from "@/lib/worktree/sweep-candidates";
+import { sanitizeHoldersRevision } from "@/lib/worktree/teardown-holder-copy";
+
+// Same bound as run-worktree-cleanup's fallback fan-out.
+const MAX_PARALLEL_CLEANUP_STREAMS = 2;
+
+type PathHolderInventory =
+  | { readonly kind: "unknown" }
+  | {
+      readonly kind: "ready";
+      readonly holders: readonly WorktreeBusyHolder[];
+      readonly holdersRevision: string | undefined;
+    };
+
+interface SweepCandidatesPayload {
+  readonly listing: WorktreeListAllForHostResponseV14;
+  readonly holdersByPath: ReadonlyMap<string, PathHolderInventory>;
+}
 
 /**
  * Why a row is not default-checked (or not checkable at all). `shared` and
@@ -46,12 +63,23 @@ export interface EpicSweepWorktreeRow {
   readonly disabled: boolean;
   readonly note: EpicSweepRowNote | null;
   /**
-   * T2 holder inventory when a test (or a later `listHolders` provider)
-   * supplies it. Empty in production until T7 populates a listing; Sweep
-   * treats an in-use row with an empty list as unknown and discloses a
-   * generic stop line rather than authorizing silently.
+   * T2 holder inventory from `worktree.listHolders`. Empty for idle rows
+   * and for the unknown fallback (unsupported host / failed read /
+   * inUse-with-empty race).
    */
   readonly holders: readonly WorktreeBusyHolder[];
+  /**
+   * `none` for idle rows. In-use rows start `loading` (not selectable)
+   * until listHolders resolves or degrades to `unknown`. Loading is
+   * never treated as empty.
+   */
+  readonly holdersStatus: "none" | "loading" | "ready" | "unknown";
+  /**
+   * Host digest of the ready inventory. Echo as
+   * `expectedHoldersRevision` on delete. Absent on old hosts and on
+   * the unknown fallback.
+   */
+  readonly holdersRevision: string | undefined;
 }
 
 export interface EpicSweepWorktreeCandidatesResult {
@@ -65,8 +93,11 @@ export interface EpicSweepWorktreeCandidatesResult {
   readonly checkedAt: number | null;
   /** The selected host is ready for another forced proof. */
   readonly canRefresh: boolean;
-  /** Re-runs the same bounded, forced proof used when the dialog opens. */
-  readonly refresh: () => Promise<void>;
+  /**
+   * Re-runs the same bounded, forced proof used when the dialog opens and
+   * resolves with the freshly classified rows (not a stale render closure).
+   */
+  readonly refresh: () => Promise<ReadonlyArray<EpicSweepWorktreeRow>>;
 }
 
 const EMPTY_ROWS: ReadonlyArray<EpicSweepWorktreeRow> = [];
@@ -131,52 +162,53 @@ export function useEpicSweepWorktreeCandidatesForClient(
   );
   const selectedEpicKey =
     selectedEpicIds === null ? "" : selectedEpicIds.join(",");
-  const fetchFreshTaskWorktrees =
-    async (): Promise<WorktreeListAllForHostResponseV14> => {
-      // `enabled` already requires readiness (false for a null client); this
-      // is the typed guard the closure needs to call `request` at all.
-      if (client === null) {
-        throw hostClientUnavailableError("worktree.listAllForHost");
-      }
-      // Cheap disk-truth walk (no git/gh probes, host cache is fine): only
-      // used to discover WHICH paths this Task owns.
-      const base: WorktreeListAllForHostResponseV14 = await client.request(
-        "worktree.listAllForHost",
-        {
-          includeActivity: false,
-          activityPaths: null,
-          cursor: null,
-          limit: null,
-          forceRefresh: false,
-        },
-      );
-      const selected = new Set(selectedEpicIds ?? []);
-      const ownedPaths = base.worktrees.flatMap((entry) =>
-        entry.owners.some((owner) => selected.has(owner.epicId))
-          ? [entry.worktreePath]
-          : [],
-      );
-      if (ownedPaths.length === 0) return { worktrees: [], nextCursor: null };
-      // The act-time proof: forced selection-mode re-derive of exactly the
-      // Task's paths. Selection mode caps the probe cost by the array itself.
-      return client.request("worktree.listAllForHost", {
-        includeActivity: true,
-        activityPaths: ownedPaths,
+  const fetchFreshTaskWorktrees = async (): Promise<SweepCandidatesPayload> => {
+    if (client === null) {
+      throw hostClientUnavailableError("worktree.listAllForHost");
+    }
+    const base: WorktreeListAllForHostResponseV14 = await client.request(
+      "worktree.listAllForHost",
+      {
+        includeActivity: false,
+        activityPaths: null,
         cursor: null,
         limit: null,
-        forceRefresh: true,
-      });
-    };
-  // Boundary-wrapped and NAMED so the closure is not mistaken for missing
-  // cache identity.
+        forceRefresh: false,
+      },
+    );
+    const selected = new Set(selectedEpicIds ?? []);
+    const ownedPaths = base.worktrees.flatMap((entry) =>
+      entry.owners.some((owner) => selected.has(owner.epicId))
+        ? [entry.worktreePath]
+        : [],
+    );
+    if (ownedPaths.length === 0) {
+      return {
+        listing: { worktrees: [], nextCursor: null },
+        holdersByPath: new Map(),
+      };
+    }
+    const listing = await client.request("worktree.listAllForHost", {
+      includeActivity: true,
+      activityPaths: ownedPaths,
+      cursor: null,
+      limit: null,
+      forceRefresh: true,
+    });
+    const holdersByPath = await loadHoldersForInUseRows(
+      client,
+      listing.worktrees,
+    );
+    return { listing, holdersByPath };
+  };
   const fetchFreshTaskWorktreesNormalized =
-    (): Promise<WorktreeListAllForHostResponseV14> =>
+    (): Promise<SweepCandidatesPayload> =>
       withHostQueryErrorBoundary(
         "worktree.listAllForHost",
         fetchFreshTaskWorktrees,
       );
   const { data, isFetching, isError, refetch } = useQuery(
-    queryOptions<WorktreeListAllForHostResponseV14, HostRpcError>({
+    queryOptions<SweepCandidatesPayload, HostRpcError>({
       queryKey: hostQueryKeys.sweepWorktreeCandidates(
         readiness.hostId,
         selectedEpicKey,
@@ -186,37 +218,44 @@ export function useEpicSweepWorktreeCandidatesForClient(
         selectedEpicIds !== null &&
         selectedEpicIds.length > 0 &&
         readiness.isReady,
-      // Always stale: every dialog open re-runs the forced probe rather than
-      // trusting a previous open's proof.
       staleTime: 0,
       retry: false,
-      // Task and History surfaces already keep task-owned provenance enriched.
-      // Seed this selection-specific proof query from that warm method cache so
-      // first-open is useful immediately; the forced query still starts now
-      // and is the only state that authorises the destructive action.
-      initialData: () =>
-        selectedEpicIds === null || readiness.hostId === null
-          ? undefined
-          : cachedTaskWorktrees(queryClient, readiness.hostId, selectedEpicIds),
-      // The warm snapshot is not an act-time proof even if its cache write was
-      // recent. Zero preserves the forced-on-open contract and retains the
-      // snapshot if that proof fails.
+      initialData: () => {
+        if (selectedEpicIds === null || readiness.hostId === null) {
+          return undefined;
+        }
+        const listing = cachedTaskWorktrees(
+          queryClient,
+          readiness.hostId,
+          selectedEpicIds,
+        );
+        if (listing === undefined) return undefined;
+        return { listing, holdersByPath: new Map() };
+      },
       initialDataUpdatedAt: 0,
     }),
   );
 
-  const refresh = async (): Promise<void> => {
+  const refresh = async (): Promise<ReadonlyArray<EpicSweepWorktreeRow>> => {
     const result = await refetch();
-    if (result.error === null) return;
-    toastFromHostError(result.error, "Couldn't refresh worktree details.");
-    throw result.error;
+    if (result.error !== null) {
+      toastFromHostError(result.error, "Couldn't refresh worktree details.");
+      throw result.error;
+    }
+    if (selectedEpicIds === null || result.data === undefined) return [];
+    return classifyOwnedSweepRows(
+      selectedEpicIds,
+      result.data.listing.worktrees,
+      result.data.holdersByPath,
+    );
   };
 
   const isPending =
     selectedEpicIds !== null && selectedEpicIds.length > 0 && isFetching;
   const canRefresh =
     selectedEpicIds !== null && selectedEpicIds.length > 0 && readiness.isReady;
-  const worktrees = data?.worktrees;
+  const worktrees = data?.listing.worktrees;
+  const holdersByPath = data?.holdersByPath;
   if (
     selectedEpicIds === null ||
     readiness.hostId === null ||
@@ -233,12 +272,10 @@ export function useEpicSweepWorktreeCandidatesForClient(
       refresh,
     };
   }
-  // The amalgamation: every worktree owned by ANY selected Task, listed once.
-  const selected = new Set(selectedEpicIds);
-  const rows = worktrees.flatMap((entry) =>
-    entry.owners.some((owner) => selected.has(owner.epicId))
-      ? [classifySweepRow(selected, entry)]
-      : [],
+  const rows = classifyOwnedSweepRows(
+    selectedEpicIds,
+    worktrees,
+    holdersByPath ?? new Map(),
   );
   return {
     hostId: readiness.hostId,
@@ -249,6 +286,24 @@ export function useEpicSweepWorktreeCandidatesForClient(
     canRefresh,
     refresh,
   };
+}
+
+function classifyOwnedSweepRows(
+  selectedEpicIds: ReadonlyArray<string>,
+  worktrees: readonly WorktreeHostEntryV14[],
+  holdersByPath: ReadonlyMap<string, PathHolderInventory>,
+): EpicSweepWorktreeRow[] {
+  const selected = new Set(selectedEpicIds);
+  return worktrees.flatMap((entry) =>
+    entry.owners.some((owner) => selected.has(owner.epicId))
+      ? [
+          applyHolderInventory(
+            classifySweepRow(selected, entry),
+            holdersByPath.get(entry.worktreePath),
+          ),
+        ]
+      : [],
+  );
 }
 
 /**
@@ -287,14 +342,111 @@ function cachedTaskWorktrees(
   return { worktrees: [...byPath.values()], nextCursor: null };
 }
 
+function applyHolderInventory(
+  row: EpicSweepWorktreeRow,
+  inventory: PathHolderInventory | undefined,
+): EpicSweepWorktreeRow {
+  if (row.note !== "in-use") {
+    return { ...row, holdersStatus: "none", holdersRevision: undefined };
+  }
+  if (inventory === undefined) {
+    return {
+      ...row,
+      disabled: true,
+      holders: [],
+      holdersStatus: "loading",
+      holdersRevision: undefined,
+    };
+  }
+  if (inventory.kind === "unknown") {
+    return {
+      ...row,
+      disabled: false,
+      holders: [],
+      holdersStatus: "unknown",
+      holdersRevision: undefined,
+    };
+  }
+  return {
+    ...row,
+    disabled: false,
+    holders: inventory.holders,
+    holdersStatus: "ready",
+    holdersRevision: inventory.holdersRevision,
+  };
+}
+
+async function loadHoldersForInUseRows(
+  client: HostClient<HostRpcRegistry>,
+  worktrees: readonly WorktreeHostEntryV14[],
+): Promise<ReadonlyMap<string, PathHolderInventory>> {
+  const inUse = worktrees.filter((entry) => entry.inUse);
+  if (inUse.length === 0) return new Map();
+  const loaded: Array<readonly [string, PathHolderInventory]> = [];
+  const queue = [...inUse];
+  const worker = async (): Promise<void> => {
+    for (
+      let entry = queue.shift();
+      entry !== undefined;
+      entry = queue.shift()
+    ) {
+      const inventory = await readPathHolderInventory(
+        client,
+        entry.worktreePath,
+      );
+      loaded.push([entry.worktreePath, inventory]);
+    }
+  };
+  const workerCount = Math.min(MAX_PARALLEL_CLEANUP_STREAMS, inUse.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return new Map(loaded);
+}
+
+async function readPathHolderInventory(
+  client: HostClient<HostRpcRegistry>,
+  worktreePath: string,
+): Promise<PathHolderInventory> {
+  try {
+    const response = await client.request("worktree.listHolders", {
+      worktreePath,
+      owner: null,
+    });
+    const holdersRevision = sanitizeHoldersRevision(response.holdersRevision);
+    // Empty inventory or a missing digest cannot form consent — same
+    // unknown fallback as an unsupported host.
+    if (response.holders.length === 0 || holdersRevision === undefined) {
+      return { kind: "unknown" };
+    }
+    return {
+      kind: "ready",
+      holders: response.holders,
+      holdersRevision,
+    };
+  } catch {
+    return { kind: "unknown" };
+  }
+}
+
 function classifySweepRow(
   selectedEpicIds: ReadonlySet<string>,
   entry: WorktreeHostEntryV14,
 ): EpicSweepWorktreeRow {
   const tier = classifyWorktreeTier(entry);
-  const base = { entry, tier, defaultChecked: false, holders: [] } as const;
+  const base = {
+    entry,
+    tier,
+    defaultChecked: false,
+    holders: [],
+    holdersStatus: "none" as const,
+    holdersRevision: undefined,
+  };
   if (entry.inUse) {
-    return { ...base, disabled: false, note: "in-use" };
+    return {
+      ...base,
+      disabled: true,
+      note: "in-use",
+      holdersStatus: "loading",
+    };
   }
   if (entry.resolvedAt === null) {
     return { ...base, disabled: true, note: "checking" };
