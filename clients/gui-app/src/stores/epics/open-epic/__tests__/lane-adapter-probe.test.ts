@@ -402,7 +402,6 @@ function buildRuntimeRig(mode: SupportMode): RuntimeRig {
   };
   const runtime = createEpicReplicaRuntime({
     epicId: `epic-lane-probe-${nextEpicSequence}`,
-    hostId: "host-1",
     environment: createRendererRuntimeEnvironment(),
     streamClientFactory: legacy.factory,
     delivery: createBatchingDelivery(() => {}),

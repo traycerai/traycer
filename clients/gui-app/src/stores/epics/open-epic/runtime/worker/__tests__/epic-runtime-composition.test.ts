@@ -86,13 +86,13 @@ describe("buildProxiedStreamFactories", () => {
 
     lanes.stateStreamClientFactory("epic-1", INERT_STATE_CALLBACKS, () => null);
     lanes.statusStreamClientFactory("epic-1", INERT_STATUS_CALLBACKS);
-    lanes.artifactStreamClientFactory(
-      "epic-1",
-      "artifact-1",
-      "epoch-1",
-      INERT_ARTIFACT_CALLBACKS,
-      () => null,
-    );
+    lanes.artifactStreamClientFactory({
+      epicId: "epic-1",
+      artifactId: "artifact-1",
+      authorityEpoch: "epoch-1",
+      callbacks: INERT_ARTIFACT_CALLBACKS,
+      seedOfferProvider: () => null,
+    });
 
     // One client per lane, all multiplexed over ONE proxied client - not three
     // proxy hosts and not three dials.

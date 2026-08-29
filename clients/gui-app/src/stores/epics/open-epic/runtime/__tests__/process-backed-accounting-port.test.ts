@@ -26,12 +26,13 @@ import type { EpicRuntimeAccountingSource } from "../epic-runtime-accounting-por
 function environmentStub(): RuntimeEnvironment {
   return {
     clock: { now: () => 0 },
-    timer: {
-      setTimeout: () => 0,
-      clearTimeout: () => undefined,
-      setInterval: () => 0,
-      clearInterval: () => undefined,
+    scheduler: {
+      schedule() {
+        return { cancel(): void {} };
+      },
+      scheduleMicrotask(): void {},
     },
+    logger: { debug: () => {}, warn: () => {}, error: () => {} },
   };
 }
 

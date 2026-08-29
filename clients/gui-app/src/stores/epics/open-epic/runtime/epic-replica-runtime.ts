@@ -113,7 +113,12 @@ import {
 
 export interface EpicReplicaRuntimeOptions {
   readonly epicId: string;
-  readonly hostId: string;
+  /**
+   * No `hostId`. 4e moved holder-id composition into the accounting port, and
+   * that was this option's only remaining reader - the write path takes the
+   * host it actually attempted from `writeCommandSender.currentHostId()`,
+   * which is a live read rather than a construction-time capture.
+   */
   readonly environment: RuntimeEnvironment;
   readonly streamClientFactory: EpicStreamClientFactory;
   /**
@@ -363,7 +368,6 @@ export function createEpicReplicaRuntime(
 ): EpicReplicaRuntime {
   const {
     epicId,
-    hostId,
     environment,
     streamClientFactory,
     delivery,

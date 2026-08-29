@@ -875,7 +875,6 @@ export function createOpenEpicStore(
   const runtimeEnvironment = createRendererRuntimeEnvironment();
   const runtime = createEpicReplicaRuntime({
     epicId,
-    hostId: runtimeHostId,
     environment: runtimeEnvironment,
     streamClientFactory: options.streamClientFactory,
     delivery,

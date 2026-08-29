@@ -151,8 +151,26 @@ export interface PlaneUsage {
   /** Cumulative, for eviction-effectiveness telemetry. */
   readonly evictionsRequested: number;
   readonly bytesReclaimed: number;
-  /** Times an eviction returned zero because everything left was protected. */
+  /**
+   * Times an eviction returned zero because everything left was protected AND
+   * nothing was dispatched to free it later.
+   *
+   * Read this together with {@link evictionsDeferred}: before the two were
+   * split, a plane whose tier lives off-thread incremented this on every
+   * breach — including the ones the tier resolved a millisecond later — and
+   * "refused" is the wrong word for that. Anything trending on this counter
+   * needs both.
+   */
   readonly evictionsRefused: number;
+  /**
+   * Times an eviction returned zero because the freeing was DISPATCHED rather
+   * than declined — the plane's tier is off-thread and its settles arrive on
+   * their own schedule.
+   *
+   * Mutually exclusive with {@link evictionsRefused}: one breach increments
+   * exactly one of the two, never both.
+   */
+  readonly evictionsDeferred: number;
   /**
    * Why the last reconcile could not reclaim more, empty when the plane is
    * under its limit or simply had nothing more to give. Survives on the
@@ -204,6 +222,17 @@ export interface MemoryAccountant {
    * consistent boundaries are, and evicting in the middle of applying a frame
    * can drop a span the rest of that frame is about to reference.
    */
+  /**
+   * Declare, from inside a plane's own `evict`, that the freeing was
+   * DISPATCHED rather than declined.
+   *
+   * A member rather than a field on `EvictionOutcome` deliberately: that type
+   * has ~30 construction sites across two packages, and every one of them
+   * would have had to name a concept only an off-thread tier can have. The
+   * signal belongs to the one caller that can raise it.
+   */
+  noteEvictionDeferred(planeId: BudgetPlaneId): void;
+
   reconcile(planeId: BudgetPlaneId): BudgetPressure;
 
   pressure(planeId: BudgetPlaneId): BudgetPressure;
@@ -247,6 +276,14 @@ interface PlaneState {
   evictionsRequested: number;
   bytesReclaimed: number;
   evictionsRefused: number;
+  evictionsDeferred: number;
+  /**
+   * Set by {@link MemoryAccountant.noteEvictionDeferred} DURING the plane's
+   * own `evict` call, and consumed by the reconcile that made it. Same shape
+   * and lifetime as `reconciling` above - a flag scoped to one pass, not
+   * state anyone reads across passes.
+   */
+  deferredInFlight: boolean;
   /**
    * Set when a reconcile asked the plane to evict and the plane could not get
    * back under the soft limit. Cleared by any later charge, settle, or
@@ -324,6 +361,7 @@ function usageOf(plane: PlaneState): PlaneUsage {
     evictionsRequested: plane.evictionsRequested,
     bytesReclaimed: plane.bytesReclaimed,
     evictionsRefused: plane.evictionsRefused,
+    evictionsDeferred: plane.evictionsDeferred,
     protectedBytesByKind: plane.lastProtectedBytesByKind,
   };
 }
@@ -379,6 +417,8 @@ export function createMemoryAccountant(
         evictionsRequested: 0,
         bytesReclaimed: 0,
         evictionsRefused: 0,
+        evictionsDeferred: 0,
+        deferredInFlight: false,
         protectedLatch: false,
         reconciling: false,
         lastProtectedBytesByKind: [],
@@ -425,6 +465,12 @@ export function createMemoryAccountant(
       plane.protectedLatch = false;
     },
 
+    noteEvictionDeferred(planeId: BudgetPlaneId): void {
+      const plane = planes.get(planeId);
+      if (plane === undefined) return;
+      plane.deferredInFlight = true;
+    },
+
     reconcile(planeId: BudgetPlaneId): BudgetPressure {
       const plane = requireRegistered(planes, planeId);
       if (plane.reconciling) return pressureOf(plane);
@@ -438,6 +484,9 @@ export function createMemoryAccountant(
       plane.reconciling = true;
       try {
         plane.evictionsRequested += 1;
+        // Reset immediately before the call whose duration is the flag's whole
+        // life; a tier that dispatches sets it from inside `evict`.
+        plane.deferredInFlight = false;
         const outcome = plane.spec.evict(charged - plane.spec.softLimitBytes);
         plane.bytesReclaimed += outcome.reclaimedBytes;
         plane.lastProtectedBytesByKind = outcome.protectedBytesByKind;
@@ -445,7 +494,11 @@ export function createMemoryAccountant(
         if (stillOver) {
           plane.protectedLatch = true;
           if (outcome.reclaimedBytes === 0) {
-            plane.evictionsRefused += 1;
+            // Exactly one of the two, never both: freeing that was dispatched
+            // is not freeing that was declined, and a telemetry reader cannot
+            // tell them apart after the fact.
+            if (plane.deferredInFlight) plane.evictionsDeferred += 1;
+            else plane.evictionsRefused += 1;
           }
         }
         return pressureOf(plane);

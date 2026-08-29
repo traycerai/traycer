@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   EvictionOutcome,
+  MemoryAccountant,
   ProtectedBytes,
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
@@ -36,12 +37,13 @@ const PROTECTED: readonly ProtectedBytes[] = [{ kind: "leased", bytes: 4_096 }];
 function environmentStub(): RuntimeEnvironment {
   return {
     clock: { now: () => 0 },
-    timer: {
-      setTimeout: () => 0,
-      clearTimeout: () => undefined,
-      setInterval: () => 0,
-      clearInterval: () => undefined,
+    scheduler: {
+      schedule() {
+        return { cancel(): void {} };
+      },
+      scheduleMicrotask(): void {},
     },
+    logger: { debug: () => {}, warn: () => {}, error: () => {} },
   };
 }
 
@@ -49,7 +51,10 @@ function environmentStub(): RuntimeEnvironment {
  * A tier standing in for the post-flip proxy: it frees nothing and reports why.
  * `calls` is the whole point of pin 1.
  */
-function deferringTier(protectedBytes: readonly ProtectedBytes[]): {
+function deferringTier(
+  protectedBytes: readonly ProtectedBytes[],
+  dispatchTo: MemoryAccountant | null,
+): {
   readonly key: string;
   materializedIds(): readonly string[];
   demoteColdestUnpinned(overBytes: number): EvictionOutcome;
@@ -62,6 +67,10 @@ function deferringTier(protectedBytes: readonly ProtectedBytes[]): {
     materializedIds: () => [],
     demoteColdestUnpinned(overBytes): EvictionOutcome {
       calls.push(overBytes);
+      // What the post-flip proxy does: hand the work to the worker and SAY SO,
+      // from inside the evict call, so the reconcile that asked can tell this
+      // apart from a tier that declined.
+      dispatchTo?.noteEvictionDeferred(BUDGET_PLANE_IDS.hotDocs);
       // Exactly the proxy's answer: nothing freed HERE, because the freeing
       // happens in the worker after this returns.
       return { reclaimedBytes: 0, protectedBytesByKind: protectedBytes };
@@ -72,7 +81,7 @@ function deferringTier(protectedBytes: readonly ProtectedBytes[]): {
 describe("a tier that frees nothing", () => {
   it("is asked EXACTLY once per evict - `evict` is a single pass, not a retry loop", () => {
     const book = createHotDocBudgetBook();
-    const tier = deferringTier(PROTECTED);
+    const tier = deferringTier(PROTECTED, null);
     book.attach(tier);
 
     const outcome = book.evict(10_000);
@@ -96,7 +105,7 @@ describe("the protected breakdown a deferring tier reports", () => {
     // `snapshot()`. Asserting on the latch would have passed with the list
     // emptied, which is the whole failure mode this pin exists to catch.
     const book = createHotDocBudgetBook();
-    book.attach(deferringTier(PROTECTED));
+    book.attach(deferringTier(PROTECTED, null));
     const accountant = createMemoryAccountant({
       environment: environmentStub(),
       observedCeilingBytes: 100_000,
@@ -126,7 +135,7 @@ describe("the protected breakdown a deferring tier reports", () => {
     // proxy that reports `[]` while the worker's tier is full of leased docs
     // tells the accountant the plane is over its limit for no reason at all.
     const book = createHotDocBudgetBook();
-    book.attach(deferringTier([]));
+    book.attach(deferringTier([], null));
     const accountant = createMemoryAccountant({
       environment: environmentStub(),
       observedCeilingBytes: 100_000,
@@ -149,5 +158,70 @@ describe("the protected breakdown a deferring tier reports", () => {
       .snapshot()
       .planes.find((usage) => usage.planeId === BUDGET_PLANE_IDS.hotDocs);
     expect(plane?.protectedBytesByKind).toEqual([]);
+  });
+});
+
+describe("the split counter", () => {
+  it("counts a DISPATCHED eviction as deferred and not as refused", () => {
+    // Before the split both cases incremented `evictionsRefused`, so a plane
+    // whose tier is off-thread trended as "refusing" every breach it in fact
+    // resolved. The two are mutually exclusive by construction: one breach
+    // increments exactly one.
+    const book = createHotDocBudgetBook();
+    const accountant = createMemoryAccountant({
+      environment: environmentStub(),
+      observedCeilingBytes: 100_000,
+    });
+    book.attach(deferringTier(PROTECTED, accountant));
+    accountant.register({
+      planeId: BUDGET_PLANE_IDS.hotDocs,
+      softLimitBytes: SOFT_LIMIT_BYTES,
+      nearThresholdRatio: 0.8,
+      evict: (overBytes) => book.evict(overBytes),
+    });
+
+    book.settle(
+      accountant,
+      hotDocHolderId("host-1", "epic-1", "token-1", "room-1"),
+      SOFT_LIMIT_BYTES * 2,
+    );
+    accountant.reconcile(BUDGET_PLANE_IDS.hotDocs);
+
+    const plane = accountant
+      .snapshot()
+      .planes.find((usage) => usage.planeId === BUDGET_PLANE_IDS.hotDocs);
+    expect(plane?.evictionsDeferred).toBe(1);
+    expect(plane?.evictionsRefused).toBe(0);
+  });
+
+  it("counts a tier that genuinely declined as refused and not as deferred", () => {
+    // The same zero bytes and the same protected list - the ONLY difference is
+    // that nothing was dispatched. If these two ever report identically, the
+    // split has silently collapsed back into one counter.
+    const book = createHotDocBudgetBook();
+    const accountant = createMemoryAccountant({
+      environment: environmentStub(),
+      observedCeilingBytes: 100_000,
+    });
+    book.attach(deferringTier(PROTECTED, null));
+    accountant.register({
+      planeId: BUDGET_PLANE_IDS.hotDocs,
+      softLimitBytes: SOFT_LIMIT_BYTES,
+      nearThresholdRatio: 0.8,
+      evict: (overBytes) => book.evict(overBytes),
+    });
+
+    book.settle(
+      accountant,
+      hotDocHolderId("host-1", "epic-1", "token-1", "room-1"),
+      SOFT_LIMIT_BYTES * 2,
+    );
+    accountant.reconcile(BUDGET_PLANE_IDS.hotDocs);
+
+    const plane = accountant
+      .snapshot()
+      .planes.find((usage) => usage.planeId === BUDGET_PLANE_IDS.hotDocs);
+    expect(plane?.evictionsRefused).toBe(1);
+    expect(plane?.evictionsDeferred).toBe(0);
   });
 });

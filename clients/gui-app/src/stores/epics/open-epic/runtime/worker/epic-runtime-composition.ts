@@ -123,13 +123,16 @@ export function buildProxiedStreamFactories(
       // is a method on the session's one durable socket, so a canvas with twelve
       // open tiles multiplexes twelve subscriptions - it does not dial twelve
       // times, and over the proxy it does not open twelve proxy hosts either.
-      artifactStreamClientFactory: (
+      // Destructured, not spread: the request and the client's options are two
+      // contracts that happen to agree today, and `...request` would forward a
+      // field added to one into the other without anyone choosing to.
+      artifactStreamClientFactory: ({
         epicId,
         artifactId,
         authorityEpoch,
         callbacks,
         seedOfferProvider,
-      ) =>
+      }) =>
         new ArtifactStreamClient({
           wsStreamClient: streams,
           epicId,
@@ -144,7 +147,12 @@ export function buildProxiedStreamFactories(
 
 export interface EpicRuntimeCompositionOptions {
   readonly epicId: string;
-  readonly hostId: string;
+  /**
+   * No `hostId`, matching `EpicReplicaRuntimeOptions`. It was forwarded
+   * straight through to the runtime, and 4e removed the last reader there;
+   * carrying it on this options object would be an input nothing consumes,
+   * which is the shape a future caller fills in wrongly and never learns.
+   */
   readonly environment: RuntimeEnvironment;
   /** EXPLICIT, never derived here - see this module's header. */
   readonly factories: EpicRuntimeStreamFactories;
@@ -187,7 +195,6 @@ export function createEpicRuntimeComposition(
 ): EpicReplicaRuntime {
   return createEpicReplicaRuntime({
     epicId: options.epicId,
-    hostId: options.hostId,
     environment: options.environment,
     streamClientFactory: options.factories.streamClientFactory,
     delivery: options.delivery,
