@@ -305,15 +305,14 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       }
       case "comment-thread": {
         const record = row.record;
-        const bucket = threadsByArtifactId[record.artifactId];
         // The wire row extends `commentThreadWireSchema` verbatim, so the
         // thread the surface reads IS this row minus the two fields the lane
         // wrapped it in. Passed by reference - a copy here would hand every
         // consumer a fresh object on every unrelated recompute.
-        if (bucket === undefined) {
-          threadsByArtifactId[record.artifactId] = [record];
+        if (Object.hasOwn(threadsByArtifactId, record.artifactId)) {
+          threadsByArtifactId[record.artifactId].push(record);
         } else {
-          bucket.push(record);
+          threadsByArtifactId[record.artifactId] = [record];
         }
         break;
       }

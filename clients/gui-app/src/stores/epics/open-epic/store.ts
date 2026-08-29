@@ -1110,9 +1110,8 @@ export function createOpenEpicStore(
             // the same `length > 0` guard the doc read applies.
             const state = get();
             if (state.installedArm === "lanes") return artifactId;
-            const artifact = state.artifacts.byId[artifactId];
-            if (artifact === undefined) return null;
-            const roomId = artifact.artifactRoomId;
+            if (!Object.hasOwn(state.artifacts.byId, artifactId)) return null;
+            const roomId = state.artifacts.byId[artifactId].artifactRoomId;
             return roomId !== null && roomId.length > 0 ? roomId : null;
           },
           acquireArtifactBodyLease: (artifactId) =>

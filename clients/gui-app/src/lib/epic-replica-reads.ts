@@ -72,19 +72,22 @@ export class ArtifactBodyUnavailableError extends Error {
  * early return is invisible - the room simply never cools - so the ordering
  * here is the contract, not a style choice.
  */
-export async function holdArtifactBody(
+export function holdArtifactBody(
   handle: OpenEpicStoreHandle,
   artifactId: string,
 ): Promise<ArtifactBodyHold> {
   const state = handle.store.getState();
-  const release = state.acquireArtifactBodyLease(artifactId);
+  let release: (() => void) | null = null;
   try {
+    release = state.acquireArtifactBodyLease(artifactId);
     const fragment = state.getArtifactFragment(artifactId);
     if (fragment === null) throw new ArtifactBodyUnavailableError(artifactId);
-    return { fragment, release: onceOnly(release) };
+    return Promise.resolve({ fragment, release: onceOnly(release) });
   } catch (cause: unknown) {
-    release();
-    throw cause;
+    release?.();
+    return Promise.reject(
+      cause instanceof Error ? cause : new Error(String(cause)),
+    );
   }
 }
 

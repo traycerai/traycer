@@ -1,4 +1,3 @@
-import type { EpicHeader } from "./types";
 import type {
   OpenEpicState,
   OpenEpicStoreHandle,
@@ -1033,7 +1032,8 @@ function readLiveTitle(handle: OpenEpicStoreHandle): string {
   // never depended on a complete projection. Three provider fixtures build a
   // partial `OpenEpicState` with no `epic` slice, and an unguarded read threw
   // on them: the VALUE substitution was exact, the TOTALITY was not.
-  const epic: EpicHeader | undefined = handle.store.getState().epic;
+  const state: Partial<OpenEpicState> = handle.store.getState();
+  const epic = state.epic;
   return typeof epic?.title === "string" ? epic.title : "";
 }
 

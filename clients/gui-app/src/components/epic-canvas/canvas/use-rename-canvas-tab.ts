@@ -193,7 +193,7 @@ export function useRenameCanvasTab(
         void renameChat
           .mutateAsync({ epicId, chatId: id, title: trimmed })
           .then(landed, failed);
-      } else if (tab.type === "terminal-agent") {
+      } else {
         void renameTerminalAgent
           .mutateAsync({ epicId, tuiAgentId: id, title: trimmed })
           .then(landed, failed);

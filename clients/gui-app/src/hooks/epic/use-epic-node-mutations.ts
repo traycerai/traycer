@@ -128,7 +128,7 @@ export function useEpicDeleteArtifact() {
     variables: Variables,
     ...callbackList: CommandMutationCallbacks<Response, Variables>[]
   ): void {
-    const callbacks = callbackList[0];
+    const callbacks = callbackList.length > 0 ? callbackList[0] : undefined;
     void mutateAsync(variables).then(
       (response) => callbacks?.onSuccess?.(response, variables),
       (error: Error) => callbacks?.onError?.(error, variables),

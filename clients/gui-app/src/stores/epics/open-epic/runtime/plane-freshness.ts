@@ -47,12 +47,14 @@ export function deriveClassFreshness(args: {
   }
   // Pre-observation silence means UNKNOWN, never clean and never stale - a UI
   // that renders "unknown" as either is asserting something no frame has said.
-  const status =
-    observedAtMs === null
-      ? "unknown"
-      : session.transportStatus() === "open"
-        ? "live"
-        : "stale";
+  let status: ClassFreshness["status"];
+  if (observedAtMs === null) {
+    status = "unknown";
+  } else if (session.transportStatus() === "open") {
+    status = "live";
+  } else {
+    status = "stale";
+  }
   return {
     planeId,
     dataClass,

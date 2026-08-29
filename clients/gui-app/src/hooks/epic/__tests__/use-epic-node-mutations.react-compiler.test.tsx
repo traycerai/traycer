@@ -1,5 +1,13 @@
 import { act, render } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { ReactElement } from "react";
 import {
   createOpenEpicStore,
@@ -48,7 +56,7 @@ function TestHarness(props: { readonly renderKey: number }): ReactElement {
 
 describe("use-epic-node-mutations under React Compiler", () => {
   let handle: OpenEpicStoreHandle;
-  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  let consoleErrorSpy: MockInstance<typeof console.error>;
 
   beforeEach(() => {
     window.localStorage.clear();

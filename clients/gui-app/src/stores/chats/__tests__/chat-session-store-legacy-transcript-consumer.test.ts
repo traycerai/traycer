@@ -162,7 +162,9 @@ function createConsumerHarness(): ConsumerHarness {
   const session = new FakeChatWireSession();
   session.negotiatedVersion = WINDOWED_VERSION;
   const client = new FakeChatStreamRpcClient(session);
-  let chatStreamClient: ChatStreamClient | null = null;
+  const captured: { chatStreamClient: ChatStreamClient | null } = {
+    chatStreamClient: null,
+  };
 
   const handle = createChatSessionStore({
     environment: CHAT_STORE_TEST_ENVIRONMENT,
@@ -184,7 +186,7 @@ function createConsumerHarness(): ConsumerHarness {
         chatId,
         callbacks,
       });
-      chatStreamClient = streamClient;
+      captured.chatStreamClient = streamClient;
       return {
         sendAction: (frame) => streamClient.sendAction(frame),
         sameTurnSteeringProtocolSupported: () =>
@@ -199,7 +201,7 @@ function createConsumerHarness(): ConsumerHarness {
     },
   });
 
-  if (chatStreamClient === null) {
+  if (captured.chatStreamClient === null) {
     throw new Error("Expected the store to construct a ChatStreamClient");
   }
   return { handle, session };

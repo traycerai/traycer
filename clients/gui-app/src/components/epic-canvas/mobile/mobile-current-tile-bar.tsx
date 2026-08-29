@@ -71,6 +71,8 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
   // tells them before they type, which is the same rule the sidebar's
   // disabled Rename entry follows.
   const chatWriteRoute = useChatWriteRoute(tile.type === "chat", tile.id);
+  const editable =
+    renameKind !== null && canMutate && chatWriteRoute !== "unavailable";
   const rename = useSwitcherRename(epicId);
   const handleCommit = useCallback(
     (next: string) => {
@@ -97,9 +99,7 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
         />
         <InlineTitleField
           value={displayTitle}
-          editable={
-            renameKind !== null && canMutate && chatWriteRoute !== "unavailable"
-          }
+          editable={editable}
           onCommit={handleCommit}
           inputLabel="Tab title"
           testId="mobile-current-tile-title"

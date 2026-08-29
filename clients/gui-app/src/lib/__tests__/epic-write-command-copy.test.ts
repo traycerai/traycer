@@ -158,9 +158,9 @@ describe("presentEpicWriteCommand", () => {
   });
 
   it("presents unknown-outcome as retryable, and names that it is not itself in flight", async () => {
-    const queue = makeQueue(async () => {
-      throw ambiguousTransportFailure("the result never came back");
-    });
+    const queue = makeQueue(() =>
+      Promise.reject(ambiguousTransportFailure("the result never came back")),
+    );
     const command = queue.enqueue({
       intent: renameIntent("a1", "First"),
       expectedEntityVersion: null,
@@ -183,11 +183,13 @@ describe("presentEpicWriteCommand", () => {
   });
 
   it("presents committed as host-committed, naming the committing host, without an unqualified 'saved' claim", async () => {
-    const queue = makeQueue(async () => ({
-      kind: "committed",
-      hostId: "host-42",
-      entityVersion: 7,
-    }));
+    const queue = makeQueue(() =>
+      Promise.resolve({
+        kind: "committed",
+        hostId: "host-42",
+        entityVersion: 7,
+      }),
+    );
     const command = queue.enqueue({
       intent: renameIntent("a1", "First"),
       expectedEntityVersion: null,
@@ -209,9 +211,9 @@ describe("presentEpicWriteCommand", () => {
   });
 
   it("presents an ordinary rejection with the host's own reason string, verbatim", async () => {
-    const queue = makeQueue(async () => {
-      throw ordinaryRejection("Another agent is using this worktree");
-    });
+    const queue = makeQueue(() =>
+      Promise.reject(ordinaryRejection("Another agent is using this worktree")),
+    );
     const command = queue.enqueue({
       intent: renameIntent("a1", "First"),
       expectedEntityVersion: null,
@@ -230,9 +232,11 @@ describe("presentEpicWriteCommand", () => {
   });
 
   it("pulls E_EPIC_READ_ONLY out of rejected into its own non-retryable stage", async () => {
-    const queue = makeQueue(async () => {
-      throw readOnlyRejection("This epic cannot be written to right now");
-    });
+    const queue = makeQueue(() =>
+      Promise.reject(
+        readOnlyRejection("This epic cannot be written to right now"),
+      ),
+    );
     const command = queue.enqueue({
       intent: renameIntent("a1", "First"),
       expectedEntityVersion: null,
@@ -255,11 +259,13 @@ describe("presentEpicWriteCommand", () => {
   });
 
   it("presents a committed-then-superseded record as superseded, not as the committed state it passed through", async () => {
-    const queue = makeQueue(async () => ({
-      kind: "committed",
-      hostId: "host-1",
-      entityVersion: 3,
-    }));
+    const queue = makeQueue(() =>
+      Promise.resolve({
+        kind: "committed",
+        hostId: "host-1",
+        entityVersion: 3,
+      }),
+    );
     const command = queue.enqueue({
       intent: renameIntent("a1", "First"),
       expectedEntityVersion: null,

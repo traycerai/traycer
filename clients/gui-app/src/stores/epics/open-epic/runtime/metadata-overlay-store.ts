@@ -277,44 +277,47 @@ export function createMetadataOverlayStore(
    */
   function scheduleLandedExpiry(requestId: string): RuntimeTimer {
     landedExpiryByRequestId.get(requestId)?.cancel();
-    let timer: RuntimeTimer;
-    timer = environment.scheduler.schedule(LANDED_MUTATION_TTL_MS, () => {
-      if (landedExpiryByRequestId.get(requestId) !== timer) return;
-      landedExpiryByRequestId.delete(requestId);
-      if (isDisposed()) return;
-      const entry = pending.get(requestId);
-      if (entry === undefined) return;
-      const nodeId = entry.kind === "epic-title" ? null : entry.nodeId;
-      const chainRequestIds: string[] = [];
-      let chainHasUnsettled = false;
-      for (const [id, other] of pending) {
-        if (other.kind !== entry.kind) continue;
-        const otherId = other.kind === "epic-title" ? null : other.nodeId;
-        if (otherId !== nodeId) continue;
-        chainRequestIds.push(id);
-        if (!other.landed) chainHasUnsettled = true;
-      }
-      const isTail = chainRequestIds[chainRequestIds.length - 1] === requestId;
-      if (chainHasUnsettled || !isTail) {
-        scheduleLandedExpiry(requestId);
-        return;
-      }
-      for (const id of chainRequestIds) {
-        landedExpiryByRequestId.get(id)?.cancel();
-        landedExpiryByRequestId.delete(id);
-        onReconciled(id, "superseded", "landed-overlay-ttl");
-        // Reconciliation may synchronously resolve the queue, whose terminal
-        // callback calls `retire` and arms a fresh timer before control returns
-        // here. This sweep is already deleting the entry, so cancel that
-        // re-entrant timer too.
-        landedExpiryByRequestId.get(id)?.cancel();
-        landedExpiryByRequestId.delete(id);
-        pending.delete(id);
-        registryBackedRequestIds.delete(id);
-        unknownOutcomeRequestIds.delete(id);
-      }
-      republish();
-    });
+    const timer: RuntimeTimer = environment.scheduler.schedule(
+      LANDED_MUTATION_TTL_MS,
+      () => {
+        if (landedExpiryByRequestId.get(requestId) !== timer) return;
+        landedExpiryByRequestId.delete(requestId);
+        if (isDisposed()) return;
+        const entry = pending.get(requestId);
+        if (entry === undefined) return;
+        const nodeId = entry.kind === "epic-title" ? null : entry.nodeId;
+        const chainRequestIds: string[] = [];
+        let chainHasUnsettled = false;
+        for (const [id, other] of pending) {
+          if (other.kind !== entry.kind) continue;
+          const otherId = other.kind === "epic-title" ? null : other.nodeId;
+          if (otherId !== nodeId) continue;
+          chainRequestIds.push(id);
+          if (!other.landed) chainHasUnsettled = true;
+        }
+        const isTail =
+          chainRequestIds[chainRequestIds.length - 1] === requestId;
+        if (chainHasUnsettled || !isTail) {
+          scheduleLandedExpiry(requestId);
+          return;
+        }
+        for (const id of chainRequestIds) {
+          landedExpiryByRequestId.get(id)?.cancel();
+          landedExpiryByRequestId.delete(id);
+          onReconciled(id, "superseded", "landed-overlay-ttl");
+          // Reconciliation may synchronously resolve the queue, whose terminal
+          // callback calls `retire` and arms a fresh timer before control returns
+          // here. This sweep is already deleting the entry, so cancel that
+          // re-entrant timer too.
+          landedExpiryByRequestId.get(id)?.cancel();
+          landedExpiryByRequestId.delete(id);
+          pending.delete(id);
+          registryBackedRequestIds.delete(id);
+          unknownOutcomeRequestIds.delete(id);
+        }
+        republish();
+      },
+    );
     landedExpiryByRequestId.set(requestId, timer);
     return timer;
   }

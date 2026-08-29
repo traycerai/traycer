@@ -234,7 +234,7 @@ async function mountSession(
   await waitFor(() => {
     expect(seenHandles).toHaveLength(1);
   });
-  const handle = seenHandles[0];
+  const handle = seenHandles.at(0);
   if (handle === undefined) throw new Error("expected a handle");
   return { handle };
 }
@@ -287,7 +287,7 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       "epic-transport-test",
     );
     expect(transportRegistry.records).toHaveLength(1);
-    const record = transportRegistry.records[0];
+    const record = transportRegistry.records.at(0);
     if (record === undefined) throw new Error("expected a transport record");
 
     act(() => {
@@ -311,7 +311,7 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       "epic-transport-test",
       "epic-transport-test",
     );
-    const record = transportRegistry.records[0];
+    const record = transportRegistry.records.at(0);
     if (record === undefined) throw new Error("expected a transport record");
     expect(record.closeCount).toBe(0);
 
@@ -333,7 +333,7 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       "epic-transport-test",
       "epic-transport-test",
     );
-    const record = transportRegistry.records[0];
+    const record = transportRegistry.records.at(0);
     if (record === undefined) throw new Error("expected a transport record");
     expect(record.closeCount).toBe(0);
 
@@ -348,7 +348,7 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       "epic-transport-test-a",
       "epic-transport-test-a",
     );
-    const firstRecord = transportRegistry.records[0];
+    const firstRecord = transportRegistry.records.at(0);
     if (firstRecord === undefined) throw new Error("expected a record");
     act(() => {
       first.handle.dispose();
@@ -360,7 +360,7 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       "epic-transport-test-b",
       "epic-transport-test-b",
     );
-    const secondRecord = transportRegistry.records[1];
+    const secondRecord = transportRegistry.records.at(1);
     if (secondRecord === undefined) throw new Error("expected a record");
     act(() => {
       second.handle.detachTransport();
@@ -407,8 +407,8 @@ describe("<EpicSessionProvider /> transport ownership", () => {
       expect(seenHandles).toHaveLength(1);
     });
     expect(transportRegistry.records).toHaveLength(1);
-    const firstHandle = seenHandles[0];
-    const firstRecord = transportRegistry.records[0];
+    const firstHandle = seenHandles.at(0);
+    const firstRecord = transportRegistry.records.at(0);
     if (firstHandle === undefined || firstRecord === undefined) {
       throw new Error("expected an initial handle and transport record");
     }
@@ -423,7 +423,7 @@ describe("<EpicSessionProvider /> transport ownership", () => {
 
     expect(transportRegistry.records).toHaveLength(2);
     expect(firstRecord.closeCount).toBe(1);
-    const secondRecord = transportRegistry.records[1];
+    const secondRecord = transportRegistry.records.at(1);
     if (secondRecord === undefined) throw new Error("expected a record");
     // A DISTINCT instance, not the disposed transport handed back to the new
     // session.

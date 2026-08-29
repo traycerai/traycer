@@ -393,15 +393,14 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     // shape as the artifact arms beside it). So the header already reads the
     // committed-to-be title from the enqueue alone - no forced doc echo
     // needed to observe it.
-    expect(titleCalls()).toEqual([
-      {
-        epicDelta: {
-          id: EPIC_ID,
-          title: "Renamed on the phone",
-          updatedAt: expect.any(Number),
-        },
-      },
-    ]);
+    expect(titleCalls()).toHaveLength(1);
+    const firstTitleCall = titleCalls().at(0);
+    if (firstTitleCall === undefined) {
+      throw new Error("expected a title update call");
+    }
+    expect(firstTitleCall.epicDelta.id).toBe(EPIC_ID);
+    expect(firstTitleCall.epicDelta.title).toBe("Renamed on the phone");
+    expect(typeof firstTitleCall.epicDelta.updatedAt).toBe("number");
     await waitFor(() =>
       expect(screen.getByTestId("mobile-header-title").textContent).toBe(
         "Renamed on the phone",

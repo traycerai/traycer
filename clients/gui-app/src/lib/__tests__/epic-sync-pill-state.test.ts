@@ -178,9 +178,7 @@ describe("summarizeEpicWriteCommands", () => {
 
   it("counts a real unknown-outcome record", async () => {
     const queue = makeQueue(
-      async () => {
-        throw new Error("connection dropped after send");
-      },
+      () => Promise.reject(new Error("connection dropped after send")),
       () => ({
         kind: "unknown-outcome",
         reason: "connection dropped after send",
@@ -209,7 +207,7 @@ describe("summarizeEpicWriteCommands", () => {
       retryable: true,
     };
     const queue = makeQueue(
-      async () => resolution,
+      () => Promise.resolve(resolution),
       () => ({ kind: "rejected", resolution }),
     );
     const record = queue.enqueue({
@@ -229,7 +227,7 @@ describe("summarizeEpicWriteCommands", () => {
 
   it("counts a real superseded record", async () => {
     const queue = makeQueue(
-      async () => committed("host-1"),
+      () => Promise.resolve(committed("host-1")),
       () => ({ kind: "queued", reason: "offline", boundedRetry: false }),
     );
     const record = queue.enqueue({
@@ -259,7 +257,7 @@ describe("summarizeEpicWriteCommands", () => {
   // to "Saving changes" for the rest of the session.
   it("counts a committed record as NOTHING, and the pill still reads synced with it present", async () => {
     const queue = makeQueue(
-      async () => committed("host-1"),
+      () => Promise.resolve(committed("host-1")),
       () => ({ kind: "queued", reason: "offline", boundedRetry: false }),
     );
     const record = queue.enqueue({

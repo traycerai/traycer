@@ -23,7 +23,9 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => clients.session,
 }));
 
-const commandFixture = vi.hoisted(() => {
+const commandFixture = await vi.hoisted(async () => {
+  // Hoisted above the static imports, so the store factory is imported here.
+  const { createStore } = await import("zustand/vanilla");
   const state = {
     writeCommands: [] as ReadonlyArray<{
       readonly state: string;
@@ -32,10 +34,11 @@ const commandFixture = vi.hoisted(() => {
     enqueueWriteCommand: vi.fn<(intent: unknown) => string | null>(),
     waitForWriteCommand: vi.fn<(commandId: string) => Promise<unknown>>(),
   };
-  const store = Object.assign(
-    <T>(selector: (candidate: typeof state) => T): T => selector(state),
-    { getState: (): typeof state => state },
-  );
+  // A real vanilla store, not a callable stub: since the hook-order fix the
+  // hooks subscribe through `useStore(handle.store, selector)`, so the fixture
+  // must carry `subscribe` as well as `getState` or every render throws
+  // "subscribe is not a function" from the passive-effect commit.
+  const store = createStore<typeof state>(() => state);
   return { state, handle: { store } };
 });
 

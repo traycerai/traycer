@@ -140,7 +140,7 @@ export function useSwitcherRename(
         void renameChat
           .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
           .then(landed, failed);
-      } else if (kind === "terminal-agent") {
+      } else {
         void renameTuiAgent
           .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
           .then(landed, failed);

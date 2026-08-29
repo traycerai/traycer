@@ -47,7 +47,7 @@ function createState(overrides: Partial<FakeState>): FakeState {
   return {
     acquireArtifactBodyLease: () => () => {},
     getArtifactFragment: () => null,
-    readAttachmentBytes: async () => null,
+    readAttachmentBytes: () => Promise.resolve(null),
     hasAttachmentBytes: () => false,
     ...overrides,
   };
@@ -126,9 +126,9 @@ describe("attachment reads", () => {
   it("waits through readEpicAttachmentBytes without consulting presence", async () => {
     const signal = new AbortController().signal;
     const bytes = Uint8Array.from([1, 2, 3]);
-    const read = vi.fn(async (_hash: string, receivedSignal: AbortSignal) => {
+    const read = vi.fn((_hash: string, receivedSignal: AbortSignal) => {
       expect(receivedSignal).toBe(signal);
-      return bytes;
+      return Promise.resolve(bytes);
     });
     const has = vi.fn(() => {
       throw new Error("presence must not be consulted");
@@ -144,7 +144,7 @@ describe("attachment reads", () => {
   });
 
   it("returns null without reading when held bytes are absent", async () => {
-    const read = vi.fn(async () => Uint8Array.from([1]));
+    const read = vi.fn(() => Promise.resolve(Uint8Array.from([1])));
     const handle = createHandle(
       createState({
         hasAttachmentBytes: () => false,
@@ -165,9 +165,9 @@ describe("attachment reads", () => {
   it("forwards the signal when held bytes are present", async () => {
     const signal = new AbortController().signal;
     const bytes = Uint8Array.from([4, 5]);
-    const read = vi.fn(async (_hash: string, receivedSignal: AbortSignal) => {
+    const read = vi.fn((_hash: string, receivedSignal: AbortSignal) => {
       expect(receivedSignal).toBe(signal);
-      return bytes;
+      return Promise.resolve(bytes);
     });
     const handle = createHandle(
       createState({

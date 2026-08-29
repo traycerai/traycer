@@ -259,11 +259,10 @@ describe("<MobileEpicHeaderTitle />", () => {
     fireEvent.change(input, { target: { value: "Renamed epic" } });
     fireEvent.blur(input);
     expect(enqueueWriteCommand).toHaveBeenCalledTimes(1);
-    expect(enqueueWriteCommand).toHaveBeenCalledWith({
-      kind: "update-epic-title",
-      title: "Renamed epic",
-      updatedAt: expect.any(Number),
-    });
+    const [[enqueuedRename]] = enqueueWriteCommand.mock.calls;
+    expect(enqueuedRename.kind).toBe("update-epic-title");
+    expect(enqueuedRename.title).toBe("Renamed epic");
+    expect(typeof enqueuedRename.updatedAt).toBe("number");
     // Post-T11 this arm's success is `command.state === "committed"`,
     // resolved through `waitForWriteCommand` rather than an RPC promise this
     // component awaits directly - it still bypasses `useEpicUpdateTitle`'s
@@ -313,11 +312,10 @@ describe("<MobileEpicHeaderTitle />", () => {
     fireEvent.change(input, { target: { value: "Renamed epic" } });
     fireEvent.blur(input);
     expect(enqueueWriteCommand).toHaveBeenCalledTimes(1);
-    expect(enqueueWriteCommand).toHaveBeenCalledWith({
-      kind: "update-epic-title",
-      title: "Renamed epic",
-      updatedAt: expect.any(Number),
-    });
+    const [[enqueuedRename]] = enqueueWriteCommand.mock.calls;
+    expect(enqueuedRename.kind).toBe("update-epic-title");
+    expect(enqueuedRename.title).toBe("Renamed epic");
+    expect(typeof enqueuedRename.updatedAt).toBe("number");
     expect(mutateAsyncSpy).not.toHaveBeenCalled();
   });
 

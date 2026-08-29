@@ -58,14 +58,18 @@ describe("classifyEpicWriteCommandFailure", () => {
           return `command-${nextCommandId}`;
         },
       },
-      send: async (
+      send: (
         command: CommandRecord<EpicWriteCommandIntent>,
       ): Promise<CommandResolution> => {
         sentCommandIds.push(command.commandId);
         if (saturated) {
-          throw rpcError("E_IDEMPOTENCY_CACHE_SATURATED");
+          return Promise.reject(rpcError("E_IDEMPOTENCY_CACHE_SATURATED"));
         }
-        return { kind: "committed", hostId: "host-1", entityVersion: null };
+        return Promise.resolve({
+          kind: "committed",
+          hostId: "host-1",
+          entityVersion: null,
+        });
       },
       classifyFailure: classifyEpicWriteCommandFailure,
       accept: () => true,

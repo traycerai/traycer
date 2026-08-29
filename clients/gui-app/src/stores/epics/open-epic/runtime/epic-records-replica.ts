@@ -928,7 +928,6 @@ export function createEpicRecordsReplica(
     // trip.
     if (row.title === trimmed) return null;
     const baseline = overlay.baselineFor("rename", nodeId, row.title);
-    if (baseline === null) return null;
     overlay.stamp({
       kind: "rename",
       requestId,
@@ -969,7 +968,6 @@ export function createEpicRecordsReplica(
     const displayed = sink.read().epic.title;
     if (displayed === trimmed) return null;
     const baseline = overlay.baselineFor("epic-title", null, displayed);
-    if (baseline === null) return null;
     return overlay.stamp({
       kind: "epic-title",
       requestId,

@@ -300,11 +300,14 @@ export function createChatRecordTable(
       // two books that can disagree is the defect class this plane already
       // documents. It is keyed by `chatId` alone and filtered to the viewer,
       // which is exactly the population whose mutations this client routes.
-      const heldHome = table.current().byId[delta.record.chatId];
+      const heldById = table.current().byId;
+      const heldHome = Object.hasOwn(heldById, delta.record.chatId)
+        ? heldById[delta.record.chatId].docResident
+        : null;
       return published(
         table.applyUpsert({
           ...delta.record,
-          docResident: heldHome === undefined ? null : heldHome.docResident,
+          docResident: heldHome,
         }),
       );
     },

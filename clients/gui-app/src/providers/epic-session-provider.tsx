@@ -898,12 +898,14 @@ export function EpicSessionProvider(
       // edits" for the length of the window, and retaining a duplicate is
       // precisely what pins an epic as permanently unsyncable. See the
       // registry's own comment on `editsTransferredToReplacement`.
-      // Narrowed HERE, in the synchronous half, and passed in. `current` is a
-      // `let` in the enclosing scope and `targetHostId` is `string | null`, so
-      // TypeScript cannot carry either narrowing across the tail's `await` -
-      // and a `!` inside the tail would assert a fact the await can genuinely
-      // invalidate. The tail receives values that were already proven.
-      if (current === null || targetHostId === null) return;
+      // `current` and `targetHostId` are already narrowed non-null by the
+      // early returns above (line 698, line 472) and neither is reassigned
+      // between there and here, so TypeScript carries both narrowings this
+      // far - and passing them as PARAMETERS, not closed-over names, is what
+      // lets that proof survive into the tail: TypeScript cannot carry a
+      // narrowing across an `await`, and a `!` inside the tail would assert a
+      // fact the await can genuinely invalidate. The tail receives values
+      // that were already proven, not names it would have to re-prove.
       void transferThenComplete(shouldTransferEdits, current, targetHostId);
     };
 
