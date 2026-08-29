@@ -151,12 +151,16 @@ function rangeResponse(input: {
 
 /** A window with a complete 10-row skeleton at epoch 1 and nothing hydrated. */
 function windowWithSkeleton(rowCount: number): TranscriptWindow {
-  const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-    epoch: 1,
-    rowCount,
-    indexRevision: null,
-    tail: { fromOrdinal: rowCount, messages: [], events: [] },
-  });
+  const seeded = applyWindowedSnapshot(
+    emptyTranscriptWindow(),
+    {
+      epoch: 1,
+      rowCount,
+      indexRevision: null,
+      tail: { fromOrdinal: rowCount, messages: [], events: [] },
+    },
+    null,
+  );
   return applySkeletonChunk(seeded, {
     epoch: 1,
     fromOrdinal: 0,
@@ -167,16 +171,20 @@ function windowWithSkeleton(rowCount: number): TranscriptWindow {
 
 describe("windowed snapshot seating", () => {
   it("seats the inline tail as a hydrated span", () => {
-    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 5,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 3,
-        messages: [userMessage("m-3", 3), userMessage("m-4", 4)],
-        events: [],
+    const window = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 5,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 3,
+          messages: [userMessage("m-3", 3), userMessage("m-4", 4)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
     expect(window.rowCount).toBe(5);
     expect(window.spans).toHaveLength(1);
     expect(window.spans[0]?.fromOrdinal).toBe(3);
@@ -201,12 +209,16 @@ describe("windowed snapshot seating", () => {
     );
     expect(seeded.spans).toHaveLength(1);
 
-    const refreshed = applyWindowedSnapshot(seeded, {
-      epoch: 1,
-      rowCount: 10,
-      indexRevision: null,
-      tail: { fromOrdinal: 9, messages: [userMessage("m-9", 9)], events: [] },
-    });
+    const refreshed = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 1,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 9, messages: [userMessage("m-9", 9)], events: [] },
+      },
+      null,
+    );
     expect(refreshed.spans.map((span) => span.fromOrdinal)).toEqual([0, 9]);
   });
 
@@ -221,12 +233,16 @@ describe("windowed snapshot seating", () => {
       }),
       null,
     );
-    const rebased = applyWindowedSnapshot(seeded, {
-      epoch: 2,
-      rowCount: 4,
-      indexRevision: null,
-      tail: { fromOrdinal: 4, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 4,
+        indexRevision: null,
+        tail: { fromOrdinal: 4, messages: [], events: [] },
+      },
+      null,
+    );
     expect(rebased.spans).toEqual([]);
     expect(rebased.skeleton).toEqual([]);
     expect(rebased.hydratedBytes).toBe(0);
@@ -236,12 +252,16 @@ describe("windowed snapshot seating", () => {
     // The host's tail walks backwards under a hard byte ceiling with no
     // always-serve-one exception, so a chat whose last row is a 1.27 MB tool
     // result ships zero rows.
-    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 40,
-      indexRevision: null,
-      tail: { fromOrdinal: 40, messages: [], events: [] },
-    });
+    const window = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 40,
+        indexRevision: null,
+        tail: { fromOrdinal: 40, messages: [], events: [] },
+      },
+      null,
+    );
     expect(window.spans).toEqual([]);
     expect(window.rowCount).toBe(40);
   });
@@ -249,12 +269,16 @@ describe("windowed snapshot seating", () => {
 
 describe("skeleton chunks", () => {
   it("places entries sparsely and completes only on the final chunk", () => {
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 6,
-      indexRevision: null,
-      tail: { fromOrdinal: 6, messages: [], events: [] },
-    });
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 6,
+        indexRevision: null,
+        tail: { fromOrdinal: 6, messages: [], events: [] },
+      },
+      null,
+    );
     const first = applySkeletonChunk(seeded, {
       epoch: 1,
       fromOrdinal: 0,
@@ -278,12 +302,16 @@ describe("skeleton chunks", () => {
   it("declares the index void when the final chunk leaves it short", () => {
     // Chunks were lost. Serving ordinals off an index the client KNOWS is
     // incomplete renders a transcript that is silently missing rows.
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 9,
-      indexRevision: null,
-      tail: { fromOrdinal: 9, messages: [], events: [] },
-    });
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 9,
+        indexRevision: null,
+        tail: { fromOrdinal: 9, messages: [], events: [] },
+      },
+      null,
+    );
     const short = applySkeletonChunk(seeded, {
       epoch: 1,
       fromOrdinal: 0,
@@ -298,12 +326,16 @@ describe("skeleton chunks", () => {
     // The sparse-array trap: the final chunk reaches `rowCount`, so length
     // agrees and the skeleton reads complete while ordinals 3-5 are holes.
     // Length is not coverage.
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 9,
-      indexRevision: null,
-      tail: { fromOrdinal: 9, messages: [], events: [] },
-    });
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 9,
+        indexRevision: null,
+        tail: { fromOrdinal: 9, messages: [], events: [] },
+      },
+      null,
+    );
     const first = applySkeletonChunk(seeded, {
       epoch: 1,
       fromOrdinal: 0,
@@ -341,12 +373,16 @@ describe("skeleton chunks", () => {
     // reaches those ordinals is the first authority - and if it names
     // different rows, the tail was hydrated from a projection this client no
     // longer holds.
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 3,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [userMessage("m-1", 1)], events: [] },
-    });
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 3,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [userMessage("m-1", 1)], events: [] },
+      },
+      null,
+    );
     expect(seeded.spans).toHaveLength(1);
 
     // First the skeleton agrees (fills the empty ids) - the body survives.
@@ -413,12 +449,16 @@ describe("index deltas", () => {
     // rows at ordinals 30 and 31, over scrollback whose real entries are still
     // in flight. Then the identity check rejects a valid range for 30-31 while
     // 100-101 stay holes forever.
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 100,
-      indexRevision: null,
-      tail: { fromOrdinal: 100, messages: [], events: [] },
-    });
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 100,
+        indexRevision: null,
+        tail: { fromOrdinal: 100, messages: [], events: [] },
+      },
+      null,
+    );
     const partial = applySkeletonChunk(seeded, {
       epoch: 1,
       fromOrdinal: 0,
@@ -494,16 +534,20 @@ describe("index deltas", () => {
     // empty chat under an active stream. The frame is self-consistent - its
     // entries occupy `[rowCount - appended, rowCount)` - so it must apply, and
     // seat at the frame-derived base rather than one past it.
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 0,
-      rowCount: 1,
-      indexRevision: 0,
-      tail: {
-        fromOrdinal: 0,
-        messages: [userMessage("m-0", 0)],
-        events: [],
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 0,
+        rowCount: 1,
+        indexRevision: 0,
+        tail: {
+          fromOrdinal: 0,
+          messages: [userMessage("m-0", 0)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
     expect(seeded.rowCount).toBe(1);
 
     const appended = applyIndexChange(seeded, {
@@ -535,16 +579,20 @@ describe("index deltas", () => {
     // being an append. Here the snapshot moved `rowCount` by three and the
     // delta names only the last of them, so ordinals 0 and 1 are undelivered -
     // whatever the cause - and the client must keep saying so.
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 0,
-      rowCount: 3,
-      indexRevision: 0,
-      tail: {
-        fromOrdinal: 0,
-        messages: [userMessage("m-0", 0)],
-        events: [],
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 0,
+        rowCount: 3,
+        indexRevision: 0,
+        tail: {
+          fromOrdinal: 0,
+          messages: [userMessage("m-0", 0)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
 
     const appended = applyIndexChange(seeded, {
       activeTurnId: null,
@@ -656,12 +704,16 @@ describe("index deltas", () => {
   it("ignores a non-reindexed delta stamped with an OLDER epoch", () => {
     // A straggler: its ordinals were renumbered by the change that moved this
     // window on, so there is nothing to apply and nothing to learn.
-    const window = applyWindowedSnapshot(windowWithSkeleton(4), {
-      epoch: 7,
-      rowCount: 4,
-      indexRevision: null,
-      tail: { fromOrdinal: 4, messages: [], events: [] },
-    });
+    const window = applyWindowedSnapshot(
+      windowWithSkeleton(4),
+      {
+        epoch: 7,
+        rowCount: 4,
+        indexRevision: null,
+        tail: { fromOrdinal: 4, messages: [], events: [] },
+      },
+      null,
+    );
     const stale = applyIndexChange(window, {
       activeTurnId: null,
       epoch: 1,
@@ -790,12 +842,16 @@ describe("isActiveTurnStreamingEcho", () => {
 describe("the active turn's streaming echo exemption in applyIndexChange", () => {
   function heldAssistantTurnWindow(turnId: string): TranscriptWindow {
     const seeded = applySkeletonChunk(
-      applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 1, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 1,
+          indexRevision: null,
+          tail: { fromOrdinal: 1, messages: [], events: [] },
+        },
+        null,
+      ),
       {
         epoch: 1,
         fromOrdinal: 0,
@@ -1045,12 +1101,16 @@ describe("held-copy preference for the active turn", () => {
 
   function heldLongerCopyWindow(turnId: string, messageId: string) {
     const seeded = applySkeletonChunk(
-      applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 1, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 1,
+          indexRevision: null,
+          tail: { fromOrdinal: 1, messages: [], events: [] },
+        },
+        null,
+      ),
       {
         epoch: 1,
         fromOrdinal: 0,
@@ -1113,6 +1173,39 @@ describe("held-copy preference for the active turn", () => {
     );
 
     expect(seatedAssistantBlocks(seated, messageId)).toEqual([firstBlock]);
+  });
+
+  it("a reordered snapshot tail cannot regress the actively streaming body", () => {
+    // A bulk snapshot serialized before newer block deltas can arrive after
+    // they were applied. Its tail seat must apply the same held-copy
+    // preference as the range seat - `insertSpan` would otherwise make the
+    // older served copy win and later deltas would build on the regressed
+    // body.
+    const turnId = "turn-snapshot";
+    const messageId = "assistant-snapshot";
+    const held = heldLongerCopyWindow(turnId, messageId);
+
+    const seated = applyWindowedSnapshot(
+      held,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 0,
+          messages: [
+            { ...assistantMessage(messageId, turnId, 2), blocks: [firstBlock] },
+          ],
+          events: [],
+        },
+      },
+      turnId,
+    );
+
+    expect(seatedAssistantBlocks(seated, messageId)).toEqual([
+      firstBlock,
+      secondBlock,
+    ]);
   });
 
   it("prefers a copy held only by a STALE span over a delayed range answer", () => {
@@ -1239,12 +1332,16 @@ describe("gaps and what to request next", () => {
   it("asks for the tail when the snapshot arrived with rows but no bodies", () => {
     // The obligation the empty-tail case creates. Without it the chat has rows
     // in it and displays as empty, with nothing on screen to suggest a retry.
-    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 40,
-      indexRevision: null,
-      tail: { fromOrdinal: 40, messages: [], events: [] },
-    });
+    const window = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 40,
+        indexRevision: null,
+        tail: { fromOrdinal: 40, messages: [], events: [] },
+      },
+      null,
+    );
     expect(planTranscriptHydration(window, null, [])).toEqual({
       fromOrdinal: 20,
       toOrdinal: 40,
@@ -1253,12 +1350,16 @@ describe("gaps and what to request next", () => {
 
   it("moves on to the visible span once the tail is hydrated", () => {
     const window = applyRangeResponse(
-      applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 1,
-        rowCount: 40,
-        indexRevision: null,
-        tail: { fromOrdinal: 40, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: null,
+          tail: { fromOrdinal: 40, messages: [], events: [] },
+        },
+        null,
+      ),
       rangeResponse({
         epoch: 1,
         fromOrdinal: 20,
@@ -1299,12 +1400,16 @@ describe("gaps and what to request next", () => {
     /** A 40-row window whose eager tail is hydrated and nothing else. */
     function tailHydrated(): TranscriptWindow {
       return applyRangeResponse(
-        applyWindowedSnapshot(emptyTranscriptWindow(), {
-          epoch: 1,
-          rowCount: 40,
-          indexRevision: null,
-          tail: { fromOrdinal: 40, messages: [], events: [] },
-        }),
+        applyWindowedSnapshot(
+          emptyTranscriptWindow(),
+          {
+            epoch: 1,
+            rowCount: 40,
+            indexRevision: null,
+            tail: { fromOrdinal: 40, messages: [], events: [] },
+          },
+          null,
+        ),
         rangeResponse({
           epoch: 1,
           fromOrdinal: 20,
@@ -1338,12 +1443,16 @@ describe("gaps and what to request next", () => {
     });
 
     it("yields to the missing tail, which is the cheaper way to the same row", () => {
-      const noTail = applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 1,
-        rowCount: 40,
-        indexRevision: null,
-        tail: { fromOrdinal: 40, messages: [], events: [] },
-      });
+      const noTail = applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: null,
+          tail: { fromOrdinal: 40, messages: [], events: [] },
+        },
+        null,
+      );
       expect(planTranscriptHydration(noTail, null, [4])).toEqual({
         fromOrdinal: 20,
         toOrdinal: 40,
@@ -1399,12 +1508,16 @@ describe("stale spans", () => {
     );
     expect(seeded.spans).toHaveLength(1);
 
-    const rebased = applyWindowedSnapshot(seeded, {
-      epoch: 2,
-      rowCount: 5,
-      indexRevision: null,
-      tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 5,
+        indexRevision: null,
+        tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
+      },
+      null,
+    );
 
     expect(rebased.epoch).toBe(2);
     expect(rebased.staleSpans).toHaveLength(1);
@@ -1426,12 +1539,16 @@ describe("stale spans", () => {
       null,
     );
 
-    const rebased = applyWindowedSnapshot(seeded, {
-      epoch: 2,
-      rowCount: 0,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 0,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(rebased.staleSpans).toEqual([]);
   });
@@ -1495,12 +1612,16 @@ describe("stale spans", () => {
       }),
       null,
     );
-    const rebased = applyWindowedSnapshot(seeded, {
-      epoch: 2,
-      rowCount: 5,
-      indexRevision: null,
-      tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 5,
+        indexRevision: null,
+        tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
+      },
+      null,
+    );
     expect(rebased.staleSpans).toHaveLength(1);
 
     const skeletoned = applySkeletonChunk(rebased, {
@@ -1526,12 +1647,16 @@ describe("stale spans", () => {
 
   it("retires a stale span the complete replacement skeleton does not name, keeping the ones it does", () => {
     const seeded = applySkeletonChunk(
-      applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 1,
-        rowCount: 4,
-        indexRevision: null,
-        tail: { fromOrdinal: 4, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 4,
+          indexRevision: null,
+          tail: { fromOrdinal: 4, messages: [], events: [] },
+        },
+        null,
+      ),
       {
         epoch: 1,
         fromOrdinal: 0,
@@ -1603,12 +1728,16 @@ describe("stale spans", () => {
       }),
       null,
     );
-    const rebased = applyWindowedSnapshot(seeded, {
-      epoch: 2,
-      rowCount: 5,
-      indexRevision: null,
-      tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 5,
+        indexRevision: null,
+        tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
+      },
+      null,
+    );
     expect(rebased.staleSpans).toHaveLength(1);
     expect(rebased.invalidated).toBe(false);
 
@@ -1640,12 +1769,16 @@ describe("stale spans", () => {
       }),
       null,
     );
-    const rebased = applyWindowedSnapshot(seeded, {
-      epoch: 2,
-      rowCount: 5,
-      indexRevision: null,
-      tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 5,
+        indexRevision: null,
+        tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
+      },
+      null,
+    );
     // The only FRESH span is the new inline tail; "m-0" survives in a stale
     // span alone.
     expect(rebased.spans).toHaveLength(1);
@@ -2244,18 +2377,22 @@ describe("holdsEveryRecordFrom", () => {
    * start of a long chat is actually in.
    */
   function splitWindow(): TranscriptWindow {
-    const seeded = applyWindowedSnapshot(windowWithSkeleton(30), {
-      epoch: 1,
-      rowCount: 30,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 25,
-        messages: Array.from({ length: 5 }, (_unused, index) =>
-          userMessage(`m-${25 + index}`, 25 + index),
-        ),
-        events: [],
+    const seeded = applyWindowedSnapshot(
+      windowWithSkeleton(30),
+      {
+        epoch: 1,
+        rowCount: 30,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 25,
+          messages: Array.from({ length: 5 }, (_unused, index) =>
+            userMessage(`m-${25 + index}`, 25 + index),
+          ),
+          events: [],
+        },
       },
-    });
+      null,
+    );
     return applyRangeResponse(
       seeded,
       rangeResponse({
@@ -2306,16 +2443,20 @@ describe("holdsEveryRecordFrom", () => {
   });
 
   it("holds everything from the tail of a fully hydrated transcript", () => {
-    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 2,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 0,
-        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
-        events: [],
+    const window = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 0,
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
     expect(holdsEveryRecordFrom(window, "m-0")).toBe(true);
   });
 });
@@ -2374,26 +2515,34 @@ describe("what an overlap keeps", () => {
   });
 
   it("drops a retained tail the new snapshot could not serve", () => {
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 3,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 2,
-        messages: [messageWithText(userMessage("row-2", 3), "half-written")],
-        events: [],
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 3,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 2,
+          messages: [messageWithText(userMessage("row-2", 3), "half-written")],
+          events: [],
+        },
       },
-    });
+      null,
+    );
     expect(seeded.spans).toHaveLength(1);
     // Same epoch, and the last row has since grown past the inline budget - so
     // the host legitimately ships an EMPTY tail. Keeping the old span would
     // leave `isTailHydrated` true and nothing would ever fetch the real body.
-    const reconnected = applyWindowedSnapshot(seeded, {
-      epoch: 1,
-      rowCount: 3,
-      indexRevision: null,
-      tail: { fromOrdinal: 2, messages: [], events: [] },
-    });
+    const reconnected = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 1,
+        rowCount: 3,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      },
+      null,
+    );
     expect(reconnected.spans).toHaveLength(0);
     expect(
       planTranscriptHydration(
@@ -2414,12 +2563,16 @@ describe("what an overlap keeps", () => {
 
     // The completion snapshot arrives before the held subscriber's synchronous
     // reindexed delta. Its only row exceeds the inline-tail budget.
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
     expect(hydratedRecords(rebased).messages.map((m) => m.messageId)).toEqual([
       transientId,
     ]);
@@ -2435,12 +2588,16 @@ describe("what an overlap keeps", () => {
       transientId,
     ]);
 
-    const resnapshot = applyWindowedSnapshot(voided, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const resnapshot = applyWindowedSnapshot(
+      voided,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
     expect(
       hydratedRecords(resnapshot).messages.map((m) => m.messageId),
     ).toEqual([transientId]);
@@ -2486,12 +2643,16 @@ describe("what an overlap keeps", () => {
       },
     );
 
-    const gapped = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: 3,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const gapped = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 3,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(gapped.invalidated).toBe(true);
     expect(hydratedRecords(gapped).messages.map((m) => m.messageId)).toEqual([
@@ -2511,24 +2672,32 @@ describe("what an overlap keeps", () => {
       { messages: [userMessage("accepted-user-gap", 1)], events: [] },
     );
 
-    const gapped = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 2,
-      indexRevision: 3,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const gapped = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: 3,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(gapped.invalidated).toBe(true);
     expect(gapped.liveMessages.map((message) => message.messageId)).toEqual([
       "accepted-user-gap",
     ]);
 
-    const replacement = applyWindowedSnapshot(gapped, {
-      epoch: 1,
-      rowCount: 2,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const replacement = applyWindowedSnapshot(
+      gapped,
+      {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(
       replacement.liveMessages.map((message) => message.messageId),
@@ -2545,12 +2714,16 @@ describe("what an overlap keeps", () => {
       rowCount: 1,
       invalidated: true,
     };
-    const replacement = applyWindowedSnapshot(invalidated, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const replacement = applyWindowedSnapshot(
+      invalidated,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     const rebuilt = applySkeletonChunk(replacement, {
       epoch: 1,
       fromOrdinal: 0,
@@ -2574,12 +2747,16 @@ describe("what an overlap keeps", () => {
       },
       { messages: [userMessage("accepted-user-removed", 1)], events: [] },
     );
-    const replacement = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const replacement = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     const rebuilt = applySkeletonChunk(replacement, {
       epoch: 1,
       fromOrdinal: 0,
@@ -2623,12 +2800,16 @@ describe("what an overlap keeps", () => {
       events: [],
     });
 
-    const empty = applyWindowedSnapshot(live, {
-      epoch: 0,
-      rowCount: 0,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const empty = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 0,
+        rowCount: 0,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(empty.liveMessages.map((message) => message.messageId)).toEqual([
       "accepted-user-deleted",
@@ -2647,12 +2828,16 @@ describe("what an overlap keeps", () => {
       events: [],
     });
 
-    const empty = applyWindowedSnapshot(live, {
-      epoch: 0,
-      rowCount: 0,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const empty = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 0,
+        rowCount: 0,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(empty.liveMessages.map((message) => message.messageId)).toEqual([
       "accepted-after-empty",
@@ -2665,12 +2850,16 @@ describe("what an overlap keeps", () => {
       events: [],
     });
 
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(rebased.liveMessages.map((message) => message.messageId)).toEqual([
       "accepted-after-rebase-snapshot",
@@ -2698,12 +2887,16 @@ describe("what an overlap keeps", () => {
       events: [setup],
     });
 
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(rebased.liveEvents.map((event) => event.eventId)).toEqual([
       setup.eventId,
@@ -2730,12 +2923,16 @@ describe("what an overlap keeps", () => {
       messages: [],
       events: [setup],
     });
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     const rebuilt = applySkeletonChunk(rebased, {
       epoch: 1,
       fromOrdinal: 0,
@@ -2743,12 +2940,16 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
 
-    const confirmed = applyWindowedSnapshot(rebuilt, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const confirmed = applyWindowedSnapshot(
+      rebuilt,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(confirmed.liveEvents).toEqual([]);
   });
@@ -2779,12 +2980,16 @@ describe("what an overlap keeps", () => {
       },
       { messages: [], events: [setup] },
     );
-    const rebuilding = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebuilding = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     expect(rebuilding.snapshotProvisionalEventIds).toContain(setup.eventId);
     const rebuilt = applySkeletonChunk(rebuilding, {
       epoch: 1,
@@ -2793,12 +2998,16 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
 
-    const confirmed = applyWindowedSnapshot(rebuilt, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const confirmed = applyWindowedSnapshot(
+      rebuilt,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     expect(confirmed.liveEvents).toEqual([]);
   });
 
@@ -2819,12 +3028,16 @@ describe("what an overlap keeps", () => {
       events: [completion],
     });
 
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 2,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 2,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(rebased.snapshotProvisionalEventIds).toContain(completion.eventId);
     const rebuilt = applySkeletonChunk(rebased, {
@@ -2833,12 +3046,16 @@ describe("what an overlap keeps", () => {
       entries: [skeletonEntry(assistantRowId("turn-1"), 0)],
       isFinal: true,
     });
-    const confirmed = applyWindowedSnapshot(rebuilt, {
-      epoch: 2,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const confirmed = applyWindowedSnapshot(
+      rebuilt,
+      {
+        epoch: 2,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     expect(confirmed.liveEvents.map((entry) => entry.eventId)).toContain(
       completion.eventId,
     );
@@ -2867,12 +3084,16 @@ describe("what an overlap keeps", () => {
       messages: [],
       events: [failed],
     });
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 2,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 2,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     expect(rebased.snapshotProvisionalEventIds).toContain(failed.eventId);
     const rebuilt = applySkeletonChunk(rebased, {
       epoch: 2,
@@ -2882,12 +3103,16 @@ describe("what an overlap keeps", () => {
     });
     expect(rebuilt.skeletonComplete).toBe(true);
 
-    const confirmed = applyWindowedSnapshot(rebuilt, {
-      epoch: 2,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const confirmed = applyWindowedSnapshot(
+      rebuilt,
+      {
+        epoch: 2,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     expect(confirmed.liveEvents).toEqual([]);
   });
 
@@ -2918,12 +3143,16 @@ describe("what an overlap keeps", () => {
         setupEvent("setup-second", "setup.running"),
       ],
     });
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     const rebuilt = applySkeletonChunk(rebased, {
       epoch: 1,
       fromOrdinal: 0,
@@ -2931,12 +3160,16 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
 
-    const confirmed = applyWindowedSnapshot(rebuilt, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const confirmed = applyWindowedSnapshot(
+      rebuilt,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(confirmed.liveEvents.map((event) => event.eventId)).toEqual([
       "setup-boundary",
@@ -2952,12 +3185,16 @@ describe("what an overlap keeps", () => {
       events: [],
     });
 
-    const snapshot = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 0,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const snapshot = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 0,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
     expect(snapshot.liveMessages.map((message) => message.messageId)).toEqual([
       transientId,
     ]);
@@ -2974,12 +3211,16 @@ describe("what an overlap keeps", () => {
   });
 
   it("keeps a user accepted after a snapshot through its older skeleton", () => {
-    const rebuilding = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 0,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebuilding = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 0,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     const live = appendLiveRecords(rebuilding, {
       messages: [userMessage("accepted-user-absent", 1)],
       events: [],
@@ -2998,12 +3239,16 @@ describe("what an overlap keeps", () => {
   });
 
   it("keeps an assistant completed after a snapshot through its older skeleton", () => {
-    const rebuilding = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 0,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebuilding = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 0,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     const transientId = transientLiveAssistantMessageId("turn-after-snapshot");
     const live = appendLiveRecords(rebuilding, {
       messages: [assistantMessage(transientId, "turn-after-snapshot", 1)],
@@ -3065,12 +3310,16 @@ describe("what an overlap keeps", () => {
       events: [],
     });
 
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 0,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 0,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
 
     const streamed = applySkeletonChunk(rebased, {
       epoch: 1,
@@ -3079,12 +3328,16 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
     expect(streamed.liveMessages).toHaveLength(2);
-    const confirmed = applyWindowedSnapshot(streamed, {
-      epoch: 1,
-      rowCount: 0,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const confirmed = applyWindowedSnapshot(
+      streamed,
+      {
+        epoch: 1,
+        rowCount: 0,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(confirmed.liveMessages).toEqual([]);
     expect(hydratedRecords(confirmed).messages).toEqual([]);
@@ -3095,12 +3348,16 @@ describe("what an overlap keeps", () => {
       messages: [userMessage("accepted-before-rebuild", 1)],
       events: [],
     });
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     const rebuilt = applySkeletonChunk(rebased, {
       epoch: 1,
       fromOrdinal: 0,
@@ -3108,12 +3365,16 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
 
-    const confirmed = applyWindowedSnapshot(rebuilt, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const confirmed = applyWindowedSnapshot(
+      rebuilt,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(confirmed.liveMessages).toEqual([]);
   });
@@ -3124,18 +3385,26 @@ describe("what an overlap keeps", () => {
       messages: [userMessage(messageId, 1)],
       events: [],
     });
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
-    const intermediate = applyWindowedSnapshot(rebased, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
+    const intermediate = applyWindowedSnapshot(
+      rebased,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     expect(intermediate.snapshotProvisionalMessageIds).toContain(messageId);
     const rebuilt = applySkeletonChunk(intermediate, {
       epoch: 1,
@@ -3144,12 +3413,16 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
 
-    const confirmed = applyWindowedSnapshot(rebuilt, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const confirmed = applyWindowedSnapshot(
+      rebuilt,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(confirmed.liveMessages).toEqual([]);
   });
@@ -3160,12 +3433,16 @@ describe("what an overlap keeps", () => {
       messages: [userMessage(messageId, 1)],
       events: [],
     });
-    const rebuilding = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 2,
-      indexRevision: null,
-      tail: { fromOrdinal: 2, messages: [], events: [] },
-    });
+    const rebuilding = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      },
+      null,
+    );
     expect(rebuilding.snapshotProvisionalMessageIds).toContain(messageId);
     const superseded = applyRangeResponse(
       rebuilding,
@@ -3179,12 +3456,16 @@ describe("what an overlap keeps", () => {
     );
     expect(superseded.liveMessages).toEqual([]);
 
-    const intermediate = applyWindowedSnapshot(superseded, {
-      epoch: 1,
-      rowCount: 2,
-      indexRevision: null,
-      tail: { fromOrdinal: 2, messages: [], events: [] },
-    });
+    const intermediate = applyWindowedSnapshot(
+      superseded,
+      {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      },
+      null,
+    );
     expect(intermediate.skeletonComplete).toBe(false);
     expect(intermediate.snapshotProvisionalMessageIds).toEqual([]);
   });
@@ -3201,12 +3482,16 @@ describe("what an overlap keeps", () => {
       },
       { messages: [userMessage(messageId, 1)], events: [] },
     );
-    const rebuilding = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebuilding = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     expect(rebuilding.snapshotProvisionalMessageIds).toContain(messageId);
     const rebuilt = applySkeletonChunk(rebuilding, {
       epoch: 1,
@@ -3215,12 +3500,16 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
 
-    const confirmed = applyWindowedSnapshot(rebuilt, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const confirmed = applyWindowedSnapshot(
+      rebuilt,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     expect(confirmed.liveMessages).toEqual([]);
   });
 
@@ -3230,12 +3519,16 @@ describe("what an overlap keeps", () => {
       messages: [userMessage(messageId, 1)],
       events: [],
     });
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
     const rebuilt = applySkeletonChunk(rebased, {
       epoch: 1,
       fromOrdinal: 0,
@@ -3243,12 +3536,16 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
 
-    const confirmed = applyWindowedSnapshot(rebuilt, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const confirmed = applyWindowedSnapshot(
+      rebuilt,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(confirmed.liveMessages.map((message) => message.messageId)).toEqual([
       messageId,
@@ -3258,12 +3555,16 @@ describe("what an overlap keeps", () => {
   it("keeps a frozen assistant across an ambiguous same-epoch empty rebuild", () => {
     const turnId = "turn-restart-deleted";
     const indexed = applySkeletonChunk(
-      applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 0,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 1, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 0,
+          rowCount: 1,
+          indexRevision: null,
+          tail: { fromOrdinal: 1, messages: [], events: [] },
+        },
+        null,
+      ),
       {
         epoch: 0,
         fromOrdinal: 0,
@@ -3278,12 +3579,16 @@ describe("what an overlap keeps", () => {
       events: [],
     });
 
-    const rebuilt = applyWindowedSnapshot(live, {
-      epoch: 0,
-      rowCount: 0,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const rebuilt = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 0,
+        rowCount: 0,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(rebuilt.skeleton).toEqual([]);
     expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
@@ -3294,12 +3599,16 @@ describe("what an overlap keeps", () => {
   it("truncates a same-epoch rebuild without retiring its ambiguous stand-in", () => {
     const turnId = "turn-restart-shortened";
     const indexed = applySkeletonChunk(
-      applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 1,
-        rowCount: 2,
-        indexRevision: null,
-        tail: { fromOrdinal: 2, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 2,
+          indexRevision: null,
+          tail: { fromOrdinal: 2, messages: [], events: [] },
+        },
+        null,
+      ),
       {
         epoch: 1,
         fromOrdinal: 0,
@@ -3316,12 +3625,16 @@ describe("what an overlap keeps", () => {
       ],
       events: [],
     });
-    const rebuilding = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const rebuilding = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(rebuilding.skeleton).toHaveLength(1);
     expect(rebuilding.liveMessages).toHaveLength(1);
@@ -3346,12 +3659,16 @@ describe("what an overlap keeps", () => {
       skeletonStreamCoveredThrough: 3,
     };
 
-    const shrunk = applyWindowedSnapshot(held, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: 2,
-      tail: { fromOrdinal: 1, messages: [], events: [] },
-    });
+    const shrunk = applyWindowedSnapshot(
+      held,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 2,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(shrunk.skeleton).toHaveLength(1);
     expect(shrunk.skeletonStreamCoveredThrough).toBe(1);
@@ -3360,12 +3677,16 @@ describe("what an overlap keeps", () => {
   it("does not retire a completion stand-in because an older span has the turn", () => {
     const turnId = "turn-stale-span";
     const seeded = applySkeletonChunk(
-      applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 1,
-        rowCount: 2,
-        indexRevision: null,
-        tail: { fromOrdinal: 2, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 2,
+          indexRevision: null,
+          tail: { fromOrdinal: 2, messages: [], events: [] },
+        },
+        null,
+      ),
       {
         epoch: 1,
         fromOrdinal: 0,
@@ -3412,12 +3733,16 @@ describe("what an overlap keeps", () => {
     const turnId = "turn-steer-only";
     const steerRowId = queueSteerRowId("queue-1");
     const indexed = applySkeletonChunk(
-      applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 1,
-        rowCount: 2,
-        indexRevision: null,
-        tail: { fromOrdinal: 2, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 2,
+          indexRevision: null,
+          tail: { fromOrdinal: 2, messages: [], events: [] },
+        },
+        null,
+      ),
       {
         epoch: 1,
         fromOrdinal: 0,
@@ -3714,22 +4039,26 @@ describe("what an overlap keeps", () => {
       events: [],
     });
 
-    const snapshot = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 3,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 0,
-        rowIds: ["user-before", assistantRowId(turnId), "user-after"],
-        incompleteRowIds: [assistantRowId(turnId)],
-        messages: [
-          userMessage("user-before", 0),
-          assistantMessage("assistant-partial", turnId, 1),
-          userMessage("user-after", 3),
-        ],
-        events: [],
+    const snapshot = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 3,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 0,
+          rowIds: ["user-before", assistantRowId(turnId), "user-after"],
+          incompleteRowIds: [assistantRowId(turnId)],
+          messages: [
+            userMessage("user-before", 0),
+            assistantMessage("assistant-partial", turnId, 1),
+            userMessage("user-after", 3),
+          ],
+          events: [],
+        },
       },
-    });
+      null,
+    );
 
     expect(snapshot.spans.map((span) => span.rowIds)).toEqual([
       ["user-before"],
@@ -3911,22 +4240,26 @@ describe("what an overlap keeps", () => {
       severity: "info",
       metadata: { workspacePath: "/workspace" },
     });
-    const partial = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 2,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 0,
-        rowIds: ["setup-card:chat-1:1:100", "setup-card:chat-1:2:200"],
-        incompleteRowIds: ["setup-card:chat-1:1:100"],
-        messages: [],
-        events: [
-          setupEvent("setup-first", "setup.running", 100),
-          setupEvent("setup-boundary", "worktree.missing", 150),
-          setupEvent("setup-second", "setup.running", 200),
-        ],
+    const partial = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 0,
+          rowIds: ["setup-card:chat-1:1:100", "setup-card:chat-1:2:200"],
+          incompleteRowIds: ["setup-card:chat-1:1:100"],
+          messages: [],
+          events: [
+            setupEvent("setup-first", "setup.running", 100),
+            setupEvent("setup-boundary", "worktree.missing", 150),
+            setupEvent("setup-second", "setup.running", 200),
+          ],
+        },
       },
-    });
+      null,
+    );
 
     expect(partial.spans.map((span) => span.rowIds)).toEqual([
       ["setup-card:chat-1:2:200"],
@@ -4218,12 +4551,16 @@ describe("what an overlap keeps", () => {
     const turnId = "turn-legacy-tail";
     const transientId = transientLiveAssistantMessageId(turnId);
     const indexed = applySkeletonChunk(
-      applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 1,
-        rowCount: 1,
-        indexRevision: null,
-        tail: { fromOrdinal: 1, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 1,
+          indexRevision: null,
+          tail: { fromOrdinal: 1, messages: [], events: [] },
+        },
+        null,
+      ),
       {
         epoch: 1,
         fromOrdinal: 0,
@@ -4236,16 +4573,20 @@ describe("what an overlap keeps", () => {
       events: [],
     });
 
-    const replacement = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 0,
-        messages: [assistantMessage("shared-steer-record", turnId, 1)],
-        events: [],
+    const replacement = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 0,
+          messages: [assistantMessage("shared-steer-record", turnId, 1)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
 
     expect(
       replacement.liveMessages.map((message) => message.messageId),
@@ -4259,16 +4600,20 @@ describe("what an overlap keeps", () => {
       messages: [assistantMessage(transientId, turnId, 2)],
       events: [],
     });
-    const replacement = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 0,
-        messages: [assistantMessage("assistant-durable", turnId, 2)],
-        events: [],
+    const replacement = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 0,
+          messages: [assistantMessage("assistant-durable", turnId, 2)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
     expect(replacement.liveMessages).toHaveLength(1);
 
     const identified = applySkeletonChunk(replacement, {
@@ -4315,12 +4660,16 @@ describe("what an overlap keeps", () => {
       ],
       events: [],
     });
-    const rebased = applyWindowedSnapshot(live, {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages: [], events: [] },
-    });
+    const rebased = applyWindowedSnapshot(
+      live,
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages: [], events: [] },
+      },
+      null,
+    );
     expect(rebased.liveMessages).toHaveLength(1);
 
     const indexed = applySkeletonChunk(rebased, {
@@ -4353,12 +4702,16 @@ describe("what an overlap keeps", () => {
       null,
     );
     expect(seeded.spans).toHaveLength(1);
-    const rebroadcast = applyWindowedSnapshot(seeded, {
-      epoch: 1,
-      rowCount: 3,
-      indexRevision: null,
-      tail: { fromOrdinal: 3, messages: [], events: [] },
-    });
+    const rebroadcast = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 1,
+        rowCount: 3,
+        indexRevision: null,
+        tail: { fromOrdinal: 3, messages: [], events: [] },
+      },
+      null,
+    );
     expect(rebroadcast.spans).toHaveLength(1);
   });
 
@@ -4366,16 +4719,20 @@ describe("what an overlap keeps", () => {
     // The snapshot precedes the skeleton, so the tail is always seated with no
     // ids to carry. Until the chunk backfills them the row merge cannot match
     // these ordinals to their models at all.
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 3,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 2,
-        messages: [userMessage("row-2", 3)],
-        events: [],
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 3,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 2,
+          messages: [userMessage("row-2", 3)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
     expect(seeded.spans[0].rowIds).toEqual([""]);
     const described = applySkeletonChunk(seeded, {
       epoch: 1,
@@ -4397,16 +4754,20 @@ describe("what an overlap keeps", () => {
     // keeps `""` at that ordinal, `transcriptListRows` finds no model with that
     // id and suppresses the ordinal, and then drops the real model as one the
     // skeleton has already placed - so the row renders nowhere at all.
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 1,
-      indexRevision: 0,
-      tail: {
-        fromOrdinal: 0,
-        messages: [userMessage("row-0", 1)],
-        events: [],
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 0,
+        tail: {
+          fromOrdinal: 0,
+          messages: [userMessage("row-0", 1)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
     expect(seeded.spans[0].rowIds).toEqual([""]);
 
     const described = applyIndexChange(seeded, {
@@ -4424,16 +4785,20 @@ describe("what an overlap keeps", () => {
   });
 
   it("still drops a tail whose id the skeleton contradicts", () => {
-    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 3,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 2,
-        messages: [userMessage("row-2", 3)],
-        events: [],
+    const seeded = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 3,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 2,
+          messages: [userMessage("row-2", 3)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
     const contradicted = applyRangeResponse(
       seeded,
       {
@@ -4626,12 +4991,16 @@ describe("one record across several spans", () => {
     entries[5] = skeletonEntry("steer:q-1", 5);
     entries[6] = skeletonEntry("assistant:t-1:part:1", 6);
     const seeded = applySkeletonChunk(
-      applyWindowedSnapshot(emptyTranscriptWindow(), {
-        epoch: 1,
-        rowCount: 10,
-        indexRevision: null,
-        tail: { fromOrdinal: 10, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 10,
+          indexRevision: null,
+          tail: { fromOrdinal: 10, messages: [], events: [] },
+        },
+        null,
+      ),
       { epoch: 1, fromOrdinal: 0, entries, isFinal: true },
     );
     // The range that served slice 0 carried the TURN's shared record, which is
@@ -4730,18 +5099,22 @@ describe("one record across several spans", () => {
 
 describe("the inline tail's row context", () => {
   it("seats the row ids and context the tail names", () => {
-    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 5,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 3,
-        rowIds: ["row-3", "row-4"],
-        messages: [userMessage("row-3", 3), userMessage("row-4", 4)],
-        events: [],
-        rowContext: { "row-3": { legacyRowAnchorAt: 1234 } },
+    const window = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 5,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 3,
+          rowIds: ["row-3", "row-4"],
+          messages: [userMessage("row-3", 3), userMessage("row-4", 4)],
+          events: [],
+          rowContext: { "row-3": { legacyRowAnchorAt: 1234 } },
+        },
       },
-    });
+      null,
+    );
     expect(window.spans[0]?.rowIds).toEqual(["row-3", "row-4"]);
     expect(hydratedRecords(window).rowContext).toEqual({
       "row-3": { legacyRowAnchorAt: 1234 },
@@ -4749,16 +5122,20 @@ describe("the inline tail's row context", () => {
   });
 
   it("falls back to the positional read when the tail names no rows", () => {
-    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 5,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 3,
-        messages: [userMessage("row-3", 3), userMessage("row-4", 4)],
-        events: [],
+    const window = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 5,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 3,
+          messages: [userMessage("row-3", 3), userMessage("row-4", 4)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
     // Unverified ids: the snapshot precedes the skeleton, so there is nothing
     // to fill them from yet.
     expect(window.spans[0]?.rowIds).toEqual(["", ""]);
@@ -4766,17 +5143,21 @@ describe("the inline tail's row context", () => {
   });
 
   it("treats a tail that named NO rows as no tail to seat", () => {
-    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 5,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 3,
-        rowIds: [],
-        messages: [userMessage("row-3", 3)],
-        events: [],
+    const window = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 5,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 3,
+          rowIds: [],
+          messages: [userMessage("row-3", 3)],
+          events: [],
+        },
       },
-    });
+      null,
+    );
     expect(window.spans).toHaveLength(0);
   });
 });
@@ -4887,29 +5268,37 @@ describe("what a span charges the byte budget", () => {
   });
 
   it("charges the context that rides the snapshot tail", () => {
-    const bare = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 2,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 0,
-        rowIds: ["row-0", "row-1"],
-        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
-        events: [],
+    const bare = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          events: [],
+        },
       },
-    });
-    const withContext = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 2,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 0,
-        rowIds: ["row-0", "row-1"],
-        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
-        events: [],
-        rowContext: CONTEXT,
+      null,
+    );
+    const withContext = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          events: [],
+          rowContext: CONTEXT,
+        },
       },
-    });
+      null,
+    );
 
     // The tail is the OTHER way a span is built, and it carries context for
     // the same rows a range would.

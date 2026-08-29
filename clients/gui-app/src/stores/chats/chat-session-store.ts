@@ -3608,12 +3608,21 @@ export function createChatSessionStoreWithNotificationDependencies(
         // asking for ranges accumulates every completed turn's tail without
         // the budget ever running.
         const window = evictTranscriptWindowToBudget(
-          applyWindowedSnapshot(get().transcriptWindow, {
-            epoch: frame.snapshot.transcriptEpoch,
-            rowCount: frame.snapshot.rowCount,
-            indexRevision: frame.snapshot.indexRevision,
-            tail: frame.snapshot.tail,
-          }),
+          applyWindowedSnapshot(
+            get().transcriptWindow,
+            {
+              epoch: frame.snapshot.transcriptEpoch,
+              rowCount: frame.snapshot.rowCount,
+              indexRevision: frame.snapshot.indexRevision,
+              tail: frame.snapshot.tail,
+            },
+            // The STORE's active turn, not the frame's: the held-copy
+            // preference is about the client's current delta-rewrite state,
+            // and a completion snapshot whose frame already settled the turn
+            // must still not displace a fresher held copy while the store is
+            // mid-handoff.
+            get().activeTurn?.turnId ?? null,
+          ),
           TRANSCRIPT_WINDOW_MAX_BYTES,
           visibleTranscriptRange,
           // The FRAME's pair, not the store's: this runs before the snapshot's

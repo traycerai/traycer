@@ -95,12 +95,16 @@ function rangeResponse(input: {
  * delta sequence that would normally produce it.
  */
 function windowAtRevision(revision: number): TranscriptWindow {
-  const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-    epoch: 4,
-    rowCount: 10,
-    indexRevision: null,
-    tail: { fromOrdinal: 10, messages: [], events: [] },
-  });
+  const seeded = applyWindowedSnapshot(
+    emptyTranscriptWindow(),
+    {
+      epoch: 4,
+      rowCount: 10,
+      indexRevision: null,
+      tail: { fromOrdinal: 10, messages: [], events: [] },
+    },
+    null,
+  );
   const skeletoned = applySkeletonChunk(seeded, {
     epoch: 4,
     fromOrdinal: 0,
@@ -133,12 +137,16 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
   it("does not invalidate, and preserves the held revision rather than clobbering it", () => {
     const window = windowAtRevision(5);
 
-    const result = applyWindowedSnapshot(window, {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: null,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const result = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(result.invalidated).toBe(false);
     // The `?? window.indexRevision` branch: a restreaming snapshot names no
@@ -161,12 +169,16 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
    * looks symmetric.
    */
   it("accepts the next delta after a rebuild, because the host's counter carried on", () => {
-    const rebuilt = applyWindowedSnapshot(windowAtRevision(5), {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: null,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const rebuilt = applyWindowedSnapshot(
+      windowAtRevision(5),
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
 
     const delta = applyIndexChange(rebuilt, {
       activeTurnId: null,
@@ -202,12 +214,16 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
     // this test is about is available to happen.
     expect(complete.skeletonComplete).toBe(true);
 
-    const rebuilt = applyWindowedSnapshot(complete, {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: null,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const rebuilt = applyWindowedSnapshot(
+      complete,
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
     // The claim is dropped at the boundary; the entries are not.
     expect(rebuilt.skeletonComplete).toBe(false);
     expect(rebuilt.skeleton).toHaveLength(10);
@@ -246,12 +262,16 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
    * reads exactly this boolean and the stream-completion watchdog reads that.
    */
   it("keeps the entries renderable when a rebuild snapshot has no stream behind it", () => {
-    const rebuilt = applyWindowedSnapshot(windowAtRevision(5), {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: null,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const rebuilt = applyWindowedSnapshot(
+      windowAtRevision(5),
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(
       rebuilt.skeleton.filter((entry) => entry !== undefined),
@@ -273,12 +293,16 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     const window = windowAtRevision(5);
     expect(window.spans.length).toBeGreaterThan(0);
 
-    const result = applyWindowedSnapshot(window, {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: 6,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const result = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: 6,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(result.invalidated).toBe(true);
     expect(result.indexRevision).toBe(6);
@@ -293,12 +317,16 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     const heldSpanCount = window.spans.length;
     expect(heldSpanCount).toBeGreaterThan(0);
 
-    const result = applyWindowedSnapshot(window, {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: 5,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const result = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: 5,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(result.invalidated).toBe(false);
     // The aux-only re-broadcast path, not a reset: the held scrollback
@@ -316,12 +344,16 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     const heldSpanCount = window.spans.length;
     expect(heldSpanCount).toBeGreaterThan(0);
 
-    const result = applyWindowedSnapshot(window, {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: 3,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const result = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: 3,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
 
     // Referential identity: nothing of the transcript half was taken. The
     // snapshot's AUXILIARY half is applied by the caller regardless, because
@@ -341,12 +373,16 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
   it("REWIND: refusing the straggler is what keeps the next delta applicable", () => {
     const window = windowAtRevision(5);
 
-    const straggler = applyWindowedSnapshot(window, {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: 3,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const straggler = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: 3,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
     expect(straggler.indexRevision).toBe(5);
 
     // The host's counter never went back, so its next delta is 6 - the
@@ -383,12 +419,16 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     // is genuinely below the one held.
     const window = { ...windowAtRevision(5), epoch: 0 };
 
-    const announced = applyWindowedSnapshot(window, {
-      epoch: 0,
-      rowCount: 10,
-      indexRevision: null,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const announced = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 0,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
     // The held revision survives the announcement itself - the restream carries
     // no revision to replace it with.
     expect(announced.indexRevision).toBe(5);
@@ -400,12 +440,16 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
       isFinal: true,
     });
 
-    const resynced = applyWindowedSnapshot(restreamed, {
-      epoch: 0,
-      rowCount: 10,
-      indexRevision: 0,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const resynced = applyWindowedSnapshot(
+      restreamed,
+      {
+        epoch: 0,
+        rowCount: 10,
+        indexRevision: 0,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
 
     // Adopted DOWNWARD, which only the boundary makes legitimate.
     expect(resynced.indexRevision).toBe(0);
@@ -435,38 +479,54 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     // A suppression with no pinned lifetime is how a one-frame allowance
     // becomes a standing hole. The frame AFTER the rebuild is compared
     // normally, so a genuine loss is still caught.
-    const announced = applyWindowedSnapshot(windowAtRevision(5), {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: null,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
-    const resynced = applyWindowedSnapshot(announced, {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: 2,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const announced = applyWindowedSnapshot(
+      windowAtRevision(5),
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
+    const resynced = applyWindowedSnapshot(
+      announced,
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: 2,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
     expect(resynced.indexRevision).toBe(2);
 
     // Second frame, same rebuild: a revision that ran AHEAD is a lost delta
     // again, not another free adoption.
-    const ahead = applyWindowedSnapshot(resynced, {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: 7,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const ahead = applyWindowedSnapshot(
+      resynced,
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: 7,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
     expect(ahead.invalidated).toBe(true);
 
     // And a straggler is refused again rather than adopted.
     expect(
-      applyWindowedSnapshot(resynced, {
-        epoch: 4,
-        rowCount: 10,
-        indexRevision: 1,
-        tail: { fromOrdinal: 10, messages: [], events: [] },
-      }),
+      applyWindowedSnapshot(
+        resynced,
+        {
+          epoch: 4,
+          rowCount: 10,
+          indexRevision: 1,
+          tail: { fromOrdinal: 10, messages: [], events: [] },
+        },
+        null,
+      ),
     ).toBe(resynced);
   });
 
@@ -477,12 +537,16 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     const window = windowAtRevision(5);
     expect(window.spans.length).toBeGreaterThan(0);
 
-    const result = applyWindowedSnapshot(window, {
-      epoch: 3, // below the window's epoch of 4
-      rowCount: 2,
-      indexRevision: 9,
-      tail: { fromOrdinal: 2, messages: [], events: [] },
-    });
+    const result = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 3, // below the window's epoch of 4
+        rowCount: 2,
+        indexRevision: 9,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      },
+      null,
+    );
 
     // Referential identity: nothing of the older space was taken.
     expect(result).toBe(window);
@@ -498,12 +562,16 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     // client on a dead epoch for the life of the connection.
     const window = windowAtRevision(5);
 
-    const result = applyWindowedSnapshot(window, {
-      epoch: 0,
-      rowCount: 2,
-      indexRevision: null,
-      tail: { fromOrdinal: 2, messages: [], events: [] },
-    });
+    const result = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 0,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(result).not.toBe(window);
     expect(result.epoch).toBe(0);
@@ -533,12 +601,16 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     });
     expect(voided.invalidated).toBe(true);
 
-    const resynced = applyWindowedSnapshot(voided, {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: 0,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const resynced = applyWindowedSnapshot(
+      voided,
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: 0,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
 
     expect(resynced.indexRevision).toBe(0);
   });
@@ -546,12 +618,16 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
   it("EXPIRY: a delta spends the boundary too, so the next one is compared", () => {
     // The delta path reaches the boundary whenever a delta arrives before the
     // next aux snapshot does, which is ordinary.
-    const announced = applyWindowedSnapshot(windowAtRevision(5), {
-      epoch: 4,
-      rowCount: 10,
-      indexRevision: null,
-      tail: { fromOrdinal: 10, messages: [], events: [] },
-    });
+    const announced = applyWindowedSnapshot(
+      windowAtRevision(5),
+      {
+        epoch: 4,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
 
     const adopted = applyIndexChange(announced, {
       activeTurnId: null,

@@ -472,6 +472,14 @@ export function appendLiveRecords(
     for (const message of span.messages) knownMessages.add(message.messageId);
     for (const event of span.events) knownEvents.add(event.eventId);
   }
+  // The stale carry counts as known too: a reconnect can retransmit an
+  // accepted record whose only copy rode a span into `staleSpans`, and
+  // re-admitting it as live would draw it a second time as an unplaced tail
+  // row wherever its stale row cannot occupy its old ordinal.
+  for (const span of window.staleSpans) {
+    for (const message of span.messages) knownMessages.add(message.messageId);
+    for (const event of span.events) knownEvents.add(event.eventId);
+  }
   const messages = input.messages.filter(
     (message) => !knownMessages.has(message.messageId),
   );
@@ -953,9 +961,23 @@ export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
         }
       : span,
   );
+  // Stale copies of a streaming record grow through the same deferred path
+  // (see {@link rewriteWindowMessage}), and `boundedStaleSpans` trusts
+  // `span.bytes` - so an unsettled stale figure would let a long streaming
+  // turn hold more than the shared budget admits.
+  const staleSpans = window.staleSpans.map((span) =>
+    span.messages.some((message) => unsettled.has(message.messageId))
+      ? {
+          ...span,
+          bytes:
+            recordsByteLength(span.messages, span.events) + span.contextBytes,
+        }
+      : span,
+  );
   return {
     ...window,
     spans,
+    staleSpans,
     hydratedBytes: totalBytes(spans),
     unsettledByteMessageIds: [],
   };
@@ -998,11 +1020,24 @@ function rewriteWindowMessage(
     : window.staleSpans.map((span, spanIndex) => {
         const index = staleIndexes[spanIndex];
         if (index < 0) return span;
+        const previous = span.messages[index];
+        const next = update(previous);
         const messages = span.messages.slice();
-        messages[index] = update(messages[index]);
-        // Stale bytes are bounded at the carry and never charged to
-        // `hydratedBytes`, so no re-measure here.
-        return { ...span, messages };
+        messages[index] = next;
+        // Never charged to `hydratedBytes`, but `boundedStaleSpans` trusts
+        // this figure - so a growing streamed copy must keep it honest. Same
+        // delta charge as the fresh branch below; `deferred` is settled by
+        // {@link settleWindowBytes} exactly as a fresh span's is.
+        return {
+          ...span,
+          messages,
+          bytes:
+            charge === "deferred"
+              ? span.bytes
+              : span.bytes +
+                recordByteLength(next) -
+                recordByteLength(previous),
+        };
       });
   const spans = window.spans.map((span, spanIndex) => {
     const index = spanIndexes[spanIndex];
@@ -1539,6 +1574,14 @@ export function applyWindowedSnapshot(
     readonly indexRevision: number | null;
     readonly tail: ChatTranscriptWindow;
   },
+  /**
+   * The streaming turn, if any. A bulk snapshot serialized before newer block
+   * deltas can arrive after they were applied, and its tail seat must not let
+   * the older served copy displace the delta-rewritten one - the same
+   * held-copy preference the range seat applies. See
+   * {@link preferHeldActiveTurnMessages}.
+   */
+  activeTurnId: string | null,
 ): TranscriptWindow {
   // A snapshot from an epoch this window has already LEFT describes a
   // coordinate space whose ordinals were renumbered by the very change that
@@ -1827,6 +1870,7 @@ export function applyWindowedSnapshot(
     rowIds: tailRowIds,
     rowContext: tailRowContext,
     clock,
+    activeTurnId,
   });
 }
 
@@ -1836,6 +1880,7 @@ function seatSnapshotTailSpan(input: {
   readonly rowIds: readonly string[];
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
   readonly clock: number;
+  readonly activeTurnId: string | null;
 }): TranscriptWindow {
   const { base, tail, rowIds, rowContext, clock } = input;
   const conflictingRowIds = incompleteRowIdsToWithhold(tail.incompleteRowIds);
@@ -1854,13 +1899,21 @@ function seatSnapshotTailSpan(input: {
     tail.fromOrdinal,
   );
   const contextBytes = contextByteLength(rowContext);
+  // The same held-copy preference the range seat applies: a bulk snapshot
+  // can be serialized before block deltas that arrive ahead of it, and its
+  // tail must not displace the delta-rewritten copy of the streaming body.
+  const messages = preferHeldActiveTurnMessages(
+    completeBase,
+    tail.messages,
+    input.activeTurnId,
+  );
   const tailSpan: HydratedSpan = {
     fromOrdinal: tail.fromOrdinal,
     rowIds,
     rowContext,
-    messages: tail.messages,
+    messages,
     events: tail.events,
-    bytes: recordsByteLength(tail.messages, tail.events) + contextBytes,
+    bytes: recordsByteLength(messages, tail.events) + contextBytes,
     contextBytes,
     touchedAt: clock,
     servedAt: clock,
@@ -1871,7 +1924,7 @@ function seatSnapshotTailSpan(input: {
       { ...completeBase, spans, hydratedBytes: totalBytes(spans) },
       servedAssistantTurns(
         declaredCompleteTailRowIds(tail),
-        tail.messages,
+        messages,
         tail.events,
       ),
     ),
@@ -1885,6 +1938,7 @@ function seatNonConflictingTailRuns(
     readonly rowIds: readonly string[];
     readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
     readonly clock: number;
+    readonly activeTurnId: string | null;
   },
   conflictingRowIds: ReadonlySet<string>,
 ): TranscriptWindow {
@@ -1941,6 +1995,7 @@ function seatNonConflictingTailRuns(
         rowIds,
         rowContext,
         clock: input.clock,
+        activeTurnId: input.activeTurnId,
       });
       setupRowsBeforeRun += rowIds.filter((rowId) =>
         rowId.startsWith("setup-card:"),
@@ -2485,7 +2540,11 @@ function boundedStaleSpans(
     carried.push(span);
     bytes += span.bytes;
   }
-  return carried;
+  // Selected by warmth, STORED in ordinal order. `staleSpans` is read on the
+  // per-token path (`hydratedRecords` merges it with the fresh tier in
+  // transcript order), so the ordering cost is paid once here - at a rebase,
+  // void, or demotion - never per delta.
+  return carried.sort((left, right) => left.fromOrdinal - right.fromOrdinal);
 }
 
 /**
@@ -3183,18 +3242,17 @@ export function hydratedRowContext(
   const out: Record<string, TranscriptRowContext> = {};
   // Stale first, so a fresh span's context overwrites a carried copy of the
   // same row - the map is keyed by row id, which is the axis stale spans are
-  // consumed on. Within the stale tier, oldest serve first: overlapping
-  // carried spans (a partial refetch followed by another rebase) can share a
-  // row, and the newest serve's context must win exactly as
-  // {@link dedupeByFreshestSpan} resolves the row's body.
-  const stale =
-    window.staleSpans.length > 1
-      ? [...window.staleSpans].sort(
-          (left, right) => left.servedAt - right.servedAt,
-        )
-      : window.staleSpans;
-  for (const span of stale) {
+  // consumed on. Within the stale tier the NEWEST serve wins a shared row
+  // (overlapping carried spans exist after a partial refetch followed by
+  // another rebase), matching how {@link dedupeByFreshestSpan} resolves the
+  // row's body - tracked per row rather than by sorting, since this runs on
+  // the per-token publish path.
+  const staleServe = new Map<string, number>();
+  for (const span of window.staleSpans) {
     for (const rowId of Object.keys(span.rowContext)) {
+      const seen = staleServe.get(rowId);
+      if (seen !== undefined && seen >= span.servedAt) continue;
+      staleServe.set(rowId, span.servedAt);
       out[rowId] = span.rowContext[rowId];
     }
   }
@@ -3371,31 +3429,18 @@ export function hydratedRecords(window: TranscriptWindow): {
   // record's POSITION at first encounter (only the body follows `servedAt`).
   // Stale spans keep their previous-coordinate `fromOrdinal`, which is the
   // best transcript-position estimate the client has for them - a completion
-  // rebase preserves prefix ordering - while their carry array is LRU-ordered
-  // and must not be walked as-is. Fresh spans win ties so a re-served row's
-  // position comes from the current coordinates. The bodies are unaffected:
-  // `servedAt` rides the window clock, continuous across a rebase, so every
-  // post-rebase serve outranks every carried copy. Stale spans must be here
-  // at all because the row merger can only draw a stale row whose records
-  // reach `rendered`.
+  // rebase preserves prefix ordering. Fresh spans win ties so a re-served
+  // row's position comes from the current coordinates. The bodies are
+  // unaffected: `servedAt` rides the window clock, continuous across a
+  // rebase, so every post-rebase serve outranks every carried copy.
+  //
+  // A LINEAR merge, not a sort: this runs per streaming token, and both
+  // tiers are already ordinal-ordered - the fresh spans by invariant, the
+  // stale tier because `boundedStaleSpans` orders it at the write.
   const spans =
     window.staleSpans.length === 0
       ? window.spans
-      : [
-          ...window.spans.map((span, index) => ({ span, index, stale: 1 })),
-          ...window.staleSpans.map((span, index) => ({
-            span,
-            index,
-            stale: 2,
-          })),
-        ]
-          .sort(
-            (left, right) =>
-              left.span.fromOrdinal - right.span.fromOrdinal ||
-              left.stale - right.stale ||
-              left.index - right.index,
-          )
-          .map((entry) => entry.span);
+      : mergeSpansByOrdinal(window.spans, window.staleSpans);
   return {
     messages: dedupeByFreshestSpan(
       spans,
@@ -3411,6 +3456,39 @@ export function hydratedRecords(window: TranscriptWindow): {
     ),
     rowContext: hydratedRowContext(window),
   };
+}
+
+/**
+ * Merge two ordinal-ordered span tiers, the FIRST winning ties.
+ *
+ * O(fresh + stale), no allocation beyond the output array - written for the
+ * per-token path {@link hydratedRecords} sits on.
+ */
+function mergeSpansByOrdinal(
+  fresh: readonly HydratedSpan[],
+  stale: readonly HydratedSpan[],
+): readonly HydratedSpan[] {
+  const merged: HydratedSpan[] = [];
+  let freshIndex = 0;
+  let staleIndex = 0;
+  while (freshIndex < fresh.length || staleIndex < stale.length) {
+    const nextFresh = freshIndex < fresh.length ? fresh[freshIndex] : null;
+    const nextStale = staleIndex < stale.length ? stale[staleIndex] : null;
+    if (
+      nextStale === null ||
+      (nextFresh !== null && nextFresh.fromOrdinal <= nextStale.fromOrdinal)
+    ) {
+      // `nextFresh` is non-null here: the loop condition guarantees at least
+      // one side remains, and this branch is taken only when stale is
+      // exhausted or fresh leads.
+      if (nextFresh !== null) merged.push(nextFresh);
+      freshIndex += 1;
+      continue;
+    }
+    merged.push(nextStale);
+    staleIndex += 1;
+  }
+  return merged;
 }
 
 /**
