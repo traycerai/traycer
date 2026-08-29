@@ -11,6 +11,7 @@ import {
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
   projectTranscriptRows,
+  type TranscriptRowDescriptor,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
@@ -244,11 +245,78 @@ function staleBackingLookup(
 }
 
 /**
+ * The whole-history row projection, once per window.
+ *
+ * Both steer questions below want it, and `appendUnplacedRenderedRows` reaches
+ * both for a single model - a synthesized steer row answers the stale question
+ * through the projection, and is then asked the live one, which projects again.
+ * So without sharing, one render pays this fold twice.
+ *
+ * That matters here specifically because this module runs per token (see
+ * {@link placeholderRowsFor}) while `projectTranscriptRows` is O(history) - the
+ * shape the rest of the module is arranged to keep off that path.
+ *
+ * Keyed on the WINDOW rather than on the records, because both inputs come out
+ * of one {@link hydratedRecords} call and the window is what identifies the
+ * pair. Every update spreads a new window object, so an identity's contents
+ * never change and a hit can never be stale. Streaming replaces the window per
+ * token, so this collapses the folds WITHIN a render rather than across them -
+ * which is the duplication, the cross-render case being a genuinely different
+ * projection each time.
+ */
+const projectedRowCache = new WeakMap<
+  TranscriptWindow,
+  readonly TranscriptRowDescriptor[]
+>();
+
+function projectedRowsFor(
+  window: TranscriptWindow,
+): readonly TranscriptRowDescriptor[] {
+  const cached = projectedRowCache.get(window);
+  if (cached !== undefined) return cached;
+  const records = hydratedRecords(window);
+  const rows = projectTranscriptRows({
+    messages: records.messages,
+    events: records.events,
+    activeTurnId: null,
+    chatId: "",
+  });
+  projectedRowCache.set(window, rows);
+  return rows;
+}
+
+/**
+ * The steer rows the projection draws for a given set of turns.
+ *
+ * The two tiers ask one question of one projection and differ only in the turn
+ * set, so they share this rather than each carrying a copy of the filter.
+ *
+ * No turns, no fold: the filter could not match anything, so the answer is
+ * empty without projecting. Worth stating because the caller cannot always tell
+ * - {@link transientLiveSteerRowIds} builds a set that is empty whenever no
+ * live assistant message is transient, which is most of the time.
+ */
+function steerRowIdsForTurnKeys(
+  window: TranscriptWindow,
+  turnKeys: ReadonlySet<string>,
+): ReadonlySet<string> {
+  if (turnKeys.size === 0) return new Set();
+  return new Set(
+    projectedRowsFor(window)
+      .filter(
+        (row) =>
+          row.source.kind === "steer" && turnKeys.has(row.source.turnKey),
+      )
+      .map((row) => row.rowId),
+  );
+}
+
+/**
  * Steer rows projected from a turn ONLY the stale tier holds.
  *
- * The stale-tier counterpart of {@link transientLiveSteerRowIds}, and written
- * against it: same projection, same `source.kind === "steer"` filter, a
- * different turn set. Keep the two in step.
+ * The stale-tier counterpart of {@link transientLiveSteerRowIds}: same
+ * projection and same filter, reached through {@link steerRowIdsForTurnKeys},
+ * with only the turn set differing. Keep the two in step.
  */
 function staleOnlySteerRowIds(window: TranscriptWindow): ReadonlySet<string> {
   const turnKeys = new Set<string>();
@@ -265,21 +333,7 @@ function staleOnlySteerRowIds(window: TranscriptWindow): ReadonlySet<string> {
   for (const span of window.spans) {
     for (const message of span.messages) alsoCurrent(message);
   }
-  if (turnKeys.size === 0) return new Set();
-  const records = hydratedRecords(window);
-  return new Set(
-    projectTranscriptRows({
-      messages: records.messages,
-      events: records.events,
-      activeTurnId: null,
-      chatId: "",
-    })
-      .filter(
-        (row) =>
-          row.source.kind === "steer" && turnKeys.has(row.source.turnKey),
-      )
-      .map((row) => row.rowId),
-  );
+  return steerRowIdsForTurnKeys(window, turnKeys);
 }
 
 /**
@@ -322,21 +376,7 @@ function transientLiveSteerRowIds(
       transientTurnKeys.add(assistantTurnKey(message));
     }
   }
-  const records = hydratedRecords(window);
-  return new Set(
-    projectTranscriptRows({
-      messages: records.messages,
-      events: records.events,
-      activeTurnId: null,
-      chatId: "",
-    })
-      .filter(
-        (row) =>
-          row.source.kind === "steer" &&
-          transientTurnKeys.has(row.source.turnKey),
-      )
-      .map((row) => row.rowId),
-  );
+  return steerRowIdsForTurnKeys(window, transientTurnKeys);
 }
 
 function projectedLiveSetupRowIds(

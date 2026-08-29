@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assistantRowId,
   assistantSliceRowId,
+  projectTranscriptRows,
   queueSteerRowId,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type {
@@ -21,6 +22,26 @@ import {
   visibleOrdinalRange,
   type TranscriptListRow,
 } from "@/stores/chats/transcript-list-rows";
+
+/*
+ * A counting PASSTHROUGH, not a stub: every test in this file still runs the
+ * real projection, so nothing here relocates the invariant into a fake. The
+ * count is only readable by the one test that asserts how many whole-history
+ * folds a single render pays.
+ */
+vi.mock(
+  "@traycer/protocol/persistence/chat-transcript/row-projection",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer/protocol/persistence/chat-transcript/row-projection")
+      >();
+    return {
+      ...actual,
+      projectTranscriptRows: vi.fn(actual.projectTranscriptRows),
+    };
+  },
+);
 
 /**
  * The merge that makes the transcript list `rowCount` long on the windowed
@@ -1056,6 +1077,51 @@ describe("transcriptListRows", () => {
     });
 
     expect(kinds(rows)).toEqual(["H:" + assistantRowId("turn-steered")]);
+  });
+
+  it("projects the whole history ONCE when both tiers ask a steer question", () => {
+    // `appendUnplacedRenderedRows` reaches both lookups for a single model: a
+    // synthesized steer row answers the stale question through the projection,
+    // and is then asked the live one. Both used to project independently, so a
+    // render paid two O(history) folds - on the per-token path, in the module
+    // arranged to keep that shape off it.
+    //
+    // Both turn sets have to be non-empty or this passes for the wrong reason:
+    // each side skips the fold outright on an empty set, so a fixture with only
+    // a stale steer would count one either way. Hence a transient live
+    // assistant on a DIFFERENT turn - same turn would make the stale-ONLY
+    // scoping delete it and take the stale side back to zero.
+    const liveTransient = {
+      ...steeredAssistant("turn-live", "q-2"),
+      messageId: transientLiveAssistantMessageId("turn-live"),
+    };
+    vi.mocked(projectTranscriptRows).mockClear();
+
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: false,
+        liveMessages: [liveTransient],
+        staleSpans: [
+          {
+            ...span(0, [assistantRowId("turn-stale")]),
+            messages: [steeredAssistant("turn-stale", "q-1")],
+          },
+        ],
+      }),
+      rendered: [
+        modelWithoutPersistentMessageId(queueSteerRowId("q-1")),
+        model(assistantRowId("turn-stale")),
+      ],
+    });
+
+    // The answer both folds produced, unchanged: the stale-only steer row is
+    // withheld from the tail.
+    expect(kinds(rows)).toEqual(["H:" + assistantRowId("turn-stale")]);
+    expect(vi.mocked(projectTranscriptRows)).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a steer row whose turn the LIVE tier also holds", () => {
