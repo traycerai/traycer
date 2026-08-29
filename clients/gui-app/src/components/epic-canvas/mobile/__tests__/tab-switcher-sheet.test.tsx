@@ -48,7 +48,9 @@ vi.mock("@/components/epic-canvas/mobile/switcher-terminals-list", () => ({
   SwitcherTerminalsList: () => <div data-testid="mock-terminals-list" />,
 }));
 vi.mock("@/components/epic-canvas/mobile/switcher-browsers-list", () => ({
-  SwitcherBrowsersList: () => <div data-testid="mock-browsers-list" />,
+  // A semantic stand-in for the real list, which renders a `Browser tabs`
+  // list - so the sheet's assertions address it the way a user would find it.
+  SwitcherBrowsersList: () => <ul aria-label="Browser tabs" />,
 }));
 vi.mock("@/components/epic-canvas/mobile/switcher-artifacts-list", () => ({
   SwitcherArtifactsList: () => <div data-testid="mock-artifacts-list" />,
@@ -289,7 +291,7 @@ describe("<TabSwitcherSheet />", () => {
     expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
       "browsers",
     );
-    expect(screen.getByTestId("mock-browsers-list")).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Browser tabs" })).toBeTruthy();
   });
 
   it("opens straight onto a browsers selection the desktop rail persisted", () => {
@@ -303,7 +305,7 @@ describe("<TabSwitcherSheet />", () => {
     expect(
       screen.getByRole("tab", { name: "Browsers" }).getAttribute("data-state"),
     ).toBe("active");
-    expect(screen.getByTestId("mock-browsers-list")).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Browser tabs" })).toBeTruthy();
   });
 
   it("shows the comments panel when the category is selected", async () => {

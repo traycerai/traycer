@@ -142,12 +142,31 @@ interface ActiveTouch {
   scrolling: boolean;
 }
 
-/** Scroll travelled while the host had not yet answered the arm request. */
-interface PendingTouchWheel {
-  readonly pointer: PointerLike;
-  readonly deltaX: number;
-  readonly deltaY: number;
-}
+/**
+ * A touch gesture completed while the host had not yet answered the arm
+ * request. They are held in ONE ordered queue rather than in per-kind slots,
+ * because the finger's order is the only order the page can be replayed in: a
+ * tap belongs before the swipe that followed it and after the swipe that
+ * preceded it, and no rule about kinds can recover that.
+ *
+ * The queue is also why touch does not use the arm buffer. That buffer holds
+ * exactly one gesture and drops it when a second `up` lands outside the first
+ * `down`'s slop - correct for a mouse, where a press and a release bracket one
+ * click, and destructive for touch, where two taps in the window are two
+ * gestures and forcing them through one pen annihilated both.
+ */
+type PendingTouchGesture =
+  | {
+      readonly kind: "wheel";
+      readonly pointer: PointerLike;
+      readonly deltaX: number;
+      readonly deltaY: number;
+    }
+  | {
+      readonly kind: "tap";
+      readonly down: ScreencastPointerInput;
+      readonly up: ScreencastPointerInput;
+    };
 
 /**
  * The non-React half of a screencast tile: the arm/disarm epoch protocol, the
@@ -176,7 +195,7 @@ export function createScreencastController(options: {
   let frameSize: ScreencastFrameSize | null = null;
   let capturedPointer: CapturedPointer | null = null;
   let activeTouch: ActiveTouch | null = null;
-  let pendingTouchWheel: PendingTouchWheel | null = null;
+  let pendingTouchGestures: PendingTouchGesture[] = [];
   let suppressPointerId: number | null = null;
   let pendingMove: ScreencastPointerInput | null = null;
   let moveRaf: number | null = null;
@@ -264,7 +283,7 @@ export function createScreencastController(options: {
   const resetTransientInput = (): void => {
     armBuffer.drop();
     activeTouch = null;
-    pendingTouchWheel = null;
+    pendingTouchGestures = [];
     pendingNav = [];
     forwardedKeyDowns.clear();
     claimedLocalCodes.clear();
@@ -328,33 +347,46 @@ export function createScreencastController(options: {
   };
 
   /**
-   * The scroll a finger travelled while the arm request was in flight, sent as
-   * one wheel frame now that there is an epoch to stamp it with. Without this
-   * the whole first swipe of a freshly-opened tile is dropped: arming is a
-   * round trip, and on a relay it easily outlasts the gesture.
+   * The gestures a finger completed while the arm request was in flight,
+   * replayed in the order they were made now that there is an epoch to stamp
+   * them with. Without this the whole first interaction with a freshly-opened
+   * tile is lost: arming is a round trip, and on a relay it easily outlasts a
+   * swipe or a tap.
+   *
+   * A stale TAP is dropped rather than sent. Its coordinates were normalized
+   * against the frame that was on screen when the finger landed, so replaying
+   * it against a frame that has since repainted clicks whatever moved into
+   * that spot - the same refusal the arm buffer applies to a mouse click. A
+   * wheel keeps no such promise: it carries a delta, and scrolling by it is
+   * right whatever the page has repainted underneath.
    */
-  const flushPendingTouchWheel = (): void => {
-    const pending = pendingTouchWheel;
-    pendingTouchWheel = null;
-    if (pending === null || activeArmEpoch === null) return;
-    const frame = buildPointerFrame({
-      event: pending.pointer,
-      type: "wheel",
-      clampToEdge: true,
-      deltaX: pending.deltaX,
-      deltaY: pending.deltaY,
-    });
-    if (frame === null) return;
-    sendDiscretePointer(frame);
+  const flushPendingTouchGestures = (): void => {
+    const queued = pendingTouchGestures;
+    pendingTouchGestures = [];
+    if (activeArmEpoch === null) return;
+    for (const gesture of queued) {
+      if (gesture.kind === "wheel") {
+        const frame = buildPointerFrame({
+          event: gesture.pointer,
+          type: "wheel",
+          clampToEdge: true,
+          deltaX: gesture.deltaX,
+          deltaY: gesture.deltaY,
+        });
+        if (frame !== null) sendDiscretePointer(frame);
+        continue;
+      }
+      if (gesture.down.castSequence !== presentedSequence) continue;
+      sendDiscretePointer(gesture.down);
+      sendDiscretePointer(gesture.up);
+    }
   };
 
   const noteArmed = (armEpoch: number): void => {
     activeArmEpoch = armEpoch;
-    // Wheel first, then the click. Both can be waiting - a swipe followed by a
-    // tap, all inside the arm round trip - and the finger's order is the one
-    // the page has to see: a tap replayed before the scroll it followed lands
-    // on whatever was under the finger BEFORE the page moved.
-    flushPendingTouchWheel();
+    // The finger's own gestures first, in the order it made them; then the
+    // mouse path's buffered click, which is a different pointer's business.
+    flushPendingTouchGestures();
     deliverArmBuffer();
     const pending = pendingNav;
     pendingNav = [];
@@ -608,12 +640,19 @@ export function createScreencastController(options: {
     // deltas are already client pixels, the same unit `handleWheel` converts
     // its own into.
     if (activeArmEpoch === null) {
-      // Accumulated rather than dropped, and flushed by `noteArmed`.
-      pendingTouchWheel = {
+      // Queued rather than dropped, and replayed by `noteArmed`. Consecutive
+      // moves fold into one wheel entry; a tap in between ends the run, so the
+      // scroll either side of it stays on its own side.
+      const last = pendingTouchGestures.at(-1);
+      const carried = last?.kind === "wheel" ? last : null;
+      const next: PendingTouchGesture = {
+        kind: "wheel",
         pointer: touchPointerLike(event, 0),
-        deltaX: (pendingTouchWheel?.deltaX ?? 0) - deltaX,
-        deltaY: (pendingTouchWheel?.deltaY ?? 0) - deltaY,
+        deltaX: (carried?.deltaX ?? 0) - deltaX,
+        deltaY: (carried?.deltaY ?? 0) - deltaY,
       };
+      if (carried === null) pendingTouchGestures.push(next);
+      else pendingTouchGestures[pendingTouchGestures.length - 1] = next;
       return;
     }
     const frame = buildPointerFrame({
@@ -659,22 +698,9 @@ export function createScreencastController(options: {
       sendDiscretePointer(up);
       return;
     }
-    // Still waiting on the host's `armed`: hand the pair to the arm buffer,
-    // which delivers it only while the frame it was aimed at is still the one
-    // presented - the same rule a first click on an unarmed tile obeys.
-    armBuffer.storeDown({
-      payload: down,
-      castSequence: down.castSequence,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      isPrimary: true,
-    });
-    armBuffer.storeMatchingUp({
-      payload: up,
-      isPrimary: true,
-      clientX: event.clientX,
-      clientY: event.clientY,
-    });
+    // Still waiting on the host's `armed`: queue the pair behind whatever the
+    // finger did before it.
+    pendingTouchGestures.push({ kind: "tap", down, up });
   };
 
   const onTouchPointerCancel = (
@@ -686,8 +712,8 @@ export function createScreencastController(options: {
     const touch = activeTouch;
     if (touch === null || touch.pointerId !== event.pointerId) return;
     activeTouch = null;
-    pendingTouchWheel = null;
-    armBuffer.drop();
+    // Only the gesture in flight is abandoned; gestures already completed into
+    // the queue were the user's and still owed to the page.
     releaseCapturedPointer();
   };
 
