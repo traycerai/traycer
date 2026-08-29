@@ -619,6 +619,7 @@ function recordsForRowIds(
   messages: readonly Message[],
   events: readonly ChatEvent[],
   rowIds: ReadonlySet<string>,
+  setupRowOffset: number,
 ): {
   readonly messages: Message[];
   readonly events: ChatEvent[];
@@ -649,6 +650,7 @@ function recordsForRowIds(
   ).length;
   const fallbackSetupRows = new Set(
     projectedSetupRows
+      .slice(setupRowOffset, setupRowOffset + setupRowIds.length)
       .filter((row) => !exactSetupRowIds.has(row.rowId))
       .slice(0, unmatchedSetupCount),
   );
@@ -1496,6 +1498,7 @@ function seatNonConflictingTailRuns(
   );
   let next = input.base;
   let runStart = -1;
+  let setupRowsBeforeRun = 0;
   for (let index = 0; index <= input.rowIds.length; index += 1) {
     const atEnd = index === input.rowIds.length;
     if (!atEnd && !conflictingRowIds.has(input.rowIds[index])) {
@@ -1505,7 +1508,12 @@ function seatNonConflictingTailRuns(
     if (runStart < 0) continue;
     const rowIds = input.rowIds.slice(runStart, index);
     const rowIdSet = new Set(rowIds);
-    const records = recordsForRowIds(messages, events, rowIdSet);
+    const records = recordsForRowIds(
+      messages,
+      events,
+      rowIdSet,
+      setupRowsBeforeRun,
+    );
     const rowContext = Object.fromEntries(
       Object.entries(input.rowContext).filter(([id]) => rowIdSet.has(id)),
     );
@@ -1526,6 +1534,9 @@ function seatNonConflictingTailRuns(
       rowContext,
       clock: input.clock,
     });
+    setupRowsBeforeRun += rowIds.filter((rowId) =>
+      rowId.startsWith("setup-card:"),
+    ).length;
     runStart = -1;
   }
   return next;
@@ -2321,6 +2332,7 @@ export function applyRangeResponse(
     );
     let next = window;
     let runStart = -1;
+    let setupRowsBeforeRun = 0;
     for (let index = 0; index <= response.rowIds.length; index += 1) {
       const atEnd = index === response.rowIds.length;
       if (!atEnd && !conflictingRowIds.has(response.rowIds[index])) {
@@ -2330,7 +2342,12 @@ export function applyRangeResponse(
       if (runStart < 0) continue;
       const rowIds = response.rowIds.slice(runStart, index);
       const rowIdSet = new Set(rowIds);
-      const records = recordsForRowIds(messages, events, rowIdSet);
+      const records = recordsForRowIds(
+        messages,
+        events,
+        rowIdSet,
+        setupRowsBeforeRun,
+      );
       next = applyRangeResponse(next, {
         ...response,
         fromOrdinal: response.fromOrdinal + runStart,
@@ -2348,6 +2365,9 @@ export function applyRangeResponse(
         reachedStart: response.reachedStart && runStart === 0,
         reachedEnd: response.reachedEnd && index === response.rowIds.length,
       });
+      setupRowsBeforeRun += rowIds.filter((rowId) =>
+        rowId.startsWith("setup-card:"),
+      ).length;
       runStart = -1;
     }
     return next;

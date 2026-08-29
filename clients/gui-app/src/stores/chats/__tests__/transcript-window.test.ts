@@ -2554,9 +2554,9 @@ describe("what an overlap keeps", () => {
         epoch: 1,
         fromOrdinal: 0,
         rowIds: [
-          "setup-card:chat-1:0:100",
+          "setup-card:chat-1:10:100",
           assistantRowId(turnId),
-          "setup-card:chat-1:1:100",
+          "setup-card:chat-1:11:100",
         ],
         incompleteRowIds: [assistantRowId(turnId)],
         messages: [assistantMessage("assistant-partial", turnId, 1)],
