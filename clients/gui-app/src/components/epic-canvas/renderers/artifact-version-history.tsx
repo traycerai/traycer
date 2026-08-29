@@ -715,7 +715,13 @@ function ArtifactVersionHistoryPanel(props: {
             afterMarkdown={selectedBlob.data?.markdown ?? null}
             loading={selectedBlob.isLoading || comparisonBlob.isLoading}
             failed={selectedBlob.isError || comparisonBlob.isError}
-            outcome={outcome?.status ?? null}
+            outcome={
+              outcome !== null &&
+              selected !== null &&
+              outcome.observationId === selected.observationId
+                ? outcome.status
+                : null
+            }
             onRetry={() => {
               if (selectedBlob.isError) void selectedBlob.refetch();
               if (comparisonBlob.isError) void comparisonBlob.refetch();

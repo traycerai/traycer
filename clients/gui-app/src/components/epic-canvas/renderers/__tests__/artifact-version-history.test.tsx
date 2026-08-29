@@ -709,6 +709,41 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(state.queryInvalidationCalls).toHaveLength(1);
   });
 
+  it("keeps a restore outcome banner scoped to its restored observation", () => {
+    state.historyEntries = [
+      observation("observation-original", "Original snapshot"),
+      observation("observation-restored", "Restored snapshot"),
+    ];
+    state.blobByObservationId.set("observation-original", {
+      contentHash: HASH_A,
+      markdown: "original body",
+    });
+    state.restoreExecute = {
+      kind: "outcome",
+      status: "clean",
+      newObservationId: "observation-restored",
+    };
+
+    openHistory();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore this version" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore as new version" }),
+    );
+    expect(screen.getByText("Restored as a new version.")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Select version observation-original",
+      }),
+    );
+
+    expect(screen.queryByText("Restored as a new version.")).toBeNull();
+    expect(screen.getByText("Restored")).toBeTruthy();
+  });
+
   it("renders the renormalized restore outcome banner and badge", () => {
     state.historyEntries = [
       observation("observation-original", "Original snapshot"),

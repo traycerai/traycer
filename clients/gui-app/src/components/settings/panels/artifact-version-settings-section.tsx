@@ -28,6 +28,18 @@ import { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
 
 type ConfirmAction = "disable" | "retention" | "clear" | null;
 
+interface PendingConfirmation {
+  readonly hostId: string | null;
+  readonly action: Exclude<ConfirmAction, null>;
+}
+
+interface RetentionDraft {
+  readonly hostId: string | null;
+  readonly retentionDays: string | null;
+  readonly maxVersions: string | null;
+  readonly maxMegabytes: string | null;
+}
+
 function confirmTitle(action: ConfirmAction): string {
   if (action === "disable") return "Turn off version history?";
   if (action === "retention") return "Tighten retention?";
@@ -129,10 +141,10 @@ export function ArtifactVersionSettingsSection(props: {
     readonly hostId: string | null;
     readonly response: ArtifactVersionSettingsCommandResponse;
   } | null>(null);
-  const [confirm, setConfirm] = useState<ConfirmAction>(null);
-  const [retentionDays, setRetentionDays] = useState<string | null>(null);
-  const [maxVersions, setMaxVersions] = useState<string | null>(null);
-  const [maxMegabytes, setMaxMegabytes] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<PendingConfirmation | null>(null);
+  const [retentionDraft, setRetentionDraft] = useState<RetentionDraft | null>(
+    null,
+  );
 
   const setEnabled = useHostScopedMutationForClient(props.client, {
     method: "epic.artifactVersionSettings.setEnabled",
@@ -153,9 +165,9 @@ export function ArtifactVersionSettingsSection(props: {
     ],
     onSuccess: (result) => {
       setCommitted({ hostId: props.hostId, response: result });
-      setRetentionDays(null);
-      setMaxVersions(null);
-      setMaxMegabytes(null);
+      setRetentionDraft((current) =>
+        current?.hostId === props.hostId ? null : current,
+      );
     },
   });
   const clearHistory = useHostScopedMutationForClient(props.client, {
@@ -193,6 +205,28 @@ export function ArtifactVersionSettingsSection(props: {
   }
 
   const settings = snapshot.settings;
+  const currentRetentionDraft =
+    retentionDraft?.hostId === props.hostId ? retentionDraft : null;
+  const retentionDays = currentRetentionDraft?.retentionDays ?? null;
+  const maxVersions = currentRetentionDraft?.maxVersions ?? null;
+  const maxMegabytes = currentRetentionDraft?.maxMegabytes ?? null;
+  const confirmForHost =
+    confirm?.hostId === props.hostId ? confirm.action : null;
+  const updateRetentionDraft = (
+    field: "retentionDays" | "maxVersions" | "maxMegabytes",
+    value: string,
+  ): void => {
+    setRetentionDraft((current) => {
+      const currentForHost = current?.hostId === props.hostId ? current : null;
+      return {
+        hostId: props.hostId,
+        retentionDays: currentForHost?.retentionDays ?? null,
+        maxVersions: currentForHost?.maxVersions ?? null,
+        maxMegabytes: currentForHost?.maxMegabytes ?? null,
+        [field]: value,
+      };
+    });
+  };
   const draft: ArtifactVersionSettings = {
     enabled: settings.enabled,
     retentionDays: boundedInteger(
@@ -228,6 +262,7 @@ export function ArtifactVersionSettingsSection(props: {
     setEnabled.isPending || setRetention.isPending || clearHistory.isPending;
 
   const commitRetention = (): void => {
+    if (retentionDraft?.hostId !== props.hostId) return;
     setConfirm(null);
     setRetention.mutate({
       retentionDays: draft.retentionDays,
@@ -254,7 +289,7 @@ export function ArtifactVersionSettingsSection(props: {
               aria-label="Capture artifact versions"
               onCheckedChange={(checked) => {
                 if (checked) setEnabled.mutate({ enabled: true });
-                else setConfirm("disable");
+                else setConfirm({ hostId: props.hostId, action: "disable" });
               }}
             />
           }
@@ -275,7 +310,9 @@ export function ArtifactVersionSettingsSection(props: {
                   min={1}
                   max={MAX_ARTIFACT_VERSION_RETENTION_DAYS}
                   value={retentionDays ?? String(settings.retentionDays)}
-                  onChange={(event) => setRetentionDays(event.target.value)}
+                  onChange={(event) =>
+                    updateRetentionDraft("retentionDays", event.target.value)
+                  }
                 />
               </label>
               <label
@@ -289,7 +326,9 @@ export function ArtifactVersionSettingsSection(props: {
                   min={1}
                   max={MAX_ARTIFACT_VERSIONS_PER_ARTIFACT}
                   value={maxVersions ?? String(settings.maxVersionsPerArtifact)}
-                  onChange={(event) => setMaxVersions(event.target.value)}
+                  onChange={(event) =>
+                    updateRetentionDraft("maxVersions", event.target.value)
+                  }
                 />
               </label>
               <label
@@ -308,7 +347,9 @@ export function ArtifactVersionSettingsSection(props: {
                       Math.ceil(settings.maxBytesPerArtifact / (1024 * 1024)),
                     )
                   }
-                  onChange={(event) => setMaxMegabytes(event.target.value)}
+                  onChange={(event) =>
+                    updateRetentionDraft("maxMegabytes", event.target.value)
+                  }
                 />
               </label>
               <Button
@@ -317,8 +358,12 @@ export function ArtifactVersionSettingsSection(props: {
                 variant="outline"
                 disabled={!retentionChanged || pending}
                 onClick={() => {
-                  if (tightensRetention) setConfirm("retention");
-                  else commitRetention();
+                  if (tightensRetention) {
+                    setConfirm({
+                      hostId: props.hostId,
+                      action: "retention",
+                    });
+                  } else commitRetention();
                 }}
               >
                 Save retention
@@ -346,7 +391,9 @@ export function ArtifactVersionSettingsSection(props: {
               size="sm"
               variant="outline"
               disabled={pending}
-              onClick={() => setConfirm("clear")}
+              onClick={() =>
+                setConfirm({ hostId: props.hostId, action: "clear" })
+              }
             >
               Clear version history…
             </Button>
@@ -364,14 +411,17 @@ export function ArtifactVersionSettingsSection(props: {
       </SettingsGroup>
 
       <Dialog
-        open={confirm !== null}
+        open={confirmForHost !== null}
         onOpenChange={(open) => !open && setConfirm(null)}
       >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{confirmTitle(confirm)}</DialogTitle>
+            <DialogTitle>{confirmTitle(confirmForHost)}</DialogTitle>
             <DialogDescription>
-              {confirmDescription(confirm, snapshot.storage.reclaimableBytes)}
+              {confirmDescription(
+                confirmForHost,
+                snapshot.storage.reclaimableBytes,
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -379,21 +429,22 @@ export function ArtifactVersionSettingsSection(props: {
               Cancel
             </Button>
             <Button
-              variant={confirm === "clear" ? "destructive" : "default"}
+              variant={confirmForHost === "clear" ? "destructive" : "default"}
               disabled={pending}
               onClick={() => {
-                if (confirm === "disable") {
+                if (confirm?.hostId !== props.hostId) return;
+                if (confirm.action === "disable") {
                   setConfirm(null);
                   setEnabled.mutate({ enabled: false });
-                } else if (confirm === "retention") {
+                } else if (confirm.action === "retention") {
                   commitRetention();
-                } else if (confirm === "clear") {
+                } else {
                   setConfirm(null);
                   clearHistory.mutate({});
                 }
               }}
             >
-              {confirmButtonLabel(confirm)}
+              {confirmButtonLabel(confirmForHost)}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -375,4 +375,47 @@ describe("<ArtifactVersionSettingsSection />", () => {
     expect(screen.getByText("Loading version history settings…")).toBeTruthy();
     expect(screen.queryByText(/3 observations pruned/u)).toBeNull();
   });
+
+  it("does not carry an open confirmation to a newly selected host", () => {
+    const { rerender } = render(
+      <ArtifactVersionSettingsSection client={null} hostId="host-a" enabled />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear version history…" }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "Clear version history?" }),
+    ).toBeTruthy();
+
+    rerender(
+      <ArtifactVersionSettingsSection client={null} hostId="host-b" enabled />,
+    );
+
+    expect(
+      screen.queryByRole("heading", { name: "Clear version history?" }),
+    ).toBeNull();
+    expect(state.mutationCalls).toEqual([]);
+  });
+
+  it("does not carry edited retention values to a newly selected host", () => {
+    const { rerender } = render(
+      <ArtifactVersionSettingsSection client={null} hostId="host-a" enabled />,
+    );
+    fireEvent.change(screen.getByLabelText("Days"), {
+      target: { value: "7" },
+    });
+    expect(screen.getByLabelText<HTMLInputElement>("Days").value).toBe("7");
+
+    rerender(
+      <ArtifactVersionSettingsSection client={null} hostId="host-b" enabled />,
+    );
+
+    expect(screen.getByLabelText<HTMLInputElement>("Days").value).toBe("30");
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Save retention",
+      }).disabled,
+    ).toBe(true);
+    expect(state.mutationCalls).toEqual([]);
+  });
 });
