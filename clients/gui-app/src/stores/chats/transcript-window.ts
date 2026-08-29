@@ -525,16 +525,44 @@ function pruneSupersededLiveRecords(
 function servedAssistantTurnKeys(
   rowIds: readonly string[],
   messages: readonly Message[],
+  liveMessages: readonly Message[],
 ): ReadonlySet<string> {
-  const messageKeys = new Set(
-    messages
-      .filter((message) => message.role === "assistant")
-      .map(assistantTurnKey),
-  );
+  // A row id plus one matching record does not prove the folded turn is fully
+  // hydrated: the range reader preserves the row while independently skipping
+  // records its lookup no longer has. Retire the complete live stand-in only
+  // when the fresh records reproduce its entire rendered block sequence.
+  type AssistantBlocks = Extract<Message, { role: "assistant" }>["blocks"];
+  const servedBlocksByTurn = new Map<string, AssistantBlocks>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    const turnKey = assistantTurnKey(message);
+    servedBlocksByTurn.set(turnKey, [
+      ...(servedBlocksByTurn.get(turnKey) ?? []),
+      ...message.blocks,
+    ]);
+  }
+  const completeLiveTurnKeys = new Set<string>();
+  for (const message of liveMessages) {
+    if (
+      message.role !== "assistant" ||
+      !isTransientLiveAssistantMessageId(message.messageId)
+    ) {
+      continue;
+    }
+    const turnKey = assistantTurnKey(message);
+    const servedBlocks = servedBlocksByTurn.get(turnKey);
+    if (
+      servedBlocks !== undefined &&
+      JSON.stringify(servedBlocks) === JSON.stringify(message.blocks)
+    ) {
+      completeLiveTurnKeys.add(turnKey);
+    }
+  }
   const keys = new Set<string>();
   for (const rowId of rowIds) {
     const turnKey = assistantRowTurnKey(rowId);
-    if (turnKey !== null && messageKeys.has(turnKey)) keys.add(turnKey);
+    if (turnKey !== null && completeLiveTurnKeys.has(turnKey))
+      keys.add(turnKey);
   }
   return keys;
 }
@@ -1038,21 +1066,6 @@ function replacementSkeletonBaseline<T>(
   return indexRevision === null ? fresh : held;
 }
 
-function replacementBaselineLiveMessages(input: {
-  readonly window: TranscriptWindow;
-  readonly provisionalLiveMessages: readonly Message[];
-  readonly indexRevision: number | null;
-  readonly rebased: boolean;
-  readonly missedDeltas: boolean;
-}): readonly Message[] {
-  return input.indexRevision === null &&
-    !input.rebased &&
-    !input.missedDeltas &&
-    !input.window.invalidated
-    ? input.window.liveMessages
-    : input.provisionalLiveMessages;
-}
-
 /**
  * Seat a windowed snapshot.
  *
@@ -1192,13 +1205,6 @@ export function applyWindowedSnapshot(
     missedDeltas,
     rebased,
   });
-  const replacementBaselineMessages = replacementBaselineLiveMessages({
-    window,
-    provisionalLiveMessages,
-    indexRevision: input.indexRevision,
-    rebased,
-    missedDeltas,
-  });
   const skeletonBaselineTransientAssistantMessageIds = provisionalLiveMessages
     .filter(
       (message) =>
@@ -1206,7 +1212,7 @@ export function applyWindowedSnapshot(
         isTransientLiveAssistantMessageId(message.messageId),
     )
     .map((message) => message.messageId);
-  const skeletonBaselineProvisionalUserMessageIds = replacementBaselineMessages
+  const skeletonBaselineProvisionalUserMessageIds = provisionalLiveMessages
     .filter((message) => message.role === "user")
     .map((message) => message.messageId);
   const base: TranscriptWindow =
@@ -1359,7 +1365,11 @@ export function applyWindowedSnapshot(
       spans,
       hydratedBytes: totalBytes(spans),
     },
-    servedAssistantTurnKeys(tailRowIds, input.tail.messages),
+    servedAssistantTurnKeys(
+      tailRowIds,
+      input.tail.messages,
+      boundedBase.liveMessages,
+    ),
   );
 }
 
@@ -2187,7 +2197,11 @@ export function applyRangeResponse(
       hydratedBytes: totalBytes(spans),
       clock,
     },
-    servedAssistantTurnKeys(response.rowIds, response.messages),
+    servedAssistantTurnKeys(
+      response.rowIds,
+      response.messages,
+      window.liveMessages,
+    ),
   );
 }
 

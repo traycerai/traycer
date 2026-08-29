@@ -66,7 +66,7 @@ function assistantMessage(
   messageId: string,
   turnId: string | null,
   timestamp: number,
-): Message {
+): Extract<Message, { role: "assistant" }> {
   return {
     role: "assistant",
     messageId,
@@ -1875,7 +1875,7 @@ describe("what an overlap keeps", () => {
     expect(rebuilt.liveMessages).toEqual([]);
   });
 
-  it("retires a retained user omitted by a non-invalidated null rebuild", () => {
+  it("keeps a retained user through a delayed non-invalidated null rebuild", () => {
     const live = appendLiveRecords(
       {
         ...emptyTranscriptWindow(),
@@ -1899,7 +1899,9 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
 
-    expect(rebuilt.liveMessages).toEqual([]);
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user-removed",
+    ]);
   });
 
   it("keeps a just-accepted user record through an index void", () => {
@@ -2259,6 +2261,51 @@ describe("what an overlap keeps", () => {
     );
 
     expect(bodyless.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("does not retire a completion stand-in from a partial turn response", () => {
+    const turnId = "turn-partial-body";
+    const firstBlock = {
+      type: "text" as const,
+      blockId: "block-1",
+      status: "completed" as const,
+      timestamp: 1,
+      text: "first",
+      providerNotice: null,
+    };
+    const secondBlock = { ...firstBlock, blockId: "block-2", text: "second" };
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [
+          {
+            ...assistantMessage(transientId, turnId, 2),
+            blocks: [firstBlock, secondBlock],
+          },
+        ],
+        events: [],
+      },
+    );
+
+    const partial = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          {
+            ...assistantMessage("assistant-first", turnId, 1),
+            blocks: [firstBlock],
+          },
+        ],
+      }),
+    );
+
+    expect(partial.liveMessages.map((message) => message.messageId)).toEqual([
       transientId,
     ]);
   });
