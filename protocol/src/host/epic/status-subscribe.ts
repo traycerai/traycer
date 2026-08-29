@@ -122,7 +122,31 @@
  * of this and the one a client is most likely to get wrong:
  *
  *     snapshot(pre-open basis, migration running) -> migrationProgress... ->
- *     migrationFailed -> termination
+ *     migrationFailed -> [LANE STAYS OPEN]
+ *
+ * **The lane does not terminate on a failed open.** `migrationFailed` is
+ * emitted INSTEAD of a fatal close (see the frame's own doc below), and failure
+ * then becomes a STABLE SNAPSHOT CONDITION rather than a moment that passed: a
+ * client attaching afterwards receives `snapshot` with
+ * `migration: {state: "failed", ...}` and needs no replay to learn it. That is
+ * the completeness rule applied to the one state where a lane is most tempted to
+ * hang up.
+ *
+ * Staying open is what makes retry work at all. `epic.retryMigration` reuses
+ * THIS live session - the host releases the epic for replacement and the
+ * observing session drives the retry - so a lane that closed on failure would
+ * take the modal's channel down with it and leave the user with a Retry button
+ * wired to nothing.
+ *
+ * Termination on this lane is reserved for two things: an adjudicated verdict
+ * (a cloud denial, which is authorization and not migration), and the client
+ * closing. A failed migration is neither.
+ *
+ * Note the contrast with the HANDLE-REQUIRING lanes - `epic.state.subscribe`
+ * and `artifact.subscribe` still terminate RETRYABLE on a failed open, because
+ * they have no rows and no document to serve. This lane is the one built to be
+ * alive precisely when the doc is not, which is why it alone reports the failure
+ * instead of inheriting it.
  *
  * The client renders the migration modal off the SNAPSHOT, not off
  * `migrationStarted` - which it may never see, because the migration was already
@@ -520,10 +544,19 @@ export const epicStatusSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
       ...epicLaneTextFrameFields,
     }),
     /**
-     * Terminal failure of an in-flight migration. Emitted INSTEAD of a fatal
-     * stream close so the session stays alive and the modal can drive
-     * `epic.retryMigration`. `reason` is a short, user-safe summary for
-     * host-side logging; the modal copy is fixed and never renders this string.
+     * Terminal for the ATTEMPT, not for the lane - and the distinction is the
+     * whole point of the frame.
+     *
+     * Emitted INSTEAD of a fatal stream close, so the session stays alive and
+     * the modal can drive `epic.retryMigration`, which reuses this very session.
+     * A lane that closed here would take down the channel the Retry button
+     * needs. See the failed-open ordering in the module doc: after this frame
+     * the lane REMAINS OPEN and failure becomes a stable snapshot condition, so
+     * a later attacher reads it off `snapshot.migration` rather than needing
+     * this frame replayed.
+     *
+     * `reason` is a short, user-safe summary for host-side logging; the modal
+     * copy is fixed and never renders this string.
      */
     z.object({
       kind: z.literal("migrationFailed"),

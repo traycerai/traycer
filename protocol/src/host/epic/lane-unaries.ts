@@ -98,10 +98,26 @@ export const epicGetWorkspaceContextV10 = defineRpcContract({
  * the same observation, and the only feedback loop was waiting to see whether
  * migration frames resumed. A retry is a COMMAND. It gets a reply.
  *
- * The host side is unchanged in substance: it tears down the current epic lease
- * and re-runs `openEpic`, which is retry-safe (server prepare skips duplicates,
- * room transformation is idempotent). Progress continues to arrive on
- * `epic.status.subscribe` - this call starts the work, it does not report it.
+ * The host side is unchanged in substance: it releases the current epic lease
+ * for replacement and re-runs `openEpic`, which is retry-safe (server prepare
+ * skips duplicates, room transformation is idempotent). Progress continues to
+ * arrive on `epic.status.subscribe` - this call starts the work, it does not
+ * report it.
+ *
+ * ## The caller keeps its control lane across the retry
+ *
+ * `epic.status.subscribe` does NOT close when a migration fails - the lane
+ * stays open holding `migration: {state: "failed"}` as a stable snapshot
+ * condition - and the retry reuses that same live session. So a client calls
+ * this WITHOUT re-subscribing, and the resulting progress arrives on the
+ * subscription it already had.
+ *
+ * That is a load-bearing property rather than a convenience: a caller that tore
+ * down its control lane on `migrationFailed` and rebuilt it around this call
+ * would be racing the host's own release-for-replacement, and the Retry button
+ * would be wired to a channel that no longer exists. The epic REPLICA is
+ * replaced by a retry (expect an `authorityEpoch` change and fresh lane
+ * snapshots); the SUBSCRIPTION is not.
  *
  * ## `ok: true` and nothing else
  *
