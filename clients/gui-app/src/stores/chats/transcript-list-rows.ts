@@ -2,6 +2,7 @@ import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transc
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   hydratedRecords,
+  skeletonOrdinalByRowId,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import {
@@ -132,44 +133,6 @@ export function unplacedRowKey(ordinal: number): string {
  */
 export function isUnplacedRowKey(key: string): boolean {
   return key.startsWith(UNPLACED_ROW_KEY_PREFIX);
-}
-
-/**
- * Every row id the index names and the ordinal it names it at, keyed by the
- * skeleton array that produced it.
- *
- * Module-scope and keyed on array IDENTITY for the same reason
- * `chat-timeline.tsx`'s row caches are: `transcriptListRows` re-runs on every
- * streaming token (`messages` is rebuilt wholesale per token), while the
- * skeleton array is replaced only when a chunk lands or the index changes.
- * Building this inline would put an O(rowCount) Map on the per-token path -
- * 20k entries per token on a long chat - which is precisely the per-token
- * O(history) work the windowed line exists to delete.
- *
- * The ORDINAL and not merely membership, because both questions this answers
- * need it: "does the index name this row?" (so it is not an unplaced record)
- * and "where?" (so a live record the index has just started naming can be
- * seated there instead of dropped). One pass, one cache entry.
- *
- * Safe to publish from a render: the value is a pure function of the array it
- * is keyed on, so a discarded render can only ever populate the same answer.
- */
-const skeletonOrdinalCache = new WeakMap<
-  readonly (RowSkeletonEntry | undefined)[],
-  ReadonlyMap<string, number>
->();
-
-function skeletonOrdinalByRowId(
-  skeleton: readonly (RowSkeletonEntry | undefined)[],
-): ReadonlyMap<string, number> {
-  const cached = skeletonOrdinalCache.get(skeleton);
-  if (cached !== undefined) return cached;
-  const ordinals = new Map<string, number>();
-  skeleton.forEach((entry, ordinal) => {
-    if (entry !== undefined) ordinals.set(entry.rowId, ordinal);
-  });
-  skeletonOrdinalCache.set(skeleton, ordinals);
-  return ordinals;
 }
 
 /**
@@ -481,6 +444,16 @@ function invalidatedPlaceholderRows(
  *
  * Runs after the span and live passes and never displaces either: a fresh
  * body always outranks a carried one.
+ *
+ * A carry that holds the body while the renderer withholds the MODEL suppresses
+ * its ordinal, as the fresh-span pass does - but only for a row the
+ * replacement index still NAMES. Withholding is a renderer policy about the row
+ * (an assistant row whose only segments were lifted into the pinned-todo dock
+ * is the standing example), not a statement about which tier holds it, so the
+ * row is meant to draw nothing and the skeleton placeholder would make a rebase
+ * materialize a row that was deliberately absent before it and after it. The
+ * restriction is what keeps that apart from a row the rebase merely RENAMED;
+ * see the branch itself.
  */
 function seatStaleRows(input: {
   readonly window: TranscriptWindow;
@@ -488,7 +461,7 @@ function seatStaleRows(input: {
   readonly skeletonOrdinals: ReadonlyMap<string, number>;
   readonly modelByOrdinal: Map<number, ChatMessageModel>;
   readonly placedRowIds: Set<string>;
-  readonly suppressedOrdinals: ReadonlySet<number>;
+  readonly suppressedOrdinals: Set<number>;
 }): void {
   const { window } = input;
   for (const span of window.staleSpans) {
@@ -498,6 +471,11 @@ function seatStaleRows(input: {
       if (rowId === "") return;
       if (input.placedRowIds.has(rowId)) return;
       let ordinal = input.skeletonOrdinals.get(rowId);
+      // Whether the REPLACEMENT index still names this id, which is the only
+      // evidence here that it is a current row id and not a pre-rebase one.
+      // Read below, where a missing model has to be told apart from a
+      // renamed row.
+      const namedByIndex = ordinal !== undefined;
       if (ordinal === undefined) {
         const oldOrdinal = span.fromOrdinal + offset;
         if (window.skeleton[oldOrdinal] !== undefined) return;
@@ -511,7 +489,25 @@ function seatStaleRows(input: {
         return;
       }
       const model = input.modelsById.get(rowId);
-      if (model === undefined) return;
+      if (model === undefined) {
+        // The fresh-span pass reads a missing model as the renderer WITHHOLDING
+        // the row and emits nothing, and it is entitled to: its row ids are the
+        // current ones by construction, so the renderer projects under exactly
+        // those ids. A stale span's are not, and the difference is the whole
+        // reason this pass exists - a rebase re-slices a turn (the `split`
+        // suffix is sticky for every row of it), so the same record now
+        // projects under ids this span never listed. Reading THAT as
+        // withholding blanks the turn's whole ordinal range for the length of
+        // the carry, which is worse than the placeholder it removes.
+        //
+        // So only where the replacement index still names the id, which is the
+        // one piece of evidence available here that it is current. Absent that,
+        // fall through to the placeholder - transiently, until the skeleton
+        // reaches the row. `withholds a sibling slice of a stale-held record
+        // from the live tail` is the case this narrowing protects.
+        if (namedByIndex) input.suppressedOrdinals.add(ordinal);
+        return;
+      }
       input.modelByOrdinal.set(ordinal, model);
       input.placedRowIds.add(rowId);
     });
@@ -593,6 +589,12 @@ function invalidatedTranscriptListRows(
     skeletonOrdinals: skeletonOrdinalByRowId(window.skeleton),
     modelByOrdinal: staleByOrdinal,
     placedRowIds: staleSeatedRowIds,
+    // Collected and DISCARDED, deliberately. Suppression means "draw nothing
+    // at this ordinal", which the ordinal space below cannot honour: its rows
+    // are identity-free spacers whose whole job is to keep the list exactly
+    // `rowCount` long so LegendList keeps its measurements and the chat cannot
+    // flash the empty state. Dropping one would shorten the list to buy the
+    // absence of a row the reader cannot tell from its neighbours anyway.
     suppressedOrdinals: new Set<number>(),
   });
   const unplacedRendered = rendered.filter((model) => {

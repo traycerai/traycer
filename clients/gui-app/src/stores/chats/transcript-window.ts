@@ -2271,7 +2271,7 @@ function retireUnnamedStaleSpans(window: TranscriptWindow): TranscriptWindow {
   if (!window.skeletonComplete || window.staleSpans.length === 0) {
     return window;
   }
-  const named = skeletonNamedRowIds(window);
+  const named = skeletonOrdinalByRowId(window.skeleton);
   const kept = window.staleSpans.filter((span) =>
     span.rowIds.some((rowId) => named.has(rowId)),
   );
@@ -2281,20 +2281,73 @@ function retireUnnamedStaleSpans(window: TranscriptWindow): TranscriptWindow {
 }
 
 /**
- * Every row id the skeleton currently names.
+ * Where the skeleton currently names each row id.
  *
- * Shared by the two retirement rules so they cannot disagree about what
- * "the index names this row" means: {@link retireUnnamedStaleSpans} asks
- * whether a span names any surviving row, {@link retireCoveredStaleSpans} asks
- * the same question per row, and a second copy of the fold would be one edit
- * away from answering them differently.
+ * ONE index, because four questions across two modules are the same question:
+ * {@link retireUnnamedStaleSpans} asks whether a span names any surviving row,
+ * {@link retireCoveredStaleSpans} asks it per row, `transcript-list-rows.ts`
+ * asks WHERE so it can seat a live record the index has just started naming,
+ * and {@link staleSpanVisibleIn} asks WHERE so it can reproduce that seat's
+ * placement without re-deriving it. A second fold would be one edit away from
+ * answering them differently, and the ordinal costs nothing over the
+ * membership.
+ *
+ * Cached on the array IDENTITY, which changes exactly when the skeleton does -
+ * a chunk landing or the index moving - while `transcriptListRows` re-runs on
+ * every streaming token and `touchTranscriptRange` on every viewport report.
+ * Built inline it would be an O(rowCount) Map per token, 20k entries on a long
+ * chat, which is precisely the per-token O(history) work the windowed line
+ * exists to delete. Safe to populate from a render - the value is a pure
+ * function of the array it is keyed on, so a discarded render can only ever
+ * write the same answer.
  */
-function skeletonNamedRowIds(window: TranscriptWindow): ReadonlySet<string> {
-  const named = new Set<string>();
-  for (const entry of window.skeleton) {
-    if (entry !== undefined) named.add(entry.rowId);
+const skeletonOrdinalCache = new WeakMap<
+  readonly (RowSkeletonEntry | undefined)[],
+  ReadonlyMap<string, number>
+>();
+
+export function skeletonOrdinalByRowId(
+  skeleton: readonly (RowSkeletonEntry | undefined)[],
+): ReadonlyMap<string, number> {
+  const cached = skeletonOrdinalCache.get(skeleton);
+  if (cached !== undefined) return cached;
+  const ordinals = new Map<string, number>();
+  skeleton.forEach((entry, ordinal) => {
+    if (entry !== undefined) ordinals.set(entry.rowId, ordinal);
+  });
+  skeletonOrdinalCache.set(skeleton, ordinals);
+  return ordinals;
+}
+
+/**
+ * The row ids the FRESH tier DRAWS - one per row served, markers excluded.
+ *
+ * Two questions want it and both are about the stale tier losing to a fresh
+ * copy: {@link retireCoveredStaleSpans} retires a carry the fresh tier has
+ * replaced, and {@link staleSpanVisibleIn} refuses to warm a carry for a row
+ * the fresh tier is the one putting on screen. Cached on the spans array for
+ * the second of those, which runs on every viewport report.
+ *
+ * The marker is dropped rather than folded in, for the reason
+ * {@link boundedStaleSpans} keeps two spaces: it is "identity unverified", not
+ * an id, so one span's marker must never read as covering another's.
+ */
+const freshDrawnRowIdCache = new WeakMap<
+  readonly HydratedSpan[],
+  ReadonlySet<string>
+>();
+
+function freshDrawnRowIds(spans: readonly HydratedSpan[]): ReadonlySet<string> {
+  const cached = freshDrawnRowIdCache.get(spans);
+  if (cached !== undefined) return cached;
+  const drawn = new Set<string>();
+  for (const span of spans) {
+    for (const rowId of span.rowIds) {
+      if (rowId !== "") drawn.add(rowId);
+    }
   }
-  return named;
+  freshDrawnRowIdCache.set(spans, drawn);
+  return drawn;
 }
 
 function reconcileUnavailableRowsWithSkeleton(
@@ -2725,13 +2778,10 @@ function boundedStaleSpans(
  */
 function retireCoveredStaleSpans(window: TranscriptWindow): TranscriptWindow {
   if (window.staleSpans.length === 0) return window;
-  const fresh = new Set<string>();
-  for (const span of window.spans) {
-    for (const rowId of span.rowIds) {
-      if (rowId !== "") fresh.add(rowId);
-    }
-  }
-  const named = window.skeletonComplete ? skeletonNamedRowIds(window) : null;
+  const fresh = freshDrawnRowIds(window.spans);
+  const named = window.skeletonComplete
+    ? skeletonOrdinalByRowId(window.skeleton)
+    : null;
   const uncovered = window.staleSpans.filter((span) =>
     span.rowIds.some((rowId) =>
       rowId === ""
@@ -3064,6 +3114,25 @@ export function applyIndexChange(
  * inside the drop is exact only when the rewritten row is hydrated, and a
  * sibling slice holding the same turn's records is the case where it is not.
  * See {@link recordSharingOrdinals}.
+ *
+ * ## Why the echo test alone, when the store also asks whether the copy is HELD
+ *
+ * The store gates its half of this decision - whether to supersede in-flight
+ * hydration - on {@link holdsActiveTurnAssistantMessage} as well, because an
+ * unheld copy is not being rewritten by the deltas and an answer generated
+ * before them carries blocks the client can never recover. That conjunct is
+ * absent here, and the two still agree, for a reason worth stating rather than
+ * rediscovering: this half is a NO-OP whenever the conjunct would differ.
+ * {@link dropSpansForUpdatedOrdinals} drops by ordinal containment, every
+ * ordinal it is given names an `assistant:` row of the active turn (the entry
+ * test in {@link isActiveTurnStreamingEcho}, widened along the same axis by
+ * {@link recordSharingOrdinals}), and a span covering such an ordinal was
+ * served the records backing it - so "no span holds the turn's assistant
+ * message" already implies "no span contains one of these ordinals", and there
+ * is nothing for the skip to keep. Adding the scan here would buy no
+ * behavioural change and would put an O(records held) walk on the per-token
+ * path, which is exactly what the store's own `outstandingHydrationRequests`
+ * gate exists to avoid.
  */
 function reconcileUpdatedBodies(
   window: TranscriptWindow,
@@ -3854,30 +3923,44 @@ export function touchTranscriptRange(
  * Not an ordinal overlap: a stale span keeps its PREVIOUS coordinates, so
  * comparing them against a range expressed in the replacement space compares
  * two different spaces. The honest question is where the row merger actually
- * draws it, and that is `seatStaleRows`' two rules - by replacement-skeleton
- * NAME wherever the new index has named one of its rows, and otherwise at its
- * own old ordinal, but only into an ordinal the skeleton has not named at all.
- * Warmth follows the same two rules so that "warm" means "on screen" in both
- * placements rather than only the second.
+ * draws it, which is `seatStaleRows`' rule - so this REPRODUCES that rule
+ * rather than approximating it, and every refusal below is one of its own:
+ *
+ * - The marker is "identity unverified" rather than an id, and `seatStaleRows`
+ *   returns on it before considering position, so it is never drawn at all -
+ *   not even at its old ordinal. Warming a marker-only carry credits it with
+ *   rows it does not put on screen.
+ * - A row the FRESH tier draws is seated from that copy, and the carry loses.
+ * - A NAMED row draws at its name and never falls back, so name is decided
+ *   BEFORE the hole rather than beside it. Read as either-or, a row the
+ *   replacement index names off-screen still reads as visible whenever its old
+ *   ordinal happens to land in an unarrived hole in view.
+ *
+ * What it cannot reproduce is the pair of refusals that depend on RENDERED
+ * models - an ordinal another model already took, and a row whose model the
+ * renderer withheld. Those live in the row merger and nothing here can see
+ * them, so this stays a slight over-estimate; the direction is deliberate,
+ * since the cost of a missed bump (the on-screen carry evicted) is the failure
+ * the bump exists to prevent and the cost of a spare one is a colder span
+ * surviving a squeeze.
  */
 function staleSpanVisibleIn(
   window: TranscriptWindow,
   range: OrdinalRange,
 ): (span: HydratedSpan) => boolean {
   // No carry, no question - and this runs on every viewport report, so the
-  // ordinary window must not pay for the skeleton scan below.
+  // ordinary window must not pay for the lookups below.
   if (window.staleSpans.length === 0) return () => false;
   const from = Math.max(0, range.fromOrdinal);
   const to = Math.min(range.toOrdinal, window.rowCount);
-  const namedInView = new Set<string>();
-  for (let ordinal = from; ordinal < to; ordinal += 1) {
-    const entry = window.skeleton[ordinal];
-    if (entry !== undefined) namedInView.add(entry.rowId);
-  }
+  if (from >= to) return () => false;
+  const namedAt = skeletonOrdinalByRowId(window.skeleton);
+  const drawnByFreshTier = freshDrawnRowIds(window.spans);
   return (span) =>
     span.rowIds.some((rowId, offset) => {
-      // The marker is not an identity, so it can only be placed positionally.
-      if (rowId !== "" && namedInView.has(rowId)) return true;
+      if (rowId === "" || drawnByFreshTier.has(rowId)) return false;
+      const named = namedAt.get(rowId);
+      if (named !== undefined) return named >= from && named < to;
       const oldOrdinal = span.fromOrdinal + offset;
       return (
         oldOrdinal >= from &&

@@ -2193,6 +2193,173 @@ describe("stale spans", () => {
     ]);
   });
 
+  it("does not warm a carry for a row the FRESH tier is the one drawing", () => {
+    // Warmth has to mean "this carry is putting a row on screen", because it
+    // is the only thing that speaks for a carry under a squeeze. A row the
+    // fresh tier has re-served is drawn from the fresh copy - `seatStaleRows`
+    // refuses it on `placedRowIds` - so crediting the carry for it lets a span
+    // retained purely for an OFF-screen row outrank one that is really on
+    // screen, which is the inversion the viewport bump exists to prevent.
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+      }),
+      null,
+    );
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 30,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 29,
+          messages: [userMessage("m-29", 29)],
+          events: [],
+        },
+      },
+      null,
+    );
+    expect(rebased.staleSpans.map((span) => span.rowIds)).toEqual([
+      ["row-0", "row-1"],
+    ]);
+
+    // The replacement serves row-0 only. The carry survives for row-1, which
+    // is what makes this the MIXED span the retirement rule deliberately keeps
+    // - and row-0 is now the fresh tier's to draw.
+    const served = applyRangeResponse(
+      rebased,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+      null,
+    );
+    expect(served.staleSpans.map((span) => span.rowIds)).toEqual([
+      ["row-0", "row-1"],
+    ]);
+
+    const before = served.staleSpans.map((span) => span.touchedAt);
+    const read = touchTranscriptRange(served, {
+      fromOrdinal: 0,
+      toOrdinal: 1,
+    });
+
+    expect(read.staleSpans.map((span) => span.touchedAt)).toEqual(before);
+  });
+
+  it("does not warm a carry through the old ordinal of a row the index names off screen", () => {
+    // Name and hole are a PRIORITY in `seatStaleRows`, not a choice: a row the
+    // replacement index has named draws at that name and never falls back to
+    // its old ordinal. Read as either-or, a row named far off screen still
+    // counts as visible whenever its old ordinal happens to land in a hole the
+    // replacement skeleton has not reached yet - which, mid-restream, is most
+    // of them.
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [userMessage("m-5", 5)],
+      }),
+      null,
+    );
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 30,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 29,
+          messages: [userMessage("m-29", 29)],
+          events: [],
+        },
+      },
+      null,
+    );
+    // The replacement index renumbers the carried row from 5 to 20 and has not
+    // reached ordinal 5, so 5 is still a hole.
+    const renamed = applySkeletonChunk(rebased, {
+      epoch: 2,
+      fromOrdinal: 20,
+      entries: [skeletonEntry("row-5", 20)],
+      isFinal: false,
+    });
+    expect(renamed.skeleton[5]).toBeUndefined();
+    expect(renamed.staleSpans.map((span) => span.rowIds)).toEqual([["row-5"]]);
+
+    const before = renamed.staleSpans.map((span) => span.touchedAt);
+    const atOldOrdinal = touchTranscriptRange(renamed, {
+      fromOrdinal: 5,
+      toOrdinal: 6,
+    });
+
+    expect(atOldOrdinal.staleSpans.map((span) => span.touchedAt)).toEqual(
+      before,
+    );
+
+    // The other direction, so this cannot pass by never warming anything: at
+    // the ordinal the index actually names, the carry IS on screen.
+    const atName = touchTranscriptRange(renamed, {
+      fromOrdinal: 20,
+      toOrdinal: 21,
+    });
+
+    expect(atName.staleSpans.map((span) => span.touchedAt)).not.toEqual(before);
+  });
+
+  it("does not warm a carry whose rows are all unverified-identity markers", () => {
+    // `seatStaleRows` returns on the marker before it considers position, so a
+    // marker row is never drawn - not at its old ordinal, not anywhere. This
+    // is only safe because the marker span that MATTERS is the active turn's,
+    // and that one is warmed by the write path
+    // (`rewriteWindowMessage` bumps `touchedAt` on every delta) rather than by
+    // the viewport.
+    const legacyTail = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 10,
+        indexRevision: null,
+        // No skeleton has arrived, so the tail is seated positionally and its
+        // row ids are markers.
+        tail: {
+          fromOrdinal: 8,
+          messages: [userMessage("m-8", 8), userMessage("m-9", 9)],
+          events: [],
+        },
+      },
+      null,
+    );
+    const rebased = applyWindowedSnapshot(
+      legacyTail,
+      {
+        epoch: 2,
+        rowCount: 10,
+        indexRevision: null,
+        tail: { fromOrdinal: 10, messages: [], events: [] },
+      },
+      null,
+    );
+    expect(rebased.staleSpans.map((span) => span.rowIds)).toEqual([["", ""]]);
+
+    const before = rebased.staleSpans.map((span) => span.touchedAt);
+    const read = touchTranscriptRange(rebased, {
+      fromOrdinal: 8,
+      toOrdinal: 10,
+    });
+
+    expect(read.staleSpans.map((span) => span.touchedAt)).toEqual(before);
+  });
+
   it("retires a stale span mixing a marker with a survivor once the skeleton completes", () => {
     // A tail the skeleton had only partly reached is seated on real ids AND
     // markers, so this span is subject to both retirement rules at once.

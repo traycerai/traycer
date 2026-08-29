@@ -918,6 +918,33 @@ describe("transcriptListRows", () => {
 
     expect(kinds(rows)).toEqual(["P:0", "P:1"]);
   });
+
+  it("suppresses the ordinal of a carried row the index names and the renderer withheld", () => {
+    // The same inference the fresh-span pass makes from the same evidence: the
+    // tier proves the body is HELD, so a missing model is renderer POLICY
+    // (an assistant row whose only segments were lifted into the pinned-todo
+    // dock) rather than a row this client is waiting for. Falling through to a
+    // placeholder makes a rebase materialize a row that was deliberately
+    // absent before it and will be absent again after it.
+    //
+    // Gated on the replacement index still NAMING the row, which is what
+    // separates a withheld row from one the rebase merely re-sliced under new
+    // ids - `withholds a sibling slice of a stale-held record from the live
+    // tail` is that case, and it must keep its placeholder.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 2,
+        spans: [],
+        skeleton: [skeletonEntry("withheld-row"), skeletonEntry("carried-row")],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [span(0, ["withheld-row", "carried-row"])],
+      }),
+      rendered: [model("carried-row")],
+    });
+
+    expect(kinds(rows)).toEqual(["H:carried-row"]);
+  });
 });
 
 describe("visibleOrdinalRange", () => {
