@@ -1,6 +1,9 @@
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type { TranscriptWindow } from "@/stores/chats/transcript-window";
+import {
+  hydratedRecords,
+  type TranscriptWindow,
+} from "@/stores/chats/transcript-window";
 import {
   assistantRowId,
   chatTranscriptEventRowId,
@@ -232,10 +235,11 @@ function transientLiveSteerRowIds(
       transientTurnKeys.add(assistantTurnKey(message));
     }
   }
+  const records = hydratedRecords(window);
   return new Set(
     projectTranscriptRows({
-      messages: window.liveMessages,
-      events: window.liveEvents,
+      messages: records.messages,
+      events: records.events,
       activeTurnId: null,
       chatId: "",
     })

@@ -2177,6 +2177,52 @@ describe("what an overlap keeps", () => {
     );
   });
 
+  it("does not retain an independent notification from an assistant turn match", () => {
+    const turnId = "turn-with-deleted-notification";
+    const seeded = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-notification", turnId, 1)],
+      }),
+    );
+    const failed: ChatEvent = {
+      ...event("send-failed-deleted", 2),
+      type: "send.failed",
+      turnId,
+      message: "failed",
+      metadata: { notificationAnchor: true },
+    };
+    const live = appendLiveRecords(seeded, {
+      messages: [],
+      events: [failed],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 2,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(rebased.snapshotProvisionalEventIds).toContain(failed.eventId);
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: [skeletonEntry(assistantRowId(turnId), 0)],
+      isFinal: true,
+    });
+    expect(rebuilt.skeletonComplete).toBe(true);
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 2,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(confirmed.liveEvents).toEqual([]);
+  });
+
   it("matches same-timestamp provisional setup windows one-to-one", () => {
     const setupEvent = (
       eventId: string,
@@ -3303,6 +3349,31 @@ describe("what an overlap keeps", () => {
     expect(updated.unavailableRowIds).toEqual([]);
     expect(
       planTranscriptHydration(updated, { fromOrdinal: 0, toOrdinal: 1 }, []),
+    ).toEqual({ fromOrdinal: 0, toOrdinal: 1 });
+  });
+
+  it("re-arms a pre-skeleton unavailable ordinal when the skeleton names a new row", () => {
+    const partial = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["stale-before-skeleton"],
+        incompleteRowIds: ["stale-before-skeleton"],
+        messages: [userMessage("stale-before-skeleton", 1)],
+      }),
+    );
+    const indexed = applySkeletonChunk(partial, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-row", 0)],
+      isFinal: true,
+    });
+
+    expect(indexed.unavailableRowIds).toEqual([]);
+    expect(indexed.unavailableRowOrdinals).toEqual([]);
+    expect(
+      planTranscriptHydration(indexed, { fromOrdinal: 0, toOrdinal: 1 }, []),
     ).toEqual({ fromOrdinal: 0, toOrdinal: 1 });
   });
 

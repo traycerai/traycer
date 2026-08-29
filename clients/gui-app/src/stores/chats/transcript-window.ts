@@ -11,6 +11,7 @@ import type {
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   assistantRowTurnKey,
+  isTurnDecoratingEvent,
   projectTranscriptRows,
   queueSteerRowId,
   type TranscriptRowDescriptor,
@@ -679,17 +680,26 @@ function withUnavailableRows(
   fromOrdinal: number,
   unavailableRowIds: ReadonlySet<string>,
 ): TranscriptWindow {
-  const unavailable = new Set(window.unavailableRowIds);
-  const unavailableOrdinals = new Set(window.unavailableRowOrdinals);
+  const unavailableByOrdinal = new Map<number, string>();
+  for (
+    let index = 0;
+    index < window.unavailableRowOrdinals.length;
+    index += 1
+  ) {
+    unavailableByOrdinal.set(
+      window.unavailableRowOrdinals[index],
+      window.unavailableRowIds[index],
+    );
+  }
   for (let index = 0; index < rowIds.length; index += 1) {
     if (!unavailableRowIds.has(rowIds[index])) continue;
-    unavailable.add(rowIds[index]);
-    unavailableOrdinals.add(fromOrdinal + index);
+    unavailableByOrdinal.set(fromOrdinal + index, rowIds[index]);
   }
+  const unavailableRows = [...unavailableByOrdinal.entries()];
   return {
     ...window,
-    unavailableRowIds: [...unavailable],
-    unavailableRowOrdinals: [...unavailableOrdinals],
+    unavailableRowIds: unavailableRows.map(([, rowId]) => rowId),
+    unavailableRowOrdinals: unavailableRows.map(([ordinal]) => ordinal),
   };
 }
 
@@ -703,11 +713,17 @@ function withoutUnavailableRows(
   const completedOrdinals = new Set(
     rowIds.map((_rowId, index) => fromOrdinal + index),
   );
-  const unavailableRowIds = window.unavailableRowIds.filter(
-    (rowId) => !completed.has(rowId),
+  const keptIndexes = window.unavailableRowOrdinals.flatMap((ordinal, index) =>
+    completedOrdinals.has(ordinal) ||
+    completed.has(window.unavailableRowIds[index])
+      ? []
+      : [index],
   );
-  const unavailableRowOrdinals = window.unavailableRowOrdinals.filter(
-    (ordinal) => !completedOrdinals.has(ordinal),
+  const unavailableRowIds = keptIndexes.map(
+    (index) => window.unavailableRowIds[index],
+  );
+  const unavailableRowOrdinals = keptIndexes.map(
+    (index) => window.unavailableRowOrdinals[index],
   );
   return unavailableRowIds.length === window.unavailableRowIds.length &&
     unavailableRowOrdinals.length === window.unavailableRowOrdinals.length
@@ -1314,6 +1330,7 @@ function namedLiveEventIds(
   // to reconstruct an association the skeleton already names.
   for (const event of window.liveEvents) {
     if (
+      isTurnDecoratingEvent(event) &&
       typeof event.turnId === "string" &&
       namedAssistantTurnKeys.has(event.turnId)
     ) {
@@ -2015,12 +2032,42 @@ export function applySkeletonChunk(
     invalidated: window.invalidated || lost,
     clock: window.clock + 1,
   };
-  const reconciled = reconcileSpansWithSkeleton(
+  const unavailableReconciled = reconcileUnavailableRowsWithSkeleton(
     next,
     chunk.fromOrdinal,
     chunk.fromOrdinal + chunk.entries.length,
   );
-  return reconciled;
+  return reconcileSpansWithSkeleton(
+    unavailableReconciled,
+    chunk.fromOrdinal,
+    chunk.fromOrdinal + chunk.entries.length,
+  );
+}
+
+function reconcileUnavailableRowsWithSkeleton(
+  window: TranscriptWindow,
+  fromOrdinal: number,
+  toOrdinal: number,
+): TranscriptWindow {
+  const keptIndexes = window.unavailableRowOrdinals.flatMap(
+    (ordinal, index) => {
+      if (ordinal < fromOrdinal || ordinal >= toOrdinal) return [index];
+      return window.skeleton[ordinal]?.rowId === window.unavailableRowIds[index]
+        ? [index]
+        : [];
+    },
+  );
+  if (keptIndexes.length === window.unavailableRowOrdinals.length)
+    return window;
+  return {
+    ...window,
+    unavailableRowIds: keptIndexes.map(
+      (index) => window.unavailableRowIds[index],
+    ),
+    unavailableRowOrdinals: keptIndexes.map(
+      (index) => window.unavailableRowOrdinals[index],
+    ),
+  };
 }
 
 /**

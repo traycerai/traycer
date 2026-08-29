@@ -664,6 +664,72 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["P:0", "H:steer:queue-live"]);
   });
 
+  it("projects a live steer with its retained span-backed user dependency", () => {
+    const turnId = "turn-live-steer-with-user";
+    const steeredMessageId = "steered-user";
+    const transient: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientLiveAssistantMessageId(turnId),
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          blockId: "steer-with-user",
+          status: "completed",
+          timestamp: 1,
+          type: "steer",
+          queueItemId: "queue-with-user",
+          messageId: steeredMessageId,
+          content: { type: "doc" },
+          mode: "safe_point",
+          sender: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 2,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+    const steeredUser: Extract<Message, { role: "user" }> = {
+      role: "user",
+      messageId: steeredMessageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: {
+        kind: "user",
+        content: { type: "doc" },
+        browserAnnotations: [],
+      },
+      timestamp: 1,
+      sessionAnchor: null,
+    };
+    const retainedSpan = {
+      ...span(0, [assistantRowId("retained-sibling")]),
+      messages: [steeredUser],
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [retainedSpan],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveMessages: [transient],
+      }),
+      rendered: [modelWithoutPersistentMessageId(steeredMessageId)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", `H:${steeredMessageId}`]);
+  });
+
   it("does not retain an unrelated historical orphan steer during invalidation", () => {
     const turnId = "turn-unrelated-live";
     const transient: Extract<Message, { role: "assistant" }> = {
