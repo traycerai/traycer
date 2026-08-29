@@ -166,6 +166,29 @@ function skeletonOrdinalByRowId(
 }
 
 /**
+ * Every row identity backed by a hydrated span, keyed by the spans array.
+ *
+ * An invalidated transcript still re-renders on every streaming token while
+ * its retained spans change only when hydration/index state changes. Keep the
+ * O(window) membership fold off that token path, just like the skeleton map.
+ */
+const spanRowIdCache = new WeakMap<
+  TranscriptWindow["spans"],
+  ReadonlySet<string>
+>();
+
+function spanRowIds(spans: TranscriptWindow["spans"]): ReadonlySet<string> {
+  const cached = spanRowIdCache.get(spans);
+  if (cached !== undefined) return cached;
+  const rowIds = new Set<string>();
+  for (const span of spans) {
+    for (const rowId of span.rowIds) rowIds.add(rowId);
+  }
+  spanRowIdCache.set(spans, rowIds);
+  return rowIds;
+}
+
+/**
  * The row ids of the records this client holds LIVE - pushed whole by the host
  * and not yet superseded by a span.
  *
@@ -325,18 +348,11 @@ export function transcriptListRows(input: {
     // identity-free placeholders until the replacement index lands; appending
     // them too would draw the same history twice on skeleton-loss paths.
     const liveRowIds = liveRecordRowIds(window);
-    const spanRowIds = new Set<string>();
-    for (const span of window.spans) {
-      for (const rowId of span.rowIds) spanRowIds.add(rowId);
-    }
-    const skeletonRowIds = new Set(
-      window.skeleton.flatMap((entry) =>
-        entry === undefined ? [] : [entry.rowId],
-      ),
-    );
+    const retainedSpanRowIds = spanRowIds(window.spans);
+    const skeletonRowIds = skeletonOrdinalByRowId(window.skeleton);
     const unplacedRendered = rendered.filter(
       (model) =>
-        !spanRowIds.has(model.id) &&
+        !retainedSpanRowIds.has(model.id) &&
         !skeletonRowIds.has(model.id) &&
         (isExplicitlyPendingOrStreaming(model) ||
           liveRowIds.has(model.id) ||
