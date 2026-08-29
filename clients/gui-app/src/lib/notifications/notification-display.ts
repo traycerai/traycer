@@ -15,7 +15,7 @@ import {
 } from "@/stores/notifications/merged-notifications";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
 import type {
-  HostNotificationEntryV21,
+  HostNotificationEntryV22,
   HostNotificationsCloudFeedRowV11,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -415,7 +415,7 @@ function activationRoute(
  * focus filtering to collapse the fan-out it exists to collapse.
  */
 export function displayHostChannelEmission(
-  entries: ReadonlyArray<HostNotificationEntryV21>,
+  entries: ReadonlyArray<HostNotificationEntryV22>,
   target: NotificationDisplayTarget,
   originHostId: string | null,
 ): void {
@@ -557,6 +557,10 @@ function hostEntityReplaceKey(
     case "epic":
     case "terminal":
       return epicReplaceKey(payload.epicId);
+    // Per-session, not per-epic: two parked sessions are two separate people-
+    // needed steps, and collapsing them would hide one behind the other.
+    case "browserSession":
+      return `host:browser-session:${payload.sessionId}`;
     // Falls through to the per-row id key. Coalescing by entity is right for
     // repeated activity ON one chat or epic; two finished commands are two
     // separate results, and replacing the first toast with the second would

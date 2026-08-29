@@ -1628,6 +1628,13 @@ function navigationPayloadFromKnown(
     // whose operation payload this build cannot parse never reaches here at
     // all - it renders with common-field copy and no deep link, which is the
     // designed degradation rather than a guessed destination.
+    case "browser_human_needed":
+      return {
+        kind: "browserSession",
+        epicId: known.epicId,
+        sessionId: known.sessionId,
+        tabId: known.tabId,
+      };
     case "worktree_deletion":
       return {
         kind: "hostSurface",

@@ -21,6 +21,8 @@ import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import { TILE_KIND_BROWSER_SESSION } from "@/stores/epics/canvas/tile-kinds";
+import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import {
   type ChatTranscriptJumpTarget,
   useChatTranscriptJumpStore,
@@ -34,6 +36,7 @@ export type NotificationPayloadKind =
   | "interview"
   | "chat"
   | "terminal"
+  | "browserSession"
   | "hostSurface";
 
 export interface SessionNotificationPayload {
@@ -95,6 +98,19 @@ export interface TerminalNotificationPayload {
 }
 
 /**
+ * A parked browser session's tile. `sessionId`/`tabId` address the tile
+ * deterministically (its canvas node id is `browser-session:<sessionId>:<tabId>`),
+ * and the session is host-local for life - so this routes only to a tile bound
+ * to the row's origin host, never to a same-id tile on another machine.
+ */
+export interface BrowserSessionNotificationPayload {
+  readonly kind: "browserSession";
+  readonly epicId: string;
+  readonly sessionId: string;
+  readonly tabId: string;
+}
+
+/**
  * A host-managed surface rather than a document inside an epic.
  *
  * One destination FAMILY, not one payload kind per operation: the notification
@@ -123,6 +139,7 @@ export type NotificationPayload =
   | InterviewNotificationPayload
   | ChatNotificationPayload
   | TerminalNotificationPayload
+  | BrowserSessionNotificationPayload
   | HostSurfaceNotificationPayload;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -223,6 +240,18 @@ function parseTerminalPayload(
   };
 }
 
+function parseBrowserSessionPayload(
+  value: Record<string, unknown>,
+): BrowserSessionNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const sessionId = readString(value.sessionId);
+  const tabId = readString(value.tabId);
+  if (epicId === null || sessionId === null || tabId === null) {
+    return null;
+  }
+  return { kind: "browserSession", epicId, sessionId, tabId };
+}
+
 function parseApprovalPayload(
   value: Record<string, unknown>,
 ): ApprovalNotificationPayload | null {
@@ -303,6 +332,8 @@ export function parseNotificationPayload(
       return parseChatPayload(value);
     case "terminal":
       return parseTerminalPayload(value);
+    case "browser_human_needed":
+      return parseBrowserSessionPayload(value);
     case "approval":
       return parseApprovalPayload(value);
     case "interview":
@@ -357,6 +388,7 @@ export function isNotificationPayloadRoutable(
     case "chat":
     case "interview":
     case "terminal":
+    case "browserSession":
     case "hostSurface":
       return true;
     case "approval":
@@ -432,6 +464,13 @@ export function routeNotificationForHost(
     case "terminal":
       routeTerminalNotification(navigate, payload, receivedAt);
       return true;
+    case "browserSession":
+      return routeBrowserSessionNotification(
+        navigate,
+        payload,
+        receivedAt,
+        originHostId,
+      );
     case "approval":
       if (payload.epicId === undefined || payload.chatId === undefined) {
         return false;
@@ -497,6 +536,73 @@ export function routeNotificationForHost(
     case "session":
       return false;
   }
+}
+
+/**
+ * Focuses the parked browser tile, or opens its epic when no such tile is on a
+ * canvas.
+ *
+ * Reuses the terminal row's machinery exactly - locate the tile, prepare its
+ * nested focus, activate its tab - because a browser tile is addressed the same
+ * way. `false` when it fell through to the hostless epic intent, so the caller
+ * can decline to credit an activation that never reached the parked host.
+ */
+function routeBrowserSessionNotification(
+  navigate: NotificationNavigate,
+  payload: BrowserSessionNotificationPayload,
+  receivedAt: number,
+  originHostId: string | null,
+): boolean {
+  const tileId = browserSessionTileId(payload);
+  const state = useEpicCanvasStore.getState();
+  const match = Object.values(state.tabsById)
+    .flatMap((tab) => {
+      if (tab === undefined || tab.epicId !== payload.epicId) return [];
+      const found = findOpenArtifactInTab(tab.tabId, tileId);
+      if (found === null) return [];
+      const tile =
+        state.canvasByTabId[tab.tabId]?.tilesByInstanceId[found.instanceId];
+      if (tile?.type !== TILE_KIND_BROWSER_SESSION) return [];
+      if (originHostId !== null && tile.hostId !== originHostId) return [];
+      return [{ tabId: tab.tabId, ...found }];
+    })
+    .at(0);
+  if (match === undefined) {
+    navigateToTabIntent(
+      navigate,
+      openOrFocusEpicIntent({
+        epicId: payload.epicId,
+        focus: {
+          focusedAt: receivedAt,
+          focusArtifactId: tileId,
+          focusThreadId: undefined,
+          migrationSource: undefined,
+        },
+      }),
+      undefined,
+    );
+    return false;
+  }
+  navigateToTabIntent(
+    navigate,
+    existingEpicTabIntentWithNestedFocus({
+      epicId: payload.epicId,
+      tabId: match.tabId,
+      focus: {
+        focusedAt: receivedAt,
+        focusArtifactId: tileId,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+      },
+      nestedFocus: state.prepareSetActiveTileTabFocusTarget(
+        match.tabId,
+        match.paneId,
+        match.instanceId,
+      ),
+    }),
+    undefined,
+  );
+  return true;
 }
 
 /**

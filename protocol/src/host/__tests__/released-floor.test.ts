@@ -27,13 +27,14 @@ describe("released floor production module", () => {
       SERVES_EVERY_INSTALLED_MAJOR,
     );
 
-    // Latest advertised major for list is 2 (native projections), at minor 1
-    // (the `host.operation.finished` arm); major 1 remains registered for the
-    // frozen all/unread bridge, and 2.0 stays installed so an older peer
-    // negotiates down to it, but optional capability manifests always
-    // advertise the method's latest major AND minor.
+    // Latest advertised major for list is 2 (native projections), at minor 2
+    // (the `browser.human.needed` arm, after 2.1's `host.operation.finished`);
+    // major 1 remains registered for the frozen all/unread bridge, and 2.0/2.1
+    // stay installed so an older peer negotiates down to one of them, but
+    // optional capability manifests always advertise the method's latest major
+    // AND minor.
     expect(split.optionalManifest).toMatchObject({
-      "host.notifications.list": { major: 2, minor: 1 },
+      "host.notifications.list": { major: 2, minor: 2 },
       "host.notifications.markRead": { major: 1, minor: 0 },
       "host.notifications.resolve": { major: 1, minor: 0 },
       "host.notifications.markAllRead": { major: 1, minor: 0 },
