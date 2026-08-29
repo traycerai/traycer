@@ -24,6 +24,7 @@ import {
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import {
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
+  type ArtifactBodySeedMode,
   type MainToWorkerEvent,
   type RuntimeWorkerLogEntry,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
@@ -56,7 +57,35 @@ export interface EpicRuntimeWorkerCore {
    * transferred out from under it.
    */
   readAttachmentBytes(hash: string): Promise<Uint8Array | null>;
+  /**
+   * The cold bytes for an artifact body, or `null` when this replica cannot
+   * serve one. The live `Y.Doc` is built from these on the MAIN thread, which
+   * is where Tiptap needs it.
+   */
+  materializeBody(
+    artifactId: string,
+  ): Promise<ArtifactBodyMaterialization | null>;
+  /**
+   * Take an artifact body's encoded state back and settle it.
+   *
+   * Answers only once the bytes are durably held: the main thread keeps the
+   * live doc until this resolves, so an early `accepted: true` is a window in
+   * which an edit exists nowhere. `accepted: false` tells the main thread to
+   * keep the doc.
+   */
+  demoteBody(input: {
+    readonly docKey: string;
+    readonly generation: number;
+    readonly update: Uint8Array;
+  }): Promise<{ readonly accepted: boolean; readonly settledBytes: number }>;
   dispose(): void;
+}
+
+export interface ArtifactBodyMaterialization {
+  readonly docKey: string;
+  readonly update: Uint8Array;
+  readonly seedMode: ArtifactBodySeedMode;
+  readonly hostStateVector: string | null;
 }
 
 export interface EpicRuntimeWorkerHost {
@@ -97,6 +126,44 @@ export function startEpicRuntimeWorkerHost(
         value: { bytes: prepared.bytes },
         transfer: prepared.transfer,
       };
+    },
+    "body/materialize": async (request) => {
+      const held =
+        core === null ? null : await core.materializeBody(request.artifactId);
+      if (held === null) {
+        // No core, or no body for that artifact. Both reach the main thread as
+        // an `unavailable` grant, which is what a lease with nothing behind it
+        // has always been.
+        return {
+          value: {
+            docKey: null,
+            update: null,
+            seedMode: "full",
+            hostStateVector: null,
+          },
+          transfer: NO_TRANSFER,
+        };
+      }
+      const prepared = takeBytesForTransfer(held.update);
+      return {
+        value: {
+          docKey: held.docKey,
+          update: prepared.bytes,
+          seedMode: held.seedMode,
+          hostStateVector: held.hostStateVector,
+        },
+        transfer: prepared.transfer,
+      };
+    },
+    "body/demote": async (request) => {
+      // Refusing is the only safe answer without a core: the main thread keeps
+      // the live doc on `accepted: false`, and an unowned `true` would tell it
+      // to drop bytes nothing has stored.
+      const settled =
+        core === null
+          ? { accepted: false, settledBytes: 0 }
+          : await core.demoteBody(request);
+      return { value: settled, transfer: NO_TRANSFER };
     },
   };
 

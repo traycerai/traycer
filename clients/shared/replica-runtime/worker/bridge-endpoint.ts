@@ -323,6 +323,20 @@ async function serve(
           transfer: reply.transfer,
         };
       }
+      case "body/materialize": {
+        const reply = await handlers["body/materialize"](call.request);
+        return {
+          result: { outcome: "ok", value: reply.value },
+          transfer: reply.transfer,
+        };
+      }
+      case "body/demote": {
+        const reply = await handlers["body/demote"](call.request);
+        return {
+          result: { outcome: "ok", value: reply.value },
+          transfer: reply.transfer,
+        };
+      }
       default:
         return unservedCall(call);
     }

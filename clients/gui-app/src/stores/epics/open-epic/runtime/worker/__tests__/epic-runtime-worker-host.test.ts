@@ -76,12 +76,31 @@ describe("startEpicRuntimeWorkerHost", () => {
   });
 
   it("holds a bearer push received before bootstrap and clears it on absent", async () => {
-    const { pair, main, host } = createFixture();
+    const { main, host } = createFixture();
 
     main.emit(
       {
         kind: "bearer",
         bearer: { state: "present", token: "token", userId: "user-1" },
+      },
+      [],
+    );
+    await expect(main.call("bearer/probe", {}, [])).resolves.toEqual({
+      state: "present",
+      userId: "user-1",
+    });
+
+    // The handshake arriving afterwards must not disturb what is held. The
+    // spawner sends bootstrap first in production, so a holder that reset on
+    // bootstrap would look fine there and lose the credential only in the
+    // ordering nobody exercises.
+    main.emit(
+      {
+        kind: "bootstrap",
+        bootstrap: {
+          protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION,
+          windowLabel: "window-1",
+        },
       },
       [],
     );

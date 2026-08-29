@@ -1,0 +1,258 @@
+/**
+ * The main-thread half of the artifact-body lease, once the cold tier lives in
+ * the worker.
+ *
+ * The shape is forced by one hard constraint and one ruling. The constraint:
+ * Tiptap binds a `Y.XmlFragment` synchronously by reference, so a materialized
+ * body is a MAIN-THREAD object and cannot become a promise at the binding site.
+ * The ruling: demote is ACKNOWLEDGED - the main thread keeps the live doc until
+ * the worker says it has settled the bytes - so there is never a moment where
+ * an edit exists in neither place.
+ *
+ * `release()` is therefore synchronous and returns `void`, and the doc is
+ * dropped by the ACK HANDLER rather than by the caller. That is what keeps this
+ * out of the lease hook's signature: from the hook's side nothing changed.
+ *
+ * This module is deliberately free of `yjs`. It owns the lifecycle - reference
+ * counts, generations, the demote state machine, what the accountant is told
+ * and when - and the live doc itself is owned by whoever installs it, addressed
+ * only by an opaque `docKey`. Splitting it that way is what makes the
+ * lifecycle testable without standing up a document tier.
+ */
+import {
+  BridgeDisposedError,
+  type MainBridgeEndpoint,
+} from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
+import {
+  NO_TRANSFER,
+  takeBytesForTransfer,
+} from "@traycer-clients/shared/replica-runtime/worker/transferable-bytes";
+import type { ArtifactBodySeedMode } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+
+/**
+ * The live main-thread documents, as this module addresses them.
+ *
+ * Every method is keyed by `docKey` and none of them mention `yjs`: installing
+ * bytes, encoding them back, and dropping the doc are the document tier's job,
+ * and the seed-mode rules that go with them (a `"full"` snapshot with a CHANGED
+ * guid REPLACES rather than splices) live there too.
+ */
+export interface MainThreadBodyDocs {
+  install(input: {
+    readonly docKey: string;
+    readonly update: Uint8Array;
+    readonly seedMode: ArtifactBodySeedMode;
+    readonly hostStateVector: string | null;
+  }): void;
+  /** The doc's current state, for handing back to the worker. */
+  encode(docKey: string): Uint8Array;
+  /**
+   * Release the live doc. Called ONLY from an accepted demote's ack handler -
+   * never from `release()`, and never on a rejection.
+   */
+  drop(docKey: string): void;
+  has(docKey: string): boolean;
+}
+
+/**
+ * What the byte accountant is told, and when.
+ *
+ * The ordering is the contract, not the call list. A doc awaiting its demote
+ * ack is still HOT - it is still resident on this thread - so its charge stands
+ * until the ack, and `markDemoting` is what stops the accountant choosing it
+ * again for a demotion that is already under way.
+ */
+export interface HotBodyBudget {
+  chargeHot(docKey: string): void;
+  /**
+   * This doc is on its way out; do not select it for demotion again. Cleared
+   * by {@link clearDemoting} if the lease is re-acquired before the ack.
+   */
+  markDemoting(docKey: string): void;
+  clearDemoting(docKey: string): void;
+  /**
+   * The demote landed: release the hot charge and record the cold bytes.
+   *
+   * One call rather than an uncharge plus a charge, because the two must not
+   * be separable - a hot release that happened without the matching cold
+   * record is a doc the accountant believes is free and the store still has.
+   * `settledBytes` is the WORKER's count for what it actually kept.
+   */
+  settleCold(docKey: string, settledBytes: number): void;
+}
+
+export type ArtifactBodyGrant =
+  | { readonly kind: "granted"; readonly docKey: string; release(): void }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
+export interface ArtifactBodyLeaseBridge {
+  acquire(artifactId: string): Promise<ArtifactBodyGrant>;
+  /**
+   * Re-post every demote that was posted but never acknowledged.
+   *
+   * Called after a worker respawn. The main thread still holds those docs -
+   * that is the entire reason an acknowledged demote holds them - so the bytes
+   * are still available to send. Same generation as the original post, so a
+   * worker that somehow received both settles once.
+   */
+  resendUnacknowledgedDemotes(): void;
+  /** Doc keys posted for demotion and not yet settled. A test seam. */
+  unacknowledgedDemoteKeys(): readonly string[];
+}
+
+interface BodyEntry {
+  leases: number;
+  /**
+   * Bumped on every demote post AND on every re-acquire.
+   *
+   * One counter serving both is what makes a late ack recognisable: an ack
+   * naming a generation that is no longer current belongs to a demote the
+   * lease outlived, and the only correct response to it is to do nothing.
+   */
+  generation: number;
+  demotingGeneration: number | null;
+}
+
+export function createArtifactBodyLeaseBridge(options: {
+  readonly bridge: MainBridgeEndpoint;
+  readonly docs: MainThreadBodyDocs;
+  readonly budget: HotBodyBudget;
+}): ArtifactBodyLeaseBridge {
+  const entries = new Map<string, BodyEntry>();
+
+  function postDemote(docKey: string, generation: number): void {
+    const encoded = takeBytesForTransfer(options.docs.encode(docKey));
+    void options.bridge
+      .call(
+        "body/demote",
+        { docKey, generation, update: encoded.bytes },
+        encoded.transfer,
+      )
+      .then(
+        (answer) => {
+          const entry = entries.get(docKey);
+          // A late ack for a lease that has since been re-acquired. The doc is
+          // live again under a newer generation; dropping it here would take
+          // the document out from under a bound editor.
+          if (entry === undefined || entry.demotingGeneration !== generation) {
+            return;
+          }
+          // The worker declined this generation. Keep the doc AND keep the
+          // entry pending, so a later resend can settle it - a declined demote
+          // that silently dropped the doc is the same data loss as an accepted
+          // one that never arrived.
+          if (!answer.accepted) return;
+          entry.demotingGeneration = null;
+          entries.delete(docKey);
+          options.budget.settleCold(docKey, answer.settledBytes);
+          options.docs.drop(docKey);
+        },
+        (cause: unknown) => {
+          // The worker went away mid-demote. The doc stays live and the entry
+          // stays pending; `resendUnacknowledgedDemotes` re-posts it to the
+          // replacement. Any other rejection gets the same treatment for the
+          // same reason: the one thing that must never happen is dropping the
+          // doc without a settled ack.
+          void (cause instanceof BridgeDisposedError);
+        },
+      );
+  }
+
+  return {
+    async acquire(artifactId): Promise<ArtifactBodyGrant> {
+      const existing = findByArtifact(entries, artifactId);
+      if (existing !== null) {
+        const { docKey, entry } = existing;
+        // Re-acquired before the ack landed. The doc never left, so this is
+        // not a round trip: cancel the pending drop by moving the generation
+        // past it and hand back the same document.
+        if (entry.demotingGeneration !== null) {
+          entry.demotingGeneration = null;
+          entry.generation += 1;
+          options.budget.clearDemoting(docKey);
+        }
+        entry.leases += 1;
+        return { kind: "granted", docKey, release: releaseFor(docKey) };
+      }
+
+      const answer = await options.bridge.call(
+        "body/materialize",
+        { artifactId },
+        NO_TRANSFER,
+      );
+      if (answer.docKey === null || answer.update === null) {
+        return { kind: "unavailable", reason: `no body for ${artifactId}` };
+      }
+      const docKey = answer.docKey;
+      // A concurrent acquire for the same artifact may have installed it while
+      // this call was in flight; adopt that installation rather than replacing
+      // a document an editor may already be bound to.
+      const raced = entries.get(docKey);
+      if (raced !== undefined) {
+        raced.leases += 1;
+        return { kind: "granted", docKey, release: releaseFor(docKey) };
+      }
+      options.docs.install({
+        docKey,
+        update: answer.update,
+        seedMode: answer.seedMode,
+        hostStateVector: answer.hostStateVector,
+      });
+      entries.set(docKey, {
+        leases: 1,
+        generation: 1,
+        demotingGeneration: null,
+      });
+      options.budget.chargeHot(docKey);
+      return { kind: "granted", docKey, release: releaseFor(docKey) };
+    },
+    resendUnacknowledgedDemotes(): void {
+      for (const [docKey, entry] of entries) {
+        if (entry.demotingGeneration === null) continue;
+        postDemote(docKey, entry.demotingGeneration);
+      }
+    },
+    unacknowledgedDemoteKeys(): readonly string[] {
+      const keys: string[] = [];
+      for (const [docKey, entry] of entries) {
+        if (entry.demotingGeneration !== null) keys.push(docKey);
+      }
+      return keys;
+    },
+  };
+
+  function releaseFor(docKey: string): () => void {
+    let live = true;
+    return () => {
+      // Idempotent per grant. Without this a caller's `finally` backstop
+      // running after its own early release would decrement a second time and
+      // demote a document another holder is still using.
+      if (!live) return;
+      live = false;
+      const entry = entries.get(docKey);
+      if (entry === undefined) return;
+      entry.leases -= 1;
+      if (entry.leases > 0) return;
+      // Already on its way out - a second release before the ack must not post
+      // a second demote, nor tell the accountant twice.
+      if (entry.demotingGeneration !== null) return;
+      entry.generation += 1;
+      entry.demotingGeneration = entry.generation;
+      options.budget.markDemoting(docKey);
+      postDemote(docKey, entry.generation);
+    };
+  }
+}
+
+function findByArtifact(
+  entries: Map<string, BodyEntry>,
+  artifactId: string,
+): { readonly docKey: string; readonly entry: BodyEntry } | null {
+  // The lane arm answers `docKey === artifactId`; the `@1` arm answers a room
+  // id, which this map is keyed by. A held entry is therefore findable by
+  // artifact id only on the lane arm, and on the `@1` arm a re-acquire goes
+  // through `body/materialize` - which is correct, because only the worker
+  // knows which room now hosts that artifact.
+  const direct = entries.get(artifactId);
+  return direct === undefined ? null : { docKey: artifactId, entry: direct };
+}

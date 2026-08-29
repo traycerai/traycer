@@ -97,6 +97,27 @@ export type WorkerToMainEvent =
   | { readonly kind: "log"; readonly entry: RuntimeWorkerLogEntry }
   | {
       /**
+       * A published projection slice.
+       *
+       * `value` is `unknown` at this layer, and deliberately so: the shape it
+       * carries is the STORE's published slice, which this module has no
+       * business knowing and which would drift the moment the store's owner
+       * added a field. The composition root supplies the narrowing, exactly as
+       * it does for a call response - see `subscribeRuntimeProjection`.
+       *
+       * `revision` is the sink's own (`ProjectionSink.revision()`), so the two
+       * sides share one ordering. It is strictly increasing per worker, and
+       * the main side DROPS a revision it has already applied: a re-delivered
+       * publication that rolled the UI back to an older slice would be
+       * indistinguishable from a legitimate update, because the sink publishes
+       * WHOLE values rather than patches.
+       */
+      readonly kind: "projection";
+      readonly revision: number;
+      readonly value: unknown;
+    }
+  | {
+      /**
        * The worker failed in a way it cannot continue from.
        *
        * Distinct from a logged `error`: a fatal says the runtime behind this
@@ -146,7 +167,65 @@ export interface RuntimeWorkerCallMap {
     readonly request: { readonly hash: string };
     readonly response: { readonly bytes: Uint8Array | null };
   };
+  /**
+   * Materialize an artifact body: the worker hands back the cold bytes, the
+   * main thread builds the live `Y.Doc` from them.
+   *
+   * The split is the hard constraint made concrete. Tiptap binds a
+   * `Y.XmlFragment` synchronously by reference, so the live doc must be a
+   * main-thread object; the ENCODED history is what the worker keeps, and it
+   * is the expensive part.
+   *
+   * `docKey` is the identity the lease is held under - the room id on the `@1`
+   * arm, the artifact id on the lane arm - and it comes from the worker
+   * because only the worker knows which arm is serving. `update: null` means
+   * the body is not available (no such artifact, or not served yet), which is
+   * the `unavailable` lease grant.
+   */
+  readonly "body/materialize": {
+    readonly request: { readonly artifactId: string };
+    readonly response: {
+      readonly docKey: string | null;
+      readonly update: Uint8Array | null;
+      readonly seedMode: ArtifactBodySeedMode;
+      /**
+       * The host watermark the bytes were encoded against, base64, or `null`
+       * for the named not-established state. Never a defaulted `""` - T12
+       * ruled that a null watermark is a state with its own meaning.
+       */
+      readonly hostStateVector: string | null;
+    };
+  };
+  /**
+   * Hand a body's encoded state back to the worker and ask it to keep it.
+   *
+   * Answered only once the worker has settled the bytes; the main thread holds
+   * the live doc until then. `accepted: false` means the worker declined this
+   * generation - it has already accepted a newer one, or the lease was
+   * re-acquired - and the main thread must NOT drop the doc.
+   */
+  readonly "body/demote": {
+    readonly request: {
+      readonly docKey: string;
+      readonly generation: number;
+      readonly update: Uint8Array;
+    };
+    readonly response: {
+      readonly accepted: boolean;
+      readonly settledBytes: number;
+    };
+  };
 }
+
+/**
+ * How a materialized body's bytes relate to what the client already had.
+ *
+ * Mirrors T5's tier signature rather than re-inventing it: `"full"` with a
+ * CHANGED doc guid REPLACES (splicing two histories under one artifact id is
+ * the failure that rule exists for), `"full"` with an unchanged guid installs,
+ * and `"delta-against-offer"` merges into the offer's replica.
+ */
+export type ArtifactBodySeedMode = "full" | "delta-against-offer";
 
 export type BearerProbe =
   | { readonly state: "present"; readonly userId: string }
@@ -207,6 +286,8 @@ const CALL_BUILDERS: {
 } = {
   "bearer/probe": (request) => ({ kind: "bearer/probe", request }),
   "attachment/read": (request) => ({ kind: "attachment/read", request }),
+  "body/materialize": (request) => ({ kind: "body/materialize", request }),
+  "body/demote": (request) => ({ kind: "body/demote", request }),
 };
 
 /** Builds the envelope for one call, with its kind and request correlated. */
@@ -320,6 +401,23 @@ export const CALL_RESPONSE_PARSERS: {
     if (!isRecord(value)) return null;
     if (value.bytes === null) return { bytes: null };
     return isUint8Array(value.bytes) ? { bytes: value.bytes } : null;
+  },
+  "body/materialize": (value) => {
+    if (!isRecord(value)) return null;
+    const { docKey, update, seedMode, hostStateVector } = value;
+    if (docKey !== null && typeof docKey !== "string") return null;
+    if (update !== null && !isUint8Array(update)) return null;
+    if (seedMode !== "full" && seedMode !== "delta-against-offer") return null;
+    if (hostStateVector !== null && typeof hostStateVector !== "string") {
+      return null;
+    }
+    return { docKey, update, seedMode, hostStateVector };
+  },
+  "body/demote": (value) => {
+    if (!isRecord(value)) return null;
+    const { accepted, settledBytes } = value;
+    if (typeof accepted !== "boolean") return null;
+    return typeof settledBytes === "number" ? { accepted, settledBytes } : null;
   },
 };
 
