@@ -2439,6 +2439,40 @@ describe("what an overlap keeps", () => {
     expect(confirmed.liveMessages).toEqual([]);
   });
 
+  it("prunes provisional ids after their live records are span-superseded", () => {
+    const messageId = "accepted-before-span-supersession";
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage(messageId, 1)],
+      events: [],
+    });
+    const rebuilding = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: null,
+      tail: { fromOrdinal: 2, messages: [], events: [] },
+    });
+    expect(rebuilding.snapshotProvisionalMessageIds).toContain(messageId);
+    const superseded = applyRangeResponse(
+      rebuilding,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [messageId],
+        messages: [userMessage(messageId, 1)],
+      }),
+    );
+    expect(superseded.liveMessages).toEqual([]);
+
+    const intermediate = applyWindowedSnapshot(superseded, {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: null,
+      tail: { fromOrdinal: 2, messages: [], events: [] },
+    });
+    expect(intermediate.skeletonComplete).toBe(false);
+    expect(intermediate.snapshotProvisionalMessageIds).toEqual([]);
+  });
+
   it("tracks retained users across a same-epoch null-revision rebuild", () => {
     const messageId = "accepted-before-same-epoch-rebuild";
     const live = appendLiveRecords(

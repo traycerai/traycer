@@ -1673,10 +1673,20 @@ export function applyWindowedSnapshot(
       .filter((event) => provisionalRowProducingEventIds.has(event.eventId))
       .map((event) => event.eventId),
   ]);
+  const heldProvisionalMessageIds = new Set(
+    base.liveMessages.map((message) => message.messageId),
+  );
+  const heldProvisionalEventIds = new Set(
+    base.liveEvents.map((event) => event.eventId),
+  );
   const snapshotBase = {
     ...base,
-    snapshotProvisionalMessageIds: [...snapshotProvisionalMessageIds],
-    snapshotProvisionalEventIds: [...snapshotProvisionalEventIds],
+    snapshotProvisionalMessageIds: [...snapshotProvisionalMessageIds].filter(
+      (messageId) => heldProvisionalMessageIds.has(messageId),
+    ),
+    snapshotProvisionalEventIds: [...snapshotProvisionalEventIds].filter(
+      (eventId) => heldProvisionalEventIds.has(eventId),
+    ),
     unavailableRowIds: [],
     unavailableRowOrdinals: [],
   };
