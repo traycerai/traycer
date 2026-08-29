@@ -19,7 +19,6 @@ import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runne
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
 
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
 const playNotificationChimeSoundMock = vi.hoisted(() => vi.fn());
@@ -39,9 +38,7 @@ afterEach(() => {
   cleanup();
   navigateToSettingsSectionMock.mockClear();
   playNotificationChimeSoundMock.mockClear();
-  useSettingsStore.setState({
-    notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
-  });
+  useSettingsStore.setState(useSettingsStore.getInitialState(), true);
 });
 
 describe("<AppNotificationsSettingsPanel />", () => {
@@ -110,6 +107,24 @@ describe("<AppNotificationsSettingsPanel />", () => {
 
     expect(playNotificationChimeSoundMock).toHaveBeenCalledWith("rift");
     expect(persistSelection).not.toHaveBeenCalled();
+  });
+
+  it("previews a chime activated by a synthesized click", () => {
+    const persistSelection = vi.fn();
+    useSettingsStore.setState({
+      setNotificationChimeSoundForEvent: persistSelection,
+    });
+    renderPanel({ pushPermission: null, systemSettings: null });
+
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Failure sound" }), {
+      key: "ArrowDown",
+    });
+    fireEvent.click(screen.getByRole("option", { name: "Classic" }), {
+      detail: 0,
+    });
+
+    expect(playNotificationChimeSoundMock).toHaveBeenCalledWith("classic");
+    expect(persistSelection).toHaveBeenCalledWith("failure", "classic");
   });
 
   it("owns this phone's OS push permission", async () => {

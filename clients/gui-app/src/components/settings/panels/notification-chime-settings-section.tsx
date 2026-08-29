@@ -132,6 +132,13 @@ function ChimeOption(props: { readonly sound: NotificationChimeSound }) {
     <SelectItem
       value={props.sound}
       onPointerUp={preview}
+      onClick={(event) => {
+        // Pointer activations already preview on pointer-up, before Radix
+        // persists and closes the menu. A zero-detail click is synthesized
+        // (for example by a screen reader or HTMLElement.click()) and has no
+        // pointer event to provide that preview.
+        if (event.detail === 0) preview();
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") preview();
       }}
