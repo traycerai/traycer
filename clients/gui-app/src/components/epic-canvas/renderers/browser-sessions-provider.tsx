@@ -31,6 +31,7 @@ import {
   type BrowserSessionsState,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   BrowserSessionsContext,
@@ -71,11 +72,13 @@ export function BrowserSessionsHostProvider(props: {
 }) {
   const runnerHost = useRunnerHost();
   const browserView = runnerHost.browserView;
+  const localHostId = useReactiveLocalHostId();
   const { state: sessions, coordinatorKey } = useBrowserSessions({
     hostId: props.hostId,
     hostClient: props.hostClient,
     epicId: props.epicId,
     browserView,
+    localHostId,
   });
   return (
     <BrowserSessionsCoordinatorKeyContext.Provider value={coordinatorKey}>
@@ -122,6 +125,8 @@ interface UseBrowserSessionsArgs {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly browserView: BrowserViewBridge | null;
+  /** This machine's host id, declared as the Electron locality signal. */
+  readonly localHostId: string | null;
 }
 
 interface BrowserSessionsHookResult {
@@ -132,7 +137,7 @@ interface BrowserSessionsHookResult {
 function useBrowserSessions(
   args: UseBrowserSessionsArgs,
 ): BrowserSessionsHookResult {
-  const { hostId, epicId, browserView } = args;
+  const { hostId, epicId, browserView, localHostId } = args;
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
   const transportReady =
     args.hostClient !== null &&
@@ -164,7 +169,7 @@ function useBrowserSessions(
         consumerId,
         epicId,
         owner: selectedOwner,
-        runtime: { browserView, openTransport },
+        runtime: { browserView, localHostId, openTransport },
         createIfMissing: transportReady,
       }),
   );
@@ -178,9 +183,10 @@ function useBrowserSessions(
     if (coordinatorKey === null) return;
     upsertBrowserSessionsCoordinatorConsumer(coordinatorKey, consumerId, {
       browserView,
+      localHostId,
       openTransport,
     });
-  }, [browserView, consumerId, coordinatorKey, openTransport]);
+  }, [browserView, consumerId, coordinatorKey, localHostId, openTransport]);
 
   const subscribe = useCallback(
     (listener: () => void) =>

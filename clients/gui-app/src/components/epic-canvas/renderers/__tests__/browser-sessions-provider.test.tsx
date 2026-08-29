@@ -41,6 +41,11 @@ const hookState = vi.hoisted(() => ({
   transportKey: "authenticated-host-test",
   ownerIdentityKey: "local\u0000host-test\u0000user-test",
   browserViewBridge: null as FakeBridge | null,
+  localHostId: "host-test" as string | null,
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => hookState.localHostId,
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
@@ -532,11 +537,13 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
     installTransport(false);
     hookState.browserViewBridge = null;
+    hookState.localHostId = "host-test";
   });
 
   afterEach(() => {
     cleanup();
     hookState.browserViewBridge = null;
+    hookState.localHostId = "host-test";
   });
 
   it("opens exactly one epic-scoped browser.sessions subscription", () => {
@@ -782,6 +789,71 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       );
     });
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
+  });
+
+  it("declares this machine's host id as the readiness locality signal", () => {
+    hookState.localHostId = "local-machine";
+    installNativeBridge(new FakeBridge());
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toEqual([
+      {
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+        coLocatedHostId: "local-machine",
+      },
+    ]);
+  });
+
+  it("waits for the local host id, then declares it once it resolves", () => {
+    hookState.localHostId = null;
+    installNativeBridge(new FakeBridge());
+    const { rerender } = render(
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>,
+    );
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+
+    // A null locality could never be elected, so readiness holds rather than
+    // burning this connection's one-shot frame on it.
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
+
+    hookState.localHostId = "local-machine";
+    act(() => {
+      rerender(
+        <BrowserSessionsProvider epicId="epic-1">
+          <Probe />
+        </BrowserSessionsProvider>,
+      );
+    });
+
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toEqual([
+      {
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+        coLocatedHostId: "local-machine",
+      },
+    ]);
   });
 
   it("accepts a snapshot that arrives before the live status", () => {

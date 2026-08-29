@@ -55,6 +55,13 @@ export interface BrowserSessionsOwner {
 
 interface BrowserSessionsCoordinatorRuntime {
   readonly browserView: BrowserViewBridge | null;
+  /**
+   * THIS machine's host id, or null on a shell with no local host. Declared to
+   * the host on `electronTabLifecycleReady`: the host only elects an Electron
+   * lifecycle owner whose declared id equals its own, so a GUI attached to a
+   * remote host stays a pure viewer (spec decision #3).
+   */
+  readonly localHostId: string | null;
   readonly openTransport: (hostId: string) => DurableStreamTransport;
 }
 
@@ -185,6 +192,9 @@ function createBrowserSessionsCoordinator(args: {
   let activeConsumerId: symbol | null = args.consumerId;
   let runtime = args.runtime;
   let actionChannel: BrowserSessionsActionChannel | null = null;
+  // Re-runs the readiness gate for the live connection; the local host id can
+  // resolve after the stream opened.
+  let retryLifecycleReady = (): void => undefined;
   let stopCurrentStream = (): void => undefined;
   let disposed = false;
   const publish = (state: BrowserSessionsState): void => {
@@ -293,9 +303,16 @@ function createBrowserSessionsCoordinator(args: {
     let connectionStatus: StreamConnectionStatus = "connecting";
     let connectionGeneration = 0;
     const sendLifecycleReadyIfReady = (): void => {
+      const localHostId = runtime.localHostId;
       if (
         actionChannel !== channel ||
         browserView === null ||
+        // Wait for the local host id rather than advertising a null locality
+        // that can never be elected: readiness is sent once per connection, so
+        // a null sent now would stick for the whole connection. A shell that
+        // genuinely has no local host never sends readiness at all, which is
+        // exactly right - it could not own an Electron lifecycle either way.
+        localHostId === null ||
         connectionStatus !== "open" ||
         !snapshotReadyForConnection ||
         electronLifecycleReadySentForConnection
@@ -306,8 +323,10 @@ function createBrowserSessionsCoordinator(args: {
       stream?.sendClientFrame({
         kind: "electronTabLifecycleReady",
         hasBinaryPayload: false,
+        coLocatedHostId: localHostId,
       });
     };
+    retryLifecycleReady = sendLifecycleReadyIfReady;
 
     const onConnectionStatus = (
       status: StreamConnectionStatus,
@@ -442,6 +461,7 @@ function createBrowserSessionsCoordinator(args: {
         runtime.browserView !== nextRuntime.browserView;
       runtime = nextRuntime;
       if (browserViewChanged) restart();
+      else retryLifecycleReady();
     },
     release: (consumerId) => {
       runtimes.delete(consumerId);
@@ -457,6 +477,7 @@ function createBrowserSessionsCoordinator(args: {
         runtime.browserView !== nextRuntime.browserView;
       runtime = nextRuntime;
       if (browserViewChanged) restart();
+      else retryLifecycleReady();
       return runtimes.size;
     },
     dispose: () => {

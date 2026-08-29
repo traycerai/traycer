@@ -13,6 +13,7 @@ const CAPTURE_REQUEST = {
 const ELECTRON_LIFECYCLE_READY = {
   kind: "electronTabLifecycleReady",
   hasBinaryPayload: false,
+  coLocatedHostId: "host-1",
 } as const;
 
 const CAPTURED_RESPONSE = {

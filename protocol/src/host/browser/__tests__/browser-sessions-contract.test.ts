@@ -334,6 +334,29 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
     ).toBe(false);
   });
 
+  it("carries the GUI's declared coLocatedHostId on lifecycle-ready, real or null (ticket 01)", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+        coLocatedHostId: "host-1",
+      }).success,
+    ).toBe(true);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+        coLocatedHostId: null,
+      }).success,
+    ).toBe(true);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires epicId and tabId on screencast open requests", () => {
     expect(
       browserScreencastOpenRequestSchema.safeParse({
@@ -375,7 +398,11 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
 describe("browser.sessions@1.0 correlation", () => {
   it("rejects fake request ids on events and one-way retirement", () => {
     const clientEvents = [
-      { kind: "electronTabLifecycleReady", hasBinaryPayload: false },
+      {
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+        coLocatedHostId: "host-1",
+      },
       {
         kind: "electronTabState",
         hasBinaryPayload: false,

@@ -215,6 +215,11 @@ export type ElectronTabCreateFailureCode = z.infer<
   typeof electronTabCreateFailureCodeSchema
 >;
 
+// Reserved evolution room, not yet added:
+// - A `downloadEvent` server frame for file downloads/uploads (deferred,
+//   spec decision #12); the honest unsupported toast stays until then.
+// - A `captureTabPreview` server frame / `tabPreviewResult` client frame
+//   pair for cross-host mention-preview capture (ticket 06).
 export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -438,6 +443,14 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // capture seam. The desktop preload exposes this as one capability.
       kind: z.literal("electronTabLifecycleReady"),
       ...textFrameFields,
+      // The GUI's declared co-located hostId. Null means "I have a native
+      // browserView but I am not co-located with any host I can name". The
+      // host compares this against its own id and must never elect a
+      // subscriber whose declared id differs as Electron lifecycle owner
+      // (spec decision #3): Electron placement is a same-machine
+      // optimization, and this field is the sole locality signal it is
+      // gated on.
+      coLocatedHostId: z.string().nullable(),
     })
     .strict(),
   z
