@@ -1,16 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer as createTcpServer } from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import {
-  findChrome,
-  launchChromeWithDevTools,
-  terminateProcessTree,
-} from "./chrome-launcher.mjs";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -18,10 +14,24 @@ const projectRoot = path.resolve(
 );
 const fixturePath = "/src/__tests__/browser/pierre-tree-zoom.html";
 const zoomLevels = [0.8, 0.9, 1, 1.1, 1.25];
-const chromePath = await findChrome("the Pierre tree zoom regression");
+const requireFromDesktop = createRequire(
+  path.join(projectRoot, "../desktop/package.json"),
+);
+const desktopRoot = path.resolve(projectRoot, "../desktop");
+const defaultElectronPath = requireFromDesktop("electron");
+const { prepareElectronBinary } = requireFromDesktop(
+  "./scripts/dev/electron-binary.cjs",
+);
+const electronPath = prepareElectronBinary(
+  defaultElectronPath,
+  desktopRoot,
+  "Traycer Tree Zoom Test",
+);
 const vitePort = await freePort();
-let chrome;
-let chromeProfilePath;
+const devtoolsPort = await freePort();
+let electron;
+let electronProfilePath;
+let electronStdout = "";
 let client;
 let viteProcess;
 
@@ -56,26 +66,17 @@ try {
   });
   await waitForHttp(pageUrl, viteProcess, () => viteError, "Vite");
 
-  const launched = await launchChromeWithDevTools(
-    chromePath,
-    "traycer-tree-zoom-",
-  );
-  chrome = launched.chrome;
-  chromeProfilePath = launched.profilePath;
+  const launched = await launchElectron(electronPath, pageUrl, devtoolsPort);
+  electron = launched.electron;
+  electronProfilePath = launched.profilePath;
+  electronStdout = launched.readStdout();
+  launched.onStdout((stdout) => {
+    electronStdout = stdout;
+  });
   const devtoolsUrl = launched.devtoolsHttpUrl;
-
-  const targetResponse = await fetch(
-    new URL(`/json/new?${encodeURIComponent(pageUrl)}`, devtoolsUrl),
-    { method: "PUT" },
-  );
-  if (!targetResponse.ok) {
-    throw new Error(
-      `Chrome could not open the fixture: ${targetResponse.status}`,
-    );
-  }
-  const target = await targetResponse.json();
+  const target = await waitForElectronTarget(devtoolsUrl, pageUrl, launched);
   if (typeof target.webSocketDebuggerUrl !== "string") {
-    throw new Error("Chrome did not return a page debugger URL");
+    throw new Error("Electron did not return a page debugger URL");
   }
   client = await connectCdp(target.webSocketDebuggerUrl);
   await client.send("Runtime.enable");
@@ -90,16 +91,14 @@ try {
       )`,
   );
 
-  for (const zoom of zoomLevels) {
-    await client.send("Emulation.setDeviceMetricsOverride", {
-      width: 1000,
-      height: 800,
-      deviceScaleFactor: zoom,
-      mobile: false,
-    });
-    await evaluate(
-      client,
-      `new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))`,
+  for (const [index, zoom] of zoomLevels.entries()) {
+    const requestId = `zoom-${index}`;
+    electron.stdin.write(`${JSON.stringify({ id: requestId, zoom })}\n`);
+    await waitForValue(
+      () => electronStdout,
+      (stdout) => stdout.includes(`"id":"${requestId}"`),
+      `Electron zoom acknowledgement for ${zoom}`,
+      launched.readStderr,
     );
 
     const result = await evaluate(
@@ -147,16 +146,128 @@ try {
   );
 } finally {
   client?.close();
-  if (chrome !== undefined) {
-    await terminateProcessTree(chrome);
+  if (electron !== undefined) {
+    await terminateElectron(electron);
   }
   viteProcess?.kill("SIGTERM");
-  if (chromeProfilePath !== undefined) {
-    await rm(chromeProfilePath, {
+  if (electronProfilePath !== undefined) {
+    await rm(electronProfilePath, {
       recursive: true,
       force: true,
       maxRetries: 3,
     });
+  }
+}
+
+async function launchElectron(executable, pageUrl, debuggingPort) {
+  const profilePath = await mkdtemp(path.join(tmpdir(), "traycer-tree-zoom-"));
+  const electronEnv = { ...process.env };
+  delete electronEnv.ELECTRON_RUN_AS_NODE;
+  const electronProcess = spawn(
+    executable,
+    [
+      "--headless",
+      "--no-sandbox",
+      `--remote-debugging-port=${debuggingPort}`,
+      "--remote-allow-origins=*",
+      `--user-data-dir=${profilePath}`,
+      path.join(
+        projectRoot,
+        "src/__tests__/browser/pierre-tree-zoom-electron-app",
+      ),
+      pageUrl,
+    ],
+    {
+      cwd: projectRoot,
+      env: electronEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
+    },
+  );
+  let stderr = "";
+  let stdout = "";
+  let stdoutListener = () => {};
+  electronProcess.stderr.setEncoding("utf8");
+  electronProcess.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  electronProcess.stdout.setEncoding("utf8");
+  electronProcess.stdout.on("data", (chunk) => {
+    stdout += chunk;
+    stdoutListener(stdout);
+  });
+  const devtoolsHttpUrl = new URL(`http://127.0.0.1:${debuggingPort}`);
+  try {
+    await waitForHttp(
+      new URL("/json/version", devtoolsHttpUrl).href,
+      electronProcess,
+      () => stderr,
+      "Electron DevTools",
+    );
+  } catch (error) {
+    await terminateElectron(electronProcess);
+    await rm(profilePath, { recursive: true, force: true, maxRetries: 3 });
+    throw error;
+  }
+  return {
+    electron: electronProcess,
+    profilePath,
+    devtoolsHttpUrl,
+    readStderr: () => stderr,
+    readStdout: () => stdout,
+    onStdout(listener) {
+      stdoutListener = listener;
+    },
+  };
+}
+
+async function waitForElectronTarget(devtoolsUrl, pageUrl, launched) {
+  return await waitForValue(
+    async () => {
+      const response = await fetch(new URL("/json/list", devtoolsUrl));
+      if (!response.ok) return [];
+      return await response.json();
+    },
+    (targets) => targets.some((target) => target.url === pageUrl),
+    "Electron fixture target",
+    launched.readStderr,
+    (targets) => targets.find((target) => target.url === pageUrl),
+  );
+}
+
+async function waitForValue(
+  readValue,
+  isReady,
+  label,
+  readError,
+  select = (value) => value,
+) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const value = await readValue();
+    if (isReady(value)) return select(value);
+    await delay(50);
+  }
+  throw new Error(`Timed out waiting for ${label}:\n${readError()}`);
+}
+
+async function terminateElectron(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.stdin.write(`${JSON.stringify({ quit: true })}\n`);
+  const deadline = Date.now() + 2_000;
+  while (
+    child.exitCode === null &&
+    child.signalCode === null &&
+    Date.now() < deadline
+  ) {
+    await delay(50);
+  }
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    // The Electron process group already exited.
   }
 }
 
@@ -180,7 +291,7 @@ async function freePort() {
 async function waitForHttp(url, process, readError, label) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    if (process.exitCode !== null) {
+    if (process.exitCode !== null || process.signalCode !== null) {
       throw new Error(`${label} exited before it was ready:\n${readError()}`);
     }
     try {
