@@ -17,6 +17,14 @@
  *
  * What is left uncovered by construction is the shipped entry's composition of
  * the two, which is one line. Do not "fix" that by loosening the guard.
+ *
+ * **This module must track the shipped entry.** The delta is the worker-scope
+ * decision and nothing else. If the shipped entry ever grows a line beyond
+ * guard-then-boot, that line belongs here too - otherwise the boot pin keeps
+ * passing against a composition that no longer ships, which is the failure this
+ * whole arrangement is trying not to have. The shipped entry's IMPORTS are
+ * held by the worker-entry arm of the graph ratchet (empty allowlist); its
+ * BODY is held by nothing but this sentence.
  */
 import {
   type BridgeMessageTargetLike,
