@@ -1867,6 +1867,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
       { x: -300, y: -200, width: 300, height: 200 },
     ]);
     expect(view.visible).toBe(true);
+
+    harness.manager.pip.stop();
   });
 
   it("holds and releases the compositor lease for an unbound PiP tab", async () => {

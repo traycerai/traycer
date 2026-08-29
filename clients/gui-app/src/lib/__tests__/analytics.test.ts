@@ -99,6 +99,7 @@ describe("analytics", () => {
     const sections = [
       "agents",
       "app-diagnostics",
+      "app-notifications",
       "appearance",
       "devices",
       "diagnostics",

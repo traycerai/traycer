@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_PERMISSION } from "@/components/home/data/landing-options";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
+import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
 import {
   DEFAULT_WORKTREE_BRANCH_PREFIX,
   useSettingsStore,
@@ -25,6 +26,7 @@ function resetSettingsStore(): void {
     browserDevOrigins: [],
     worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
+    notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
   });
 }
 
@@ -41,6 +43,112 @@ describe("useSettingsStore", () => {
 
   it("defaults the chat turn minimap to the right side", () => {
     expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("right");
+  });
+
+  it("persists and rehydrates notification chimes by event type", async () => {
+    useSettingsStore
+      .getState()
+      .setNotificationChimeSoundForEvent("failure", "coin");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"failure":"coin"');
+
+    useSettingsStore.setState({
+      notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+    });
+    if (persisted === null) throw new Error("expected persisted settings");
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().notificationChimeSounds.failure).toBe(
+      "coin",
+    );
+  });
+
+  it("migrates the legacy single chime to every event type", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { notificationChimeSound: "ripple" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().notificationChimeSounds).toEqual({
+      needs_action: "ripple",
+      failure: "ripple",
+      done: "ripple",
+      info: "ripple",
+    });
+  });
+
+  it("migrates the former collaboration chime lane to info", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: {
+          notificationChimeSounds: {
+            needs_action: "orbit",
+            failure: "classic",
+            done: "prism",
+            collaboration: "coin",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().notificationChimeSounds).toEqual({
+      needs_action: "orbit",
+      failure: "classic",
+      done: "prism",
+      info: "coin",
+    });
+  });
+
+  it("repairs invalid persisted notification chimes independently", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: {
+          notificationChimeSounds: {
+            needs_action: "coin",
+            failure: "classic",
+            done: "airhorn",
+            info: "ripple",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().notificationChimeSounds).toEqual({
+      needs_action: "coin",
+      failure: "classic",
+      done: DEFAULT_NOTIFICATION_CHIME_SOUNDS.done,
+      info: "ripple",
+    });
+  });
+
+  it("uses semantic defaults when persisted notification chimes are unusable", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { notificationChimeSounds: "airhorn" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().notificationChimeSounds).toEqual(
+      DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+    );
   });
 
   it("persists and rehydrates the chat turn minimap side", async () => {
