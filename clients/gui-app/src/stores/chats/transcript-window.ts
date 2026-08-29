@@ -1692,7 +1692,7 @@ export function applyWindowedSnapshot(
    * deltas can arrive after they were applied, and its tail seat must not let
    * the older served copy displace the delta-rewritten one - the same
    * held-copy preference the range seat applies. See
-   * {@link preferHeldActiveTurnMessages}.
+   * {@link preferFresherHeldMessages}.
    */
   activeTurnId: string | null,
 ): TranscriptWindow {
@@ -2019,7 +2019,7 @@ function seatSnapshotTailSpan(input: {
   // The same held-copy preference the range seat applies: a bulk snapshot
   // can be serialized before block deltas that arrive ahead of it, and its
   // tail must not displace the delta-rewritten copy of the streaming body.
-  const messages = preferHeldActiveTurnMessages(
+  const messages = preferFresherHeldMessages(
     completeBase,
     tail.messages,
     input.activeTurnId,
@@ -3499,10 +3499,18 @@ export function holdsActiveTurnAssistantMessage(
  * rewritten client-side, so the served copy is the freshest thing the client
  * can hold.
  *
+ * TWO rules, because authority differs by record. For the ACTIVE turn the
+ * stream is the authority: the held copy wins unless demonstrably BEHIND (see
+ * {@link heldCopyIsBehindServed}). For a SETTLED record the host is the
+ * authority and the served copy wins unless the held one is demonstrably
+ * AHEAD (see {@link heldCopyIsAheadOfServed}) - which it can be, because the
+ * client rewrites a settled record in place for a detached subagent's card and
+ * for an image resolving, and a range sliced before that write would otherwise
+ * seat the older body under the newest `servedAt`.
+ *
  * "The stream is the authority" is a statement about which copy is USUALLY
- * ahead, not a guarantee that it always is, so the substitution is gated on
- * the held copy not being demonstrably BEHIND - see
- * {@link heldCopyIsBehindServed}. Holding a copy is not the same as having
+ * ahead, not a guarantee that it always is, so the active-turn substitution is
+ * gated on the held copy not being demonstrably BEHIND. Holding a copy is not the same as having
  * applied every delta to it: a write can be lost while the stream stays open,
  * and then this preference would pin the incomplete body in place. Nothing
  * would repair it, either - the row is hydrated, so it leaves no gap for the
@@ -3513,25 +3521,59 @@ export function holdsActiveTurnAssistantMessage(
  * {@link heldMessageCopy}. Comparing the served body against some OTHER held
  * copy decides the seat on a record the reader is not looking at.
  */
-function preferHeldActiveTurnMessages(
+function preferFresherHeldMessages(
   window: TranscriptWindow,
   messages: readonly Message[],
   activeTurnId: string | null,
 ): readonly Message[] {
-  if (activeTurnId === null) return messages;
   // A Map rather than a copied-array-in-a-closure: an assignment inside a
   // callback is invisible to control-flow narrowing, which this module has
   // paid for before (see {@link rewriteWindowMessage}).
   const substitutions = new Map<number, Message>();
   messages.forEach((message, index) => {
     if (message.role !== "assistant") return;
-    if (assistantTurnKey(message) !== activeTurnId) return;
+    const active =
+      activeTurnId !== null && assistantTurnKey(message) === activeTurnId;
+    // A SETTLED record is only substituted on positive proof, so an
+    // unanswerable comparison is not worth the held-copy scan below.
+    if (!active && message.blocksVersion === undefined) return;
     const held = heldMessageCopy(window, message.messageId);
-    if (held === null || heldCopyIsBehindServed(held, message)) return;
+    if (held === null) return;
+    if (
+      active
+        ? heldCopyIsBehindServed(held, message)
+        : !heldCopyIsAheadOfServed(held, message)
+    ) {
+      return;
+    }
     substitutions.set(index, held);
   });
   if (substitutions.size === 0) return messages;
   return messages.map((message, index) => substitutions.get(index) ?? message);
+}
+
+/**
+ * Can the held copy be PROVEN newer than the one the host just served?
+ *
+ * The opposite polarity to {@link heldCopyIsBehindServed}, and the asymmetry is
+ * the point rather than an oversight. For the ACTIVE turn the stream is the
+ * authority, so the held copy wins by default and only demonstrable staleness
+ * displaces it. For a SETTLED record the host is the authority, so the served
+ * copy wins by default - the client rewrites one in place only for a detached
+ * subagent's card or an image resolving, and a delayed range sliced before that
+ * write would otherwise seat the older body under the newest `servedAt` and
+ * regress it with no gap left for the planner to repair.
+ *
+ * So this requires proof in the other direction: both versions present and the
+ * held one strictly greater. An absent field keeps the host's copy, which is
+ * the safe default for a record the client is not authoring.
+ */
+function heldCopyIsAheadOfServed(held: Message, served: Message): boolean {
+  if (held.role !== "assistant" || served.role !== "assistant") return false;
+  const heldVersion = held.blocksVersion;
+  const servedVersion = served.blocksVersion;
+  if (heldVersion === undefined || servedVersion === undefined) return false;
+  return heldVersion > servedVersion;
 }
 
 /**
@@ -3581,7 +3623,7 @@ function heldCopyIsBehindServed(held: Message, served: Message): boolean {
 export function applyRangeResponse(
   window: TranscriptWindow,
   response: ChatRangeResponse,
-  /** The streaming turn, if any - see {@link preferHeldActiveTurnMessages}. */
+  /** The streaming turn, if any - see {@link preferFresherHeldMessages}. */
   activeTurnId: string | null,
 ): TranscriptWindow {
   if (response.epoch !== window.epoch) return window;
@@ -3671,7 +3713,7 @@ export function applyRangeResponse(
   );
   const clock = completeWindow.clock + 1;
   const contextBytes = contextByteLength(response.rowContext);
-  const messages = preferHeldActiveTurnMessages(
+  const messages = preferFresherHeldMessages(
     completeWindow,
     response.messages,
     activeTurnId,

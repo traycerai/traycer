@@ -2527,6 +2527,63 @@ describe("stale spans", () => {
     ).toBe(555);
   });
 
+  it("keeps a locally-rewritten SETTLED record over a delayed older serve", () => {
+    // The held-copy preference was active-turn-only, but a settled record is
+    // rewritten in place too - a detached subagent's card, an image resolving.
+    // A range sliced before that write arrives with the newest `servedAt`, so
+    // `hydratedRecords` picks its older body; the row stays hydrated, so no
+    // planner gap ever repairs it.
+    //
+    // Settled records take the OPPOSITE gate to the active turn: the host is
+    // the authority, so the held copy is substituted only on positive proof
+    // that it is ahead.
+    const settled = {
+      ...assistantMessage("a-settled", "t-old", 5),
+      blocksVersion: 1,
+    };
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settled],
+      }),
+      null,
+    );
+    // The local in-place rewrite, bumping the host's write counter the way
+    // `accumulateTurnContent` does.
+    const rewritten = updateWindowMessage(seeded, "a-settled", (message) =>
+      message.role !== "assistant"
+        ? message
+        : { ...message, blocksVersion: 2, timestamp: 99 },
+    );
+    expect(rewritten.held).toBe(true);
+
+    // A delayed range re-serves the SAME record at its pre-rewrite version.
+    const delayed = applyRangeResponse(
+      rewritten.window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settled],
+      }),
+      // No active turn, so only the settled rule can save this.
+      null,
+    );
+
+    const rendered = hydratedRecords(delayed).messages.find(
+      (message) => message.messageId === "a-settled",
+    );
+    expect(rendered?.timestamp).toBe(99);
+    expect(
+      rendered !== undefined && rendered.role === "assistant"
+        ? rendered.blocksVersion
+        : undefined,
+    ).toBe(2);
+  });
+
   it("protects every carry drawing the viewport, not just the first admitted", () => {
     // The soft budget exemption was positional: `carried.length > 0` spared
     // whichever contributing span sorted first and dropped the rest. A reader
