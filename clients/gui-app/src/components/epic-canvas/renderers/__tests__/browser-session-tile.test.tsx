@@ -26,7 +26,6 @@ const harness = vi.hoisted(() => ({
  * `node.hostId` rather than the canvas host.
  */
 const hostBindingHarness = vi.hoisted(() => ({
-  boundaryHostIds: [] as string[],
   reachabilityHostIds: [] as string[],
   electronBindingCalls: [] as Array<{
     readonly sessionId: string;
@@ -81,20 +80,6 @@ vi.mock(
     useCloseCanvasTileWithNestedFocus: () => harness.closeCanvasTile,
   }),
 );
-vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
-  BrowserSessionsHostProvider: (props: {
-    readonly children: React.ReactNode;
-  }) => props.children,
-  BrowserSessionsHostBoundary: (props: {
-    readonly hostId: string | null;
-    readonly children: React.ReactNode;
-  }) => {
-    if (props.hostId !== null) {
-      hostBindingHarness.boundaryHostIds.push(props.hostId);
-    }
-    return props.children;
-  },
-}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
@@ -210,7 +195,6 @@ describe("BrowserSessionTile lifecycle projection", () => {
     reachabilityHarness.status = "reachable";
     reachabilityHarness.hostLabel = "host-test";
     peekFrameHarness.frame = null;
-    hostBindingHarness.boundaryHostIds = [];
     hostBindingHarness.reachabilityHostIds = [];
     hostBindingHarness.electronBindingCalls = [];
   });
@@ -509,7 +493,6 @@ describe("BrowserSessionTile lifecycle projection", () => {
     expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
       "tab-1",
     );
-    expect(hostBindingHarness.boundaryHostIds).toEqual(["host-remote"]);
     expect(hostBindingHarness.reachabilityHostIds).toContain("host-remote");
     expect(hostBindingHarness.reachabilityHostIds).not.toContain("host-test");
     expect(hostBindingHarness.electronBindingCalls).toContainEqual({

@@ -11,7 +11,6 @@ import {
   type BrowserPeekNode,
 } from "./browser-peek-tile";
 import { BrowserPeekTileMobile } from "./browser-peek-tile-mobile";
-import { BrowserSessionsHostBoundary } from "./browser-sessions-provider";
 import { useBrowserSessionsContext } from "./browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 import {
@@ -268,7 +267,12 @@ function useRuntimeDemotionNote(
   };
 }
 
-function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
+/**
+ * The sessions context this reads is the TILE's host stream: `renderTile`
+ * puts every tile's subtree behind a `BrowserSessionsHostBoundary` for
+ * `node.hostId`, so there is no per-tile boundary here.
+ */
+export function BrowserSessionTile(props: BrowserSessionTileProps) {
   const sessions = useBrowserSessionsContext();
   const touch = useCoarsePointer();
   const reachability = useHostReachability(props.node.hostId);
@@ -345,16 +349,5 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
         />
       </div>
     </div>
-  );
-}
-
-export function BrowserSessionTile(props: BrowserSessionTileProps) {
-  return (
-    <BrowserSessionsHostBoundary
-      hostId={props.node.hostId}
-      epicId={props.epicId}
-    >
-      <BrowserSessionTileFromProvider {...props} />
-    </BrowserSessionsHostBoundary>
   );
 }

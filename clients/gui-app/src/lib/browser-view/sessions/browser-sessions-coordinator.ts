@@ -231,6 +231,31 @@ export function browserSessionsCoordinatorsForEpic(
 }
 
 /**
+ * The live session with this id on ANY host whose coordinator is open, or
+ * `null`.
+ *
+ * Composer chips (browser-tab mentions, annotation cards) carry a
+ * `sessionId`/`tabId` and no host, and they render inside a chat tile that is
+ * now bound to ONE host's sessions stream (`renderTile`'s
+ * `BrowserSessionsHostBoundary`). Reading the surrounding context would make a
+ * chip resolve only when its tab happens to live on the tile's host, so a
+ * mention the picker legitimately offered from another host would render as
+ * missing. Session ids are host-minted uuids, so scanning the registry cannot
+ * resolve the wrong session; the epic is not needed to disambiguate.
+ */
+export function browserSessionAcrossCoordinators(
+  sessionId: string,
+): BrowserSessionInfo | null {
+  for (const coordinator of browserSessionsCoordinators.values()) {
+    const session = coordinator.state.items.find(
+      (item) => item.sessionId === sessionId,
+    );
+    if (session !== undefined) return session;
+  }
+  return null;
+}
+
+/**
  * Requests one snapshot preview over the named coordinator's stream. Rejects
  * when that coordinator is gone or its stream is not live.
  */

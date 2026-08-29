@@ -1086,12 +1086,13 @@ export function createBrowserTabMentionEntriesSnapshotCache(): (
  * churning `BrowserSessionsContext`, and fans out over every coordinator open
  * for this epic rather than the canvas host's alone.
  *
- * The fan-out deliberately does NOT open streams of its own. A coordinator
- * exists for exactly the hosts whose browser surfaces are already mounted in
- * this epic (`BrowserSessionsHostBoundary` acquires one per tile/sidebar/PiP
- * host), which is the same set as "hosts with browser tiles in the epic" - so
- * lazily dialing on picker-open would buy nothing but a second, refcounted
- * stream lifecycle and a per-host auth gate for a menu that may never be used.
+ * The fan-out deliberately does NOT open streams of its own. `renderTile` puts
+ * every tile behind a `BrowserSessionsHostBoundary` for its own host, so a
+ * coordinator exists for exactly one host per DISTINCT TILE host in this epic
+ * (plus the sidebar/PiP hosts) - wider than "hosts with browser tiles", and
+ * the picker's fan-out widens with it. Lazily dialing on picker-open would
+ * therefore buy nothing but a second, refcounted stream lifecycle and a
+ * per-host auth gate for a menu that may never be used.
  *
  * `!active` unsubscribes entirely and returns the shared empty constant, so a
  * closed picker holds no subscription at all; while open, `getSnapshot` is

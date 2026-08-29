@@ -9,10 +9,6 @@ import type {
 
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
 import { BrowserAnnotationCard } from "@/components/chat/composer/browser-annotation-card";
-import {
-  BrowserSessionsContext,
-  type BrowserSessionsState,
-} from "@/components/epic-canvas/renderers/browser-sessions-context";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import {
   STUB_ANNOTATION_ELEMENT,
@@ -31,6 +27,31 @@ import {
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
+
+/**
+ * The card resolves its session across the coordinator REGISTRY rather than a
+ * surrounding sessions context, so the fixture seeds the registry lookup.
+ */
+const sessionsHarness = vi.hoisted(() => ({
+  items: null as ReadonlyArray<BrowserSessionInfo> | null,
+}));
+
+vi.mock(
+  "@/lib/browser-view/sessions/browser-sessions-coordinator",
+  async () => {
+    const actual = await vi.importActual<
+      typeof import("@/lib/browser-view/sessions/browser-sessions-coordinator")
+    >("@/lib/browser-view/sessions/browser-sessions-coordinator");
+    return {
+      ...actual,
+      subscribeToBrowserSessionsCoordinators: () => () => undefined,
+      browserSessionAcrossCoordinators: (sessionId: string) =>
+        (sessionsHarness.items ?? []).find(
+          (item) => item.sessionId === sessionId,
+        ) ?? null,
+    };
+  },
+);
 
 vi.mock("idb-keyval", async () => {
   // Dynamic import: the factory is hoisted above the static imports, so the
@@ -116,21 +137,6 @@ function session(
   };
 }
 
-function sessionsState(
-  items: ReadonlyArray<BrowserSessionInfo>,
-): BrowserSessionsState {
-  return {
-    hostId: "host-1",
-    lifecycle: "live",
-    inventoryReady: true,
-    items,
-    errorMessage: null,
-    retry: vi.fn(),
-    openTab: vi.fn(() => Promise.reject(new Error("not used"))),
-    closeTab: vi.fn(() => Promise.resolve()),
-  };
-}
-
 async function landingFetcher(hash: string): Promise<{
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly mediaType: string | null;
@@ -147,26 +153,19 @@ function renderCard(
   onRemove: (annotationId: string) => void,
   items: ReadonlyArray<BrowserSessionInfo> | null,
 ): void {
-  const card = (
+  sessionsHarness.items = items;
+  render(
     <BrowserAnnotationCard
       record={record}
       onRemove={onRemove}
       imageFetcher={landingFetcher}
       sessionObjectUrl={sessionObjectUrl}
-    />
-  );
-  if (items === null) {
-    render(card);
-    return;
-  }
-  render(
-    <BrowserSessionsContext.Provider value={sessionsState(items)}>
-      {card}
-    </BrowserSessionsContext.Provider>,
+    />,
   );
 }
 
 beforeEach(async () => {
+  sessionsHarness.items = null;
   URL.createObjectURL = createObjectURL;
   URL.revokeObjectURL = revokeObjectURL;
   installIdbWorking(idbData, idbGet, idbSet, idbDel);
