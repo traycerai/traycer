@@ -248,8 +248,34 @@ function transientLiveSteerRowIds(
   );
 }
 
-function hasLiveSetupEvent(window: TranscriptWindow): boolean {
-  return window.liveEvents.some((event) => event.type.startsWith("setup."));
+function projectedLiveSetupRowIds(
+  window: TranscriptWindow,
+  rendered: readonly ChatMessageModel[],
+): ReadonlySet<string> {
+  if (!window.liveEvents.some((event) => event.type.startsWith("setup."))) {
+    return new Set();
+  }
+  const liveCreatedAt = new Set(
+    projectTranscriptRows({
+      messages: window.liveMessages,
+      events: window.liveEvents,
+      activeTurnId: null,
+      chatId: "",
+    })
+      .filter((row) => row.source.kind === "setup-card")
+      .map((row) => row.rowId.slice(row.rowId.lastIndexOf(":") + 1)),
+  );
+  const newestByCreatedAt = new Map<string, { id: string; index: number }>();
+  for (const model of rendered) {
+    const match = model.id.match(/^setup-card:.*:(\d+):(\d+)$/);
+    if (match === null || !liveCreatedAt.has(match[2])) continue;
+    const index = Number(match[1]);
+    const current = newestByCreatedAt.get(match[2]);
+    if (current === undefined || index > current.index) {
+      newestByCreatedAt.set(match[2], { id: model.id, index });
+    }
+  }
+  return new Set([...newestByCreatedAt.values()].map((entry) => entry.id));
 }
 
 function isExplicitlyPendingOrStreaming(model: ChatMessageModel): boolean {
@@ -388,13 +414,13 @@ export function transcriptListRows(input: {
     // them too would draw the same history twice on skeleton-loss paths.
     const liveRowIds = liveRecordRowIds(window);
     const retainedSpanRowIds = spanRowIds(window.spans);
-    const liveSetup = hasLiveSetupEvent(window);
+    const liveSetupRowIds = projectedLiveSetupRowIds(window, rendered);
     let liveTransientSteerRowIds: ReadonlySet<string> | null = null;
     const unplacedRendered = rendered.filter((model) => {
       const liveBacked =
         isExplicitlyPendingOrStreaming(model) ||
         liveRowIds.has(model.id) ||
-        (liveSetup && model.id.startsWith("setup-card:")) ||
+        liveSetupRowIds.has(model.id) ||
         (model.persistentMessageId === null &&
           (liveTransientSteerRowIds ??= transientLiveSteerRowIds(window)).has(
             model.id,

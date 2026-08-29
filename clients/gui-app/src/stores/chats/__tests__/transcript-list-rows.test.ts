@@ -198,7 +198,10 @@ describe("transcriptListRows", () => {
         invalidated: true,
         liveEvents: [setup],
       }),
-      rendered: [modelWithoutPersistentMessageId(setupRowId)],
+      rendered: [
+        modelWithoutPersistentMessageId("setup-card:chat-1:1:2"),
+        modelWithoutPersistentMessageId(setupRowId),
+      ],
     });
 
     expect(kinds(rows)).toEqual(["P:0", `H:${setupRowId}`]);

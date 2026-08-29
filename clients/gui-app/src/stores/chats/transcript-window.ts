@@ -1186,6 +1186,13 @@ function provisionalLiveMessagesForSnapshot(input: {
   readonly missedDeltas: boolean;
   readonly rebased: boolean;
 }): readonly Message[] {
+  if (
+    input.rowCount === 0 &&
+    input.window.rowCount === 0 &&
+    input.window.skeletonComplete
+  ) {
+    return [];
+  }
   return input.window.liveMessages.filter(
     (message) =>
       (message.role === "assistant" &&
@@ -1193,6 +1200,39 @@ function provisionalLiveMessagesForSnapshot(input: {
       ((input.rebased || input.missedDeltas || input.window.invalidated) &&
         message.role === "user"),
   );
+}
+
+function provisionalLiveEventsForSnapshot(input: {
+  readonly window: TranscriptWindow;
+  readonly rowCount: number;
+  readonly missedDeltas: boolean;
+  readonly rebased: boolean;
+}): readonly ChatEvent[] {
+  if (
+    input.rowCount === 0 &&
+    input.window.rowCount === 0 &&
+    input.window.skeletonComplete
+  ) {
+    return [];
+  }
+  return input.rebased || input.missedDeltas || input.window.invalidated
+    ? input.window.liveEvents
+    : [];
+}
+
+function isConfirmedEmptySnapshot(
+  window: TranscriptWindow,
+  rowCount: number,
+): boolean {
+  return rowCount === 0 && window.rowCount === 0 && window.skeletonComplete;
+}
+
+function selectSnapshotLiveRecords<T>(
+  current: readonly T[],
+  provisional: readonly T[],
+  replace: boolean,
+): readonly T[] {
+  return replace ? provisional : current;
 }
 
 /**
@@ -1334,6 +1374,14 @@ export function applyWindowedSnapshot(
     missedDeltas,
     rebased,
   });
+  const provisionalLiveEvents = provisionalLiveEventsForSnapshot({
+    window,
+    rowCount: input.rowCount,
+    missedDeltas,
+    rebased,
+  });
+  const replaceLiveRecords =
+    window.invalidated || isConfirmedEmptySnapshot(window, input.rowCount);
   // Snapshots travel on the bulk lane and can be overtaken by interactive live
   // records even when they announce a new epoch. Their later skeleton may
   // prove where a record belongs, but absence from it cannot prove that a live
@@ -1354,6 +1402,7 @@ export function applyWindowedSnapshot(
           // the same turn (see pruneSupersededLiveRecords), despite its
           // intentionally different id.
           liveMessages: provisionalLiveMessages,
+          liveEvents: provisionalLiveEvents,
           epoch: input.epoch,
           rowCount: input.rowCount,
           indexRevision: input.indexRevision ?? 0,
@@ -1365,9 +1414,16 @@ export function applyWindowedSnapshot(
         }
       : {
           ...window,
-          liveMessages: window.invalidated
-            ? provisionalLiveMessages
-            : window.liveMessages,
+          liveMessages: selectSnapshotLiveRecords(
+            window.liveMessages,
+            provisionalLiveMessages,
+            replaceLiveRecords,
+          ),
+          liveEvents: selectSnapshotLiveRecords(
+            window.liveEvents,
+            provisionalLiveEvents,
+            replaceLiveRecords,
+          ),
           rowCount: input.rowCount,
           // A restreaming snapshot (`null`) leaves the held revision alone: the
           // skeleton chunks that follow do not carry one, so overwriting it here
@@ -1717,17 +1773,7 @@ export function applySkeletonChunk(
     chunk.fromOrdinal,
     chunk.fromOrdinal + chunk.entries.length,
   );
-  if (!reconciled.skeletonComplete || reconciled.rowCount !== 0) {
-    return reconciled;
-  }
-  const liveMessages = reconciled.liveMessages.filter(
-    (message) =>
-      message.role !== "assistant" ||
-      !isTransientLiveAssistantMessageId(message.messageId),
-  );
-  return liveMessages.length === reconciled.liveMessages.length
-    ? reconciled
-    : { ...reconciled, liveMessages };
+  return reconciled;
 }
 
 /**

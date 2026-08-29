@@ -1968,7 +1968,40 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
-  it("keeps an assistant that overtakes a rebasing empty snapshot until its skeleton arrives", () => {
+  it("keeps a live event that overtakes a rebasing snapshot", () => {
+    const setup: ChatEvent = {
+      eventId: "setup-after-rebase-snapshot",
+      type: "setup.running",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [],
+      events: [setup],
+    });
+
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(rebased.liveEvents.map((event) => event.eventId)).toEqual([
+      setup.eventId,
+    ]);
+  });
+
+  it("keeps an assistant through its overtaken empty stream", () => {
     const turnId = "turn-after-empty-rebase";
     const transientId = transientLiveAssistantMessageId(turnId);
     const live = appendLiveRecords(emptyTranscriptWindow(), {
@@ -1992,7 +2025,9 @@ describe("what an overlap keeps", () => {
       entries: [],
       isFinal: true,
     });
-    expect(rebuilt.liveMessages).toEqual([]);
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
   });
 
   it("keeps a user accepted after a snapshot through its older skeleton", () => {
@@ -2076,11 +2111,12 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
-  it("drops a frozen assistant when the rebased empty skeleton confirms absence", () => {
+  it("drops retained live records on the next confirmed-empty snapshot", () => {
     const turnId = "turn-deleted";
     const live = appendLiveRecords(emptyTranscriptWindow(), {
       messages: [
         assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
+        userMessage("accepted-deleted", 1),
       ],
       events: [],
     });
@@ -2092,11 +2128,18 @@ describe("what an overlap keeps", () => {
       tail: { fromOrdinal: 0, messages: [], events: [] },
     });
 
-    const confirmed = applySkeletonChunk(rebased, {
+    const streamed = applySkeletonChunk(rebased, {
       epoch: 1,
       fromOrdinal: 0,
       entries: [],
       isFinal: true,
+    });
+    expect(streamed.liveMessages).toHaveLength(2);
+    const confirmed = applyWindowedSnapshot(streamed, {
+      epoch: 1,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
     });
 
     expect(confirmed.liveMessages).toEqual([]);
