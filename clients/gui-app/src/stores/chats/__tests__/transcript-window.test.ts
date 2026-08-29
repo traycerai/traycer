@@ -1239,6 +1239,7 @@ describe("records the index has not placed yet", () => {
     });
 
     expect(withLive.liveMessages.map((m) => m.messageId)).toEqual(["m-live"]);
+    expect(withLive.hydratedBytes).toBeGreaterThan(window.hydratedBytes);
     const records = hydratedRecords(withLive);
     // Spans first, unplaced last - which is also chronological, since an
     // unplaced record is the newest thing the client has.
@@ -1251,8 +1252,10 @@ describe("records the index has not placed yet", () => {
     // span carrying it, which requires it to belong to a ROW - and
     // `send.accepted`, the `queue.*` family and their siblings materialize no
     // row, so no span will ever name them however far the reader scrolls.
-    // `hydratedBytes` is `totalBytes(spans)`, so they are not charged to the
-    // budget either and nothing else notices them accumulating.
+    // They ARE charged to `hydratedBytes` (live records count), so a huge
+    // live set will evict unprotected spans. The events themselves stay
+    // until this cap, because a row-less signal is not recoverable by range
+    // hydration.
     let window = windowWithSkeleton(4);
     const total = MAX_LIVE_EVENTS + 200;
     for (let index = 0; index < total; index += 1) {
@@ -1263,6 +1266,7 @@ describe("records the index has not placed yet", () => {
     }
 
     expect(window.liveEvents).toHaveLength(MAX_LIVE_EVENTS);
+    expect(window.hydratedBytes).toBeGreaterThan(0);
     // The NEWEST are kept: those are the ones with any chance of being live-
     // relevant, and an older one that genuinely belongs to a row is re-served
     // by that row's hydration.

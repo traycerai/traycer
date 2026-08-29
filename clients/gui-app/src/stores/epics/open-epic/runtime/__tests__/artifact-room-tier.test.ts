@@ -159,6 +159,7 @@ function createHarness(): TestHarness {
     send: (request) => sent.push(request),
     onDivergenceChanged: () => undefined,
     isDisposed: () => false,
+    budget: null,
   });
   return { tier, environment, session, sent };
 }

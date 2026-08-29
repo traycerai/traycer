@@ -255,6 +255,18 @@ export interface TranscriptWindow {
    */
   readonly liveMessages: readonly Message[];
   readonly liveEvents: readonly ChatEvent[];
+  /**
+   * Everything this window currently retains, in bytes: hydrated spans AND
+   * live records the index has not placed yet.
+   *
+   * Live records used to sit outside this figure (`totalBytes(spans)` only).
+   * A session that only sends never seats a span, so the live set could grow
+   * while the budget still read zero — which is how a huge in-flight turn
+   * failed to evict the cold scrollback it was competing with. They are
+   * charged here so eviction of *unprotected spans* can make room; the live
+   * records themselves stay (they have no ordinal, so dropping them is not
+   * recoverable by range hydration).
+   */
   readonly hydratedBytes: number;
   /**
    * MESSAGE ids whose latest rewrite is not yet reflected in
@@ -432,13 +444,16 @@ export function appendLiveRecords(
   // prune never runs and the row-less events would still accumulate unbounded.
   // This is the append the cap actually has to hold.
   const appendedEvents = [...window.liveEvents, ...events];
+  const liveEvents =
+    appendedEvents.length > MAX_LIVE_EVENTS
+      ? appendedEvents.slice(appendedEvents.length - MAX_LIVE_EVENTS)
+      : appendedEvents;
+  const liveMessages = [...window.liveMessages, ...messages];
   return {
     ...window,
-    liveMessages: [...window.liveMessages, ...messages],
-    liveEvents:
-      appendedEvents.length > MAX_LIVE_EVENTS
-        ? appendedEvents.slice(appendedEvents.length - MAX_LIVE_EVENTS)
-        : appendedEvents,
+    liveMessages,
+    liveEvents,
+    hydratedBytes: chargedWindowBytes(window.spans, liveMessages, liveEvents),
     clock: window.clock + 1,
   };
 }
@@ -477,8 +492,10 @@ function pruneSupersededLiveRecords(
   // their siblings are transcript-level signals that materialize no row, so no
   // span will ever name them and no amount of scrolling will evict them. On a
   // tab left connected across many sends they accumulate for the life of the
-  // session - and, because `hydratedBytes` is `totalBytes(spans)`, they are
-  // not charged to the window budget either, so nothing else notices.
+  // session. They ARE charged to `hydratedBytes` (live records count), so a
+  // huge live set will evict unprotected spans; the events themselves stay
+  // until this cap, because dropping a row-less signal is not recoverable
+  // by range hydration.
   //
   // The tail is what has any chance of being live-relevant, so the cap keeps
   // the NEWEST. Dropping an older one is safe rather than lossy: anything that
@@ -494,7 +511,12 @@ function pruneSupersededLiveRecords(
   ) {
     return window;
   }
-  return { ...window, liveMessages, liveEvents };
+  return {
+    ...window,
+    liveMessages,
+    liveEvents,
+    hydratedBytes: chargedWindowBytes(window.spans, liveMessages, liveEvents),
+  };
 }
 
 /**
@@ -586,13 +608,13 @@ export function mapWindowMessages(
     ...window,
     spans,
     liveMessages,
-    hydratedBytes: totalBytes(spans),
+    hydratedBytes: chargedWindowBytes(spans, liveMessages, window.liveEvents),
   };
 }
 
 /**
- * Bring {@link TranscriptWindow.hydratedBytes} back in line with what the spans
- * actually hold.
+ * Bring {@link TranscriptWindow.hydratedBytes} back in line with what the
+ * spans and live records actually hold.
  *
  * Re-measures only the spans holding an unsettled row - not the whole window -
  * so the cost is proportional to what was deferred, not to what is hydrated.
@@ -616,7 +638,11 @@ export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
   return {
     ...window,
     spans,
-    hydratedBytes: totalBytes(spans),
+    hydratedBytes: chargedWindowBytes(
+      spans,
+      window.liveMessages,
+      window.liveEvents,
+    ),
     unsettledByteMessageIds: [],
   };
 }
@@ -673,7 +699,7 @@ function rewriteWindowMessage(
       ...window,
       spans,
       liveMessages,
-      hydratedBytes: totalBytes(spans),
+      hydratedBytes: chargedWindowBytes(spans, liveMessages, window.liveEvents),
       unsettledByteMessageIds:
         charge === "now" || window.unsettledByteMessageIds.includes(messageId)
           ? window.unsettledByteMessageIds
@@ -724,6 +750,27 @@ function contextByteLength(
 
 function totalBytes(spans: readonly HydratedSpan[]): number {
   return spans.reduce((sum, span) => sum + span.bytes, 0);
+}
+
+function chargedWindowBytes(
+  spans: readonly HydratedSpan[],
+  liveMessages: readonly Message[],
+  liveEvents: readonly ChatEvent[],
+): number {
+  return totalBytes(spans) + recordsByteLength(liveMessages, liveEvents);
+}
+
+/**
+ * What the window currently retains, in bytes: hydrated spans PLUS live
+ * records the index has not placed yet. The figure {@link evictTranscriptWindowToBudget}
+ * reads, and the figure a process-wide accountant should settle.
+ */
+export function transcriptWindowChargedBytes(window: TranscriptWindow): number {
+  return chargedWindowBytes(
+    window.spans,
+    window.liveMessages,
+    window.liveEvents,
+  );
 }
 
 /**
@@ -1212,7 +1259,11 @@ export function applyWindowedSnapshot(
   return pruneSupersededLiveRecords({
     ...base,
     spans,
-    hydratedBytes: totalBytes(spans),
+    hydratedBytes: chargedWindowBytes(
+      spans,
+      base.liveMessages,
+      base.liveEvents,
+    ),
   });
 }
 
@@ -1232,7 +1283,15 @@ function dropSpansOverlappingFrom(
 ): TranscriptWindow {
   const kept = window.spans.filter((span) => spanEnd(span) <= fromOrdinal);
   if (kept.length === window.spans.length) return window;
-  return { ...window, spans: kept, hydratedBytes: totalBytes(kept) };
+  return {
+    ...window,
+    spans: kept,
+    hydratedBytes: chargedWindowBytes(
+      kept,
+      window.liveMessages,
+      window.liveEvents,
+    ),
+  };
 }
 
 /**
@@ -1391,7 +1450,15 @@ function reconcileSpansWithSkeleton(
     kept.push(adopted);
   }
   if (!changed) return window;
-  return { ...window, spans: kept, hydratedBytes: totalBytes(kept) };
+  return {
+    ...window,
+    spans: kept,
+    hydratedBytes: chargedWindowBytes(
+      kept,
+      window.liveMessages,
+      window.liveEvents,
+    ),
+  };
 }
 
 /**
@@ -1821,7 +1888,15 @@ function dropSpansForUpdatedOrdinals(
     (span) => !containsUpdated(span) && !spanSharesRecord(span, staleRecordIds),
   );
   if (kept.length === window.spans.length) return window;
-  return { ...window, spans: kept, hydratedBytes: totalBytes(kept) };
+  return {
+    ...window,
+    spans: kept,
+    hydratedBytes: chargedWindowBytes(
+      kept,
+      window.liveMessages,
+      window.liveEvents,
+    ),
+  };
 }
 
 /**
@@ -1871,7 +1946,11 @@ export function applyRangeResponse(
   return pruneSupersededLiveRecords({
     ...window,
     spans,
-    hydratedBytes: totalBytes(spans),
+    hydratedBytes: chargedWindowBytes(
+      spans,
+      window.liveMessages,
+      window.liveEvents,
+    ),
     clock,
   });
 }
@@ -2380,5 +2459,13 @@ export function evictTranscriptWindowToBudget(
   }
   if (dropped.size === 0) return window;
   const spans = window.spans.filter((span) => !dropped.has(span));
-  return { ...window, spans, hydratedBytes: totalBytes(spans) };
+  return {
+    ...window,
+    spans,
+    hydratedBytes: chargedWindowBytes(
+      spans,
+      window.liveMessages,
+      window.liveEvents,
+    ),
+  };
 }

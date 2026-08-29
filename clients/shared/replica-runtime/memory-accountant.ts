@@ -205,3 +205,223 @@ export interface MemoryAccountantOptions {
    */
   readonly observedCeilingBytes: number;
 }
+
+/**
+ * The three planes Phase 1 puts under the accountant. `BudgetPlaneId` stays a
+ * plain string so a later plane (canvas, comm-graph) can register without a
+ * seam change; these constants are the names the known planes actually use.
+ */
+export const BUDGET_PLANE_IDS = {
+  epicReplicas: "epic-replicas",
+  chatWindows: "chat-windows",
+  hotDocs: "hot-docs",
+} as const;
+
+export type KnownBudgetPlaneId =
+  (typeof BUDGET_PLANE_IDS)[keyof typeof BUDGET_PLANE_IDS];
+
+interface HolderCharge {
+  settled: number;
+  provisional: number;
+}
+
+interface PlaneState {
+  readonly spec: PlaneBudgetSpec;
+  readonly holders: Map<BudgetHolderId, HolderCharge>;
+  evictionsRequested: number;
+  bytesReclaimed: number;
+  evictionsRefused: number;
+  /**
+   * Set when a reconcile asked the plane to evict and the plane could not get
+   * back under the soft limit. Cleared by any later charge, settle, or
+   * release — those are the moments new evictable bytes (or expired
+   * protection) might have appeared. Reconcile while latched does not call
+   * the hook again: that retry is the hydrate/evict/refetch livelock with an
+   * extra step.
+   */
+  protectedLatch: boolean;
+}
+
+function holderChargedBytes(holder: HolderCharge): number {
+  return holder.settled + holder.provisional;
+}
+
+function planeChargedBytes(plane: PlaneState): number {
+  let total = 0;
+  for (const holder of plane.holders.values()) {
+    total += holderChargedBytes(holder);
+  }
+  return total;
+}
+
+function pressureOf(plane: PlaneState): BudgetPressure {
+  const charged = planeChargedBytes(plane);
+  const near = plane.spec.softLimitBytes * plane.spec.nearThresholdRatio;
+  if (charged <= near) return "under";
+  if (charged <= plane.spec.softLimitBytes) return "near";
+  if (plane.protectedLatch) return "over-protected";
+  return "over";
+}
+
+function requireFiniteNonNegative(bytes: number, verb: string): void {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    throw new Error(
+      `memory accountant: ${verb} bytes must be a finite non-negative number`,
+    );
+  }
+}
+
+function requireRegistered(
+  planes: ReadonlyMap<BudgetPlaneId, PlaneState>,
+  planeId: BudgetPlaneId,
+): PlaneState {
+  const plane = planes.get(planeId);
+  if (plane === undefined) {
+    throw new Error(
+      `memory accountant: plane ${JSON.stringify(planeId)} is not registered`,
+    );
+  }
+  return plane;
+}
+
+function usageOf(plane: PlaneState): PlaneUsage {
+  return {
+    planeId: plane.spec.planeId,
+    softLimitBytes: plane.spec.softLimitBytes,
+    settledBytes: [...plane.holders.values()].reduce(
+      (sum, holder) => sum + holder.settled,
+      0,
+    ),
+    provisionalBytes: [...plane.holders.values()].reduce(
+      (sum, holder) => sum + holder.provisional,
+      0,
+    ),
+    holderCount: plane.holders.size,
+    pressure: pressureOf(plane),
+    evictionsRequested: plane.evictionsRequested,
+    bytesReclaimed: plane.bytesReclaimed,
+    evictionsRefused: plane.evictionsRefused,
+  };
+}
+
+/**
+ * Process-wide memory accountant. Pure, worker-portable, no DOM.
+ *
+ * Charges are per holder and `settle` REPLACES the holder's total — the
+ * argument is "how big is this now", not "how much did it grow". Eviction is
+ * never automatic on charge: {@link MemoryAccountant.reconcile} is the
+ * settle-then-check boundary, and reclaiming nothing is a legal answer.
+ */
+export function createMemoryAccountant(
+  options: MemoryAccountantOptions,
+): MemoryAccountant {
+  const { environment, observedCeilingBytes } = options;
+  requireFiniteNonNegative(observedCeilingBytes, "observedCeiling");
+
+  const planes = new Map<BudgetPlaneId, PlaneState>();
+
+  const snapshot = (): AccountantSnapshot => {
+    const usages = [...planes.values()].map(usageOf);
+    return {
+      takenAtMs: environment.clock.now(),
+      planes: usages,
+      totalChargedBytes: usages.reduce(
+        (sum, usage) => sum + usage.settledBytes + usage.provisionalBytes,
+        0,
+      ),
+    };
+  };
+
+  return {
+    register(spec: PlaneBudgetSpec): BudgetRegistration {
+      if (planes.has(spec.planeId)) {
+        throw new Error(
+          `memory accountant: plane ${JSON.stringify(spec.planeId)} is already registered`,
+        );
+      }
+      requireFiniteNonNegative(spec.softLimitBytes, "softLimit");
+      if (
+        !Number.isFinite(spec.nearThresholdRatio) ||
+        spec.nearThresholdRatio <= 0 ||
+        spec.nearThresholdRatio > 1
+      ) {
+        throw new Error(
+          "memory accountant: nearThresholdRatio must be in (0, 1]",
+        );
+      }
+      planes.set(spec.planeId, {
+        spec,
+        holders: new Map(),
+        evictionsRequested: 0,
+        bytesReclaimed: 0,
+        evictionsRefused: 0,
+        protectedLatch: false,
+      });
+      return {
+        planeId: spec.planeId,
+        release(): void {
+          planes.delete(spec.planeId);
+        },
+      };
+    },
+
+    chargeProvisional(
+      planeId: BudgetPlaneId,
+      holderId: BudgetHolderId,
+      bytes: number,
+    ): void {
+      requireFiniteNonNegative(bytes, "chargeProvisional");
+      const plane = requireRegistered(planes, planeId);
+      const held = plane.holders.get(holderId);
+      if (held === undefined) {
+        plane.holders.set(holderId, { settled: 0, provisional: bytes });
+      } else {
+        held.provisional += bytes;
+      }
+      plane.protectedLatch = false;
+    },
+
+    settle(
+      planeId: BudgetPlaneId,
+      holderId: BudgetHolderId,
+      bytes: number,
+    ): void {
+      requireFiniteNonNegative(bytes, "settle");
+      const plane = requireRegistered(planes, planeId);
+      plane.holders.set(holderId, { settled: bytes, provisional: 0 });
+      plane.protectedLatch = false;
+    },
+
+    release(planeId: BudgetPlaneId, holderId: BudgetHolderId): void {
+      const plane = planes.get(planeId);
+      if (plane === undefined) return;
+      plane.holders.delete(holderId);
+      plane.protectedLatch = false;
+    },
+
+    reconcile(planeId: BudgetPlaneId): BudgetPressure {
+      const plane = requireRegistered(planes, planeId);
+      if (plane.protectedLatch) return "over-protected";
+      const charged = planeChargedBytes(plane);
+      if (charged <= plane.spec.softLimitBytes) return pressureOf(plane);
+
+      plane.evictionsRequested += 1;
+      const outcome = plane.spec.evict(charged - plane.spec.softLimitBytes);
+      plane.bytesReclaimed += outcome.reclaimedBytes;
+      const stillOver = planeChargedBytes(plane) > plane.spec.softLimitBytes;
+      if (stillOver) {
+        plane.protectedLatch = true;
+        if (outcome.reclaimedBytes === 0) {
+          plane.evictionsRefused += 1;
+        }
+      }
+      return pressureOf(plane);
+    },
+
+    pressure(planeId: BudgetPlaneId): BudgetPressure {
+      return pressureOf(requireRegistered(planes, planeId));
+    },
+
+    snapshot,
+  };
+}

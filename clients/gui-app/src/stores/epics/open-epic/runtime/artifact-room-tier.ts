@@ -46,6 +46,7 @@ import {
   encodeAwarenessUpdate,
 } from "y-protocols/awareness";
 import type {
+  EvictionOutcome,
   LeaseGrant,
   LeaseHandle,
   LeasePolicy,
@@ -53,6 +54,7 @@ import type {
   RuntimeEnvironment,
   RuntimeTimer,
 } from "@traycer-clients/shared/replica-runtime";
+import type { HotDocBudgetSink } from "@/stores/replica-memory/hot-doc-budget";
 import { createMonotonicSequence } from "@traycer-clients/shared/replica-runtime";
 import type { EpicOutboundRequest } from "./epic-runtime-events";
 import type { EpicSessionFacts } from "./session-facts";
@@ -242,6 +244,11 @@ export interface ArtifactRoomTierSources {
    */
   readonly onDivergenceChanged: () => void;
   readonly isDisposed: () => boolean;
+  /**
+   * Process-wide budget sink, or `null` in tests that do not exercise it.
+   * Never optional: a missing field and "no accountant" must stay distinct.
+   */
+  readonly budget: HotDocBudgetSink | null;
 }
 
 export interface ArtifactRoomTier {
@@ -269,6 +276,11 @@ export interface ArtifactRoomTier {
   materializedIds(): readonly string[];
   /** Demote everything demotable right now, ignoring cooldowns. */
   demoteIdle(): void;
+  /**
+   * The existing LRU walk, parameterized by bytes rather than count. Pinned
+   * rooms are never victims and are reported as protected `"leased"`.
+   */
+  demoteColdestUnpinned(overBytes: number): EvictionOutcome;
 
   /** Whether the tier holds any unsent or unacknowledged local body state. */
   hasDivergence(): boolean;
@@ -323,8 +335,14 @@ export interface ArtifactRoomTier {
 export function createArtifactRoomTier(
   sources: ArtifactRoomTierSources,
 ): ArtifactRoomTier {
-  const { environment, session, send, onDivergenceChanged, isDisposed } =
-    sources;
+  const {
+    environment,
+    session,
+    send,
+    onDivergenceChanged,
+    isDisposed,
+    budget,
+  } = sources;
 
   const replicas = new Map<string, ArtifactRoomReplicaEntry>();
   const cold = new Map<string, ColdArtifactRoomEntry>();
@@ -337,6 +355,25 @@ export function createArtifactRoomTier(
   const touchSeq = new Map<string, number>();
   const touchCounter: MonotonicSequence = createMonotonicSequence();
   let tierDisposed = false;
+  /** Last encoded size settled as hot, for `"leased"` protection reporting. */
+  const lastHotBytes = new Map<string, number>();
+
+  function notifyHot(artifactRoomId: string, bytes: number): void {
+    lastHotBytes.set(artifactRoomId, bytes);
+    if (budget === null) return;
+    budget.settle(artifactRoomId, bytes);
+  }
+
+  function notifyCold(artifactRoomId: string, bytes: number): void {
+    if (budget === null) return;
+    budget.settleCold(artifactRoomId, bytes);
+  }
+
+  function unchargeHot(artifactRoomId: string): void {
+    lastHotBytes.delete(artifactRoomId);
+    if (budget === null) return;
+    budget.release(artifactRoomId);
+  }
 
   function clearPendingRoomUpdates(entry: ArtifactRoomReplicaEntry): void {
     entry.pendingUpdates.length = 0;
@@ -608,12 +645,14 @@ export function createArtifactRoomTier(
         latestHostStateVectorBase64: hostStateVectorBase64,
         awarenessFrames: [],
       });
+      notifyCold(artifactRoomId, update.byteLength);
       return;
     }
     pushColdUpdate(existing, update);
     if (hostStateVectorBase64 !== null) {
       existing.latestHostStateVectorBase64 = hostStateVectorBase64;
     }
+    notifyCold(artifactRoomId, existing.bytes);
   }
 
   function recordColdAwareness(
@@ -671,6 +710,8 @@ export function createArtifactRoomTier(
       // so cooling a room does not blank presence when it comes back.
       awarenessFrames,
     });
+    unchargeHot(artifactRoomId);
+    notifyCold(artifactRoomId, encoded.byteLength);
     return true;
   }
 
@@ -771,6 +812,8 @@ export function createArtifactRoomTier(
     for (const frame of coldEntry.awarenessFrames) {
       applyAwarenessUpdate(entry.awareness, frame, BIN_AWARENESS_REMOTE_ORIGIN);
     }
+    notifyHot(artifactRoomId, Y.encodeStateAsUpdate(entry.doc).byteLength);
+    notifyCold(artifactRoomId, 0);
     enforceHotCap();
     armCooldownForUnleasedMaterialization(artifactRoomId);
     return entry;
@@ -892,6 +935,40 @@ export function createArtifactRoomTier(
       }
     },
 
+    demoteColdestUnpinned(overBytes: number): EvictionOutcome {
+      let remaining = overBytes;
+      let reclaimed = 0;
+      while (remaining > 0) {
+        let victim: string | null = null;
+        let victimSeq = Number.POSITIVE_INFINITY;
+        for (const id of replicas.keys()) {
+          if (isPinned(id)) continue;
+          const seq = touchSeq.get(id) ?? 0;
+          if (seq < victimSeq) {
+            victimSeq = seq;
+            victim = id;
+          }
+        }
+        if (victim === null) break;
+        cancelCooldown(victim);
+        if (!coolReplica(victim)) break;
+        const cooled = cold.get(victim);
+        const bytes = cooled === undefined ? 0 : cooled.bytes;
+        reclaimed += bytes;
+        remaining -= bytes;
+      }
+      let leasedBytes = 0;
+      for (const id of replicas.keys()) {
+        if (!isPinned(id)) continue;
+        leasedBytes += lastHotBytes.get(id) ?? 0;
+      }
+      return {
+        reclaimedBytes: reclaimed,
+        protectedBytesByKind:
+          leasedBytes > 0 ? [{ kind: "leased", bytes: leasedBytes }] : [],
+      };
+    },
+
     hasDivergence(): boolean {
       for (const entry of replicas.values()) {
         if (entry.dirtyWatermarkStateVectorBase64 !== null) return true;
@@ -971,6 +1048,10 @@ export function createArtifactRoomTier(
       ) {
         entry.dirtyWatermarkStateVectorBase64 = null;
       }
+      if (!hadPrior) {
+        notifyHot(artifactRoomId, Y.encodeStateAsUpdate(entry.doc).byteLength);
+        notifyCold(artifactRoomId, 0);
+      }
       return hadPrior ? "merged" : "seeded";
     },
 
@@ -985,6 +1066,7 @@ export function createArtifactRoomTier(
         if (coldEntry === undefined) return;
         pushColdUpdate(coldEntry, updateBytes);
         coldEntry.latestHostStateVectorBase64 = hostStateVectorBase64;
+        notifyCold(artifactRoomId, coldEntry.bytes);
         return;
       }
       Y.applyUpdate(entry.doc, updateBytes, BIN_STREAM_ORIGIN);
@@ -1035,6 +1117,8 @@ export function createArtifactRoomTier(
       cold.delete(artifactRoomId);
       touchSeq.delete(artifactRoomId);
       destroyReplica(artifactRoomId);
+      unchargeHot(artifactRoomId);
+      notifyCold(artifactRoomId, 0);
     },
 
     scheduleCooldownCheck: scheduleCooldown,
@@ -1065,7 +1149,9 @@ export function createArtifactRoomTier(
     },
 
     destroyAll(): void {
-      for (const id of Array.from(replicas.keys())) {
+      const hotIds = Array.from(replicas.keys());
+      const coldIds = Array.from(cold.keys());
+      for (const id of hotIds) {
         destroyReplica(id);
       }
       for (const timer of cooldownTimers.values()) {
@@ -1074,6 +1160,13 @@ export function createArtifactRoomTier(
       cooldownTimers.clear();
       cold.clear();
       touchSeq.clear();
+      lastHotBytes.clear();
+      for (const id of hotIds) {
+        unchargeHot(id);
+      }
+      for (const id of coldIds) {
+        notifyCold(id, 0);
+      }
       // Leases are deliberately NOT cleared: they are owned by mounted editors,
       // which survive a replica swap / resubscribe and will re-materialize their
       // room from the next snapshot. Clearing them here would leave a mounted
@@ -1097,7 +1190,9 @@ export function createArtifactRoomTier(
      */
     dispose(): void {
       tierDisposed = true;
-      for (const id of Array.from(replicas.keys())) {
+      const hotIds = Array.from(replicas.keys());
+      const coldIds = Array.from(cold.keys());
+      for (const id of hotIds) {
         destroyReplica(id);
       }
       for (const timer of cooldownTimers.values()) {
@@ -1107,6 +1202,13 @@ export function createArtifactRoomTier(
       cold.clear();
       touchSeq.clear();
       leases.clear();
+      lastHotBytes.clear();
+      for (const id of hotIds) {
+        unchargeHot(id);
+      }
+      for (const id of coldIds) {
+        notifyCold(id, 0);
+      }
     },
   };
 }
