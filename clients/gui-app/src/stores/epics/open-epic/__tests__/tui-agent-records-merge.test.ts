@@ -624,3 +624,106 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     expect(after.title).toBe("Adopted (registry)");
   });
 });
+
+/** The narrow cross-host arm, as a delta or a snapshot row. */
+function cloudRow(
+  overrides: Partial<Extract<TuiAgentRecordSummaryV12, { origin: "cloud" }>>,
+): TuiAgentRecordSummaryV12 {
+  return {
+    origin: "cloud",
+    tuiAgentId: "tui-1",
+    ownerUserId: USER,
+    hostId: "host-elsewhere",
+    harnessId: "claude",
+    parentId: null,
+    title: "An agent on my other machine",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    revision: 1,
+    ...overrides,
+  };
+}
+
+describe("terminal-agent merge puts AUTHORITY before revision", () => {
+  it("TRIPWIRE: a registry snapshot row replaces a held cloud row at a LOWER revision", () => {
+    // THE STRANDING THIS PREVENTS. The host may legitimately answer with the
+    // authoritative local row at or below a stale replica's revision - it
+    // drops a replica sitting under a live local row SILENTLY, then serves the
+    // local row from its next list. A revision-first rule rejects that as "not
+    // newer" and keeps the cloud copy, which is unlaunchable and unforkable -
+    // and because the id WAS in the snapshot, the omission fence cannot remove
+    // it either. Nothing dislodges it until some later local mutation happens
+    // to bump the revision.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([cloudRow({ revision: 999 })], null);
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1", revision: 1 })], null);
+
+    expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].origin).toBe(
+      "registry",
+    );
+  });
+
+  it("TRIPWIRE: a registry DELTA replaces a held cloud row at a lower revision", () => {
+    // The push half of the same rule. Poll and push share one predicate so
+    // they cannot disagree about which of two rows wins.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: cloudRow({ revision: 999 }),
+    });
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: row({ tuiAgentId: "tui-1", revision: 1 }),
+    });
+
+    expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].origin).toBe(
+      "registry",
+    );
+  });
+
+  it("never lets a cloud row displace a local one, however new it is", () => {
+    // The other direction, and the one that keeps a live local agent usable: a
+    // replica arriving at a far higher revision must not turn an authoritative
+    // row into an unlaunchable copy.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1", revision: 1 })], null);
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([cloudRow({ revision: 999 })], null);
+
+    expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].origin).toBe(
+      "registry",
+    );
+  });
+
+  it("still orders by revision BETWEEN two rows of the same authority", () => {
+    // Authority is a tie-breaker between planes, not a licence to ignore
+    // ordering. Two replicas still compare by revision, so a replayed or
+    // reordered delta stays a no-op.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([cloudRow({ revision: 5, title: "newer" })], null);
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([cloudRow({ revision: 4, title: "older" })], null);
+
+    expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].title).toBe(
+      "newer",
+    );
+  });
+});

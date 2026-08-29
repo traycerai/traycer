@@ -1024,6 +1024,42 @@ function emitCurrentAwareness(
  *   - Persist only `lastFocusedArtifactId` + `lastFocusedThreadId` to
  *     localStorage under a key scoped to `epicId`
  */
+/**
+ * Whether an incoming terminal-agent row should REPLACE the one held.
+ *
+ * AUTHORITY FIRST, revision second - and the order is the whole point.
+ *
+ * A `cloud` row is a read-only replica of an agent on another machine; a
+ * `registry` (or `doc`) row is the serving host's own. Comparing revisions
+ * first treats the two as interchangeable, and they are not: the host may
+ * legitimately answer with an authoritative row at the SAME revision a stale
+ * replica already carries - it silently drops a stale replica sitting under a
+ * live local row, then serves the local row from its next list - and a
+ * revision-first rule rejects it as "not newer". The GUI then keeps the cloud
+ * copy for good: it is unlaunchable and unforkable, and because the id WAS in
+ * the snapshot, the omission fence cannot remove it either. Nothing short of a
+ * later local mutation that happens to bump the revision would dislodge it.
+ *
+ * So: a local row always beats a replica, a replica never beats a local row,
+ * and `revision` decides only between two rows of the same authority.
+ *
+ * The doc-over-doc waiver rides on that last clause. A doc row has no registry
+ * seq and ships at `revision: 0` on every answer, so "strictly greater" would
+ * reject each refresh and freeze the row at whatever the session first saw.
+ * Two doc reads are the same authority and the later one is newer by
+ * construction, being a fresher read of the same map.
+ */
+function tuiAgentRowSupersedes(
+  incoming: TuiAgentRecordSummaryV12,
+  held: TuiAgentRecordSummaryV12,
+): boolean {
+  const incomingIsLocal = incoming.origin !== "cloud";
+  const heldIsLocal = held.origin !== "cloud";
+  if (incomingIsLocal !== heldIsLocal) return incomingIsLocal;
+  if (incoming.origin === "doc" && held.origin === "doc") return true;
+  return incoming.revision > held.revision;
+}
+
 export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {
@@ -4208,14 +4244,8 @@ export function createOpenEpicStore(
               // waived is only the comparison between two rows that both carry
               // a placeholder, where the later answer is newer by construction
               // because it is a fresher read of the same map.
-              if (held !== undefined) {
-                // Keyed on `origin`, not on `docResident`: the row is a union
-                // from `@1.2` on, and the narrow cross-host arm carries no
-                // `docResident` at all. `origin === "doc"` is the same fact
-                // stated on the discriminator every arm answers.
-                const bothDocResident =
-                  held.origin === "doc" && row.origin === "doc";
-                if (!bothDocResident && row.revision <= held.revision) continue;
+              if (held !== undefined && !tuiAgentRowSupersedes(row, held)) {
+                continue;
               }
               tuiAgentRecordRows.set(id, row);
               tuiAgentIngestSeq += 1;
@@ -4254,10 +4284,15 @@ export function createOpenEpicStore(
             // the row here.
             if (tuiAgentRetractions.has(record.tuiAgentId)) return;
             const held = tuiAgentRecordRows.get(record.tuiAgentId);
-            // The staleness test: `revision` is per-record monotonic and the
-            // only ordering fact on a row, so a delta that does not strictly
-            // exceed what is held is a replay, a reorder or a duplicate.
-            if (held !== undefined && record.revision <= held.revision) return;
+            // The staleness test, AUTHORITY FIRST - the same rule the snapshot
+            // path applies, and shared with it so the poll and the push can
+            // never disagree about which of two rows wins. `revision` alone
+            // would let a stale cloud replica hold its ground against the
+            // authoritative local row at an equal revision; see
+            // `tuiAgentRowSupersedes`.
+            if (held !== undefined && !tuiAgentRowSupersedes(record, held)) {
+              return;
+            }
             // Stored VERBATIM, where this used to force `docResident: false`.
             //
             // That fill was a fact about the source while the delta plane was
