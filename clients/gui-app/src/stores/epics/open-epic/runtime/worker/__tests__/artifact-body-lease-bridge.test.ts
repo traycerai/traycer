@@ -42,7 +42,10 @@ interface DemoteRecord {
  * until the test settles it - which is what makes "before the ack" a state a
  * test can actually stand in.
  */
-function createWorkerSide(pair: FakeBridgePair) {
+function createWorkerSide(
+  pair: FakeBridgePair,
+  docKeyFor: (artifactId: string) => string,
+) {
   const demotes: DemoteRecord[] = [];
   const unsubscribe = pair.worker.subscribe((message) => {
     if (!isMainToWorkerFrame(message) || message.frame !== "call") return;
@@ -55,7 +58,7 @@ function createWorkerSide(pair: FakeBridgePair) {
     };
     if (call.kind === "body/materialize") {
       respond({
-        docKey: call.request.artifactId,
+        docKey: docKeyFor(call.request.artifactId),
         update: Uint8Array.from([1, 2, 3]),
         seedMode: "full",
         hostStateVector: null,
@@ -125,7 +128,7 @@ function grantedKey(grant: ArtifactBodyGrant): string {
 
 function setup() {
   const pair = createFakeBridgePair("sync");
-  const worker = createWorkerSide(pair);
+  const worker = createWorkerSide(pair, (artifactId) => artifactId);
   const main = createMainBridgeEndpoint(pair.main);
   const docs = createDocs();
   const budget = createBudget();
@@ -289,7 +292,7 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
 
     // Respawn: a fresh pair, a fresh endpoint, the same lease bridge state.
     const nextPair = createFakeBridgePair("sync");
-    const nextWorker = createWorkerSide(nextPair);
+    const nextWorker = createWorkerSide(nextPair, (artifactId) => artifactId);
     const nextLeases = createArtifactBodyLeaseBridge({
       bridge: createMainBridgeEndpoint(nextPair.main),
       docs,
@@ -410,3 +413,53 @@ function countCalls(pair: FakeBridgePair, kind: RuntimeWorkerCallKind): number {
     );
   }).length;
 }
+
+describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the same way", () => {
+  it("disarms the pending demote when the re-acquire arrives through materialize", async () => {
+    // On `@1` the doc key is a ROOM id, so a held entry is not findable by
+    // artifact id and EVERY re-acquire goes through `body/materialize` - the
+    // post-materialize arm, not the fast path. The lane-arm pin above cannot
+    // reach this code at all, which is exactly why it was not evidence.
+    const pair = createFakeBridgePair("sync");
+    const worker = createWorkerSide(pair, () => "room-1");
+    const main = createMainBridgeEndpoint(pair.main);
+    const docs = createDocs();
+    const budget = createBudget();
+    const leases = createArtifactBodyLeaseBridge({
+      bridge: main,
+      docs,
+      budget,
+    });
+
+    const first = await leases.acquire("artifact-1");
+    expect(grantedKey(first)).toBe("room-1");
+    if (first.kind !== "granted") throw new Error("expected a grant");
+    first.release();
+    expect(worker.demotes).toHaveLength(1);
+    const staleGeneration = worker.demotes[0]?.generation;
+
+    // Re-acquired before the ack. Goes through materialize because the entry
+    // is keyed by the room, not the artifact.
+    const second = await leases.acquire("artifact-1");
+    expect(grantedKey(second)).toBe("room-1");
+    expect(budget.calls).toContain("clearDemoting:room-1");
+
+    // The old demote's ack lands. It must be a no-op: the editor bound to that
+    // Y.Doc is holding it right now.
+    worker.demotes[0]?.settle({ accepted: true, settledBytes: 4_096 });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(docs.dropped).toEqual([]);
+    expect(docs.has("room-1")).toBe(true);
+    expect(budget.calls).not.toContain("settleCold:room-1:4096");
+    expect(leases.unacknowledgedDemoteKeys()).toEqual([]);
+
+    // And the entry is genuinely held again: releasing posts a NEW demote past
+    // the generation that was ignored.
+    if (second.kind !== "granted") throw new Error("expected a grant");
+    second.release();
+    expect(worker.demotes).toHaveLength(2);
+    expect(worker.demotes[1]?.generation).toBeGreaterThan(staleGeneration ?? 0);
+  });
+});

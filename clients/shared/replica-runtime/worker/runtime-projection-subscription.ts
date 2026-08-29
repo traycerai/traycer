@@ -41,29 +41,61 @@ export interface RuntimeProjectionHandlers<TProjection> {
 }
 
 /**
- * Subscribes to the worker's projection publications. Returns the unsubscribe.
+ * The ordering itself, as a value with no knowledge of where publications come
+ * from.
+ *
+ * Split out from the subscription because the watermark must be held in
+ * exactly ONE place. Production wires projections through the spawner's
+ * `onProjection` port, so if this module also subscribed to the bridge
+ * directly there would be two watermarks over one stream, each dropping the
+ * other's deliveries as stale - a failure that looks like a projection that
+ * updates half the time.
+ */
+export interface RuntimeProjectionOrdering {
+  deliver(revision: number, value: unknown): void;
+}
+
+export function createRuntimeProjectionOrdering<TProjection>(
+  handlers: RuntimeProjectionHandlers<TProjection>,
+): RuntimeProjectionOrdering {
+  // Starts below every real revision: the sink's first delivery is 1.
+  let appliedRevision = 0;
+  return {
+    deliver(revision, value): void {
+      if (revision <= appliedRevision) {
+        handlers.reject("stale", revision);
+        return;
+      }
+      const accepted = handlers.accept(value);
+      if (accepted === null) {
+        handlers.reject("unrecognised", revision);
+        return;
+      }
+      // Advanced only on a publication that was actually applied. Advancing on
+      // a rejected one would make the NEXT good publication at that revision
+      // look stale, turning one skewed frame into a permanently frozen
+      // projection.
+      appliedRevision = revision;
+      handlers.apply(accepted, revision);
+    },
+  };
+}
+
+/**
+ * Subscribes an ordering directly to a bridge. Returns the unsubscribe.
+ *
+ * For a caller that owns its bridge outright. The production composition root
+ * does NOT use this - it hands `ordering.deliver` to the spawner, which owns
+ * the one subscription - so reaching for it beside a spawned worker is the
+ * two-watermark mistake described above.
  */
 export function subscribeRuntimeProjection<TProjection>(
   bridge: MainBridgeEndpoint,
   handlers: RuntimeProjectionHandlers<TProjection>,
 ): () => void {
-  // Starts below every real revision: the sink's first delivery is 1.
-  let appliedRevision = 0;
+  const ordering = createRuntimeProjectionOrdering(handlers);
   return bridge.onEvent((event) => {
     if (event.kind !== "projection") return;
-    if (event.revision <= appliedRevision) {
-      handlers.reject("stale", event.revision);
-      return;
-    }
-    const accepted = handlers.accept(event.value);
-    if (accepted === null) {
-      handlers.reject("unrecognised", event.revision);
-      return;
-    }
-    // Advanced only on a publication that was actually applied. Advancing on a
-    // rejected one would make the NEXT good publication at that revision look
-    // stale, turning one skewed frame into a permanently frozen projection.
-    appliedRevision = event.revision;
-    handlers.apply(accepted, event.revision);
+    ordering.deliver(event.revision, event.value);
   });
 }

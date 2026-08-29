@@ -162,17 +162,7 @@ export function createArtifactBodyLeaseBridge(options: {
     async acquire(artifactId): Promise<ArtifactBodyGrant> {
       const existing = findByArtifact(entries, artifactId);
       if (existing !== null) {
-        const { docKey, entry } = existing;
-        // Re-acquired before the ack landed. The doc never left, so this is
-        // not a round trip: cancel the pending drop by moving the generation
-        // past it and hand back the same document.
-        if (entry.demotingGeneration !== null) {
-          entry.demotingGeneration = null;
-          entry.generation += 1;
-          options.budget.clearDemoting(docKey);
-        }
-        entry.leases += 1;
-        return { kind: "granted", docKey, release: releaseFor(docKey) };
+        return reviveAndHold(existing.docKey, existing.entry);
       }
 
       const answer = await options.bridge.call(
@@ -184,13 +174,24 @@ export function createArtifactBodyLeaseBridge(options: {
         return { kind: "unavailable", reason: `no body for ${artifactId}` };
       }
       const docKey = answer.docKey;
-      // A concurrent acquire for the same artifact may have installed it while
-      // this call was in flight; adopt that installation rather than replacing
-      // a document an editor may already be bound to.
+      // An entry already under this doc key. Two ways to arrive here, and the
+      // second is the one that matters:
+      //
+      //   - a concurrent acquire for the same artifact installed it while this
+      //     call was in flight; or
+      //   - the `@1` arm, where `docKey` is a ROOM id. `findByArtifact` is
+      //     keyed by doc key, so a held legacy entry is not findable by
+      //     artifact id at all, and EVERY legacy re-acquire lands here rather
+      //     than on the fast path above.
+      //
+      // Both must revive a pending demote, which is why this shares one helper
+      // with the fast path instead of only bumping the lease count. Skipping
+      // the revive here leaves the earlier demote armed: its `accepted: true`
+      // passes the generation guard, the entry is deleted, settled cold and
+      // dropped - out from under the editor that just took the new grant.
       const raced = entries.get(docKey);
       if (raced !== undefined) {
-        raced.leases += 1;
-        return { kind: "granted", docKey, release: releaseFor(docKey) };
+        return reviveAndHold(docKey, raced);
       }
       options.docs.install({
         docKey,
@@ -220,6 +221,28 @@ export function createArtifactBodyLeaseBridge(options: {
       return keys;
     },
   };
+
+  /**
+   * Take a hold on an entry that already exists, cancelling any demote that is
+   * still in flight for it.
+   *
+   * The single place a pending demote is disarmed, and it is shared on purpose:
+   * there are TWO routes to "re-acquire a doc whose demote has not been
+   * acknowledged" - the fast path (doc key equals artifact id, the lane arm)
+   * and the post-materialize path (doc key is a room id, the `@1` arm) - and
+   * for a while only the first one revived. Advancing the generation is what
+   * makes the outstanding ack a no-op; without it the ack still matches, and
+   * the document is dropped under a live grant.
+   */
+  function reviveAndHold(docKey: string, entry: BodyEntry): ArtifactBodyGrant {
+    if (entry.demotingGeneration !== null) {
+      entry.demotingGeneration = null;
+      entry.generation += 1;
+      options.budget.clearDemoting(docKey);
+    }
+    entry.leases += 1;
+    return { kind: "granted", docKey, release: releaseFor(docKey) };
+  }
 
   function releaseFor(docKey: string): () => void {
     let live = true;

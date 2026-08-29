@@ -84,13 +84,25 @@ export function startBearerPump(options: BearerPumpOptions): () => void {
     options.push(next);
   };
 
-  pushCurrent();
+  // Subscribe FIRST, then take the snapshot.
+  //
+  // The other order loses a credential change that lands in the gap: a
+  // sign-out (or a rotation) between the snapshot read and the subscription
+  // emits to nobody, and with no later identity event the worker keeps
+  // re-dialing with a token for a user who has gone. Snapshot-last cannot lose
+  // anything the other way round - a change that fires during registration is
+  // simply reflected in the snapshot that follows it.
+  //
+  // Safe against double-pushing because `lastPushed` is `null` until the first
+  // push, so the dedupe below cannot suppress the snapshot even when a
+  // subscription callback already pushed the identical value.
   const unsubscribeChange = options.hostClient.onChange(() => {
     pushCurrent();
   });
   const unsubscribeRotation = options.hostClient.onBearerRotated(() => {
     pushCurrent();
   });
+  pushCurrent();
 
   return () => {
     unsubscribeChange();

@@ -59,6 +59,17 @@ export interface SpawnEpicRuntimeWorkerOptions {
   readonly createWorker: () => RuntimeWorkerLike;
   readonly hostClient: BearerPumpHostClient;
   readonly relay: RuntimeWorkerLogRelay;
+  /**
+   * Where published projection slices go.
+   *
+   * The spawner owns the ONE subscription to this stream and forwards it here
+   * verbatim, un-narrowed. It does not narrow because the slice's shape is the
+   * store's, and it does not hold a watermark because the ordering belongs to
+   * exactly one place (`createRuntimeProjectionOrdering`) - two watermarks over
+   * one stream drop each other's deliveries as stale, which presents as a
+   * projection that updates half the time.
+   */
+  readonly onProjection: (revision: number, value: unknown) => void;
   /** Identifies this renderer window in the worker's log lines. */
   readonly windowLabel: string;
 }
@@ -104,6 +115,9 @@ export function spawnEpicRuntimeWorker(
         return;
       case "log":
         options.relay.log(event.entry);
+        return;
+      case "projection":
+        options.onProjection(event.revision, event.value);
         return;
       case "fatal":
         options.relay.fatal(event.message, event.stack);

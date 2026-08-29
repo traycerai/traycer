@@ -215,3 +215,71 @@ describe("startBearerPump", () => {
     expect(pushes).toHaveLength(count);
   });
 });
+
+describe("startBearerPump — the registration gap", () => {
+  /**
+   * A host client whose SUBSCRIPTION acts: registering the handler is itself
+   * the moment the credential changes. That is the gap, made deterministic -
+   * in production it is a sign-out landing between the snapshot read and the
+   * subscription, which emits to nobody and leaves the worker re-dialing as a
+   * user who has gone.
+   */
+  function createTransitioningClient(input: {
+    readonly before: RequestContext | null;
+    readonly after: RequestContext | null;
+    readonly on: "change" | "rotation";
+  }): BearerPumpHostClient {
+    let context = input.before;
+    const transition = (): void => {
+      context = input.after;
+    };
+    return {
+      getRequestContext: () => context,
+      onChange: (handler) => {
+        if (input.on === "change") transition();
+        void handler;
+        return () => {};
+      },
+      onBearerRotated: (handler) => {
+        if (input.on === "rotation") transition();
+        void handler;
+        return () => {};
+      },
+    };
+  }
+
+  it("reflects a sign-out that lands while onChange is being registered", () => {
+    const pushes: BearerPush[] = [];
+    startBearerPump({
+      hostClient: createTransitioningClient({
+        before: createRequestContextFixture({ bearerToken: "token" }),
+        after: null,
+        on: "change",
+      }),
+      push: (bearer) => pushes.push(bearer),
+      onReadFailure: () => {},
+    });
+
+    // The LAST startup push is the one the worker ends up holding. The dedupe
+    // cannot suppress it: `lastPushed` is null until the first push, so the
+    // snapshot always emits.
+    expect(pushes.at(-1)).toEqual({ state: "absent" });
+  });
+
+  it("reflects a rotation that lands while onBearerRotated is being registered", () => {
+    const pushes: BearerPush[] = [];
+    startBearerPump({
+      hostClient: createTransitioningClient({
+        before: createRequestContextFixture({ bearerToken: "stale" }),
+        after: createRequestContextFixture({ bearerToken: "rotated" }),
+        on: "rotation",
+      }),
+      push: (bearer) => pushes.push(bearer),
+      onReadFailure: () => {},
+    });
+
+    const last = pushes.at(-1);
+    expect(last?.state).toBe("present");
+    expect(last?.state === "present" ? last.token : null).toBe("rotated");
+  });
+});

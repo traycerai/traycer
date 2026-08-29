@@ -28,7 +28,15 @@ import { createFakeBridgePair } from "../test-support/fake-bridge-pair";
 
 const ABSENT: BearerProbe = { state: "absent" };
 
-/** Handlers that answer everything successfully and record nothing else. */
+/**
+ * The no-core answers, as the worker host gives them before a composition root
+ * is installed: nothing available, and a demote REFUSED.
+ *
+ * Written out per call rather than behind a widened type. The map is required
+ * to be total on purpose - a call added to the protocol without a handler is
+ * meant to stop the build - and a `Partial` base would turn that guarantee off
+ * for every suite that reached for this helper.
+ */
 function stubHandlers(
   overrides: Partial<RuntimeWorkerCallHandlers>,
 ): RuntimeWorkerCallHandlers {
@@ -37,6 +45,21 @@ function stubHandlers(
       Promise.resolve({ value: ABSENT, transfer: NO_TRANSFER }),
     "attachment/read": () =>
       Promise.resolve({ value: { bytes: null }, transfer: NO_TRANSFER }),
+    "body/materialize": () =>
+      Promise.resolve({
+        value: {
+          docKey: null,
+          update: null,
+          seedMode: "full",
+          hostStateVector: null,
+        },
+        transfer: NO_TRANSFER,
+      }),
+    "body/demote": () =>
+      Promise.resolve({
+        value: { accepted: false, settledBytes: 0 },
+        transfer: NO_TRANSFER,
+      }),
   };
   return { ...base, ...overrides };
 }
@@ -229,6 +252,41 @@ describe("bridge byte transfer", () => {
     await main.call("bearer/probe", {}, NO_TRANSFER);
 
     expect(pair.fromWorker.at(-1)?.transferCount).toBe(0);
+  });
+});
+
+describe("the body calls, with nothing behind them", () => {
+  it("REFUSES a demote rather than reporting bytes nobody stored", async () => {
+    const pair = createFakeBridgePair("sync");
+    createWorkerBridgeEndpoint(pair.worker, stubHandlers({}));
+    const main = createMainBridgeEndpoint(pair.main);
+
+    // `accepted: false` is what keeps the main thread's live doc alive. An
+    // unowned `true` here tells it to drop a document whose bytes were never
+    // written, which is the one failure the acknowledged demote exists to
+    // rule out.
+    await expect(
+      main.call(
+        "body/demote",
+        { docKey: "doc-1", generation: 1, update: Uint8Array.from([1]) },
+        NO_TRANSFER,
+      ),
+    ).resolves.toEqual({ accepted: false, settledBytes: 0 });
+  });
+
+  it("answers a materialize with no body as a null doc key", async () => {
+    const pair = createFakeBridgePair("sync");
+    createWorkerBridgeEndpoint(pair.worker, stubHandlers({}));
+    const main = createMainBridgeEndpoint(pair.main);
+
+    await expect(
+      main.call("body/materialize", { artifactId: "artifact-1" }, NO_TRANSFER),
+    ).resolves.toEqual({
+      docKey: null,
+      update: null,
+      seedMode: "full",
+      hostStateVector: null,
+    });
   });
 });
 

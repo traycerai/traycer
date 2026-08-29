@@ -101,6 +101,7 @@ describe("spawnEpicRuntimeWorker", () => {
     const handle = spawnEpicRuntimeWorker({
       createWorker: () => fixture.worker,
       hostClient,
+      onProjection: () => {},
       relay,
       windowLabel: "window-1",
     });
@@ -122,6 +123,7 @@ describe("spawnEpicRuntimeWorker", () => {
     const handle = spawnEpicRuntimeWorker({
       createWorker: () => fixture.worker,
       hostClient,
+      onProjection: () => {},
       relay,
       windowLabel: "window-1",
     });
@@ -157,6 +159,7 @@ describe("spawnEpicRuntimeWorker", () => {
     const handle = spawnEpicRuntimeWorker({
       createWorker: () => fixture.worker,
       hostClient,
+      onProjection: () => {},
       relay,
       windowLabel: "window-1",
     });
@@ -177,6 +180,7 @@ describe("spawnEpicRuntimeWorker", () => {
     const handle = spawnEpicRuntimeWorker({
       createWorker: () => fixture.worker,
       hostClient,
+      onProjection: () => {},
       relay,
       windowLabel: "window-1",
     });

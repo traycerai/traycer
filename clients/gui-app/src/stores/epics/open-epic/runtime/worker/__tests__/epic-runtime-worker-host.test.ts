@@ -15,6 +15,7 @@ import {
 import {
   startEpicRuntimeWorkerHost,
   type EpicRuntimeWorkerHost,
+  type EpicRuntimeWorkerCore,
 } from "../epic-runtime-worker-host";
 
 interface HostFixture {
@@ -48,6 +49,29 @@ function bootstrap(protocolVersion: number): {
     kind: "bootstrap",
     bootstrap: { protocolVersion, windowLabel: "test-window" },
   };
+}
+
+/**
+ * A core with the fail-closed no-core answers, overridable per test.
+ *
+ * One helper rather than a literal per test, and that is the point:
+ * `EpicRuntimeWorkerCore` MIRRORS the protocol's call kinds, so it grows every
+ * time a call is added — and five separate literals meant five separate
+ * compile errors the moment `body/*` landed. A single construction site turns
+ * the next such addition into one failure in one place.
+ */
+function stubCore(
+  overrides: Partial<EpicRuntimeWorkerCore>,
+): EpicRuntimeWorkerCore {
+  const base: EpicRuntimeWorkerCore = {
+    readAttachmentBytes: () => Promise.resolve(null),
+    materializeBody: () => Promise.resolve(null),
+    // Refused, never accepted: an unowned `true` tells the main thread to drop
+    // a document whose bytes nothing stored.
+    demoteBody: () => Promise.resolve({ accepted: false, settledBytes: 0 }),
+    dispose: () => {},
+  };
+  return { ...base, ...overrides };
 }
 
 describe("startEpicRuntimeWorkerHost", () => {
@@ -134,10 +158,9 @@ describe("startEpicRuntimeWorkerHost", () => {
     fullView.set([0, 1, 2, 3, 4, 5, 6, 7]);
     const partialView = new Uint8Array(buffer, 2, 3);
 
-    host.installCore({
-      readAttachmentBytes: async () => partialView,
-      dispose: () => {},
-    });
+    host.installCore(
+      stubCore({ readAttachmentBytes: async () => partialView }),
+    );
 
     // Asserted on what the CALLER receives, not on the frame in transit. The
     // frame is the same evidence either way, but a caller that gets a
@@ -165,14 +188,8 @@ describe("startEpicRuntimeWorkerHost", () => {
     const { main, host } = createFixture();
     const firstDispose = vi.fn();
     const secondDispose = vi.fn();
-    const core = {
-      readAttachmentBytes: async () => null,
-      dispose: firstDispose,
-    };
-    const replacement = {
-      readAttachmentBytes: async () => null,
-      dispose: secondDispose,
-    };
+    const core = stubCore({ dispose: firstDispose });
+    const replacement = stubCore({ dispose: secondDispose });
 
     host.installCore(core);
     host.installCore(replacement);
@@ -186,7 +203,7 @@ describe("startEpicRuntimeWorkerHost", () => {
   it("shuts down idempotently, disposes the core, and ignores later events", () => {
     const { pair, main, host } = createFixture();
     const dispose = vi.fn();
-    host.installCore({ readAttachmentBytes: async () => null, dispose });
+    host.installCore(stubCore({ dispose }));
 
     host.shutdown();
     host.shutdown();
@@ -200,7 +217,7 @@ describe("startEpicRuntimeWorkerHost", () => {
   it("shuts down when a shutdown event arrives from the main side", () => {
     const { pair, main, host } = createFixture();
     const dispose = vi.fn();
-    host.installCore({ readAttachmentBytes: async () => null, dispose });
+    host.installCore(stubCore({ dispose }));
 
     main.emit({ kind: "shutdown" }, []);
     expect(dispose).toHaveBeenCalledTimes(1);
