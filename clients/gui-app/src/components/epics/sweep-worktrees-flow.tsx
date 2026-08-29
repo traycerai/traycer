@@ -27,6 +27,53 @@ const CLOSED: SweepFlowPhase = { kind: "closed" };
 const PICKING: SweepFlowPhase = { kind: "picking" };
 const DIRECT: SweepFlowPhase = { kind: "direct" };
 
+/** Which of the two steps a phase shows. */
+interface SweepFlowView {
+  /** The host question is up. */
+  readonly pickerOpen: boolean;
+  /** The confirmation may run - it receives the Tasks. */
+  readonly sweeping: boolean;
+}
+
+/**
+ * The phase, plus whether the picked host's client resolved, decides which
+ * step is up. Exhaustive over the union and pure, so the component below keeps
+ * one job and the reasoning that follows lives next to the branch it explains.
+ *
+ * **A picked host whose client will not resolve keeps the PICKER up** rather
+ * than handing the confirmation a null client. That dialog reads a null client
+ * as "no rows" - its candidates query gates on readiness, so it never fetches
+ * and never reports pending - and paints "No worktrees on this host for the
+ * selected tasks". In a tool whose entire job is finding leftovers, that
+ * sentence is a claim we have not earned: it says there is nothing to clean up
+ * when the truth is that we could not ask. Withholding the Tasks instead would
+ * close the confirmation outright, since it opens on the task count - a
+ * vanishing dialog traded for a wrong one.
+ *
+ * Deliberately NOT a loading state, because this is not a wait. Selectable
+ * picker rows are `isAdministrableRoute`, which already requires a dialable
+ * endpoint, so the client resolves in the SAME render for every host a person
+ * can choose. What is left is the host ceasing to be dialable between the pick
+ * and this render - deregistered, or the credential lease released - and the
+ * honest response to that is the question again, with that row now inert,
+ * rather than a spinner for an answer that is not coming.
+ */
+function sweepFlowView(
+  phase: SweepFlowPhase,
+  pickedHostResolved: boolean,
+): SweepFlowView {
+  switch (phase.kind) {
+    case "picking":
+      return { pickerOpen: true, sweeping: false };
+    case "picked":
+      return { pickerOpen: !pickedHostResolved, sweeping: pickedHostResolved };
+    case "direct":
+      return { pickerOpen: false, sweeping: true };
+    case "closed":
+      return { pickerOpen: false, sweeping: false };
+  }
+}
+
 interface SweepWorktreesFlowProps {
   /**
    * The Tasks being swept, exactly as `SweepWorktreesDialog` takes them.
@@ -105,13 +152,14 @@ export function SweepWorktreesFlow(props: SweepWorktreesFlowProps): ReactNode {
   // favour of the surface's own client - the two are the same object on
   // History and deliberately are not inside an Epic session.
   const pickedHostClient = useHostClientForHostId(pickedHostId);
-  const sweeping = phase.kind === "direct" || phase.kind === "picked";
+  const view = sweepFlowView(phase, pickedHostClient !== null);
+  const sweeping = view.sweeping;
 
   return (
     <>
       {phase.kind === "picking" || phase.kind === "picked" ? (
         <SweepHostPickerDialog
-          open={phase.kind === "picking"}
+          open={view.pickerOpen}
           taskCount={epicIds?.length ?? 0}
           taskTitle={props.taskTitle}
           occupiedHostIds={props.occupiedHostIds}

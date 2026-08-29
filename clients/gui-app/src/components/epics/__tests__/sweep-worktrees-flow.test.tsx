@@ -29,6 +29,11 @@ function clientAddressing(hostId: string): HostClient<HostRpcRegistry> {
 const state = vi.hoisted(() => ({
   connectableHostIds: ["host-a"] as readonly string[],
   resolved: true,
+  /**
+   * Hosts whose client the seam cannot build - the real one answers `null`
+   * when the entry stops being dialable or the credential lease goes away.
+   */
+  unresolvableHostIds: [] as readonly string[],
 }));
 const captured = vi.hoisted<{
   dialog: {
@@ -51,7 +56,7 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
 // contract the real seam holds and the only part these assertions need.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
-    hostId === null
+    hostId === null || state.unresolvableHostIds.includes(hostId)
       ? null
       : { getActiveHostId: () => hostId, resolvedFor: hostId },
 }));
@@ -184,6 +189,7 @@ describe("SweepWorktreesFlow", () => {
   beforeEach(() => {
     state.connectableHostIds = ["host-a"];
     state.resolved = true;
+    state.unresolvableHostIds = [];
     captured.dialog = [];
   });
   afterEach(() => {
@@ -310,6 +316,23 @@ describe("SweepWorktreesFlow", () => {
     fireEvent.click(screen.getByTestId("sweep-host-picker-option-host-b"));
 
     expect(lastOpenDialogHostId()).toBe("host-b");
+  });
+
+  it("keeps asking rather than telling a person there is nothing to sweep", () => {
+    state.connectableHostIds = ["host-a", "host-b"];
+    // host-b stops being dialable between the pick and the render that
+    // follows it - deregistered, or the credential lease released.
+    state.unresolvableHostIds = ["host-b"];
+    render(flow(new Set(["host-b"])));
+
+    fireEvent.click(screen.getByTestId("sweep-host-picker-option-host-b"));
+
+    // The confirmation would have read the null client as an empty census and
+    // said "No worktrees on this host for the selected tasks" - a claim about
+    // that machine's disk we never got to make. The question stays up instead,
+    // so the other host is still one click away.
+    expect(sweepDialogEverOpened()).toBe(false);
+    expect(screen.getByTestId("sweep-host-picker-dialog")).toBeTruthy();
   });
 
   it("does not decide the fleet's shape before the directory has answered", () => {
