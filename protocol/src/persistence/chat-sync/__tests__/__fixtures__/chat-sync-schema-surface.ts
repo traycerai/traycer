@@ -5038,6 +5038,17 @@ export const chatSyncSchemaSurfaceBaseline = {
                               }
                             ]
                           },
+                          "envCredentialVar": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "imageResolutions": {
                             "default": [],
                             "type": "array",
@@ -5187,6 +5198,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                           "usage",
                           "reasoningEffort",
                           "serviceTier",
+                          "envCredentialVar",
                           "imageResolutions"
                         ],
                         "additionalProperties": false

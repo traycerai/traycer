@@ -868,6 +868,7 @@ function assistantSteerMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -948,6 +949,7 @@ function persistedInterviewMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -9454,6 +9456,7 @@ describe("createChatSessionStore", () => {
           usage: null,
           reasoningEffort: null,
           serviceTier: null,
+          envCredentialVar: null,
           imageResolutions: [],
         },
       ],
@@ -10202,6 +10205,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              envCredentialVar: null,
               imageResolutions: [],
             },
           ],
@@ -10346,6 +10350,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              envCredentialVar: null,
               imageResolutions: [],
             },
             persistedUserMessage("message-split-steered"),
@@ -10372,6 +10377,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              envCredentialVar: null,
               imageResolutions: [],
             },
           ],
@@ -11638,6 +11644,7 @@ function settleTurnAndEvictItsRow(callbacks: ChatStreamCallbacks): void {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
   emitSnapshotFrame({
@@ -12363,6 +12370,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      envCredentialVar: null,
       imageResolutions: [],
     };
   }
@@ -12551,6 +12559,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
         usage: null,
         reasoningEffort: null,
         serviceTier: null,
+        envCredentialVar: null,
         imageResolutions: [],
       },
     ]);

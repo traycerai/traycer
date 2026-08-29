@@ -1947,6 +1947,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions,
   };
 
@@ -2674,6 +2675,7 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   });
 

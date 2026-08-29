@@ -7987,6 +7987,12 @@ function assistantMessageFromLiveAssistant(
     usage: null,
     reasoningEffort: liveAssistant.reasoningEffort,
     serviceTier: liveAssistant.serviceTier,
+    // Unlike the two above - mirrored from `ChatActiveTurn`, which knows what
+    // the user PICKED - the credential a spawn used is a host-side fact this
+    // transient placeholder never receives. Left null rather than guessed: the
+    // authoritative snapshot that replaces this row carries the real value, and
+    // a wrong `null` here would only ever be visible for the moment before it.
+    envCredentialVar: null,
     imageResolutions,
   };
 }
