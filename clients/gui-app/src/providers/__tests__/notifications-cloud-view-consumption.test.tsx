@@ -410,17 +410,25 @@ beforeEach(() => {
   resetCloudEntityReadDriver();
   feedSupport.value = "supported";
   hostState.client = createHostClient();
-  // T28: mixed mode also requires `host.notifications.list@2.2` and
-  // `host.notifications.markAllRead@1.1` negotiated on the SERVING host
+  // T28: mixed mode also requires `host.notifications.list@2.2`,
+  // `host.notifications.markAllRead@1.1` and
+  // `host.notifications.indicatorState@1.1` negotiated on the SERVING host
   // (always `mockLocalHostEntry` here, per `useReactiveLocalHostEntry`
   // above), read through the real negotiated-manifest registry rather than
   // the `stream-runtime-context` mock, which only stands in for the stream
   // minors. Staged at floor by default so every existing cloud-mode case
   // keeps working; the "local-mode view consumption" describe below adds a
   // case that deliberately withholds this.
+  //
+  // All THREE unary floors have to be staged, not just the two the mark-read
+  // path uses: `useNotificationFeedModeFor` admits mixed mode on the whole set,
+  // so omitting `indicatorState` silently drops every case here into local mode
+  // and the failure surfaces as unrelated cloud assertions, not as a version
+  // problem.
   recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
     "host.notifications.list": { major: 2, minor: 2 },
     "host.notifications.markAllRead": { major: 1, minor: 1 },
+    "host.notifications.indicatorState": { major: 1, minor: 1 },
   });
   useCloudNotificationsStore.getState().reset();
   __resetHostNotificationsStoreForTests();

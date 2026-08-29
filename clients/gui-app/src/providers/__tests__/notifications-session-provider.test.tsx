@@ -896,11 +896,20 @@ const NOTIFICATION_HOST_IDS_UNDER_TEST = [
   mockLocalHostEntry.hostId,
 ] as const;
 
+/**
+ * Every UNARY floor mixed mode admits on, staged together.
+ *
+ * All three, not just the two the mark-read path uses:
+ * `useNotificationFeedModeFor` admits on the whole set, so omitting one drops
+ * these cases into local mode and the failure surfaces as unrelated cloud
+ * assertions rather than as a version problem.
+ */
 function stageNotificationPartitionFloors(): void {
   for (const hostId of NOTIFICATION_HOST_IDS_UNDER_TEST) {
     recordNegotiatedHostManifest(hostId, {
       "host.notifications.list": { major: 2, minor: 2 },
       "host.notifications.markAllRead": { major: 1, minor: 1 },
+      "host.notifications.indicatorState": { major: 1, minor: 1 },
     });
   }
 }
