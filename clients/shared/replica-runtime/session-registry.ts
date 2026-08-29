@@ -404,14 +404,24 @@ export interface SessionRegistry<TSession> {
   notify(): void;
 
   /**
-   * Run several registry operations as ONE observable step.
+   * Run several registry operations as ONE observable step, returning whatever
+   * `operation` returns.
    *
    * Without it, a plane method that releases and then prunes wakes every
    * subscriber twice for one user gesture. The incumbent registries all emit
    * exactly once per public method, and this is what preserves that while
    * their internals become calls into here.
+   *
+   * The return type is a parameter, not `void`, because a plane method that
+   * batches is usually also a method that ANSWERS - `acquire` hands back the
+   * handle it attached, `replaceMounted` hands back whether it won the race.
+   * Declaring `void` here still accepts a value-returning callback (a
+   * `() => T` is assignable to a `() => void`), so the value is simply
+   * swallowed at the boundary and the caller's own `return` becomes `void` -
+   * which is a type error at the caller and NOTHING at all under a test
+   * runner that transpiles instead of type-checking.
    */
-  transact(operation: () => void): void;
+  transact<T>(operation: () => T): T;
 
   /** Sign-out semantics: dispose everything, notify once. */
   disposeAll(): void;

@@ -1176,6 +1176,35 @@ describe("createSessionRegistry", () => {
 
       expect(listener).toHaveBeenCalledTimes(1);
     });
+
+    it("returns what its operation returned, so a plane method can batch AND answer in one call", () => {
+      // Every plane that batches also answers - `acquireMounted` hands back the
+      // handle it attached, `replaceMounted` whether it won the race - so the
+      // value has to flow out through the transaction rather than be swallowed
+      // at the boundary.
+      //
+      // Pinned at RUNTIME deliberately, because the way this broke was
+      // type-only: the interface declared `transact(op: () => void): void` over
+      // a generic implementation, a `() => T` is assignable to a `() => void`,
+      // and every caller's own `return` silently became `void`. A transpiling
+      // test runner sees none of that, so 1,266 green tests said nothing about
+      // it. This assertion is what a runner CAN see.
+      const environment = createFakeEnvironment();
+      const policy = createTrackedPolicy(defaultPolicyConfig());
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+
+      const attached = registry.transact(() =>
+        registry.acquire("s1", "scope", () => session),
+      );
+      expect(attached).toBe(session);
+
+      // Nested, since the inner transaction is the one that must not eat it.
+      const nested = registry.transact(() =>
+        registry.transact(() => registry.peek("s1")),
+      );
+      expect(nested).toBe(session);
+    });
   });
 
   describe("materialize vs acquire", () => {
