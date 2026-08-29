@@ -799,8 +799,8 @@ export class OpenEpicSessionRegistry {
       out.push({
         epicId: session.epicId,
         title: resolveUnsyncedTitle(
-          liveTitleCandidates(session.handle, session.epicId, state).concat(
-            retainedTitleCandidates(retainedBucket, session.epicId),
+          liveTitleCandidates(session.handle, state).concat(
+            retainedTitleCandidates(retainedBucket),
           ),
           session.epicId,
         ),
@@ -820,10 +820,7 @@ export class OpenEpicSessionRegistry {
       if (bucket.length === 0) continue;
       out.push({
         epicId,
-        title: resolveUnsyncedTitle(
-          retainedTitleCandidates(bucket, epicId),
-          epicId,
-        ),
+        title: resolveUnsyncedTitle(retainedTitleCandidates(bucket), epicId),
         queueSize: sumRetainedQueueSize(bucket),
         isDirty: true,
         // This loop IS the retained-only arm, so every row it emits is
@@ -964,7 +961,6 @@ function resolveUnsyncedTitle(
 
 function liveTitleCandidates(
   handle: OpenEpicStoreHandle,
-  epicId: string,
   state: OpenEpicState,
 ): string[] {
   return [readLiveTitle(handle), state.snapshotMeta?.epicLight?.title ?? ""];
@@ -972,7 +968,6 @@ function liveTitleCandidates(
 
 function retainedTitleCandidates(
   bucket: readonly RetainedUnsyncedBuffer[],
-  epicId: string,
 ): string[] {
   return bucket.flatMap((buffer) => [
     readLiveTitle(buffer.handle),
