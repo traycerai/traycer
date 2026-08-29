@@ -439,6 +439,43 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["P:0"]);
   });
 
+  it("does not append a skeleton-named live row after void placeholders", () => {
+    const liveId = "accepted-user-in-skeleton";
+    const liveMessage: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: liveId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [],
+      startedAt: 1,
+      timestamp: 2,
+      turnId: "turn-in-skeleton",
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      imageResolutions: [],
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [skeletonEntry(liveId)],
+        skeletonComplete: true,
+        invalidated: true,
+        liveMessages: [liveMessage],
+      }),
+      rendered: [modelWithPersistentMessageId(liveId, liveId)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0"]);
+  });
+
   it("keeps a genuinely pending null-record row after void placeholders", () => {
     const rows = transcriptListRows({
       window: windowOf({

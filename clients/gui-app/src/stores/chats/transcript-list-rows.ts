@@ -329,9 +329,15 @@ export function transcriptListRows(input: {
     for (const span of window.spans) {
       for (const rowId of span.rowIds) spanRowIds.add(rowId);
     }
+    const skeletonRowIds = new Set(
+      window.skeleton.flatMap((entry) =>
+        entry === undefined ? [] : [entry.rowId],
+      ),
+    );
     const unplacedRendered = rendered.filter(
       (model) =>
         !spanRowIds.has(model.id) &&
+        !skeletonRowIds.has(model.id) &&
         (isExplicitlyPendingOrStreaming(model) ||
           liveRowIds.has(model.id) ||
           (model.persistentMessageId !== null &&
