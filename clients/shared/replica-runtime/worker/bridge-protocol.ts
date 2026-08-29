@@ -8,19 +8,37 @@
  *     worker produces for the UI is an event (projections, patches, logs),
  *     because a projection is a broadcast to whoever is listening and has no
  *     reply.
- *   - CALLS travel in ONE direction only: the main thread asks, the worker
- *     answers. Nothing the worker needs is answerable only by the main thread -
- *     the environment it needs (clock, timers, bearer) is pushed to it, not
- *     pulled from it. Encoding that asymmetry in the types is what keeps a
- *     worker->main request from being added casually later: a worker that
- *     blocks on the main thread has re-created the very stall the relocation
- *     exists to remove.
+ *   - CALLS travel BOTH ways, but not symmetrically in scale. The main thread
+ *     asks the worker for anything the replica knows. The worker asks the main
+ *     thread for exactly TWO things, and the count is the contract.
+ *
+ *     The original rule here said "nothing the worker needs is answerable only
+ *     by the main thread". That was false, and the transport is where it broke:
+ *     `StreamAuthRevalidator` revalidates through the SAME single-flight unary
+ *     RPC uses (13 consumers share the instance), and the host-credential mint
+ *     is an app-wide single-flight per hostId whose whole purpose is that
+ *     concurrent mints cannot supersede one another and leave the host holding
+ *     nothing. Those two must stay app-wide, so they are CALLED rather than
+ *     copied - a second instance in each worker is the bug they exist to
+ *     prevent.
+ *
+ *     Everything else the worker needs is a value, a push, or an event:
+ *     `target`/`userId` ride the bootstrap, the bearer and the dialable
+ *     endpoint are pushed on change, and recovery evidence travels outward as
+ *     an event. A THIRD worker->main call must not appear without a paragraph
+ *     like this one justifying it, and `MAIN_CALL_KINDS` pins the count.
  *
  * Payloads are structured-clone values only. Nothing here may carry a live
  * `Y.Doc`, an `Awareness`, a function, or a class instance - a `DataCloneError`
  * from `postMessage` surfaces at the boundary with no indication of which field
  * caused it.
  */
+import type { RevalidateOutcome } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type {
+  HostCredentialMintOutcome,
+  HostCredentialMintRequest,
+} from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
+import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { SendOutcome } from "../adapter";
 import type { RuntimeLogFields } from "../runtime-environment";
 
@@ -44,6 +62,10 @@ export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 1;
  */
 export interface RuntimeWorkerBootstrap {
   readonly protocolVersion: number;
+  /** The host this session's transport dials. Fixed for the worker's life. */
+  readonly hostId: string;
+  /** The signed-in user the session is bound to. Also fixed for life. */
+  readonly userId: string;
   /**
    * Identifies this renderer window in log lines the worker emits.
    *
@@ -91,6 +113,25 @@ export interface RuntimeWorkerLogEntry {
 export type MainToWorkerEvent =
   | { readonly kind: "bootstrap"; readonly bootstrap: RuntimeWorkerBootstrap }
   | { readonly kind: "bearer"; readonly bearer: BearerPush }
+  | {
+      /**
+       * The dialable endpoint for this worker's host, as the directory sees it
+       * right now.
+       *
+       * A PUSH rather than a call, because `HostEndpointProvider` is read
+       * synchronously inside a dial: the worker holds the last value and
+       * answers from it. The main thread subscribes the directory and pushes
+       * on a genuine endpoint MOVE; the transport's own filtering for what
+       * counts as a move travels with the transport unchanged.
+       *
+       * `null` means "not dialable right now" - a host with no websocket URL,
+       * or a confirmed transport refusal - which is exactly what
+       * `dialableHostEndpoint` already answers, and what the transport already
+       * treats as "do not dial".
+       */
+      readonly kind: "endpoint";
+      readonly endpoint: HostTransportEndpoint | null;
+    }
   | { readonly kind: "shutdown" };
 
 export type WorkerToMainEvent =
@@ -117,6 +158,18 @@ export type WorkerToMainEvent =
       readonly kind: "projection";
       readonly revision: number;
       readonly value: unknown;
+    }
+  | {
+      /**
+       * This worker's transport reached a host it had previously lost.
+       *
+       * Fire-and-forget evidence for the selection authority, which lives on
+       * the main thread. An EVENT and not a call because nothing is answered
+       * and nothing waits: the worker does not care what the authority does
+       * with it. Payload-free - the host is fixed at bootstrap, exactly as the
+       * main-thread `notifyRecoveredForNamedHost` captured it at open time.
+       */
+      readonly kind: "host-recovered";
     }
   | {
       /**
@@ -253,6 +306,165 @@ export interface RuntimeWorkerCallMap {
  */
 export type ArtifactBodySeedMode = "full" | "delta-against-offer";
 
+/**
+ * The calls the WORKER may issue to the main thread. Exactly two, forever
+ * unless the header's paragraph is extended.
+ *
+ * Both are app-wide single-flights that must not be copied per worker, and
+ * both are on the recovery path rather than the hot path - a dial that lost
+ * its credential, and a host that needs one minted. Neither is reached while
+ * frames are flowing, which is what keeps this from re-creating the stall the
+ * relocation removes.
+ *
+ * The response types are the CONTRACT's own (`RevalidateOutcome`,
+ * `HostCredentialMintOutcome`), imported rather than restated: a copy here
+ * would drift from the thing that actually produces them.
+ */
+export interface MainCallMap {
+  /**
+   * Revalidate the credential after the host refused an open frame.
+   *
+   * Answered on the main thread by THE existing `StreamAuthRevalidator` - the
+   * same single-flight unary RPC shares. A worker holding its own would mint
+   * a refresh per open epic on one expiry.
+   */
+  readonly "main/auth-revalidate": {
+    readonly request: Record<string, never>;
+    readonly response: { readonly outcome: RevalidateOutcome };
+  };
+  /**
+   * Mint a device credential for a connected host that reports it has none.
+   *
+   * Answered by THE existing app-wide flow, single-flighted per hostId. The
+   * outcome carries tokens, which is why it crosses at all: the transport that
+   * needs them is in the worker. It is the one payload on this bridge that is
+   * credential-bearing, and it travels only in answer to a call the worker
+   * made.
+   */
+  readonly "main/mint-credential": {
+    readonly request: { readonly mint: HostCredentialMintRequest };
+    readonly response: { readonly outcome: HostCredentialMintOutcome };
+  };
+}
+
+export type MainCallKind = keyof MainCallMap;
+
+export type MainCallRequest<K extends MainCallKind> = MainCallMap[K]["request"];
+export type MainCallResponse<K extends MainCallKind> =
+  MainCallMap[K]["response"];
+
+/**
+ * The worker->main call kinds, enumerated as a value.
+ *
+ * A runtime list beside the type so the COUNT is pinnable: the ruling is "two,
+ * and a third needs its own justification", and a type alone cannot be
+ * asserted on. A member added to {@link MainCallMap} without a line here fails
+ * the exhaustiveness check below.
+ */
+export const MAIN_CALL_KINDS: readonly MainCallKind[] = [
+  "main/auth-revalidate",
+  "main/mint-credential",
+];
+
+/** Compile-time proof that {@link MAIN_CALL_KINDS} names every member. */
+const MAIN_CALL_KIND_COVERAGE: { readonly [K in MainCallKind]: true } = {
+  "main/auth-revalidate": true,
+  "main/mint-credential": true,
+};
+void MAIN_CALL_KIND_COVERAGE;
+
+export type MainCall = {
+  [K in MainCallKind]: {
+    readonly kind: K;
+    readonly request: MainCallRequest<K>;
+  };
+}[MainCallKind];
+
+const MAIN_CALL_BUILDERS: {
+  readonly [K in MainCallKind]: (request: MainCallRequest<K>) => MainCall;
+} = {
+  "main/auth-revalidate": (request) => ({
+    kind: "main/auth-revalidate",
+    request,
+  }),
+  "main/mint-credential": (request) => ({
+    kind: "main/mint-credential",
+    request,
+  }),
+};
+
+export function buildMainCall<K extends MainCallKind>(
+  kind: K,
+  request: MainCallRequest<K>,
+): MainCall {
+  return MAIN_CALL_BUILDERS[kind](request);
+}
+
+/**
+ * Response parsers for the worker->main direction, for the same reason the
+ * other direction has them: the pending table is keyed by call id and cannot
+ * carry each entry's response type.
+ */
+export const MAIN_CALL_RESPONSE_PARSERS: {
+  readonly [K in MainCallKind]: (value: unknown) => MainCallResponse<K> | null;
+} = {
+  "main/auth-revalidate": (value) => {
+    if (!isRecord(value)) return null;
+    const outcome = value.outcome;
+    // The contract's three, spelled out. Writing them by hand is the point: a
+    // member added upstream fails this parser rather than silently arriving as
+    // an outcome the transport does not handle.
+    return outcome === "rotated" ||
+      outcome === "rejected" ||
+      outcome === "network-error"
+      ? { outcome }
+      : null;
+  },
+  "main/mint-credential": (value) => {
+    if (!isRecord(value)) return null;
+    const parsed = parseMintOutcome(value.outcome);
+    return parsed === null ? null : { outcome: parsed };
+  },
+};
+
+/**
+ * Narrows a mint outcome without asserting.
+ *
+ * Three arms, each rebuilt field by field. Verbose next to a cast, and the
+ * verbosity is what makes it a check: the `provisioned` arm carries a token
+ * and a refresh token, and a payload that merely *claimed* to be provisioned
+ * while missing them would otherwise reach the transport as a credential it
+ * cannot use.
+ */
+function parseMintOutcome(value: unknown): HostCredentialMintOutcome | null {
+  if (!isRecord(value)) return null;
+  if (value.kind === "unavailable") return { kind: "unavailable" };
+  if (value.kind === "pending-elsewhere") {
+    return typeof value.retryAfterMs === "number"
+      ? { kind: "pending-elsewhere", retryAfterMs: value.retryAfterMs }
+      : null;
+  }
+  if (value.kind !== "provisioned") return null;
+  const { token, refreshToken, familyId, provisionedAt, expiresIn } = value;
+  if (
+    typeof token !== "string" ||
+    typeof refreshToken !== "string" ||
+    typeof familyId !== "string" ||
+    typeof provisionedAt !== "string" ||
+    typeof expiresIn !== "number"
+  ) {
+    return null;
+  }
+  return {
+    kind: "provisioned",
+    token,
+    refreshToken,
+    familyId,
+    provisionedAt,
+    expiresIn,
+  };
+}
+
 export type BearerProbe =
   | { readonly state: "present"; readonly userId: string }
   | { readonly state: "absent" };
@@ -348,6 +560,12 @@ export type MainToWorkerFrame =
       readonly frame: "call";
       readonly callId: number;
       readonly call: RuntimeWorkerCall;
+    }
+  | {
+      /** The main thread ANSWERING a worker->main call. */
+      readonly frame: "main-result";
+      readonly callId: number;
+      readonly result: BridgeCallResult<MainCallResponse<MainCallKind>>;
     };
 
 export type WorkerToMainFrame =
@@ -358,6 +576,17 @@ export type WorkerToMainFrame =
       readonly result: BridgeCallResult<
         RuntimeWorkerCallResponse<RuntimeWorkerCallKind>
       >;
+    }
+  | {
+      /**
+       * The worker ASKING the main thread. Exactly two kinds - see
+       * {@link MainCallMap}. Its own frame tag rather than reusing `"call"`,
+       * so a reader of either union never has to work out which direction a
+       * `call` frame was travelling.
+       */
+      readonly frame: "main-call";
+      readonly callId: number;
+      readonly call: MainCall;
     };
 
 /**
@@ -376,6 +605,9 @@ export function isMainToWorkerFrame(
 ): value is MainToWorkerFrame {
   if (!isRecord(value)) return false;
   if (value.frame === "event") return isRecord(value.event);
+  if (value.frame === "main-result") {
+    return typeof value.callId === "number" && isRecord(value.result);
+  }
   return (
     value.frame === "call" &&
     typeof value.callId === "number" &&
@@ -389,6 +621,13 @@ export function isWorkerToMainFrame(
 ): value is WorkerToMainFrame {
   if (!isRecord(value)) return false;
   if (value.frame === "event") return isRecord(value.event);
+  if (value.frame === "main-call") {
+    return (
+      typeof value.callId === "number" &&
+      isRecord(value.call) &&
+      typeof value.call.kind === "string"
+    );
+  }
   return (
     value.frame === "result" &&
     typeof value.callId === "number" &&
