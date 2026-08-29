@@ -135,6 +135,9 @@ describe("S8 · tile-ref minimalism", () => {
       streamClientFactory: noopEpicStreamClientFactory,
       userId: null,
       onAuthError: null,
+      // No lane stream clients in this suite - the legacy @1 arm, which is
+      // what these tests drive.
+      laneSelection: null,
     });
     let docUpdates = 0;
     epicHandle.doc.on("update", () => {

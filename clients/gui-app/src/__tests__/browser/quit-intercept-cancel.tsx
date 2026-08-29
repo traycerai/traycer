@@ -78,6 +78,9 @@ function seedRetainedBuffer(): void {
     streamClientFactory: noopStreamClientFactory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this fixture - the legacy @1 arm, which is
+    // what this test drives.
+    laneSelection: null,
   });
   outgoing.doc.getMap("epic").set("title", "Rewrite the onboarding");
   outgoing.store.setState({ isDirty: true, unsyncedQueueSize: 3 });
@@ -87,6 +90,7 @@ function seedRetainedBuffer(): void {
     streamClientFactory: noopStreamClientFactory,
     userId: null,
     onAuthError: null,
+    laneSelection: null,
   });
   // The re-point. The outgoing handle is dirty, so the registry retains it with
   // its transport detached - which is what makes its row un-syncable for ever.

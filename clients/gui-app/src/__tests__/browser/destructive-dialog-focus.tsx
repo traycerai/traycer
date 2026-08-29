@@ -38,6 +38,9 @@ function seedDirtyEpic(): void {
     streamClientFactory: noopStreamClientFactory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this fixture - the legacy @1 arm, which is
+    // what this test drives.
+    laneSelection: null,
   });
   handle.doc.getMap("epic").set("title", "Rewrite the onboarding");
   handle.store.setState({ isDirty: true, unsyncedQueueSize: 2 });

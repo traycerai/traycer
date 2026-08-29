@@ -40,6 +40,8 @@ function makeHandle(epicId: string, title: string) {
     streamClientFactory: noopStreamClientFactory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+    laneSelection: null,
   });
   handle.doc.getMap("epic").set("title", title);
   // Normalised to CLEAN on purpose. Seeding the title is a `Y.Doc` mutation,

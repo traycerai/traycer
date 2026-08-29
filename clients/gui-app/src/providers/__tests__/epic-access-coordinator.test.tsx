@@ -76,6 +76,8 @@ function registerSession(epicId: string): OpenEpicStoreHandle {
     streamClientFactory: fakeFactory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+    laneSelection: null,
   });
   __getOpenEpicRegistryForTests().acquire(epicId, () => handle);
   return handle;

@@ -60,6 +60,8 @@ function registerSessionHoldingAgents(agentIds: readonly string[]): void {
       userId: null,
       streamClientFactory: noopStreamClientFactory,
       onAuthError: null,
+      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+      laneSelection: null,
     }),
   );
   handle.store.setState({ chats: { allIds: [...agentIds], byId: {} } });

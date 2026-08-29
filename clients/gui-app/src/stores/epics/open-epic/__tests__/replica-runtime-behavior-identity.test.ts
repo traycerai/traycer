@@ -280,6 +280,8 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+      laneSelection: null,
     });
     const opened = handle;
 
@@ -334,6 +336,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const opened = handle;
 
@@ -371,6 +374,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const opened = handle;
 
@@ -424,6 +428,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const opened = handle;
 
@@ -487,6 +492,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const opened = handle;
 

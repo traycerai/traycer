@@ -47,8 +47,6 @@ import {
   useEpicLiveArtifactTitleGenerating,
   useRegisteredEpicNodeArchived,
 } from "@/lib/epic-selectors";
-import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
-import type { ChatWriteRoute } from "@/stores/epics/open-epic/chat-write-routing";
 import {
   useInlineRename,
   type InlineRenameInputProps,
@@ -577,16 +575,7 @@ function useTabRenameControl(args: {
     (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
       ? terminalControl.displayTitle
       : fallbackDisplayTitle);
-  // An unadopted chat's title must not become EDITABLE: refusing at commit
-  // would silently discard what the user typed. `use-rename-canvas-tab` keeps
-  // its own no-send guard as the safety net beneath this.
-  const chatWriteRoute = useChatWriteRoute(tab.type === "chat", tab.id);
-  const canRename = canRenameCanvasTab(
-    tab,
-    canRenameTabs,
-    terminalControl,
-    chatWriteRoute,
-  );
+  const canRename = canRenameCanvasTab(tab, canRenameTabs, terminalControl);
   const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const { mutate: renameTerminalMutate } = renameTerminal;
   const handleRename = (next: string) => {
@@ -615,10 +604,8 @@ function canRenameCanvasTab(
   tab: EpicCanvasTileRef,
   canRenameTabs: boolean,
   terminalControl: TerminalTabControl | null,
-  chatWriteRoute: ChatWriteRoute,
 ): boolean {
   if (!canRenameTabs) return false;
-  if (chatWriteRoute === "unavailable") return false;
   if (!isOpenableEpicNodeKind(tab.type) && tab.type !== "terminal") {
     return false;
   }

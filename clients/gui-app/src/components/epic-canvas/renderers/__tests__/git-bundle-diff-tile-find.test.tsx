@@ -214,6 +214,8 @@ describe("<GitDiffTile /> bundle find", () => {
       userId: null,
       streamClientFactory: fakeStreamClientFactory,
       onAuthError: null,
+      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+      laneSelection: null,
     });
   });
 

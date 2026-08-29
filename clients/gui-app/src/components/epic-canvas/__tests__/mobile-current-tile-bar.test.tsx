@@ -62,6 +62,10 @@ function makeMutateAsync<TVariables>(
 // stay mocked (rather than the `useSwitcherRename` mapping itself), which
 // exercises the real kind -> mutation mapping in `use-switcher-rename.ts`.
 vi.mock("@/providers/use-open-epic-handle", () => ({
+  // The chat write-routing gate reads the session through the
+  // NON-throwing accessor. `null` is the honest double here: this suite
+  // mounts no epic store, and no session means no epic write path to gate.
+  useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => {
     if (mocks.handle.current === null) throw new Error("no handle seeded");
     return mocks.handle.current;
@@ -173,6 +177,8 @@ function newSession(): OpenEpicStoreHandle {
     streamClientFactory: factory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+    laneSelection: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));

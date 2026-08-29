@@ -48,6 +48,8 @@ function openStore(): OpenEpicStoreHandle {
     streamClientFactory: inertStreamFactory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+    laneSelection: null,
   });
   // A writable role, the way the host's meta/permission frames would set it:
   // the gate also withholds search from viewers (and from a not-yet-known

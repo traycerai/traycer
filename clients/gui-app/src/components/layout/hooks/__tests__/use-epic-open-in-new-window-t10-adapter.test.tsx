@@ -82,6 +82,8 @@ function registerDirtySession(epicId: string): void {
     streamClientFactory: fakeStreamClientFactory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+    laneSelection: null,
   });
   handle.store.setState({ isDirty: true });
   __getOpenEpicRegistryForTests().acquire(epicId, () => handle);

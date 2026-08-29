@@ -175,6 +175,9 @@ function renderInChatContext(children: React.ReactNode): void {
     streamClientFactory: noopEpicStreamClientFactory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this suite - the legacy @1 arm, which is what
+    // these tests drive.
+    laneSelection: null,
   });
   render(
     <TabHostProvider hostId={HOST_ID}>

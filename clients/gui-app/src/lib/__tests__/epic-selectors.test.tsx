@@ -68,6 +68,8 @@ describe("useRegisteredEpicLiveAgents", () => {
       userId: null,
       streamClientFactory: fakeStreamClientFactory,
       onAuthError: null,
+      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+      laneSelection: null,
     });
     handle.store.setState({
       chats: {
@@ -114,6 +116,7 @@ describe("useRegisteredEpicLiveAgents", () => {
       userId: null,
       streamClientFactory: fakeStreamClientFactory,
       onAuthError: null,
+      laneSelection: null,
     });
     handle.store.setState({
       chats: {
@@ -151,6 +154,7 @@ describe("useRegisteredEpicLiveAgents", () => {
       userId: null,
       streamClientFactory: fakeStreamClientFactory,
       onAuthError: null,
+      laneSelection: null,
     });
     handle.store.setState({
       tuiAgents: {
@@ -533,6 +537,7 @@ function createHandle(epicId: string): OpenEpicStoreHandle {
     userId: null,
     streamClientFactory: fakeStreamClientFactory,
     onAuthError: null,
+    laneSelection: null,
   });
   handles.push(handle);
   return handle;

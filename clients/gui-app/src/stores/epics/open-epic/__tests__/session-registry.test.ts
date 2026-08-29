@@ -43,6 +43,8 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
     streamClientFactory: noopStreamClientFactory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+    laneSelection: null,
   });
 
   let disposed = false;
@@ -381,6 +383,7 @@ function buildRetentionHandle(
     }),
     userId: null,
     onAuthError: null,
+    laneSelection: null,
   });
   handle.store.setState({ isDirty: dirty, unsyncedQueueSize: queueSize });
   return { handle, closed: () => closeCount > 0 };

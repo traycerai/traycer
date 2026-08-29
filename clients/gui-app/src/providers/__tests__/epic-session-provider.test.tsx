@@ -67,6 +67,16 @@ const sessionHostRows = vi.hoisted(
 interface StubSessionHostClient {
   readonly request: Mock;
   readonly getActiveHost: () => unknown;
+  /**
+   * The host this client addresses.
+   *
+   * Absent from this stub since T11 gave the store a memory book keyed by host
+   * (`store.ts` reads it at construction), which made every test in this file
+   * throw `getActiveHostId is not a function` before the store was built. The
+   * stub is already one object per host id, so the honest answer is the id it
+   * was resolved for.
+   */
+  readonly getActiveHostId: () => string;
   readonly getRequestContextUserId: () => string | null;
 }
 const sessionHostClients = vi.hoisted(
@@ -89,6 +99,7 @@ const resolveSessionHostClient = vi.hoisted(
       const created = {
         request: vi.fn(),
         getActiveHost: () => sessionHostRows.byHostId.get(hostId) ?? null,
+        getActiveHostId: () => hostId,
         getRequestContextUserId: () => sessionHostRows.userId,
       };
       sessionHostClients.byHostId.set(hostId, created);

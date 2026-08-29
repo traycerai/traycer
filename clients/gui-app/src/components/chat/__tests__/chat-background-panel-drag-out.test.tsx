@@ -275,6 +275,9 @@ beforeEach(() => {
     streamClientFactory: noopStreamClientFactory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this suite - the legacy @1 arm, which is what
+    // these tests drive.
+    laneSelection: null,
   });
   chatSession = installManagedCommandChatSession({
     hostId: HOST_ID,

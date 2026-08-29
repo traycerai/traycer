@@ -346,6 +346,9 @@ function registerEpicSession(chats: readonly ChatProjection[]): void {
       userId: null,
       streamClientFactory: noopStreamClientFactory,
       onAuthError: null,
+      // No lane stream clients in this suite - the legacy @1 arm, which is
+      // what these tests drive.
+      laneSelection: null,
     }),
   );
   handle.store.setState({

@@ -170,6 +170,8 @@ function newSession(): OpenEpicStoreHandle {
     streamClientFactory: factory,
     userId: VIEWER_ID,
     onAuthError: null,
+    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+    laneSelection: null,
   });
   if (captured.value === null) throw new Error("stream factory not invoked");
   const seed = new Y.Doc();

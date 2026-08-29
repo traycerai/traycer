@@ -30,7 +30,8 @@
  * the transition it matters for - a host GAINING a record plane - moves rows
  * from enabled to disabled, and the epic re-projects when it happens.
  */
-import { useEpicStore } from "@/hooks/use-epic-store";
+import { useCallback, useSyncExternalStore } from "react";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { readEpicDocRecordArms } from "@/stores/epics/open-epic/doc-record-arms";
 import {
@@ -108,6 +109,40 @@ export function describeBlockedChatWrites(
   return `Some agents aren’t adopted by their host yet, so they can’t be deleted: ${list}. Deselect them to delete the rest.`;
 }
 
+const EMPTY_CHATS_BY_ID: Readonly<Record<string, ChatProjection>> =
+  Object.freeze({});
+
+/**
+ * The chat union, or an empty one when this surface has no epic session.
+ *
+ * `useMaybeOpenEpicHandle` rather than `useEpicStore`, which throws outside a
+ * provider. Several of the surfaces this gate reaches - the canvas tab strip
+ * most of all - are mounted in contexts that do not always carry an epic
+ * session, and a status gate is the last thing that should be able to take a
+ * surface down.
+ *
+ * Ungating in that case is not a hole. The three mutations are epic-scoped
+ * (`epicId` is a required parameter), so with no session there is nothing to
+ * dispatch and nothing to misroute; and the host leg agrees by construction -
+ * no session means no `sessionHostId`, and `readEpicDocRecordArms(null)`
+ * answers "the doc is still a record source", which is the same
+ * fact-one-satisfied `"registry-rpc"` a floor-era host gets.
+ */
+function useChatsById(): Readonly<Record<string, ChatProjection>> {
+  const handle = useMaybeOpenEpicHandle();
+  const subscribe = useCallback(
+    (onStoreChange: () => void): (() => void) =>
+      handle === null ? () => {} : handle.store.subscribe(onStoreChange),
+    [handle],
+  );
+  const getSnapshot = useCallback(
+    (): Readonly<Record<string, ChatProjection>> =>
+      handle === null ? EMPTY_CHATS_BY_ID : handle.store.getState().chats.byId,
+    [handle],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
 /**
  * {@link resolveChatWriteRoute} against the live epic session.
  *
@@ -119,12 +154,21 @@ export function useChatWriteRoute(
   nodeId: string,
 ): ChatWriteRoute {
   const sessionHostId = useEpicSessionHostId();
-  return useEpicStore((state) =>
-    resolveChatWriteRoute({
-      chatsById: state.chats.byId,
-      isChatRow,
-      nodeId,
-      sessionHostId,
-    }),
-  );
+  const chatsById = useChatsById();
+  return resolveChatWriteRoute({
+    chatsById,
+    isChatRow,
+    nodeId,
+    sessionHostId,
+  });
+}
+
+/**
+ * The chat union for a caller that resolves several rows at once (the sidebar's
+ * bulk delete), sharing this module's session tolerance.
+ */
+export function useChatsByIdForWriteRoute(): Readonly<
+  Record<string, ChatProjection>
+> {
+  return useChatsById();
 }

@@ -115,6 +115,8 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+      laneSelection: null,
     });
 
     // Cycle 1: a full snapshot seeding content X.
@@ -173,6 +175,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     expect(handle().seedOfferProvider()).toBeNull();
@@ -187,6 +190,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const hostDoc = new Y.Doc();
@@ -210,6 +214,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const hostDoc = new Y.Doc();
@@ -231,6 +236,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const hostDoc = new Y.Doc();
@@ -261,6 +267,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const originDoc = new Y.Doc();
@@ -311,6 +318,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const originDoc = new Y.Doc();
@@ -361,6 +369,7 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const originDoc = new Y.Doc();

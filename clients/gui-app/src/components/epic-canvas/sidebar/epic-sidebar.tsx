@@ -50,10 +50,10 @@ import {
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
-import { useEpicStore } from "@/hooks/use-epic-store";
 import {
   describeBlockedChatWrites,
   resolveChatWriteRoute,
+  useChatsByIdForWriteRoute,
 } from "@/hooks/epic/use-chat-write-route";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
@@ -1427,7 +1427,7 @@ function SidebarBulkDeleteController(props: {
   const deleteChat = useEpicDeleteChat();
   const deleteTerminalAgent = useEpicDeleteTuiAgent();
   const sessionHostId = useEpicSessionHostId();
-  const chatsById = useEpicStore((s) => s.chats.byId);
+  const chatsById = useChatsByIdForWriteRoute();
   const recordById = useMemo(
     () => new Map(liveRecords.map((record) => [record.id, record])),
     [liveRecords],

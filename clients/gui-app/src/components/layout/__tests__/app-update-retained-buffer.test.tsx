@@ -219,6 +219,8 @@ function seedRetainedBuffer(liveDirty: boolean): {
     streamClientFactory: noopStreamClientFactory,
     userId: null,
     onAuthError: null,
+    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+    laneSelection: null,
   });
   outgoing.doc.getMap("epic").set("title", "Rewrite the onboarding");
   outgoing.store.setState({ isDirty: true, unsyncedQueueSize: 3 });
@@ -229,6 +231,7 @@ function seedRetainedBuffer(liveDirty: boolean): {
     streamClientFactory: noopStreamClientFactory,
     userId: null,
     onAuthError: null,
+    laneSelection: null,
   });
   registry.replaceMounted(EPIC_ID, outgoing, incoming, {
     hostStamp: "host-a",
@@ -546,6 +549,7 @@ describe("app update install vs a retained unsynced buffer", () => {
       streamClientFactory: noopStreamClientFactory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     handle.doc.getMap("epic").set("title", "Syncable");
     handle.store.setState({ isDirty: true, unsyncedQueueSize: 2 });

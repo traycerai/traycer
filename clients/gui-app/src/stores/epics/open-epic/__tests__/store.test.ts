@@ -133,6 +133,8 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -157,6 +159,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: "user-alice",
       onAuthError: null,
+      laneSelection: null,
     });
 
     // Persisting a field flushes the slice to localStorage under the persist
@@ -182,6 +185,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     handle().callbacks.onEpicDeleted({
@@ -207,6 +211,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -229,6 +234,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -251,6 +257,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -272,6 +279,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const hostDoc = new Y.Doc();
     handle().callbacks.onConnectionStatus("open", null);
@@ -301,6 +309,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     handle().callbacks.onConnectionStatus("open", null);
@@ -349,6 +358,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const hostDoc = new Y.Doc();
     handle().callbacks.onSnapshot(
@@ -389,6 +399,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const hostDoc = new Y.Doc();
     handle().callbacks.onSnapshot(
@@ -434,6 +445,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const hostDoc = new Y.Doc();
     handle().callbacks.onConnectionStatus("open", null);
@@ -477,6 +489,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const initialHostDoc = new Y.Doc();
     handle().callbacks.onConnectionStatus("open", null);
@@ -511,6 +524,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const hostDoc = new Y.Doc();
     handle().callbacks.onConnectionStatus("open", null);
@@ -548,6 +562,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     const hostDoc = new Y.Doc();
     hostDoc.getMap("epic").set("title", "Server truth");
@@ -572,6 +587,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -599,6 +615,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -624,6 +641,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     first.store.getState().setLastFocusedArtifactId("art-42");
     first.dispose();
@@ -634,6 +652,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory2,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     expect(second.store.getState().lastFocusedArtifactId).toBe("art-42");
     second.dispose();
@@ -646,6 +665,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factoryA,
       userId: "alice@example.com",
       onAuthError: null,
+      laneSelection: null,
     });
     userA.store.getState().setLastFocusedArtifactId("art-alice");
     userA.dispose();
@@ -656,6 +676,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factoryB,
       userId: "bob@example.com",
       onAuthError: null,
+      laneSelection: null,
     });
     // Bob has never focused anything - he must NOT see Alice's focus state.
     expect(userB.store.getState().lastFocusedArtifactId).toBeNull();
@@ -669,6 +690,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factoryA2,
       userId: "alice@example.com",
       onAuthError: null,
+      laneSelection: null,
     });
     expect(userAAgain.store.getState().lastFocusedArtifactId).toBe("art-alice");
     userAAgain.dispose();
@@ -679,6 +701,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factoryB2,
       userId: "bob@example.com",
       onAuthError: null,
+      laneSelection: null,
     });
     expect(userBAgain.store.getState().lastFocusedArtifactId).toBe("art-bob");
     userBAgain.dispose();
@@ -691,6 +714,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -727,6 +751,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -744,6 +769,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -770,6 +796,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     expect(handle().closeCount).toBe(0);
     opened.dispose();
@@ -786,6 +813,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     handles()[0].callbacks.onConnectionStatus("open", null);
@@ -824,6 +852,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -846,6 +875,7 @@ describe("createOpenEpicStore", () => {
       onAuthError: () => {
         authErrorCount += 1;
       },
+      laneSelection: null,
     });
 
     handle().callbacks.onConnectionStatus("closed", {
@@ -879,6 +909,7 @@ describe("createOpenEpicStore", () => {
       onAuthError: () => {
         authErrorCount += 1;
       },
+      laneSelection: null,
     });
 
     handle().callbacks.onConnectionStatus("closed", { kind: "caller" });
@@ -949,6 +980,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     // Build a donor with one artifact pointing at artifact-room-0.
@@ -999,6 +1031,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1033,6 +1066,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     handle().callbacks.onConnectionStatus("open", null);
@@ -1072,6 +1106,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     handle().callbacks.onConnectionStatus("open", null);
@@ -1090,6 +1125,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1142,6 +1178,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1205,6 +1242,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1251,6 +1289,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1304,6 +1343,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1369,6 +1409,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1412,6 +1453,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1493,6 +1535,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1553,6 +1596,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1656,6 +1700,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1726,6 +1771,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1788,6 +1834,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1859,6 +1906,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -1912,6 +1960,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -2003,6 +2052,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -2046,6 +2096,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -2105,6 +2156,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();
@@ -2144,6 +2196,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       expect(opened.store.getState().migration.status).toBe("idle");
@@ -2175,6 +2228,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       handle().callbacks.onMigrationStarted();
@@ -2194,6 +2248,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       // The host's `migrationFailed` path keeps the WS open, so the
@@ -2225,6 +2280,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       handle().callbacks.onConnectionStatus("open", null);
@@ -2253,6 +2309,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       handle().callbacks.onMigrationStarted();
@@ -2290,6 +2347,7 @@ describe("createOpenEpicStore", () => {
         onAuthError: () => {
           authErrorCount += 1;
         },
+        laneSelection: null,
       });
 
       handle().callbacks.onMigrationStarted();
@@ -2319,6 +2377,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       handle().callbacks.onConnectionStatus("closed", {
@@ -2347,6 +2406,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       const initialStream = handle();
@@ -2386,6 +2446,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       opened.store.getState().retryMigration();
@@ -2407,6 +2468,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     // Park a waiter on a hash that has not synced in yet, then dispose the
@@ -2444,6 +2506,7 @@ describe("createOpenEpicStore", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      laneSelection: null,
     });
 
     handle().callbacks.onSnapshot(
@@ -2470,6 +2533,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       const state = opened.store.getState();
@@ -2489,6 +2553,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       // Transport opens before a current-cycle cloud status arrives. Preserve
@@ -2547,6 +2612,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
 
       handle().callbacks.onConnectionStatus("open", null);
@@ -2592,6 +2658,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
       const donor = new Y.Doc();
       seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
@@ -2816,6 +2883,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
       const donor = new Y.Doc();
       seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
@@ -2972,6 +3040,7 @@ describe("createOpenEpicStore", () => {
         streamClientFactory: factory,
         userId: null,
         onAuthError: null,
+        laneSelection: null,
       });
       const roomCount = MAX_HOT_ARTIFACT_ROOMS_FOR_TESTS + 1;
       const donor = new Y.Doc();

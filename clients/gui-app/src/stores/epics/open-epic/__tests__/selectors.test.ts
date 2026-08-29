@@ -158,6 +158,8 @@ describe("open-epic-store doc projection", () => {
       streamClientFactory: factory,
       userId: null,
       onAuthError: null,
+      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
+      laneSelection: null,
     });
 
     const donor = new Y.Doc();

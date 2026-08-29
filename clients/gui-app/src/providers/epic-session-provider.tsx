@@ -527,6 +527,24 @@ export function EpicSessionProvider(
         userId: sessionUserId,
         onAuthError: handleSessionAuthError,
         commandRequester: resolvedSessionHostClient,
+        // Explicit `null`: this composition has no lane stream clients YET, so
+        // the session takes the `@1` arm - today's behaviour, unchanged.
+        //
+        // Not a placeholder to be forgotten. Building them needs the session to
+        // own ONE durable transport that every client rides (the state lane,
+        // the status lane, and §6's per-artifact body lanes), because
+        // `openTransport` is not pooled and a client-per-transport shape would
+        // give an epic two sockets on the lane arm and N more with tiles open -
+        // worse than the `@1` monolith on exactly the axis this cutover is for.
+        // `WsStreamClient` already multiplexes methods over one socket, so one
+        // transport serves them all, and its `wsStreamClient` is also the
+        // method-support source selection reads before deciding anything.
+        //
+        // That is a change to this file's documented transport lifetime (the
+        // factory opens it today, so ownership is true only because there is
+        // one client), so it lands as its own change with its own pins rather
+        // than riding this one.
+        laneSelection: null,
       });
       // Construction-honest stamp, written exactly once: `streamClientFactory`
       // above captures this run's `targetHostId` into the transport it opens,

@@ -121,22 +121,24 @@ export interface OpenEpicStoreOptions {
   /** Production's host-pinned requester; omitted by stores that never write. */
   readonly commandRequester?: HostRequester<HostRpcRegistry> | null;
   /**
-   * Everything the lane arm needs, or absent/`null` for a caller that cannot
-   * serve lanes.
+   * Everything the lane arm needs, or an explicit `null` for a caller that
+   * genuinely has no lane stream clients.
    *
-   * OPTIONAL, unlike `getDocArm` on the runtime, and the asymmetry is argued
-   * rather than convenient. The two fields fail in opposite directions when a
-   * caller forgets them: an absent `getDocArm` would either silently empty a
-   * released-floor host's epic or silently restore the double-count, so it must
-   * be stated. An absent lane selection yields the `@1` arm - today's behaviour,
-   * on today's wire, which is precisely what a caller with no lane stream
-   * clients wants and what all 147 existing call sites already mean.
+   * REQUIRED, and symmetric with the runtime's `getDocArm` for the same reason:
+   * both are wrong-by-omission in a direction nobody would notice. An absent
+   * `getDocArm` silently empties a released-floor host's epic or restores the
+   * double-count. An absent lane selection silently runs the fat
+   * `epic.subscribe@1` path this cutover exists to retire - on a host that
+   * serves the lanes, invisible to every test and every user until somebody
+   * measures the open.
    *
-   * Making it required would put one noise line in 62 test files to express a
-   * default that is both correct and unsurprising. `commandRequester` is
-   * optional here for the same reason.
+   * "It fails safe" was the argument for making this optional, and it is the
+   * failure the rule exists to prevent: a composition that forgets it - a
+   * refactor of `epic-session-provider.tsx`, a second mount path, the worker
+   * composition root - does not fail, it goes quiet. `null` says the caller
+   * has no lane clients; absence says nobody thought about it.
    */
-  readonly laneSelection?: EpicLaneSelectionSources | null;
+  readonly laneSelection: EpicLaneSelectionSources | null;
 }
 
 /**
@@ -855,7 +857,7 @@ export function createOpenEpicStore(
     // constructed before the auth profile hydrates must pick up the id on its
     // next projection.
     getCurrentUserId: () => useAuthStore.getState().profile?.userId ?? null,
-    laneSelection: options.laneSelection ?? null,
+    laneSelection: options.laneSelection,
     // Read LIVE off the negotiated manifest, never captured: a host that
     // handshakes after this session is constructed - or upgrades in place -
     // must move the arms without the tab reopening. See `readEpicDocRecordArms`

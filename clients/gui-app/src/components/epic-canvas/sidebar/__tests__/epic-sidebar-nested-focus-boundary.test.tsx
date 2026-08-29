@@ -405,6 +405,10 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
+  // The chat write-routing gate reads the session through the
+  // NON-throwing accessor. `null` here is the honest double: this suite
+  // mounts no epic store, and no session means no epic write path to gate.
+  useMaybeOpenEpicHandle: () => null,
   useOpenEpicHandle: () => ({
     epicId: "epic-1",
     store: {
