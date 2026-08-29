@@ -537,3 +537,124 @@ describe("browser.sessions@1.0 electron tab handoff", () => {
     ).toBe(false);
   });
 });
+
+describe("browser.sessions@1.0 store-key handshake", () => {
+  // 32 zero bytes: the exact shape of a minted store key on the wire.
+  const RAW_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  const WRAPPED_KEY = "d3JhcHBlZA==";
+
+  it("accepts the three client frames", () => {
+    for (const frame of [
+      { kind: "storeKeyOffer", hasBinaryPayload: false },
+      {
+        kind: "storeKeyWrapped",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        wrappedKey: WRAPPED_KEY,
+      },
+      {
+        kind: "storeKeyUnwrapped",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        rawKey: RAW_KEY,
+      },
+      {
+        kind: "storeKeyUnwrapped",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        rawKey: null,
+      },
+    ]) {
+      expect(browserSessionsClientFrameSchema.safeParse(frame).success).toBe(
+        true,
+      );
+      expect(browserSessionsV1.clientFrameSchema.safeParse(frame).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it("accepts the two server frames", () => {
+    for (const frame of [
+      {
+        kind: "storeKeyWrapRequest",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        rawKey: RAW_KEY,
+      },
+      {
+        kind: "storeKeyUnwrapRequest",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        wrappedKey: WRAPPED_KEY,
+      },
+    ]) {
+      expect(browserSessionsServerFrameSchema.safeParse(frame).success).toBe(
+        true,
+      );
+      expect(browserSessionsV1.serverFrameSchema.safeParse(frame).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it("rejects key material that is not base64", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "storeKeyWrapRequest",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        rawKey: "not base64!",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "storeKeyWrapped",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        wrappedKey: "not base64!",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "storeKeyUnwrapped",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        rawKey: "not base64!",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a missing requestId, a missing key, and unknown fields", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "storeKeyWrapped",
+        hasBinaryPayload: false,
+        wrappedKey: WRAPPED_KEY,
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "storeKeyUnwrapped",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "storeKeyOffer",
+        hasBinaryPayload: false,
+        userId: "user-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "storeKeyUnwrapRequest",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        wrappedKey: WRAPPED_KEY,
+        userId: "user-1",
+      }).success,
+    ).toBe(false);
+  });
+});

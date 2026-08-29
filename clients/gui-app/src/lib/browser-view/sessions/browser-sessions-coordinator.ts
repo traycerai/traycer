@@ -341,6 +341,15 @@ function createBrowserSessionsCoordinator(args: {
             hasBinaryPayload: false,
             state: next,
           });
+          if (next !== "enabled") return;
+          // This machine can reach an OS keystore, so it can also hold the
+          // host's store key. The host answers with a wrap or an unwrap
+          // request (handled below); it ignores the offer when it already has
+          // the key in memory.
+          stream?.sendClientFrame({
+            kind: "storeKeyOffer",
+            hasBinaryPayload: false,
+          });
         })
         .catch((cause: unknown) => {
           appLogger.warn("[browser] could not read the cookie crypto state", {
@@ -663,6 +672,14 @@ function handleBrowserSessionsSubsystemFrame(args: {
         sendClientFrame: args.sendClientFrame,
       });
       return;
+    case "storeKeyWrapRequest":
+    case "storeKeyUnwrapRequest":
+      handleStoreKeyRequestFrame({
+        frame,
+        browserView: args.browserView,
+        sendClientFrame: args.sendClientFrame,
+      });
+      return;
     case "burstStarted":
     case "burstEnded":
     case "pong":
@@ -731,6 +748,85 @@ function handlePrimaryProfileCaptureFrame(args: {
         storageState: null,
         status: "failed",
         reason: error instanceof Error ? error.message : String(error),
+      });
+    });
+}
+
+/**
+ * The desktop half of the store-key handshake (spec §6.2). The key never
+ * touches this renderer's storage: it is handed to the main process, sealed
+ * with (or opened by) the OS keystore, and handed straight back to the host.
+ *
+ * A failed *unwrap* is answered (`rawKey: null`) so the host knows to stay
+ * sealed. A failed *wrap* has no negative frame by design: nothing durable was
+ * created, and the host simply re-asks on the next connect.
+ */
+function handleStoreKeyRequestFrame(args: {
+  readonly frame: Extract<
+    BrowserSessionsServerFrame,
+    { readonly kind: "storeKeyWrapRequest" | "storeKeyUnwrapRequest" }
+  >;
+  readonly browserView: BrowserViewBridge | null;
+  readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
+}): void {
+  const frame = args.frame;
+  const browserView = args.browserView;
+  const requestId = frame.requestId;
+  if (browserView === null) {
+    if (frame.kind === "storeKeyUnwrapRequest") {
+      args.sendClientFrame({
+        kind: "storeKeyUnwrapped",
+        hasBinaryPayload: false,
+        requestId,
+        rawKey: null,
+      });
+    }
+    return;
+  }
+  const warn = (cause: unknown): void => {
+    appLogger.warn("[browser] the store-key handshake failed", {
+      frameKind: frame.kind,
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+  };
+  if (frame.kind === "storeKeyWrapRequest") {
+    // Wrapped so a bridge that predates this call rejects instead of throwing
+    // into the stream callback that asked for it.
+    void Promise.resolve()
+      .then(() => browserView.wrapStoreKey(frame.rawKey))
+      .then((result) => {
+        if (!result.ok) {
+          warn(result.reason);
+          return;
+        }
+        args.sendClientFrame({
+          kind: "storeKeyWrapped",
+          hasBinaryPayload: false,
+          requestId,
+          wrappedKey: result.wrappedKey,
+        });
+      })
+      .catch(warn);
+    return;
+  }
+  void Promise.resolve()
+    .then(() => browserView.unwrapStoreKey(frame.wrappedKey))
+    .then((result) => {
+      if (!result.ok) warn(result.reason);
+      args.sendClientFrame({
+        kind: "storeKeyUnwrapped",
+        hasBinaryPayload: false,
+        requestId,
+        rawKey: result.ok ? result.rawKey : null,
+      });
+    })
+    .catch((cause: unknown) => {
+      warn(cause);
+      args.sendClientFrame({
+        kind: "storeKeyUnwrapped",
+        hasBinaryPayload: false,
+        requestId,
+        rawKey: null,
       });
     });
 }

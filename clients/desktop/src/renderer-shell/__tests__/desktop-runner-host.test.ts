@@ -603,6 +603,16 @@ function buildFakeBridge(
       enablePersistence: async () => persistedPersistenceState,
       declinePersistence: async () => persistedPersistenceState,
       relaunchForPersistence: async () => undefined,
+      // This shell test has no OS keystore; the store-key handshake refuses
+      // the same way a machine without one does.
+      wrapStoreKey: async () => ({
+        ok: false as const,
+        reason: "no keystore in this test bridge",
+      }),
+      unwrapStoreKey: async () => ({
+        ok: false as const,
+        reason: "no keystore in this test bridge",
+      }),
       onPersistenceStateChanged: (_handler) => ({ dispose: () => undefined }),
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),

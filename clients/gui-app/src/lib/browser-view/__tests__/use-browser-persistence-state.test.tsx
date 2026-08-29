@@ -5,6 +5,8 @@ import { useBrowserPersistenceState } from "@/lib/browser-view/use-browser-persi
 import type {
   BrowserCookieCryptoState,
   BrowserPersistenceState,
+  BrowserStoreKeyUnwrapResult,
+  BrowserStoreKeyWrapResult,
   BrowserViewBridge,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
@@ -173,6 +175,14 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
 
   relaunchForPersistence(): Promise<void> {
     return Promise.resolve();
+  }
+
+  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult> {
+    return Promise.resolve({ ok: true, wrappedKey: rawKey });
+  }
+
+  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult> {
+    return Promise.resolve({ ok: true, rawKey: wrappedKey });
   }
 
   onPersistenceStateChanged(

@@ -33,11 +33,13 @@ import {
   ensureBrowserViewSessionForPartition,
   onBrowserViewCertificateError,
   onBrowserViewDownloadChange,
+  partitionForProfile,
   readBrowserViewPendingCertificateError,
   registerBrowserViewWebContents,
+  releaseBrowserViewSession,
   type BrowserSessionProfileRequest,
 } from "../browser-view/browser-session";
-import { log } from "../app/logger";
+import { describeLogError, log } from "../app/logger";
 import {
   declineBrowserPersistence,
   enableBrowserPersistence,
@@ -52,9 +54,17 @@ import {
   seedBrowserViewCookies,
 } from "../browser-view/storage/browser-storage-state";
 import { migrateBrowserPersistenceToPersistentPartition } from "../browser-view/storage/browser-persistence-migration";
+import {
+  unwrapStoreKey,
+  wrapStoreKey,
+} from "../browser-view/storage/browser-store-key";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
-import type { BrowserPersistenceState } from "@traycer-clients/shared/platform/browser-view";
+import type {
+  BrowserPersistenceState,
+  BrowserStoreKeyUnwrapResult,
+  BrowserStoreKeyWrapResult,
+} from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * The whole-jar capture reads the one shared `primary` identity, so its
@@ -109,8 +119,22 @@ export function registerBrowserViewIpc(
       bridge.safeSendToWindow(windowId, channel, payload),
     seedStorageState: seedBrowserViewCookies,
     captureStorageState: captureBrowserViewStorageState,
-    observePrimaryProfileOrigin: (url, webContents) => {
+    observePrimaryProfileOrigin: (url, webContents, profile) => {
+      // The primary capture reads the shared jar only. An isolated partition's
+      // origins must never enter it - ticket 06's cookie-change observer takes
+      // the same early return before it attaches to a partition.
+      if (profile !== "primary") return;
       primaryProfileSnapshots.observe(url, webContents);
+    },
+    releaseSessionStorage: (request) => {
+      void releaseBrowserViewSession(
+        partitionForProfile(request.profile, request.sessionId),
+      ).catch((error: unknown) => {
+        log.warn("[browser-view] isolated session release failed", {
+          sessionId: request.sessionId,
+          error: describeLogError(error),
+        });
+      });
     },
     readMigrationOrigins: () => primaryProfileSnapshots.rememberedOrigins(),
     boundsStreamLogIntervalMs: BOUNDS_STREAM_LOG_INTERVAL_MS,
@@ -400,6 +424,39 @@ export function registerBrowserViewIpc(
   // same truth the pushes carry rather than from its own first read.
   publishBrowserPersistenceState(bridge);
 
+  // The host's store key, sealed with the same keystore Chromium's own jar
+  // uses (spec §6.2). `browser-store-key.ts` refuses unless that keystore is
+  // already os-backed, so neither call can raise a first, unexplained prompt -
+  // and a refusal is reported as a result, never as a thrown IPC rejection,
+  // because the host has a defined answer for it (stay sealed).
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewStoreKeyWrap,
+    (_event, payload): BrowserStoreKeyWrapResult => {
+      const rawKey = browserViewIpcPayload.storeKeyMaterial.parse(payload);
+      try {
+        return { ok: true, wrappedKey: wrapStoreKey(rawKey) };
+      } catch (err) {
+        log.warn("[browser-view] wrapping the host store key failed", { err });
+        return { ok: false, reason: storeKeyFailureReason(err) };
+      }
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewStoreKeyUnwrap,
+    (_event, payload): BrowserStoreKeyUnwrapResult => {
+      const wrappedKey = browserViewIpcPayload.storeKeyMaterial.parse(payload);
+      try {
+        return { ok: true, rawKey: unwrapStoreKey(wrappedKey) };
+      } catch (err) {
+        log.warn("[browser-view] unwrapping the host store key failed", {
+          err,
+        });
+        return { ok: false, reason: storeKeyFailureReason(err) };
+      }
+    },
+  );
+
   // Chromium caches the macOS keychain lookup per process, so a denial can
   // only be re-asked from a fresh one.
   bridge.handleInvoke(
@@ -421,6 +478,10 @@ export function registerBrowserViewIpc(
  * One truth for every window. The shield and the explainer card read this
  * push, so a decision taken in one window is never invisible in another.
  */
+function storeKeyFailureReason(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function publishBrowserPersistenceState(
   bridge: RunnerIpcBridge,
 ): BrowserPersistenceState {

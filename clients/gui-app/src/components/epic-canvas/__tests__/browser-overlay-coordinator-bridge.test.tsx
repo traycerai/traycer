@@ -27,6 +27,8 @@ import type {
   BrowserViewTileKey,
   BrowserViewBridge,
   BrowserPersistenceState,
+  BrowserStoreKeyUnwrapResult,
+  BrowserStoreKeyWrapResult,
 } from "@traycer-clients/shared/platform/browser-view";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
@@ -222,6 +224,14 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
 
   relaunchForPersistence(): Promise<void> {
     return Promise.resolve();
+  }
+
+  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult> {
+    return Promise.resolve({ ok: true, wrappedKey: rawKey });
+  }
+
+  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult> {
+    return Promise.resolve({ ok: true, rawKey: wrappedKey });
   }
 
   onPersistenceStateChanged(

@@ -353,6 +353,10 @@ export const RunnerHostInvoke = {
   browserViewPersistenceDecline: "runnerHost:browserView:persistence:decline",
   browserViewRelaunchForPersistence:
     "runnerHost:browserView:persistence:relaunch",
+  // Store-key handshake (keychain refactor ticket 05). Both refuse unless the
+  // keystore is already os-backed, so neither can raise a first OS prompt.
+  browserViewStoreKeyWrap: "runnerHost:browserView:storeKey:wrap",
+  browserViewStoreKeyUnwrap: "runnerHost:browserView:storeKey:unwrap",
   browserViewStartAnnotation: "runnerHost:browserView:annotation:start",
   browserViewCancelAnnotation: "runnerHost:browserView:annotation:cancel",
   browserViewSetAnnotationTargetChatLabel:

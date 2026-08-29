@@ -8,6 +8,8 @@ import type {
   BrowserCookieCryptoState,
   BrowserPersistenceState,
   BrowserPrimaryProfileCaptureResult,
+  BrowserStoreKeyUnwrapResult,
+  BrowserStoreKeyWrapResult,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
   BrowserViewDebugSnapshot,
@@ -159,6 +161,16 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewRelaunchForPersistence,
         ) as Promise<void>,
+      wrapStoreKey: (rawKey) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewStoreKeyWrap,
+          rawKey,
+        ) as Promise<BrowserStoreKeyWrapResult>,
+      unwrapStoreKey: (wrappedKey) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewStoreKeyUnwrap,
+          wrappedKey,
+        ) as Promise<BrowserStoreKeyUnwrapResult>,
       onPersistenceStateChanged: (handler) =>
         subscribe<BrowserPersistenceState>(
           RunnerHostEvent.browserViewPersistenceStateChanged,
