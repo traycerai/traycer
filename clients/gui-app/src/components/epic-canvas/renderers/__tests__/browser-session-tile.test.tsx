@@ -94,6 +94,12 @@ vi.mock("@/components/epic-canvas/renderers/browser-peek-tile", () => ({
   ),
   getLastBrowserPeekFrame: () => peekFrameHarness.frame,
   clearLastBrowserPeekFrame: vi.fn(),
+  browserPeekFrameKey: (node: {
+    readonly hostId: string;
+    readonly sessionId: string;
+    readonly tabId: string;
+    readonly instanceId: string;
+  }) => `${node.hostId}:${node.sessionId}:${node.tabId}:${node.instanceId}`,
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({

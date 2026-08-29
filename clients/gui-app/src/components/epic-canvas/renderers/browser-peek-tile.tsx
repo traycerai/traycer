@@ -66,6 +66,23 @@ export type BrowserPeekNode = Pick<
  */
 const lastFrameCache = new Map<string, ScreencastImage>();
 
+/**
+ * The one key builder for a browser peek tile's frame cache / dormant
+ * placeholder lookup - host+session+tab+tile-instance. Shared by both
+ * viewers (`BrowserPeekTile`, `BrowserPeekTileMobile`) and by
+ * `browser-session-tile.tsx`'s own placeholder/self-close reads, so the
+ * shape cannot drift between the write side and any of its readers.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
+export function browserPeekFrameKey(node: {
+  readonly hostId: string;
+  readonly sessionId: string;
+  readonly tabId: string;
+  readonly instanceId: string;
+}): string {
+  return compositeKey(node.hostId, node.sessionId, node.tabId, node.instanceId);
+}
+
 // eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
 export function getLastBrowserPeekFrame(key: string): ScreencastImage | null {
   return lastFrameCache.get(key) ?? null;
@@ -76,7 +93,14 @@ export function clearLastBrowserPeekFrame(key: string): void {
   lastFrameCache.delete(key);
 }
 
-function useRetainLastBrowserPeekFrame(
+/**
+ * Exported for {@link BrowserPeekTileMobile} (`browser-peek-tile-mobile.tsx`),
+ * which retains into this same module-scoped cache under the identical key so
+ * the dormant placeholder in `browser-session-tile.tsx` sees a last frame
+ * regardless of which viewer (desktop or touch) last streamed it.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
+export function useRetainLastBrowserPeekFrame(
   key: string,
   image: ScreencastImage | null,
 ): void {
@@ -119,12 +143,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const { image, frameSize, navState, armedEpoch, dialog } = session;
   const { tileRef, viewportRef, overlayButtonRef, imageRef, imeInputRef } =
     session.refs;
-  const frameCacheKey = compositeKey(
-    node.hostId,
-    node.sessionId,
-    node.tabId,
-    node.instanceId,
-  );
+  const frameCacheKey = browserPeekFrameKey(node);
   useRetainLastBrowserPeekFrame(frameCacheKey, image);
   const inputOwnerId =
     armedEpoch === null

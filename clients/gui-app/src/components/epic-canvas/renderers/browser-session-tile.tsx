@@ -5,10 +5,12 @@ import type { HostUnavailability } from "@traycer-clients/shared/host-client/rem
 import { ElectronTabSurface } from "./agent-browser-tile";
 import {
   BrowserPeekTile,
+  browserPeekFrameKey,
   clearLastBrowserPeekFrame,
   getLastBrowserPeekFrame,
   type BrowserPeekNode,
 } from "./browser-peek-tile";
+import { BrowserPeekTileMobile } from "./browser-peek-tile-mobile";
 import { BrowserSessionsHostBoundary } from "./browser-sessions-provider";
 import { useBrowserSessionsContext } from "./browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
@@ -16,15 +18,9 @@ import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
 } from "@/lib/browser-view/sessions/electron-tabs";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
-
-/** Same key shape the peek tile's own frame cache uses - kept in one place
- * so the placeholder's read and the self-close effect's free cannot drift. */
-function browserPeekFrameKey(node: BrowserSessionTileRef): string {
-  return compositeKey(node.hostId, node.sessionId, node.tabId, node.instanceId);
-}
 
 interface BrowserSessionTileProps {
   readonly node: BrowserSessionTileRef;
@@ -38,6 +34,14 @@ interface BrowserSessionTileBodyProps extends BrowserSessionTileProps {
   readonly tab: BrowserSessionInfo["tabs"][number] | undefined;
   readonly binding: ElectronTabBinding | null;
   readonly inventoryReady: boolean;
+  /**
+   * A touch-grade pointer is driving this window (`useCoarsePointer()`,
+   * decision #13 / ticket 12): render the touch-adapted viewer instead of
+   * the mouse-oriented one. Read once here rather than inside the headless
+   * branch below so a hybrid device's pointer-type flip mid-session is
+   * exactly as disruptive as any other tile remount.
+   */
+  readonly touch: boolean;
 }
 
 function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
@@ -65,6 +69,17 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
       tabId: props.node.tabId,
       initialUrl: props.tab.url,
     };
+    if (props.touch) {
+      return (
+        <BrowserPeekTileMobile
+          key={props.session.runtime.revision}
+          epicId={props.epicId}
+          node={peek}
+          viewTabId={props.viewTabId}
+          paneId={props.paneId}
+        />
+      );
+    }
     return (
       <BrowserPeekTile
         key={props.session.runtime.revision}
@@ -255,6 +270,7 @@ function useRuntimeDemotionNote(
 
 function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
   const sessions = useBrowserSessionsContext();
+  const touch = useCoarsePointer();
   const reachability = useHostReachability(props.node.hostId);
   const session = sessions.items.find(
     (item) => item.sessionId === props.node.sessionId,
@@ -325,6 +341,7 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
           tab={tab}
           binding={binding}
           inventoryReady={sessions.inventoryReady}
+          touch={touch}
         />
       </div>
     </div>
