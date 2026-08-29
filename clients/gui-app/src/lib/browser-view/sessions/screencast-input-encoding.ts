@@ -68,6 +68,25 @@ export interface PointerClickCount {
   readonly count: number;
 }
 
+/**
+ * The surface a pointer's coordinates were taken against, as the host reads
+ * it back: the painted frame on the JPEG plane, the host's viewport epoch on
+ * the video plane. Exactly one is set - the other plane's token is `null` -
+ * and neither means the tile has nothing correlatable to click on yet, so no
+ * frame is built at all.
+ */
+export interface ScreencastInputCorrelation {
+  readonly castSequence: number | null;
+  readonly viewportEpoch: number | null;
+}
+
+/** The single number the host will compare against, whichever plane set it. */
+export function correlationToken(
+  correlation: ScreencastInputCorrelation,
+): number | null {
+  return correlation.viewportEpoch ?? correlation.castSequence;
+}
+
 interface ScreencastPointerFrameRequest {
   readonly event: PointerLike;
   readonly type: ScreencastPointerInput["type"];
@@ -75,7 +94,7 @@ interface ScreencastPointerFrameRequest {
   readonly deltaX: number;
   readonly deltaY: number;
   readonly clickCount: number;
-  readonly castSequence: number | null;
+  readonly correlation: ScreencastInputCorrelation;
   readonly image: HTMLImageElement | null;
   readonly frameSize: ScreencastFrameSize | null;
 }
@@ -90,11 +109,14 @@ export function buildScreencastPointerFrame(
     frameSize: request.frameSize,
     clampToEdge: request.clampToEdge,
   });
-  if (request.castSequence === null || normalized === null) return null;
+  if (correlationToken(request.correlation) === null || normalized === null) {
+    return null;
+  }
   return {
     kind: "pointer",
     type: request.type,
-    castSequence: request.castSequence,
+    castSequence: request.correlation.castSequence,
+    viewportEpoch: request.correlation.viewportEpoch,
     ...normalized,
     button:
       request.type === "wheel" ? "none" : pointerButton(request.event.button),

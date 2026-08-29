@@ -10,11 +10,11 @@ import {
 
 function downAt(
   payload: string,
-  castSequence: number,
+  correlationToken: number,
   clientX: number,
   clientY: number,
 ): ScreencastArmGestureDown<string> {
-  return { payload, castSequence, clientX, clientY, isPrimary: true };
+  return { payload, correlationToken, clientX, clientY, isPrimary: true };
 }
 
 function upAt(
@@ -56,7 +56,7 @@ describe("createScreencastArmBuffer", () => {
     expect(buffer.takeIfCurrent(7)).toBeNull();
   });
 
-  it("drops when presentedSequence does not match the buffered castSequence", () => {
+  it("drops when the current token does not match the buffered one", () => {
     const buffer = createBuffer();
 
     buffer.storeDown(downAt("down", 7, 10, 20));
@@ -65,7 +65,7 @@ describe("createScreencastArmBuffer", () => {
     expect(buffer.hasPending()).toBe(false);
   });
 
-  it("drops when presentedSequence is null", () => {
+  it("drops when no surface is current", () => {
     const buffer = createBuffer();
 
     buffer.storeDown(downAt("down", 7, 10, 20));

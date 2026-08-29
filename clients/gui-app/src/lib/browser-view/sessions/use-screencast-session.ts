@@ -264,6 +264,10 @@ export function useScreencastSession(
       if (stream !== null && !isCurrent()) return;
       if (status !== "open") {
         controller.notePresentedSequence(null);
+        // Plane state cannot outlive the transport that established it: the
+        // next subscription starts on JPEG until the host says otherwise.
+        controller.noteViewportEpoch(null);
+        controller.setCaptureMode("jpeg");
         controller.clearLocalArm(false);
       } else if (
         viewportRef.current?.contains(document.activeElement) === true
@@ -295,6 +299,10 @@ export function useScreencastSession(
       // willing to send. Same split PiP already uses (pip-headless-stream.ts).
       if (frame.kind === "frame") {
         controller.noteFrameArrived(frame.sequence);
+      } else if (frame.kind === "viewportEpoch") {
+        controller.noteViewportEpoch(frame.epoch);
+      } else if (frame.kind === "captureMode") {
+        controller.setCaptureMode(frame.mode);
       }
       handleScreencastFrame({
         frame,
@@ -364,6 +372,8 @@ export function useScreencastSession(
     return () => {
       if (streamRef.current === opened) streamRef.current = null;
       controller.notePresentedSequence(null);
+      controller.noteViewportEpoch(null);
+      controller.setCaptureMode("jpeg");
       controller.clearLocalArm(false);
       opened.close();
     };

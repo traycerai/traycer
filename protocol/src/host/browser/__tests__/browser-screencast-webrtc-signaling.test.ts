@@ -250,3 +250,77 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
     ).toBe(false);
   });
 });
+
+describe("browser.screencast@1.0 viewport-epoch hit-testing", () => {
+  const POINTER = {
+    kind: "pointer",
+    hasBinaryPayload: false,
+    armEpoch: 1,
+    seq: 4,
+    type: "down",
+    normalizedX: 0.25,
+    normalizedY: 0.5,
+    button: "left",
+    buttons: 1,
+    modifiers: 0,
+    clickCount: 1,
+    deltaX: 0,
+    deltaY: 0,
+  } as const;
+
+  it("announces the viewport epoch (server -> client)", () => {
+    expect(
+      parsesServer({
+        kind: "viewportEpoch",
+        hasBinaryPayload: false,
+        epoch: 0,
+      }),
+    ).toBe(true);
+    expect(
+      parsesServer({
+        kind: "viewportEpoch",
+        hasBinaryPayload: false,
+        epoch: -1,
+      }),
+    ).toBe(false);
+    expect(
+      parsesServer({ kind: "viewportEpoch", hasBinaryPayload: false }),
+    ).toBe(false);
+    // Client-only direction check: the epoch is minted host-side.
+    expect(
+      parsesClient({
+        kind: "viewportEpoch",
+        hasBinaryPayload: false,
+        epoch: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("carries either correlation token on a pointer frame", () => {
+    expect(
+      parsesClient({ ...POINTER, castSequence: 7, viewportEpoch: null }),
+    ).toBe(true);
+    expect(
+      parsesClient({ ...POINTER, castSequence: null, viewportEpoch: 3 }),
+    ).toBe(true);
+  });
+
+  it("defaults both correlation tokens to null when omitted", () => {
+    const parsed = browserScreencastClientFrameSchema.parse(POINTER);
+    expect(parsed).toMatchObject({ castSequence: null, viewportEpoch: null });
+    const legacy = browserScreencastClientFrameSchema.parse({
+      ...POINTER,
+      castSequence: 7,
+    });
+    expect(legacy).toMatchObject({ castSequence: 7, viewportEpoch: null });
+  });
+
+  it("rejects a negative or non-integer viewport epoch on input", () => {
+    expect(
+      parsesClient({ ...POINTER, castSequence: null, viewportEpoch: -1 }),
+    ).toBe(false);
+    expect(
+      parsesClient({ ...POINTER, castSequence: null, viewportEpoch: 1.5 }),
+    ).toBe(false);
+  });
+});

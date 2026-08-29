@@ -741,6 +741,20 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // The video plane's hit-testing token. A JPEG-plane tile correlates
+      // input against the frame it painted (`castSequence`); a video-plane
+      // tile has no such frame, so the host mints a viewport epoch from
+      // `Page.getLayoutMetrics` and re-announces it whenever that geometry
+      // changes. Input carrying a stale (or no) epoch is rejected, exactly
+      // as input naming an unpresented frame is. Same counter as
+      // `agentCursor.epoch`.
+      kind: z.literal("viewportEpoch"),
+      ...textFrameFields,
+      epoch: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("agentCursor"),
       ...textFrameFields,
       type: browserScreencastAgentCursorTypeSchema,
@@ -841,7 +855,12 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       ...textFrameFields,
       ...browserScreencastControlIdentitySchema,
       type: browserScreencastPointerTypeSchema,
-      castSequence: z.number().int().nonnegative(),
+      // Exactly one correlation token is set, per display plane: JPEG tiles
+      // name the painted frame, video tiles name the host's viewport epoch
+      // (see the `viewportEpoch` server frame). Neither set is unmappable
+      // and the host rejects it.
+      castSequence: z.number().int().nonnegative().nullable().default(null),
+      viewportEpoch: z.number().int().nonnegative().nullable().default(null),
       normalizedX: z.number(),
       normalizedY: z.number(),
       button: browserScreencastPointerButtonSchema,

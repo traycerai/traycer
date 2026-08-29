@@ -8,18 +8,21 @@ import type {
   RefObject,
 } from "react";
 import type {
+  BrowserScreencastCaptureMode,
   BrowserScreencastClientFrame,
   BrowserScreencastServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import { createScreencastArmBuffer } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
 import {
   buildScreencastPointerFrame,
+  correlationToken,
   inputModifiers,
   isScreencastModChord,
   nextPointerClickCount,
   pointerButton,
   type PointerClickCount,
   type ScreencastFrameSize,
+  type ScreencastInputCorrelation,
   type ScreencastInputFrame,
   type ScreencastKeyboardInput,
   type ScreencastNavInput,
@@ -85,8 +88,20 @@ export interface ScreencastController {
   readonly setActiveDialog: (dialog: ScreencastDialog | null) => void;
   /** Drops the dialog and composition the previous transport incarnation left. */
   readonly resetInputContext: () => void;
-  /** Latches the sequence the browser has actually painted (`<img onLoad>`); pointer frames carry this for host-side hit-test correlation. */
+  /** Latches the sequence the browser has actually painted (`<img onLoad>`); JPEG-plane pointer frames carry this for host-side hit-test correlation. */
   readonly notePresentedSequence: (sequence: number | null) => void;
+  /**
+   * Latches the host's viewport epoch, the video plane's correlation token -
+   * a video tile paints no `castSequence`, so this is what its pointer frames
+   * carry. `null` while no epoch is confirmed, which withholds input exactly
+   * as an unpainted JPEG tile does.
+   */
+  readonly noteViewportEpoch: (epoch: number | null) => void;
+  /**
+   * Which plane's token the tile is correlating against. The host announces
+   * it (`captureMode` frame); nothing else about the mode lives here.
+   */
+  readonly setCaptureMode: (mode: BrowserScreencastCaptureMode) => void;
   /** Frame arrived over the wire: freshness clock + the ack the host gates the next capture on. Fires before paint - a tile acks on arrival, same as PiP. */
   readonly noteFrameArrived: (sequence: number) => void;
   /** Allocates the next arm epoch without sending; the caller emits the frame. */
@@ -143,6 +158,8 @@ export function createScreencastController(options: {
   let activeArmEpoch: number | null = null;
   let inputSequence = 0;
   let presentedSequence: number | null = null;
+  let viewportEpoch: number | null = null;
+  let captureMode: BrowserScreencastCaptureMode = "jpeg";
   let lastFrameAt: number | null = null;
   let activeDialog: ScreencastDialog | null = null;
   let composing = false;
@@ -161,6 +178,17 @@ export function createScreencastController(options: {
   >();
   const forwardedKeyDowns = new Map<string, ScreencastKeyboardInput>();
   const claimedLocalCodes = new Set<string>();
+
+  /**
+   * The one place the display plane decides anything on this side: which
+   * token the pointer frames (and the arm buffer) correlate against. The
+   * JPEG plane's `castSequence` path is untouched by the video plane's epoch
+   * and vice versa - only this reads `captureMode`.
+   */
+  const inputCorrelation = (): ScreencastInputCorrelation =>
+    captureMode === "video"
+      ? { castSequence: null, viewportEpoch }
+      : { castSequence: presentedSequence, viewportEpoch: null };
 
   const armBuffer = createScreencastArmBuffer<ScreencastPointerInput>(() => {
     pointerClickCount = null;
@@ -348,7 +376,9 @@ export function createScreencastController(options: {
 
   const deliverArmBuffer = (): void => {
     const hadPending = armBuffer.hasPending();
-    const gesture = armBuffer.takeIfCurrent(presentedSequence);
+    const gesture = armBuffer.takeIfCurrent(
+      correlationToken(inputCorrelation()),
+    );
     if (gesture === null) {
       if (hadPending && capturedPointer !== null) {
         suppressPointerId = capturedPointer.pointerId;
@@ -414,7 +444,7 @@ export function createScreencastController(options: {
       deltaX: request.deltaX,
       deltaY: request.deltaY,
       clickCount,
-      castSequence: presentedSequence,
+      correlation: inputCorrelation(),
       image: refs.imageRef.current,
       frameSize,
     });
@@ -460,10 +490,17 @@ export function createScreencastController(options: {
           deltaX: 0,
           deltaY: 0,
         });
-        if (frame !== null) {
+        const token =
+          frame === null
+            ? null
+            : correlationToken({
+                castSequence: frame.castSequence,
+                viewportEpoch: frame.viewportEpoch,
+              });
+        if (frame !== null && token !== null) {
           armBuffer.storeDown({
             payload: frame,
-            castSequence: frame.castSequence,
+            correlationToken: token,
             clientX: event.clientX,
             clientY: event.clientY,
             isPrimary: true,
@@ -617,6 +654,17 @@ export function createScreencastController(options: {
     },
     notePresentedSequence: (sequence) => {
       presentedSequence = sequence;
+    },
+    noteViewportEpoch: (epoch) => {
+      viewportEpoch = epoch;
+    },
+    setCaptureMode: (mode) => {
+      if (mode === captureMode) return;
+      captureMode = mode;
+      // The two planes' tokens are different number spaces, so a gesture
+      // buffered under the old one must not be matched against the new one:
+      // a press held at `castSequence` 37 would replay against epoch 37.
+      armBuffer.drop();
     },
     noteFrameArrived: (sequence) => {
       lastFrameAt = Date.now();
