@@ -460,7 +460,7 @@ export function appendLiveRecords(
  */
 function pruneSupersededLiveRecords(
   window: TranscriptWindow,
-  freshlyServedAssistantTurnKeys: ReadonlySet<string>,
+  freshlyServedAssistantTurns: ReadonlyMap<string, number>,
 ): TranscriptWindow {
   if (window.liveMessages.length === 0 && window.liveEvents.length === 0) {
     return window;
@@ -479,7 +479,8 @@ function pruneSupersededLiveRecords(
       !(
         message.role === "assistant" &&
         isTransientLiveAssistantMessageId(message.messageId) &&
-        freshlyServedAssistantTurnKeys.has(assistantTurnKey(message))
+        (freshlyServedAssistantTurns.get(assistantTurnKey(message)) ??
+          -Infinity) >= message.timestamp
       ),
   );
   const supersededEvents = window.liveEvents.filter(
@@ -513,21 +514,28 @@ function pruneSupersededLiveRecords(
   return { ...window, liveMessages, liveEvents };
 }
 
-function servedAssistantTurnKeys(
+function servedAssistantTurns(
   rowIds: readonly string[],
   messages: readonly Message[],
-): ReadonlySet<string> {
-  const messageKeys = new Set(
-    messages
-      .filter((message) => message.role === "assistant")
-      .map(assistantTurnKey),
-  );
-  const keys = new Set<string>();
+): ReadonlyMap<string, number> {
+  const messageTimestamps = new Map<string, number>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    const turnKey = assistantTurnKey(message);
+    messageTimestamps.set(
+      turnKey,
+      Math.max(messageTimestamps.get(turnKey) ?? -Infinity, message.timestamp),
+    );
+  }
+  const turns = new Map<string, number>();
   for (const rowId of rowIds) {
     const turnKey = assistantRowTurnKey(rowId);
-    if (turnKey !== null && messageKeys.has(turnKey)) keys.add(turnKey);
+    const timestamp =
+      turnKey === null ? undefined : messageTimestamps.get(turnKey);
+    if (turnKey !== null && timestamp !== undefined)
+      turns.set(turnKey, timestamp);
   }
-  return keys;
+  return turns;
 }
 
 function conflictingIncompleteAssistantRowIds(
@@ -615,33 +623,37 @@ function recordsForRowIds(
   readonly messages: Message[];
   readonly events: ChatEvent[];
 } {
-  const setupRowId = [...rowIds].find((rowId) =>
+  const setupRowIds = [...rowIds].filter((rowId) =>
     rowId.startsWith("setup-card:"),
   );
-  const chatId = setupRowId?.match(/^setup-card:(.*):\d+:\d+$/)?.[1] ?? "";
+  const chatId =
+    (setupRowIds.at(0) ?? "").match(/^setup-card:(.*):\d+:\d+$/)?.[1] ?? "";
   const messageIds = new Set<string>();
   const eventIds = new Set<string>();
-  const requestedSetupCreatedAt = new Set(
-    [...rowIds]
-      .filter((rowId) => rowId.startsWith("setup-card:"))
-      .map((rowId) => rowId.slice(rowId.lastIndexOf(":") + 1)),
-  );
-  for (const row of projectTranscriptRows({
+  const projectedRows = projectTranscriptRows({
     messages,
     events,
     activeTurnId: null,
     chatId,
-  })) {
-    const setupCreatedAt =
-      row.source.kind === "setup-card"
-        ? row.rowId.slice(row.rowId.lastIndexOf(":") + 1)
-        : null;
-    if (
-      !rowIds.has(row.rowId) &&
-      (setupCreatedAt === null || !requestedSetupCreatedAt.has(setupCreatedAt))
-    ) {
-      continue;
-    }
+  });
+  const projectedSetupRows = projectedRows.filter(
+    (row) => row.source.kind === "setup-card",
+  );
+  const exactSetupRowIds = new Set(
+    projectedSetupRows
+      .filter((row) => rowIds.has(row.rowId))
+      .map((row) => row.rowId),
+  );
+  const unmatchedSetupCount = setupRowIds.filter(
+    (rowId) => !exactSetupRowIds.has(rowId),
+  ).length;
+  const fallbackSetupRows = new Set(
+    projectedSetupRows
+      .filter((row) => !exactSetupRowIds.has(row.rowId))
+      .slice(0, unmatchedSetupCount),
+  );
+  for (const row of projectedRows) {
+    if (!rowIds.has(row.rowId) && !fallbackSetupRows.has(row)) continue;
     const recordIds = rowRecordIds(row.source);
     for (const id of recordIds.messageIds) messageIds.add(id);
     for (const id of recordIds.eventIds) eventIds.add(id);
@@ -1142,7 +1154,6 @@ function provisionalLiveMessagesForSnapshot(input: {
   readonly missedDeltas: boolean;
   readonly rebased: boolean;
 }): readonly Message[] {
-  if (input.rowCount === 0) return [];
   return input.window.liveMessages.filter(
     (message) =>
       (message.role === "assistant" &&
@@ -1453,7 +1464,7 @@ function seatSnapshotTailSpan(input: {
   const spans = insertSpan(base.spans, tailSpan);
   return pruneSupersededLiveRecords(
     { ...base, spans, hydratedBytes: totalBytes(spans) },
-    servedAssistantTurnKeys(declaredCompleteTailRowIds(tail), tail.messages),
+    servedAssistantTurns(declaredCompleteTailRowIds(tail), tail.messages),
   );
 }
 
@@ -1661,11 +1672,22 @@ export function applySkeletonChunk(
     invalidated: window.invalidated || lost,
     clock: window.clock + 1,
   };
-  return reconcileSpansWithSkeleton(
+  const reconciled = reconcileSpansWithSkeleton(
     next,
     chunk.fromOrdinal,
     chunk.fromOrdinal + chunk.entries.length,
   );
+  if (!reconciled.skeletonComplete || reconciled.rowCount !== 0) {
+    return reconciled;
+  }
+  const liveMessages = reconciled.liveMessages.filter(
+    (message) =>
+      message.role !== "assistant" ||
+      !isTransientLiveAssistantMessageId(message.messageId),
+  );
+  return liveMessages.length === reconciled.liveMessages.length
+    ? reconciled
+    : { ...reconciled, liveMessages };
 }
 
 /**
@@ -1714,7 +1736,7 @@ function reconcileSpansWithSkeleton(
 ): TranscriptWindow {
   let changed = false;
   const kept: HydratedSpan[] = [];
-  const adoptedAssistantTurnKeys = new Set<string>();
+  const adoptedAssistantTurns = new Map<string, number>();
   for (const span of window.spans) {
     const disjoint =
       spanEnd(span) <= fromOrdinal || span.fromOrdinal >= toOrdinal;
@@ -1729,11 +1751,11 @@ function reconcileSpansWithSkeleton(
     const adopted = adoptSkeletonRowIds(window, span);
     if (adopted !== span) {
       changed = true;
-      for (const turnKey of servedAssistantTurnKeys(
+      for (const [turnKey, timestamp] of servedAssistantTurns(
         adopted.rowIds,
         adopted.messages,
       )) {
-        adoptedAssistantTurnKeys.add(turnKey);
+        adoptedAssistantTurns.set(turnKey, timestamp);
       }
     }
     kept.push(adopted);
@@ -1741,7 +1763,7 @@ function reconcileSpansWithSkeleton(
   if (!changed) return window;
   return pruneSupersededLiveRecords(
     { ...window, spans: kept, hydratedBytes: totalBytes(kept) },
-    adoptedAssistantTurnKeys,
+    adoptedAssistantTurns,
   );
 }
 
@@ -2351,7 +2373,7 @@ export function applyRangeResponse(
       hydratedBytes: totalBytes(spans),
       clock,
     },
-    servedAssistantTurnKeys(
+    servedAssistantTurns(
       completeServedRowIds(response.rowIds, response.incompleteRowIds),
       response.messages,
     ),

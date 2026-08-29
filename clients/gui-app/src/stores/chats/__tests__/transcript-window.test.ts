@@ -1950,6 +1950,33 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
+  it("keeps an assistant that overtakes a rebasing empty snapshot until its skeleton arrives", () => {
+    const turnId = "turn-after-empty-rebase";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+
+    const snapshot = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+    expect(snapshot.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+
+    const rebuilt = applySkeletonChunk(snapshot, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [],
+      isFinal: true,
+    });
+    expect(rebuilt.liveMessages).toEqual([]);
+  });
+
   it("keeps a user accepted after a snapshot through its older skeleton", () => {
     const rebuilding = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 0,
@@ -2031,7 +2058,7 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
-  it("drops a frozen assistant immediately when a rebase makes the transcript empty", () => {
+  it("drops a frozen assistant when the rebased empty skeleton confirms absence", () => {
     const turnId = "turn-deleted";
     const live = appendLiveRecords(emptyTranscriptWindow(), {
       messages: [
@@ -2047,8 +2074,15 @@ describe("what an overlap keeps", () => {
       tail: { fromOrdinal: 0, messages: [], events: [] },
     });
 
-    expect(rebased.liveMessages).toEqual([]);
-    expect(hydratedRecords(rebased).messages).toEqual([]);
+    const confirmed = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [],
+      isFinal: true,
+    });
+
+    expect(confirmed.liveMessages).toEqual([]);
+    expect(hydratedRecords(confirmed).messages).toEqual([]);
   });
 
   it("keeps a frozen assistant across an ambiguous same-epoch empty rebuild", () => {
@@ -2239,6 +2273,32 @@ describe("what an overlap keeps", () => {
     );
 
     expect(steerOnly.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("does not retire a newer completion stand-in from an older assistant serve", () => {
+    const turnId = "turn-delayed-serve";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [assistantMessage(transientId, turnId, 2)],
+        events: [],
+      },
+    );
+
+    const delayed = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-stale", turnId, 1)],
+      }),
+    );
+
+    expect(delayed.liveMessages.map((message) => message.messageId)).toEqual([
       transientId,
     ]);
   });
@@ -2459,6 +2519,60 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
+  it("does not assign same-timestamp setup windows to each other's rows", () => {
+    const turnId = "turn-between-setup-windows";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const setupEvent = (
+      eventId: string,
+      type: ChatEvent["type"],
+    ): ChatEvent => ({
+      eventId,
+      type,
+      timestamp: 100,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    });
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 3 },
+      {
+        messages: [assistantMessage(transientId, turnId, 2)],
+        events: [],
+      },
+    );
+
+    const partial = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [
+          "setup-card:chat-1:0:100",
+          assistantRowId(turnId),
+          "setup-card:chat-1:1:100",
+        ],
+        incompleteRowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-partial", turnId, 1)],
+        events: [
+          setupEvent("setup-first", "setup.running"),
+          setupEvent("setup-boundary", "worktree.missing"),
+          setupEvent("setup-second", "setup.running"),
+        ],
+      }),
+    );
+
+    expect(
+      partial.spans.map((span) => span.events.map((event) => event.eventId)),
+    ).toEqual([["setup-first"], ["setup-second"]]);
+  });
+
   it("withholds an incomplete steer row that shares the live assistant turn", () => {
     const turnId = "turn-partial-steer";
     const transientId = transientLiveAssistantMessageId(turnId);
@@ -2537,7 +2651,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [
           {
-            ...assistantMessage("assistant-durable", turnId, 1),
+            ...assistantMessage("assistant-durable", turnId, 2),
             blocks: [{ ...block, status: "completed" }],
           },
         ],
@@ -2561,7 +2675,7 @@ describe("what an overlap keeps", () => {
       epoch: 1,
       fromOrdinal: 0,
       rowIds: [assistantRowId(turnId)],
-      messages: [assistantMessage("assistant-durable", turnId, 1)],
+      messages: [assistantMessage("assistant-durable", turnId, 2)],
     });
 
     const hydrated = applyRangeResponse(live, legacyResponse);
@@ -2620,7 +2734,7 @@ describe("what an overlap keeps", () => {
       indexRevision: null,
       tail: {
         fromOrdinal: 0,
-        messages: [assistantMessage("assistant-durable", turnId, 1)],
+        messages: [assistantMessage("assistant-durable", turnId, 2)],
         events: [],
       },
     });
