@@ -1068,6 +1068,9 @@ function buildNotifications(
   push: MobilePushRegistration | null,
 ): INotificationHost {
   return {
+    // Phones expose permission state and the OS repair link together through
+    // `pushPermission`; duplicating that link here would split one capability.
+    systemSettings: null,
     // `show` stays a no-op ON PURPOSE: OS-level notifications on the phone
     // arrive as remote pushes from the cloud fan-out, not from the renderer's
     // display path - a foregrounded app shows its in-app surfaces instead.
