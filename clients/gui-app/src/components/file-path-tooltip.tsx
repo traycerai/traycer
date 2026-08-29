@@ -1,4 +1,11 @@
-import { useState, type ReactElement, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { Slot } from "radix-ui";
 
 import {
@@ -52,6 +59,38 @@ export function FilePathTooltip(props: FilePathTooltipProps) {
   );
 }
 
+const FilePathRevealContext = createContext<((path: string) => void) | null>(
+  null,
+);
+
+/**
+ * Owns the reveal sheet on behalf of the rows beneath it, and must wrap them
+ * rather than sit inside one.
+ *
+ * A Radix portal is DOM-detached but React-ATTACHED: the sheet's markup goes to
+ * the body, yet React propagates events through the React TREE. A sheet
+ * rendered by a row therefore bubbles its clicks back into that row - a
+ * `CommandItem` or `DropdownMenuItem` whose click launches a terminal or adopts
+ * a worktree - so dismissing the sheet picked the very row the press was only
+ * inspecting. Stopping propagation at the sheet was tried and is not enough:
+ * the overlay is a sibling of the content inside the same portal, so each
+ * surface has to be found and covered one at a time, and the next one added
+ * would silently reopen the hole. Hoisting the sheet out of every row's subtree
+ * removes the class instead of patching its instances.
+ */
+export function FilePathRevealProvider(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const reveal = useCallback((path: string) => setRevealed(path), []);
+  return (
+    <FilePathRevealContext.Provider value={reveal}>
+      {props.children}
+      <FullPathSheet path={revealed} onClose={() => setRevealed(null)} />
+    </FilePathRevealContext.Provider>
+  );
+}
+
 /**
  * {@link FilePathTooltip} plus the touch half of the same disclosure: a long
  * press carries the identical string into the full-path sheet, the way an
@@ -66,53 +105,44 @@ export function FilePathTooltip(props: FilePathTooltipProps) {
  * lines already re-open that one hole with `pointer-events-auto`; this hangs
  * off the same element.
  *
+ * The sheet itself belongs to {@link FilePathRevealProvider}, which must wrap
+ * the rows - see there for why a row cannot own it.
+ *
  * A row that wires its own long press (the remote picker's, which spans the
  * whole row because nothing there disables) keeps using {@link FilePathTooltip}
  * directly - two recognizers over one gesture would open two sheets.
  */
 export function FilePathReveal(props: FilePathTooltipProps): ReactNode {
-  const [revealed, setRevealed] = useState<string | null>(null);
+  const reveal = useContext(FilePathRevealContext);
   const longPress = useLongPress({
-    onLongPress: () => setRevealed(props.content),
+    // Loud rather than silently hover-only: without a provider the touch route
+    // would just quietly not exist, on the surfaces it was added for.
+    onLongPress: () => {
+      if (reveal === null) {
+        throw new Error("FilePathReveal needs a FilePathRevealProvider");
+      }
+      reveal(props.content);
+    },
     disabled: false,
   });
   return (
-    <>
-      <FilePathTooltip content={props.content} side={props.side}>
-        {/* `Slot.Root` nested inside `TooltipTrigger asChild` composes these
-            handlers with the child's own instead of replacing them. */}
-        <Slot.Root
-          {...longPress.handlers}
-          onClick={(event) => {
-            // The browser still delivers a click after a long press. Here that
-            // click reaches the enclosing menu or command item and picks the
-            // row - moving the user off the path the press just revealed - so
-            // the press that already answered the gesture swallows it.
-            if (!longPress.consumedTap()) return;
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-        >
-          {props.children}
-        </Slot.Root>
-      </FilePathTooltip>
-      {/* The sheet is DOM-detached and React-ATTACHED: Radix portals its
-          content to the body, but React propagates events through the React
-          tree, so a click inside it still bubbles into the row this component
-          sits in - and that row is a `CommandItem` or `DropdownMenuItem` whose
-          click launches a terminal or adopts a worktree. Closing the sheet
-          therefore picked the row that raised it. Every pointer event the sheet
-          handles stops here, at the boundary between the portal's React
-          ancestry and the row's: the sheet's own controls have already run by
-          the time these fire, and nothing above the sheet has any business
-          reacting to a press inside it. */}
-      <span
-        onClick={(event) => event.stopPropagation()}
-        onPointerDown={(event) => event.stopPropagation()}
-        onPointerUp={(event) => event.stopPropagation()}
+    <FilePathTooltip content={props.content} side={props.side}>
+      {/* `Slot.Root` nested inside `TooltipTrigger asChild` composes these
+          handlers with the child's own instead of replacing them. */}
+      <Slot.Root
+        {...longPress.handlers}
+        onClick={(event) => {
+          // The browser still delivers a click after a long press. Here that
+          // click reaches the enclosing menu or command item and picks the
+          // row - moving the user off the path the press just revealed - so
+          // the press that already answered the gesture swallows it.
+          if (!longPress.consumedTap()) return;
+          event.preventDefault();
+          event.stopPropagation();
+        }}
       >
-        <FullPathSheet path={revealed} onClose={() => setRevealed(null)} />
-      </span>
-    </>
+        {props.children}
+      </Slot.Root>
+    </FilePathTooltip>
   );
 }

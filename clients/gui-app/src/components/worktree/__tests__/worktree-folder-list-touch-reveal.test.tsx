@@ -135,6 +135,18 @@ describe("WorktreeFolderList path on touch", () => {
     fireEvent.click(within(sheet).getByText(RUNNING_DIR));
     expect(onSelect).not.toHaveBeenCalled();
 
+    // The overlay too: it is a sibling of the content inside the same portal,
+    // so it shares the row's React ancestry exactly as the content does.
+    const overlay = document.querySelector('[data-slot="sheet-overlay"]');
+    // Asserted, not guarded: a `if (overlay !== null)` here would skip silently
+    // the day the slot is renamed, which is the same shape as the disabled-row
+    // fixture this test was just rescued from.
+    if (!(overlay instanceof Element)) {
+      throw new Error("the sheet rendered no overlay");
+    }
+    fireEvent.click(overlay);
+    expect(onSelect).not.toHaveBeenCalled();
+
     const close = within(sheet).getByRole("button", { name: /close/i });
     fireEvent.click(close);
 

@@ -25,7 +25,10 @@ import {
 } from "@/components/ui/input-group";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { FilePathReveal } from "@/components/file-path-tooltip";
+import {
+  FilePathReveal,
+  FilePathRevealProvider,
+} from "@/components/file-path-tooltip";
 import {
   worktreeImportRows,
   type UnifiedPickerWorktreeRow,
@@ -339,7 +342,7 @@ function ExistingWorktreeList(props: {
   };
 
   return (
-    <>
+    <FilePathRevealProvider>
       {showSearch ? (
         <div className="pb-1">
           <InputGroup className="h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
@@ -422,6 +425,6 @@ function ExistingWorktreeList(props: {
           })
         )}
       </div>
-    </>
+    </FilePathRevealProvider>
   );
 }
