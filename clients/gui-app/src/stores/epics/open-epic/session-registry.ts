@@ -36,7 +36,6 @@ import {
  * all.
  */
 export { DEFAULT_MAX_LIVE_EPICS } from "@/stores/replica-memory/budget-limits";
-const loggedLiveTitleReadFailures = new Set<string>();
 
 /**
  * Soft threshold on retained-dirty buffers (see {@link RetainedUnsyncedBuffer}).
@@ -123,7 +122,7 @@ function eligibilityKeyFor(
   // `emit()` fires, and the React-subscribed quit sheet keeps showing the
   // bare epicId while an imperative `getUnsyncedEdits()` call already sees
   // the real title. Reading it here too keeps the two in lockstep.
-  const liveTitle = readLiveTitle(handle, epicId);
+  const liveTitle = readLiveTitle(handle);
   return `${handle.isClean() ? 1 : 0}:${hasActiveAgentWork(epicId) ? 1 : 0}:${state.isDirty ? 1 : 0}:${state.unsyncedQueueSize}:${metaTitle}:${liveTitle}`;
 }
 
@@ -968,10 +967,7 @@ function liveTitleCandidates(
   epicId: string,
   state: OpenEpicState,
 ): string[] {
-  return [
-    readLiveTitle(handle, epicId),
-    state.snapshotMeta?.epicLight?.title ?? "",
-  ];
+  return [readLiveTitle(handle), state.snapshotMeta?.epicLight?.title ?? ""];
 }
 
 function retainedTitleCandidates(
@@ -979,7 +975,7 @@ function retainedTitleCandidates(
   epicId: string,
 ): string[] {
   return bucket.flatMap((buffer) => [
-    readLiveTitle(buffer.handle, epicId),
+    readLiveTitle(buffer.handle),
     buffer.handle.store.getState().snapshotMeta?.epicLight?.title ?? "",
   ]);
 }
@@ -990,22 +986,17 @@ function sumRetainedQueueSize(
   return bucket.reduce((total, buffer) => total + buffer.queueSize, 0);
 }
 
-function readLiveTitle(handle: OpenEpicStoreHandle, epicId: string): string {
-  try {
-    const epicMap = handle.doc.getMap("epic");
-    const title = epicMap.get("title");
-    return typeof title === "string" ? title : "";
-  } catch (error) {
-    if (!loggedLiveTitleReadFailures.has(epicId)) {
-      loggedLiveTitleReadFailures.add(epicId);
-      appLogger.error(
-        "[open-epic-session-registry] failed to read live title",
-        { epicId },
-        error,
-      );
-    }
-    return "";
-  }
+function readLiveTitle(handle: OpenEpicStoreHandle): string {
+  // The PROJECTION, not the doc. `projectEpicHeader` performs the identical
+  // read - `getEpicMap(doc)`, `readMaybeString(epic, "title")`, which is
+  // `typeof value === "string" ? value : ""` - so this is the same value by
+  // the same rule, one layer up.
+  //
+  // The `try`/`catch` that used to wrap this is gone with the doc access: it
+  // existed because `getMap` throws on a DESTROYED `Y.Doc`, and reading a
+  // projected slice cannot. Keeping it would have been a guard against a
+  // failure mode this line no longer has.
+  return handle.store.getState().epic.title;
 }
 
 /**

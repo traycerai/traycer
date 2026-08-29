@@ -1150,22 +1150,6 @@ export function useEpicArtifactBodyLease(artifactId: string | null): void {
   }, [handle, artifactId, bodyDocKey]);
 }
 
-// ─── Doc reference for editor binding ─────────────────────────────────────
-
-/**
- * Returns the live Y.Doc + Y.Awareness owned by the current Epic session.
- * Tile editors bind these to `@tiptap/extension-collaboration` and
- * `@tiptap/extension-collaboration-caret` directly.
- */
-export function useEpicDocBinding(): {
-  readonly doc: Y.Doc;
-  readonly awareness: OpenEpicStoreHandle["awareness"];
-} {
-  const handle = useOpenEpicHandle();
-  useStore(handle.store, (s) => s.bindingVersion);
-  return { doc: handle.doc, awareness: handle.awareness };
-}
-
 // ─── Agent activity (per-user notification-room presence) ─────────────────
 //
 // The source is the awareness replica on `notifications:<userId>` - the room
