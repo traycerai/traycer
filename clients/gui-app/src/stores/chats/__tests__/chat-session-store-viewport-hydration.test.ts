@@ -1028,9 +1028,12 @@ describe("chat session viewport hydration: review fixes", () => {
   it("ignores a straggling accumulated-change chunk after the downgrade", () => {
     const harness = createViewportHarness();
     try {
-      // The snapshot must PROMISE the summary the chunk delivers: a
-      // generation publishes only once it reaches the announced count, so a
-      // count of 0 would leave the chunk assembled off-screen forever.
+      // The snapshot must PROMISE the summary the chunk delivers - but not
+      // because the count gates publication. A final chunk publishes at any
+      // count. What a count of 0 would change is the WATCHDOG:
+      // `chunkedDeliveryIncomplete` measures the published length against
+      // `accumulatedFileChangeCount`, so 0-against-1 keeps it armed and its
+      // fire adds a `resnapshot` this test's own count would then include.
       const base = snapshot({
         rowCount: 40,
         tailFromOrdinal: 20,

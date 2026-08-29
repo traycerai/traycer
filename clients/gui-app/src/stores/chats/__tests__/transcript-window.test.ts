@@ -2526,6 +2526,87 @@ describe("stale spans", () => {
     ).toBe(555);
   });
 
+  it("keeps the freshest carry of a row an OLDER mixed span is warmer than", () => {
+    // Warmth is per SPAN, ownership is per ROW, so the sort's primary key can
+    // separate two duplicates before the serve stamp is consulted. A partial
+    // refetch leaves an older carry holding one still-uncovered row beside a
+    // freshly covered one; viewing the uncovered row makes that whole span
+    // warmer than the newer span holding the other. It then sorts first,
+    // claims both ids, and eliminates its own fresher owner - warmth earned by
+    // a different row deciding this one.
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5", "row-6"],
+        messages: [userMessage("m-5", 5), userMessage("m-6", 6)],
+      }),
+      null,
+    );
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 30,
+        indexRevision: null,
+        tail: { fromOrdinal: 30, messages: [], events: [] },
+      },
+      null,
+    );
+    // The partial refetch: only `row-5` comes back, with a newer body. The
+    // carry is now mixed - `row-5` covered by the fresh tier, `row-6` not.
+    const refetched = applyRangeResponse(
+      rebased,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 12,
+        rowIds: ["row-5"],
+        messages: [userMessage("m-5", 555)],
+      }),
+      null,
+    );
+    const named = applySkeletonChunk(refetched, {
+      epoch: 2,
+      fromOrdinal: 20,
+      entries: [skeletonEntry("row-6", 20)],
+      isFinal: false,
+    });
+    // Viewing `row-6` warms the CARRY only: the fresh span sits at ordinal 12,
+    // outside this range, and `row-5` is drawn by the fresh tier so it earns
+    // the carry nothing.
+    const warm = touchTranscriptRange(named, {
+      fromOrdinal: 20,
+      toOrdinal: 21,
+    });
+    expect(warm.staleSpans[0].touchedAt).toBeGreaterThan(
+      warm.spans[0].touchedAt,
+    );
+    expect(warm.spans[0].servedAt).toBeGreaterThan(warm.staleSpans[0].servedAt);
+
+    // The next rebase weighs them against each other, warmest first.
+    const carried = applyWindowedSnapshot(
+      warm,
+      {
+        epoch: 3,
+        rowCount: 30,
+        indexRevision: null,
+        tail: { fromOrdinal: 30, messages: [], events: [] },
+      },
+      null,
+    );
+
+    expect(carried.staleSpans.map((span) => span.rowIds)).toEqual([
+      ["row-5", "row-6"],
+      ["row-5"],
+    ]);
+    expect(
+      hydratedRecords(carried).messages.find(
+        (message) => message.messageId === "m-5",
+      )?.timestamp,
+    ).toBe(555);
+  });
+
   it("warms only the freshest carry of a row two carries hold", () => {
     // The warmth bump answers "is this carry drawing anything on screen", and
     // for a row the replacement index NAMES the answer is known: the freshest

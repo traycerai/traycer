@@ -2793,12 +2793,28 @@ function boundedStaleSpans(
   // unbound anything: the budget below still applies, and
   // {@link staleSpanVisibleIn} gives a marker no viewport warmth, so a
   // duplicated carry is the coldest thing here and the first a squeeze drops.
+  //
+  // Which is still not enough on its own, because the sort's PRIMARY key can
+  // separate two duplicates before the serve stamp is ever consulted. A mixed
+  // carry holding one still-uncovered row beside a freshly covered one earns
+  // warmth from the row the reader is looking at, so it can legitimately
+  // outrank the newer span holding the other - and then claims both ids and
+  // eliminates its own fresher owner. Warmth earned by a DIFFERENT row is not
+  // evidence about this one.
+  //
+  // So ownership is read per row, and as a reason to CONTRIBUTE rather than as
+  // a veto. The distinction is the whole safety argument: a veto ("skip a span
+  // that owns nothing freshest") would drop the staler copy of a row whose
+  // owner is then squeezed out by the budget below, losing the row outright,
+  // where today it survives. Contributing only ever admits more, and the
+  // budget still bounds the total.
+  const ownerOf = staleRowOwners(candidates);
   const coveredRowIds = new Set<string>();
   const carried: HydratedSpan[] = [];
   let bytes = liveBytes;
   for (const span of sorted) {
     const uncovered = (rowId: string): boolean =>
-      rowId === "" || !coveredRowIds.has(rowId);
+      rowId === "" || !coveredRowIds.has(rowId) || ownerOf.get(rowId) === span;
     // Coverage BEFORE the budget, so "the warmest contributing span" is the
     // one admitted below rather than whichever duplicate sorted first.
     if (!span.rowIds.some(uncovered)) continue;

@@ -751,6 +751,27 @@ export interface ChatSessionState {
    */
   readonly coldRewrittenMessageIds: ReadonlySet<string>;
   /**
+   * Has a rewrite been dropped for an unheld row since the last supersede?
+   *
+   * A one-shot latch, and what makes the index-echo exemption in
+   * `onIndexChanged` honest. That exemption skips superseding in-flight ranges
+   * on the grounds that the deltas behind the echo have ALREADY rewritten the
+   * held copy - which holds only while every write reached the window. A drop
+   * breaks exactly that premise, and holding a copy afterwards does not repair
+   * it: a range sliced before the missing write seats a copy at the same older
+   * `blocksVersion`, so the seat's held-versus-served check sees a tie rather
+   * than the fact that BOTH trail the echo, and the row is hydrated so the
+   * planner leaves no gap behind to repair it.
+   *
+   * Distinct from {@link coldRewrittenMessageIds}, which records the same event
+   * for the announcements hook and is never cleared per row - gating on that
+   * ledger would disable the exemption for the rest of the session, which is
+   * the starvation loop the exemption exists to prevent. This clears on the
+   * supersede it forces, because every range re-asked from there is sliced
+   * after the echo and so already carries the missing write.
+   */
+  readonly windowWriteDropped: boolean;
+  /**
    * An ordinal a pending transcript JUMP needs hydrated, or `null`.
    *
    * Set by the surface that holds the jump request when its target resolves to
@@ -3587,6 +3608,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // fresh store does.
             accumulatedFileChangeCount: 0,
             coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
+            windowWriteDropped: false,
             jumpTargetOrdinal: null,
             accumulatedFileChangeSummaries: [],
             accumulatedSummaryGenerationSeated: false,
@@ -3779,7 +3801,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           // these ordinals. The announcements hook drops its own consumption
           // record on the same edge.
           ...(rebased
-            ? { coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS }
+            ? {
+                coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
+                // Same edge, same reason: the rows the drop was about do not
+                // exist under these ordinals, and the snapshot itself is the
+                // fresh body the latch was holding out for.
+                windowWriteDropped: false,
+              }
             : {}),
           // Deliberately NOT resetting `accumulatedFileChangeSummaries` here.
           //
@@ -3869,8 +3897,21 @@ export function createChatSessionStoreWithNotificationDependencies(
         // exactly as before. The holds scan is gated on there being an
         // outstanding request at all, so it never runs on the bare per-token
         // path.
+        //
+        // And holding a copy is not the same as that copy being CURRENT with
+        // this echo, which is what the premise above actually needs. A write
+        // dropped while its row was unheld leaves the client behind for good:
+        // a range sliced before it then seats a copy at the same older
+        // `blocksVersion`, so the seat's held-versus-served comparison sees a
+        // tie rather than the fact that BOTH trail the host, and the row is
+        // hydrated so the planner leaves no gap to repair it.
+        // `windowWriteDropped` is the client's own record of that drop - see
+        // the field - and it clears on the supersede it forces here, so the
+        // cost is one extra round trip per dropped write rather than the
+        // starvation loop this exemption exists to prevent.
         const streamingEcho =
           isActiveTurnStreamingEcho(frame.changes, activeTurnId) &&
+          !get().windowWriteDropped &&
           (outstandingHydrationRequests.size === 0 ||
             holdsActiveTurnAssistantMessage(
               get().transcriptWindow,
@@ -3883,6 +3924,14 @@ export function createChatSessionStoreWithNotificationDependencies(
             epoch: frame.epoch,
             changes: frame.changes,
           });
+          // The latch is discharged by the supersede rather than by the reply:
+          // every range re-asked from here is sliced after this echo, so it
+          // carries the delta the drop lost. Holding it until the reply lands
+          // would supersede again on each echo in between, which is the
+          // starvation the exemption is for.
+          if (get().windowWriteDropped) {
+            set({ windowWriteDropped: false });
+          }
         }
         const window = applyIndexChange(get().transcriptWindow, {
           epoch: frame.epoch,
@@ -5187,6 +5236,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       transcriptDerived: null,
       accumulatedFileChangeCount: 0,
       coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
+      windowWriteDropped: false,
       jumpTargetOrdinal: null,
       accumulatedFileChangeSummaries: [],
       accumulatedSummaryGenerationSeated: false,
@@ -7334,7 +7384,17 @@ function rewriteMessageInPlace(
     // Recorded rather than announced here: this is a pure reducer over a
     // record, and which of these is worth saying out loud is the hook's
     // question, not this function's.
-    return { coldRewrittenMessageIds: withColdRewrite(state, messageId) };
+    return {
+      coldRewrittenMessageIds: withColdRewrite(state, messageId),
+      // Deliberately not narrowed to the active turn's own row. The record is
+      // NOT held, so the client cannot ask which turn a body it does not have
+      // belongs to - and the drop that reaches here in practice is the
+      // steer-split carryover, which targets an EARLIER row of the turn that
+      // is still streaming. Narrowing on the id would therefore miss the case
+      // this exists for. Over-triggering costs one extra supersede for a drop
+      // on an unrelated row; under-triggering costs an unrepairable body.
+      windowWriteDropped: true,
+    };
   }
   return {
     transcriptWindow: applied.window,
