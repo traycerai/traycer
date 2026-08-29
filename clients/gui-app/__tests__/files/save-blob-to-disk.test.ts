@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  FileSaveRequest,
+  SavedFileLocation,
+} from "@traycer-clients/shared/platform/runner-host";
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 
 const createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(
@@ -21,7 +25,6 @@ function restoreUrlMethod(
 }
 
 afterEach(() => {
-  (globalThis as { runnerHost?: unknown }).runnerHost = undefined;
   window.showSaveFilePicker = undefined;
   restoreUrlMethod("createObjectURL", createObjectUrlDescriptor);
   restoreUrlMethod("revokeObjectURL", revokeObjectUrlDescriptor);
@@ -41,7 +44,11 @@ describe("saveBlobToDisk", () => {
       .mockRejectedValue(new DOMException("cancelled", "AbortError"));
 
     await expect(
-      saveBlobToDisk(new Blob(["png"], { type: "image/png" }), "diagram.png"),
+      saveBlobToDisk(
+        new Blob(["png"], { type: "image/png" }),
+        "diagram.png",
+        null,
+      ),
     ).resolves.toBeNull();
     expect(createObjectURL).not.toHaveBeenCalled();
   });
@@ -72,7 +79,11 @@ describe("saveBlobToDisk", () => {
     // A recoverable (non-cancel) write failure must not lose the file: the
     // browser falls through to the <a download> anchor and still saves it.
     await expect(
-      saveBlobToDisk(new Blob(["png"], { type: "image/png" }), "diagram.png"),
+      saveBlobToDisk(
+        new Blob(["png"], { type: "image/png" }),
+        "diagram.png",
+        null,
+      ),
     ).resolves.toEqual({ name: "diagram.png", path: null });
     expect(createWritable).toHaveBeenCalledTimes(1);
     expect(writable.write).toHaveBeenCalledTimes(1);
@@ -80,25 +91,27 @@ describe("saveBlobToDisk", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the desktop save bridge before browser save APIs", async () => {
-    const saveFile = vi
-      .fn()
-      .mockResolvedValue({ name: "diagram.png", path: "/tmp/diagram.png" });
+  it("uses the shell's native save host before browser save APIs", async () => {
+    const saveFile = vi.fn<
+      (request: FileSaveRequest) => Promise<SavedFileLocation | null>
+    >(() => Promise.resolve({ name: "diagram.png", path: "/tmp/diagram.png" }));
     const createObjectURL = vi.fn(() => "blob:mermaid");
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       writable: true,
       value: createObjectURL,
     });
-    (globalThis as { runnerHost?: unknown }).runnerHost = {
-      fileDrops: { saveFile },
-    };
     window.showSaveFilePicker = vi
       .fn()
       .mockRejectedValue(new DOMException("not allowed", "NotAllowedError"));
 
     const blob = new Blob(["png"], { type: "image/png" });
-    await expect(saveBlobToDisk(blob, "diagram.png")).resolves.toEqual({
+    await expect(
+      saveBlobToDisk(blob, "diagram.png", {
+        saveFile,
+        openSavedFile: () => Promise.resolve(),
+      }),
+    ).resolves.toEqual({
       name: "diagram.png",
       path: "/tmp/diagram.png",
     });
