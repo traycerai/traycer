@@ -183,41 +183,50 @@ function SwitcherBrowsersBody(props: {
 }) {
   const sessions = useBrowserSessionsContext();
   const { tabs, filteredTabs } = props;
-  if (sessions.lifecycle === "failed" || sessions.lifecycle === "closed") {
-    return (
-      <BrowsersPanelUnavailableState
-        message={sessions.errorMessage}
-        onRetry={sessions.retry}
-      />
-    );
-  }
-  if (
+  const isUnavailable =
+    sessions.lifecycle === "failed" || sessions.lifecycle === "closed";
+  const isLoading =
     (sessions.lifecycle === "connecting" ||
       sessions.lifecycle === "reconnecting") &&
-    tabs.length === 0
-  ) {
-    return <BrowsersPanelLoadingState />;
-  }
-  if (tabs.length === 0) {
-    return <BrowsersPanelEmptyState onAddBrowser={props.onAddBrowser} />;
-  }
-  if (filteredTabs.length === 0) return <BrowsersPanelNoResultsState />;
+    tabs.length === 0;
+  const isEmpty = !isLoading && !isUnavailable && tabs.length === 0;
+  const hasNoResults = tabs.length > 0 && filteredTabs.length === 0;
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-      {filteredTabs.map((row) => (
-        <SwitcherBrowserRow
-          key={row.key}
-          row={row}
-          secondaryLabel={props.secondaryByKey.get(row.key) ?? null}
-          isDuplicateTitle={props.duplicateTitles.has(row.identity.title)}
-          chatById={props.chatById}
-          epicId={props.epicId}
-          tabId={props.tabId}
-          onClose={props.onClose}
-          onCloseTab={sessions.closeTab}
+    <>
+      {isLoading ? <BrowsersPanelLoadingState /> : null}
+      {/* Rendered ABOVE the rows rather than instead of them, as the desktop
+          panel does: a stream that drops does not un-open the tabs, and the
+          rows are still the only way to reach them. Replacing the list with
+          the banner would strand a phone user with tabs they can see nothing
+          of. */}
+      {isUnavailable ? (
+        <BrowsersPanelUnavailableState
+          message={sessions.errorMessage}
+          onRetry={sessions.retry}
         />
-      ))}
-    </div>
+      ) : null}
+      {isEmpty ? (
+        <BrowsersPanelEmptyState onAddBrowser={props.onAddBrowser} />
+      ) : null}
+      {hasNoResults ? <BrowsersPanelNoResultsState /> : null}
+      {filteredTabs.length > 0 ? (
+        <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+          {filteredTabs.map((row) => (
+            <SwitcherBrowserRow
+              key={row.key}
+              row={row}
+              secondaryLabel={props.secondaryByKey.get(row.key) ?? null}
+              isDuplicateTitle={props.duplicateTitles.has(row.identity.title)}
+              chatById={props.chatById}
+              epicId={props.epicId}
+              tabId={props.tabId}
+              onClose={props.onClose}
+              onCloseTab={sessions.closeTab}
+            />
+          ))}
+        </div>
+      ) : null}
+    </>
   );
 }
 

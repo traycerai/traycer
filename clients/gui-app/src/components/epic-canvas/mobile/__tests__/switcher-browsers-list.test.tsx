@@ -386,6 +386,19 @@ describe("SwitcherBrowsersList", () => {
     ).toBeTruthy();
   });
 
+  it("keeps the rows reachable when the session stream drops", () => {
+    // A stream that fails does not un-open the tabs, and these rows are the
+    // only route to them. Desktop renders the banner ABOVE its list for the
+    // same reason; replacing the list would strand a phone user with tabs they
+    // can see nothing of.
+    replaceSessions(sessionsState.value.items, "failed");
+    renderList(() => undefined);
+
+    expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Cart/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Guide/ })).toBeTruthy();
+  });
+
   it("mounts the desktop unavailable state with its retry", () => {
     replaceSessions([], "failed");
     renderList(() => undefined);
