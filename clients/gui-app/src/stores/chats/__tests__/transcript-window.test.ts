@@ -2527,38 +2527,48 @@ describe("stale spans", () => {
     ).toBe(555);
   });
 
-  it("leaves a staler holder's warmth alone when a shared record is rewritten", () => {
-    // One record reaches every span its turn's rows do, so a streamed rewrite
-    // can touch several disjoint carries at once. Stamping them all with the
-    // same clock FLATTENS the tier's warmth ordering - and what it flattens
-    // away is the viewport's own bump, the one thing saying which span the
-    // reader is looking at. `boundedStaleSpans` then cannot tell them apart
-    // and can evict the visible span for an off-screen duplicate, repainting
-    // that span's OWN rows as placeholders until a refetch lands.
+  it("protects every carry drawing the viewport, not just the first admitted", () => {
+    // The soft budget exemption was positional: `carried.length > 0` spared
+    // whichever contributing span sorted first and dropped the rest. A reader
+    // whose viewport crosses TWO carries therefore lost the second - and
+    // because `applyRangeResponse` rebalances the tier BEFORE
+    // `evictTranscriptWindowToBudget` frees the cold fresh spans, that drop is
+    // decided against a fresh tier only transiently over budget, and is never
+    // reconsidered once capacity returns. The rows flash back to placeholders
+    // until a refetch lands.
+    //
+    // Warmth cannot fix this: both spans are equally and legitimately warm.
+    // Visibility has to be a protection of its own.
+    const bulk = "x".repeat(Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.6));
     const first = applyRangeResponse(
       windowWithSkeleton(30),
       rangeResponse({
         epoch: 1,
-        fromOrdinal: 5,
-        rowIds: ["row-5"],
-        messages: [userMessage("m-shared", 5)],
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [messageWithText(userMessage("m-0", 0), bulk)],
       }),
       null,
     );
-    // The same record again, in a disjoint span: this one is served LATER, so
-    // it owns the record and takes the write bump.
-    const second = applyRangeResponse(
+    // Disjoint, so `insertSpan` cannot merge them into one carry.
+    const seeded = applyRangeResponse(
       first,
       rangeResponse({
         epoch: 1,
-        fromOrdinal: 12,
-        rowIds: ["row-12"],
-        messages: [userMessage("m-shared", 5)],
+        fromOrdinal: 10,
+        rowIds: ["row-10"],
+        messages: [messageWithText(userMessage("m-10", 10), bulk)],
       }),
       null,
     );
+    // The reader is across both, reported before the rebase demotes them.
+    const watching = touchTranscriptRange(seeded, {
+      fromOrdinal: 0,
+      toOrdinal: 11,
+    });
+
     const rebased = applyWindowedSnapshot(
-      second,
+      watching,
       {
         epoch: 2,
         rowCount: 30,
@@ -2567,39 +2577,13 @@ describe("stale spans", () => {
       },
       null,
     );
-    expect(rebased.staleSpans.map((span) => span.fromOrdinal)).toEqual([5, 12]);
-    expect(rebased.staleSpans[1].servedAt).toBeGreaterThan(
-      rebased.staleSpans[0].servedAt,
-    );
 
-    // The reader is looking at the OLDER carry, which is what makes it warmer.
-    const warm = touchTranscriptRange(rebased, {
-      fromOrdinal: 5,
-      toOrdinal: 6,
-    });
-    expect(warm.staleSpans[0].touchedAt).toBeGreaterThan(
-      warm.staleSpans[1].touchedAt,
-    );
-    const before = warm.staleSpans.map((span) => span.touchedAt);
-
-    const rewritten = streamWindowMessage(warm, "m-shared", (message) => ({
-      ...message,
-      timestamp: message.timestamp + 1,
-    }));
-
-    expect(rewritten.held).toBe(true);
-    // The viewport's statement survives: the span the reader is on keeps the
-    // warmth it earned, and only the record's owner is bumped.
-    expect(rewritten.window.staleSpans[0].touchedAt).toBe(before[0]);
-    expect(rewritten.window.staleSpans[1].touchedAt).toBeGreaterThan(before[1]);
-    // Both copies are still rewritten - only the WARMTH is owner-scoped.
-    expect(
-      rewritten.window.staleSpans.map(
-        (span) =>
-          span.messages.find((message) => message.messageId === "m-shared")
-            ?.timestamp,
-      ),
-    ).toEqual([6, 6]);
+    // Together they are 120% of the budget, so the second is exactly what the
+    // positional exemption dropped.
+    expect(rebased.staleSpans.map((span) => span.fromOrdinal)).toEqual([0, 10]);
+    // And the viewport travelled across the void with them, so the next
+    // rebalance protects them too.
+    expect(rebased.visibleOrdinals).toEqual({ fromOrdinal: 0, toOrdinal: 11 });
   });
 
   it("keeps the freshest carry of a row an OLDER mixed span is warmer than", () => {
@@ -3020,11 +3004,22 @@ describe("eviction", () => {
       null,
     );
 
+    // The range is RECORDED even when it warms nothing, so the first report of
+    // a new range is a new window - see the field. What must stay stable is
+    // RESTING: a viewport that has not moved, over rows no span holds.
     const touched = touchTranscriptRange(window, {
       fromOrdinal: 20,
       toOrdinal: 22,
     });
-    expect(touched).toBe(window);
+    expect(touched).not.toBe(window);
+    expect(touched.spans).toBe(window.spans);
+    expect(touched.clock).toBe(window.clock);
+
+    const resting = touchTranscriptRange(touched, {
+      fromOrdinal: 20,
+      toOrdinal: 22,
+    });
+    expect(resting).toBe(touched);
   });
 });
 

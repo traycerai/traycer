@@ -209,6 +209,7 @@ describe("chatTurnMinimapItems caching", () => {
       hydratedBytes: 32,
       unsettledByteMessageIds: [],
       invalidated: false,
+      visibleOrdinals: null,
       clock: 1,
     };
   }

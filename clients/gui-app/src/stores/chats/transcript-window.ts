@@ -353,6 +353,32 @@ export interface TranscriptWindow {
    * merely be wrong - see {@link applyRangeResponse}.
    */
   readonly invalidated: boolean;
+  /**
+   * The ordinals the reader last reported looking at, or `null` before any
+   * report.
+   *
+   * Retained because the STALE tier is bounded from places the viewport is not
+   * a parameter of. The fresh tier's eviction takes `visible` and `required`
+   * from its caller and exempts what they name; `boundedStaleSpans` runs from
+   * a rebase, a seat and a rewrite, none of which carry a range - so before
+   * this the carry had no protection except warmth, and warmth is a scalar two
+   * different claims write to. A viewport report and a streamed rewrite both
+   * moved it, so every fix that made one of them legible made the other less
+   * so, and the span the reader was looking at could still be the one a
+   * squeeze dropped.
+   *
+   * Recording the range makes visibility a PROTECTION rather than a bid for
+   * warmth, which is the same shape the fresh tier already has and leaves
+   * `touchedAt` to mean recency alone.
+   *
+   * In CURRENT coordinates. A carry keeps its previous ones, and
+   * {@link staleSpanVisibleIn} is what bridges the two - so this is compared
+   * through that predicate and never against a stale span's own ordinals.
+   * Carried across a rebase and a void because the reader has not moved; the
+   * next report corrects it either way, and an over-broad range costs budget
+   * where a missing one costs the placeholder flash the tier exists to prevent.
+   */
+  readonly visibleOrdinals: OrdinalRange | null;
   /** Monotonic counter backing `touchedAt`. */
   readonly clock: number;
 }
@@ -443,6 +469,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     hydratedBytes: 0,
     unsettledByteMessageIds: [],
     invalidated: false,
+    visibleOrdinals: null,
     clock: 0,
   };
 }
@@ -1038,7 +1065,11 @@ function boundStaleTierToBudget(window: TranscriptWindow): TranscriptWindow {
   ) {
     return window;
   }
-  const staleSpans = boundedStaleSpans(window.staleSpans, window.hydratedBytes);
+  const staleSpans = boundedStaleSpans(
+    window,
+    window.staleSpans,
+    window.hydratedBytes,
+  );
   return staleSpans.length === window.staleSpans.length
     ? window
     : { ...window, staleSpans };
@@ -1076,31 +1107,6 @@ function rewriteWindowMessage(
     spanIndexes.some((index) => index >= 0) ||
     staleIndexes.some((index) => index >= 0);
   if (!held) return { window, held: false };
-  // Which carry gets the WRITE bump, when several hold this record.
-  //
-  // One record reaches every span its turn's rows do, so a rewrite can touch
-  // several disjoint carries - and stamping them all with the same clock
-  // FLATTENS the tier's warmth ordering, erasing the extra warmth a viewport
-  // report gave the span the reader is actually looking at. The next
-  // `boundedStaleSpans` then cannot tell them apart, and can evict the visible
-  // span in favour of an off-screen duplicate, repainting that span's own
-  // unique rows as placeholders until a refetch lands.
-  //
-  // So only the freshest-served holder is bumped, on the same ownership rule
-  // the rest of the tier reads: its copy is the one the renderer draws, so it
-  // is the one whose eviction would lose the streamed body. A staler duplicate
-  // draws nothing for THIS record and needs no write warmth - its own rows are
-  // protected by the viewport bump, which is exactly what stays legible now.
-  const writeBumpIndex = staleIndexes.reduce(
-    (best, index, spanIndex) =>
-      index < 0 ||
-      (best >= 0 &&
-        window.staleSpans[spanIndex].servedAt <=
-          window.staleSpans[best].servedAt)
-        ? best
-        : spanIndex,
-    -1,
-  );
   const staleSpans = staleIndexes.every((index) => index < 0)
     ? window.staleSpans
     : window.staleSpans.map((span, spanIndex) => {
@@ -1132,12 +1138,14 @@ function rewriteWindowMessage(
           // could drop the very copy the reader is watching stream and leave
           // an idle-but-warmer span in its place.
           //
-          // The freshest holder only - see `writeBumpIndex`. Every other carry
-          // keeps the warmth it had, so the viewport's ordering survives a
-          // rewrite of a record they happen to share.
-          ...(spanIndex === writeBumpIndex
-            ? { touchedAt: window.clock + 1 }
-            : {}),
+          // Every holder, and the flattening that causes is no longer a
+          // hazard: which carry the reader is looking at is answered by
+          // {@link TranscriptWindow.visibleOrdinals} now, not by whose
+          // `touchedAt` is highest, so this scalar is free to mean recency
+          // alone. Scoping the bump to the record's freshest holder instead
+          // only moved the problem - it left the off-screen owner ABOVE the
+          // visible carry rather than level with it.
+          touchedAt: window.clock + 1,
         };
       });
   const spans = window.spans.map((span, spanIndex) => {
@@ -1843,6 +1851,10 @@ export function applyWindowedSnapshot(
           staleSpans:
             input.rowCount > 0 ? staleCarrySpans(reconciledWindow) : [],
           invalidated: missedDeltas,
+          // Carried for the same reason the void carries it: the reader has
+          // not moved because the index was replaced, and the carry they are
+          // looking at is bounded above before any new report can arrive.
+          visibleOrdinals: reconciledWindow.visibleOrdinals,
           clock,
         }
       : {
@@ -2737,6 +2749,9 @@ function staleCarrySpans(window: TranscriptWindow): readonly HydratedSpan[] {
   // correct, and a completed long turn would hold past the budget for the
   // life of the tier.
   return boundedStaleSpans(
+    // A rebase or void discards every fresh span, so nothing is drawn by that
+    // tier any more and the candidates are exactly what remains on screen.
+    { ...window, spans: [] },
     window.unsettledByteMessageIds.length === 0
       ? candidates
       : resettledSpanBytes(candidates, new Set(window.unsettledByteMessageIds)),
@@ -2772,6 +2787,13 @@ function staleCarrySpans(window: TranscriptWindow): readonly HydratedSpan[] {
  * served.
  */
 function boundedStaleSpans(
+  /**
+   * The window as it will be AFTER this bound - specifically its `spans`, the
+   * fresh tier that survives. A carry loses a row the fresh tier draws, so
+   * judging visibility against the tier being DISCARDED would find every
+   * candidate invisible at a rebase, where the candidates are that tier.
+   */
+  after: TranscriptWindow,
   candidates: readonly HydratedSpan[],
   liveBytes: number,
 ): readonly HydratedSpan[] {
@@ -2840,6 +2862,10 @@ function boundedStaleSpans(
   // where today it survives. Contributing only ever admits more, and the
   // budget still bounds the total.
   const ownerOf = staleRowOwners(candidates);
+  const drawsViewport =
+    after.visibleOrdinals === null
+      ? (): boolean => false
+      : staleSpanVisibleIn(after, candidates, after.visibleOrdinals);
   const coveredRowIds = new Set<string>();
   const carried: HydratedSpan[] = [];
   let bytes = liveBytes;
@@ -2849,9 +2875,23 @@ function boundedStaleSpans(
     // Coverage BEFORE the budget, so "the warmest contributing span" is the
     // one admitted below rather than whichever duplicate sorted first.
     if (!span.rowIds.some(uncovered)) continue;
+    // EVERY carry drawing the viewport is exempt, not just the first one
+    // admitted. `carried.length > 0` alone made the exemption positional: a
+    // reader whose viewport crosses two carries had the second dropped, and
+    // because `applyRangeResponse` rebalances the tier BEFORE
+    // `evictTranscriptWindowToBudget` frees the cold fresh spans, the drop was
+    // decided against a fresh tier that was only transiently over budget and
+    // was never reconsidered once capacity returned. Its rows flash back to
+    // placeholders until a refetch lands, which is the loss this tier exists
+    // to prevent.
+    //
+    // Explicit, not warmth. Warmth is one scalar that a viewport report and a
+    // streamed rewrite both write, so it cannot say which of those it is
+    // recording - see {@link TranscriptWindow.visibleOrdinals}.
     if (
       carried.length > 0 &&
-      bytes + span.bytes > TRANSCRIPT_WINDOW_MAX_BYTES
+      bytes + span.bytes > TRANSCRIPT_WINDOW_MAX_BYTES &&
+      !drawsViewport(span)
     ) {
       continue;
     }
@@ -2912,7 +2952,7 @@ function retireCoveredStaleSpans(window: TranscriptWindow): TranscriptWindow {
   // at the carry: every seat that grows the fresh tier shrinks the stale
   // tier's headroom, so the shared budget keeps holding as hydration
   // proceeds rather than only at the rebase that created the carry.
-  const bounded = boundedStaleSpans(uncovered, window.hydratedBytes);
+  const bounded = boundedStaleSpans(window, uncovered, window.hydratedBytes);
   const unchanged =
     bounded.length === window.staleSpans.length &&
     bounded.every((span) => window.staleSpans.includes(span));
@@ -2973,6 +3013,10 @@ function voidedTranscriptWindow(
     // authority means the rows themselves are gone, so nothing is carried.
     staleSpans: input.rowCount > 0 ? staleCarrySpans(window) : [],
     invalidated: true,
+    // The reader has not moved because the index was replaced, and the carry
+    // they are looking at is bounded before any new report can arrive. See the
+    // field.
+    visibleOrdinals: window.visibleOrdinals,
     clock: window.clock + 1,
   };
 }
@@ -3351,6 +3395,7 @@ function dropSpansForUpdatedOrdinals(
     // KEPT spans still hold, so fresh and stale share one budget. See
     // {@link TranscriptWindow.staleSpans}.
     staleSpans: boundedStaleSpans(
+      { ...window, spans: kept },
       [...dropped, ...window.staleSpans],
       hydratedBytes,
     ),
@@ -4006,8 +4051,15 @@ function dedupeByFreshestSpan<T>(
  * repaint as placeholders until their own request lands, which is the flash
  * the tier exists to prevent.
  *
- * Identity-stable when nothing overlaps, so a viewport resting on
- * placeholders or the unplaced live tail does not churn the store.
+ * Identity-stable when nothing overlaps AND the range is unchanged, so a
+ * viewport RESTING on placeholders or the unplaced live tail does not churn
+ * the store. Deliberately weaker than "stable whenever nothing overlaps": the
+ * range itself is recorded (see {@link TranscriptWindow.visibleOrdinals}), so
+ * scrolling across a region no span holds now costs one window identity per
+ * distinct range. That is the case the stale tier's protection most needs -
+ * the reader is over rows only a carry is drawing - and gating the record on a
+ * non-empty tier would withhold it at exactly the moment a rebase creates the
+ * carry, since the bound runs before any new report can arrive.
  */
 export function touchTranscriptRange(
   window: TranscriptWindow,
@@ -4015,13 +4067,25 @@ export function touchTranscriptRange(
 ): TranscriptWindow {
   const overlaps = (span: HydratedSpan): boolean =>
     span.fromOrdinal < range.toOrdinal && spanEnd(span) > range.fromOrdinal;
-  const staleVisible = staleSpanVisibleIn(window, range);
+  const staleVisible = staleSpanVisibleIn(window, window.staleSpans, range);
   const touchedSpans = window.spans.some(overlaps);
   const touchedStale = window.staleSpans.some((span) => staleVisible(span));
-  if (!touchedSpans && !touchedStale) return window;
+  // The range is recorded even when nothing is warmed by it. The two answer
+  // different questions: warmth is "which span did the reader just read", and
+  // {@link TranscriptWindow.visibleOrdinals} is "where is the reader now" -
+  // which the stale tier's budget needs precisely when the viewport is over
+  // rows no span holds yet, since that is when a carry is drawing them.
+  const sameRange =
+    window.visibleOrdinals !== null &&
+    window.visibleOrdinals.fromOrdinal === range.fromOrdinal &&
+    window.visibleOrdinals.toOrdinal === range.toOrdinal;
+  if (!touchedSpans && !touchedStale) {
+    return sameRange ? window : { ...window, visibleOrdinals: range };
+  }
   const clock = window.clock + 1;
   return {
     ...window,
+    visibleOrdinals: sameRange ? window.visibleOrdinals : range,
     spans: touchedSpans
       ? window.spans.map((span) =>
           overlaps(span) ? { ...span, touchedAt: clock } : span,
@@ -4079,17 +4143,22 @@ export function touchTranscriptRange(
  */
 function staleSpanVisibleIn(
   window: TranscriptWindow,
+  carries: readonly HydratedSpan[],
   range: OrdinalRange,
 ): (span: HydratedSpan) => boolean {
+  // Over the CANDIDATE set rather than `window.staleSpans`, because
+  // `boundedStaleSpans` asks this about spans it has not seated yet - and
+  // ownership is only meaningful within the set being weighed.
+  //
   // No carry, no question - and this runs on every viewport report, so the
   // ordinary window must not pay for the lookups below.
-  if (window.staleSpans.length === 0) return () => false;
+  if (carries.length === 0) return () => false;
   const from = Math.max(0, range.fromOrdinal);
   const to = Math.min(range.toOrdinal, window.rowCount);
   if (from >= to) return () => false;
   const namedAt = skeletonOrdinalByRowId(window.skeleton);
   const drawnByFreshTier = freshDrawnRowIds(window.spans);
-  const ownerOf = staleRowOwners(window.staleSpans);
+  const ownerOf = staleRowOwners(carries);
   return (span) =>
     span.rowIds.some((rowId, offset) => {
       if (rowId === "" || drawnByFreshTier.has(rowId)) return false;

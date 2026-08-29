@@ -200,6 +200,7 @@ function windowOf(input: {
     hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
     unsettledByteMessageIds: [],
     invalidated: input.invalidated,
+    visibleOrdinals: null,
     clock: 1,
   };
 }
