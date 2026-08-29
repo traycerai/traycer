@@ -10,5 +10,9 @@ export function useDeletedArtifactsAvailable(hostId: string | null): boolean {
     hostId,
     "epic.deletedArtifacts.revive",
   );
-  return hostId !== null && supportsList && supportsRevive;
+  const supportsGetBlob = useHostSupportsMethod(
+    hostId,
+    "epic.artifactVersions.getBlob",
+  );
+  return hostId !== null && supportsList && supportsRevive && supportsGetBlob;
 }
