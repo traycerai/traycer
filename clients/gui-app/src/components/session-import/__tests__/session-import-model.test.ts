@@ -345,6 +345,49 @@ describe("buildSessionImportView - group header counts and tri-state", () => {
       },
     ]);
   });
+
+  // The pill row is STATIC: the scan's `started` frame names every provider
+  // it covers, so the row is complete before the first folder lands instead
+  // of pills popping in with results.
+  it("pills every provider the scan covers from scanStarted, before any group arrives", () => {
+    const view = buildSessionImportView(
+      applyActions([
+        { kind: "scanStarted", providers: ["claude", "codex"] },
+      ]),
+    );
+
+    expect(view.providers).toEqual([
+      {
+        harness: "codex",
+        name: harnessDisplayName("codex"),
+        count: 0,
+        enabled: true,
+      },
+      {
+        harness: "claude",
+        name: harnessDisplayName("claude"),
+        count: 0,
+        enabled: true,
+      },
+    ]);
+  });
+
+  // A window change starts a fresh scan that wipes the groups - but which
+  // providers the host scans is not a per-scan fact, so the roster (and with
+  // it the pill row) holds instead of blinking empty until `started` re-lands.
+  it("keeps the provider roster through a fresh restart", () => {
+    const view = buildSessionImportView(
+      applyActions([
+        { kind: "scanStarted", providers: ["claude", "codex"] },
+        { kind: "scanRestarted", reason: "fresh" },
+      ]),
+    );
+
+    expect(view.providers.map((provider) => provider.harness)).toEqual([
+      "codex",
+      "claude",
+    ]);
+  });
 });
 
 describe("buildSessionImportView - search + provider filter", () => {

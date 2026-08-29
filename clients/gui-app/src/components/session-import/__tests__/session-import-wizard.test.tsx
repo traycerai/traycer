@@ -848,7 +848,9 @@ describe("<SessionImportWizard />", () => {
 
     const codexPillAfterRescan = findProviderPill("codex");
     expect(codexPillAfterRescan.getAttribute("aria-checked")).toBe("false");
-    expect(codexPillAfterRescan.textContent).toContain("—");
+    // The scan settled with nothing for codex, so the pill says 0 plainly -
+    // the old "—" placeholder read as a minus control.
+    expect(codexPillAfterRescan.textContent).toContain("0");
 
     fireEvent.click(codexPillAfterRescan);
     act(() => {

@@ -71,10 +71,10 @@ export function useSessionImportScan(active: boolean): SessionImportScanHandle {
       updatedAfter:
         scanWindow === null ? null : Date.now() - scanWindow * DAY_IN_MS,
       callbacks: {
-        onStarted: () => {
-          // `started` names the providers being scanned; the wizard's own
-          // filter already lists both, and an empty result reads the same
-          // whether a provider was skipped or simply had nothing.
+        onStarted: (providers) => {
+          // The full provider roster, before any folder lands: it is what
+          // keeps the pill row present and stable for the whole scan.
+          dispatch({ kind: "scanStarted", providers });
         },
         onGroup: (group) => {
           dispatch({ kind: "scanGroupArrived", group });

@@ -145,6 +145,7 @@ export function SessionImportWizard(props: {
         tone={tone}
         query={state.query}
         providers={view.providers}
+        scanning={state.phase === "scanning"}
         scanWindow={state.scanWindow}
         onQueryChange={(query) => dispatch({ kind: "queryChanged", query })}
         onToggleProvider={(harness) =>
@@ -289,12 +290,13 @@ export function SessionImportWizard(props: {
 
 /**
  * The pinned header: search over everything, the scan-window picker, one pill
- * per provider found.
+ * per provider the scan covers.
  */
 function SessionImportFilters(props: {
   readonly tone: SessionImportTone;
   readonly query: string;
   readonly providers: ReadonlyArray<SessionImportProviderView>;
+  readonly scanning: boolean;
   readonly scanWindow: SessionImportScanWindow;
   readonly onQueryChange: (query: string) => void;
   readonly onToggleProvider: (harness: GuiHarnessId) => void;
@@ -304,6 +306,7 @@ function SessionImportFilters(props: {
     tone,
     query,
     providers,
+    scanning,
     scanWindow,
     onQueryChange,
     onToggleProvider,
@@ -346,6 +349,7 @@ function SessionImportFilters(props: {
           <ProviderPill
             key={provider.harness}
             provider={provider}
+            pending={scanning}
             tone={tone}
             onToggle={onToggleProvider}
           />
@@ -468,10 +472,21 @@ function SessionImportFooter(props: {
 
 function ProviderPill(props: {
   readonly provider: SessionImportProviderView;
+  /** True while the scan is still running, when a zero has no verdict yet. */
+  readonly pending: boolean;
   readonly tone: SessionImportTone;
   readonly onToggle: (harness: GuiHarnessId) => void;
 }) {
-  const { provider, tone, onToggle } = props;
+  const { provider, pending, tone, onToggle } = props;
+  // No number while the scan could still change it - a mid-scan zero means
+  // "not yet", not "nothing". Once the scan settles, 0 is the honest answer;
+  // the old "—" placeholder read as a minus control inside a clickable pill.
+  const count =
+    provider.count > 0
+      ? provider.count.toLocaleString()
+      : pending
+        ? null
+        : "0";
   return (
     <button
       type="button"
@@ -491,11 +506,9 @@ function ProviderPill(props: {
         className={cn("size-3.5", !provider.enabled && "opacity-60")}
       />
       <span className="min-w-0 truncate">{provider.name}</span>
-      <span className="tabular-nums opacity-70">
-        {/* A provider the scan has not reached yet has no number to show, and a
-            zero would read as "nothing here" rather than "not yet". */}
-        {provider.count === 0 ? "—" : provider.count.toLocaleString()}
-      </span>
+      {count !== null ? (
+        <span className="tabular-nums opacity-70">{count}</span>
+      ) : null}
     </button>
   );
 }
