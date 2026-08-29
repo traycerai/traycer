@@ -5,6 +5,7 @@ import { useBrowserPersistenceState } from "@/lib/browser-view/use-browser-persi
 import type {
   BrowserCookieCryptoState,
   BrowserPersistenceState,
+  BrowserPrimaryProfileDelta,
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
   BrowserViewBridge,
@@ -194,6 +195,12 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
         this.persistenceHandlers.delete(handler);
       },
     };
+  }
+
+  onPrimaryProfileDelta(
+    _handler: (delta: BrowserPrimaryProfileDelta) => void,
+  ): { dispose: () => void } {
+    return { dispose: () => undefined };
   }
 
   overlayPaintAck(_overlayId: string): Promise<void> {

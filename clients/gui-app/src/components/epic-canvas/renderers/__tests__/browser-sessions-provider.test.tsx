@@ -336,6 +336,9 @@ class FakeBridge {
   readonly onElectronTabHandoff = vi.fn<
     BrowserViewBridge["onElectronTabHandoff"]
   >(() => ({ dispose: () => {} }));
+  readonly onPrimaryProfileDelta = vi.fn<
+    BrowserViewBridge["onPrimaryProfileDelta"]
+  >(() => ({ dispose: () => {} }));
   readonly capturePrimaryProfile = vi.fn<
     BrowserViewBridge["capturePrimaryProfile"]
   >(() =>

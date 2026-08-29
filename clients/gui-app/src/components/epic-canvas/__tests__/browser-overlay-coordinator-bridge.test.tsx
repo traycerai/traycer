@@ -27,6 +27,7 @@ import type {
   BrowserViewTileKey,
   BrowserViewBridge,
   BrowserPersistenceState,
+  BrowserPrimaryProfileDelta,
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -236,6 +237,12 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
 
   onPersistenceStateChanged(
     _handler: (state: BrowserPersistenceState) => void,
+  ): { dispose: () => void } {
+    return { dispose: () => undefined };
+  }
+
+  onPrimaryProfileDelta(
+    _handler: (delta: BrowserPrimaryProfileDelta) => void,
   ): { dispose: () => void } {
     return { dispose: () => undefined };
   }

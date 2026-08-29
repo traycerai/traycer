@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { Certificate, CertificatePrincipal } from "electron";
+import type { Certificate, CertificatePrincipal, Cookie } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 import type {
@@ -23,6 +23,12 @@ type BrowserPermissionCheckHandler = (
 type BrowserDisplayMediaRequestHandler = (
   request: unknown,
   callback: (streams: object) => void,
+) => void;
+type FakeCookieChangeListener = (
+  event: unknown,
+  cookie: Cookie,
+  cause: string,
+  removed: boolean,
 ) => void;
 type BrowserDownloadListener = (
   event: unknown,
@@ -102,6 +108,18 @@ class FakePolicySession {
     | null = null;
   displayMediaRequestHandler: BrowserDisplayMediaRequestHandler | null = null;
   readonly downloadListeners: BrowserDownloadListener[] = [];
+
+  /**
+   * The `Session["cookies"]` slice the primary-profile delta observer
+   * subscribes to. An empty jar that never fires: these suites are about
+   * session policy, not deltas - the observer only has to find the seam.
+   */
+  readonly cookies = {
+    get: (_filter: { readonly domain: string }): Promise<Cookie[]> =>
+      Promise.resolve([]),
+    on: (_event: "changed", _listener: FakeCookieChangeListener): void => {},
+    off: (_event: "changed", _listener: FakeCookieChangeListener): void => {},
+  };
 
   setPermissionRequestHandler(
     handler: BrowserPermissionRequestHandler | null,

@@ -224,10 +224,19 @@ export function browserLocalStorageSeedScript(
 export function browserStorageStateFromCookies(
   cookies: readonly Cookie[],
 ): ProtocolStorageState {
-  return {
-    cookies: cookies.map(toStorageCookie).map(toProtocolStorageCookie),
-    origins: [],
-  };
+  return { cookies: [...browserStorageCookies(cookies)], origins: [] };
+}
+
+/**
+ * Electron cookies as the protocol shape, with the one normalisation the whole
+ * store depends on: a host-only cookie loses its leading dot, so `{domain,
+ * name, path}` is the same identity here, in a delta's `removedKeys`, and in
+ * the host's tombstone keys.
+ */
+export function browserStorageCookies(
+  cookies: readonly Cookie[],
+): readonly ProtocolStorageCookie[] {
+  return cookies.map(toStorageCookie).map(toProtocolStorageCookie);
 }
 
 export async function seedBrowserViewCookies(

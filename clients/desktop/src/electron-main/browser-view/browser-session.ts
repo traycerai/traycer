@@ -7,12 +7,17 @@ import {
 } from "electron";
 import { randomUUID } from "node:crypto";
 import type { BrowserViewDownloadState } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserPrimaryProfileDelta } from "@traycer/protocol/host/browser/contracts";
 import { describeLogError, log } from "../app/logger";
 import {
   setBrowserCertificateErrorHandler,
   type CertificateErrorReport,
 } from "../app/cert-trust";
 import { ensureBrowserPersistenceForTileOpen } from "./storage/browser-cookie-crypto";
+import {
+  BrowserCookieChangeObserver,
+  BROWSER_COOKIE_DELTA_WINDOW_MS,
+} from "./storage/browser-cookie-change-observer";
 
 export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
 export const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
@@ -170,6 +175,11 @@ const pendingCertificateErrorsById = new Map<
  * `session.defaultSession` is never touched here - the app shell owns it.
  */
 const sessionsByPartition = new Map<string, Session>();
+const browserCookieDeltaListeners = new Set<
+  (delta: BrowserPrimaryProfileDelta) => void
+>();
+/** One per process: the durable `primary` jar is the only observed partition. */
+let primaryCookieObserver: BrowserCookieChangeObserver | null = null;
 
 export function ensureBrowserViewSession(
   request: BrowserSessionProfileRequest,
@@ -192,7 +202,60 @@ export function ensureBrowserViewSessionForPartition(
   const browserSession = session.fromPartition(partition, { cache: true });
   installBrowserViewSessionPolicy(browserSession);
   sessionsByPartition.set(partition, browserSession);
+  observePrimaryProfileCookieChanges(partition, browserSession);
   return browserSession;
+}
+
+/**
+ * Cookie deltas come from the durable `primary` jar and nowhere else: the
+ * ephemeral jar's logins are gone at quit, and an isolated partition shares
+ * nothing by construction (spec §6.1). This is also the single attach point for
+ * the enable-time migration - it creates the persistent session through this
+ * same function, so the jar it copies into is observed from its first cookie.
+ */
+function observePrimaryProfileCookieChanges(
+  partition: string,
+  browserSession: Session,
+): void {
+  if (partition !== BROWSER_VIEW_PARTITION || primaryCookieObserver !== null) {
+    return;
+  }
+  const observer = new BrowserCookieChangeObserver({
+    cookies: browserSession.cookies,
+    emit: (delta) => {
+      browserCookieDeltaListeners.forEach((listener) => listener(delta));
+    },
+    now: () => Date.now(),
+    coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+  });
+  observer.attach();
+  primaryCookieObserver = observer;
+}
+
+/**
+ * Every coalesced cookie delta from the durable `primary` jar. The IPC layer
+ * fans these out to the renderer, which forwards them to the host as
+ * `primaryProfileDelta`.
+ */
+export function onBrowserPrimaryProfileDelta(
+  listener: (delta: BrowserPrimaryProfileDelta) => void,
+): () => void {
+  browserCookieDeltaListeners.add(listener);
+  return () => {
+    browserCookieDeltaListeners.delete(listener);
+  };
+}
+
+/**
+ * Runs a deliberate local change to one site's cookies without it echoing back
+ * to the host as a delta (ticket 07's "clear cookies for this site").
+ */
+export async function suppressBrowserPrimaryProfileDelta<T>(
+  domain: string,
+  action: () => Promise<T>,
+): Promise<T> {
+  if (primaryCookieObserver === null) return await action();
+  return await primaryCookieObserver.suppress(domain, action);
 }
 
 export function createBrowserViewWebPreferences(

@@ -358,6 +358,26 @@ function createBrowserSessionsCoordinator(args: {
         });
     };
     publishPersistenceState = sendPersistenceState;
+    // Unsolicited cookie deltas from the durable `primary` jar (spec §6.3).
+    // Gated on this connection having sent `electronTabLifecycleReady`: the
+    // host only hears the elected lifecycle subscriber, so a second window's
+    // forward would be dropped there anyway - not sending it keeps the stream
+    // honest about who speaks for the jar.
+    const primaryProfileDeltas =
+      browserView?.onPrimaryProfileDelta((delta) => {
+        if (
+          actionChannel !== channel ||
+          connectionStatus !== "open" ||
+          !electronLifecycleReadySentForConnection
+        ) {
+          return;
+        }
+        stream?.sendClientFrame({
+          kind: "primaryProfileDelta",
+          hasBinaryPayload: false,
+          ...delta,
+        });
+      }) ?? null;
     const sendLifecycleReadyIfReady = (): void => {
       if (
         actionChannel !== channel ||
@@ -464,6 +484,7 @@ function createBrowserSessionsCoordinator(args: {
         callbacks: { onServerFrame, onConnectionStatus },
       });
     } catch (cause) {
+      primaryProfileDeltas?.dispose();
       electronTabs.dispose();
       transport.close();
       throw cause;
@@ -475,6 +496,7 @@ function createBrowserSessionsCoordinator(args: {
       if (publishPersistenceState === sendPersistenceState) {
         publishPersistenceState = (): void => undefined;
       }
+      primaryProfileDeltas?.dispose();
       electronTabs.dispose();
       opened.close();
       transport.close();

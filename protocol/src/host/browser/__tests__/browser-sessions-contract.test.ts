@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  browserPrimaryProfileDeltaSchema,
   browserSessionsClientFrameSchema,
   browserSessionsOpenRequestSchema,
   browserSessionsServerFrameSchema,
@@ -534,6 +535,84 @@ describe("browser.sessions@1.0 electron tab handoff", () => {
     ).toBe(false);
     expect(
       browserSessionsClientFrameSchema.safeParse(HANDOFF_FRAME).success,
+    ).toBe(false);
+  });
+});
+
+describe("browser.sessions@1.0 primary-profile cookie delta (ticket 06)", () => {
+  const COOKIE = {
+    name: "sid",
+    value: "abc",
+    domain: "example.com",
+    path: "/",
+    expires: -1,
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax" as const,
+  };
+
+  const DELTA = {
+    scope: { kind: "domain" as const, domain: "example.com" },
+    cookies: [COOKIE],
+    removedKeys: [{ domain: "example.com", name: "old-sid", path: "/" }],
+    issuedAt: 1_000,
+  };
+
+  it("parses a well-formed domain-scoped delta", () => {
+    expect(browserPrimaryProfileDeltaSchema.safeParse(DELTA).success).toBe(
+      true,
+    );
+  });
+
+  it("rejects an unknown top-level field", () => {
+    expect(
+      browserPrimaryProfileDeltaSchema.safeParse({
+        ...DELTA,
+        futureField: "from a newer peer",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a scope kind other than domain (the only scope this stream ever sends)", () => {
+    expect(
+      browserPrimaryProfileDeltaSchema.safeParse({
+        ...DELTA,
+        scope: { kind: "partition", domain: "example.com" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a missing removedKeys or issuedAt", () => {
+    const { removedKeys: _removedKeys, ...withoutRemovedKeys } = DELTA;
+    expect(_removedKeys.length).toBe(1);
+    expect(
+      browserPrimaryProfileDeltaSchema.safeParse(withoutRemovedKeys).success,
+    ).toBe(false);
+
+    const { issuedAt: _issuedAt, ...withoutIssuedAt } = DELTA;
+    expect(_issuedAt).toBe(1_000);
+    expect(
+      browserPrimaryProfileDeltaSchema.safeParse(withoutIssuedAt).success,
+    ).toBe(false);
+  });
+
+  it("rejects a userId field - identity is the stream's, not the frame's", () => {
+    expect(
+      browserPrimaryProfileDeltaSchema.safeParse({
+        ...DELTA,
+        userId: "user-1",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a cookie missing a required field", () => {
+    const { path: _path, ...cookieWithoutPath } = COOKIE;
+    expect(_path).toBe("/");
+    expect(
+      browserPrimaryProfileDeltaSchema.safeParse({
+        ...DELTA,
+        cookies: [cookieWithoutPath],
+      }).success,
     ).toBe(false);
   });
 });

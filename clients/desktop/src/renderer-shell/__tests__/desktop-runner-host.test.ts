@@ -614,6 +614,7 @@ function buildFakeBridge(
         reason: "no keystore in this test bridge",
       }),
       onPersistenceStateChanged: (_handler) => ({ dispose: () => undefined }),
+      onPrimaryProfileDelta: (_handler) => ({ dispose: () => undefined }),
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),
       onCertificateError: (_handler) => ({ dispose: () => undefined }),

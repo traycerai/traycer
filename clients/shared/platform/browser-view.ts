@@ -3,6 +3,7 @@ import type {
   BrowserCdpResult,
   BrowserCdpTarget,
   BrowserElectronTabHandoffSibling,
+  BrowserPrimaryProfileDelta,
   BrowserScreencastServerFrame,
   BrowserSessionProfileKind,
   BrowserSessionsClientFrame,
@@ -200,6 +201,12 @@ export interface BrowserViewOverlayReleaseResult {
 export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey {
   readonly reason: string;
 }
+
+/**
+ * One coalesced cookie-change window from the durable `primary` jar. Re-exported
+ * so renderer code sees the bridge and its payloads in one import.
+ */
+export type { BrowserPrimaryProfileDelta };
 
 export type BrowserPrimaryProfileCaptureResult =
   | {
@@ -434,6 +441,15 @@ export interface BrowserViewBridge {
   onPersistenceStateChanged(
     handler: (state: BrowserPersistenceState) => void,
   ): { dispose: () => void };
+  /**
+   * Push for every coalesced cookie change in the durable `primary` jar (spec
+   * §6.3). Unsolicited and continuous: the renderer holding the host stream
+   * forwards each one as a `primaryProfileDelta` client frame, so a login
+   * reaches the store within a window instead of waiting for teardown.
+   */
+  onPrimaryProfileDelta(handler: (delta: BrowserPrimaryProfileDelta) => void): {
+    dispose: () => void;
+  };
   /** Renderer confirms the replacement frame is painted before main parks the view. */
   readonly overlayPaintAck: (overlayId: string) => Promise<void>;
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;

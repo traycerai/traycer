@@ -172,6 +172,53 @@ export const browserStorageStateSchema = z
   .strict();
 export type BrowserStorageState = z.infer<typeof browserStorageStateSchema>;
 
+/**
+ * The slice of the jar one capture speaks for. Only registrable-domain scopes
+ * travel on the wire today (`registrable-domain.ts` derives them on both ends);
+ * the host's own store additionally knows a whole-partition scope, which is
+ * what a teardown capture writes.
+ */
+export const browserPrimaryProfileDeltaScopeSchema = z
+  .object({
+    kind: z.literal("domain"),
+    domain: z.string(),
+  })
+  .strict();
+export type BrowserPrimaryProfileDeltaScope = z.infer<
+  typeof browserPrimaryProfileDeltaScopeSchema
+>;
+
+/** Unpartitioned cookie identity: exactly what a tombstone is keyed by. */
+export const browserCookieKeySchema = z
+  .object({
+    domain: z.string(),
+    name: z.string(),
+    path: z.string(),
+  })
+  .strict();
+export type BrowserCookieKey = z.infer<typeof browserCookieKeySchema>;
+
+/**
+ * One coalescing window's worth of cookie change for a single registrable
+ * domain. `cookies` is the **complete** picture of the scope after the window
+ * (every cookie the scope subtree holds), not just the ones that changed, so
+ * the host can tombstone by absence; `removedKeys` names what was observed
+ * disappearing, which is what makes a removal legible in a trace and lets a
+ * future reader distinguish "gone" from "never seen".
+ */
+export const browserPrimaryProfileDeltaSchema = z
+  .object({
+    scope: browserPrimaryProfileDeltaScopeSchema,
+    cookies: z.array(browserStorageCookieSchema),
+    removedKeys: z.array(browserCookieKeySchema),
+    /** When the window opened, from the sender's clock. */
+    issuedAt: z.number(),
+  })
+  .strict();
+export type BrowserPrimaryProfileDelta = z.infer<
+  typeof browserPrimaryProfileDeltaSchema
+>;
+
 const cdpRequestFrameFields = {
   ...requestFrameFields,
   tabId: z.string(),
@@ -506,6 +553,19 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       storageState: browserStorageStateSchema.nullable(),
       status: z.enum(["captured", "unavailable", "failed"]),
       reason: z.string().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      // Unsolicited: the client's persistent `primary` jar reported cookie
+      // changes for one registrable domain and coalesced them into a window
+      // (keychain refactor ticket 06). There is no request to answer and no
+      // `userId` - the identity is the stream's authenticated user, and only
+      // the elected lifecycle subscriber is heard (same gate as
+      // `primaryProfileCaptured`).
+      kind: z.literal("primaryProfileDelta"),
+      ...textFrameFields,
+      ...browserPrimaryProfileDeltaSchema.shape,
     })
     .strict(),
   z

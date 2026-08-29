@@ -438,6 +438,8 @@ export const RunnerHostEvent = {
   // on boot and after each decision change, so all tiles agree at once.
   browserViewPersistenceStateChanged:
     "runnerHost:event:browserView:persistenceStateChanged",
+  browserViewPrimaryProfileDelta:
+    "runnerHost:event:browserView:primaryProfile:delta",
   // Native-tab PiP capture frames (`started` / `frame` / `stalled`).
   pipCaptureFrame: "runnerHost:event:pipCapture:frame",
   globalShortcutsChange: "runnerHost:event:globalShortcuts:change",

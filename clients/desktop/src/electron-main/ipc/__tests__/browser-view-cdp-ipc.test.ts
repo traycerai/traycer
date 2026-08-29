@@ -135,6 +135,7 @@ vi.mock("../../browser-view/browser-session", () => ({
   ensureBrowserViewSessionForPartition: vi.fn(),
   BROWSER_VIEW_PARTITION: "persist:traycer-browser",
   BROWSER_VIEW_EPHEMERAL_PARTITION: "traycer-browser-ephemeral",
+  onBrowserPrimaryProfileDelta: vi.fn(() => () => undefined),
   onBrowserViewCertificateError: vi.fn(),
   onBrowserViewDownloadChange: vi.fn(),
   readBrowserViewPendingCertificateError: vi.fn(() => null),

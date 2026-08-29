@@ -31,6 +31,7 @@ import {
   clearBrowserViewPendingCertificateError,
   ensureBrowserViewSession,
   ensureBrowserViewSessionForPartition,
+  onBrowserPrimaryProfileDelta,
   onBrowserViewCertificateError,
   onBrowserViewDownloadChange,
   partitionForProfile,
@@ -468,7 +469,15 @@ export function registerBrowserViewIpc(
     },
   );
 
+  // Coalesced cookie deltas from the durable `primary` jar (spec §6.3). The
+  // renderer that owns the host stream forwards them as `primaryProfileDelta`;
+  // windows without one simply drop them.
+  const stopDeltaFanOut = onBrowserPrimaryProfileDelta((delta) => {
+    bridge.fanOut(RunnerHostEvent.browserViewPrimaryProfileDelta, delta);
+  });
+
   bridge.disposeFns.push(() => {
+    stopDeltaFanOut();
     manager.dispose();
   });
   return manager;

@@ -23,7 +23,10 @@ import type {
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
 } from "@traycer-clients/shared/platform/browser-view";
-import type { BrowserCdpResult } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserCdpResult,
+  BrowserPrimaryProfileDelta,
+} from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
@@ -174,6 +177,11 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       onPersistenceStateChanged: (handler) =>
         subscribe<BrowserPersistenceState>(
           RunnerHostEvent.browserViewPersistenceStateChanged,
+          handler,
+        ),
+      onPrimaryProfileDelta: (handler) =>
+        subscribe<BrowserPrimaryProfileDelta>(
+          RunnerHostEvent.browserViewPrimaryProfileDelta,
           handler,
         ),
       capturePrimaryProfile: () =>
