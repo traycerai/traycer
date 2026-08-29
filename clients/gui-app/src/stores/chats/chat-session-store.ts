@@ -2829,9 +2829,23 @@ export function createChatSessionStoreWithNotificationDependencies(
      *
      * - The skeleton is owed until `skeletonComplete`, which only a chunk
      *   carrying `isFinal` sets, and only once its coverage agrees.
-     * - The summaries are owed while the assembled count DISAGREES with
-     *   `accumulatedFileChangeCount` - self-gating, because a chat with no
-     *   accumulated changes promises none and `0 !== 0` is false.
+     * - The summaries are owed while a generation is mid-ASSEMBLY, or while
+     *   the published count DISAGREES with `accumulatedFileChangeCount` -
+     *   self-gating, because a chat with no accumulated changes promises
+     *   none, assembles nothing, and `0 !== 0` is false.
+     *
+     * The assembly half is not redundant with the count: the count is aux and
+     * can be rewound under a generation that is still arriving, and the array
+     * it would be measured against has not been published yet. See the guard
+     * itself.
+     *
+     * This is deliberately NOT the same predicate as
+     * `accumulatedSummarySetComplete`, which the UI's visibility and action
+     * gates share. That one asks whether the PUBLISHED set is trustworthy and
+     * so can only see published state; this one asks whether a delivery is
+     * still owed, and the assembly is kept out of the store precisely so the
+     * panel keeps rendering the previous complete set while it streams. Two
+     * questions, so two answers - not a drift between copies of one.
      *
      * Any mismatch, not just a short prefix. A revert LOWERS the count, and
      * the snapshot path deliberately retains the previous summary array until
@@ -2856,9 +2870,18 @@ export function createChatSessionStoreWithNotificationDependencies(
       // previous generation's, and when the counts coincide it reads as a
       // finished delivery over stale digests - so the watchdog would disarm on
       // the one state it exists to notice.
+      //
+      // An unvouched-for ASSEMBLY proves that independently of the count, and
+      // has to, because the count is aux and last-write-wins: a delayed
+      // same-epoch snapshot can rewind it to zero mid-generation, and against
+      // a published array that is still empty a count test then reads
+      // `0 !== 0` as a finished delivery and disarms the watchdog on a
+      // generation that never published. `assemblingSummaries` is non-null
+      // exactly while a generation is being assembled, and the null-revision
+      // snapshot that un-seats also clears it, so the two move together.
       if (
         !state.accumulatedSummaryGenerationSeated &&
-        state.accumulatedFileChangeCount > 0
+        (assemblingSummaries !== null || state.accumulatedFileChangeCount > 0)
       ) {
         return true;
       }
@@ -4010,25 +4033,26 @@ export function createChatSessionStoreWithNotificationDependencies(
         // panel honest, and the watchdog - armed below off the un-seated
         // flag - is what recovers a replacement stream that stops short.
         //
-        // Whole means the host SAID so, not merely that the length agrees.
-        // `accumulatedFileChangeCount` is an aux field, and aux is
-        // last-write-wins: a delayed same-epoch snapshot restores an older,
-        // smaller count for a frame. A non-final prefix of the generation
-        // being assembled can have exactly that length, and publishing it
-        // would seat the generation on a coincidence - after which the
-        // remaining chunks push the assembly past the count, never match it
-        // again, and never clear the flag, so the completion watchdog
-        // measures the published prefix against the stale count, agrees with
-        // itself, and disarms. Absent another snapshot the rest of the file
-        // summaries are then hidden for the life of the connection.
+        // Whole means the host SAID so, not that the length agrees.
+        // `isFinal` is the chunk contract's own statement that the generation
+        // is complete; `accumulatedFileChangeCount` is an aux field, and aux
+        // is last-write-wins, so a delayed same-epoch snapshot restores an
+        // older, smaller count for a frame. Only one of those two can answer
+        // the question.
         //
-        // The `isFinal` half of the chunk contract is what the count cannot
-        // express, so both halves are required - and a non-final chunk
-        // actively un-seats, so a generation can never stay seated across one.
-        if (
-          frame.chunk.isFinal &&
-          summaries.length === get().accumulatedFileChangeCount
-        ) {
+        // Requiring the count to AGREE as well was the same defect this whole
+        // change exists to remove, one field over: the client holds the
+        // complete generation the host declared final, and a transient aux
+        // value made it discard that and keep rendering the previous set,
+        // with no route back. A count that disagrees with a FINAL assembly is
+        // evidence the count is stale, and `chunkedDeliveryIncomplete` already
+        // reads that disagreement as a reason to keep the watchdog armed until
+        // a snapshot corrects it - recovery, rather than a refusal to publish.
+        //
+        // A non-final chunk actively un-seats, so a generation can never stay
+        // seated across one, and a prefix whose length coincides with the
+        // count is no longer seatable on that coincidence.
+        if (frame.chunk.isFinal) {
           set({
             accumulatedFileChangeSummaries: summaries,
             accumulatedSummaryGenerationSeated: true,

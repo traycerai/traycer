@@ -11,6 +11,7 @@ import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/
 import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
   createChatSessionStore,
+  STREAM_COMPLETION_TIMEOUT_MS,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
@@ -343,6 +344,13 @@ function windowedSnapshot(input: {
   readonly tailFromOrdinal: number;
   readonly tailMessages: readonly Message[];
   readonly accumulatedFileChangeCount: number;
+  /**
+   * Defaults to `null` - "the host holds no index for this subscriber and is
+   * rebuilding one", which resets the summary generation. Pass a live revision
+   * for an AUX-ONLY re-broadcast, the case that carries no chunks and so must
+   * leave a generation mid-assembly alone.
+   */
+  readonly indexRevision?: number | null;
 }): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
   return {
     kind: "snapshot",
@@ -380,7 +388,7 @@ function windowedSnapshot(input: {
       heldUpdates: [],
       transcriptEpoch: input.epoch,
       rowCount: input.rowCount,
-      indexRevision: null,
+      indexRevision: input.indexRevision ?? null,
       tail: {
         fromOrdinal: input.tailFromOrdinal,
         messages: [...input.tailMessages],
@@ -2036,22 +2044,122 @@ describe("accumulated-change chunks", () => {
         harness.handle.store.getState().accumulatedSummaryGenerationSeated,
       ).toBe(false);
 
-      // Left unseated, the rest of the generation still assembles and lands
-      // on the final chunk - the gate blocks a coincidence, not a completion.
-      // (The count is authoritative again by then in the ordinary case; the
-      // neighbouring test pins that swap.)
+      // The gate blocks a coincidence, not a completion. The count is STILL
+      // the stale `1` here and the assembly is now two entries long, and the
+      // final chunk publishes anyway: `isFinal` is the host declaring the
+      // generation whole, which is the one thing an aux field cannot say.
+      //
+      // Refusing here instead would strand a complete generation the client
+      // already holds behind a transient value - the previous set rendering
+      // indefinitely with no route back, since the host believes this
+      // subscriber was already sent this generation and re-sends nothing.
       chunk(1, [summary("y.ts")], true);
 
       expect(
         harness.handle.store.getState().accumulatedSummaryGenerationSeated,
-      ).toBe(false);
+      ).toBe(true);
       expect(
         harness.handle.store
           .getState()
           .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
-      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      ).toEqual(["x.ts", "y.ts"]);
     } finally {
       harness.handle.dispose();
+    }
+  });
+
+  it("keeps the watchdog armed when an aux re-broadcast rewinds the count mid-assembly", () => {
+    // The count is aux and aux is last-write-wins, so an aux-only re-broadcast
+    // can restore an older, smaller value for a frame - zero, before the first
+    // generation has published anything. Measuring completeness against THAT
+    // agrees with the still-empty published array (`0 !== 0` is false) and
+    // disarms the stall watchdog on a generation that delivered nothing, so
+    // the summaries stay hidden for the rest of the connection.
+    //
+    // What proves a delivery is owed is holding an assembly no chunk has
+    // vouched for, and that is true whatever the count currently says.
+    vi.useFakeTimers();
+    const harness = createWindowedHarness();
+    try {
+      const snapshotWithCount = (
+        count: number,
+        indexRevision: number | null,
+      ): void => {
+        harness.callbacks().onWindowedSnapshot(
+          windowedSnapshot({
+            epoch: 6,
+            rowCount: 1,
+            tailFromOrdinal: 0,
+            tailMessages: [userMessage("m-0", 0)],
+            accumulatedFileChangeCount: count,
+            indexRevision,
+          }),
+        );
+      };
+
+      snapshotWithCount(3, null);
+      harness.callbacks().onSkeletonChunk({
+        kind: "skeletonChunk",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 6,
+          fromOrdinal: 0,
+          entries: [
+            {
+              rowId: "row-0",
+              createdAt: 1,
+              role: "user",
+              byteLength: 10,
+              bodyDigest: "d0",
+            },
+          ],
+          isFinal: true,
+        },
+      });
+      const before = harness.resnapshotCount();
+
+      // The first generation opens and then STOPS - its last frame is lost.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 6,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [
+            {
+              filePath: "a.ts",
+              operation: "edit",
+              diffSource: "snapshot",
+              reason: "snapshot",
+              undoable: true,
+              hasContents: true,
+              digest: "d-a.ts",
+              counts: { additions: 1, deletions: 0 },
+            },
+          ],
+          isFinal: false,
+        },
+      });
+
+      // At a LIVE revision, so it carries no chunks and leaves the assembly in
+      // place - the one shape that can rewind the count without also
+      // announcing the re-stream that would repair it.
+      snapshotWithCount(0, 1);
+
+      // Exactly one idle window. The watchdog re-arms behind its own
+      // resnapshot, so a longer advance would count the retries too and say
+      // nothing about whether the FIRST deadline survived the rewind.
+      vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS + 1);
+
+      expect(harness.resnapshotCount()).toBe(before + 1);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
     }
   });
 

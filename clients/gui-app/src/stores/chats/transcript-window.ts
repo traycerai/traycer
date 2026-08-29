@@ -3116,32 +3116,55 @@ function dropSpansForUpdatedOrdinals(
 }
 
 /**
- * The window's own copy of a record, wherever it is held.
+ * The window's own copy of a record - the one {@link hydratedRecords} RENDERS.
  *
- * Live records first: they are the copies the delta stream rewrites most
- * directly, and the set is small. Spans after, because a span-held copy of a
- * streaming record is rewritten in place too ({@link streamWindowMessage}).
+ * This MIRRORS {@link dedupeByFreshestSpan} for a single key, and the mirror is
+ * the contract rather than an implementation echo: the only caller substitutes
+ * this copy for a served one at a seat, so a rule that disagrees with the
+ * render authority seats a body the window is not showing. Change one of these
+ * two and the other moves with it.
+ *
+ * Both halves of that rule are load-bearing, and a first-match scan gets each
+ * of them wrong:
+ *
+ * - The body follows the greatest `servedAt`, not the earliest ordinal. One
+ *   turn's records reach every span its rows do and `SPAN_MERGE_MAX_BYTES`
+ *   means those are not always merged, so the same id sits in several spans at
+ *   different serves.
+ * - Spans outrank live records wholesale - "a live copy never displaces a
+ *   span's" - so a live copy answers only for an id no span holds. It is a
+ *   fallback, not a first look.
+ *
+ * A copy demoted to stale competes on equal terms here, which is what keeps
+ * the carry reachable: it is still rewritten in place, so a same-epoch
+ * `updated` can demote the active turn's span while its deltas keep arriving
+ * (see {@link rewriteWindowMessage}), and until a replacement is served it
+ * holds the greatest stamp there is.
  */
 function heldMessageCopy(
   window: TranscriptWindow,
   messageId: string,
 ): Message | null {
+  const spans =
+    window.staleSpans.length === 0
+      ? window.spans
+      : mergeSpansByOrdinal(window.spans, window.staleSpans);
+  let best: Message | null = null;
+  let bestServedAt = 0;
+  for (const span of spans) {
+    for (const message of span.messages) {
+      if (message.messageId !== messageId) continue;
+      // `>` and not `>=`, over the merged ordinal order, so an equal stamp
+      // resolves to the same copy `dedupeByFreshestSpan` keeps.
+      if (best === null || span.servedAt > bestServedAt) {
+        best = message;
+        bestServedAt = span.servedAt;
+      }
+    }
+  }
+  if (best !== null) return best;
   for (const message of window.liveMessages) {
     if (message.messageId === messageId) return message;
-  }
-  for (const span of window.spans) {
-    for (const message of span.messages) {
-      if (message.messageId === messageId) return message;
-    }
-  }
-  // A copy demoted to stale is still rewritten in place, so it can be the
-  // freshest one the client holds - a same-epoch `updated` can demote the
-  // active turn's span while its deltas keep arriving (see
-  // {@link rewriteWindowMessage}).
-  for (const span of window.staleSpans) {
-    for (const message of span.messages) {
-      if (message.messageId === messageId) return message;
-    }
   }
   return null;
 }
@@ -3196,6 +3219,11 @@ export function holdsActiveTurnAssistantMessage(
  * and then this preference would pin the incomplete body in place. Nothing
  * would repair it, either - the row is hydrated, so it leaves no gap for the
  * planner to re-request.
+ *
+ * That gate is only as good as the copy handed to it, so the copy is the one
+ * {@link hydratedRecords} renders rather than the first one found - see
+ * {@link heldMessageCopy}. Comparing the served body against some OTHER held
+ * copy decides the seat on a record the reader is not looking at.
  */
 function preferHeldActiveTurnMessages(
   window: TranscriptWindow,
@@ -3676,6 +3704,9 @@ function mergeSpansByOrdinal(
  * delta republishes `messages`), so it is held to the same standard as
  * everything else there - a constant factor over the records the window holds,
  * never a second walk and never a sort.
+ *
+ * {@link heldMessageCopy} answers this same question for a single key and must
+ * keep answering it the same way; a change to the rule here belongs there too.
  */
 function dedupeByFreshestSpan<T>(
   spans: readonly HydratedSpan[],

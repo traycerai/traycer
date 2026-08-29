@@ -1252,6 +1252,96 @@ describe("held-copy preference for the active turn", () => {
     ]);
   });
 
+  it("prefers the later-served copy when a record sits in two spans", () => {
+    // One turn's records reach every span its rows do, and adjacent spans are
+    // not always merged, so the same id sits in several spans at different
+    // serves. `hydratedRecords` bodies a duplicate from the greatest
+    // `servedAt`; answering this preference from the earliest ORDINAL instead
+    // compares the served copy against a record the reader is not looking at,
+    // and seats that verdict at the newest stamp - so the freshest body is
+    // displaced and every later delta builds on the regressed one.
+    const turnId = "turn-two-spans";
+    const messageId = "assistant-two-spans";
+    const rowId = assistantRowId(turnId);
+    // Stamped, so the growth survives its OWN seat: without a version the
+    // preference below would substitute the older copy into the later span
+    // too, and the fixture would pin nothing.
+    const grown = {
+      ...assistantMessage(messageId, turnId, 2),
+      blocks: [firstBlock, secondBlock],
+      blocksVersion: 5,
+    };
+    const short = {
+      ...assistantMessage(messageId, turnId, 2),
+      blocks: [firstBlock],
+      blocksVersion: 3,
+    };
+    const seeded = applySkeletonChunk(
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 3,
+          indexRevision: null,
+          tail: { fromOrdinal: 3, messages: [], events: [] },
+        },
+        null,
+      ),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry(rowId, 0),
+          skeletonEntry("row-1", 1),
+          skeletonEntry("row-2", 2),
+        ],
+        isFinal: true,
+      },
+    );
+
+    // The earliest ordinal, served first and so carrying the older body...
+    const early = applyRangeResponse(
+      seeded,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [rowId],
+        messages: [short],
+      }),
+      turnId,
+    );
+    // ...and a LATER serve of a later ordinal carrying the same record grown.
+    // Ordinal 1 stays a gap, so these never merge into one span.
+    const later = applyRangeResponse(
+      early,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 2,
+        rowIds: ["row-2"],
+        messages: [grown],
+      }),
+      turnId,
+    );
+
+    // A bulk answer for the earliest row, generated before the growth. The
+    // held copy it must be measured against is span 2's.
+    const seated = applyRangeResponse(
+      later,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [rowId],
+        messages: [short],
+      }),
+      turnId,
+    );
+
+    expect(seatedAssistantBlocks(seated, messageId)).toEqual([
+      firstBlock,
+      secondBlock,
+    ]);
+  });
+
   it("seats the served copy verbatim when there is no active turn", () => {
     const turnId = "turn-idle";
     const messageId = "assistant-idle";
