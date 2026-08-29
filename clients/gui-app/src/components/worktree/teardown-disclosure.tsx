@@ -71,10 +71,7 @@ export function TeardownInlineDisclosure(props: {
       data-testid="teardown-disclosure-inline"
     >
       <p className="text-ui-xs font-medium text-foreground">{props.heading}</p>
-      <ul
-        className="m-0 mt-1 flex list-none flex-col gap-1 p-0"
-        role="list"
-      >
+      <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0" role="list">
         {props.unknownConsequence !== null ? (
           <li className="text-ui-xs wrap-anywhere text-foreground">
             {props.unknownConsequence}

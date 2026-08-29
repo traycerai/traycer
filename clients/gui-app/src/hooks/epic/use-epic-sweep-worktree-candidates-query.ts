@@ -385,7 +385,11 @@ async function loadHoldersForInUseRows(
   const loaded: Array<readonly [string, PathHolderInventory]> = [];
   const queue = [...inUse];
   const worker = async (): Promise<void> => {
-    for (let entry = queue.shift(); entry !== undefined; entry = queue.shift()) {
+    for (
+      let entry = queue.shift();
+      entry !== undefined;
+      entry = queue.shift()
+    ) {
       const inventory = await readPathHolderInventory(
         client,
         entry.worktreePath,

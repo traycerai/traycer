@@ -86,15 +86,11 @@ describe("TeardownDisclosure", () => {
     const actorRows = screen.getAllByRole("listitem");
     expect(
       actorRows.some((row) =>
-        row.textContent.includes(
-          "Claude will restart in the new folder",
-        ),
+        row.textContent.includes("Claude will restart in the new folder"),
       ),
     ).toBe(true);
     expect(
-      actorRows.some((row) =>
-        row.textContent.includes("npm run dev"),
-      ),
+      actorRows.some((row) => row.textContent.includes("npm run dev")),
     ).toBe(true);
     expect(screen.queryByText("Terminal")).toBeNull();
     expect(screen.queryByText("Run directory")).toBeNull();

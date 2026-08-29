@@ -20,10 +20,12 @@ const HOLDER: WorktreeBusyHolder = {
 function seedOpenEpicWithChatTitle(title: string): {
   rename: (next: string) => void;
 } {
-  let chatsById: Record<string, { readonly id: string; readonly title: string }> =
-    {
-      "chat-1": { id: "chat-1", title },
-    };
+  let chatsById: Record<
+    string,
+    { readonly id: string; readonly title: string }
+  > = {
+    "chat-1": { id: "chat-1", title },
+  };
   const listeners = new Set<() => void>();
   const doc = new Y.Doc();
   const handle = {
@@ -82,8 +84,8 @@ describe("useTeardownAgentNames", () => {
     expect(screen.getByTestId("teardown-holder-label").textContent).toContain(
       "Renamed title",
     );
-    expect(screen.getByTestId("teardown-holder-label").textContent).not.toContain(
-      "Old title",
-    );
+    expect(
+      screen.getByTestId("teardown-holder-label").textContent,
+    ).not.toContain("Old title");
   });
 });

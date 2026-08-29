@@ -189,10 +189,7 @@ export function SweepWorktreesReview(props: {
         </div>
         {needsTypedGate ? (
           <div className="space-y-1.5">
-            <label
-              htmlFor={typedConfirmId}
-              className="text-ui-xs font-medium"
-            >
+            <label htmlFor={typedConfirmId} className="text-ui-xs font-medium">
               Type <code className="font-mono">sweep</code> to confirm possible
               loss of unmerged work
             </label>

@@ -1834,11 +1834,7 @@ function WorktreeDeleteForegroundSurface(props: {
           const scripts =
             props.reviewedScriptsByPath.get(confirmed.worktreePath) ??
             confirmed.scripts;
-          props.onForceDelete(
-            confirmed,
-            scripts,
-            run.pendingHoldersRevision,
-          );
+          props.onForceDelete(confirmed, scripts, run.pendingHoldersRevision);
         }}
         onDismiss={props.onDismissForceDelete}
       />
