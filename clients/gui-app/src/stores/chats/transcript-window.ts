@@ -1180,17 +1180,20 @@ function classifySnapshotRevision(
   return indexRevision > window.indexRevision ? "gap" : "current";
 }
 
+function isConfirmedEmptySnapshot(
+  window: TranscriptWindow,
+  rowCount: number,
+): boolean {
+  return rowCount === 0 && window.rowCount === 0 && window.skeletonComplete;
+}
+
 function provisionalLiveMessagesForSnapshot(input: {
   readonly window: TranscriptWindow;
   readonly rowCount: number;
   readonly missedDeltas: boolean;
   readonly rebased: boolean;
 }): readonly Message[] {
-  if (
-    input.rowCount === 0 &&
-    input.window.rowCount === 0 &&
-    input.window.skeletonComplete
-  ) {
+  if (isConfirmedEmptySnapshot(input.window, input.rowCount)) {
     return [];
   }
   return input.window.liveMessages.filter(
@@ -1208,23 +1211,12 @@ function provisionalLiveEventsForSnapshot(input: {
   readonly missedDeltas: boolean;
   readonly rebased: boolean;
 }): readonly ChatEvent[] {
-  if (
-    input.rowCount === 0 &&
-    input.window.rowCount === 0 &&
-    input.window.skeletonComplete
-  ) {
+  if (isConfirmedEmptySnapshot(input.window, input.rowCount)) {
     return [];
   }
   return input.rebased || input.missedDeltas || input.window.invalidated
     ? input.window.liveEvents
     : [];
-}
-
-function isConfirmedEmptySnapshot(
-  window: TranscriptWindow,
-  rowCount: number,
-): boolean {
-  return rowCount === 0 && window.rowCount === 0 && window.skeletonComplete;
 }
 
 function selectSnapshotLiveRecords<T>(
