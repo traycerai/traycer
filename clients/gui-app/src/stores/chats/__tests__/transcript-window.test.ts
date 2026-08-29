@@ -1836,6 +1836,43 @@ describe("what an overlap keeps", () => {
     expect(gapped.liveMessages.map((message) => message.messageId)).toEqual([
       "accepted-user-gap",
     ]);
+
+    const replacement = applyWindowedSnapshot(gapped, {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(
+      replacement.liveMessages.map((message) => message.messageId),
+    ).toEqual(["accepted-user-gap"]);
+  });
+
+  it("retires a pre-snapshot accepted user when the replacement skeleton omits it", () => {
+    const invalidated = {
+      ...appendLiveRecords(emptyTranscriptWindow(), {
+        messages: [userMessage("accepted-user-removed", 1)],
+        events: [],
+      }),
+      epoch: 1,
+      rowCount: 1,
+      invalidated: true,
+    };
+    const replacement = applyWindowedSnapshot(invalidated, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(replacement, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("different-user", 0)],
+      isFinal: true,
+    });
+
+    expect(rebuilt.liveMessages).toEqual([]);
   });
 
   it("keeps a just-accepted user record through an index void", () => {

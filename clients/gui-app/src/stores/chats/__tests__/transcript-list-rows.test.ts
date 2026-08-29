@@ -118,6 +118,7 @@ function windowOf(input: {
     spans: input.spans,
     liveMessages: [...(input.liveMessages ?? [])],
     skeletonBaselineTransientAssistantMessageIds: [],
+    skeletonBaselineProvisionalUserMessageIds: [],
     liveEvents: [],
     hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
     unsettledByteMessageIds: [],

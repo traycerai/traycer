@@ -266,6 +266,8 @@ export interface TranscriptWindow {
    * chunk until a newer range or skeleton replaces them.
    */
   readonly skeletonBaselineTransientAssistantMessageIds: readonly string[];
+  /** Accepted users present when the current replacement skeleton began. */
+  readonly skeletonBaselineProvisionalUserMessageIds: readonly string[];
   readonly liveEvents: readonly ChatEvent[];
   readonly hydratedBytes: number;
   /**
@@ -392,6 +394,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     spans: [],
     liveMessages: [],
     skeletonBaselineTransientAssistantMessageIds: [],
+    skeletonBaselineProvisionalUserMessageIds: [],
     liveEvents: [],
     hydratedBytes: 0,
     unsettledByteMessageIds: [],
@@ -1010,6 +1013,31 @@ function classifySnapshotRevision(
   return indexRevision > window.indexRevision ? "gap" : "current";
 }
 
+function provisionalLiveMessagesForSnapshot(input: {
+  readonly window: TranscriptWindow;
+  readonly rowCount: number;
+  readonly missedDeltas: boolean;
+  readonly rebased: boolean;
+}): readonly Message[] {
+  if (input.rowCount === 0) return [];
+  return input.window.liveMessages.filter(
+    (message) =>
+      (message.role === "assistant" &&
+        isTransientLiveAssistantMessageId(message.messageId)) ||
+      ((input.missedDeltas || input.window.invalidated) &&
+        !input.rebased &&
+        message.role === "user"),
+  );
+}
+
+function replacementSkeletonBaseline<T>(
+  indexRevision: number | null,
+  fresh: readonly T[],
+  held: readonly T[],
+): readonly T[] {
+  return indexRevision === null ? fresh : held;
+}
+
 /**
  * Seat a windowed snapshot.
  *
@@ -1143,19 +1171,21 @@ export function applyWindowedSnapshot(
   );
   if (verdict === "straggler") return window;
   const missedDeltas = verdict === "gap";
-  const provisionalLiveMessages = window.liveMessages.filter(
-    (message) =>
-      input.rowCount > 0 &&
-      ((message.role === "assistant" &&
-        isTransientLiveAssistantMessageId(message.messageId)) ||
-        (missedDeltas && !rebased && message.role === "user")),
-  );
+  const provisionalLiveMessages = provisionalLiveMessagesForSnapshot({
+    window,
+    rowCount: input.rowCount,
+    missedDeltas,
+    rebased,
+  });
   const skeletonBaselineTransientAssistantMessageIds = provisionalLiveMessages
     .filter(
       (message) =>
         message.role === "assistant" &&
         isTransientLiveAssistantMessageId(message.messageId),
     )
+    .map((message) => message.messageId);
+  const skeletonBaselineProvisionalUserMessageIds = provisionalLiveMessages
+    .filter((message) => message.role === "user")
     .map((message) => message.messageId);
   const base: TranscriptWindow =
     rebased || missedDeltas
@@ -1174,6 +1204,7 @@ export function applyWindowedSnapshot(
           // intentionally different id.
           liveMessages: provisionalLiveMessages,
           skeletonBaselineTransientAssistantMessageIds,
+          skeletonBaselineProvisionalUserMessageIds,
           epoch: input.epoch,
           rowCount: input.rowCount,
           indexRevision: input.indexRevision ?? 0,
@@ -1185,11 +1216,11 @@ export function applyWindowedSnapshot(
         }
       : {
           ...window,
-          // A resnapshot answers an invalidated window and retires provisional
-          // users that predate that authority. A `messageAccepted` delivered
-          // AFTER this snapshot is appended later and must survive the older
-          // skeleton stream that follows; skeleton completeness cannot judge
-          // that race. Transient assistants use turn identity and bridge it.
+          // A resnapshot retains provisional users while its replacement
+          // skeleton streams. The complete skeleton may retire only the cohort
+          // captured here; a `messageAccepted` delivered AFTER this snapshot is
+          // appended later and survives that older authority. Transient
+          // assistants use the same cohort boundary plus turn identity.
           liveMessages: window.invalidated
             ? provisionalLiveMessages
             : window.liveMessages,
@@ -1197,6 +1228,12 @@ export function applyWindowedSnapshot(
             input.indexRevision === null
               ? skeletonBaselineTransientAssistantMessageIds
               : window.skeletonBaselineTransientAssistantMessageIds,
+          skeletonBaselineProvisionalUserMessageIds:
+            replacementSkeletonBaseline(
+              input.indexRevision,
+              skeletonBaselineProvisionalUserMessageIds,
+              window.skeletonBaselineProvisionalUserMessageIds,
+            ),
           rowCount: input.rowCount,
           // A restreaming snapshot (`null`) leaves the held revision alone: the
           // skeleton chunks that follow do not carry one, so overwriting it here
@@ -1477,24 +1514,31 @@ function reconcileProvisionalMessagesWithSkeleton(
     return window;
   }
   const skeletonAssistantTurnKeys = new Set<string>();
+  const skeletonRowIds = new Set<string>();
   for (const entry of window.skeleton) {
     if (entry === undefined) continue;
+    skeletonRowIds.add(entry.rowId);
     const turnKey = assistantRowTurnKey(entry.rowId);
     if (turnKey !== null) skeletonAssistantTurnKeys.add(turnKey);
   }
   const baselineMessageIds = new Set(
     window.skeletonBaselineTransientAssistantMessageIds,
   );
-  const liveMessages = window.liveMessages.filter(
-    (message) =>
-      message.role !== "assistant" ||
-      !isTransientLiveAssistantMessageId(message.messageId) ||
-      !baselineMessageIds.has(message.messageId) ||
-      skeletonAssistantTurnKeys.has(assistantTurnKey(message)),
+  const baselineUserMessageIds = new Set(
+    window.skeletonBaselineProvisionalUserMessageIds,
+  );
+  const liveMessages = window.liveMessages.filter((message) =>
+    message.role === "user"
+      ? !baselineUserMessageIds.has(message.messageId) ||
+        skeletonRowIds.has(message.messageId)
+      : !isTransientLiveAssistantMessageId(message.messageId) ||
+        !baselineMessageIds.has(message.messageId) ||
+        skeletonAssistantTurnKeys.has(assistantTurnKey(message)),
   );
   if (
     liveMessages.length === window.liveMessages.length &&
-    baselineMessageIds.size === 0
+    baselineMessageIds.size === 0 &&
+    baselineUserMessageIds.size === 0
   ) {
     return window;
   }
@@ -1502,6 +1546,7 @@ function reconcileProvisionalMessagesWithSkeleton(
     ...window,
     liveMessages,
     skeletonBaselineTransientAssistantMessageIds: [],
+    skeletonBaselineProvisionalUserMessageIds: [],
   };
 }
 
