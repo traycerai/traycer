@@ -97,6 +97,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -765,6 +766,7 @@ function assistantMessageWithoutImageResolutions(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     // Deliberately no `imageResolutions` key.
   };
   return preImage as Extract<Message, { role: "assistant" }>;

@@ -112,6 +112,7 @@ function assistantMessage(input: {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
