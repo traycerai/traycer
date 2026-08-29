@@ -115,7 +115,7 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
     renderNotificationsSettings(undefined);
 
     expect(
-      screen.queryByRole("combobox", { name: "Notification sound" }),
+      screen.queryByRole("combobox", { name: "Needs action sound" }),
     ).toBeNull();
     expect(screen.queryByTestId("push-permission-section")).toBeNull();
     await screen.findByRole("switch", {

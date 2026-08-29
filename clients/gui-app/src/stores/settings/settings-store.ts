@@ -30,7 +30,7 @@ import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix
 import {
   DEFAULT_NOTIFICATION_CHIME_SOUNDS,
   isNotificationChimeSound,
-  isNotificationChimeSoundsByEvent,
+  NOTIFICATION_CHIME_EVENT_TYPES,
   type NotificationChimeEventType,
   type NotificationChimeSound,
   type NotificationChimeSoundsByEvent,
@@ -589,30 +589,28 @@ function resolvePersistedNotificationChimeSounds(
   value: unknown,
   legacyValue: unknown,
 ): NotificationChimeSoundsByEvent {
-  if (isNotificationChimeSoundsByEvent(value)) return value;
-  if (
-    isRecord(value) &&
-    isNotificationChimeSound(value.needs_action) &&
-    isNotificationChimeSound(value.failure) &&
-    isNotificationChimeSound(value.done) &&
-    isNotificationChimeSound(value.collaboration)
-  ) {
-    return {
-      needs_action: value.needs_action,
-      failure: value.failure,
-      done: value.done,
-      info: value.collaboration,
-    };
+  const persisted = isRecord(value) ? value : {};
+  const legacySound = isNotificationChimeSound(legacyValue)
+    ? legacyValue
+    : null;
+  const resolved: Record<NotificationChimeEventType, NotificationChimeSound> = {
+    ...DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+  };
+
+  for (const eventType of NOTIFICATION_CHIME_EVENT_TYPES) {
+    const eventSound = persisted[eventType];
+    const collaborationSound =
+      eventType === "info" ? persisted.collaboration : undefined;
+    if (isNotificationChimeSound(eventSound)) {
+      resolved[eventType] = eventSound;
+    } else if (isNotificationChimeSound(collaborationSound)) {
+      resolved[eventType] = collaborationSound;
+    } else if (legacySound !== null) {
+      resolved[eventType] = legacySound;
+    }
   }
-  if (isNotificationChimeSound(legacyValue)) {
-    return {
-      needs_action: legacyValue,
-      failure: legacyValue,
-      done: legacyValue,
-      info: legacyValue,
-    };
-  }
-  return DEFAULT_NOTIFICATION_CHIME_SOUNDS;
+
+  return resolved;
 }
 
 export function isBrowserLinkOpenMode(

@@ -109,11 +109,37 @@ describe("useSettingsStore", () => {
     });
   });
 
-  it("repairs invalid persisted notification chimes to semantic defaults", async () => {
+  it("repairs invalid persisted notification chimes independently", async () => {
     window.localStorage.setItem(
       "traycer-gui-app:settings",
       JSON.stringify({
-        state: { notificationChimeSounds: { done: "airhorn" } },
+        state: {
+          notificationChimeSounds: {
+            needs_action: "coin",
+            failure: "classic",
+            done: "airhorn",
+            info: "ripple",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().notificationChimeSounds).toEqual({
+      needs_action: "coin",
+      failure: "classic",
+      done: DEFAULT_NOTIFICATION_CHIME_SOUNDS.done,
+      info: "ripple",
+    });
+  });
+
+  it("uses semantic defaults when persisted notification chimes are unusable", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { notificationChimeSounds: "airhorn" },
         version: 1,
       }),
     );

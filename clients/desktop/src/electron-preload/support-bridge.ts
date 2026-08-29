@@ -4,6 +4,7 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  DesktopRuntimePlatform,
   SupportBuildPublicDraftResult,
   SupportFingerprintOccurrence,
   SupportFreezeEvidenceInput,
@@ -134,7 +135,9 @@ export interface SupportBridgeSurface {
   };
 }
 
-export function buildSupportBridge(): SupportBridgeSurface {
+export function buildSupportBridge(
+  platform: DesktopRuntimePlatform,
+): SupportBridgeSurface {
   const foregroundNotificationDisplays =
     createForegroundNotificationDisplayChannel();
   return {
@@ -157,7 +160,7 @@ export function buildSupportBridge(): SupportBridgeSurface {
 
     notifications: {
       systemSettings:
-        process.platform === "darwin" || process.platform === "win32"
+        platform === "darwin" || platform === "win32"
           ? {
               open: () =>
                 ipcRenderer.invoke(

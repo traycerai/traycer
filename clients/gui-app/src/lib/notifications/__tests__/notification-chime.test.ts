@@ -18,7 +18,7 @@ const oscillators: Array<{
 class FakeAudioContext {
   readonly currentTime = 2;
   readonly destination = {};
-  readonly state: AudioContextState = "running";
+  state: AudioContextState = "running";
   readonly close = vi.fn(() => Promise.resolve());
   readonly resume = vi.fn(() => Promise.resolve());
 
@@ -115,6 +115,27 @@ describe("playNotificationChimeSound", () => {
 
     expect(AudioContext).toHaveBeenCalledTimes(1);
     expect(AudioContext).toHaveBeenCalledWith({ latencyHint: "interactive" });
+  });
+
+  it("resumes a suspended audio context before scheduling the chime", async () => {
+    const contexts: FakeAudioContext[] = [];
+    class SuspendedAudioContext extends FakeAudioContext {
+      constructor() {
+        super();
+        this.state = "suspended";
+        contexts.push(this);
+      }
+    }
+    vi.stubGlobal("AudioContext", SuspendedAudioContext);
+
+    playNotificationChimeSound("classic");
+
+    const context = contexts[0];
+    expect(context.resume).toHaveBeenCalledOnce();
+    expect(oscillators).toHaveLength(0);
+    await context.resume.mock.results[0].value;
+    await Promise.resolve();
+    expect(oscillators).toHaveLength(2);
   });
 
   it.each([
