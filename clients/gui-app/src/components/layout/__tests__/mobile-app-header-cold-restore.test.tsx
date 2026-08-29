@@ -398,9 +398,13 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     if (firstTitleCall === undefined) {
       throw new Error("expected a title update call");
     }
-    expect(firstTitleCall.epicDelta.id).toBe(EPIC_ID);
-    expect(firstTitleCall.epicDelta.title).toBe("Renamed on the phone");
-    expect(typeof firstTitleCall.epicDelta.updatedAt).toBe("number");
+    const epicDelta = firstTitleCall.epicDelta;
+    if (epicDelta === null) {
+      throw new Error("expected the title update to carry an epic delta");
+    }
+    expect(epicDelta.id).toBe(EPIC_ID);
+    expect(epicDelta.title).toBe("Renamed on the phone");
+    expect(typeof epicDelta.updatedAt).toBe("number");
     await waitFor(() =>
       expect(screen.getByTestId("mobile-header-title").textContent).toBe(
         "Renamed on the phone",
