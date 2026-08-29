@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
 import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import type {
   HostNotificationChannelId,
   HostNotificationSeverity,
@@ -27,7 +27,6 @@ import {
   type NotificationHooksTestMutation,
 } from "@/hooks/host/use-notification-hooks-query";
 import { NotificationHooksSection } from "@/components/settings/panels/notification-hooks-section";
-import { PushPermissionSection } from "@/components/settings/panels/push-permission-section";
 import {
   HostScopeConnecting,
   HostScopeGate,
@@ -185,32 +184,16 @@ function NotificationsSettingsPanelContent(props: {
       // surface got confusing; this is the one place it was still true.
       headerAction={undefined}
     >
-      <div
-        className={cn(
-          "flex h-full min-h-0 flex-col",
-          compact ? "gap-3.5" : "gap-5",
-        )}
-      >
-        {/* Outside the gate, deliberately. This row is about the PHONE, not
-            about any host - a phone with no reachable host still needs to see
-            (and repair) its own OS notification switch, and the gate's job is
-            to withhold host-scoped content, which this is not. It renders
-            nothing at all wherever OS push does not exist, so the desktop
-            panel keeps its exact previous shape. */}
-        <PushPermissionSection />
-        <div className="min-h-0 flex-1">
-          {scope === null ? (
-            body
-          ) : (
-            <HostScopeGate
-              scope={scope}
-              skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-            >
-              {body}
-            </HostScopeGate>
-          )}
-        </div>
-      </div>
+      {scope === null ? (
+        body
+      ) : (
+        <HostScopeGate
+          scope={scope}
+          skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
+        >
+          {body}
+        </HostScopeGate>
+      )}
     </SettingsPanelShell>
   );
 }

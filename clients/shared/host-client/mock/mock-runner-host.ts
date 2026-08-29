@@ -793,6 +793,7 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   readonly notifications: INotificationHost = {
+    systemSettings: null,
     show: async (
       title: string,
       body: string,

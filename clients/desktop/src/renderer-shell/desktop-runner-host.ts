@@ -212,6 +212,7 @@ export interface DesktopPreloadBridge {
     start(): Promise<DeviceFlowSession | null>;
   };
   notifications: {
+    readonly systemSettings: { open(): Promise<void> } | null;
     show(
       title: string,
       body: string,
@@ -745,6 +746,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.tokenStore = options.bridge.tokenStore;
 
     this.notifications = {
+      systemSettings: this.bridge.notifications.systemSettings,
       show: (
         title,
         body,

@@ -27,6 +27,14 @@ import {
 } from "@/lib/diff/diff-viewer-preferences";
 import { type EditorId } from "@traycer/protocol/host";
 import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix-validation";
+import {
+  DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+  isNotificationChimeSound,
+  isNotificationChimeSoundsByEvent,
+  type NotificationChimeEventType,
+  type NotificationChimeSound,
+  type NotificationChimeSoundsByEvent,
+} from "@/lib/notifications/notification-chime";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
@@ -157,6 +165,8 @@ export interface SettingsState {
    * re-render every open diff.
    */
   workspaceFileWordWrap: boolean | null;
+  /** App-wide audible cues selected for each notification event type. */
+  notificationChimeSounds: NotificationChimeSoundsByEvent;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   setComposerMode: (mode: ComposerMode) => void;
@@ -186,6 +196,10 @@ export interface SettingsState {
   setDiffViewerPreferences: (preferences: DiffViewerPreferences) => void;
   patchDiffViewerPreferences: (patch: DiffViewerPreferencesPatch) => void;
   setWorkspaceFileWordWrap: (value: boolean | null) => void;
+  setNotificationChimeSoundForEvent: (
+    eventType: NotificationChimeEventType,
+    value: NotificationChimeSound,
+  ) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -221,6 +235,7 @@ type PersistedSettingsState = Pick<
   | "steerOnModEnterEnabled"
   | "diffViewerPreferences"
   | "workspaceFileWordWrap"
+  | "notificationChimeSounds"
 >;
 
 type SetFn = (
@@ -290,6 +305,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     steerOnModEnterEnabled: state.steerOnModEnterEnabled,
     diffViewerPreferences: state.diffViewerPreferences,
     workspaceFileWordWrap: state.workspaceFileWordWrap,
+    notificationChimeSounds: state.notificationChimeSounds,
   };
 }
 
@@ -327,6 +343,7 @@ export const useSettingsStore = create<SettingsState>()(
       steerOnModEnterEnabled: true,
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
       workspaceFileWordWrap: null,
+      notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: makeSetter(set, "themePreset"),
       setComposerMode: makeSetter(set, "composerMode"),
@@ -403,6 +420,18 @@ export const useSettingsStore = create<SettingsState>()(
         }));
       },
       setWorkspaceFileWordWrap: makeSetter(set, "workspaceFileWordWrap"),
+      setNotificationChimeSoundForEvent: (eventType, value) => {
+        set((state) =>
+          state.notificationChimeSounds[eventType] === value
+            ? state
+            : {
+                notificationChimeSounds: {
+                  ...state.notificationChimeSounds,
+                  [eventType]: value,
+                },
+              },
+        );
+      },
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -442,6 +471,10 @@ export const useSettingsStore = create<SettingsState>()(
             typeof merged.workspaceFileWordWrap === "boolean"
               ? merged.workspaceFileWordWrap
               : null,
+          notificationChimeSounds: resolvePersistedNotificationChimeSounds(
+            persisted.notificationChimeSounds,
+            persisted.notificationChimeSound,
+          ),
         };
       },
     },
@@ -450,4 +483,34 @@ export const useSettingsStore = create<SettingsState>()(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function resolvePersistedNotificationChimeSounds(
+  value: unknown,
+  legacyValue: unknown,
+): NotificationChimeSoundsByEvent {
+  if (isNotificationChimeSoundsByEvent(value)) return value;
+  if (
+    isRecord(value) &&
+    isNotificationChimeSound(value.needs_action) &&
+    isNotificationChimeSound(value.failure) &&
+    isNotificationChimeSound(value.done) &&
+    isNotificationChimeSound(value.collaboration)
+  ) {
+    return {
+      needs_action: value.needs_action,
+      failure: value.failure,
+      done: value.done,
+      info: value.collaboration,
+    };
+  }
+  if (isNotificationChimeSound(legacyValue)) {
+    return {
+      needs_action: legacyValue,
+      failure: legacyValue,
+      done: legacyValue,
+      info: legacyValue,
+    };
+  }
+  return DEFAULT_NOTIFICATION_CHIME_SOUNDS;
 }
