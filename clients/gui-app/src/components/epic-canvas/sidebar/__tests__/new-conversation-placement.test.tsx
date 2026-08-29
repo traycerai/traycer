@@ -737,11 +737,13 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     }
   });
 
-  it("scopes the workspace picker and the latest-workspace seed to the RESOLVED host, not the raw request", () => {
+  it("keeps the workspace picker selectable on the RESOLVED host and seeds from it", () => {
     // Codex #1243 T-50: the request is unnamed (`hostId: null`) and the
     // placement resolves it to host-a through the Epic's tiers. The picker
     // and the seed used to key on the raw request field, so they browsed and
-    // seeded from the app-wide host while the create went to host-a.
+    // seeded from the app-wide host while the create went to host-a. An
+    // unnamed request must still expose the Epic-local placement callback so
+    // the user can switch hosts before submitting.
     testState.placement.current = {
       resolvedHostId: "host-session",
       client: { getActiveHostId: () => "host-session" },
@@ -757,7 +759,12 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     );
     expect(scopes.length).toBeGreaterThan(0);
     for (const scope of scopes) {
-      expect(scope).toMatchObject({ kind: "fixed", hostId: "host-session" });
+      expect(scope).toMatchObject({
+        kind: "selected",
+        hostId: "host-session",
+        onSelect: testState.recordPlacement,
+        unselectableExceptHostId: null,
+      });
     }
     expect(testState.latestSeedPins.length).toBeGreaterThan(0);
     for (const pin of testState.latestSeedPins) {

@@ -3705,12 +3705,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           // the new total and no entry of a previous set can outlive it.
           //
           // And a snapshot is NOT proof that a re-stream is coming. The host
-          // emits the summaries only while rebuilding a subscriber's index;
-          // an aux-only re-broadcast - a queue change, an approval - re-sends
-          // the snapshot against an unchanged skeleton and sends no chunks at
-          // all. Clearing here would empty the panel on the next approval and
-          // leave it empty, with the header still counting the files it can no
-          // longer list.
+          // re-streams the summaries whenever they CHANGED - the reconcile runs
+          // ahead of every index branch, so a turn that replaces them while
+          // leaving every ordinal intact still delivers them - but it compares
+          // what this subscriber was last sent by identity, so an UNCHANGED set
+          // is never re-sent. An aux-only re-broadcast - a queue change, an
+          // approval - therefore carries no chunks at all, and clearing here
+          // would empty the panel on the next approval and leave it empty, with
+          // the header still counting the files it can no longer list.
         });
         // An aux-only re-broadcast - a queue change, an approval - clears the
         // resnapshot latch and `invalidated` while sending no chunks at all
@@ -3928,12 +3930,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           // it, and the panel's rows are then attributed to the wrong files.
           //
           // Dropped rather than seated at the wrong offset - but dropping
-          // alone is not a recovery. The host streams these chunks only while
-          // REBUILDING a subscriber's index, so nothing on the ordinary path
-          // will send them again: the panel would stay permanently short, with
-          // "Review all" held back, for the rest of the connection. A
-          // resnapshot is what restarts the stream, and it is the same
-          // recovery a void index uses.
+          // alone is not a recovery. The host re-streams these chunks when the
+          // summaries CHANGE, and it records the set it just sent: a chunk lost
+          // in transit leaves the host believing this subscriber holds that
+          // generation, so ordinary traffic over an unchanged set sends nothing
+          // and the panel stays short - "Review all" held back - for the rest
+          // of the connection. A resnapshot is what restarts the stream, and it
+          // is the same recovery a void index uses.
           if (frame.chunk.fromIndex > assembled.length) {
             requestSummaryRestream();
             return {};
