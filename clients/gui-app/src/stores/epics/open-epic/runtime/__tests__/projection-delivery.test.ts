@@ -20,6 +20,7 @@ import {
 import type { EpicRuntimeProjection } from "@/stores/epics/open-epic/runtime/epic-runtime-projection";
 import { EMPTY_RECORDS_PROJECTION } from "@/stores/epics/open-epic/runtime/epic-runtime-projection";
 import type {
+  ChatProjection,
   ChatsSlice,
   EpicProjectedSlices,
 } from "@/stores/epics/open-epic/types";
@@ -136,21 +137,34 @@ describe("createBatchingDelivery", () => {
 });
 
 describe("projectedSlicesView", () => {
-  function makeChatsSlice(id: string): ChatsSlice {
+  /**
+   * A complete `ChatProjection`, annotated so the compiler checks it HERE.
+   *
+   * The fixture only stands in for "a row with a stable identity" - nothing in
+   * these tests reads a field - but it is spelled out in full rather than
+   * narrowed, because a partial fixture is only as safe as the one annotation
+   * that happens to be checking it. Naming the type on the row itself puts the
+   * error on the missing field instead of on the slice three lines out, and
+   * makes the next field added to `ChatProjection` fail here rather than
+   * somewhere that has to be traced back.
+   */
+  function makeChatProjection(id: string): ChatProjection {
     return {
-      byId: {
-        [id]: {
-          id,
-          parentId: null,
-          title: id,
-          createdAt: 0,
-          updatedAt: 0,
-          userId: null,
-          archivedAt: null,
-        },
-      },
-      allIds: [id],
+      id,
+      title: id,
+      parentId: null,
+      createdAt: 0,
+      updatedAt: 0,
+      userId: null,
+      hostId: null,
+      isTitleEditedByUser: false,
+      settings: null,
+      archivedAt: null,
     };
+  }
+
+  function makeChatsSlice(id: string): ChatsSlice {
+    return { byId: { [id]: makeChatProjection(id) }, allIds: [id] };
   }
 
   function makeFakeRecordsSink(initial: EpicRecordsProjection): {

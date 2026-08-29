@@ -342,18 +342,21 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       Y.encodeStateAsUpdate(donor),
     );
 
-    // Both the initial factory invocation and the close/open we are about to
-    // trigger land in one shared sequence array, so clear the "open" the
-    // constructor itself recorded before exercising the behaviour under test.
-    sequence.length = 0;
+    // Every factory invocation and every close lands in one shared sequence,
+    // and the whole of it is asserted below rather than the tail. Truncating it
+    // first (this read `sequence.length = 0`) would have been both a write to a
+    // `readonly` array and a weaker test: erasing the constructor's own record
+    // means an unexpected extra open before this point becomes invisible, which
+    // is exactly the kind of thing an ordering assertion exists to catch.
+    expect(sequence).toEqual(["open"]);
 
     opened.requestFreshSnapshot();
 
-    // The socket must be closed strictly before the factory is invoked again
-    // for the replacement client - the re-subscribe reads the seed offer, so
-    // an offer taken before coverage is cleared would name state this client
-    // just discarded.
-    expect(sequence).toEqual(["close", "open"]);
+    // One open from construction, then close STRICTLY BEFORE the factory is
+    // invoked again for the replacement client - the re-subscribe reads the
+    // seed offer, so an offer taken before coverage is cleared would name state
+    // this client just discarded.
+    expect(sequence).toEqual(["open", "close", "open"]);
     expect(streamHandle().callbacks).toBeDefined();
   });
 
