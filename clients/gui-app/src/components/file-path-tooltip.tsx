@@ -96,7 +96,23 @@ export function FilePathReveal(props: FilePathTooltipProps): ReactNode {
           {props.children}
         </Slot.Root>
       </FilePathTooltip>
-      <FullPathSheet path={revealed} onClose={() => setRevealed(null)} />
+      {/* The sheet is DOM-detached and React-ATTACHED: Radix portals its
+          content to the body, but React propagates events through the React
+          tree, so a click inside it still bubbles into the row this component
+          sits in - and that row is a `CommandItem` or `DropdownMenuItem` whose
+          click launches a terminal or adopts a worktree. Closing the sheet
+          therefore picked the row that raised it. Every pointer event the sheet
+          handles stops here, at the boundary between the portal's React
+          ancestry and the row's: the sheet's own controls have already run by
+          the time these fire, and nothing above the sheet has any business
+          reacting to a press inside it. */}
+      <span
+        onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+        onPointerUp={(event) => event.stopPropagation()}
+      >
+        <FullPathSheet path={revealed} onClose={() => setRevealed(null)} />
+      </span>
     </>
   );
 }

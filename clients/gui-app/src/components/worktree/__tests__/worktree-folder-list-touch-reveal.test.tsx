@@ -46,13 +46,24 @@ const DISABLED_BADGE: WorktreeFolderRowBadge = {
   disabled: true,
 };
 
-function renderList(onSelect: () => void): void {
+/**
+ * A ready row, which is the only kind that can prove anything about the sheet's
+ * dismissal: `WorktreeFolderList` returns before `onSelect` when a row is
+ * disabled, so asserting "the row was not selected" against a DISABLED row
+ * passes whether or not the click reached it.
+ */
+const READY_BADGE: WorktreeFolderRowBadge | null = null;
+
+function renderList(
+  onSelect: () => void,
+  badge: WorktreeFolderRowBadge | null,
+): void {
   render(
     <WorktreeFolderList
       rows={[checkingRow()]}
       selectedRow={null}
       secondaryLabel={(row) => row.runningDir}
-      rowBadge={() => DISABLED_BADGE}
+      rowBadge={() => badge}
       onSelect={onSelect}
       autoFocusSearch={false}
       emptyMessage="No directories in this task."
@@ -69,7 +80,7 @@ describe("WorktreeFolderList path on touch", () => {
   it("reveals a disabled row's path on a long press, and still refuses to select it", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const onSelect = vi.fn();
-    renderList(onSelect);
+    renderList(onSelect, DISABLED_BADGE);
 
     const line = screen.getByText(RUNNING_DIR);
     fireEvent.pointerDown(line, {
@@ -99,7 +110,10 @@ describe("WorktreeFolderList path on touch", () => {
     // sheet rendered inside the row's own click path, would fail this.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const onSelect = vi.fn();
-    renderList(onSelect);
+    // ENABLED, deliberately: the disabled arm returns before `onSelect`, so the
+    // same assertion against a disabled row would pass without the sheet
+    // containing anything.
+    renderList(onSelect, READY_BADGE);
 
     const line = screen.getByText(RUNNING_DIR);
     fireEvent.pointerDown(line, {
@@ -113,9 +127,15 @@ describe("WorktreeFolderList path on touch", () => {
       vi.advanceTimersByTime(500);
     });
 
-    const close = within(screen.getByRole("dialog")).getByRole("button", {
-      name: /close/i,
-    });
+    // Every surface inside the sheet, not just Close. A portal's clicks bubble
+    // through React ancestry regardless of which element they start on, so the
+    // path text a user selects and the overlay they tap to dismiss reach the
+    // row exactly as the button does.
+    const sheet = screen.getByRole("dialog");
+    fireEvent.click(within(sheet).getByText(RUNNING_DIR));
+    expect(onSelect).not.toHaveBeenCalled();
+
+    const close = within(sheet).getByRole("button", { name: /close/i });
     fireEvent.click(close);
 
     expect(screen.queryByRole("dialog")).toBeNull();
