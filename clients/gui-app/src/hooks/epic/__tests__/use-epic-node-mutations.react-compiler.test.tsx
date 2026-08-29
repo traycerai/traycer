@@ -114,7 +114,7 @@ describe("use-epic-node-mutations under React Compiler", () => {
     const hookOrderErrors = consoleErrorSpy.mock.calls
       .flat()
       .filter(
-        (arg): arg is string =>
+        (arg: unknown): arg is string =>
           typeof arg === "string" &&
           arg.includes("change in the order of Hooks"),
       );
