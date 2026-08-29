@@ -1,7 +1,9 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import {
   findOpenTileInTab,
@@ -47,8 +49,6 @@ export function useBrowserTabClose(args: BrowserTabCloseArgs): BrowserTabClose {
     status,
     onCloseTab,
   } = args;
-  const [closePending, setClosePending] = useState(false);
-  const isClosing = status === "closing" || closePending;
   const tile = useMemo(
     () => makeBrowserSessionTileRef({ hostId, sessionId, tabId }),
     [hostId, sessionId, tabId],
@@ -57,49 +57,52 @@ export function useBrowserTabClose(args: BrowserTabCloseArgs): BrowserTabClose {
   const prepareClose = useEpicCanvasStore(
     (state) => state.prepareCloseCanvasTabFocusTarget,
   );
+  const closeMutation = useMutation({
+    mutationKey: browserMutationKeys.closeTab(hostId, sessionId, tabId),
+    mutationFn: () => onCloseTab(sessionId, tabId),
+    onSuccess: () => {
+      const pointer = findOpenTileInTab(viewTabId, tile);
+      if (pointer === null) return;
+      navigateNested(epicId, viewTabId, () =>
+        prepareClose(viewTabId, pointer.paneId, pointer.instanceId),
+      );
+    },
+    onError: () => {
+      toast.error(`Couldn't close ${title}. Try again.`, {
+        duration: Infinity,
+      });
+    },
+  });
+  // The host's own `closing` status folds in, so a close an agent started
+  // reads the same as one this row started.
+  const isClosing = status === "closing" || closeMutation.isPending;
+  const mutate = closeMutation.mutate;
   const close = useCallback(() => {
     if (isClosing) return;
-    setClosePending(true);
-    void onCloseTab(sessionId, tabId)
-      .then(() => {
-        const pointer = findOpenTileInTab(viewTabId, tile);
-        if (pointer === null) return;
-        navigateNested(epicId, viewTabId, () =>
-          prepareClose(viewTabId, pointer.paneId, pointer.instanceId),
-        );
-      })
-      .catch(() => {
-        toast.error(`Couldn't close ${title}. Try again.`, {
-          duration: Infinity,
-        });
-        setClosePending(false);
-      });
-  }, [
-    epicId,
-    isClosing,
-    navigateNested,
-    onCloseTab,
-    prepareClose,
-    sessionId,
-    tabId,
-    tile,
-    title,
-    viewTabId,
-  ]);
+    mutate();
+  }, [isClosing, mutate]);
   return { isClosing, close };
 }
 
 /**
- * The close button's label. A title shared by more than one row cannot identify
- * which tab the button closes, so those rows fall back to their disambiguating
- * label - or the tab id, which is unique by construction.
+ * The close button's label, in both of its states. A title shared by more than
+ * one row cannot identify which tab the button closes, so those rows fall back
+ * to their disambiguating label - or the tab id, which is unique by
+ * construction.
+ *
+ * Both strings are built here rather than one being derived from the other by
+ * substitution: a caller rewriting `Close ` into `Closing ` depends on wording
+ * this function owns, so changing the phrasing would silently leave the pending
+ * label behind.
  */
 export function browserTabCloseLabel(args: {
   readonly tabId: string;
   readonly title: string;
   readonly secondaryLabel: string | null;
   readonly isDuplicateTitle: boolean;
+  readonly isClosing: boolean;
 }): string {
-  if (!args.isDuplicateTitle) return `Close ${args.title}`;
-  return `Close ${args.title} (${args.secondaryLabel ?? args.tabId})`;
+  const verb = args.isClosing ? "Closing" : "Close";
+  if (!args.isDuplicateTitle) return `${verb} ${args.title}`;
+  return `${verb} ${args.title} (${args.secondaryLabel ?? args.tabId})`;
 }

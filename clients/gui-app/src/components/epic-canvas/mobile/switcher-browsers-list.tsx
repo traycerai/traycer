@@ -98,6 +98,14 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
   // Agents list for why a query must not outlive a sheet that closes on the
   // first tap.
   const [searchQuery, setSearchQuery] = useState("");
+  // Built once for the list, as the desktop panel builds it once in
+  // `BrowsersPanelBodyLive` - a per-row map would redo the work for every
+  // visible row on every chat update.
+  const chats = useEpicChatRecords();
+  const chatById = useMemo(
+    () => new Map(chats.map((chat) => [chat.id, chat])),
+    [chats],
+  );
   const tabs = useBrowserSidebarTabRows(sessions.items);
   const { secondaryByKey, duplicateTitles } = useBrowserTabRowLabels(tabs);
   const filteredTabs = useMemo(
@@ -148,6 +156,7 @@ function SwitcherBrowsersListLive(props: SwitcherListProps) {
         filteredTabs={filteredTabs}
         secondaryByKey={secondaryByKey}
         duplicateTitles={duplicateTitles}
+        chatById={chatById}
         epicId={epicId}
         tabId={tabId}
         onClose={onClose}
@@ -162,6 +171,10 @@ function SwitcherBrowsersBody(props: {
   readonly filteredTabs: readonly BrowserSidebarTabRow[];
   readonly secondaryByKey: ReadonlyMap<string, string | null>;
   readonly duplicateTitles: ReadonlySet<string>;
+  readonly chatById: ReadonlyMap<
+    string,
+    { readonly id: string; readonly title: string }
+  >;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
@@ -196,6 +209,7 @@ function SwitcherBrowsersBody(props: {
           row={row}
           secondaryLabel={props.secondaryByKey.get(row.key) ?? null}
           isDuplicateTitle={props.duplicateTitles.has(row.identity.title)}
+          chatById={props.chatById}
           epicId={props.epicId}
           tabId={props.tabId}
           onClose={props.onClose}
@@ -210,6 +224,10 @@ function SwitcherBrowserRow(props: {
   readonly row: BrowserSidebarTabRow;
   readonly secondaryLabel: string | null;
   readonly isDuplicateTitle: boolean;
+  readonly chatById: ReadonlyMap<
+    string,
+    { readonly id: string; readonly title: string }
+  >;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
@@ -218,27 +236,31 @@ function SwitcherBrowserRow(props: {
   const { row, epicId, tabId, onClose } = props;
   const { session, tab, identity } = row;
   const activate = useSwitcherActivate(epicId, tabId, onClose);
-  const tile = useMemo(
-    () =>
-      makeBrowserSessionTileRef({
-        hostId: session.hostId,
-        sessionId: session.sessionId,
-        tabId: tab.tabId,
-      }),
+  // One source for what this row POINTS AT; the refs below are both built from
+  // it, so the identity cannot drift between the one `isActive` is judged
+  // against and the one a tap opens.
+  const tileIdentity = useMemo(
+    () => ({
+      hostId: session.hostId,
+      sessionId: session.sessionId,
+      tabId: tab.tabId,
+    }),
     [session.hostId, session.sessionId, tab.tabId],
+  );
+  const tile = useMemo(
+    () => makeBrowserSessionTileRef(tileIdentity),
+    [tileIdentity],
   );
   // Host-scoped, like desktop: two fleet sessions sharing a tab id must not
   // both read as the current tile.
   const isActive = useIsActiveTile(tabId, tile.id, session.hostId);
+  // A fresh ref per activation, not the memoized one: `instanceId` keys the
+  // evicted-preview payloads a back navigation restores, so an open reusing a
+  // previous open's instance would write over its own history entry. Every
+  // sibling category mints one per tap for the same reason.
   const onSelect = useCallback(() => {
-    activate(() =>
-      makeBrowserSessionTileRef({
-        hostId: session.hostId,
-        sessionId: session.sessionId,
-        tabId: tab.tabId,
-      }),
-    );
-  }, [activate, session.hostId, session.sessionId, tab.tabId]);
+    activate(() => makeBrowserSessionTileRef(tileIdentity));
+  }, [activate, tileIdentity]);
 
   return (
     <SwitcherListRow
@@ -265,6 +287,7 @@ function SwitcherBrowserRow(props: {
           row={row}
           secondaryLabel={props.secondaryLabel}
           isDuplicateTitle={props.isDuplicateTitle}
+          chatById={props.chatById}
           epicId={epicId}
           tabId={tabId}
           onClose={onClose}
@@ -311,6 +334,10 @@ function SwitcherBrowserRowActions(props: {
   readonly row: BrowserSidebarTabRow;
   readonly secondaryLabel: string | null;
   readonly isDuplicateTitle: boolean;
+  readonly chatById: ReadonlyMap<
+    string,
+    { readonly id: string; readonly title: string }
+  >;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
@@ -333,11 +360,13 @@ function SwitcherBrowserRowActions(props: {
     title: identity.title,
     secondaryLabel: props.secondaryLabel,
     isDuplicateTitle: props.isDuplicateTitle,
+    isClosing,
   });
   return (
     <>
       <SwitcherBrowserDriverButton
         row={row}
+        chatById={props.chatById}
         epicId={epicId}
         tabId={tabId}
         onClose={onClose}
@@ -347,9 +376,7 @@ function SwitcherBrowserRowActions(props: {
         variant="ghost"
         size="icon-sm"
         disabled={isClosing}
-        aria-label={
-          isClosing ? closeLabel.replace("Close ", "Closing ") : closeLabel
-        }
+        aria-label={closeLabel}
         data-testid={`switcher-browser-close-${tab.tabId}`}
         className="shrink-0 text-muted-foreground hover:text-destructive"
         onClick={close}
@@ -371,17 +398,17 @@ function SwitcherBrowserRowActions(props: {
 /** "Jump to the agent driving this tab", the desktop row's bot glyph as a row action. */
 function SwitcherBrowserDriverButton(props: {
   readonly row: BrowserSidebarTabRow;
+  readonly chatById: ReadonlyMap<
+    string,
+    { readonly id: string; readonly title: string }
+  >;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
   const { row, epicId, tabId, onClose } = props;
   const drivers = useCoalescedBrowserTabDrivers(row.tab.drivenBy);
-  const chats = useEpicChatRecords();
-  const chatById = useMemo(
-    () => new Map(chats.map((chat) => [chat.id, chat])),
-    [chats],
-  );
+  const { chatById } = props;
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpen = useEpicCanvasStore(
     (state) => state.prepareOpenTileInTabFocusTarget,

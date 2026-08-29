@@ -81,12 +81,6 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
   const title = identity.title;
   const isFailed = tab.status === "crashed";
   const visibleDrivers = useCoalescedBrowserTabDrivers(tab.drivenBy);
-  const closeAriaLabel = browserTabCloseLabel({
-    tabId: tab.tabId,
-    title,
-    secondaryLabel,
-    isDuplicateTitle: duplicateTitles.has(title),
-  });
   const { isClosing, close: handleClose } = useBrowserTabClose({
     epicId,
     viewTabId,
@@ -96,6 +90,13 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
     title,
     status: tab.status,
     onCloseTab,
+  });
+  const closeAriaLabel = browserTabCloseLabel({
+    tabId: tab.tabId,
+    title,
+    secondaryLabel,
+    isDuplicateTitle: duplicateTitles.has(title),
+    isClosing,
   });
   const tile = useMemo(
     () =>
@@ -206,11 +207,7 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
           variant="ghost"
           size="icon-xs"
           disabled={isClosing}
-          aria-label={
-            isClosing
-              ? closeAriaLabel.replace("Close ", "Closing ")
-              : closeAriaLabel
-          }
+          aria-label={closeAriaLabel}
           data-testid={`epic-browser-sidebar-close-${tab.tabId}`}
           className={cn(
             "size-6 cursor-pointer justify-self-center text-muted-foreground opacity-0 transition-opacity duration-100 pointer-events-none motion-reduce:transition-none",

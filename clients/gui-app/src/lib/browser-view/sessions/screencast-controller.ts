@@ -350,8 +350,12 @@ export function createScreencastController(options: {
 
   const noteArmed = (armEpoch: number): void => {
     activeArmEpoch = armEpoch;
-    deliverArmBuffer();
+    // Wheel first, then the click. Both can be waiting - a swipe followed by a
+    // tap, all inside the arm round trip - and the finger's order is the one
+    // the page has to see: a tap replayed before the scroll it followed lands
+    // on whatever was under the finger BEFORE the page moved.
     flushPendingTouchWheel();
+    deliverArmBuffer();
     const pending = pendingNav;
     pendingNav = [];
     for (const frame of pending) sendInput(frame);

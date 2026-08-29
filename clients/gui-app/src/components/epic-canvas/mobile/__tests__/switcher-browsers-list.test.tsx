@@ -10,6 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   BrowserSessionInfo,
   BrowserTabInfo,
@@ -157,11 +158,27 @@ function seedCanvasTab(): void {
   });
 }
 
+// The close action is a TanStack mutation, so these renders need a client.
+// ONE for the file's lifetime: a fresh client per render would leave existing
+// observers attached to the old one.
+const testQueryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: false, gcTime: 0 },
+    mutations: { retry: false },
+  },
+});
+
 function renderList(onClose: () => void = () => undefined) {
   return render(
-    <TooltipProvider delayDuration={0}>
-      <SwitcherBrowsersList epicId="epic-1" tabId={TAB_ID} onClose={onClose} />
-    </TooltipProvider>,
+    <QueryClientProvider client={testQueryClient}>
+      <TooltipProvider delayDuration={0}>
+        <SwitcherBrowsersList
+          epicId="epic-1"
+          tabId={TAB_ID}
+          onClose={onClose}
+        />
+      </TooltipProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -211,8 +228,8 @@ describe("SwitcherBrowsersList", () => {
 
   it("lists every tab of every session on the surface's host", () => {
     renderList();
-    expect(screen.getByTestId("switcher-browser-row-tab-1")).toBeTruthy();
-    expect(screen.getByTestId("switcher-browser-row-tab-2")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Cart/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Guide/ })).toBeTruthy();
   });
 
   it("shows the URL on the row, where desktop only has a hover tooltip", () => {
@@ -225,7 +242,7 @@ describe("SwitcherBrowsersList", () => {
     const onClose = vi.fn();
     renderList(onClose);
 
-    await user.click(screen.getByTestId("switcher-browser-row-tab-1"));
+    await user.click(screen.getByRole("button", { name: /^Cart/ }));
 
     expect(navigateNested).toHaveBeenCalled();
     expect(openTiles()).toMatchObject([
@@ -238,8 +255,8 @@ describe("SwitcherBrowsersList", () => {
     const user = userEvent.setup();
     renderList();
 
-    await user.click(screen.getByTestId("switcher-browser-row-tab-1"));
-    await user.click(screen.getByTestId("switcher-browser-row-tab-2"));
+    await user.click(screen.getByRole("button", { name: /^Cart/ }));
+    await user.click(screen.getByRole("button", { name: /^Guide/ }));
 
     // A phone shows one tile; a second permanent tile would be unreachable.
     expect(openTiles()).toHaveLength(1);
@@ -252,8 +269,8 @@ describe("SwitcherBrowsersList", () => {
 
     await user.type(screen.getByLabelText("Search browsers"), "docs.example");
 
-    expect(screen.queryByTestId("switcher-browser-row-tab-1")).toBeNull();
-    expect(screen.getByTestId("switcher-browser-row-tab-2")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Cart/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /^Guide/ })).toBeTruthy();
   });
 
   it("offers Add browser on a list that already has rows, and closes on the tile", async () => {
@@ -304,7 +321,7 @@ describe("SwitcherBrowsersList", () => {
     closeTab.mockResolvedValue(undefined);
     renderList();
 
-    await user.click(screen.getByTestId("switcher-browser-close-tab-1"));
+    await user.click(screen.getByRole("button", { name: "Close Cart" }));
 
     await waitFor(() => {
       expect(closeTab).toHaveBeenCalledWith("sess-1", "tab-1");
@@ -344,7 +361,9 @@ describe("SwitcherBrowsersList", () => {
     });
     vi.useRealTimers();
 
-    fireEvent.click(screen.getByTestId("switcher-browser-driver-tab-1"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open driving chat: Checkout agent" }),
+    );
 
     expect(openTiles()).toMatchObject([{ type: "chat", id: "chat-driver" }]);
   });
