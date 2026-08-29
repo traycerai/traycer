@@ -9,17 +9,18 @@
  * canvas.
  */
 import { create } from "zustand";
-import type { StripDragState } from "@/components/epic-canvas/dnd/strip-drag-model";
+import type {
+  MergeSide,
+  StripDragState,
+} from "@/components/epic-canvas/dnd/strip-drag-model";
 import {
   EPIC_CANVAS_DND_SOURCE_TYPES,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
-  type EpicCanvasArtifactTabDragData,
   type EpicCanvasDragSourceData,
   type EpicCanvasDropPreview,
   type EpicCanvasLeftPanelRailDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
-import type { TopLevelEdgeSplitTarget } from "@/components/layout/tabs/top-level-tab-dnd";
 import type { TabRef } from "@/stores/tabs/types";
 import type {
   DropPosition,
@@ -126,9 +127,17 @@ function tileOffsetsEqual(
 }
 
 /**
+ * A pair-into-split preview: the target strip tab, and the side of the pair
+ * the dragged tab would occupy (its approach side).
+ */
+export interface TopLevelStripPairPreview {
+  readonly targetRef: TabRef;
+  readonly side: MergeSide;
+}
+
+/**
  * Structural equality so a resolve that produced the same gesture state does
- * not publish a new object every pointer move. The arming timestamps are
- * deliberately compared too: a re-anchored dwell IS a different state.
+ * not publish a new object every pointer move.
  */
 function headerStripDragStateEqual(
   left: StripDragState | null,
@@ -140,14 +149,10 @@ function headerStripDragStateEqual(
     return false;
   }
   if (left.kind === "reorder" || right.kind === "reorder") return true;
-  if (left.targetItemId !== right.targetItemId) return false;
-  if (left.kind === "merge-armed" && right.kind === "merge-armed") {
-    return (
-      left.armedAtMs === right.armedAtMs &&
-      left.armedAtPointerX === right.armedAtPointerX
-    );
-  }
-  return true;
+  return (
+    left.targetItemId === right.targetItemId &&
+    left.targetSide === right.targetSide
+  );
 }
 
 /**
@@ -170,7 +175,6 @@ function isDragStateIdle(state: EpicDndState): boolean {
     state.headerStripOffsets.size === 0 &&
     state.tileStripOffsets.size === 0 &&
     state.tileSourceWidth === null &&
-    state.topLevelEdgeSplitPreview === null &&
     state.topLevelStripPairPreview === null &&
     state.reparentTargetNodeId === null &&
     state.reparentTargetViewTabId === null &&
@@ -229,14 +233,11 @@ interface EpicDndState {
    * and genuinely unequal, so this cannot be a constant.
    */
   readonly tileSourceWidth: number | null;
-  /** Preview owned by the independent top-level edge-dwell machine. */
-  readonly topLevelEdgeSplitPreview: TopLevelEdgeSplitTarget | null;
   /**
-   * Strip tab the same dwell machine is previewing a pair-into-split against.
-   * Kept separate from the edge preview so a tab chip and a content pane never
-   * both claim to be the drop destination.
+   * Strip tab a pair-into-split gesture is previewing against, and the side of
+   * the resulting pair the DRAGGED tab would take - its approach side.
    */
-  readonly topLevelStripPairPreview: TabRef | null;
+  readonly topLevelStripPairPreview: TopLevelStripPairPreview | null;
   /**
    * Sidebar reparent preview (gesture-scoped, mutually exclusive with the
    * canvas `dropPreview`). `reparentTargetNodeId` is the hovered VALID row
@@ -266,10 +267,9 @@ interface EpicDndState {
     offsets: ReadonlyMap<string, number>,
   ) => void;
   readonly tileSourceWidthChanged: (width: number | null) => void;
-  readonly topLevelEdgeSplitPreviewChanged: (
-    preview: TopLevelEdgeSplitTarget | null,
+  readonly topLevelStripPairPreviewChanged: (
+    preview: TopLevelStripPairPreview | null,
   ) => void;
-  readonly topLevelStripPairPreviewChanged: (preview: TabRef | null) => void;
   // Every field is required: the preview lands verbatim in `reparent*` state,
   // which is `string | null`. An omitted key reads as `undefined` and would
   // store a third value the readers below never compare against.
@@ -293,7 +293,6 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   headerStripOffsets: EMPTY_GROUP_OFFSETS,
   tileStripOffsets: EMPTY_TILE_OFFSETS,
   tileSourceWidth: null,
-  topLevelEdgeSplitPreview: null,
   topLevelStripPairPreview: null,
   reparentTargetNodeId: null,
   reparentTargetViewTabId: null,
@@ -311,7 +310,6 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       headerStripOffsets: EMPTY_GROUP_OFFSETS,
       tileStripOffsets: EMPTY_TILE_OFFSETS,
       tileSourceWidth: null,
-      topLevelEdgeSplitPreview: null,
       topLevelStripPairPreview: null,
       reparentTargetNodeId: null,
       reparentTargetViewTabId: null,
@@ -331,7 +329,6 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       headerStripOffsets: EMPTY_GROUP_OFFSETS,
       tileStripOffsets: EMPTY_TILE_OFFSETS,
       tileSourceWidth: null,
-      topLevelEdgeSplitPreview: null,
       topLevelStripPairPreview: null,
       reparentTargetNodeId: null,
       reparentTargetViewTabId: null,
@@ -374,8 +371,8 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
     if (headerStripDragStateEqual(current, next)) return;
     set({ headerStripDragState: next });
   },
-  topLevelEdgeSplitPreviewChanged: (preview) => {
-    const current = get().topLevelEdgeSplitPreview;
+  topLevelStripPairPreviewChanged: (preview) => {
+    const current = get().topLevelStripPairPreview;
     if (
       current === preview ||
       (current !== null &&
@@ -383,19 +380,6 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
         current.side === preview.side &&
         current.targetRef.kind === preview.targetRef.kind &&
         current.targetRef.id === preview.targetRef.id)
-    ) {
-      return;
-    }
-    set({ topLevelEdgeSplitPreview: preview });
-  },
-  topLevelStripPairPreviewChanged: (preview) => {
-    const current = get().topLevelStripPairPreview;
-    if (
-      current === preview ||
-      (current !== null &&
-        preview !== null &&
-        current.kind === preview.kind &&
-        current.id === preview.id)
     ) {
       return;
     }
@@ -433,7 +417,6 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       headerStripOffsets: EMPTY_GROUP_OFFSETS,
       tileStripOffsets: EMPTY_TILE_OFFSETS,
       tileSourceWidth: null,
-      topLevelEdgeSplitPreview: null,
       topLevelStripPairPreview: null,
       reparentTargetNodeId: null,
       reparentTargetViewTabId: null,
@@ -522,34 +505,22 @@ export function useHeaderStripDragState(): StripDragState | null {
   return useEpicDndStore((s) => s.headerStripDragState);
 }
 
-export function useActiveArtifactTab(): EpicCanvasArtifactTabDragData | null {
-  return useEpicDndStore((s) =>
-    s.activeSource?.kind === "artifact-tab" ? s.activeSource : null,
-  );
-}
-
-export function useTopLevelEdgeSplitPreview(
+/**
+ * For the one strip tab a pair-into-split drop would combine with: the side of
+ * the pair the DRAGGED tab would take (its approach side). Null for every
+ * other tab.
+ */
+export function useTopLevelStripPairPreview(
   refKind: string,
   refId: string,
-): "left" | "right" | null {
+): MergeSide | null {
   return useEpicDndStore((state) => {
-    const preview = state.topLevelEdgeSplitPreview;
+    const preview = state.topLevelStripPairPreview;
     return preview !== null &&
       preview.targetRef.kind === refKind &&
       preview.targetRef.id === refId
       ? preview.side
       : null;
-  });
-}
-
-/** True for the one strip tab a pair-into-split drop would combine with. */
-export function useTopLevelStripPairPreview(
-  refKind: string,
-  refId: string,
-): boolean {
-  return useEpicDndStore((state) => {
-    const preview = state.topLevelStripPairPreview;
-    return preview !== null && preview.kind === refKind && preview.id === refId;
   });
 }
 

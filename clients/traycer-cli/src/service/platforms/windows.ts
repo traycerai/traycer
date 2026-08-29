@@ -1,7 +1,14 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  isServiceMutationAuthorityError,
+  verifyServiceMutationAuthority,
+} from "../mutation-authority";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { HOST_CAPABILITY_SERVICE_LABEL } from "../../host/capabilities";
+import {
+  HOST_CAPABILITY_HOST_START_ADOPTION_V2,
+  HOST_CAPABILITY_SERVICE_LABEL,
+} from "../../host/capabilities";
 import {
   readHostPidMetadata,
   removeHostPidMetadata,
@@ -48,7 +55,11 @@ export type ProcessRunner = typeof runCommand;
 export function createWindowsController(
   runner: ProcessRunner | null,
 ): ServiceController {
-  const run = runner ?? runCommand;
+  const unverifiedRun: ProcessRunner = runner ?? runCommand;
+  const run: ProcessRunner = async (command, args, options) => {
+    await verifyServiceMutationAuthority();
+    return unverifiedRun(command, args, options);
+  };
   return {
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
@@ -56,6 +67,7 @@ export function createWindowsController(
     stop: (label) => stopService(label, run),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
+    hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
     // No Desktop/SMAppService split on Windows, so the restart halves are the
     // stop and start `host restart` already performed - the named seam exists
     // so the command has one shape on every platform. `forcedRecycle` is
@@ -120,15 +132,19 @@ export interface WindowsTaskInstallDeps {
 
 const defaultTaskInstallDeps: WindowsTaskInstallDeps = {
   stageTaskDefinition: async (options) => {
+    await verifyServiceMutationAuthority();
     const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
     const xmlPath = join(tmpDir, "task.xml");
     await writeHiddenHostLauncher(options);
     const xmlBody = buildTaskXml({ label: options.label, cli: options.cli });
+    await verifyServiceMutationAuthority();
     await writeFile(xmlPath, Buffer.from(`﻿${xmlBody}`, "utf16le"));
     return { tmpDir, xmlPath };
   },
-  removeStagedTaskDefinition: (tmpDir) =>
-    rm(tmpDir, { recursive: true, force: true }),
+  removeStagedTaskDefinition: async (tmpDir) => {
+    await verifyServiceMutationAuthority();
+    await rm(tmpDir, { recursive: true, force: true });
+  },
 };
 
 let taskInstallDeps: WindowsTaskInstallDeps = defaultTaskInstallDeps;
@@ -162,11 +178,13 @@ async function installService(
       },
     );
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     // Roll the launcher back: `stageTaskDefinition` wrote the persistent
     // VBS before /Create ran, and a launcher without a task is an orphan
     // that outlives the failed install (only a later uninstall would
     // collect it). Best-effort - the error the operator sees is the
     // install failure, not the rollback's.
+    await verifyServiceMutationAuthority();
     await rm(hiddenHostLauncherPath(options.label), { force: true }).catch(
       () => undefined,
     );
@@ -205,6 +223,7 @@ async function uninstallService(
     timeoutMs: 30_000,
     tolerateNonZeroExit: true,
   });
+  await verifyServiceMutationAuthority();
   await rm(hiddenHostLauncherPath(options.label), { force: true });
   // `schtasks /Delete` removes only the task; the `\Traycer` FOLDER it was
   // auto-created in stays behind forever (probed live on Windows 11: the
@@ -229,10 +248,13 @@ async function uninstallService(
       timeoutMs: 30_000,
       tolerateNonZeroExit: true,
     },
-  ).catch(() => undefined);
+  ).catch((cause) => {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+  });
   // Same rationale as stopService: the force-kill above skips the host's
   // graceful pid.json cleanup, and metadata surviving an uninstall reads as
   // a crashed (rather than removed) host to anything that finds it later.
+  await verifyServiceMutationAuthority();
   await removeHostPidMetadata(options.label.environment);
 }
 
@@ -284,6 +306,7 @@ async function stopService(
   // graceful shutdown" contract, and metadata left behind makes this
   // deliberate stop indistinguishable from a crash - the desktop's health
   // watchdog would resurrect the host the user just stopped.
+  await verifyServiceMutationAuthority();
   await removeHostPidMetadata(label.environment);
 }
 
@@ -313,7 +336,9 @@ async function killHostProcessTree(
         cwd: undefined,
         timeoutMs: WINDOWS_TASKKILL_TIMEOUT_MS,
         tolerateNonZeroExit: true,
-      }).catch(() => undefined),
+      }).catch((cause) => {
+        if (isServiceMutationAuthorityError(cause)) throw cause;
+      }),
     ),
   );
 }
@@ -342,6 +367,7 @@ async function runTaskAndVerifyStart(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `schtasks /Run failed for ${taskName}: ${describeCause(cause)}`,
@@ -398,7 +424,8 @@ async function readTaskLastRunResult(
       },
     );
     return parseSchtasksLastRunResult(result.stdout);
-  } catch {
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     return null;
   }
 }
@@ -508,7 +535,8 @@ async function findSlotProcessIds(
       },
     );
     return parseProcessIdJson(result.stdout);
-  } catch {
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     return null;
   }
 }
@@ -598,7 +626,8 @@ function parseProcessIdJson(stdout: string): readonly number[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
-  } catch {
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     return [];
   }
   const values = Array.isArray(parsed) ? parsed : [parsed];
@@ -694,7 +723,8 @@ export async function describeSlotLockHolders(
       },
     );
     return parseProcessDetailJson(result.stdout);
-  } catch {
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     return [];
   }
 }
@@ -799,12 +829,34 @@ function buildHiddenHostLauncher(
   ]
     .map(quoteWindowsArg)
     .join(" ");
+  const adoptionNonceProbe = [
+    ...invocation,
+    "host",
+    "adoption-nonce",
+    "--service-label",
+    label.id,
+  ]
+    .map(quoteWindowsArg)
+    .join(" ");
+  const adoptionCapabilityProbe = [
+    ...invocation,
+    "host",
+    "capabilities",
+    "--has",
+    HOST_CAPABILITY_HOST_START_ADOPTION_V2,
+  ]
+    .map(quoteWindowsArg)
+    .join(" ");
   return [
     "Option Explicit",
     "Dim shell",
     "Dim exitCode",
     "Dim commandLine",
     "Dim probeStatus",
+    "Dim adoptionCapabilityStatus",
+    "Dim nonceProbe",
+    "Dim adoptionNonce",
+    "Dim noncePattern",
     'Set shell = CreateObject("WScript.Shell")',
     `commandLine = ${quoteVbsString(commandLine)}`,
     "On Error Resume Next",
@@ -813,7 +865,29 @@ function buildHiddenHostLauncher(
     "Err.Clear",
     "On Error Goto 0",
     "If probeStatus = 0 Then",
-    `  commandLine = ${quoteVbsString(labelledCommandLine)}`,
+    '  adoptionNonce = ""',
+    "  On Error Resume Next",
+    `  adoptionCapabilityStatus = shell.Run(${quoteVbsString(adoptionCapabilityProbe)}, 0, True)`,
+    "  If Err.Number <> 0 Then adoptionCapabilityStatus = 1",
+    "  Err.Clear",
+    "  If adoptionCapabilityStatus = 0 Then",
+    `    Set nonceProbe = shell.Exec(${quoteVbsString(adoptionNonceProbe)})`,
+    "    If Err.Number = 0 Then",
+    "      Do While nonceProbe.Status = 0",
+    "        WScript.Sleep 10",
+    "      Loop",
+    "      If nonceProbe.ExitCode = 0 Then adoptionNonce = Trim(nonceProbe.StdOut.ReadAll)",
+    "    End If",
+    "  End If",
+    "  Err.Clear",
+    "  On Error Goto 0",
+    "  Set noncePattern = New RegExp",
+    '  noncePattern.Pattern = "^[0-9A-Fa-f-]{36}$"',
+    "  If noncePattern.Test(adoptionNonce) Then",
+    `    commandLine = ${quoteVbsString(labelledCommandLine)} & " --adoption-nonce " & Chr(34) & adoptionNonce & Chr(34)`,
+    "  Else",
+    `    commandLine = ${quoteVbsString(labelledCommandLine)}`,
+    "  End If",
     "End If",
     // Exit 75 is the CLI's restart-into-refreshed-slot signal (see
     // EXIT_RESTART_INTO_REFRESHED_SLOT in index.ts): the supervised entry
@@ -841,8 +915,10 @@ async function writeHiddenHostLauncher(
   options: BuildTaskXmlOptions,
 ): Promise<void> {
   const launcherPath = hiddenHostLauncherPath(options.label);
+  await verifyServiceMutationAuthority();
   await mkdir(dirname(launcherPath), { recursive: true });
   const body = buildHiddenHostLauncher(options.cli, options.label);
+  await verifyServiceMutationAuthority();
   await writeFile(launcherPath, Buffer.from(`\uFEFF${body}`, "utf16le"));
 }
 

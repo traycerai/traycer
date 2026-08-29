@@ -2,7 +2,7 @@ import { formatTerminalOutputPointer } from "@traycer/protocol/host/terminal/out
 import { readTerminalOutputResponseSchema } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   toAgentCliError,
 } from "../internal/host-rpc";
 import { resolveEpicId } from "../internal/agent-context";
@@ -34,7 +34,8 @@ export function buildTerminalOutputCommand(opts: {
         sessionId: opts.terminalId,
       }),
     );
-    const { path } = parseHostResponse(
+    const { path } = parseCanonicalHostResponse(
+      "terminal.readOutput",
       readTerminalOutputResponseSchema,
       result,
     );

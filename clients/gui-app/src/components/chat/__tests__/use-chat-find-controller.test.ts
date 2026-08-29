@@ -119,14 +119,14 @@ describe("useChatFindController - chain-open on reveal", () => {
       (currentMessages: ReadonlyArray<ChatMessageModel>) => {
         const messagesRef = useRef(currentMessages);
         messagesRef.current = currentMessages;
-        const messageIndexByIdRef = useRef(
+        const rowIndexByKeyRef = useRef(
           new Map(
             currentMessages.map(
               (message, index) => [message.id, index] as const,
             ),
           ),
         );
-        messageIndexByIdRef.current = new Map(
+        rowIndexByKeyRef.current = new Map(
           currentMessages.map((message, index) => [message.id, index] as const),
         );
         const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
@@ -138,7 +138,10 @@ describe("useChatFindController - chain-open on reveal", () => {
           messagesRef,
           backgroundToolBlockIds: EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
           backgroundToolBlockIdsRef,
-          messageIndexByIdRef,
+          // This suite drives the legacy line, where the transcript is fully
+          // materialized and find has nothing to disclose.
+          getFindCoverageMessage: () => null,
+          rowIndexByKeyRef,
           getScroller: () => scroller,
           scrollToLocation,
           cancelManualNavigation,

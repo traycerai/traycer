@@ -708,7 +708,7 @@ describe("useCreateTuiAgent", () => {
 
     // An explicit worktree intent is present precisely to prove it is never
     // dispatched - the preflight must reject BEFORE `dispatchWorktreeIntent`
-    // (tech plan governing mechanism 2, T3 client ordering).
+    // (client-side ordering from the governing technical plan).
     const intent: WorktreeIntent = {
       entries: [
         {

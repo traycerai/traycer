@@ -12,7 +12,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
+import {
+  epicTabRightActionsKey,
+  landingTerminalRightActionsKey,
+  useMobileHeaderStore,
+} from "@/stores/layout/mobile-header-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { emptySystemTabs, tabItemId } from "@/stores/tabs/layout";
@@ -177,7 +181,7 @@ function presentNoTab(): void {
 describe("MobileAppHeader", () => {
   beforeEach(() => {
     useMobileNavStore.setState({ open: false });
-    useMobileHeaderStore.setState({ rightActions: null });
+    useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     presentNoTab();
     useSettingsStore.setState({ showGlobalResourceMonitor: false });
     headerTitleState.role = "owner";
@@ -187,7 +191,7 @@ describe("MobileAppHeader", () => {
   afterEach(() => {
     cleanup();
     useMobileNavStore.setState({ open: false });
-    useMobileHeaderStore.setState({ rightActions: null });
+    useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     presentNoTab();
   });
 
@@ -332,14 +336,100 @@ describe("MobileAppHeader", () => {
     ).toBeNull();
   });
 
-  it("renders surface-contributed right actions from the slot store", async () => {
-    useMobileHeaderStore.setState({
-      rightActions: <button type="button">epic action</button>,
-    });
+  it("renders the presented epic tab's registered right actions", async () => {
+    useMobileHeaderStore
+      .getState()
+      .registerRightActions(
+        epicTabRightActionsKey("t1"),
+        <button type="button">epic action</button>,
+      );
     presentEpicTab("t1", "e1", "Wire up billing");
     renderAt("/epics/e1/t1");
     expect(
       await screen.findByRole("button", { name: "epic action" }),
     ).not.toBeNull();
+  });
+
+  // The registry outlives presentation on purpose: surfaces stay registered
+  // while merely retained. What keeps their controls out of another surface's
+  // header is resolution, so these two pin the header end of it.
+  it("shows no registered actions on the History and Settings surfaces", async () => {
+    useMobileHeaderStore
+      .getState()
+      .registerRightActions(
+        landingTerminalRightActionsKey("page-1"),
+        <button type="button">terminal toggle</button>,
+      );
+    presentHistoryTab();
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "terminal toggle" }),
+    ).toBeNull();
+
+    cleanup();
+    presentSettingsTab("/settings");
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "terminal toggle" }),
+    ).toBeNull();
+  });
+
+  // The return leg of a launch round-trip: the same start page is presented
+  // again and its long-lived registration simply resolves - no surface had to
+  // observe the switch and re-publish.
+  it("shows the landing terminal entry again when its start page returns", async () => {
+    useMobileHeaderStore
+      .getState()
+      .registerRightActions(
+        landingTerminalRightActionsKey("page-1"),
+        <button type="button">terminal toggle</button>,
+      );
+    presentEpicTab("t1", "e1", "Wire up billing");
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "terminal toggle" }),
+    ).toBeNull();
+
+    focusTab({ kind: "draft", id: "page-1" }, emptySystemTabs());
+    expect(
+      await screen.findByRole("button", { name: "terminal toggle" }),
+    ).not.toBeNull();
+  });
+
+  // Keyed per hosting page: a focus move between two start pages must not
+  // resolve the departing page's toggle across the switch.
+  it("ignores a landing entry registered for another start page", async () => {
+    useMobileHeaderStore
+      .getState()
+      .registerRightActions(
+        landingTerminalRightActionsKey("page-1"),
+        <button type="button">terminal toggle</button>,
+      );
+    focusTab({ kind: "draft", id: "page-2" }, emptySystemTabs());
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "terminal toggle" }),
+    ).toBeNull();
+  });
+
+  // A departing epic tab's entry may outlive its focus by a commit; a stale
+  // entry must resolve to nothing rather than to another tab's header.
+  it("ignores a registered entry for an epic tab that is not presented", async () => {
+    useMobileHeaderStore
+      .getState()
+      .registerRightActions(
+        epicTabRightActionsKey("t-stale"),
+        <button type="button">stale epic action</button>,
+      );
+    presentEpicTab("t1", "e1", "Wire up billing");
+    renderAt("/epics/e1/t1");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "stale epic action" }),
+    ).toBeNull();
   });
 });

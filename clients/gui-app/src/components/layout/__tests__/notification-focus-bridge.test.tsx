@@ -207,6 +207,7 @@ describe("NotificationFocusBridge", () => {
         buildNotificationActivationEnvelope({
           route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
           feed: { source: "cloud", id: "removed-row" },
+          chimeEventType: "done",
           originHostId: "host-a",
         }),
       );
@@ -434,6 +435,7 @@ describe("NotificationFocusBridge", () => {
     const envelope = buildNotificationActivationEnvelope({
       route: { kind: "chat", epicId: "epic-9", chatId: "chat-1" },
       feed: { source: "host", id: "n-9" },
+      chimeEventType: "done",
       originHostId: mockLocalHostEntry.hostId,
     });
 
@@ -465,6 +467,7 @@ describe("NotificationFocusBridge", () => {
         artifactId: undefined,
       },
       feed: { source: "host", id: "n-1" },
+      chimeEventType: "needs_action",
       originHostId: mockLocalHostEntry.hostId,
     });
 
@@ -502,6 +505,7 @@ describe("NotificationFocusBridge", () => {
         artifactId: undefined,
       },
       feed: { source: "host", id: "n-cross" },
+      chimeEventType: "needs_action",
       originHostId: "other-host",
     });
 
@@ -525,6 +529,7 @@ describe("NotificationFocusBridge", () => {
     const envelope = buildNotificationActivationEnvelope({
       route: { kind: "session", sessionId: "session-1" },
       feed: { source: "host", id: "n-session" },
+      chimeEventType: "done",
       originHostId: mockLocalHostEntry.hostId,
     });
 
@@ -545,6 +550,7 @@ describe("NotificationFocusBridge", () => {
     const envelope = buildNotificationActivationEnvelope({
       route: { kind: "epic", epicId: "epic-local" },
       feed: { source: "app-local", id: "local-1" },
+      chimeEventType: "failure",
       originHostId: null,
     });
 
@@ -592,6 +598,7 @@ describe("NotificationFocusBridge", () => {
           artifactId: undefined,
         },
         feed: { source: "host", id: "n-cross" },
+        chimeEventType: "needs_action",
         originHostId: "other-host",
       });
 
@@ -621,6 +628,7 @@ describe("NotificationFocusBridge", () => {
       const envelope = buildNotificationActivationEnvelope({
         route: { kind: "chat", epicId: "epic-9", chatId: "chat-1" },
         feed: { source: "host", id: "n-9" },
+        chimeEventType: "done",
         originHostId: mockLocalHostEntry.hostId,
       });
 

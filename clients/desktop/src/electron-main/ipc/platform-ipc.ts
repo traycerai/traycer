@@ -395,11 +395,14 @@ export function registerPlatformIpc(
 
   bridge.handleInvoke(
     RunnerHostInvoke.certTrustRemove,
-    async (_event, fingerprint: unknown, hostname: unknown) => {
+    async (_event, scope: unknown, fingerprint: unknown, hostname: unknown) => {
+      if (scope !== "app-shell" && scope !== "browser") {
+        throw new Error("cert:untrust requires a known trust scope");
+      }
       if (typeof fingerprint !== "string" || typeof hostname !== "string") {
         throw new Error("cert:untrust requires string fingerprint + hostname");
       }
-      await untrustCertificate(fingerprint, hostname);
+      await untrustCertificate(scope, fingerprint, hostname);
     },
   );
 

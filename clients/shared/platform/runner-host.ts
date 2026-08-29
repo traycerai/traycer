@@ -29,6 +29,11 @@ import type {
   HostGetInstallationInfoResponse,
   HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostUpdateAttemptContinuation,
+  HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
+import type { BrowserViewBridge } from "./browser-view";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
@@ -85,6 +90,9 @@ export type SystemResumeEvent = {
  * register it through module-level globals.
  */
 export interface IRunnerHost {
+  /** Complete native browser capability, or null on shells without one. */
+  readonly browserView: BrowserViewBridge | null;
+
   /**
    * Browser-safe sign-in URL the shell wants `gui-app` to open when the
    * user initiates auth. Shells embed their own callback scheme (custom
@@ -377,6 +385,13 @@ export interface IRunnerHost {
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
   /**
+   * How this shell commits a blob the user asked to keep, or `null` where it
+   * owns no native route and the caller falls back to the browser save APIs.
+   * A capability, not an identity: a plain desktop browser tab is `null` here
+   * without being any less of a desktop.
+   */
+  readonly fileSave: IFileSaveHost | null;
+  /**
    * Desktop display-zoom surface. Present on desktop shells and `null` on
    * shells that do not own a native app-scale control.
    */
@@ -661,6 +676,47 @@ export interface IFileDropHost {
    * paste event whose DOM clipboard has no usable content.
    */
   readNativeClipboardFilePaths(): Promise<readonly string[]>;
+}
+
+/** The bytes and their identity, as handed to `IFileSaveHost.saveFile`. */
+export interface FileSaveRequest {
+  readonly name: string;
+  readonly type: string;
+  readonly bytes: ArrayBuffer;
+}
+
+/**
+ * Where a completed save landed. `name` is display copy for the confirmation;
+ * `path` is the absolute location, which only a shell whose save mechanism
+ * REPORTS one can fill in - a native save dialog names the file it wrote,
+ * while a share sheet hands the bytes to another app and never says where they
+ * went. `path` is `null` there, and no "open it" affordance is possible.
+ */
+export interface SavedFileLocation {
+  readonly name: string;
+  readonly path: string | null;
+}
+
+/**
+ * The shell's native "put these bytes somewhere the user keeps files"
+ * capability, or `null` on `IRunnerHost.fileSave` where the shell has none and
+ * the caller must fall back to the web save APIs (a plain browser tab, tests).
+ *
+ * The two shells that have one reach it very differently - Electron opens a
+ * native save dialog and learns a path, a phone writes a temporary file and
+ * offers it to the OS share sheet - so this contract states only what both can
+ * honour: the bytes go out, the user may dismiss the surface, and a path comes
+ * back only when the mechanism produced one.
+ */
+export interface IFileSaveHost {
+  /** `null` when the user dismissed the dialog or sheet without saving. */
+  saveFile(request: FileSaveRequest): Promise<SavedFileLocation | null>;
+  /**
+   * Re-opens a file this shell saved, by the `path` it reported, with the OS
+   * default application. `null` where the shell never learns a path, which is
+   * also every case where `saveFile` reports `path: null`.
+   */
+  readonly openSavedFile: ((path: string) => Promise<void>) | null;
 }
 
 /**
@@ -1039,7 +1095,9 @@ export interface IDeviceFlowHost {
    * process. Resolves with a `DeviceFlowSession` once authorization succeeds,
    * or `null` when authorization itself fails (network/5xx) or the shell has no
    * device-flow backend - the caller surfaces a launch-style failure and may
-   * retry. The shell supplies its own `client_id` (`"desktop"`) and host label.
+   * retry. The shell supplies its own client kind as `client_id` - the kind it
+   * signs sessions in as (`"desktop"` for the desktop app, `"mobile"` for the
+   * phone shell) - and its host label.
    */
   start(): Promise<DeviceFlowSession | null>;
 }
@@ -1278,6 +1336,12 @@ export type NotificationShowOutcome =
 export type NotificationFeedSource = "host" | "cloud" | "app-local" | "global";
 
 export interface INotificationHost {
+  /**
+   * Native OS notification preferences for this desktop app. Phones expose
+   * their richer read/request/repair surface through `pushPermission` instead;
+   * browser/dev shells leave this null.
+   */
+  readonly systemSettings: INotificationSystemSettingsHost | null;
   show(
     title: string,
     body: string,
@@ -1291,6 +1355,11 @@ export interface INotificationHost {
   onForegroundDisplay(
     handler: (display: NotificationForegroundDisplay) => void,
   ): Disposable;
+}
+
+export interface INotificationSystemSettingsHost {
+  /** Opens the OS notification preferences owned by this application. */
+  open(): Promise<void>;
 }
 
 /**
@@ -1443,11 +1512,21 @@ export interface HostRemovalState {
 
 // Result of the in-app "Remove Traycer" action. The desktop stops + removes
 // the host service, the host install, and (on macOS) the SMAppService login
-// item, while preserving all `~/.traycer` user data. Each flag reports what
-// the teardown actually accomplished so the renderer can confirm.
+// item, while preserving all `~/.traycer` user data.
 export interface TraycerUninstallResult {
   readonly removedHost: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - NOT that
+   * the registration is provably gone. See `HostUninstallResult` for why no
+   * platform can verify absence.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the post-teardown readback observed: `true` = definitely still
+   * registered, `null` = nothing could confirm either way. Read this rather
+   * than `deregisteredService` when you need certainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
 }
 
@@ -1600,7 +1679,50 @@ export type HostActivationState =
   | "activationUnknown"
   | "unavailable";
 
+/**
+ * The durable attempt record's facts, read from disk by desktop main.
+ *
+ * ## Why FACTS and not a projected view (Ticket 07 §5.2.7 / T6 Q1(b))
+ *
+ * The gap this closes is the host-DOWN window: with no host to answer
+ * `host.status`, the renderer had no observation at all, so an attempt sitting
+ * on disk rendered as a blank "state unknown" and the user could not tell
+ * "an update is mid-flight and the host is unreachable" from "nothing is
+ * happening".
+ *
+ * Desktop main can read that record without a host. What it must NOT do is
+ * decide what it MEANS: the qualified-stale vocabulary (`kind` / `qualified` /
+ * `lastKnownKind`) lives with the renderer's projector, and a second copy of it
+ * here would be the duplicated-policy class this epic has paid for repeatedly.
+ * So this carries the record's facts and nothing else; the renderer feeds them
+ * through the SAME projector it already uses for live reads.
+ *
+ * `updatedAt` is presentation only. Attempt ordering is
+ * `attemptId + generation + sequence` — never a timestamp, so two clocks can
+ * never disagree about which attempt is newer.
+ */
+export interface LocalAttemptFacts {
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly sequence: number;
+  readonly targetVersion: string;
+  readonly phase: HostUpdateAttemptPhase;
+  // `HostUpdateAttemptContinuation` already includes `null`.
+  readonly continuation: HostUpdateAttemptContinuation;
+  readonly updatedAt: string;
+}
+
 export interface HostControllerStatus {
+  /**
+   * The durable attempt on THIS machine, or `null` when there is none or the
+   * record could not be read.
+   *
+   * `null` is deliberately not "no attempt": an unreadable record is also
+   * `null`, and the renderer must treat absence as "we cannot say" rather than
+   * as "nothing is running". Fabricating idleness from a failed read is how a
+   * mid-flight update becomes invisible.
+   */
+  readonly localAttempt: LocalAttemptFacts | null;
   readonly download: DownloadLaneStatus | null;
   readonly mutation: MutationLaneStatus | null;
   readonly installedVersion: string | null;
@@ -1678,7 +1800,23 @@ export type ApplyStagedTrigger = "launch" | "manual";
 
 export interface HostUninstallResult {
   readonly removedInstallDir: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - NOT that
+   * the registration is provably gone. No platform can verify absence:
+   * Windows maps every `schtasks /Query` failure to `not-installed`, Linux
+   * re-reads the manifest the uninstall just deleted, and macOS's
+   * `launchctl print` probe tolerates non-zero while an unloaded SMAppService
+   * record is invisible to it. It IS false when the readback positively found
+   * the registration still present.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the post-teardown readback observed. `true` = definitely still
+   * registered, `null` = nothing could confirm either way, `false` = verified
+   * absent (no platform produces this today). Read this rather than
+   * `deregisteredService` when you need certainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
 }
 
 export interface HostLogsTailResult {

@@ -4,6 +4,7 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  OpenDraftInNewWindowResult,
   OpenEpicInNewWindowResult,
   WindowSummary,
 } from "../ipc-contracts/window-types";
@@ -34,6 +35,9 @@ export interface WindowsBridgeSurface {
       title: string,
       tabId: string,
     ): Promise<OpenEpicInNewWindowResult>;
+    requestOpenDraftInNewWindow(
+      draftId: string,
+    ): Promise<OpenDraftInNewWindowResult>;
     ownership: OwnershipBridgeSurface;
     perWindowState: PerWindowStateBridgeSurface;
     authSession: AuthSessionBridgeSurface;
@@ -75,6 +79,11 @@ export function buildWindowsBridge(windowId: string): WindowsBridgeSurface {
           title,
           tabId,
         ) as Promise<OpenEpicInNewWindowResult>,
+      requestOpenDraftInNewWindow: (draftId) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
+          draftId,
+        ) as Promise<OpenDraftInNewWindowResult>,
       ownership: buildOwnershipBridge(),
       perWindowState: buildPerWindowStateBridge(),
       authSession: buildAuthSessionBridge(),

@@ -9,7 +9,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -23,7 +23,11 @@ export function buildAgentListHarnessesCommand(): CommandFn {
         parseUserInput(listGuiHarnessesRequestSchema, {}),
       ),
     );
-    const catalog = parseHostResponse(listGuiHarnessesResponseSchema, result);
+    const catalog = parseCanonicalHostResponse(
+      "agent.gui.listHarnesses",
+      listGuiHarnessesResponseSchema,
+      result,
+    );
     const response = {
       harnesses: catalog.harnesses
         .filter((harness) => harness.enabled)

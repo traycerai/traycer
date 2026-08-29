@@ -90,6 +90,16 @@ const runnerHostMock: { hostManagement: object | null } = vi.hoisted(() => ({
   hostManagement: null,
 }));
 
+const uninstallMock = vi.hoisted(() => ({
+  data: undefined as
+    | {
+        readonly serviceRegistrationRetained: boolean | null;
+      }
+    | undefined,
+  isSuccess: false,
+  mutate: vi.fn(),
+}));
+
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     hostManagement: runnerHostMock.hostManagement,
@@ -98,7 +108,12 @@ vi.mock("@/providers/use-runner-host", () => ({
 }));
 
 vi.mock("@/hooks/runner/use-runner-uninstall-traycer-mutation", () => ({
-  useRunnerUninstallTraycer: () => ({ mutate: vi.fn(), isPending: false }),
+  useRunnerUninstallTraycer: () => ({
+    data: uninstallMock.data,
+    isSuccess: uninstallMock.isSuccess,
+    mutate: uninstallMock.mutate,
+    isPending: false,
+  }),
 }));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
@@ -134,6 +149,9 @@ beforeEach(() => {
   removeFromAccountSpy.mockClear();
   removeFromAccountHostIds.length = 0;
   runnerHostMock.hostManagement = null;
+  uninstallMock.data = undefined;
+  uninstallMock.isSuccess = false;
+  uninstallMock.mutate.mockClear();
 });
 
 // Explicit: without it a previous test's tree stays mounted and `getByTestId`
@@ -212,6 +230,41 @@ describe("HostDangerZone", () => {
     expect(clearRow === null || isConcealed(clearRow)).toBe(true);
     expect(capturedQueryClients.every((client) => client === null)).toBe(true);
     expect(screen.getByTestId("host-scope-unreachable")).not.toBeNull();
+  });
+
+  it("offers retry when the service is positively retained", () => {
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    uninstallMock.isSuccess = true;
+    uninstallMock.data = { serviceRegistrationRetained: true };
+
+    render(<LocalRecoveryDangerZone />);
+
+    expect(screen.getByText("Traycer removal incomplete")).not.toBeNull();
+    expect(
+      screen.getByText("The background service is still registered", {
+        exact: false,
+      }),
+    ).not.toBeNull();
+    expect(screen.queryByText("Traycer removed")).toBeNull();
+    expect(screen.queryByTestId("settings-quit-after-uninstall")).toBeNull();
+    screen.getByTestId("settings-retry-uninstall").click();
+    expect(uninstallMock.mutate).toHaveBeenCalledOnce();
+  });
+
+  it("reports unknown service teardown without offering a pointless retry", () => {
+    runnerHostMock.hostManagement = { uninstallTraycer: vi.fn() };
+    uninstallMock.isSuccess = true;
+    uninstallMock.data = { serviceRegistrationRetained: null };
+
+    render(<LocalRecoveryDangerZone />);
+
+    expect(screen.getByText("Traycer removal unverified")).not.toBeNull();
+    expect(
+      screen.getByText("traycer host service status", { exact: false }),
+    ).not.toBeNull();
+    expect(screen.queryByText("Traycer removed")).toBeNull();
+    expect(screen.queryByTestId("settings-quit-after-uninstall")).toBeNull();
+    expect(screen.queryByTestId("settings-retry-uninstall")).toBeNull();
   });
 
   it("explains the missing rows for an unreachable host that is not this one", () => {

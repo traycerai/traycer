@@ -144,6 +144,7 @@ function SelectContent({
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
         data-slot="select-content"
+        data-browser-overlay="select"
         data-align-trigger={position === "item-aligned"}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(

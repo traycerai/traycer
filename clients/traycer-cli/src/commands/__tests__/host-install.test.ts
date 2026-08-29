@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `host install` (Host Update Layer Redesign Tech Plan, "Lock-scope
@@ -48,6 +51,25 @@ vi.mock("../../installer", () => ({
   },
   currentInstallPlatform: mocks.currentInstallPlatformMock,
 }));
+
+// The contender-aware command facade imports the commit edge from the
+// concrete installer module, not through the package barrel above. Mock the
+// same boundary there so this command-wiring suite cannot mutate the
+// operator's real host install while still providing a genuine staged file
+// for the pre-commit attestation path.
+vi.mock("../../installer/install", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../installer/install")>();
+  return {
+    ...actual,
+    commitHostInstallSource: async (
+      ...callArgs: Parameters<typeof mocks.commitHostInstallSourceMock>
+    ) => {
+      mocks.callOrder.push("commit");
+      return mocks.commitHostInstallSourceMock(...callArgs);
+    },
+  };
+});
 
 vi.mock("../../service/install-lifecycle", () => ({
   createServiceInstallLifecycle: mocks.createServiceInstallLifecycleMock,
@@ -154,22 +176,36 @@ function sampleRecord(version: string): HostInstallRecord {
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath: "/tmp/traycer-host",
+    executableSha256: null,
   };
 }
 
+const stagedFixtureRoots: string[] = [];
+
 function sampleStaged(): StagedHostInstallSource {
+  const fixtureRoot = mkdtempSync(
+    join(tmpdir(), "traycer-host-install-stage-"),
+  );
+  stagedFixtureRoots.push(fixtureRoot);
+  const stagingDir = join(fixtureRoot, "staging");
+  const archivePath = join(fixtureRoot, "archive.tar.gz");
+  const executablePath = join(stagingDir, "traycer-host");
+  const executableBytes = "fixture host executable";
+  mkdirSync(stagingDir, { recursive: true });
+  writeFileSync(archivePath, "fixture verified archive");
+  writeFileSync(executablePath, executableBytes);
   return {
-    stagingDir: "/tmp/staging-dir",
-    archivePath: "/tmp/staging-dir/archive.tar.gz",
+    stagingDir,
+    archivePath,
     archiveIsTemporary: true,
-    executablePath: "/tmp/staging-dir/traycer-host",
+    executablePath,
     version: "2.0.0",
     runtimeVersion: null,
     source: { kind: "registry", value: "2.0.0" },
     archiveSha256: "b".repeat(64),
     signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
     signatureKeyId: "test-key",
-    sizeBytes: 1,
+    sizeBytes: Buffer.byteLength(executableBytes),
   };
 }
 
@@ -198,6 +234,7 @@ function baseArgs(overrides: Partial<HostInstallArgs>): HostInstallArgs {
     noServiceRegister: false,
     ifIdle: false,
     force: false,
+    attemptAdoption: null,
     ...overrides,
   };
 }
@@ -313,6 +350,9 @@ describe("buildHostInstallCommand", () => {
     // matches host-update.test.ts's convention.
     vi.resetAllMocks();
     mocks.callOrder = [];
+    for (const fixtureRoot of stagedFixtureRoots.splice(0)) {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
     // Unconditional: a test that never touched `isTTY` restores a no-op
     // descriptor identical to the original, so this can't leak either way.
     if (originalStdoutIsTTYDescriptor === undefined) {
@@ -443,6 +483,10 @@ describe("buildHostInstallCommand", () => {
     );
     await command(fakeCtx());
 
+    // No `attemptAdoption` here, deliberately: `host install` mints its own
+    // adoption for the children it spawns rather than forwarding one into the
+    // service-install lifecycle. Production is right; the field was carried in
+    // this assertion from an earlier shape of the call.
     expect(mocks.createServiceInstallLifecycleMock).toHaveBeenCalledWith({
       environment: "production",
       bootstrap: { enableLinger: false, allowSelfInvocation: true },
@@ -536,9 +580,14 @@ describe("buildHostInstallCommand", () => {
     });
 
     expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
+    // The third argument is the verify callback, whose signature has now
+    // settled: the discard runs under the same execution segment as the commit
+    // it is scrubbing after, so it re-verifies the capability at the actuator
+    // rather than trusting the one captured at segment entry.
     expect(mocks.discardStagedHostInstallSourceMock).toHaveBeenCalledWith(
       "production",
       staged,
+      expect.any(Function),
     );
   });
 
@@ -562,9 +611,14 @@ describe("buildHostInstallCommand", () => {
       code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
     });
 
+    // The third argument is the verify callback, whose signature has now
+    // settled: the discard runs under the same execution segment as the commit
+    // it is scrubbing after, so it re-verifies the capability at the actuator
+    // rather than trusting the one captured at segment entry.
     expect(mocks.discardStagedHostInstallSourceMock).toHaveBeenCalledWith(
       "production",
       staged,
+      expect.any(Function),
     );
   });
 

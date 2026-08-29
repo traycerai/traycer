@@ -319,6 +319,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "production" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -376,6 +378,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "production" as const,
     };
     const reachabilityProbe = vi.fn(async () => true);
@@ -425,6 +429,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "production" as const,
     };
     const lifecycle = new HostLifecycle({
@@ -485,6 +491,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "production" as const,
     };
     const websocketUrl = "ws://127.0.0.1:54322/rpc";
@@ -572,6 +580,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "production" as const,
     };
     const readyTimeoutMs = 300;
@@ -649,6 +659,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "dev" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -710,6 +722,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "production" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -763,6 +777,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "dev" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -818,6 +834,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "production" as const,
     };
     await writeFile(
@@ -870,6 +888,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "production" as const,
     };
     await writeFile(
@@ -921,6 +941,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "production" as const,
     };
     const websocketUrl = "ws://127.0.0.1:54321/rpc";

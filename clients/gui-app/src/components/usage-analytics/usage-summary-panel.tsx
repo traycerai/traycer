@@ -546,11 +546,11 @@ function UsageSummaryPanelBody(props: {
   );
 
   return (
-    // `usage-chart-root` carries the `--usage-series-*` palette, and it has
+    // `usage-chart-root` carries the series and harness palettes, and it has
     // to sit on the common ancestor rather than on the chart alone:
     // `UsageHarnessSplit` is the chart's SIBLING here and colors its dots and
     // bars from the same scale, so while the scope lived only on
-    // `UsageDailyChart` those `var(--usage-series-N)` reads resolved against
+    // `UsageDailyChart` those palette-variable reads resolved against
     // nothing and the split rendered colorless. `UsageDailyChart` keeps its
     // own copy of the class for the epic dialog, where it stands alone.
     <div className="usage-chart-root flex flex-col gap-5">

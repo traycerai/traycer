@@ -11,10 +11,12 @@
  */
 import { z } from "zod";
 import {
+  HOLDERS_REVISION_DIGEST_PATTERN,
   worktreeBusyHoldersSchema,
   worktreeBusyOwnerRefSchema,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 export {
+  HOLDERS_REVISION_DIGEST_PATTERN,
   worktreeBusyErrorDetailsSchema,
   worktreeBusyHoldKindSchema,
   worktreeBusyHolderActivitySchema,
@@ -22,6 +24,7 @@ export {
   worktreeBusyHoldersSchema,
   worktreeBusyOwnerKindSchema,
   worktreeBusyOwnerRefSchema,
+  worktreeHoldersChangedErrorDetailsSchema,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 export type {
   WorktreeBusyErrorDetails,
@@ -31,6 +34,7 @@ export type {
   WorktreeBusyHolders,
   WorktreeBusyOwnerKind,
   WorktreeBusyOwnerRef,
+  WorktreeHoldersChangedErrorDetails,
 } from "@traycer/protocol/framework/worktree-busy-holders";
 
 // Inlined to avoid a circular import with `epic-schemas.ts` (which
@@ -878,6 +882,60 @@ export type WorktreeDeleteRequestV11 = z.infer<
   typeof worktreeDeleteRequestSchemaV11
 >;
 
+/**
+ * Present consent must be a real digest — empty and non-digest
+ * strings are rejected rather than silently treated as "no consent".
+ */
+export const expectedHoldersRevisionFieldSchema = z
+  .string()
+  .regex(HOLDERS_REVISION_DIGEST_PATTERN)
+  .optional();
+
+/**
+ * A consent revision without `stopOwners: true` can never be honored
+ * (absent-revision + stopOwners false is T7 refuse-on-busy; a present
+ * revision with stopOwners false would be silently ignored). Refuse
+ * at parse instead.
+ */
+export function refineConsentRevisionRequiresStopOwners(
+  value: {
+    readonly stopOwners: boolean;
+    readonly expectedHoldersRevision?: string;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.expectedHoldersRevision === undefined) return;
+  if (value.stopOwners) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["expectedHoldersRevision"],
+    message: "expectedHoldersRevision requires stopOwners to be true",
+  });
+}
+
+/**
+ * `worktree.delete@1.2` request. `expectedHoldersRevision` is the
+ * digest of the inventory the caller reviewed. When present with
+ * `stopOwners: true`, the host compares it to a fresh inventory
+ * digest before teardown; mismatch refuses with
+ * `WORKTREE_HOLDERS_CHANGED` and does not stop or delete. Absent
+ * reproduces @1.1 (stop whatever the fresh read finds). Present-empty
+ * and non-digest values, and a revision with `stopOwners: false`,
+ * fail parse.
+ *
+ * Degrade: a 1.1 host's request schema strips
+ * `expectedHoldersRevision`. A 1.1 client talking to a 1.2 host is
+ * upgraded with the field absent.
+ */
+export const worktreeDeleteRequestSchemaV12 = worktreeDeleteRequestSchemaV11
+  .extend({
+    expectedHoldersRevision: expectedHoldersRevisionFieldSchema,
+  })
+  .superRefine(refineConsentRevisionRequiresStopOwners);
+export type WorktreeDeleteRequestV12 = z.infer<
+  typeof worktreeDeleteRequestSchemaV12
+>;
+
 export const worktreeDeleteResponseSchema = z.object({
   deleted: z.boolean(),
 });
@@ -910,6 +968,14 @@ export type WorktreeListHoldersRequest = z.infer<
 
 export const worktreeListHoldersResponseSchema = z.object({
   holders: worktreeBusyHoldersSchema,
+  /**
+   * Host-computed digest of `holders`. Optional so a pre-revision
+   * response still parses; a current host always emits it. Present
+   * values must match `HOLDERS_REVISION_DIGEST_PATTERN` so a client
+   * can echo the field as `expectedHoldersRevision` without a parse
+   * round-trip failing.
+   */
+  holdersRevision: z.string().regex(HOLDERS_REVISION_DIGEST_PATTERN).optional(),
 });
 export type WorktreeListHoldersResponse = z.infer<
   typeof worktreeListHoldersResponseSchema

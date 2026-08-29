@@ -11,9 +11,10 @@ import {
   readHostStagedRecordAt,
 } from "../manifest/host-staged";
 import { hostInstallDir, hostStagedDir } from "../store/paths";
-import { sweepOwnedTempDirs } from "../store/owned-temp";
+import { sweepOwnedTempDirsWithVerifier } from "../store/owned-temp";
 import {
   invalidateAsideDir,
+  legacyMutationVerifier,
   listAsideDirsNewestFirst,
   sweepDeadAsideDirs,
 } from "./aside-dirs";
@@ -137,13 +138,14 @@ async function validateInstallAsideCandidate(
 async function recoverMissingInstallTarget(
   environment: Environment,
   logger: ILogger,
+  verifyMutationCapability: () => Promise<void>,
 ): Promise<boolean> {
   const installDir = hostInstallDir(environment);
   if (await pathExists(installDir)) return false;
   const candidates = await listOldAsideDirsNewestFirst(installDir);
   for (const candidate of candidates) {
     if (!(await validateInstallAsideCandidate(candidate, installDir))) continue;
-    await renameWithRetry(candidate, installDir);
+    await renameWithRetry(candidate, installDir, verifyMutationCapability);
     logger.info("Stage reconcile restored install/ from an aside copy", {
       environment,
       candidate,
@@ -157,10 +159,16 @@ async function recoverMissingInstallTarget(
 async function sweepInstallTrashIfTargetExists(
   environment: Environment,
   logger: ILogger,
+  verifyMutationCapability: () => Promise<void>,
 ): Promise<boolean> {
   const installDir = hostInstallDir(environment);
   if (!(await pathExists(installDir))) return false;
-  await sweepOldTrash(installDir, "install.json", logger);
+  await sweepOldTrash(
+    installDir,
+    "install.json",
+    logger,
+    verifyMutationCapability,
+  );
   return true;
 }
 
@@ -204,6 +212,7 @@ async function evaluateStageForDeletion(
 async function reconcileStagedAside(
   environment: Environment,
   logger: ILogger,
+  verifyMutationCapability: () => Promise<void>,
 ): Promise<StagedAsideOutcome> {
   const stagedDir = hostStagedDir(environment);
   const candidates = await listOldAsideDirsNewestFirst(stagedDir);
@@ -222,7 +231,7 @@ async function reconcileStagedAside(
       if (!(await stagedExecutableIsFile(candidate, record.executablePath))) {
         continue;
       }
-      await renameWithRetry(candidate, stagedDir);
+      await renameWithRetry(candidate, stagedDir, verifyMutationCapability);
       logger.info("Stage reconcile restored staged/ from an aside copy", {
         environment,
         candidate,
@@ -230,11 +239,16 @@ async function reconcileStagedAside(
       return "restored";
     }
   }
-  await Promise.all(
-    candidates.map((candidate) =>
-      invalidateAsideDir(stagedDir, candidate, "staged.json", logger),
-    ),
-  );
+  for (const candidate of candidates) {
+    await verifyMutationCapability();
+    await invalidateAsideDir(
+      stagedDir,
+      candidate,
+      "staged.json",
+      logger,
+      verifyMutationCapability,
+    );
+  }
   return "deleted";
 }
 
@@ -258,7 +272,12 @@ export type PurgeHostStageResult =
 export async function purgeHostStage(
   environment: Environment,
   expectedStageFingerprint: string | null,
+  verifyMutationCapability: () => Promise<void>,
 ): Promise<PurgeHostStageResult> {
+  // Every destructive edge below receives an explicit verifier. Legacy
+  // maintenance passes `legacyMutationVerifier` deliberately; production
+  // contender paths pass their live capability verifier.
+  const verify = verifyMutationCapability;
   const logger = createCliLogger(environment);
   const stagedDir = hostStagedDir(environment);
   const staged = await readHostStagedRecord(environment);
@@ -276,19 +295,23 @@ export async function purgeHostStage(
       actualStageFingerprint,
     };
   }
+  await verify();
   await rm(stagedDir, { recursive: true, force: true });
   const asides = await listAsideDirsNewestFirst(stagedDir, "old-");
-  const invalidated = await Promise.all(
-    asides.map((aside) =>
-      invalidateAsideDir(stagedDir, aside, "staged.json", logger),
-    ),
-  );
+  const invalidated: boolean[] = [];
+  for (const aside of asides) {
+    await verify();
+    invalidated.push(
+      await invalidateAsideDir(stagedDir, aside, "staged.json", logger, verify),
+    );
+  }
   if (invalidated.some((outcome) => !outcome)) {
     throw new Error(
       "Could not invalidate every recoverable staged aside; the stage was not purged.",
     );
   }
-  await sweepDeadAsideDirs(stagedDir);
+  await verify();
+  await sweepDeadAsideDirs(stagedDir, verify);
   logger.info("Host stage purged", {
     environment,
     recoverableAsideCount: asides.length,
@@ -296,17 +319,20 @@ export async function purgeHostStage(
   return { outcome: "purged", purged: true };
 }
 
-export async function reconcileHostStage(
+async function reconcileHostStageWithVerifier(
   environment: Environment,
+  verifyMutationCapability: () => Promise<void>,
 ): Promise<StageReconcileResult> {
   const logger = createCliLogger(environment);
   const targetMissingRecovered = await recoverMissingInstallTarget(
     environment,
     logger,
+    verifyMutationCapability,
   );
   const installTrashSwept = await sweepInstallTrashIfTargetExists(
     environment,
     logger,
+    verifyMutationCapability,
   );
   const installRecord = await readHostInstallRecord(environment);
   let stageDeletedReason = await evaluateStageForDeletion(
@@ -314,13 +340,18 @@ export async function reconcileHostStage(
     installRecord,
   );
   if (stageDeletedReason !== null) {
+    await verifyMutationCapability();
     await rm(hostStagedDir(environment), { recursive: true, force: true });
     logger.info("Stage reconcile deleted the staged tree", {
       environment,
       reason: stageDeletedReason,
     });
   }
-  const stagedAsideOutcome = await reconcileStagedAside(environment, logger);
+  const stagedAsideOutcome = await reconcileStagedAside(
+    environment,
+    logger,
+    verifyMutationCapability,
+  );
   // Unconditional and independent of `stagedAsideOutcome` above -
   // `.dead-*` siblings are litter `invalidateAsideDir`'s layer-1
   // rename leaves behind regardless of whether THIS pass found any
@@ -328,7 +359,10 @@ export async function reconcileHostStage(
   // replacement has none) or restored one instead. A call site nested
   // inside `reconcileStagedAside`'s pure-litter branch was unreachable on
   // both of those paths, so `.dead-*` trees accumulated forever.
-  await sweepDeadAsideDirs(hostStagedDir(environment));
+  await sweepDeadAsideDirs(
+    hostStagedDir(environment),
+    verifyMutationCapability,
+  );
   if (stagedAsideOutcome === "restored") {
     // Step 4's own validation (parseable sidecar + platform/arch match +
     // executable present) is a lighter "good enough to try" check than
@@ -344,6 +378,7 @@ export async function reconcileHostStage(
       installRecord,
     );
     if (restoredDeletionReason !== null) {
+      await verifyMutationCapability();
       await rm(hostStagedDir(environment), { recursive: true, force: true });
       logger.info(
         "Stage reconcile deleted a just-restored staged aside that failed re-evaluation",
@@ -352,7 +387,10 @@ export async function reconcileHostStage(
       stageDeletedReason = restoredDeletionReason;
     }
   }
-  const tempsSwept = await sweepOwnedTempDirs(environment);
+  const tempsSwept = await sweepOwnedTempDirsWithVerifier(
+    environment,
+    verifyMutationCapability,
+  );
   logger.debug("Stage reconcile completed", {
     environment,
     targetMissingRecovered,
@@ -368,4 +406,21 @@ export async function reconcileHostStage(
     stagedAsideOutcome,
     tempsSwept,
   };
+}
+
+// Legacy maintenance callers retain their established no-capability behavior.
+// All attempt-bound install/download/apply paths use the explicit verifier
+// variant below so every rename/remove inside reconciliation rechecks the
+// same live capability immediately before the edge.
+export async function reconcileHostStage(
+  environment: Environment,
+): Promise<StageReconcileResult> {
+  return reconcileHostStageWithVerifier(environment, legacyMutationVerifier);
+}
+
+export async function reconcileHostStageWithAttempt(
+  environment: Environment,
+  verifyMutationCapability: () => Promise<void>,
+): Promise<StageReconcileResult> {
+  return reconcileHostStageWithVerifier(environment, verifyMutationCapability);
 }

@@ -69,6 +69,7 @@ const IDLE_CONTROLLER_STATUS: HostControllerStatus = {
   updateReady: false,
   activation: "activated",
   reachable: true,
+  localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
 };

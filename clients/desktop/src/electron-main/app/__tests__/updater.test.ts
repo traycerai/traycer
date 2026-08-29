@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
@@ -493,6 +494,197 @@ describe("desktop app updater", () => {
     expect(updater.getAppUpdateSnapshot().errorMessage).toBe(
       "Traycer ran into a problem while updating. Please try again in a little while.",
     );
+  });
+
+  // On Windows a completed, sha512-verified download is thrown away whenever
+  // electron-updater's Authenticode check REJECTS - which its PowerShell call
+  // does routinely, because it carries a hardcoded 20s timeout and has to hash
+  // the whole ~138MB installer. The wrapper tolerates that. What it must not
+  // tolerate is the two rejections that are security verdicts rather than
+  // infrastructure failures.
+  describe("tolerateUnrunnableSignatureCheck", () => {
+    const SIGNED_OK = null;
+
+    // REAL `execFile` errors, not hand-built ones. The discriminator is a
+    // property Node stamps onto its own errors, so a fabricated `{ cmd: "…" }`
+    // would assert nothing beyond this test agreeing with the wrapper about
+    // what Node does - the exact shape of vacuous test both would pass.
+    function failingChild(
+      script: string,
+      timeout: number | undefined,
+    ): Promise<Error> {
+      return new Promise((resolve, reject) => {
+        execFile(
+          process.execPath,
+          ["-e", script],
+          timeout === undefined ? {} : { timeout },
+          (err) => {
+            if (err === null) {
+              reject(new Error("expected the child process to fail"));
+              return;
+            }
+            resolve(err);
+          },
+        );
+      });
+    }
+
+    it("proceeds when the verifier subprocess is killed by its timeout", async () => {
+      const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+      const timeoutKill = await failingChild("setTimeout(() => {}, 10000)", 50);
+      // The field fingerprint: killed, no exit code, empty stderr.
+      expect(timeoutKill).toMatchObject({ killed: true, signal: "SIGTERM" });
+
+      const verify = updater.tolerateUnrunnableSignatureCheck(() =>
+        Promise.reject(timeoutKill),
+      );
+
+      await expect(verify(["CN=TRAYCER AI INC."], "C:\\a.exe")).resolves.toBe(
+        SIGNED_OK,
+      );
+    });
+
+    it("proceeds when the verifier subprocess exits non-zero", async () => {
+      const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+      // The fourth field machine: PowerShell ran, failed to load
+      // Microsoft.PowerShell.Security, and exited non-zero in under a second.
+      const nonZeroExit = await failingChild(
+        "console.error('CouldNotAutoloadMatchingModule'); process.exit(1)",
+        undefined,
+      );
+      expect(nonZeroExit).toMatchObject({ killed: false, code: 1 });
+
+      const verify = updater.tolerateUnrunnableSignatureCheck(() =>
+        Promise.reject(nonZeroExit),
+      );
+
+      await expect(verify(["CN=TRAYCER AI INC."], "C:\\a.exe")).resolves.toBe(
+        SIGNED_OK,
+      );
+    });
+
+    it("re-throws a LiteralPath mismatch, which is an anti-substitution verdict", async () => {
+      const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+      // electron-updater mints this one by hand when the file PowerShell
+      // reported on is not the file we are about to install. It carries none of
+      // Node's child-process properties, which is exactly what distinguishes it.
+      const substitution = new Error(
+        "LiteralPath of C:\\other.exe is different than C:\\pending\\temp.exe",
+      );
+
+      const verify = updater.tolerateUnrunnableSignatureCheck(() =>
+        Promise.reject(substitution),
+      );
+
+      await expect(verify(["CN=TRAYCER AI INC."], "C:\\a.exe")).rejects.toBe(
+        substitution,
+      );
+    });
+
+    it("re-throws the unknown-stderr rejection, which upstream fails closed on", async () => {
+      const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+      const unknownStderr = new Error(
+        "Cannot execute Get-AuthenticodeSignature, stderr: ??. Failing signature validation due to unknown stderr.",
+      );
+
+      const verify = updater.tolerateUnrunnableSignatureCheck(() =>
+        Promise.reject(unknownStderr),
+      );
+
+      await expect(verify(["CN=TRAYCER AI INC."], "C:\\a.exe")).rejects.toBe(
+        unknownStderr,
+      );
+    });
+
+    it("passes a publisher mismatch through untouched", async () => {
+      const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+      // A genuine mismatch RESOLVES with a reason string rather than rejecting,
+      // and NsisUpdater fails the update on any non-null result. The wrapper
+      // must not flatten that to null.
+      const mismatch = "publisherNames: CN=TRAYCER AI INC., raw info: {}";
+
+      const verify = updater.tolerateUnrunnableSignatureCheck(() =>
+        Promise.resolve(mismatch),
+      );
+
+      await expect(verify(["CN=TRAYCER AI INC."], "C:\\a.exe")).resolves.toBe(
+        mismatch,
+      );
+    });
+  });
+
+  // `formatUserVisibleUpdateError` is first-match-wins, so bucket ORDER is part
+  // of the behavior and not an implementation detail.
+  describe("update failure classification", () => {
+    const SIGNATURE_MESSAGE =
+      "Traycer couldn't verify this update and did not install it. Please download Traycer again from traycer.ai.";
+    const DOWNLOAD_MESSAGE =
+      "Traycer couldn't download and install the latest update. Please try again in a little while.";
+    const SERVICE_MESSAGE =
+      "Traycer couldn't reach the update service right now. Please try again in a little while.";
+
+    async function messageFor(raw: string): Promise<string | null> {
+      const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+      autoUpdater.checkForUpdates.mockRejectedValue(new Error(raw));
+      await updater.installAutoUpdater(true, makeDeps(true));
+
+      await updater.checkForUpdatesNow(false, "manual");
+
+      return updater.getAppUpdateSnapshot().errorMessage;
+    }
+
+    it("tells the user an update failed verification rather than failed to download", async () => {
+      // INSTALL_ERROR_HINTS also matches "not signed", so this only reaches the
+      // signature bucket because that bucket is checked first.
+      await expect(
+        messageFor(
+          "New version 1.2.0 is not signed by the application owner: publisherNames: CN=TRAYCER AI INC., raw info: {}",
+        ),
+      ).resolves.toBe(SIGNATURE_MESSAGE);
+    });
+
+    it("classifies a LiteralPath substitution as a verification failure", async () => {
+      await expect(
+        messageFor(
+          "LiteralPath of C:\\other.exe is different than C:\\pending\\temp.exe",
+        ),
+      ).resolves.toBe(SIGNATURE_MESSAGE);
+    });
+
+    it("classifies the unknown-stderr fail-closed as a verification failure", async () => {
+      await expect(
+        messageFor(
+          "Cannot execute Get-AuthenticodeSignature, stderr: ??. Failing signature validation due to unknown stderr.",
+        ),
+      ).resolves.toBe(SIGNATURE_MESSAGE);
+    });
+
+    it("still calls a checksum mismatch a download failure, not a verification one", async () => {
+      // The boundary that keeps the new bucket from swallowing the old one.
+      await expect(
+        messageFor("sha512 checksum mismatch, expected abc got def"),
+      ).resolves.toBe(DOWNLOAD_MESSAGE);
+    });
+
+    it("does not mistake `chcp 65001` for HTTP 500", async () => {
+      // The reason the service hints no longer carry bare digits: "500" is a
+      // substring of "65001", and that code page appears in EVERY Windows
+      // signature-verifier error.
+      await expect(
+        messageFor(
+          'Command failed: set "PSModulePath=" & chcp 65001 >NUL & powershell.exe -Command "Get-AuthenticodeSignature -LiteralPath \'C:\\pending\\temp.exe\'"',
+        ),
+      ).resolves.toBe(DOWNLOAD_MESSAGE);
+    });
+
+    it("still routes a real HTTP status code to the service message", async () => {
+      // Dropping the bare-digit hints must not cost genuine status detection;
+      // this message carries no other service hint, so only the whole-number
+      // match can classify it.
+      await expect(
+        messageFor("unexpected response 503 while fetching the update"),
+      ).resolves.toBe(SERVICE_MESSAGE);
+    });
   });
 
   it("defaults allowPrerelease off so RC builds use the stable feed", async () => {

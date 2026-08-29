@@ -99,7 +99,7 @@ export function PlanSegment(props: PlanSegmentProps) {
   const actionsVisible =
     segment.planStatus === "drafting" || segment.planStatus === "ready";
   const actionsDisabled =
-    planActions === null || !planActions.canAct || planActions.pending;
+    planActions === null || !planActions.canSend || planActions.pending;
   const handleImplement = useCallback(() => {
     planActions?.onImplement();
   }, [planActions]);

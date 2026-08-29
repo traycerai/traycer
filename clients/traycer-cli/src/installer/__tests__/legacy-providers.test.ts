@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { noopLogger } from "../../logger";
 import type { ILogger, LogFields } from "../../logger";
+import { ServiceMutationAuthorityError } from "../../service/mutation-authority";
 import { preserveLegacyProviders } from "../legacy-providers";
 
 /**
@@ -39,6 +40,8 @@ const PLATFORM_ARCH = "darwin-arm64";
 // would read the chmod-0o000 dir cleanly and assert nothing.
 const runsAsRoot =
   typeof process.getuid === "function" && process.getuid() === 0;
+
+const allowMutation = async (): Promise<void> => undefined;
 
 // The nested `host-runtime/resources/...` shape a release archive extracts
 // into - `resolveResourcesDir`'s "one level down" branch.
@@ -129,7 +132,12 @@ describe("preserveLegacyProviders", () => {
             join(oldResources, "providers", "codex", PLATFORM_ARCH, "codex"),
           ).ino;
 
-    await preserveLegacyProviders(oldInstall, newInstall, noopLogger);
+    await preserveLegacyProviders(
+      oldInstall,
+      newInstall,
+      noopLogger,
+      allowMutation,
+    );
 
     expect(
       existsSync(
@@ -177,7 +185,12 @@ describe("preserveLegacyProviders", () => {
     writePack(oldResources, "legacy-providers", "opencode", "0.9.0");
     writePack(newResources, "providers", "ripgrep", "14.0.0");
 
-    await preserveLegacyProviders(oldInstall, newInstall, noopLogger);
+    await preserveLegacyProviders(
+      oldInstall,
+      newInstall,
+      noopLogger,
+      allowMutation,
+    );
 
     expect(
       existsSync(
@@ -208,7 +221,12 @@ describe("preserveLegacyProviders", () => {
     // find - an unrelated pack, so this stays a pure collision test on codex.
     writePack(newResources, "providers", "ripgrep", "14.0.0");
 
-    await preserveLegacyProviders(oldInstall, newInstall, noopLogger);
+    await preserveLegacyProviders(
+      oldInstall,
+      newInstall,
+      noopLogger,
+      allowMutation,
+    );
 
     expect(readCarriedVersion(newResources, "codex")).toEqual({
       version: "newer",
@@ -224,7 +242,7 @@ describe("preserveLegacyProviders", () => {
 
     const { logger, warnings } = capturingLogger();
     await expect(
-      preserveLegacyProviders(oldInstall, newInstall, logger),
+      preserveLegacyProviders(oldInstall, newInstall, logger, allowMutation),
     ).resolves.toBeUndefined();
 
     // A genuinely absent source (ENOENT) is `isExpectedAbsence` territory -
@@ -242,7 +260,12 @@ describe("preserveLegacyProviders", () => {
     writePack(oldResources, "providers", "codex", "1.2.3");
     writePack(newResources, "providers", "ripgrep", "14.0.0");
 
-    await preserveLegacyProviders(oldInstall, newInstall, noopLogger);
+    await preserveLegacyProviders(
+      oldInstall,
+      newInstall,
+      noopLogger,
+      allowMutation,
+    );
 
     expect(
       existsSync(
@@ -272,7 +295,7 @@ describe("preserveLegacyProviders", () => {
 
     const { logger, warnings } = capturingLogger();
     await expect(
-      preserveLegacyProviders(oldInstall, newInstall, logger),
+      preserveLegacyProviders(oldInstall, newInstall, logger, allowMutation),
     ).resolves.toBeUndefined();
 
     expect(warnings.length).toBe(1);
@@ -319,7 +342,12 @@ describe("preserveLegacyProviders", () => {
       const { logger, warnings } = capturingLogger();
       try {
         await expect(
-          preserveLegacyProviders(oldInstall, newInstall, logger),
+          preserveLegacyProviders(
+            oldInstall,
+            newInstall,
+            logger,
+            allowMutation,
+          ),
         ).resolves.toBeUndefined();
 
         expect(warnings.length).toBe(1);
@@ -363,7 +391,12 @@ describe("preserveLegacyProviders", () => {
       const { logger, warnings } = capturingLogger();
       try {
         await expect(
-          preserveLegacyProviders(oldInstall, newInstall, logger),
+          preserveLegacyProviders(
+            oldInstall,
+            newInstall,
+            logger,
+            allowMutation,
+          ),
         ).resolves.toBeUndefined();
 
         expect(warnings.length).toBe(2);
@@ -392,4 +425,63 @@ describe("preserveLegacyProviders", () => {
       }
     },
   );
+
+  it("revalidates immediately before every canonical carryover edge", async () => {
+    const oldInstall = join(sandboxRoot, "old-install");
+    const newInstall = join(sandboxRoot, "new-install");
+    const oldResources = wrappedResources(oldInstall);
+    const newResources = wrappedResources(newInstall);
+    writePack(oldResources, "providers", "codex", "1.2.3");
+    writePack(oldResources, "providers", "opencode", "0.9.0");
+    writePack(newResources, "providers", "ripgrep", "14.0.0");
+
+    let verifierCalls = 0;
+    const verifyMutationCapability = async (): Promise<void> => {
+      verifierCalls += 1;
+    };
+
+    await preserveLegacyProviders(
+      oldInstall,
+      newInstall,
+      noopLogger,
+      verifyMutationCapability,
+    );
+
+    // One verification is required before mkdir and another before rename for
+    // each pack. The exact count also keeps a future refactor from moving the
+    // verifier back to a once-per-loop check.
+    expect(verifierCalls).toBeGreaterThanOrEqual(4);
+    expect(existsSync(join(newResources, "legacy-providers", "codex"))).toBe(
+      true,
+    );
+    expect(existsSync(join(newResources, "legacy-providers", "opencode"))).toBe(
+      true,
+    );
+  });
+
+  it("propagates lost mutation authority through best-effort catches", async () => {
+    const oldInstall = join(sandboxRoot, "old-install");
+    const newInstall = join(sandboxRoot, "new-install");
+    const oldResources = wrappedResources(oldInstall);
+    const newResources = wrappedResources(newInstall);
+    writePack(oldResources, "providers", "codex", "1.2.3");
+    writePack(newResources, "providers", "ripgrep", "14.0.0");
+
+    const verifyMutationCapability = async (): Promise<void> => {
+      throw new ServiceMutationAuthorityError(new Error("lost"));
+    };
+
+    await expect(
+      preserveLegacyProviders(
+        oldInstall,
+        newInstall,
+        noopLogger,
+        verifyMutationCapability,
+      ),
+    ).rejects.toBeInstanceOf(ServiceMutationAuthorityError);
+    expect(existsSync(join(oldResources, "providers", "codex"))).toBe(true);
+    expect(existsSync(join(newResources, "legacy-providers", "codex"))).toBe(
+      false,
+    );
+  });
 });

@@ -335,6 +335,9 @@ describe("<UsageSummaryPanel /> image export", () => {
       expect(mocks.saveBlobToDisk).toHaveBeenCalledWith(
         blob,
         expect.stringMatching(/^traycer-usage-30d\.png$/),
+        // This harness mounts no runner host, so there is no native save
+        // route and the save falls through to the browser APIs.
+        null,
       );
     });
     expect(mocks.captureUsageExportImageBlob).toHaveBeenCalledWith({

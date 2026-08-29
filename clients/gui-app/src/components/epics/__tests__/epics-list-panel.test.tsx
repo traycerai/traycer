@@ -1,3 +1,5 @@
+import "./stub-sweep-dialog-host-hooks";
+
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },
@@ -207,33 +209,6 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
     candidates: testState.worktreeCandidates,
     isError: false,
   }),
-}));
-
-// The list panel hands the sweep dialog the app-wide following client; the
-// panel renders outside a HostRuntimeProvider here, and the sweep query is
-// mocked below anyway.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
-}));
-
-vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
-  useEpicSweepWorktreeCandidatesForClient: () => ({
-    hostId: "host-test",
-    rows: [],
-    isPending: false,
-    isError: false,
-    checkedAt: null,
-    canRefresh: true,
-    refresh: () => Promise.resolve(),
-  }),
-}));
-
-vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
-  useEpicSweepWorktrees: () => ({
-    isPending: false,
-    mutate: () => {},
-  }),
-  useSweepingWorktreePaths: () => new Set<string>(),
 }));
 
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({

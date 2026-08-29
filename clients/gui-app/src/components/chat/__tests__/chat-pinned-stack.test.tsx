@@ -6,7 +6,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AccumulatedFileChange } from "@/lib/chat/accumulated-file-changes-from-messages";
+import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ChatPinnedStack } from "@/components/chat/chat-pinned-stack";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
@@ -131,7 +131,7 @@ function renderStack(
 
 function stackUi(
   todo: PinnedTodoSnapshot,
-  changes: ReadonlyArray<AccumulatedFileChange>,
+  changes: ReadonlyArray<AccumulatedChangeRow>,
 ) {
   return (
     <TooltipProvider delayDuration={0}>
@@ -145,7 +145,7 @@ function stackUi(
 }
 
 function baseRestore(
-  changes: ReadonlyArray<AccumulatedFileChange>,
+  changes: ReadonlyArray<AccumulatedChangeRow>,
 ): ChatRestoreContextValue {
   return {
     accessRole: "owner",
@@ -157,6 +157,8 @@ function baseRestore(
     restoreActionPending: false,
     restoreCheckpoint: vi.fn().mockReturnValue(null),
     accumulatedFileChanges: changes,
+    undeliveredChangeCount: 0,
+    accumulatedSetComplete: true,
     revertFileChanges: vi.fn().mockReturnValue(null),
   };
 }
@@ -193,15 +195,17 @@ function todoItem(
   };
 }
 
-function fileChange(): AccumulatedFileChange {
+function fileChange(): AccumulatedChangeRow {
   return {
     filePath: "/repo/src/app.ts",
     operation: "edit",
     diffSource: "snapshot",
-    beforeContent: "old\n",
-    afterContent: "new\n",
     reason: "snapshot",
     undoable: true,
-    streamingCounts: null,
+    artifact: null,
+    counts: { additions: 1, deletions: 1 },
+    hasContents: true,
+    digest: null,
+    liveDiff: null,
   };
 }

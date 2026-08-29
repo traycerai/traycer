@@ -20,7 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { ChatStreamClientHandle } from "@/stores/chats/chat-session-store";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   __getChatSessionRegistryForTests,
@@ -340,14 +340,15 @@ const CHAT_RUN_SETTINGS: ChatRunSettings = {
 };
 
 function buildChatYMap(chat: EpicCanvasTileRef): Y.Map<unknown> {
+  const name = chat.name;
   const chatMap = new Y.Map<unknown>();
   chatMap.set("id", chat.id);
-  chatMap.set("title", chat.name);
+  chatMap.set("title", name);
   chatMap.set("parentId", null);
   chatMap.set("createdAt", 0);
   chatMap.set("updatedAt", 0);
   const messages = new Y.Array<unknown>();
-  messages.push([{ role: "user", content: `${chat.name} seed`, timestamp: 1 }]);
+  messages.push([{ role: "user", content: `${name} seed`, timestamp: 1 }]);
   chatMap.set("messages", messages);
   return chatMap;
 }
@@ -417,6 +418,7 @@ function buildUserSnapshotMessage(
           },
         ],
       },
+      browserAnnotations: [],
     },
     timestamp: index + 1,
     sessionAnchor: null,
@@ -454,6 +456,7 @@ function buildAssistantSnapshotMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -543,12 +546,11 @@ function installChatStreamFactory(
         emitChatSnapshot(chat, callbacks, messagesStore.get(chat.id));
       }
     }, 0);
-    const client: Pick<
-      ChatStreamClient,
-      "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
-    > = {
+    const client: ChatStreamClientHandle = {
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => true,
+      requestTranscriptRange: () => undefined,
+      requestResnapshot: () => undefined,
       close: () => {
         if (callbacksByChatId.get(chatId) === callbacks) {
           callbacksByChatId.delete(chatId);

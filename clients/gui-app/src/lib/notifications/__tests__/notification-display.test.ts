@@ -108,6 +108,7 @@ describe("notification display", () => {
           chatId: "chat-1",
         },
         feed: { source: "host", id: "n-1" },
+        chimeEventType: "done",
         originHostId: "origin-host-1",
       }),
       replaceKey: "host:chat:chat-1",
@@ -154,6 +155,7 @@ describe("notification display", () => {
         payload: buildNotificationActivationEnvelope({
           route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
           feed: { source: "app-local", id: entry.id },
+          chimeEventType: "failure",
           originHostId: "host-b",
         }),
       }),
@@ -283,6 +285,7 @@ describe("notification display", () => {
           chatId: "chat-1",
         },
         feed: { source: "host", id: "n-1" },
+        chimeEventType: "done",
         originHostId: "origin-host-1",
       }),
       replaceKey: "notification-batch",
@@ -855,6 +858,7 @@ describe("forwarded foreground display gate", () => {
             ? { kind: "epic", epicId: "epic-1" }
             : { kind: "chat", epicId: "epic-1", chatId },
         feed: { source: "cloud", id: "entry-1" },
+        chimeEventType: "done",
         originHostId: "origin-host-1",
       }),
       replaceKey: "host:chat:chat-1",
@@ -935,6 +939,7 @@ describe("forwarded foreground display gate", () => {
       payload: buildNotificationActivationEnvelope({
         route: { kind: "chat", epicId: "epic-1", chatId },
         feed: { source: "host", id: "n-1" },
+        chimeEventType: "done",
         originHostId: "origin-host-1",
       }),
     };
@@ -1063,6 +1068,7 @@ describe("forwarded foreground display gate", () => {
         payload: buildNotificationActivationEnvelope({
           route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
           feed: { source: "app-local", id: "terminal.closed:t-1" },
+          chimeEventType: "failure",
           originHostId: null,
         }),
         replaceKey: "terminal.closed:t-1",

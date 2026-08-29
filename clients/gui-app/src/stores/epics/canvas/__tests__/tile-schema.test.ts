@@ -488,7 +488,7 @@ describe("parseTileRef / serializeTileRef", () => {
     });
 
     expect(parsed).not.toBeNull();
-    expect(parsed?.name).toBe("traycer · Changes");
+    expect(parsed === null ? null : parsed.name).toBe("traycer · Changes");
   });
 
   it("rejects unknown tile kinds", () => {

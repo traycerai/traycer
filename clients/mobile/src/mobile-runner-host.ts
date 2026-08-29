@@ -68,6 +68,7 @@ import type {
   HostRestartRequestResult,
   IDeviceFlowHost,
   IDeviceDescriber,
+  IFileSaveHost,
   ILinkCodeScanner,
   ILinkLoginDeepLinkSource,
   INotificationHost,
@@ -170,6 +171,15 @@ export interface MobileRunnerHostOptions {
    * host is even built, since a cold launch delivers the URL once.
    */
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
+  /**
+   * Native save route for everything the GUI exports (artifact markdown, the
+   * usage image, a Mermaid PNG, a chat image), or `null` where the plugins it
+   * needs have no implementation - the dev web entry, tests. Constructed by
+   * the entry point for the same web-safety reason as the scanner above, and
+   * `null` is not a degradation there: a browser tab still has the File System
+   * Access API and `<a download>`, which is exactly what gui-app falls back to.
+   */
+  readonly fileSave: IFileSaveHost | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -215,12 +225,14 @@ export class MobileRunnerHost implements IRunnerHost {
     ): Promise<readonly string[]> => paths,
     readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
+  readonly fileSave: IFileSaveHost | null;
   readonly zoom = null;
   readonly service = null;
   readonly traycerCli = null;
   readonly migration = null;
   readonly hostManagement = null;
   readonly hostTray = null;
+  readonly browserView = null;
   readonly linkCodeScanner: ILinkCodeScanner | null;
   readonly deviceDescriber: IDeviceDescriber | null;
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
@@ -273,6 +285,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.linkCodeScanner = options.linkCodeScanner;
     this.deviceDescriber = options.deviceDescriber;
     this.linkLoginDeepLinks = options.linkLoginDeepLinks;
+    this.fileSave = options.fileSave;
     this.notifications = buildNotifications(options.pushRegistration);
     this.pushPermission = buildPushPermission(
       options.pushRegistration,
@@ -644,16 +657,12 @@ export class MobileRunnerHost implements IRunnerHost {
   }
 }
 
-// TEMPORARY: the DEPLOYED authn (verified 2026-08-14 against BOTH
-// authn.dev.traycer.ai and authn.traycer.ai: `/device/authorize` returns 400
-// "client_id must be 'cli' or 'desktop'") predates the "mobile" device client
-// kind, so sign in as "desktop" until the authn-v3 mobile client-kind work is
-// deployed. Flip back to "mobile" then - the approval-page copy and push-token
-// registration are keyed off it. The repo's authn-v3 already accepts "mobile";
-// only the deployment lags. NOTE the cloud /device page fires the
-// return-to-app deep link for both "desktop" and "mobile", so this override
-// does not affect the `return_scheme` behavior below.
-const DEVICE_FLOW_CLIENT_ID: DeviceClientId = "desktop";
+// The client kind this app signs in as. It labels the minted session on the
+// sessions page, keys the approval-page copy, and gates push-token
+// registration. The cloud /device page fires the return-to-app deep link for
+// this kind, so `return_scheme` behaves the same as a desktop sign-in.
+// Requires an authn that accepts the "mobile" device client kind.
+const DEVICE_FLOW_CLIENT_ID: DeviceClientId = "mobile";
 
 class MobileDeviceFlowHost implements IDeviceFlowHost {
   constructor(
@@ -1059,6 +1068,9 @@ function buildNotifications(
   push: MobilePushRegistration | null,
 ): INotificationHost {
   return {
+    // Phones expose permission state and the OS repair link together through
+    // `pushPermission`; duplicating that link here would split one capability.
+    systemSettings: null,
     // `show` stays a no-op ON PURPOSE: OS-level notifications on the phone
     // arrive as remote pushes from the cloud fan-out, not from the renderer's
     // display path - a foregrounded app shows its in-app surfaces instead.
@@ -1236,7 +1248,9 @@ class MobilePushPermissionHost implements IPushPermissionHost {
  * The shell's plugin set is kept SMALL rather than fixed at a number, and each
  * member earns its place by being the only way to reach an OS capability:
  * core, keyboard, push-notifications, app-launcher, secure-storage,
- * native-settings, device, barcode-scanner, network, and app. `@capacitor/app`
+ * native-settings, device, barcode-scanner, network, app, and the
+ * filesystem/share pair a WKWebView save has no browser route to (see
+ * `file-save.ts`). `@capacitor/app`
  * first earned its place because a URL the OS opens (a QR scanned by the
  * system camera) has no other route into JS (see `link-login-deep-links.ts`);
  * its lifecycle events are the second capability it is the only route to.

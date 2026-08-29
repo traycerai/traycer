@@ -52,6 +52,10 @@ export const MENTION_ATTRIBUTE_NAMES: ReadonlyArray<string> = [
   "terminalAgentId",
   "terminalId",
   "status",
+  // Browser tab reference (`ContextType.BrowserTab`). `url` is already listed
+  // below for GitHub; the browser-tab arm reuses it for the tab's address.
+  "tabId",
+  "sessionId",
   // GitHub PR/issue references. These names are the protocol serializer's
   // (`MentionAttrs`), not local ones: `formatMentionForLLMQuery` reads them off
   // the submitted node by name to build `@github-pr:org/repo#N [url=…]`.

@@ -32,7 +32,8 @@ export function ActiveAgentsPanel(props: {
   const [open, setOpen] = useState(false);
   // The root agent counts as running too when it is itself active (not just
   // idling while its sub-agents work).
-  const runningCount = props.descendants.length + (props.self.active ? 1 : 0);
+  const runningCount =
+    props.descendants.length + (props.self.activity === false ? 0 : 1);
 
   return (
     <Collapsible

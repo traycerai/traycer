@@ -218,6 +218,7 @@ import {
   chatSubscribeV15,
   chatSubscribeV16,
   chatSubscribeV17,
+  chatSubscribeV18,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -242,8 +243,10 @@ import {
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
+  hostStatusV13,
   hostStatusUpgradeV10ToV11,
   hostStatusUpgradeV11ToV12,
+  hostStatusUpgradeV12ToV13,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -258,7 +261,9 @@ import {
 } from "@traycer/protocol/host/identity/contracts";
 import {
   hostDoctorV10,
+  hostGetInstallationInfoUpgradeV10ToV11,
   hostGetInstallationInfoV10,
+  hostGetInstallationInfoV11,
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
@@ -266,6 +271,8 @@ import {
   hostUpdateCheckV10,
   hostUpdateCheckV11,
   hostUpdateInstallV10,
+  hostUpdateInstallV11,
+  hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
   lifecycleClaimShutdownUpgradeV10ToV11,
@@ -304,6 +311,10 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
+import {
+  chatLocateRowV10,
+  chatReadAccumulatedFileChangeV10,
+} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -470,6 +481,10 @@ import {
   terminalSubscribeV16,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
+  browserScreencastV1,
+  browserSessionsV1,
+} from "@traycer/protocol/host/browser/contracts";
+import {
   terminalPlainCloseDowngradeV21ToV10,
   terminalPlainCloseUpgradeV10ToV21,
   terminalPlainCloseV10,
@@ -539,6 +554,7 @@ import {
   resourcesSubscribeV13,
   resourcesSubscribeV14,
   resourcesKillV10,
+  resourcesListLocalServersV10,
 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
@@ -553,6 +569,7 @@ import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/workt
 import {
   worktreeDeleteByPathStreamV10,
   worktreeDeleteByPathStreamV11,
+  worktreeDeleteByPathStreamV12,
 } from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
 import { providersChangedV10 } from "@traycer/protocol/host/providers-changed-stream";
@@ -599,6 +616,7 @@ import {
   worktreeCreatePathsResponseSchema,
   worktreeDeleteRequestSchema,
   worktreeDeleteRequestSchemaV11,
+  worktreeDeleteRequestSchemaV12,
   worktreeDeleteResponseSchema,
   worktreeListHoldersRequestSchema,
   worktreeListHoldersResponseSchema,
@@ -1123,6 +1141,31 @@ export const worktreeDeleteUpgradeV10ToV11 = defineUpgradePath<
   upgradeRequest: (request) => ({
     ...request,
     stopOwners: false,
+  }),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `worktree.delete@1.2` - optional `expectedHoldersRevision`. Absent
+ * reproduces @1.1 (stop whatever the fresh inventory finds). Present
+ * with `stopOwners: true` is a digest-equality compare before teardown.
+ */
+export const worktreeDeleteV12 = defineRpcContract({
+  method: "worktree.delete",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: worktreeDeleteRequestSchemaV12,
+  responseSchema: worktreeDeleteResponseSchema,
+});
+
+export const worktreeDeleteUpgradeV11ToV12 = defineUpgradePath<
+  typeof worktreeDeleteV11,
+  typeof worktreeDeleteV12
+>({
+  from: worktreeDeleteV11.schemaVersion,
+  to: worktreeDeleteV12.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    expectedHoldersRevision: undefined,
   }),
   upgradeResponse: (response) => response,
 });
@@ -4132,7 +4175,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -4145,6 +4188,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: hostStatusV12,
           upgradeFromPreviousVersion: hostStatusUpgradeV11ToV12,
+        },
+        3: {
+          contract: hostStatusV13,
+          upgradeFromPreviousVersion: hostStatusUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -4245,11 +4292,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateInstallV11,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV10ToV11,
+          // The `dispatch-indeterminate` arm is response VALUE growth: a `@1.0`
+          // peer parses with its own schema, and a discriminated union refuses
+          // an unknown discriminator outright rather than ignoring it. So the
+          // arm is only safe if the host never sends it to such a peer, and
+          // this annotation is the reviewed claim that it does not.
+          //
+          // ⚠ TODAY THE CLAIM IS TRIVIALLY TRUE AND TOMORROW IT IS AN
+          // OBLIGATION. Nothing emits this arm yet — Ticket 06 added the
+          // decoder only, so that no `@1.1` peer generation exists that knows
+          // `attemptId` and cannot decode "there is no attempt id for this
+          // dispatch". When Ticket 07 wires the executor ACK and starts
+          // EMITTING it, that resolver must derive the arm from the version the
+          // caller negotiated and emit `cli-failed` (or whatever the ruling
+          // settles) to a `@1.0` caller. A post-hoc filter is not sufficient
+          // and neither is "we only call it from new clients": the validator
+          // cannot check this, which is exactly why it is written down here.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -4258,11 +4326,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.getInstallationInfo": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostGetInstallationInfoV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostGetInstallationInfoV11,
+          upgradeFromPreviousVersion: hostGetInstallationInfoUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -4788,6 +4860,45 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: { contract: chatForkGetV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The contents behind an accumulated-change summary on the windowed
+  // `chat.subscribe` line, which ships summaries and leaves the file bodies to
+  // be fetched on demand. Off-floor, so a GUI meeting an older host falls back
+  // to its legacy full-contents-in-snapshot path instead of losing the diff.
+  //
+  // Registered AHEAD of `chatSubscribeV18`, and that ordering was not an
+  // oversight: a stream minor negotiates to the highest the peers share, so
+  // registering that one IS the switch to windowed frames - it waited until
+  // the renderer could draw placeholder rows and drive viewport hydration. A
+  // unary method flips no negotiation - a client that never calls it cannot
+  // tell it exists.
+  "chat.readAccumulatedFileChange": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatReadAccumulatedFileChangeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Where a cross-tile jump target sits, for the two target kinds a client
+  // identifies by walking rendered models - which a COLD row does not have.
+  // Off-floor for the same reason as the read above: a GUI meeting an older
+  // host degrades to waiting for the row, which on a non-windowed host always
+  // arrives because that host serves the whole transcript.
+  "chat.locateRow": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatLocateRowV10, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
@@ -6717,6 +6828,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "resources.listLocalServers": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: resourcesListLocalServersV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // The human lifecycle controls for monitors and shells. Brand-new v1.0
   // methods on the same `degrade: unsupported` channel as `resources.kill`
   // above: a host without the managed-command subsystem simply lacks them.
@@ -7115,7 +7239,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.delete": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: worktreeDeleteV10,
@@ -7124,6 +7248,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: worktreeDeleteV11,
           upgradeFromPreviousVersion: worktreeDeleteUpgradeV10ToV11,
+        },
+        2: {
+          contract: worktreeDeleteV12,
+          upgradeFromPreviousVersion: worktreeDeleteUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -8338,10 +8466,11 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 /**
  * Combined streaming-RPC registry for the `/stream` WS manifest.
  *
- * One manifest per `/stream` WS: `epic.subscribe@1.0`,
- * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
- * `terminal.subscribe@1.0`, `git.subscribeStatus@1.3`,
- * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
+ * One manifest per `/stream` WS: `epic.subscribe@1.1`,
+ * `chat.subscribe@1.6`, `notifications.subscribe@1.1`,
+ * `terminal.subscribe@1.6`, `git.subscribeStatus@1.3`,
+ * `browser.sessions@1.0`, `browser.screencast@1.0`,
+ * `resources.subscribe@1.4`, `agent.inbox.subscribe@1.2`,
  * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`,
  * `pr.subscribeListForEpic@1.0`, `pr.subscribeDetail@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
@@ -8546,6 +8675,31 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: managedCommandSubscribeOutputV10,
+        },
+      },
+    },
+  },
+  "browser.sessions": {
+    1: {
+      // Shared-browser-runtime ticket 01: `browser.sessions` never shipped,
+      // so its prior in-repo minor history (@1.0-@1.4) is collapsed into one
+      // fresh @1.0 baseline carrying every frame kind - see the doc comment
+      // on `browserSessionsV1` in `contracts.ts`. Agent-browser PiP ticket 01
+      // extends that same 1.0 in place.
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserSessionsV1,
+        },
+      },
+    },
+  },
+  "browser.screencast": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserScreencastV1,
         },
       },
     },
@@ -8763,13 +8917,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "worktree.deleteByPath": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: worktreeDeleteByPathStreamV10,
         },
         1: {
           contract: worktreeDeleteByPathStreamV11,
+        },
+        2: {
+          contract: worktreeDeleteByPathStreamV12,
         },
       },
     },
@@ -8847,7 +9004,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -8872,6 +9029,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         7: {
           contract: chatSubscribeV17,
+        },
+        8: {
+          contract: chatSubscribeV18,
         },
       },
     },

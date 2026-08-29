@@ -200,7 +200,7 @@ export function useSurfaceHostClient(
 }
 
 export function useTabSurfaceKey(
-  kind: Extract<SurfaceKind, "file-tree" | "new-terminal">,
+  kind: Extract<SurfaceKind, "file-tree" | "new-terminal" | "browsers">,
   tabId: string,
 ): string {
   return tabSurfaceKey(kind, tabId);

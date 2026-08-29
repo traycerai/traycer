@@ -12,6 +12,7 @@ import {
   snapshotOwnerTeardownHolders,
   teardownHolderKey,
   teardownHolderSetDrifted,
+  teardownOwnerDisplayName,
   type OwnerTeardownSnapshotInput,
 } from "../owner-teardown-snapshot";
 
@@ -64,6 +65,17 @@ function input(
 describe("snapshotOwnerTeardownHolders", () => {
   it("returns nothing when the owner is idle with no shells", () => {
     expect(snapshotOwnerTeardownHolders(input({}))).toEqual([]);
+  });
+
+  it("names an untitled owner as This agent", () => {
+    expect(teardownOwnerDisplayName("")).toBe("This agent");
+    expect(teardownOwnerDisplayName("Untitled agent")).toBe("This agent");
+    expect(teardownOwnerDisplayName("Untitled chat")).toBe("This agent");
+    expect(
+      snapshotOwnerTeardownHolders(
+        input({ ownerLabel: "Untitled agent", hasActiveTurn: true }),
+      )[0]?.label,
+    ).toMatch(/^This agent is working/);
   });
 
   it("names a working chat turn and the agent.stop consequence", () => {
