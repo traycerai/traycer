@@ -248,6 +248,10 @@ function transientLiveSteerRowIds(
   );
 }
 
+function hasLiveSetupEvent(window: TranscriptWindow): boolean {
+  return window.liveEvents.some((event) => event.type.startsWith("setup."));
+}
+
 function isExplicitlyPendingOrStreaming(model: ChatMessageModel): boolean {
   return model.statusLabel === "Pending" || model.statusLabel === "Streaming";
 }
@@ -384,11 +388,13 @@ export function transcriptListRows(input: {
     // them too would draw the same history twice on skeleton-loss paths.
     const liveRowIds = liveRecordRowIds(window);
     const retainedSpanRowIds = spanRowIds(window.spans);
+    const liveSetup = hasLiveSetupEvent(window);
     let liveTransientSteerRowIds: ReadonlySet<string> | null = null;
     const unplacedRendered = rendered.filter((model) => {
       const liveBacked =
         isExplicitlyPendingOrStreaming(model) ||
         liveRowIds.has(model.id) ||
+        (liveSetup && model.id.startsWith("setup-card:")) ||
         (model.persistentMessageId === null &&
           (liveTransientSteerRowIds ??= transientLiveSteerRowIds(window)).has(
             model.id,

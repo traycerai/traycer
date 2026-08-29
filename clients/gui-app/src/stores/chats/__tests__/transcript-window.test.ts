@@ -2321,6 +2321,60 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
+  it("does not retire a finalized stand-in from a same-timestamp stale body", () => {
+    const turnId = "turn-tied-stale-serve";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [
+          {
+            ...assistantMessage(transientId, turnId, 2),
+            blocks: [
+              {
+                type: "text",
+                blockId: "block-1",
+                status: "completed",
+                timestamp: 2,
+                text: "done",
+                providerNotice: null,
+              },
+            ],
+          },
+        ],
+        events: [],
+      },
+    );
+
+    const delayed = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          {
+            ...assistantMessage("assistant-stale", turnId, 2),
+            blocks: [
+              {
+                type: "text",
+                blockId: "block-1",
+                status: "streaming",
+                timestamp: 2,
+                text: "done",
+                providerNotice: null,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(delayed.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
   it("does not retire a completion stand-in when its assistant row has no body", () => {
     const turnId = "turn-row-without-body";
     const transientId = transientLiveAssistantMessageId(turnId);
@@ -2669,7 +2723,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [
           {
-            ...assistantMessage("assistant-durable", turnId, 2),
+            ...assistantMessage("assistant-durable", turnId, 3),
             blocks: [{ ...block, status: "completed" }],
           },
         ],

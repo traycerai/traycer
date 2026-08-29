@@ -172,6 +172,38 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["P:0", `H:${assistantRowId(turnId)}`]);
   });
 
+  it("keeps a setup card projected from live events while invalidated", () => {
+    const setup: ChatEvent = {
+      eventId: "setup-live",
+      type: "setup.running",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const setupRowId = "setup-card:chat-1:3:2";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveEvents: [setup],
+      }),
+      rendered: [modelWithoutPersistentMessageId(setupRowId)],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", `H:${setupRowId}`]);
+  });
+
   it("leaves a partially-hydrated turn's unserved rows as placeholders", () => {
     // Codex P1 (#1459): hydrating ONE row of a steer-split assistant turn
     // pulls the turn's shared records, and rendering those projects EVERY row

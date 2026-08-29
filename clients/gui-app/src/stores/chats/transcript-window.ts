@@ -459,7 +459,10 @@ export function appendLiveRecords(
  */
 function pruneSupersededLiveRecords(
   window: TranscriptWindow,
-  freshlyServedAssistantTurns: ReadonlyMap<string, number>,
+  freshlyServedAssistantTurns: ReadonlyMap<
+    string,
+    Extract<Message, { role: "assistant" }>
+  >,
 ): TranscriptWindow {
   if (window.liveMessages.length === 0 && window.liveEvents.length === 0) {
     return window;
@@ -472,16 +475,22 @@ function pruneSupersededLiveRecords(
     }
     for (const event of span.events) spanEvents.add(event.eventId);
   }
-  const liveMessages = window.liveMessages.filter(
-    (message) =>
-      !spanMessages.has(message.messageId) &&
-      !(
-        message.role === "assistant" &&
-        isTransientLiveAssistantMessageId(message.messageId) &&
-        (freshlyServedAssistantTurns.get(assistantTurnKey(message)) ??
-          -Infinity) >= message.timestamp
-      ),
-  );
+  const liveMessages = window.liveMessages.filter((message) => {
+    if (spanMessages.has(message.messageId)) return false;
+    if (
+      message.role !== "assistant" ||
+      !isTransientLiveAssistantMessageId(message.messageId)
+    ) {
+      return true;
+    }
+    const served = freshlyServedAssistantTurns.get(assistantTurnKey(message));
+    return (
+      served === undefined ||
+      served.timestamp < message.timestamp ||
+      (served.timestamp === message.timestamp &&
+        !assistantRenderBodyEqual(served, message))
+    );
+  });
   const supersededEvents = window.liveEvents.filter(
     (event) => !spanEvents.has(event.eventId),
   );
@@ -513,26 +522,50 @@ function pruneSupersededLiveRecords(
   return { ...window, liveMessages, liveEvents };
 }
 
+function assistantRenderBodyEqual(
+  left: Extract<Message, { role: "assistant" }>,
+  right: Extract<Message, { role: "assistant" }>,
+): boolean {
+  return (
+    JSON.stringify([
+      left.blocks,
+      left.usage,
+      left.imageResolutions,
+      left.reasoningEffort,
+      left.serviceTier,
+    ]) ===
+    JSON.stringify([
+      right.blocks,
+      right.usage,
+      right.imageResolutions,
+      right.reasoningEffort,
+      right.serviceTier,
+    ])
+  );
+}
+
 function servedAssistantTurns(
   rowIds: readonly string[],
   messages: readonly Message[],
-): ReadonlyMap<string, number> {
-  const messageTimestamps = new Map<string, number>();
+): ReadonlyMap<string, Extract<Message, { role: "assistant" }>> {
+  const assistantMessages = new Map<
+    string,
+    Extract<Message, { role: "assistant" }>
+  >();
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     const turnKey = assistantTurnKey(message);
-    messageTimestamps.set(
-      turnKey,
-      Math.max(messageTimestamps.get(turnKey) ?? -Infinity, message.timestamp),
-    );
+    const current = assistantMessages.get(turnKey);
+    if (current === undefined || message.timestamp > current.timestamp) {
+      assistantMessages.set(turnKey, message);
+    }
   }
-  const turns = new Map<string, number>();
+  const turns = new Map<string, Extract<Message, { role: "assistant" }>>();
   for (const rowId of rowIds) {
     const turnKey = assistantRowTurnKey(rowId);
-    const timestamp =
-      turnKey === null ? undefined : messageTimestamps.get(turnKey);
-    if (turnKey !== null && timestamp !== undefined)
-      turns.set(turnKey, timestamp);
+    const message =
+      turnKey === null ? undefined : assistantMessages.get(turnKey);
+    if (turnKey !== null && message !== undefined) turns.set(turnKey, message);
   }
   return turns;
 }
@@ -1743,7 +1776,10 @@ function reconcileSpansWithSkeleton(
 ): TranscriptWindow {
   let changed = false;
   const kept: HydratedSpan[] = [];
-  const adoptedAssistantTurns = new Map<string, number>();
+  const adoptedAssistantTurns = new Map<
+    string,
+    Extract<Message, { role: "assistant" }>
+  >();
   for (const span of window.spans) {
     const disjoint =
       spanEnd(span) <= fromOrdinal || span.fromOrdinal >= toOrdinal;
@@ -1758,11 +1794,11 @@ function reconcileSpansWithSkeleton(
     const adopted = adoptSkeletonRowIds(window, span);
     if (adopted !== span) {
       changed = true;
-      for (const [turnKey, timestamp] of servedAssistantTurns(
+      for (const [turnKey, message] of servedAssistantTurns(
         adopted.rowIds,
         adopted.messages,
       )) {
-        adoptedAssistantTurns.set(turnKey, timestamp);
+        adoptedAssistantTurns.set(turnKey, message);
       }
     }
     kept.push(adopted);
