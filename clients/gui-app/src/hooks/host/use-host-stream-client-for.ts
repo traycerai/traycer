@@ -257,6 +257,11 @@ export function buildHostStreamClient(params: {
       // bearer at a wake-time re-attach revalidates + redials instead of
       // terminally closing the shared session (`RemoteSessionOptions.auth`).
       auth: params.auth,
+      // The same app-wide verdict the local branch passes below. A wrong wall
+      // clock wedges a remote session identically - it is the machine's clock,
+      // not the host's - and a user connected across a relay is the one least
+      // placed to guess why nothing works.
+      clock: appServerClock,
       rpcRegistry: hostRpcRegistry,
       streamRegistry: hostStreamRpcRegistry,
       webSocketFactory: browserStreamWebSocketFactory,
