@@ -136,9 +136,19 @@ describe("FolderLocationControl worktree path on touch", () => {
     expect(sheet.textContent).toContain(WORKTREE_PATH);
 
     // The sheet is rendered BY the menu row, so a menu that dismissed itself
-    // would take the sheet down with it. It survives because a modal dialog
-    // above suppresses the menu's outside-pointerdown dismissal.
+    // would take the sheet down with it.
     expect(screen.getByTestId("folder-location-existing-list")).toBeTruthy();
+
+    // The load-bearing case, and the one the press alone does not reach: a
+    // pointer landing INSIDE the sheet is, to the menu, a pointer outside
+    // itself. What stops the menu dismissing on it is a layer-index predicate
+    // in Radix's dismissable layer, not hit-testing - the modal sheet is the
+    // highest layer with outside pointer events disabled, so the menu's own
+    // outside handler is skipped. That predicate is plain JS and runs here
+    // exactly as it does in a browser.
+    fireEvent.pointerDown(sheet, { pointerId: 2, pointerType: "touch" });
+    expect(screen.getByTestId("folder-location-existing-list")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
 
     // And the press must not ALSO pick the worktree it was inspecting - the
     // browser still delivers a click to the menu item afterwards.
