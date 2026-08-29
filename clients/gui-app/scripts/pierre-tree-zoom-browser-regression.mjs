@@ -310,9 +310,23 @@ async function connectCdp(url) {
     const socket = new WebSocket(url);
     const pending = new Map();
     let nextId = 0;
-    socket.addEventListener("error", () =>
-      reject(new Error("CDP socket failed")),
-    );
+    const failPending = (error) => {
+      for (const request of pending.values()) request.reject(error);
+      pending.clear();
+    };
+    const connectTimer = setTimeout(() => {
+      reject(new Error("CDP connect timed out"));
+      socket.close();
+    }, 15_000);
+    socket.addEventListener("error", () => {
+      const error = new Error("CDP socket failed");
+      reject(error);
+      failPending(error);
+    });
+    socket.addEventListener("close", () => {
+      clearTimeout(connectTimer);
+      failPending(new Error("CDP socket closed"));
+    });
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data));
       if (typeof message.id !== "number") return;
@@ -323,6 +337,7 @@ async function connectCdp(url) {
       else request.reject(new Error(message.error.message));
     });
     socket.addEventListener("open", () => {
+      clearTimeout(connectTimer);
       resolve({
         send(method, params = {}) {
           return new Promise((requestResolve, requestReject) => {
