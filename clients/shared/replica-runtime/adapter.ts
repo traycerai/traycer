@@ -93,6 +93,13 @@ export interface AdapterHost<TEvent> {
    * requests replacement while the control lane is still reporting progress,
    * and the runtime holds both until the post-migration epoch is known.
    */
+  /**
+   * Takes an authority reason, NOT the provenance-carrying `ReplicaResetCause`,
+   * and the narrowing is deliberate: an adapter speaks for the authority by
+   * construction, so it must not be able to originate a client-initiated
+   * reseed. The runtime widens this to `{ origin: "authority", reason }` when
+   * it drives the reset.
+   */
   requestReplacement(reason: ReplicaReplacementReason): void;
 }
 

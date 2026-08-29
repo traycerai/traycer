@@ -417,6 +417,14 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const previous = buildRetentionHandle(EPIC, true, 3);
     seedEpicTitle(previous.handle, "Rewrite the onboarding");
+    // Re-assert AFTER the doc write, not before. The seed above is a local
+    // mutation, so it publishes - and a publish re-states every field the
+    // records projection owns, `unsyncedQueueSize` among them. That is the
+    // sink's contract (whole values, never patches) and the reason nothing in
+    // production writes a projected field out of band; this fixture does, so it
+    // has to do it last. The subject of the test is unchanged: a retained
+    // handle whose published state reports three queued edits.
+    previous.handle.store.setState({ isDirty: true, unsyncedQueueSize: 3 });
     registry.acquireMounted(EPIC, () => previous.handle);
     const next = buildRetentionHandle(EPIC, false, 0);
 

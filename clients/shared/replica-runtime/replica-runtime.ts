@@ -19,7 +19,7 @@ import type {
 } from "./adapter";
 import type { FreshnessReport } from "./freshness";
 import type { MemoryAccountant } from "./memory-accountant";
-import type { PlaneId, Replica, ReplicaReplacementReason } from "./replica";
+import type { PlaneId, Replica, ReplicaResetCause } from "./replica";
 import type { RuntimeEnvironment } from "./runtime-environment";
 
 /**
@@ -74,9 +74,15 @@ export interface ReplicaRuntime {
 
   /**
    * Reset one plane. Used for a targeted degrade (resume-too-old on one lane)
-   * that must not disturb its siblings.
+   * that must not disturb its siblings, and for a locally requested reseed of a
+   * single plane.
+   *
+   * Takes the provenance-carrying cause rather than an authority reason,
+   * because this is the route a client-initiated fresh-snapshot request travels
+   * - a recovery affordance reaches a replica through the runtime, not around
+   * it.
    */
-  replacePlane(planeId: PlaneId, reason: ReplicaReplacementReason): void;
+  replacePlane(planeId: PlaneId, cause: ReplicaResetCause): void;
 
   /**
    * Reset every plane as one unit.
@@ -87,7 +93,7 @@ export interface ReplicaRuntime {
    * independently is what stops one lane resuming into the old epoch while its
    * sibling is still migrating.
    */
-  replaceAll(reason: ReplicaReplacementReason): void;
+  replaceAll(cause: ReplicaResetCause): void;
 
   /**
    * Per-class freshness, never collapsed into one verdict. See `freshness.ts`

@@ -48,9 +48,11 @@ export type {
   PlaneId,
   Replica,
   ReplicaApplyOutcome,
+  ReplicaClientResetIntent,
   ReplicaDataClass,
   ReplicaIgnoreReason,
   ReplicaReplacementReason,
+  ReplicaResetCause,
 } from "./replica";
 
 export type {

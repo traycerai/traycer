@@ -12,7 +12,7 @@
  *     DOM and no real timers — the worker-portability requirement made
  *     executable.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, type Mock } from "vitest";
 
 import {
   createMonotonicSequence,
@@ -27,9 +27,19 @@ import { createTransactionalProjectionSink } from "../projection-sink";
 import { unknownFreshness } from "../freshness";
 import { createGenerationGuard, guardHandler } from "../generation-guard";
 import { sessionKeyOf, type SessionRegistryPolicy } from "../session-registry";
-import type { Replica, ReplicaApplyOutcome } from "../replica";
+import type {
+  Replica,
+  ReplicaApplyOutcome,
+  ReplicaReplacementReason,
+  ReplicaResetCause,
+} from "../replica";
 import type { AdapterHost, LaneAdapter } from "../adapter";
-import type { LeaseMaterializer } from "../lease";
+import type {
+  LeaseGrant,
+  LeaseHandle,
+  LeaseMaterializer,
+  LeaseRegistry,
+} from "../lease";
 import type { DocReplicaEvent } from "../replica-events";
 
 // ─── createMonotonicSequence ────────────────────────────────────────────────
@@ -378,10 +388,14 @@ function createFakeEnvironment(): RuntimeEnvironment & {
 /** A minimal in-memory `Replica<FakeEvent, FakeProjection>` for one records plane. */
 function createFakeReplica(
   planeId: string,
-): Replica<FakeEvent, FakeProjection> {
+): Replica<FakeEvent, FakeProjection> & {
+  readonly resetCauses: ReplicaResetCause[];
+} {
   const rows = new Map<string, { revision: number; row: FakeRow }>();
   let disposed = false;
+  let seeded = false;
   let currentWatermark: LaneCursor | null = null;
+  const resetCauses: ReplicaResetCause[] = [];
   const sink = createTransactionalProjectionSink<FakeProjection>([], () => {
     // Reference sink; the smoke test reads through `replica.sink.read()`.
   });
@@ -389,6 +403,7 @@ function createFakeReplica(
   return {
     planeId,
     dataClass: "records",
+    resetCauses,
     apply(event: FakeEvent): ReplicaApplyOutcome {
       if (disposed) return { kind: "ignored", reason: "disposed" };
       const held = rows.get(event.rowId);
@@ -400,6 +415,7 @@ function createFakeReplica(
       } else {
         rows.delete(event.rowId);
       }
+      seeded = true;
       return { kind: "applied", cursor: currentWatermark };
     },
     project(): void {
@@ -415,11 +431,24 @@ function createFakeReplica(
       return currentWatermark;
     },
     freshness() {
-      return unknownFreshness(planeId, "records");
+      // Not hardcoded to "unknown": the reset tests below rely on this
+      // actually flipping to "live" after an apply and back after a reset.
+      if (!seeded) return unknownFreshness(planeId, "records");
+      return {
+        planeId,
+        dataClass: "records",
+        status: "live",
+        watermark: currentWatermark,
+        observedAtMs: null,
+        trust: null,
+        degradedReason: null,
+      };
     },
-    reset(): void {
+    reset(cause: ReplicaResetCause): void {
+      resetCauses.push(cause);
       rows.clear();
       currentWatermark = null;
+      seeded = false;
       sink.publish([]);
     },
     dispose(): void {
@@ -432,7 +461,9 @@ function createFakeReplica(
 /** A minimal in-memory `AdapterHost<FakeEvent>` wrapping a replica. */
 function createFakeAdapterHost(
   environment: RuntimeEnvironment,
-  replica: Replica<FakeEvent, FakeProjection>,
+  replica: Replica<FakeEvent, FakeProjection> & {
+    reset(cause: ReplicaResetCause): void;
+  },
 ): AdapterHost<FakeEvent> & { readonly outcomes: ReplicaApplyOutcome[] } {
   const outcomes: ReplicaApplyOutcome[] = [];
   return {
@@ -447,8 +478,13 @@ function createFakeAdapterHost(
     reportStatus(): void {
       // Smoke test does not exercise connection status.
     },
-    requestReplacement(): void {
-      // Smoke test does not exercise replacement.
+    requestReplacement(reason: ReplicaReplacementReason): void {
+      // The runtime side of the seam: `AdapterHost.requestReplacement` is
+      // deliberately narrow — an adapter can only hand it an authority
+      // reason — and it is the runtime, not the adapter, that turns that
+      // into the ONE reset entry point. A client-requested reseed can never
+      // reach the replica through this path.
+      replica.reset({ origin: "authority", reason });
     },
   };
 }
@@ -456,6 +492,7 @@ function createFakeAdapterHost(
 /** A minimal in-memory `LaneAdapter<FakeEvent>` with a test-only frame pump. */
 function createFakeLaneAdapter(laneId: string): LaneAdapter<FakeEvent> & {
   pushFrame(events: readonly FakeEvent[]): void;
+  triggerReplacementRequest(reason: ReplicaReplacementReason): void;
   readonly detachReasons: string[];
 } {
   let host: AdapterHost<FakeEvent> | null = null;
@@ -478,6 +515,14 @@ function createFakeLaneAdapter(laneId: string): LaneAdapter<FakeEvent> & {
     pushFrame(events: readonly FakeEvent[]): void {
       if (host === null) throw new Error("adapter not attached");
       for (const event of events) host.emit(event);
+    },
+    triggerReplacementRequest(reason: ReplicaReplacementReason): void {
+      if (host === null) throw new Error("adapter not attached");
+      // `AdapterHost.requestReplacement` is the only path an adapter has to
+      // this — its signature accepts a `ReplicaReplacementReason`, never a
+      // `ReplicaResetCause`, so a client-origin cause cannot even be
+      // constructed at this call site.
+      host.requestReplacement(reason);
     },
   };
 }
@@ -750,6 +795,10 @@ function createFakeDocReplica(planeId: string): Replica<
       return unknownFreshness(planeId, "doc");
     },
     reset(): void {
+      // The doc fake does not assert on reset provenance itself — the
+      // records fake and the AdapterHost-wiring test below cover
+      // `ReplicaResetCause`; this signature change is exercised here only to
+      // prove the doc class implements the same one entry point.
       heldGuid = null;
       tokens = new Set();
       divergent = false;
@@ -901,5 +950,229 @@ describe("doc-class Replica conformance", () => {
       cursor: null,
     });
     expect(transientUnavailableOutcome.kind).not.toBe("requires-replacement");
+  });
+});
+
+// ─── Replica.reset — one entry point, provenance in the argument ───────────
+
+describe("Replica.reset provenance", () => {
+  it("distinguishes an authority reset from a client reset after the fact, with the same empty end state", () => {
+    const replica = createFakeReplica("epic-1");
+    replica.apply({
+      kind: "upsert",
+      rowId: "row-1",
+      revision: 1,
+      row: { label: "x" },
+    });
+    replica.project();
+    expect(replica.freshness().status).toBe("live");
+
+    replica.reset({ origin: "authority", reason: "resume-too-old" });
+    expect(replica.resetCauses).toEqual([
+      { origin: "authority", reason: "resume-too-old" },
+    ]);
+    expect(replica.sink.read()).toEqual([]);
+    expect(replica.watermark()).toBeNull();
+    expect(replica.freshness().status).toBe("unknown");
+
+    replica.apply({
+      kind: "upsert",
+      rowId: "row-2",
+      revision: 1,
+      row: { label: "y" },
+    });
+    replica.project();
+
+    replica.reset({ origin: "client", intent: "fresh-snapshot-requested" });
+    // Distinguishable after the fact — the whole point of moving provenance
+    // into the argument instead of a second reset method.
+    expect(replica.resetCauses).toEqual([
+      { origin: "authority", reason: "resume-too-old" },
+      { origin: "client", intent: "fresh-snapshot-requested" },
+    ]);
+    // Provenance changes what may be CLAIMED, never what HAPPENS: the client
+    // reset leaves the replica in exactly the same empty state as the
+    // authority reset did above.
+    expect(replica.sink.read()).toEqual([]);
+    expect(replica.watermark()).toBeNull();
+    expect(replica.freshness().status).toBe("unknown");
+  });
+
+  it("routes an adapter-requested replacement through AdapterHost to an authority-origin reset only", () => {
+    const environment = createFakeEnvironment();
+    const replica = createFakeReplica("epic-2");
+    const host = createFakeAdapterHost(environment, replica);
+    const adapter = createFakeLaneAdapter("epic.state.subscribe@1.0");
+    adapter.attach(host);
+
+    // `AdapterHost.requestReplacement` is deliberately narrow — it accepts
+    // only a `ReplicaReplacementReason` — so there is no call an adapter can
+    // make here that reaches the replica as a client-origin reset.
+    adapter.triggerReplacementRequest("resume-too-old");
+
+    expect(replica.resetCauses).toEqual([
+      { origin: "authority", reason: "resume-too-old" },
+    ]);
+  });
+});
+
+// ─── LeaseRegistry / LeaseGrant conformance — demand vs residency ──────────
+//
+// The rule: a lease is a statement of DEMAND, not a handle on bytes, and
+// there is exactly one demand book. `leaseCount` tracks demand;
+// `materializedIds` tracks residency; the two disagree for exactly as long
+// as a resource is "awaiting-seed".
+
+function createSeedableLeaseMaterializer<
+  TResource,
+>(): LeaseMaterializer<TResource> & {
+  seed(resourceId: string, resource: TResource): void;
+  // `Mock`, not `ReturnType<typeof vi.fn>` — the repo's type-safety lint bans
+  // `ReturnType<...>` in every `.ts` file, and this package grants no test
+  // exemption.
+  readonly demote: Mock;
+} {
+  const seeded = new Map<string, TResource>();
+  return {
+    demote: vi.fn(),
+    seed(resourceId: string, resource: TResource): void {
+      seeded.set(resourceId, resource);
+    },
+    async materialize(resourceId: string): Promise<TResource | null> {
+      return seeded.get(resourceId) ?? null;
+    },
+  };
+}
+
+/** A minimal in-memory `LeaseRegistry<TResource>` driving a `LeaseMaterializer`. */
+function createFakeLeaseRegistry<TResource>(
+  materializer: LeaseMaterializer<TResource>,
+): LeaseRegistry<TResource> {
+  const leaseCounts = new Map<string, number>();
+  const materialized = new Map<string, TResource>();
+  let disposed = false;
+
+  function currentCount(resourceId: string): number {
+    return leaseCounts.get(resourceId) ?? 0;
+  }
+
+  function makeLease(resourceId: string): LeaseHandle {
+    let released = false;
+    return {
+      resourceId,
+      release(): void {
+        if (released) return;
+        released = true;
+        const next = currentCount(resourceId) - 1;
+        if (next <= 0) leaseCounts.delete(resourceId);
+        else leaseCounts.set(resourceId, next);
+      },
+      isReleased(): boolean {
+        return released;
+      },
+    };
+  }
+
+  return {
+    async acquire(resourceId: string): Promise<LeaseGrant<TResource>> {
+      if (disposed) {
+        // The only arm with no lease: no demand was registered.
+        return { kind: "unavailable", reason: "disposed" };
+      }
+      // Demand is counted BEFORE materialisation completes, and stays
+      // counted whether or not anything comes back below.
+      leaseCounts.set(resourceId, currentCount(resourceId) + 1);
+      const lease = makeLease(resourceId);
+      const resource = await materializer.materialize(resourceId);
+      if (resource === null) {
+        return { kind: "awaiting-seed", lease };
+      }
+      materialized.set(resourceId, resource);
+      return { kind: "granted", lease, resource };
+    },
+    peek(resourceId: string): TResource | null {
+      return materialized.get(resourceId) ?? null;
+    },
+    leaseCount(resourceId: string): number {
+      return currentCount(resourceId);
+    },
+    materializedIds(): readonly string[] {
+      return Array.from(materialized.keys());
+    },
+    demoteIdle(): void {
+      for (const [resourceId, resource] of materialized) {
+        if (currentCount(resourceId) === 0) {
+          materializer.demote(resourceId, resource);
+          materialized.delete(resourceId);
+        }
+      }
+    },
+    dispose(): void {
+      disposed = true;
+      for (const [resourceId, resource] of materialized) {
+        materializer.demote(resourceId, resource);
+      }
+      materialized.clear();
+      leaseCounts.clear();
+    },
+  };
+}
+
+describe("LeaseRegistry / LeaseGrant conformance", () => {
+  it("registers demand even when nothing is materialisable yet, and releases it like a granted lease", async () => {
+    const materializer = createSeedableLeaseMaterializer<{ bytes: number }>();
+    const registry = createFakeLeaseRegistry(materializer);
+
+    const grant = await registry.acquire("doc-cold");
+    expect(grant.kind).toBe("awaiting-seed");
+    if (grant.kind !== "awaiting-seed")
+      throw new Error("expected awaiting-seed");
+
+    // Demand is on the books even though nothing materialised.
+    expect(registry.leaseCount("doc-cold")).toBe(1);
+    // Demand and residency are different questions: absent from the
+    // materialised set while awaiting seed.
+    expect(registry.materializedIds()).not.toContain("doc-cold");
+
+    grant.lease.release();
+    expect(registry.leaseCount("doc-cold")).toBe(0);
+  });
+
+  it("materialises under a still-held lease without cooling the resource — the stranded-editor bug", async () => {
+    const materializer = createSeedableLeaseMaterializer<{ bytes: number }>();
+    const registry = createFakeLeaseRegistry(materializer);
+
+    const firstGrant = await registry.acquire("doc-cold");
+    if (firstGrant.kind !== "awaiting-seed") {
+      throw new Error("expected awaiting-seed");
+    }
+
+    // The seed arrives while the first lease is still held.
+    materializer.seed("doc-cold", { bytes: 64 });
+    const secondGrant = await registry.acquire("doc-cold");
+    expect(secondGrant.kind).toBe("granted");
+    expect(registry.materializedIds()).toContain("doc-cold");
+    expect(registry.leaseCount("doc-cold")).toBe(2);
+
+    // The bug this seam exists to prevent: a resource that has just
+    // materialised under demand that was already counted must not be
+    // treated as idle and cooled. Assert with a spy, not merely that a
+    // value came back.
+    expect(materializer.demote).not.toHaveBeenCalled();
+
+    firstGrant.lease.release();
+    if (secondGrant.kind === "granted") secondGrant.lease.release();
+  });
+
+  it("carries no lease on the unavailable arm — the only arm with no demand registered", async () => {
+    const materializer = createSeedableLeaseMaterializer<{ bytes: number }>();
+    const registry = createFakeLeaseRegistry(materializer);
+    registry.dispose();
+
+    const grant = await registry.acquire("doc-cold");
+    expect(grant.kind).toBe("unavailable");
+    expect(registry.leaseCount("doc-cold")).toBe(0);
+    // Runtime shape, not just the discriminant: no `lease` property at all.
+    expect("lease" in grant).toBe(false);
   });
 });

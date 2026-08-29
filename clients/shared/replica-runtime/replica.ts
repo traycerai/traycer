@@ -83,6 +83,40 @@ export type ReplicaReplacementReason =
   | "security-epoch-changed";
 
 /**
+ * A reseed this client asked for, with nothing wrong upstream.
+ *
+ * Separate from {@link ReplicaReplacementReason} because every member of that
+ * type is a statement about the AUTHORITY - its epoch moved, its history no
+ * longer reaches back this far, it migrated. None of them is true when a user
+ * hits a recovery affordance, and passing one anyway (`"resume-too-old"` is the
+ * tempting one) puts a fabricated authority-side event into logs, telemetry and
+ * the replay harness, where nothing downstream can tell it from a real one.
+ */
+export type ReplicaClientResetIntent =
+  /**
+   * A fresh snapshot was requested locally - the user's recovery affordance, or
+   * a caller that has decided its view is not trustworthy.
+   */
+  "fresh-snapshot-requested";
+
+/**
+ * Why a replica is being reset, and by whom.
+ *
+ * ONE type with the provenance as its discriminant, rather than a second reset
+ * method beside the first. Two entry points is the shape that drifts: a guard
+ * added to one, telemetry added to the other, and after a while the two answers
+ * to "why is this replica empty" disagree. Here there is one way in, and
+ * `origin` is a field every consumer can read.
+ *
+ * The two arms deliberately name their payload differently (`reason` vs
+ * `intent`) so neither can be passed for the other by rearranging a literal -
+ * the provenance is structural, not a convention someone has to remember.
+ */
+export type ReplicaResetCause =
+  | { readonly origin: "authority"; readonly reason: ReplicaReplacementReason }
+  | { readonly origin: "client"; readonly intent: ReplicaClientResetIntent };
+
+/**
  * Why a decoded event was NOT applied.
  *
  * Ignoring is the normal, correct outcome for a large fraction of frames on a
@@ -188,8 +222,13 @@ export interface Replica<TEvent, TProjection> {
    * would drop every subscriber. The projection published immediately after a
    * reset is the empty one, and freshness returns to `"unknown"` - a reset
    * replica must not keep asserting the watermark it no longer holds.
+   *
+   * The ONE reset entry point, for both authority-driven replacement and a
+   * locally requested reseed. They behave identically - the replica is empty
+   * either way - and differ only in what may be claimed about why, which is
+   * what {@link ReplicaResetCause}'s `origin` carries.
    */
-  reset(reason: ReplicaReplacementReason): void;
+  reset(cause: ReplicaResetCause): void;
 
   /**
    * Terminal. Releases every budget charge and every lease this replica holds.

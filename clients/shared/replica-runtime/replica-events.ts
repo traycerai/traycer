@@ -346,7 +346,7 @@ export interface DocAwarenessEvent {
  * reachable state. It must stay distinguishable from an empty body: a consumer
  * that treats ready-but-unseeded as an empty document renders a blank editor
  * and exports an empty file over real content. This is the same distinction
- * `LeaseGrant`'s `"unseeded"` arm exists to preserve.
+ * `LeaseGrant`'s `"awaiting-seed"` arm exists to preserve.
  */
 export interface DocReadyEvent {
   readonly kind: "doc-ready";

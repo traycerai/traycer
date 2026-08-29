@@ -28,26 +28,56 @@ export interface LeaseHandle {
   isReleased(): boolean;
 }
 
+/**
+ * The result of asking for a lease.
+ *
+ * ## Demand and resource are different questions
+ *
+ * The governing rule, and the one this type got wrong on its first pass: **a
+ * lease is a statement of DEMAND, not a handle on bytes.** Whether anything is
+ * materialisable right now is a separate fact, and it changes on its own
+ * schedule.
+ *
+ * The order that makes this load-bearing is the normal one, not an edge case:
+ * a room reports ready independently of any bytes arriving, an editor mounts
+ * and takes its lease, and only the NEXT snapshot brings content. The lease is
+ * precisely what tells that snapshot to materialise the resource hot instead of
+ * filing it cold - so a grant that refused to register demand until bytes
+ * existed would strand the editor that is waiting for them, and force its plane
+ * to keep a second demand counter of its own.
+ *
+ * **There is exactly one demand book.** Two places demand can be registered can
+ * disagree, and a disagreement here is unfixable after the fact: one book says
+ * pin, the other says evict. Every arm below that registers demand carries the
+ * lease that represents it, and the only arm without a lease is the one where
+ * no demand was registered at all.
+ */
 export type LeaseGrant<TResource> =
   | {
       readonly kind: "granted";
-      readonly resource: TResource;
       readonly lease: LeaseHandle;
+      readonly resource: TResource;
     }
   /**
-   * There is nothing to materialise for this id.
+   * Demand is registered; there is nothing to materialise YET.
    *
-   * NOT an error, and NOT an empty resource. The distinction is load-bearing:
-   * a room reports `"ready"` on first observation independently of any bytes
-   * arriving, so there is a real window in which the resource is ready and no
-   * bytes exist anywhere. Fabricating an empty doc there hands the caller a
-   * live-but-EMPTY body that reads as a real, empty one - export writes an
-   * empty file past its "still loading" guard, and an editor binds a blank
-   * document. An empty resource and an unseeded resource must stay
-   * distinguishable, so this arm returns no lease at all.
+   * NOT an error, and emphatically NOT an empty resource. That distinction is
+   * why this arm exists rather than fabricating a blank one: an empty resource
+   * reads as real, so an export writes an empty file past its "still loading"
+   * guard and an editor binds a blank document over content that was merely
+   * late. An absent resource and an empty one must stay distinguishable.
+   *
+   * The holder releases this lease exactly as it would a granted one. When the
+   * seed arrives, the resource materialises under the demand already counted
+   * here - so it is hot and pinned immediately, and never cooled in the gap.
+   * Holders learn it arrived through their plane's own signal; this seam
+   * deliberately does not add a second notification channel.
    */
-  | { readonly kind: "unseeded" }
-  /** The registry is disposed, or acquisition was cancelled. */
+  | { readonly kind: "awaiting-seed"; readonly lease: LeaseHandle }
+  /**
+   * No lease, because no demand was registered: the registry is disposed, or
+   * acquisition was cancelled. The only arm a caller has nothing to release.
+   */
   | { readonly kind: "unavailable"; readonly reason: string };
 
 /**
@@ -60,8 +90,10 @@ export type LeaseGrant<TResource> =
  */
 export interface LeaseMaterializer<TResource> {
   /**
-   * `null` means unseeded - see {@link LeaseGrant}. Rejecting is for genuine
-   * failures only.
+   * `null` means "nothing to materialise yet" and produces an
+   * `"awaiting-seed"` grant - see {@link LeaseGrant}. It is a normal answer,
+   * not a failure, and must never be an empty resource. Rejecting is for
+   * genuine failures only.
    */
   materialize(resourceId: string): Promise<TResource | null>;
 
@@ -121,10 +153,25 @@ export interface LeaseRegistry<TResource> {
    */
   peek(resourceId: string): TResource | null;
 
-  /** Outstanding leases on a resource. A leased resource is never cooled. */
+  /**
+   * Outstanding leases on a resource. A leased resource is never cooled.
+   *
+   * Counts demand, NOT materialisation: a resource nobody has bytes for yet can
+   * legitimately have leases. That is what makes this the query the seeding
+   * path asks - "did anyone ask for this while it was absent?" - to decide
+   * whether an arriving snapshot materialises hot or is filed cold. A plane
+   * that answered that from its own counter instead would be the second demand
+   * book this interface exists to prevent.
+   */
   leaseCount(resourceId: string): number;
 
-  /** Ids currently materialised. For telemetry and the memory accountant. */
+  /**
+   * Ids currently materialised. For telemetry and the memory accountant.
+   *
+   * Strictly the materialised set, so an id under an `"awaiting-seed"` lease is
+   * absent from it - there is nothing resident to account for. Do not use this
+   * to answer "is anyone holding this"; that is {@link leaseCount}.
+   */
   materializedIds(): readonly string[];
 
   /**
