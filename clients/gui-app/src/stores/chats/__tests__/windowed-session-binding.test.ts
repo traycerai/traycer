@@ -139,6 +139,7 @@ function assistantMessage(messageId: string, timestamp: number): Message {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }

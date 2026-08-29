@@ -86,6 +86,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }

@@ -391,6 +391,7 @@ describe("transcriptListRows", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      envCredentialVar: null,
       imageResolutions: [],
     };
     const projectedRowId = assistantRowId(turnId);
@@ -433,6 +434,7 @@ describe("transcriptListRows", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      envCredentialVar: null,
       imageResolutions: [],
     };
     const rows = transcriptListRows({
@@ -652,6 +654,7 @@ describe("transcriptListRows", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      envCredentialVar: null,
       imageResolutions: [],
     };
     const rows = transcriptListRows({
@@ -717,6 +720,7 @@ describe("transcriptListRows", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      envCredentialVar: null,
       imageResolutions: [],
     };
     const rows = transcriptListRows({
@@ -767,6 +771,7 @@ describe("transcriptListRows", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      envCredentialVar: null,
       imageResolutions: [],
     };
     const steeredUser: Extract<Message, { role: "user" }> = {
@@ -875,6 +880,7 @@ describe("transcriptListRows", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      envCredentialVar: null,
       imageResolutions: [],
     };
     const rows = transcriptListRows({
