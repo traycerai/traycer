@@ -2951,6 +2951,31 @@ function heldMessageCopy(
 }
 
 /**
+ * Does the window hold the active turn's assistant message ANYWHERE - live,
+ * fresh span, or stale span?
+ *
+ * The precondition for skipping the in-flight supersede on a streaming echo:
+ * the skip is sound because the delta stream rewrites the held copy in place,
+ * and a copy that is not held is not being rewritten - deltas for it are
+ * dropped, so an answer generated before them carries blocks the client can
+ * never recover and MUST be discarded and re-asked.
+ *
+ * O(records the window holds); the caller gates it on there being an
+ * outstanding request at all, so it never runs on the bare per-token path.
+ */
+export function holdsActiveTurnAssistantMessage(
+  window: TranscriptWindow,
+  activeTurnId: string | null,
+): boolean {
+  if (activeTurnId === null) return false;
+  const matches = (message: Message): boolean =>
+    message.role === "assistant" && assistantTurnKey(message) === activeTurnId;
+  if (window.liveMessages.some(matches)) return true;
+  if (window.spans.some((span) => span.messages.some(matches))) return true;
+  return window.staleSpans.some((span) => span.messages.some(matches));
+}
+
+/**
  * While a turn streams, the held copy of its assistant message outranks any
  * served one.
  *
@@ -3152,8 +3177,17 @@ export function hydratedRowContext(
   const out: Record<string, TranscriptRowContext> = {};
   // Stale first, so a fresh span's context overwrites a carried copy of the
   // same row - the map is keyed by row id, which is the axis stale spans are
-  // consumed on.
-  for (const span of window.staleSpans) {
+  // consumed on. Within the stale tier, oldest serve first: overlapping
+  // carried spans (a partial refetch followed by another rebase) can share a
+  // row, and the newest serve's context must win exactly as
+  // {@link dedupeByFreshestSpan} resolves the row's body.
+  const stale =
+    window.staleSpans.length > 1
+      ? [...window.staleSpans].sort(
+          (left, right) => left.servedAt - right.servedAt,
+        )
+      : window.staleSpans;
+  for (const span of stale) {
     for (const rowId of Object.keys(span.rowContext)) {
       out[rowId] = span.rowContext[rowId];
     }
@@ -3326,15 +3360,36 @@ export function hydratedRecords(window: TranscriptWindow): {
    */
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
 } {
-  // Stale spans AFTER the fresh ones, so a record served since the rebase
-  // takes both position and body: `servedAt` rides the window clock, which is
-  // continuous across a rebase, so every post-rebase serve outranks every
-  // carried copy. They must be here at all because the row merger can only
-  // draw a stale row whose records reach `rendered`.
+  // Fresh and stale merged in TRANSCRIPT order, because this function's
+  // contract is transcript order and `dedupeByFreshestSpan` fixes each
+  // record's POSITION at first encounter (only the body follows `servedAt`).
+  // Stale spans keep their previous-coordinate `fromOrdinal`, which is the
+  // best transcript-position estimate the client has for them - a completion
+  // rebase preserves prefix ordering - while their carry array is LRU-ordered
+  // and must not be walked as-is. Fresh spans win ties so a re-served row's
+  // position comes from the current coordinates. The bodies are unaffected:
+  // `servedAt` rides the window clock, continuous across a rebase, so every
+  // post-rebase serve outranks every carried copy. Stale spans must be here
+  // at all because the row merger can only draw a stale row whose records
+  // reach `rendered`.
   const spans =
     window.staleSpans.length === 0
       ? window.spans
-      : [...window.spans, ...window.staleSpans];
+      : [
+          ...window.spans.map((span, index) => ({ span, index, stale: 1 })),
+          ...window.staleSpans.map((span, index) => ({
+            span,
+            index,
+            stale: 2,
+          })),
+        ]
+          .sort(
+            (left, right) =>
+              left.span.fromOrdinal - right.span.fromOrdinal ||
+              left.stale - right.stale ||
+              left.index - right.index,
+          )
+          .map((entry) => entry.span);
   return {
     messages: dedupeByFreshestSpan(
       spans,

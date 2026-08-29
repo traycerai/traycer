@@ -1467,10 +1467,32 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
     );
   }
 
+  /** A tail whose span HOLDS the active turn's streaming assistant message. */
+  function seatedTailHoldingTurn(
+    harness: WindowedHarness,
+    turnId: string,
+  ): void {
+    harness.callbacks().onWindowedSnapshot(
+      windowedSnapshot({
+        epoch: 1,
+        rowCount: 40,
+        tailFromOrdinal: 20,
+        tailMessages: [
+          userMessage("tail", 20),
+          assistantWithBlocks("assistant-live", 21, turnId, []),
+        ],
+        accumulatedFileChangeCount: 0,
+      }),
+    );
+  }
+
   it("a streaming echo does not supersede in-flight hydration", () => {
     const harness = createWindowedHarness();
     try {
-      seatedTail(harness);
+      // The tail span holds the streaming turn's record - the ordinary state
+      // mid-turn, and the precondition for the echo exemption: only a HELD
+      // copy is being rewritten in place by the delta stream.
+      seatedTailHoldingTurn(harness, "t-9");
       raiseActiveTurn(harness.callbacks(), "t-9");
 
       harness.handle.store
@@ -1574,6 +1596,65 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
       const window = harness.handle.store.getState().transcriptWindow;
       expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
       // And re-planned, because ordinal 10 is still a gap.
+      expect(harness.rangeRequests.length).toBeGreaterThan(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a streaming echo still supersedes when the turn's record is not held", () => {
+    // The cold-row boundary of the exemption: a copy the window does not
+    // hold is not being rewritten - its deltas are dropped - so an answer
+    // generated before them carries blocks the client can never recover.
+    // Accepting it would seat the older body permanently; it must be
+    // discarded and re-asked exactly as before the exemption existed.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 10,
+                  entry: {
+                    rowId: assistantRowId("t-9"),
+                    createdAt: 10,
+                    role: "assistant",
+                    byteLength: 4096,
+                    bodyDigest: "d10-cold",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [assistantWithBlocks("assistant-10", 10, "t-9", [])],
+        }),
+      );
+
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
       expect(harness.rangeRequests.length).toBeGreaterThan(1);
     } finally {
       harness.handle.dispose();

@@ -46,6 +46,7 @@ import {
   emptyTranscriptWindow,
   evictTranscriptWindowToBudget,
   hydratedRecords,
+  holdsActiveTurnAssistantMessage,
   hydratedRowContext,
   isActiveTurnStreamingEcho,
   isTailHydrated,
@@ -3790,10 +3791,21 @@ export function createChatSessionStoreWithNotificationDependencies(
         // answer in flight for that turn's rows is not stale. Discarding it
         // anyway is a starvation loop on a chat dominated by one long turn -
         // every answer arrives after the next echo and hydration never lands.
-        const streamingEcho = isActiveTurnStreamingEcho(
-          frame.changes,
-          activeTurnId,
-        );
+        //
+        // But ONLY while the turn's record is actually HELD. A copy the
+        // window does not hold is not being rewritten - its deltas are
+        // dropped - so an answer generated before them carries blocks the
+        // client can never recover, and it must be superseded and re-asked
+        // exactly as before. The holds scan is gated on there being an
+        // outstanding request at all, so it never runs on the bare per-token
+        // path.
+        const streamingEcho =
+          isActiveTurnStreamingEcho(frame.changes, activeTurnId) &&
+          (outstandingHydrationRequests.size === 0 ||
+            holdsActiveTurnAssistantMessage(
+              get().transcriptWindow,
+              activeTurnId,
+            ));
         if (!streamingEcho) {
           // BEFORE the fold, because it reads the epoch the in-flight request
           // was framed against and the fold can move it.
