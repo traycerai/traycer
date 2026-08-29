@@ -619,6 +619,65 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
   // already covers. A named reasoned absence beats a green test that restates
   // its neighbour.
 
+  // ── OWED-AT-FLIP #2: the retention decision precedes disposal ──────────────
+  //
+  // `replaceMounted` reads `previousHandle.store.getState().isDirty` to decide
+  // whether the outgoing handle is the only copy of its edits and must be
+  // retained. That read has to happen while the handle is still LIVE. Dispose
+  // it first and the decision is made against a torn-down store - which
+  // answers "not dirty" and discards the only copy, silently, with the
+  // re-point still reporting success.
+  //
+  // The ordering is structural today (disposal is a CONSEQUENCE of
+  // `replaceMounted`, reached through the registry's own replace path), so
+  // this pin exists to keep it that way when the flip moves the tail around:
+  // §8's constraint was that `replaceMounted` precedes dispose in the async
+  // tail, and an async tail is exactly where an await lands in front of it.
+  it("still retains when the outgoing store would read CLEAN after teardown", () => {
+    // ONE pin, not two. A companion asserting "a dirty handle is retained"
+    // was written first and deleted: it restates `reports the retained buffer`
+    // above, and the ablation proved it - disposing before the decision left
+    // it GREEN while this one reddened. A test that cannot fail for the reason
+    // it is named after is the thing this block already refuses to keep.
+    //
+    // The discriminating case. This handle reports dirty while live and clean
+    // once disposed - which is what a real torn-down store does, and what
+    // makes the ordering observable at all. If anything ever disposes before
+    // the decision, this is the fixture that notices: the row disappears while
+    // every other retention test stays green, because theirs keep reporting
+    // dirty after teardown and cannot tell the two orders apart.
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const built = buildRetentionHandle(EPIC, true, 6);
+    built.handle.store.setState({ isDirty: true, unsyncedQueueSize: 6 });
+    const outgoing: OpenEpicStoreHandle = {
+      ...built.handle,
+      get epicId() {
+        return built.handle.epicId;
+      },
+      get doc() {
+        return built.handle.doc;
+      },
+      get awareness() {
+        return built.handle.awareness;
+      },
+      get store() {
+        return built.handle.store;
+      },
+      dispose: () => {
+        built.handle.store.setState({ isDirty: false, unsyncedQueueSize: 0 });
+        built.handle.dispose();
+      },
+    };
+    registry.acquireMounted(EPIC, () => outgoing);
+    const next = buildRetentionHandle(EPIC, false, 0);
+
+    expect(repoint(registry, outgoing, next.handle, IDENTITY_A)).toBe(true);
+
+    const rows = registry.getUnsyncedEdits();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.queueSize).toBe(6);
+  });
+
   it("refuses to merge across an owner-identity rotation on the same host", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const first = buildRetentionHandle(EPIC, true, 2);
