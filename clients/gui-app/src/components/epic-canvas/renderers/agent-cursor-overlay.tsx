@@ -2,9 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MousePointer2 } from "lucide-react";
 import {
   containFit,
+  type AgentCursorPosition,
   type ScreencastFrameSize,
 } from "@/lib/browser-view/sessions/screencast-input-encoding";
-import type { AgentCursorPosition } from "@/lib/browser-view/sessions/use-screencast-session";
 import { cn } from "@/lib/utils";
 
 /** How long the cursor lingers after the agent's last pointer event. */
@@ -28,8 +28,8 @@ type TrackedCursor = {
  * nothing here.
  *
  * Purely decorative - `pointer-events: none`, no arm/epoch involvement, and it
- * dies with the tile because the frames that feed it ride the tile's own
- * screencast subscription.
+ * dies with whichever subscription feeds it: the tile's own for a tile, PiP's
+ * own for the PiP mirror, which mounts this too.
  */
 export function AgentCursorOverlay(props: {
   readonly cursor: AgentCursorPosition | null;

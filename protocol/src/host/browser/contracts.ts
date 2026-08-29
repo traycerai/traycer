@@ -971,6 +971,12 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       packetsLost: z.number().int().nonnegative(),
       jitterMs: z.number().nonnegative(),
       roundTripTimeMs: z.number().nonnegative(),
+      // Reserved, and null on every frame today: capture-to-paint needs a
+      // host-stamped capture timestamp on the frame to diff against, which
+      // the display-plane epic does not add (the client's only candidate,
+      // `requestVideoFrameCallback` metadata, times decode - a fabricated
+      // number). The field stays on the wire so the eventual host stamp is an
+      // additive change on both ends rather than a schema break.
       glassToGlassMs: z.number().nonnegative().nullable(),
       // getStats() candidate-pair `candidateType` of the active receive
       // path (only observable receiver-side) - the "ICE path taken" metric.

@@ -399,6 +399,64 @@ describe("webrtc media registry", () => {
     await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
   });
 
+  /**
+   * The reconnect shape: the stream the round was negotiated over dies, the
+   * tile re-subscribes, and the host's fresh subscription offers a new round
+   * over a NEW reply channel. There is no resume - the registry's whole job
+   * here is that the surviving entry adopts the new round and never answers
+   * back down the dead one.
+   */
+  it("adopts a superseding offer on a fresh port after the transport dies", async () => {
+    const key = nextKey();
+    const harness = peerHarness();
+    const deadPort = recordingPort();
+    const held = acquireBrowserMediaEntry({
+      key,
+      createPeer: harness.createPeer,
+    });
+
+    held.entry.acceptOffer({ negotiationId: 4, sdp: "first", port: deadPort });
+    await vi.advanceTimersByTimeAsync(0);
+    harness.peers[0]?.handlers.onStream(fakeStream("s"));
+    held.entry.reportFirstDecodedFrame();
+    expect(deadPort.states).toEqual([
+      { negotiationId: 4, state: "live", reason: null },
+    ]);
+
+    // Transport death: the stream is gone, so nothing tells the registry. The
+    // media survives the tile's remount, and the re-subscription's offer -
+    // higher round, new port - is what re-establishes video.
+    const livePort = recordingPort();
+    held.entry.acceptOffer({ negotiationId: 9, sdp: "second", port: livePort });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.peers).toHaveLength(2);
+    expect(harness.peers[0]?.closeCount).toBe(1);
+    expect(livePort.answers).toEqual([
+      { negotiationId: 9, sdp: "answer-for:second" },
+    ]);
+    expect(deadPort.answers).toHaveLength(1);
+
+    harness.peers[1]?.handlers.onStream(fakeStream("s2"));
+    held.entry.reportFirstDecodedFrame();
+    expect(livePort.states).toEqual([
+      { negotiationId: 9, state: "live", reason: null },
+    ]);
+    expect(held.entry.getSnapshot()).toMatchObject({
+      phase: "streaming",
+      negotiationId: 9,
+    });
+    // The dead round's channel is never written to again, not even by its own
+    // peer falling over afterwards.
+    harness.peers[0]?.handlers.onFailure("transport-gone");
+    expect(deadPort.states).toHaveLength(1);
+    expect(deadPort.candidates).toEqual([]);
+
+    held.release();
+    await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    expect(harness.peers[1]?.closeCount).toBe(1);
+  });
+
   it("keeps separate keys on separate peers", async () => {
     const first = nextKey();
     const second = nextKey();

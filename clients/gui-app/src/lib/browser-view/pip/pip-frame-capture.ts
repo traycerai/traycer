@@ -21,6 +21,10 @@ import {
   PIP_HEADLESS_MAX_WIDTH,
   PIP_HEADLESS_QUALITY,
 } from "@/lib/browser-view/pip/pip-headless-stream";
+import type {
+  AgentCursorPosition,
+  ScreencastFrameSize,
+} from "@/lib/browser-view/sessions/screencast-input-encoding";
 import {
   applyPipStreamHealth,
   completePipConversion,
@@ -36,10 +40,38 @@ interface OwnedPipFrame {
   readonly src: string;
 }
 
+/**
+ * The non-pixel state PiP's own subscription carries: the geometry the agent
+ * cursor is normalized against, and the cursor itself. Both are scoped to the
+ * selection they arrived for, exactly as the frame is.
+ *
+ * No epoch gating, unlike the tile: `shouldAcceptAgentCursorFrame` only
+ * rejects while the SUBSCRIBER's capture mode is `video`, and PiP's never is -
+ * it does not negotiate, so the host keeps casting JPEG to it (ticket 12).
+ */
+interface PipFrameMeta {
+  readonly selectionId: string;
+  readonly frameSize: ScreencastFrameSize | null;
+  readonly cursor: AgentCursorPosition | null;
+}
+
+type PipMetaUpdate =
+  | { readonly kind: "frameSize"; readonly frameSize: ScreencastFrameSize }
+  | {
+      readonly kind: "cursor";
+      readonly cursor: Omit<AgentCursorPosition, "id">;
+    };
+
+export interface PipPreview {
+  readonly src: string | null;
+  readonly frameSize: ScreencastFrameSize | null;
+  readonly cursor: AgentCursorPosition | null;
+}
+
 export function usePipOwnedFrame(
   epicId: string,
   snapshot: PipSnapshot,
-): string | null {
+): PipPreview {
   const runnerHost = useRunnerHostOrNull();
   const {
     captureTarget,
@@ -62,6 +94,8 @@ export function usePipOwnedFrame(
     displayedSelectionId,
     selectionId,
   );
+  const [meta, setMeta] = useState<PipFrameMeta | null>(null);
+  const cursorSerialRef = useRef(0);
 
   // One arm for both transports. Every value below is render-stable (the
   // binding comes from the Electron-tab directory store, the client from the
@@ -77,12 +111,29 @@ export function usePipOwnedFrame(
         return { selectionId, src };
       });
     };
+    const onMeta = (update: PipMetaUpdate): void => {
+      setMeta((previous) => {
+        const base =
+          previous?.selectionId === selectionId
+            ? previous
+            : { selectionId, frameSize: null, cursor: null };
+        if (update.kind === "frameSize") {
+          return { ...base, frameSize: update.frameSize };
+        }
+        cursorSerialRef.current += 1;
+        return {
+          ...base,
+          cursor: { ...update.cursor, id: cursorSerialRef.current },
+        };
+      });
+    };
     if (binding !== null && bridge !== null) {
       return startNativePipCapture({
         binding,
         bridge,
         epicId,
         selectionId,
+        onMeta,
         onUrl,
       });
     }
@@ -91,6 +142,7 @@ export function usePipOwnedFrame(
       client,
       epicId,
       selectionId,
+      onMeta,
       onUrl,
       sessionId,
       tabId,
@@ -107,7 +159,15 @@ export function usePipOwnedFrame(
     tabId,
   ]);
 
-  return frameSrcFor(owned, displayedSelectionId);
+  // Deliberately unmemoized: the consumer is one un-memoized component, so a
+  // fresh object costs nothing and `useMemo` would only add a dependency list
+  // to keep honest.
+  const scoped = meta?.selectionId === displayedSelectionId ? meta : null;
+  return {
+    src: frameSrcFor(owned, displayedSelectionId),
+    frameSize: scoped?.frameSize ?? null,
+    cursor: scoped?.cursor ?? null,
+  };
 }
 
 function pipCaptureCoordinates(snapshot: PipSnapshot): {
@@ -181,6 +241,7 @@ function startNativePipCapture(input: {
   readonly bridge: BrowserViewBridge;
   readonly epicId: string;
   readonly selectionId: string;
+  readonly onMeta: (update: PipMetaUpdate) => void;
   readonly onUrl: (src: string) => void;
 }): () => void {
   let disposed = false;
@@ -194,6 +255,7 @@ function startNativePipCapture(input: {
       selectionId: input.selectionId,
       frame,
       jpegBytes,
+      onMeta: input.onMeta,
       onUrl: input.onUrl,
     });
   };
@@ -226,6 +288,7 @@ function startHeadlessPipCapture(input: {
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly selectionId: string;
+  readonly onMeta: (update: PipMetaUpdate) => void;
   readonly onUrl: (src: string) => void;
   readonly sessionId: string;
   readonly tabId: string;
@@ -246,6 +309,7 @@ function startHeadlessPipCapture(input: {
         selectionId: input.selectionId,
         frame,
         jpegBytes,
+        onMeta: input.onMeta,
         onUrl: input.onUrl,
       });
     },
@@ -261,8 +325,31 @@ function applyCaptureFrame(input: {
   readonly selectionId: string;
   readonly frame: BrowserScreencastServerFrame;
   readonly jpegBytes: Uint8Array | null;
+  readonly onMeta: (update: PipMetaUpdate) => void;
   readonly onUrl: (url: string) => void;
 }): void {
+  if (input.frame.kind === "started" || input.frame.kind === "resized") {
+    input.onMeta({
+      kind: "frameSize",
+      frameSize: {
+        width: input.frame.frameWidth,
+        height: input.frame.frameHeight,
+      },
+    });
+    return;
+  }
+  if (input.frame.kind === "agentCursor") {
+    input.onMeta({
+      kind: "cursor",
+      cursor: {
+        type: input.frame.type,
+        normalizedX: input.frame.normalizedX,
+        normalizedY: input.frame.normalizedY,
+        label: input.frame.label,
+      },
+    });
+    return;
+  }
   if (input.frame.kind === "stalled") {
     applyPipStreamHealth(input.epicId, input.selectionId, "stale");
     return;

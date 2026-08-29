@@ -1,4 +1,7 @@
-import type { BrowserScreencastClientFrame } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserScreencastAgentCursorType,
+  BrowserScreencastClientFrame,
+} from "@traycer/protocol/host/browser/contracts";
 import { SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
 import { hasPlatformModKey } from "@/lib/keybindings/chord";
 
@@ -47,6 +50,23 @@ export type ScreencastInputFrame =
 export interface ScreencastFrameSize {
   readonly width: number;
   readonly height: number;
+}
+
+/**
+ * Where the agent driving a tab last pointed. Lives beside
+ * {@link ScreencastFrameSize} because the two are read together: the overlay
+ * maps this through that geometry, the exact inverse of the pointer path
+ * below. Every screencast surface produces one - the tile from its session,
+ * PiP from its own subscription - so it cannot belong to either.
+ */
+export interface AgentCursorPosition {
+  readonly type: BrowserScreencastAgentCursorType;
+  /** Normalized [0,1] against the surface the host mapped it to. */
+  readonly normalizedX: number;
+  readonly normalizedY: number;
+  readonly label: string;
+  /** Distinguishes consecutive identical positions (a click at rest). */
+  readonly id: number;
 }
 
 interface PointerLike {

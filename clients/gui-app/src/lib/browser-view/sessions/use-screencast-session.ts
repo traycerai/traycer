@@ -10,7 +10,6 @@ import {
 } from "react";
 import type {
   BrowserNavState,
-  BrowserScreencastAgentCursorType,
   BrowserScreencastCaptureMode,
   BrowserScreencastClientFrame,
   BrowserScreencastServerFrame,
@@ -35,7 +34,10 @@ import {
   type ScreencastOverlayHandlers,
   type ScreencastSessionRefs,
 } from "@/lib/browser-view/sessions/screencast-controller";
-import type { ScreencastFrameSize } from "@/lib/browser-view/sessions/screencast-input-encoding";
+import type {
+  AgentCursorPosition,
+  ScreencastFrameSize,
+} from "@/lib/browser-view/sessions/screencast-input-encoding";
 import {
   createVideoPlaneSession,
   JPEG_VIEW,
@@ -53,6 +55,10 @@ const DEFAULT_MAX_HEIGHT = 720;
 const DEFAULT_QUALITY = 70;
 const STALE_WITHOUT_FRAME_MS = 8_000;
 const VIEWPORT_DEBOUNCE_MS = 200;
+
+// Re-exported: the type now lives beside `ScreencastFrameSize`, which every
+// consumer reads it with, but the tile side knows it as this hook's output.
+export type { AgentCursorPosition };
 
 export type {
   ScreencastDialog,
@@ -121,16 +127,6 @@ export interface ScreencastSession {
   readonly onFocusExit: (relatedTarget: EventTarget | null) => void;
   readonly overlayHandlers: ScreencastOverlayHandlers;
   readonly imeHandlers: ScreencastImeHandlers;
-}
-
-export interface AgentCursorPosition {
-  readonly type: BrowserScreencastAgentCursorType;
-  /** Normalized [0,1] against the surface the host mapped it to. */
-  readonly normalizedX: number;
-  readonly normalizedY: number;
-  readonly label: string;
-  /** Distinguishes consecutive identical positions (a click at rest). */
-  readonly id: number;
 }
 
 interface ScreencastRenderState {
