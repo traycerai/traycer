@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 
@@ -43,6 +44,7 @@ function fakeOpenEpicHandle(id: string): OpenEpicStoreHandle & {
     requestFreshSnapshot: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
     disposeCount: 0,
   };
   return h;

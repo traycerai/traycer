@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
@@ -337,6 +338,9 @@ function buildHeaderEpicHandle(
     isDirty: false,
     unsyncedQueueSize: 0,
     bindingVersion: 0,
+    installedArm: null,
+    chatIngestSeq: 0,
+    tuiAgentIngestSeq: 0,
   };
   const storeCallable = (_selector: unknown): unknown => state;
   const storeBase: unknown = Object.assign(storeCallable, {
@@ -359,6 +363,7 @@ function buildHeaderEpicHandle(
     requestFreshSnapshot: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
   };
 }
 

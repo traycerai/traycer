@@ -15,7 +15,8 @@
  *     React remount token and stays on this side (the runtime publishes a
  *     monotonic `bindingEpoch` and knows nothing about remounts); the auth store
  *     is read here and handed in as a getter, because a runtime scheduled for a
- *     Web Worker cannot import a React store.
+ *     Web Worker cannot import type { EpicAdapterArm } from "./runtime/epic-adapter-selection";
+import a React store.
  *  3. **Delivery.** Subscription, equality-based re-render skipping and the
  *     batching that keeps a multi-plane frame at one `setState` are consumer
  *     concerns by contract.
@@ -204,6 +205,8 @@ export interface OpenEpicState {
    */
   readonly chatRecordListAuthoritative: boolean;
   /** Projected ingest counters - see `EpicRecordsProjection`. */
+  /** Projected adapter arm - see `EpicControlProjection`. */
+  readonly installedArm: EpicAdapterArm | null;
   readonly chatIngestSeq: number;
   readonly tuiAgentIngestSeq: number;
   /**
@@ -1094,9 +1097,24 @@ export function createOpenEpicStore(
           getArtifactBodyAwareness: (artifactId) =>
             runtime.getArtifactBodyAwareness(artifactId),
           getArtifactBodyAvailability: (artifactId) =>
-            runtime.getArtifactBodyAvailability(artifactId),
-          getArtifactBodyDocKey: (artifactId) =>
-            runtime.getArtifactBodyDocKey(artifactId),
+            // Zero new payload: the runtime's own implementation was already a
+            // projection read - `sink.read().artifactRooms.stateByArtifactId[id]
+            // ?? "unavailable"` (`epic-rooms-replica.ts:411`). This is the same
+            // expression against the same slice, one layer up, so the value and
+            // its default are identical rather than merely equivalent.
+            get().artifactRooms.stateByArtifactId[artifactId] ?? "unavailable",
+          getArtifactBodyDocKey: (artifactId) => {
+            // The runtime's own rule, against projected inputs: the lanes arm
+            // keys the tier by artifact id, `@1` keys it by the artifact's
+            // ROOM. `artifactRoomId` is already projected (`types.ts:46`) with
+            // the same `length > 0` guard the doc read applies.
+            const state = get();
+            if (state.installedArm === "lanes") return artifactId;
+            const artifact = state.artifacts.byId[artifactId];
+            if (artifact === undefined) return null;
+            const roomId = artifact.artifactRoomId;
+            return roomId !== null && roomId.length > 0 ? roomId : null;
+          },
           acquireArtifactBodyLease: (artifactId) =>
             runtime.acquireArtifactBodyLease(artifactId),
           readArtifactTitle: (artifactId) => {

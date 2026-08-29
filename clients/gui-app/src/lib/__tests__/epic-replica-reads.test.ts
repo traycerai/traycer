@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
 import { describe, expect, it, vi } from "vitest";
@@ -38,6 +39,7 @@ function createHandle(state: FakeState): OpenEpicStoreHandle {
     requestFreshSnapshot: () => {},
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
   };
 }
 

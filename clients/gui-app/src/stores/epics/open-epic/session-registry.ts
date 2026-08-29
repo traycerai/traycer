@@ -3,7 +3,6 @@ import type {
   OpenEpicState,
   OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
-import * as Y from "yjs";
 import {
   createSessionRegistry,
   type SessionRegistry,

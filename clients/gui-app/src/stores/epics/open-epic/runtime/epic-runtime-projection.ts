@@ -14,6 +14,7 @@
  * names these fields, and the store shape follows. Nothing here imports the
  * store, which is what finally breaks the projector's circular import.
  */
+import type { EpicAdapterArm } from "./epic-adapter-selection";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicCloudSyncStatus,
@@ -184,6 +185,7 @@ export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
   ...EMPTY_PROJECTED_SLICES,
   chatRecords: EMPTY_CHATS_SLICE,
   chatRecordListAuthoritative: false,
+  installedArm: null,
   chatIngestSeq: 0,
   tuiAgentIngestSeq: 0,
   chatRetractions: EMPTY_CHAT_RETRACTIONS,
@@ -236,6 +238,21 @@ export const EMPTY_ROOMS_PROJECTION: EpicRoomsProjection = Object.freeze({
 // ─── Control plane ────────────────────────────────────────────────────────
 
 export interface EpicControlProjection {
+  /**
+   * Which adapter arm is installed, projected.
+   *
+   * `null` before the first selection. A READ of runtime state that the store
+   * needs synchronously - `getArtifactBodyDocKey` answers the artifact id on
+   * the lanes arm and the artifact's ROOM id on `@1` - so it belongs in the
+   * projection rather than in a call into the replica.
+   *
+   * Published through `delivery.publish`, which takes a
+   * `Partial<EpicRuntimeProjection>` and therefore reaches any member. The
+   * per-replica sinks are typed to their own sub-projection, so the runtime -
+   * which is what owns the arm - could not have published this through
+   * `records.sink` without putting a selection fact on the records slice.
+   */
+  readonly installedArm: EpicAdapterArm | null;
   readonly permissionRole: PermissionRole | null;
   /**
    * VISIBLE connection status: `deriveConnectionStatus(hostTransportStatus,

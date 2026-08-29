@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -454,6 +455,9 @@ function createDirtyEpicHandle(
     doc,
     awareness,
     bindingVersion: 0,
+    installedArm: null,
+    chatIngestSeq: 0,
+    tuiAgentIngestSeq: 0,
     ...EMPTY_PROJECTED_SLICES,
     chatRecords: EMPTY_CHATS_SLICE,
     chatRecordListAuthoritative: true,
@@ -554,6 +558,7 @@ function createDirtyEpicHandle(
     requestFreshSnapshot: () => undefined,
     isClean: () => !store.getState().isDirty,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
   };
 }
 

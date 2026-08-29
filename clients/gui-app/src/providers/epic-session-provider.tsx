@@ -898,16 +898,24 @@ export function EpicSessionProvider(
       // edits" for the length of the window, and retaining a duplicate is
       // precisely what pins an epic as permanently unsyncable. See the
       // registry's own comment on `editsTransferredToReplacement`.
-      void transferThenComplete(shouldTransferEdits);
+      // Narrowed HERE, in the synchronous half, and passed in. `current` is a
+      // `let` in the enclosing scope and `targetHostId` is `string | null`, so
+      // TypeScript cannot carry either narrowing across the tail's `await` -
+      // and a `!` inside the tail would assert a fact the await can genuinely
+      // invalidate. The tail receives values that were already proven.
+      if (current === null || targetHostId === null) return;
+      void transferThenComplete(shouldTransferEdits, current, targetHostId);
     };
 
     async function transferThenComplete(
       shouldTransferEdits: boolean,
+      outgoing: MountedSessionState,
+      hostId: string,
     ): Promise<void> {
       let editsTransferredToReplacement = false;
       if (shouldTransferEdits) {
         try {
-          const update = await current.handle.encodeRootState();
+          const update = await outgoing.handle.encodeRootState();
           // `true`: LOCAL_ORIGIN, so the union routes through the
           // replacement's normal local-update path and unacknowledged edits
           // survive for recovery.
@@ -937,13 +945,13 @@ export function EpicSessionProvider(
       // rather than recomputed, so the two can never disagree about what
       // happened to this document.
       const previousDisposition = {
-        hostStamp: getEpicSessionHandleHostId(current.handle),
-        ownerIdentityKey: current.ownerIdentityKey,
+        hostStamp: getEpicSessionHandleHostId(outgoing.handle),
+        ownerIdentityKey: outgoing.ownerIdentityKey,
         editsTransferredToReplacement,
       };
       const replaced = registry.replaceMounted(
         epicId,
-        current.handle,
+        outgoing.handle,
         nextHandle,
         previousDisposition,
       );
@@ -953,21 +961,21 @@ export function EpicSessionProvider(
         // failed so the retry affordance exists, instead of an `establishing`
         // that nothing will ever advance.
         const winner = registry.peek(epicId);
-        if (winner !== null && winner !== current.handle) {
+        if (winner !== null && winner !== outgoing.handle) {
           adoptWinner(winner);
           return;
         }
         nextHandle.dispose();
         presentSession({
           kind: "failed",
-          targetHostId,
+          hostId,
           originalHostId: originalHostIdRef.current,
         });
         return;
       }
       const nextSession = {
         handle: nextHandle,
-        hostId: targetHostId,
+        hostId: hostId,
         // The captured reading describes the host this session was on when
         // the re-point STARTED, not `targetHostId` - so recording it here
         // pairs the replacement's handle with the previous host's key. The
@@ -982,7 +990,7 @@ export function EpicSessionProvider(
         // post-move key to record at all - one mechanism for both, which is
         // why an eager post-move read would not have been enough.
         ownerIdentityKey: ownerIdentityKeyForHost(
-          targetHostId,
+          hostId,
           ownerIdentityKey,
           ownerIdentityKeyHostId,
         ),
@@ -991,7 +999,7 @@ export function EpicSessionProvider(
       setSession(nextSession);
       presentSession({
         kind: "ready",
-        targetHostId,
+        hostId,
         originalHostId: originalHostIdRef.current,
       });
     }

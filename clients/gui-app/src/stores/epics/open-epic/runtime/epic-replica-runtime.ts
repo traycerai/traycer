@@ -951,6 +951,7 @@ export function createEpicReplicaRuntime(
     const transition = planEpicAdapterTransition(installedArm, verdict);
     if (transition.steps.length === 0) {
       installedArm = transition.installed;
+      options.delivery.publish({ installedArm });
       return;
     }
     for (const step of transition.steps) {
@@ -972,6 +973,7 @@ export function createEpicReplicaRuntime(
       }
     }
     installedArm = transition.installed;
+    options.delivery.publish({ installedArm });
   }
 
   function applySelection(): void {

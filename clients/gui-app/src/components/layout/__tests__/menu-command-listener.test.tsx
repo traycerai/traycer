@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import {
   afterEach,
   beforeEach,
@@ -229,6 +230,7 @@ function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
     requestFreshSnapshot: () => undefined,
     isClean: () => false,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
   };
 }
 

@@ -49,6 +49,31 @@ function openSession(epicId: string): {
   return { handle, sent };
 }
 
+describe("the projected adapter arm", () => {
+  it("publishes the installed arm, and the doc-key read uses it", () => {
+    // The arm is a RUNTIME fact the store needs synchronously:
+    // `getArtifactBodyDocKey` answers the artifact id on the lanes arm and the
+    // artifact's ROOM id on `@1`. It is published through `delivery.publish`,
+    // which takes a `Partial<EpicRuntimeProjection>` and so reaches any member
+    // - the per-replica sinks are typed to their own sub-projection, so the
+    // runtime could not have published a selection fact without putting it on
+    // the records slice.
+    // `createOpenEpicStore` starts the runtime itself - there is no `start` on
+    // the store's own surface, which is why this reads the arm directly.
+    const session = openSession("epic-a");
+
+    // `null` until a selection runs, then the verdict. With no lane sources
+    // there is nothing to select and `@1` is the arm.
+    expect(session.handle.store.getState().installedArm).toBe("legacy");
+    // On `@1` the doc key is the artifact's room, and an artifact with no
+    // projected room has no key - not an empty string.
+    expect(
+      session.handle.store.getState().getArtifactBodyDocKey("artifact-1"),
+    ).toBeNull();
+    session.handle.dispose();
+  });
+});
+
 describe("the root-state port", () => {
   it("carries an edit from one session's replica into another's projection", async () => {
     const source = openSession("epic-a");

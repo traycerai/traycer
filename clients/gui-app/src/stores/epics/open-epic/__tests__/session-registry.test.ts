@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   publishAgentActivity,
@@ -80,6 +81,7 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
     detachTransport: () => base.detachTransport(),
     isClean: () => isCleanOverride,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
   };
 
   const testHandle: TestHandle = {

@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import {
   afterEach,
   beforeEach,
@@ -108,6 +109,7 @@ function buildHandle(epicId: string, title: string): FakeHandle {
     requestFreshSnapshot: () => undefined,
     isClean: () => !state.isDirty,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
     setDirty: (isDirty, queueSize) => {
       state.isDirty = isDirty;
       state.unsyncedQueueSize = queueSize;
