@@ -60,17 +60,13 @@ export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 1;
 /**
  * What the worker was told about the surface it is serving.
  *
- * Deliberately scalar. The worker does not receive a host client, a store, or
- * anything else that would have to be reconstructed on the other side; it
- * receives the identifiers it needs to build its own, which is what makes the
- * composition root movable at all.
+ * Deliberately scalar, and deliberately down to ONE field. `hostId`/`userId`
+ * rode here while the plan was to move the socket; with the transport on main
+ * nothing in the worker reads either, and a field nobody reads is the
+ * design-by-accident this bridge keeps deleting. They return WITH a reader.
  */
 export interface RuntimeWorkerBootstrap {
   readonly protocolVersion: number;
-  /** The host this session's transport dials. Fixed for the worker's life. */
-  readonly hostId: string;
-  /** The signed-in user the session is bound to. Also fixed for life. */
-  readonly userId: string;
   /**
    * Identifies this renderer window in log lines the worker emits.
    *

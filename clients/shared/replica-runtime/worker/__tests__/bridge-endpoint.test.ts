@@ -19,7 +19,6 @@ import {
   createWorkerBridgeEndpoint,
   type BridgeTransport,
   type BridgeReply,
-  type RuntimeWorkerCallHandlers,
 } from "../bridge-endpoint";
 import { stubRuntimeWorkerCallHandlers } from "../test-support/stub-runtime-worker-call-handlers";
 import { NO_TRANSFER, takeBytesForTransfer } from "../transferable-bytes";

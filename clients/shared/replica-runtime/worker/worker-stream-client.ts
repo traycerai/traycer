@@ -229,9 +229,9 @@ export function createWorkerStreamClient(
       };
     },
     disposeAll(): void {
-      const open = [...sessions.entries()];
+      const outstanding = [...sessions.entries()];
       sessions.clear();
-      for (const [streamId, entry] of open) {
+      for (const [streamId, entry] of outstanding) {
         entry.markClosed();
         emit({ kind: "stream/close", stream: { streamId } }, NO_TRANSFER);
       }

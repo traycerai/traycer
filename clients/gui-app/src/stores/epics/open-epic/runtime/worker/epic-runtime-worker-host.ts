@@ -273,6 +273,36 @@ export function startEpicRuntimeWorkerHost(
         );
         return;
       }
+      case "stream/frame": {
+        streams.deliverFrame(
+          event.frame.streamId,
+          event.frame.envelope,
+          event.frame.binaryPayload,
+        );
+        return;
+      }
+      case "stream/session-version": {
+        // Applied before the status it belongs to, which is the order main
+        // posts them in - so a handler reacting to `open` already reads the
+        // version negotiated for that open.
+        streams.deliverSessionVersion(
+          event.version.streamId,
+          event.version.version,
+        );
+        return;
+      }
+      case "stream/status": {
+        streams.deliverStatus(
+          event.status.streamId,
+          event.status.status,
+          event.status.reason,
+        );
+        return;
+      }
+      case "stream/manifest": {
+        streams.deliverManifest(event.manifest);
+        return;
+      }
       case "shutdown": {
         shutdown();
         return;

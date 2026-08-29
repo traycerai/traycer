@@ -11,7 +11,6 @@ import { createWorkerStreamClient } from "../worker-stream-client";
 import { createStreamProxyHost } from "../stream-proxy-host";
 import {
   EPIC_WORKER_STREAM_METHOD_LIST,
-  EPIC_WORKER_STREAM_METHODS,
   OPEN_PARAMS_SCHEMA_SOURCES,
   STREAM_PROXY_UNKNOWN_METHOD_CODE,
 } from "../stream-proxy-protocol";

@@ -68,6 +68,12 @@ export interface RuntimeWorkerLogRelay {
 export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
   readonly createWorker: () => RuntimeWorkerLike;
   /**
+   * Where a worker's log lines and its fatal go. A fatal is NOT just another
+   * log line: the runtime behind the bridge is gone, so a UI waiting on
+   * projections must be told rather than left waiting.
+   */
+  readonly relay: RuntimeWorkerLogRelay;
+  /**
    * The session's REAL stream client, which stays on this thread.
    *
    * The worker gets a proxy over it, never the thing itself: the durable
