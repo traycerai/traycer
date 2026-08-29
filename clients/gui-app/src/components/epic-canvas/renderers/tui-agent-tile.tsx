@@ -233,6 +233,25 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     // expiring rather than proof the agent's session ended. The tile stops
     // waiting; the persisted notification still needs directory evidence.
     if (reachability.basis !== "directory") return;
+    // REMOTE-UNADDRESSABLE: another of the user's machines, not reachable from
+    // this one. The banner is right and the notification is not.
+    //
+    // "Terminal closed" is a claim that a session on the reader's own machine
+    // ended, and it is written into a durable feed. Here it would be a claim
+    // about a machine this client cannot observe at all - and the reader
+    // closed nothing; someone shut a laptop. The agent and its transcript are
+    // exactly what the banner says they are: kept, on their own host, waiting
+    // for it to come back.
+    //
+    // The gate matters now because the TUI roster's phase 2 put every agent on
+    // every other machine the user owns into this tree. Before it, opening a
+    // remote-bound agent tile was rare enough that this fired seldom; after
+    // it, peeking at a sleeping laptop's agents would write one persisted
+    // "permanently closed" entry per tile. Deliberately narrow to `remote`:
+    // a host the directory cannot classify keeps today's behaviour, because
+    // inferring "someone else's machine" from "not in the directory" is the
+    // kind of guess this whole chain of gates exists to refuse.
+    if (reachability.hostKind === "remote") return;
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
       hostId,
@@ -251,6 +270,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     reachability.hostLabel,
     reachability.unavailability,
     reachability.basis,
+    reachability.hostKind,
     epicId,
     hostId,
     props.node.id,

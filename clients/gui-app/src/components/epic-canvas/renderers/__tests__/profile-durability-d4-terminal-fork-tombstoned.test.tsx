@@ -181,6 +181,7 @@ function sourceAgentWithProfile(profileId: string | null): TuiAgentProjection {
     // An ordinary registry-backed agent - this suite exercises profile
     // durability, not doc residency.
     docResident: false,
+    origin: "registry",
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",

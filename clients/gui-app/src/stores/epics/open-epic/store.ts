@@ -15,7 +15,7 @@ import type {
   ChatRecordRemovalReason,
   ChatRecordSummary,
 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -598,7 +598,7 @@ export interface OpenEpicState {
    * holds an omitted row for one extra pass instead.
    */
   applyTuiAgentRecords: (
-    records: readonly TuiAgentRecordSummaryV11[],
+    records: readonly TuiAgentRecordSummaryV12[],
     issuedAtSeq: number | null,
   ) => void;
   /**
@@ -2051,7 +2051,7 @@ export function createOpenEpicStore(
    * to be safe for what the host actually serves.
    */
   let tuiAgentRecords: TerminalAgentsSlice = EMPTY_TERMINAL_AGENTS_SLICE;
-  const tuiAgentRecordRows = new Map<string, TuiAgentRecordSummaryV11>();
+  const tuiAgentRecordRows = new Map<string, TuiAgentRecordSummaryV12>();
   /** See `OpenEpicState.tuiAgentRetractions` - absorbing for the session. */
   const tuiAgentRetractions = new Map<string, ChatRecordRemovalReason>();
   /**
@@ -2562,7 +2562,7 @@ export function createOpenEpicStore(
           // See publishChatRecords: provenance marks are captured at the one
           // seam every terminal-agent record write flows through.
           markRegistryBackedMutations();
-          const visible: TuiAgentRecordSummaryV11[] = [];
+          const visible: TuiAgentRecordSummaryV12[] = [];
           for (const row of tuiAgentRecordRows.values()) {
             if (!isTerminalAgentVisibleToUser(row.ownerUserId, currentUserId)) {
               continue;
@@ -4162,7 +4162,7 @@ export function createOpenEpicStore(
 
           applyTuiAgentRecords: (records, issuedAtSeq) => {
             if (disposed) return;
-            const served = new Map<string, TuiAgentRecordSummaryV11>();
+            const served = new Map<string, TuiAgentRecordSummaryV12>();
             for (const row of records) {
               // A retracted agent never comes back through the poll: the list
               // read is a snapshot of the host's registry and the host applies
@@ -4209,7 +4209,12 @@ export function createOpenEpicStore(
               // a placeholder, where the later answer is newer by construction
               // because it is a fresher read of the same map.
               if (held !== undefined) {
-                const bothDocResident = held.docResident && row.docResident;
+                // Keyed on `origin`, not on `docResident`: the row is a union
+                // from `@1.2` on, and the narrow cross-host arm carries no
+                // `docResident` at all. `origin === "doc"` is the same fact
+                // stated on the discriminator every arm answers.
+                const bothDocResident =
+                  held.origin === "doc" && row.origin === "doc";
                 if (!bothDocResident && row.revision <= held.revision) continue;
               }
               tuiAgentRecordRows.set(id, row);
@@ -4253,19 +4258,22 @@ export function createOpenEpicStore(
             // only ordering fact on a row, so a delta that does not strictly
             // exceed what is held is a replay, a reorder or a duplicate.
             if (held !== undefined && record.revision <= held.revision) return;
-            // The delta plane is REGISTRY-ONLY by construction - a doc-resident
-            // agent has no registry row, so it can never produce a delta. So
-            // `false` here is a fact about the source, not a filled-in default.
+            // Stored VERBATIM, where this used to force `docResident: false`.
             //
-            // It is also what makes ADOPTION converge through the staleness
-            // test above: `epic.listTuiAgents@1.1` serves a frozen doc row at
-            // `revision: 0`, so the first real delta after that agent's binding
-            // host upgrades and the sweep imports it strictly exceeds 0 and
-            // replaces the frozen copy in place.
-            tuiAgentRecordRows.set(record.tuiAgentId, {
-              ...record,
-              docResident: false,
-            });
+            // That fill was a fact about the source while the delta plane was
+            // registry-only: a doc-resident agent has no registry row, so it
+            // could never produce a delta. It has two sources from `@1.2` -
+            // the host's own registry and its record inbox's cross-host
+            // replicas - and the row now STATES which, so re-deriving it here
+            // would be overwriting an answer with a guess (and the narrow
+            // replica arm has no `docResident` key to write anyway).
+            //
+            // The property that made the fill load-bearing is unchanged and
+            // still carried by the row itself: `epic.listTuiAgents` serves a
+            // frozen doc row at `revision: 0`, so the first real delta after
+            // that agent's binding host upgrades and the sweep imports it
+            // strictly exceeds 0 and replaces the frozen copy in place.
+            tuiAgentRecordRows.set(record.tuiAgentId, record);
             // Past the fence the last snapshot left: an `epic.listTuiAgents`
             // answer already in flight cannot carry this row, so its omission
             // must not delete it. See `tuiAgentRowSeq`.

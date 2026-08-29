@@ -1065,6 +1065,7 @@ function sourceAgentWithTerminalArgs(
     // An ordinary registry-backed agent - this suite exercises the fork
     // dialog's terminal-args plumbing, not doc residency.
     docResident: false,
+    origin: "registry",
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",

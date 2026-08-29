@@ -1,9 +1,9 @@
 import {
-  hostChatRecordsSubscribeServerFrameSchemaV11,
+  hostChatRecordsSubscribeServerFrameSchemaV12,
   type ChatRecordRemovalReason,
   type ChatRecordSummary,
 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
@@ -44,7 +44,7 @@ export type ChatRecordDelta =
 
 /**
  * One terminal-agent record delta, the `@1.1` addition riding the same
- * host-scoped stream (`tuiUpsert` / `tuiRemove`).
+ * host-scoped stream (`tuiUpsert` / `tuiRemove`), carrying the `@1.2` row.
  *
  * A SEPARATE union rather than two more members on {@link ChatRecordDelta},
  * because the two grammars address different record tables: the consumer's
@@ -62,7 +62,7 @@ export type TuiAgentRecordDelta =
        * frame repeats `tuiAgentId`/`revision` and the contract refuses a frame
        * where they disagree, so only the row's own copy travels here.
        */
-      readonly record: TuiAgentRecordSummary;
+      readonly record: TuiAgentRecordSummaryV12;
     }
   | {
       readonly kind: "tuiRemove";
@@ -72,8 +72,10 @@ export type TuiAgentRecordDelta =
     };
 
 /**
- * Everything `host.chatRecords.subscribe@1.1` can deliver. An old host
- * negotiates @1.0 and simply never sends the terminal-agent kinds.
+ * Everything `host.chatRecords.subscribe@1.2` can deliver. An older host
+ * negotiates down and simply never sends what its minor did not have: @1.0
+ * omits the terminal-agent kinds entirely, @1.1 sends them for its OWN rows
+ * only and never for a cross-host replica.
  */
 export type ChatRecordsStreamDelta = ChatRecordDelta | TuiAgentRecordDelta;
 
@@ -157,12 +159,12 @@ export class ChatRecordsStreamClient {
   }
 
   private handleServerFrame(envelope: StreamFrameEnvelope): void {
-    // Parsed against the @1.1 superset: the handshake negotiates the method
-    // version per session, and @1.1 accepts every @1.0 frame verbatim, so one
-    // schema serves both negotiated outcomes - an old host just never produces
-    // the terminal-agent kinds.
+    // Parsed against the @1.2 superset: the handshake negotiates the method
+    // version per session, and each minor's frames are accepted verbatim by
+    // the next, so one schema serves every negotiated outcome - an older host
+    // simply never produces the kinds, or the row arms, that its minor lacked.
     const parsed =
-      hostChatRecordsSubscribeServerFrameSchemaV11.safeParse(envelope);
+      hostChatRecordsSubscribeServerFrameSchemaV12.safeParse(envelope);
     // A frame this build cannot parse is dropped rather than guessed at. The
     // removal-reason enum is CLOSED for exactly this reason: a widened reason
     // arrives as an unparseable frame, and the poll - which still sees the row
