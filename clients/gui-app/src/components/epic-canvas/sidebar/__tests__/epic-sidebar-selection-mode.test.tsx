@@ -5010,11 +5010,14 @@ describe("chat tree expansion keys", () => {
     testState.records = [];
   });
 
+  // By role: these keys are only reachable on the focusable control, so the
+  // query should name the same button a keyboard user lands on.
+  function row(name: string): HTMLElement {
+    return screen.getByRole("button", { name });
+  }
+
   function pressOnRoot(key: string): boolean {
-    return fireEvent.keyDown(
-      screen.getByTestId("epic-sidebar-item-chat-root"),
-      { key },
-    );
+    return fireEvent.keyDown(row("Root chat"), { key });
   }
 
   it("opens a collapsed branch on ArrowRight and closes it on ArrowLeft", () => {
@@ -5072,7 +5075,7 @@ describe("chat tree expansion keys", () => {
 
   it("does not claim the keys on a row with no branch to open", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
-    const leaf = screen.getByTestId("epic-sidebar-item-chat-leaf");
+    const leaf = row("Leaf chat");
 
     expect(fireEvent.keyDown(leaf, { key: "ArrowRight" })).toBe(true);
     expect(fireEvent.keyDown(leaf, { key: "ArrowLeft" })).toBe(true);

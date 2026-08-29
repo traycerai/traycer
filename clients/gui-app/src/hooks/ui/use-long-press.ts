@@ -35,6 +35,13 @@ export interface LongPress {
    * Whether the press already fired for the gesture now ending. The row reads
    * it in its click handler: the browser still delivers a click after a long
    * press, and letting it through would open the task the press just selected.
+   *
+   * ONE-SHOT - it clears the flag as it reports it, so exactly one click is
+   * swallowed per press. Reporting without clearing would leave the flag armed
+   * until the next `pointerdown`, and a KEYBOARD activation delivers a click
+   * with no pointerdown before it: on a focusable trigger, the Enter that
+   * follows a long press would be eaten too, with nothing to re-arm from.
+   * Every caller reads it once per click, which is what makes clearing safe.
    */
   readonly consumedTap: () => boolean;
 }
@@ -129,7 +136,11 @@ export function useLongPress(args: LongPressArgs): LongPress {
     [cancel],
   );
 
-  const consumedTap = useCallback(() => firedRef.current, []);
+  const consumedTap = useCallback(() => {
+    const fired = firedRef.current;
+    firedRef.current = false;
+    return fired;
+  }, []);
 
   return {
     handlers: {

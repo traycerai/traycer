@@ -156,6 +156,28 @@ describe("workspace summary preview on touch", () => {
     ).toBeTruthy();
   });
 
+  it("swallows exactly one click, so a keyboard can still open the picker", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderTrigger();
+
+    const trigger = press("touch");
+    // The click the browser delivers after the hold. This one is consumed.
+    fireEvent.click(trigger);
+    expect(
+      screen.queryByTestId("workspace-readonly-folders-popover"),
+    ).toBeNull();
+
+    // Now activate from the keyboard. Enter on a focused button produces a
+    // click with NO pointerdown before it, so nothing re-arms the recognizer -
+    // a flag that reported without clearing would still be set here and would
+    // eat this activation too, leaving the control dead to the keyboard until
+    // someone touched it again.
+    fireEvent.click(trigger);
+    expect(
+      screen.getByTestId("workspace-readonly-folders-popover"),
+    ).toBeTruthy();
+  });
+
   it("leaves a mouse press alone, where hover already answers", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     renderTrigger();
