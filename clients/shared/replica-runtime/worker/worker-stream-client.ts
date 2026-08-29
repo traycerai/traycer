@@ -23,7 +23,6 @@ import type {
   StatusChangeHandler,
   StreamCloseReason,
   StreamConnectionStatus,
-  StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorkerToMainEvent } from "./bridge-protocol";
