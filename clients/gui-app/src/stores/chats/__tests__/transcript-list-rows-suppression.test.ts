@@ -100,6 +100,7 @@ function windowOf(
     liveEvents: [],
     snapshotProvisionalMessageIds: [],
     snapshotProvisionalEventIds: [],
+    unavailableRowIds: [],
     hydratedBytes: spans.reduce((sum, item) => sum + item.bytes, 0),
     unsettledByteMessageIds: [],
     invalidated: false,

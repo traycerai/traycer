@@ -2068,6 +2068,85 @@ describe("what an overlap keeps", () => {
     expect(confirmed.liveEvents).toEqual([]);
   });
 
+  it("tracks a live decorating event using its span-backed assistant", () => {
+    const seeded = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId("turn-1")],
+        messages: [assistantMessage("assistant-durable", "turn-1", 1)],
+      }),
+    );
+    const completion = event("completion-live", 2);
+    const live = appendLiveRecords(seeded, {
+      messages: [],
+      events: [completion],
+    });
+
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 2,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(rebased.snapshotProvisionalEventIds).toContain(completion.eventId);
+  });
+
+  it("matches same-timestamp provisional setup windows one-to-one", () => {
+    const setupEvent = (
+      eventId: string,
+      type: ChatEvent["type"],
+    ): ChatEvent => ({
+      eventId,
+      type,
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    });
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [],
+      events: [
+        setupEvent("setup-first", "setup.running"),
+        setupEvent("setup-boundary", "worktree.missing"),
+        setupEvent("setup-second", "setup.running"),
+      ],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("setup-card:chat-1:9:2", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveEvents.map((event) => event.eventId)).toEqual([
+      "setup-boundary",
+      "setup-second",
+    ]);
+  });
+
   it("keeps an assistant through its overtaken empty stream", () => {
     const turnId = "turn-after-empty-rebase";
     const transientId = transientLiveAssistantMessageId(turnId);
@@ -2225,6 +2304,42 @@ describe("what an overlap keeps", () => {
       tail: { fromOrdinal: 1, messages: [], events: [] },
     });
     const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveMessages).toEqual([]);
+  });
+
+  it("keeps provisional provenance through an intermediate snapshot", () => {
+    const messageId = "accepted-before-intermediate";
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage(messageId, 1)],
+      events: [],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const intermediate = applyWindowedSnapshot(rebased, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(intermediate.snapshotProvisionalMessageIds).toContain(messageId);
+    const rebuilt = applySkeletonChunk(intermediate, {
       epoch: 1,
       fromOrdinal: 0,
       entries: [skeletonEntry("replacement-user", 0)],
@@ -2965,6 +3080,40 @@ describe("what an overlap keeps", () => {
     );
 
     expect(partial.spans).toEqual([]);
+  });
+
+  it("does not retry an incomplete row until the index changes", () => {
+    const partial = applyRangeResponse(
+      windowWithSkeleton(1),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        incompleteRowIds: ["row-0"],
+        messages: [userMessage("row-0", 1)],
+      }),
+    );
+
+    expect(partial.unavailableRowIds).toEqual(["row-0"]);
+    expect(
+      planTranscriptHydration(partial, { fromOrdinal: 0, toOrdinal: 1 }, []),
+    ).toBeNull();
+
+    const updated = applyIndexChange(partial, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 0, entry: skeletonEntry("row-0", 0) }],
+        },
+      ],
+    });
+    expect(updated.unavailableRowIds).toEqual([]);
+    expect(
+      planTranscriptHydration(updated, { fromOrdinal: 0, toOrdinal: 1 }, []),
+    ).toEqual({ fromOrdinal: 0, toOrdinal: 1 });
   });
 
   it("retires a stand-in when a complete authoritative row rewrites block status", () => {

@@ -13,6 +13,7 @@ import {
   assistantRowTurnKey,
   projectTranscriptRows,
   queueSteerRowId,
+  type TranscriptRowDescriptor,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { rowRecordIds } from "@traycer/protocol/persistence/chat-transcript/read-range";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
@@ -272,6 +273,8 @@ export interface TranscriptWindow {
   readonly snapshotProvisionalMessageIds: readonly string[];
   /** Row-producing live events carried across the latest snapshot boundary. */
   readonly snapshotProvisionalEventIds: readonly string[];
+  /** Rows the current authority declared incomplete; do not hot-loop them. */
+  readonly unavailableRowIds: readonly string[];
   readonly hydratedBytes: number;
   /**
    * MESSAGE ids whose latest rewrite is not yet reflected in
@@ -399,6 +402,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     liveEvents: [],
     snapshotProvisionalMessageIds: [],
     snapshotProvisionalEventIds: [],
+    unavailableRowIds: [],
     hydratedBytes: 0,
     unsettledByteMessageIds: [],
     invalidated: false,
@@ -609,6 +613,29 @@ function incompleteRowIdsToWithhold(
   incompleteRowIds: readonly string[] | undefined,
 ): ReadonlySet<string> {
   return new Set(incompleteRowIds ?? []);
+}
+
+function withUnavailableRows(
+  window: TranscriptWindow,
+  rowIds: Iterable<string>,
+): TranscriptWindow {
+  const unavailable = new Set(window.unavailableRowIds);
+  for (const rowId of rowIds) unavailable.add(rowId);
+  return { ...window, unavailableRowIds: [...unavailable] };
+}
+
+function withoutUnavailableRows(
+  window: TranscriptWindow,
+  rowIds: readonly string[],
+): TranscriptWindow {
+  if (window.unavailableRowIds.length === 0) return window;
+  const completed = new Set(rowIds);
+  const unavailableRowIds = window.unavailableRowIds.filter(
+    (rowId) => !completed.has(rowId),
+  );
+  return unavailableRowIds.length === window.unavailableRowIds.length
+    ? window
+    : { ...window, unavailableRowIds };
 }
 
 function completeServedRowIds(
@@ -1184,24 +1211,53 @@ function namedLiveEventIds(
   window: TranscriptWindow,
   skeletonRowIds: ReadonlySet<string>,
 ): ReadonlySet<string> {
-  const setupCreatedAt = new Set(
-    [...skeletonRowIds]
-      .filter((rowId) => rowId.startsWith("setup-card:"))
-      .map((rowId) => rowId.slice(rowId.lastIndexOf(":") + 1)),
-  );
-  const named = new Set<string>();
-  for (const row of projectTranscriptRows({
+  const projectedRows = projectTranscriptRows({
     messages: window.liveMessages,
     events: window.liveEvents,
     activeTurnId: null,
     chatId: "",
-  })) {
-    const setupNamed =
-      row.source.kind === "setup-card" &&
-      setupCreatedAt.has(String(row.createdAt));
-    if (!setupNamed && !skeletonRowIds.has(row.rowId)) continue;
+  });
+  const named = setupEventIdsNamedBySkeleton(projectedRows, skeletonRowIds);
+  for (const row of projectedRows) {
+    if (row.source.kind === "setup-card") continue;
+    if (!skeletonRowIds.has(row.rowId)) continue;
     for (const eventId of rowRecordIds(row.source).eventIds) {
       named.add(eventId);
+    }
+  }
+  return named;
+}
+
+function setupEventIdsNamedBySkeleton(
+  projectedRows: readonly TranscriptRowDescriptor[],
+  skeletonRowIds: ReadonlySet<string>,
+): Set<string> {
+  const setupCountByCreatedAt = new Map<string, number>();
+  for (const rowId of skeletonRowIds) {
+    if (!rowId.startsWith("setup-card:")) continue;
+    const createdAt = rowId.slice(rowId.lastIndexOf(":") + 1);
+    setupCountByCreatedAt.set(
+      createdAt,
+      (setupCountByCreatedAt.get(createdAt) ?? 0) + 1,
+    );
+  }
+  const named = new Set<string>();
+  const setupRowsByCreatedAt = new Map<string, TranscriptRowDescriptor[]>();
+  for (const row of projectedRows) {
+    if (row.source.kind !== "setup-card") continue;
+    const createdAt = String(row.createdAt);
+    const rows = setupRowsByCreatedAt.get(createdAt) ?? [];
+    rows.push(row);
+    setupRowsByCreatedAt.set(createdAt, rows);
+  }
+  for (const [createdAt, rows] of setupRowsByCreatedAt) {
+    const count = setupCountByCreatedAt.get(createdAt) ?? 0;
+    if (count === 0) continue;
+    for (const row of rows.slice(-count)) {
+      if (row.source.kind !== "setup-card") continue;
+      for (const eventId of rowRecordIds(row.source).eventIds) {
+        named.add(eventId);
+      }
     }
   }
   return named;
@@ -1516,18 +1572,26 @@ export function applyWindowedSnapshot(
           invalidated: false,
           clock,
         };
+  const heldRecords = hydratedRecords(reconciledWindow);
   const provisionalRowProducingEventIds = rowProducingEventIds(
-    provisionalLiveMessages,
-    provisionalLiveEvents,
+    heldRecords.messages,
+    heldRecords.events,
   );
-  const snapshotBase = {
-    ...base,
-    snapshotProvisionalMessageIds: provisionalLiveMessages.map(
-      (message) => message.messageId,
-    ),
-    snapshotProvisionalEventIds: provisionalLiveEvents
+  const snapshotProvisionalMessageIds = new Set([
+    ...reconciledWindow.snapshotProvisionalMessageIds,
+    ...provisionalLiveMessages.map((message) => message.messageId),
+  ]);
+  const snapshotProvisionalEventIds = new Set([
+    ...reconciledWindow.snapshotProvisionalEventIds,
+    ...provisionalLiveEvents
       .filter((event) => provisionalRowProducingEventIds.has(event.eventId))
       .map((event) => event.eventId),
+  ]);
+  const snapshotBase = {
+    ...base,
+    snapshotProvisionalMessageIds: [...snapshotProvisionalMessageIds],
+    snapshotProvisionalEventIds: [...snapshotProvisionalEventIds],
+    unavailableRowIds: [],
   };
 
   // `rowCount` is authoritative even when a same-epoch `null` revision merely
@@ -1586,6 +1650,10 @@ function seatSnapshotTailSpan(input: {
       conflictingRowIds,
     );
   }
+  const completeBase = withoutUnavailableRows(
+    base,
+    declaredCompleteTailRowIds(tail),
+  );
   const contextBytes = contextByteLength(rowContext);
   const tailSpan: HydratedSpan = {
     fromOrdinal: tail.fromOrdinal,
@@ -1598,9 +1666,9 @@ function seatSnapshotTailSpan(input: {
     touchedAt: clock,
     servedAt: clock,
   };
-  const spans = insertSpan(base.spans, tailSpan);
+  const spans = insertSpan(completeBase.spans, tailSpan);
   return pruneSupersededLiveRecords(
-    { ...base, spans, hydratedBytes: totalBytes(spans) },
+    { ...completeBase, spans, hydratedBytes: totalBytes(spans) },
     servedAssistantTurns(declaredCompleteTailRowIds(tail), tail.messages),
   );
 }
@@ -1678,7 +1746,7 @@ function seatNonConflictingTailRuns(
       setupRowsBeforeRun += 1;
     }
   }
-  return next;
+  return withUnavailableRows(next, conflictingRowIds);
 }
 
 /** Apply a snapshot's authoritative row-space boundary to retained state. */
@@ -2288,6 +2356,7 @@ export function applyIndexChange(
     // compared against, whether it was adopted under the boundary or earned by
     // being the immediate successor.
     indexRevisionRebuilding: false,
+    unavailableRowIds: [],
     // Whether the client holds a COMPLETE index once this frame is folded in,
     // re-derived from the two conditions {@link applySkeletonChunk} uses - and
     // deliberately NOT gated on the completeness this window arrived with.
@@ -2503,9 +2572,13 @@ export function applyRangeResponse(
         setupRowsBeforeRun += 1;
       }
     }
-    return next;
+    return withUnavailableRows(next, conflictingRowIds);
   }
-  const clock = window.clock + 1;
+  const completeWindow = withoutUnavailableRows(
+    window,
+    completeServedRowIds(response.rowIds, response.incompleteRowIds),
+  );
+  const clock = completeWindow.clock + 1;
   const contextBytes = contextByteLength(response.rowContext);
   const span: HydratedSpan = {
     fromOrdinal: response.fromOrdinal,
@@ -2518,10 +2591,10 @@ export function applyRangeResponse(
     touchedAt: clock,
     servedAt: clock,
   };
-  const spans = insertSpan(window.spans, span);
+  const spans = insertSpan(completeWindow.spans, span);
   return pruneSupersededLiveRecords(
     {
-      ...window,
+      ...completeWindow,
       spans,
       hydratedBytes: totalBytes(spans),
       clock,
@@ -2845,7 +2918,27 @@ export function transcriptHydrationGaps(
     if (cursor >= to) break;
   }
   if (cursor < to) gaps.push({ fromOrdinal: cursor, toOrdinal: to });
-  return gaps;
+  if (window.unavailableRowIds.length === 0) return gaps;
+  const unavailable = new Set(window.unavailableRowIds);
+  const retryable: OrdinalRange[] = [];
+  for (const gap of gaps) {
+    let runStart: number | null = null;
+    for (let ordinal = gap.fromOrdinal; ordinal < gap.toOrdinal; ordinal += 1) {
+      const rowId = window.skeleton[ordinal]?.rowId;
+      if (rowId !== undefined && unavailable.has(rowId)) {
+        if (runStart !== null) {
+          retryable.push({ fromOrdinal: runStart, toOrdinal: ordinal });
+          runStart = null;
+        }
+        continue;
+      }
+      runStart ??= ordinal;
+    }
+    if (runStart !== null) {
+      retryable.push({ fromOrdinal: runStart, toOrdinal: gap.toOrdinal });
+    }
+  }
+  return retryable;
 }
 
 /**
