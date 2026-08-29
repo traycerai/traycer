@@ -13,6 +13,7 @@ import {
   assistantRowTurnKey,
   projectTranscriptRows,
   queueSteerRowId,
+  type TranscriptRowDescriptor,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { rowRecordIds } from "@traycer/protocol/persistence/chat-transcript/read-range";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
@@ -547,27 +548,32 @@ function conflictingIncompleteAssistantRowIds(
       liveTurnKeys.add(assistantTurnKey(message));
     }
   }
-  const liveProjection = projectTranscriptRows({
-    messages: liveMessages,
-    events: [],
-    activeTurnId: null,
-    chatId: "",
-  });
+  let servedProjection: readonly TranscriptRowDescriptor[] | null = null;
+  const servedRows = (): readonly TranscriptRowDescriptor[] =>
+    (servedProjection ??= projectTranscriptRows({
+      messages: servedMessages,
+      events: servedEvents,
+      activeTurnId: null,
+      chatId: "",
+    }));
+  let liveProjection: readonly TranscriptRowDescriptor[] | null = null;
+  const liveRows = (): readonly TranscriptRowDescriptor[] =>
+    (liveProjection ??= projectTranscriptRows({
+      messages: liveMessages,
+      events: [],
+      activeTurnId: null,
+      chatId: "",
+    }));
   return new Set(
     incompleteRowIds.filter((rowId) => {
       const directTurnKey = assistantRowTurnKey(rowId);
       const projected =
         directTurnKey === null
-          ? projectTranscriptRows({
-              messages: servedMessages,
-              events: servedEvents,
-              activeTurnId: null,
-              chatId: "",
-            }).find((row) => row.rowId === rowId)
+          ? servedRows().find((row) => row.rowId === rowId)
           : undefined;
       const liveProjected =
         directTurnKey === null
-          ? liveProjection.find((row) => row.rowId === rowId)
+          ? liveRows().find((row) => row.rowId === rowId)
           : undefined;
       let turnKey = directTurnKey;
       if (
@@ -1521,17 +1527,14 @@ function boundWindowToRowCount(
 ): TranscriptWindow {
   const skeleton = window.skeleton.slice(0, rowCount);
   const spans = window.spans.filter((span) => spanEnd(span) <= rowCount);
-  const liveMessages = window.liveMessages;
   const changed =
     skeleton.length !== window.skeleton.length ||
-    spans.length !== window.spans.length ||
-    liveMessages.length !== window.liveMessages.length;
+    spans.length !== window.spans.length;
   if (!changed) return window;
   return {
     ...window,
     skeleton,
     spans,
-    liveMessages,
     hydratedBytes: totalBytes(spans),
     skeletonStreamCoveredThrough: Math.min(
       window.skeletonStreamCoveredThrough,

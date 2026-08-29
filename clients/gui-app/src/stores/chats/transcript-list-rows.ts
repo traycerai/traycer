@@ -384,21 +384,18 @@ export function transcriptListRows(input: {
     // them too would draw the same history twice on skeleton-loss paths.
     const liveRowIds = liveRecordRowIds(window);
     const retainedSpanRowIds = spanRowIds(window.spans);
-    const skeletonRowIds = skeletonOrdinalByRowId(window.skeleton);
-    const liveTransientSteerRowIds = transientLiveSteerRowIds(window);
+    let liveTransientSteerRowIds: ReadonlySet<string> | null = null;
     const unplacedRendered = rendered.filter((model) => {
       const liveBacked =
         isExplicitlyPendingOrStreaming(model) ||
         liveRowIds.has(model.id) ||
         (model.persistentMessageId === null &&
-          liveTransientSteerRowIds.has(model.id)) ||
+          (liveTransientSteerRowIds ??= transientLiveSteerRowIds(window)).has(
+            model.id,
+          )) ||
         (model.persistentMessageId !== null &&
           liveRowIds.has(model.persistentMessageId));
-      return (
-        !retainedSpanRowIds.has(model.id) &&
-        (!skeletonRowIds.has(model.id) || liveBacked) &&
-        liveBacked
-      );
+      return !retainedSpanRowIds.has(model.id) && liveBacked;
     });
     return [
       ...invalidatedPlaceholderRows(window.rowCount),
