@@ -2,6 +2,7 @@ import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transc
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 import {
+  assistantRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
@@ -209,6 +210,9 @@ function liveRecordRowIds(window: TranscriptWindow): ReadonlySet<string> {
   for (const event of window.liveEvents) {
     rowIds.add(chatTranscriptEventRowId(event.eventId));
     rowIds.add(forkedChatLinkRowId(event.eventId));
+    if (event.type === "turn.stopped" && event.turnId !== null) {
+      rowIds.add(assistantRowId(event.turnId));
+    }
   }
   return rowIds;
 }

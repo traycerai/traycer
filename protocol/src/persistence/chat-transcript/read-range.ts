@@ -131,6 +131,8 @@ export interface TranscriptRangeSlice {
    * degrade to a refetch instead of to bodies rendered under the wrong rows.
    */
   readonly rowIds: readonly string[];
+  /** Served rows whose complete required record set exists in the lookup. */
+  readonly completeRowIds: readonly string[];
   /** Deduplicated union of the records the served rows render from. */
   readonly messages: readonly Message[];
   readonly events: readonly ChatEvent[];
@@ -312,6 +314,7 @@ export function sliceTranscriptRange(
   const empty: TranscriptRangeSlice = {
     fromOrdinal: 0,
     rowIds: [],
+    completeRowIds: [],
     messages: [],
     events: [],
     rowContext: {},
@@ -336,6 +339,7 @@ export function sliceTranscriptRange(
   const to = Math.min(request.toOrdinal, lastOrdinal);
 
   const rowIds: string[] = [];
+  const completeRowIds: string[] = [];
   const messages: Message[] = [];
   const events: ChatEvent[] = [];
   const rowContext: Record<string, TranscriptRowContext> = {};
@@ -394,6 +398,14 @@ export function sliceTranscriptRange(
     }
     spent += cost;
     rowIds.push(rows[ordinal].rowId);
+    if (
+      needed.messageIds.every((messageId) =>
+        lookup.messagesById.has(messageId),
+      ) &&
+      needed.eventIds.every((eventId) => lookup.eventsById.has(eventId))
+    ) {
+      completeRowIds.push(rows[ordinal].rowId);
+    }
     if (hasContext) rowContext[rows[ordinal].rowId] = context;
     for (const message of freshMessages) {
       seenMessageIds.add(message.messageId);
@@ -408,6 +420,7 @@ export function sliceTranscriptRange(
   return {
     fromOrdinal: from,
     rowIds,
+    completeRowIds,
     messages,
     events,
     rowContext,
@@ -424,6 +437,8 @@ export interface TranscriptTailSlice {
   /** Ordinal of the first row in the tail. `rows.length` when the tail is empty. */
   readonly fromOrdinal: number;
   readonly rowIds: readonly string[];
+  /** Tail rows whose complete required record set exists in the lookup. */
+  readonly completeRowIds: readonly string[];
   readonly messages: readonly Message[];
   readonly events: readonly ChatEvent[];
   /**
@@ -473,6 +488,7 @@ export function sliceTranscriptTail(
 ): TranscriptTailSlice {
   const budget = Math.min(maxBytes, TRANSCRIPT_TAIL_MAX_BYTES);
   const rowIds: string[] = [];
+  const completeRowIds: string[] = [];
   const messages: Message[] = [];
   const events: ChatEvent[] = [];
   const rowContext: Record<string, TranscriptRowContext> = {};
@@ -515,6 +531,14 @@ export function sliceTranscriptTail(
     spent += cost;
     fromOrdinal = ordinal;
     rowIds.unshift(rows[ordinal].rowId);
+    if (
+      needed.messageIds.every((messageId) =>
+        lookup.messagesById.has(messageId),
+      ) &&
+      needed.eventIds.every((eventId) => lookup.eventsById.has(eventId))
+    ) {
+      completeRowIds.unshift(rows[ordinal].rowId);
+    }
     if (hasContext) rowContext[rows[ordinal].rowId] = context;
     // Unshift each row's fresh records as a BLOCK, not one at a time. Walking
     // backward and unshifting individually reverses a row's own records, and
@@ -528,5 +552,12 @@ export function sliceTranscriptTail(
     events.unshift(...freshEvents);
   }
 
-  return { fromOrdinal, rowIds, messages, events, rowContext };
+  return {
+    fromOrdinal,
+    rowIds,
+    completeRowIds,
+    messages,
+    events,
+    rowContext,
+  };
 }

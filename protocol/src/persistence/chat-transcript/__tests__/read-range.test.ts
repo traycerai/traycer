@@ -160,6 +160,7 @@ describe("sliceTranscriptRange", () => {
     expect(result).toEqual({
       fromOrdinal: 0,
       rowIds: [],
+      completeRowIds: [],
       messages: [],
       events: [],
       rowContext: {},
@@ -230,6 +231,7 @@ describe("sliceTranscriptRange", () => {
     });
 
     expect(result.rowIds).toEqual(["m-1", "m-2"]);
+    expect(result.completeRowIds).toEqual(["m-1", "m-2"]);
     expect(result.reachedEnd).toBe(true);
   });
 
@@ -827,6 +829,7 @@ describe("a row's records are enumerated, not inferred", () => {
     );
 
     expect(slice.rowIds).toEqual(["assistant:t-1"]);
+    expect(slice.completeRowIds).toEqual(["assistant:t-1"]);
     expect(slice.events.map((event) => event.eventId)).toEqual(["e-1"]);
     expect(slice.messages.map((message) => message.messageId)).toEqual(["m-1"]);
   });
@@ -854,6 +857,7 @@ describe("a row's records are enumerated, not inferred", () => {
     );
 
     expect(slice.rowIds).toEqual(["assistant:t-1"]);
+    expect(slice.completeRowIds).toEqual([]);
     expect(slice.messages).toEqual([]);
   });
 });

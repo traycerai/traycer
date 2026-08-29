@@ -525,46 +525,28 @@ function pruneSupersededLiveRecords(
 function servedAssistantTurnKeys(
   rowIds: readonly string[],
   messages: readonly Message[],
-  liveMessages: readonly Message[],
 ): ReadonlySet<string> {
-  // A row id plus one matching record does not prove the folded turn is fully
-  // hydrated: the range reader preserves the row while independently skipping
-  // records its lookup no longer has. Retire the complete live stand-in only
-  // when the fresh records reproduce its entire rendered block sequence.
-  type AssistantBlocks = Extract<Message, { role: "assistant" }>["blocks"];
-  const servedBlocksByTurn = new Map<string, AssistantBlocks>();
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    const turnKey = assistantTurnKey(message);
-    servedBlocksByTurn.set(turnKey, [
-      ...(servedBlocksByTurn.get(turnKey) ?? []),
-      ...message.blocks,
-    ]);
-  }
-  const completeLiveTurnKeys = new Set<string>();
-  for (const message of liveMessages) {
-    if (
-      message.role !== "assistant" ||
-      !isTransientLiveAssistantMessageId(message.messageId)
-    ) {
-      continue;
-    }
-    const turnKey = assistantTurnKey(message);
-    const servedBlocks = servedBlocksByTurn.get(turnKey);
-    if (
-      servedBlocks !== undefined &&
-      JSON.stringify(servedBlocks) === JSON.stringify(message.blocks)
-    ) {
-      completeLiveTurnKeys.add(turnKey);
-    }
-  }
+  const messageKeys = new Set(
+    messages
+      .filter((message) => message.role === "assistant")
+      .map(assistantTurnKey),
+  );
   const keys = new Set<string>();
   for (const rowId of rowIds) {
     const turnKey = assistantRowTurnKey(rowId);
-    if (turnKey !== null && completeLiveTurnKeys.has(turnKey))
-      keys.add(turnKey);
+    if (turnKey !== null && messageKeys.has(turnKey)) keys.add(turnKey);
   }
   return keys;
+}
+
+function declaredCompleteTailRowIds(
+  tail: ChatTranscriptWindow,
+): readonly string[] {
+  // A legacy tail with no declared identities is seated positionally from the
+  // retained skeleton. During a rebuild that skeleton may be stale, so those
+  // fallback ids cannot prove which row the fresh records completed.
+  if (tail.rowIds === undefined) return [];
+  return tail.completeRowIds ?? [];
 }
 
 /**
@@ -1366,9 +1348,8 @@ export function applyWindowedSnapshot(
       hydratedBytes: totalBytes(spans),
     },
     servedAssistantTurnKeys(
-      tailRowIds,
+      declaredCompleteTailRowIds(input.tail),
       input.tail.messages,
-      boundedBase.liveMessages,
     ),
   );
 }
@@ -2197,11 +2178,7 @@ export function applyRangeResponse(
       hydratedBytes: totalBytes(spans),
       clock,
     },
-    servedAssistantTurnKeys(
-      response.rowIds,
-      response.messages,
-      window.liveMessages,
-    ),
+    servedAssistantTurnKeys(response.completeRowIds ?? [], response.messages),
   );
 }
 

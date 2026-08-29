@@ -130,6 +130,7 @@ function rangeResponse(input: {
   readonly epoch: number;
   readonly fromOrdinal: number;
   readonly rowIds: readonly string[];
+  readonly completeRowIds?: readonly string[];
   readonly messages: readonly Message[];
   readonly events?: readonly ChatEvent[];
 }): ChatRangeResponse {
@@ -138,6 +139,7 @@ function rangeResponse(input: {
     epoch: input.epoch,
     fromOrdinal: input.fromOrdinal,
     rowIds: [...input.rowIds],
+    completeRowIds: [...(input.completeRowIds ?? input.rowIds)],
     messages: [...input.messages],
     events: [...(input.events ?? [])],
     rowContext: {},
@@ -2296,6 +2298,7 @@ describe("what an overlap keeps", () => {
         epoch: 1,
         fromOrdinal: 0,
         rowIds: [assistantRowId(turnId)],
+        completeRowIds: [],
         messages: [
           {
             ...assistantMessage("assistant-first", turnId, 1),
@@ -2308,6 +2311,83 @@ describe("what an overlap keeps", () => {
     expect(partial.liveMessages.map((message) => message.messageId)).toEqual([
       transientId,
     ]);
+  });
+
+  it("retires a stand-in when a complete authoritative row rewrites block status", () => {
+    const turnId = "turn-authoritative-status";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const block = {
+      type: "text" as const,
+      blockId: "block-1",
+      status: "errored" as const,
+      timestamp: 1,
+      text: "done",
+      providerNotice: null,
+    };
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [
+          { ...assistantMessage(transientId, turnId, 2), blocks: [block] },
+        ],
+        events: [],
+      },
+    );
+
+    const hydrated = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          {
+            ...assistantMessage("assistant-durable", turnId, 1),
+            blocks: [{ ...block, status: "completed" }],
+          },
+        ],
+      }),
+    );
+
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
+  it("does not retire a stand-in from legacy positional tail identities", () => {
+    const turnId = "turn-legacy-tail";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const indexed = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [skeletonEntry(assistantRowId(turnId), 0)],
+        isFinal: true,
+      },
+    );
+    const live = appendLiveRecords(indexed, {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+
+    const replacement = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: {
+        fromOrdinal: 0,
+        messages: [assistantMessage("shared-steer-record", turnId, 1)],
+        events: [],
+      },
+    });
+
+    expect(
+      replacement.liveMessages.map((message) => message.messageId),
+    ).toEqual([transientId]);
   });
 
   it("does not reconcile stand-ins against a completed void skeleton", () => {

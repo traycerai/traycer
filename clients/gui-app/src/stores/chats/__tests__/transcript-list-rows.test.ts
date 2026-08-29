@@ -3,7 +3,10 @@ import {
   assistantRowId,
   assistantSliceRowId,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  ChatEvent,
+  Message,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
@@ -106,6 +109,7 @@ function windowOf(input: {
   skeletonComplete: boolean;
   invalidated: boolean;
   liveMessages?: readonly Message[];
+  liveEvents?: readonly ChatEvent[];
 }): TranscriptWindow {
   return {
     epoch: 1,
@@ -119,7 +123,7 @@ function windowOf(input: {
     liveMessages: [...(input.liveMessages ?? [])],
     skeletonBaselineTransientAssistantMessageIds: [],
     skeletonBaselineProvisionalUserMessageIds: [],
-    liveEvents: [],
+    liveEvents: [...(input.liveEvents ?? [])],
     hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
     unsettledByteMessageIds: [],
     invalidated: input.invalidated,
@@ -134,6 +138,42 @@ function kinds(rows: readonly TranscriptListRow[]): string[] {
 }
 
 describe("transcriptListRows", () => {
+  it("keeps a live stopped-turn row visible while the index is invalidated", () => {
+    const turnId = "turn-stopped";
+    const stopped: ChatEvent = {
+      eventId: "stopped-1",
+      type: "turn.stopped",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId,
+      messageId: "triggering-user",
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { reason: "user_requested", turnHadOutput: false },
+    };
+    const stoppedRow = {
+      ...modelWithoutPersistentMessageId(assistantRowId(turnId)),
+      statusLabel: "Completed" as const,
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveEvents: [stopped],
+      }),
+      rendered: [stoppedRow],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", `H:${assistantRowId(turnId)}`]);
+  });
+
   it("leaves a partially-hydrated turn's unserved rows as placeholders", () => {
     // Codex P1 (#1459): hydrating ONE row of a steer-split assistant turn
     // pulls the turn's shared records, and rendering those projects EVERY row
