@@ -255,27 +255,40 @@ function projectedLiveSetupRowIds(
   if (!window.liveEvents.some((event) => event.type.startsWith("setup."))) {
     return new Set();
   }
-  const liveCreatedAt = new Set(
-    projectTranscriptRows({
-      messages: window.liveMessages,
-      events: window.liveEvents,
-      activeTurnId: null,
-      chatId: "",
-    })
-      .filter((row) => row.source.kind === "setup-card")
-      .map((row) => row.rowId.slice(row.rowId.lastIndexOf(":") + 1)),
-  );
-  const newestByCreatedAt = new Map<string, { id: string; index: number }>();
+  const liveCountByCreatedAt = new Map<string, number>();
+  for (const createdAt of projectTranscriptRows({
+    messages: window.liveMessages,
+    events: window.liveEvents,
+    activeTurnId: null,
+    chatId: "",
+  })
+    .filter((row) => row.source.kind === "setup-card")
+    .map((row) => row.rowId.slice(row.rowId.lastIndexOf(":") + 1))) {
+    liveCountByCreatedAt.set(
+      createdAt,
+      (liveCountByCreatedAt.get(createdAt) ?? 0) + 1,
+    );
+  }
+  const renderedByCreatedAt = new Map<
+    string,
+    { id: string; index: number }[]
+  >();
   for (const model of rendered) {
     const match = model.id.match(/^setup-card:.*:(\d+):(\d+)$/);
-    if (match === null || !liveCreatedAt.has(match[2])) continue;
-    const index = Number(match[1]);
-    const current = newestByCreatedAt.get(match[2]);
-    if (current === undefined || index > current.index) {
-      newestByCreatedAt.set(match[2], { id: model.id, index });
+    if (match === null || !liveCountByCreatedAt.has(match[2])) continue;
+    const candidates = renderedByCreatedAt.get(match[2]) ?? [];
+    candidates.push({ id: model.id, index: Number(match[1]) });
+    renderedByCreatedAt.set(match[2], candidates);
+  }
+  const liveRowIds = new Set<string>();
+  for (const [createdAt, count] of liveCountByCreatedAt) {
+    const candidates = renderedByCreatedAt.get(createdAt) ?? [];
+    candidates.sort((left, right) => right.index - left.index);
+    for (const candidate of candidates.slice(0, count)) {
+      liveRowIds.add(candidate.id);
     }
   }
-  return new Set([...newestByCreatedAt.values()].map((entry) => entry.id));
+  return liveRowIds;
 }
 
 function isExplicitlyPendingOrStreaming(model: ChatMessageModel): boolean {

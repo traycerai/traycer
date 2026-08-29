@@ -98,6 +98,7 @@ function windowOf(
     spans,
     liveMessages: [],
     liveEvents: [],
+    snapshotProvisionalMessageIds: [],
     hydratedBytes: spans.reduce((sum, item) => sum + item.bytes, 0),
     unsettledByteMessageIds: [],
     invalidated: false,

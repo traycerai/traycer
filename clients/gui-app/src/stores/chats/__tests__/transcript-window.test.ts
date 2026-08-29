@@ -1950,6 +1950,30 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
+  it("keeps a provisional user after an established empty skeleton", () => {
+    const establishedEmpty = applySkeletonChunk(emptyTranscriptWindow(), {
+      epoch: 0,
+      fromOrdinal: 0,
+      entries: [],
+      isFinal: true,
+    });
+    const live = appendLiveRecords(establishedEmpty, {
+      messages: [userMessage("accepted-after-empty", 1)],
+      events: [],
+    });
+
+    const empty = applyWindowedSnapshot(live, {
+      epoch: 0,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(empty.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-after-empty",
+    ]);
+  });
+
   it("keeps an accepted user that overtakes a rebasing snapshot", () => {
     const live = appendLiveRecords(emptyTranscriptWindow(), {
       messages: [userMessage("accepted-after-rebase-snapshot", 2)],
@@ -2144,6 +2168,34 @@ describe("what an overlap keeps", () => {
 
     expect(confirmed.liveMessages).toEqual([]);
     expect(hydratedRecords(confirmed).messages).toEqual([]);
+  });
+
+  it("retires a provisional user after a completed nonempty rebuild omits it", () => {
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage("accepted-before-rebuild", 1)],
+      events: [],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveMessages).toEqual([]);
   });
 
   it("keeps a frozen assistant across an ambiguous same-epoch empty rebuild", () => {
@@ -2737,6 +2789,21 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
+  it("withholds every declared incomplete row without a live assistant", () => {
+    const partial = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["user-incomplete"],
+        incompleteRowIds: ["user-incomplete"],
+        messages: [userMessage("user-incomplete", 1)],
+      }),
+    );
+
+    expect(partial.spans).toEqual([]);
+  });
+
   it("retires a stand-in when a complete authoritative row rewrites block status", () => {
     const turnId = "turn-authoritative-status";
     const transientId = transientLiveAssistantMessageId(turnId);
@@ -2768,6 +2835,53 @@ describe("what an overlap keeps", () => {
           {
             ...assistantMessage("assistant-durable", turnId, 3),
             blocks: [{ ...block, status: "completed" }],
+          },
+        ],
+      }),
+    );
+
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
+  it("folds complete assistant records before comparing a stand-in", () => {
+    const turnId = "turn-multi-record";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const firstBlock = {
+      type: "text" as const,
+      blockId: "block-1",
+      status: "completed" as const,
+      timestamp: 1,
+      text: "first",
+      providerNotice: null,
+    };
+    const secondBlock = { ...firstBlock, blockId: "block-2", text: "second" };
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [
+          {
+            ...assistantMessage(transientId, turnId, 2),
+            blocks: [firstBlock, secondBlock],
+          },
+        ],
+        events: [],
+      },
+    );
+
+    const hydrated = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          {
+            ...assistantMessage("assistant-part-1", turnId, 2),
+            blocks: [firstBlock],
+          },
+          {
+            ...assistantMessage("assistant-part-2", turnId, 2),
+            blocks: [secondBlock],
           },
         ],
       }),

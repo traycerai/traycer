@@ -13,7 +13,6 @@ import {
   assistantRowTurnKey,
   projectTranscriptRows,
   queueSteerRowId,
-  type TranscriptRowDescriptor,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { rowRecordIds } from "@traycer/protocol/persistence/chat-transcript/read-range";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
@@ -261,6 +260,16 @@ export interface TranscriptWindow {
    */
   readonly liveMessages: readonly Message[];
   readonly liveEvents: readonly ChatEvent[];
+  /**
+   * Live messages carried across the latest snapshot boundary.
+   *
+   * A bulk snapshot can be overtaken by the interactive record frame, so the
+   * replacement skeleton may not use absence to retire these immediately.
+   * Once that skeleton completes, the NEXT snapshot is later authority: it
+   * may retire only these recorded ids while preserving messages appended
+   * after the boundary.
+   */
+  readonly snapshotProvisionalMessageIds: readonly string[];
   readonly hydratedBytes: number;
   /**
    * MESSAGE ids whose latest rewrite is not yet reflected in
@@ -386,6 +395,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     spans: [],
     liveMessages: [],
     liveEvents: [],
+    snapshotProvisionalMessageIds: [],
     hydratedBytes: 0,
     unsettledByteMessageIds: [],
     invalidated: false,
@@ -556,9 +566,31 @@ function servedAssistantTurns(
     if (message.role !== "assistant") continue;
     const turnKey = assistantTurnKey(message);
     const current = assistantMessages.get(turnKey);
-    if (current === undefined || message.timestamp > current.timestamp) {
+    if (current === undefined) {
       assistantMessages.set(turnKey, message);
+      continue;
     }
+    let startedAt = current.startedAt;
+    if (
+      startedAt === null ||
+      (message.startedAt !== null && message.startedAt < startedAt)
+    ) {
+      startedAt = message.startedAt;
+    }
+    assistantMessages.set(turnKey, {
+      ...current,
+      messageId: message.messageId,
+      blocks: [...current.blocks, ...message.blocks],
+      startedAt,
+      timestamp: Math.max(current.timestamp, message.timestamp),
+      usage: message.usage ?? current.usage,
+      reasoningEffort: current.reasoningEffort ?? message.reasoningEffort,
+      serviceTier: current.serviceTier ?? message.serviceTier,
+      imageResolutions: [
+        ...current.imageResolutions,
+        ...message.imageResolutions,
+      ],
+    });
   }
   const turns = new Map<string, Extract<Message, { role: "assistant" }>>();
   for (const rowId of rowIds) {
@@ -570,69 +602,10 @@ function servedAssistantTurns(
   return turns;
 }
 
-function conflictingIncompleteAssistantRowIds(
+function incompleteRowIdsToWithhold(
   incompleteRowIds: readonly string[] | undefined,
-  liveMessages: readonly Message[],
-  servedMessages: readonly Message[],
-  servedEvents: readonly ChatEvent[],
 ): ReadonlySet<string> {
-  if (incompleteRowIds === undefined || incompleteRowIds.length === 0) {
-    return new Set();
-  }
-  const liveTurnKeys = new Set<string>();
-  for (const message of liveMessages) {
-    if (
-      message.role === "assistant" &&
-      isTransientLiveAssistantMessageId(message.messageId)
-    ) {
-      liveTurnKeys.add(assistantTurnKey(message));
-    }
-  }
-  let servedProjection: readonly TranscriptRowDescriptor[] | null = null;
-  const servedRows = (): readonly TranscriptRowDescriptor[] =>
-    (servedProjection ??= projectTranscriptRows({
-      messages: servedMessages,
-      events: servedEvents,
-      activeTurnId: null,
-      chatId: "",
-    }));
-  let liveProjection: readonly TranscriptRowDescriptor[] | null = null;
-  const liveRows = (): readonly TranscriptRowDescriptor[] =>
-    (liveProjection ??= projectTranscriptRows({
-      messages: liveMessages,
-      events: [],
-      activeTurnId: null,
-      chatId: "",
-    }));
-  return new Set(
-    incompleteRowIds.filter((rowId) => {
-      const directTurnKey = assistantRowTurnKey(rowId);
-      const projected =
-        directTurnKey === null
-          ? servedRows().find((row) => row.rowId === rowId)
-          : undefined;
-      const liveProjected =
-        directTurnKey === null
-          ? liveRows().find((row) => row.rowId === rowId)
-          : undefined;
-      let turnKey = directTurnKey;
-      if (
-        turnKey === null &&
-        projected !== undefined &&
-        "turnKey" in projected.source
-      ) {
-        turnKey = projected.source.turnKey;
-      }
-      if (
-        turnKey === null &&
-        liveProjected !== undefined &&
-        "turnKey" in liveProjected.source
-      ) {
-        turnKey = liveProjected.source.turnKey;
-      }
-      return turnKey !== null && liveTurnKeys.has(turnKey);
-    }),
-  );
+  return new Set(incompleteRowIds ?? []);
 }
 
 function completeServedRowIds(
@@ -1180,22 +1153,11 @@ function classifySnapshotRevision(
   return indexRevision > window.indexRevision ? "gap" : "current";
 }
 
-function isConfirmedEmptySnapshot(
-  window: TranscriptWindow,
-  rowCount: number,
-): boolean {
-  return rowCount === 0 && window.rowCount === 0 && window.skeletonComplete;
-}
-
 function provisionalLiveMessagesForSnapshot(input: {
   readonly window: TranscriptWindow;
-  readonly rowCount: number;
   readonly missedDeltas: boolean;
   readonly rebased: boolean;
 }): readonly Message[] {
-  if (isConfirmedEmptySnapshot(input.window, input.rowCount)) {
-    return [];
-  }
   return input.window.liveMessages.filter(
     (message) =>
       (message.role === "assistant" &&
@@ -1207,16 +1169,46 @@ function provisionalLiveMessagesForSnapshot(input: {
 
 function provisionalLiveEventsForSnapshot(input: {
   readonly window: TranscriptWindow;
-  readonly rowCount: number;
   readonly missedDeltas: boolean;
   readonly rebased: boolean;
 }): readonly ChatEvent[] {
-  if (isConfirmedEmptySnapshot(input.window, input.rowCount)) {
-    return [];
-  }
   return input.rebased || input.missedDeltas || input.window.invalidated
     ? input.window.liveEvents
     : [];
+}
+
+function reconcileSnapshotProvisionalMessages(
+  window: TranscriptWindow,
+): TranscriptWindow {
+  if (
+    !window.skeletonComplete ||
+    window.snapshotProvisionalMessageIds.length === 0
+  ) {
+    return window;
+  }
+  const provisionalIds = new Set(window.snapshotProvisionalMessageIds);
+  const skeletonRowIds = new Set(
+    window.skeleton.flatMap((entry) =>
+      entry === undefined ? [] : [entry.rowId],
+    ),
+  );
+  const skeletonAssistantTurnKeys = new Set(
+    [...skeletonRowIds]
+      .map(assistantRowTurnKey)
+      .filter((turnKey): turnKey is string => turnKey !== null),
+  );
+  const liveMessages = window.liveMessages.filter((message) => {
+    if (!provisionalIds.has(message.messageId)) return true;
+    if (message.role === "user") {
+      return skeletonRowIds.has(message.messageId);
+    }
+    return skeletonAssistantTurnKeys.has(assistantTurnKey(message));
+  });
+  return {
+    ...window,
+    liveMessages,
+    snapshotProvisionalMessageIds: [],
+  };
 }
 
 function selectSnapshotLiveRecords<T>(
@@ -1359,21 +1351,19 @@ export function applyWindowedSnapshot(
     rebased,
   );
   if (verdict === "straggler") return window;
+  const reconciledWindow = reconcileSnapshotProvisionalMessages(window);
   const missedDeltas = verdict === "gap";
   const provisionalLiveMessages = provisionalLiveMessagesForSnapshot({
-    window,
-    rowCount: input.rowCount,
+    window: reconciledWindow,
     missedDeltas,
     rebased,
   });
   const provisionalLiveEvents = provisionalLiveEventsForSnapshot({
-    window,
-    rowCount: input.rowCount,
+    window: reconciledWindow,
     missedDeltas,
     rebased,
   });
-  const replaceLiveRecords =
-    window.invalidated || isConfirmedEmptySnapshot(window, input.rowCount);
+  const replaceLiveRecords = reconciledWindow.invalidated;
   // Snapshots travel on the bulk lane and can be overtaken by interactive live
   // records even when they announce a new epoch. Their later skeleton may
   // prove where a record belongs, but absence from it cannot prove that a live
@@ -1405,14 +1395,14 @@ export function applyWindowedSnapshot(
           clock,
         }
       : {
-          ...window,
+          ...reconciledWindow,
           liveMessages: selectSnapshotLiveRecords(
-            window.liveMessages,
+            reconciledWindow.liveMessages,
             provisionalLiveMessages,
             replaceLiveRecords,
           ),
           liveEvents: selectSnapshotLiveRecords(
-            window.liveEvents,
+            reconciledWindow.liveEvents,
             provisionalLiveEvents,
             replaceLiveRecords,
           ),
@@ -1457,15 +1447,21 @@ export function applyWindowedSnapshot(
           // the completion watchdog is what recovers a stream that never comes.
           skeletonComplete:
             input.indexRevision !== null &&
-            window.skeletonComplete &&
-            coversEveryOrdinal(window.skeleton, input.rowCount),
+            reconciledWindow.skeletonComplete &&
+            coversEveryOrdinal(reconciledWindow.skeleton, input.rowCount),
           skeletonStreamCoveredThrough:
             input.indexRevision === null
               ? 0
-              : window.skeletonStreamCoveredThrough,
+              : reconciledWindow.skeletonStreamCoveredThrough,
           invalidated: false,
           clock,
         };
+  const snapshotBase = {
+    ...base,
+    snapshotProvisionalMessageIds: provisionalLiveMessages.map(
+      (message) => message.messageId,
+    ),
+  };
 
   // `rowCount` is authoritative even when a same-epoch `null` revision merely
   // announces a replacement skeleton stream. A fresh host/view cache can
@@ -1473,7 +1469,7 @@ export function applyWindowedSnapshot(
   // necessarily fires. Bound the retained coordinate data now: otherwise old
   // ordinals beyond the new end make final-skeleton completeness impossible,
   // and a deleted transient can survive every rebuild.
-  const boundedBase = boundWindowToRowCount(base, input.rowCount);
+  const boundedBase = boundWindowToRowCount(snapshotBase, input.rowCount);
   const tailRowIds = tailRowIdsFor(boundedBase, input);
   if (tailRowIds === null) {
     // Two different "no tail" answers, and only one of them is inert.
@@ -1513,12 +1509,7 @@ function seatSnapshotTailSpan(input: {
   readonly clock: number;
 }): TranscriptWindow {
   const { base, tail, rowIds, rowContext, clock } = input;
-  const conflictingRowIds = conflictingIncompleteAssistantRowIds(
-    tail.incompleteRowIds,
-    base.liveMessages,
-    tail.messages,
-    tail.events,
-  );
+  const conflictingRowIds = incompleteRowIdsToWithhold(tail.incompleteRowIds);
   if (conflictingRowIds.size > 0) {
     return seatNonConflictingTailRuns(
       {
@@ -2377,11 +2368,8 @@ export function applyRangeResponse(
   if (skeletonContradicts(window, response.fromOrdinal, response.rowIds)) {
     return window.invalidated ? window : { ...window, invalidated: true };
   }
-  const conflictingRowIds = conflictingIncompleteAssistantRowIds(
+  const conflictingRowIds = incompleteRowIdsToWithhold(
     response.incompleteRowIds,
-    window.liveMessages,
-    response.messages,
-    response.events,
   );
   if (conflictingRowIds.size > 0) {
     const conflictingTurnKeys = new Set(

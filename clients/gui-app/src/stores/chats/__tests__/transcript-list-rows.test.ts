@@ -122,6 +122,7 @@ function windowOf(input: {
     spans: input.spans,
     liveMessages: [...(input.liveMessages ?? [])],
     liveEvents: [...(input.liveEvents ?? [])],
+    snapshotProvisionalMessageIds: [],
     hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
     unsettledByteMessageIds: [],
     invalidated: input.invalidated,
@@ -205,6 +206,50 @@ describe("transcriptListRows", () => {
     });
 
     expect(kinds(rows)).toEqual(["P:0", `H:${setupRowId}`]);
+  });
+
+  it("keeps every same-timestamp setup card projected from live events", () => {
+    const setupEvent = (
+      eventId: string,
+      type: ChatEvent["type"] = "setup.running",
+    ): ChatEvent => ({
+      eventId,
+      type,
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    });
+    const firstRowId = "setup-card:chat-1:2:2";
+    const secondRowId = "setup-card:chat-1:3:2";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: true,
+        liveEvents: [
+          setupEvent("setup-live-1"),
+          setupEvent("setup-boundary", "worktree.missing"),
+          setupEvent("setup-live-2"),
+        ],
+      }),
+      rendered: [
+        modelWithoutPersistentMessageId("setup-card:chat-1:1:2"),
+        modelWithoutPersistentMessageId(firstRowId),
+        modelWithoutPersistentMessageId(secondRowId),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", `H:${firstRowId}`, `H:${secondRowId}`]);
   });
 
   it("leaves a partially-hydrated turn's unserved rows as placeholders", () => {
