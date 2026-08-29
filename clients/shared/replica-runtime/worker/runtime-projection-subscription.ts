@@ -43,12 +43,15 @@ export interface RuntimeProjectionHandlers<TProjection> {
  * The ordering itself, as a value with no knowledge of where publications come
  * from.
  *
- * Split out from the subscription because the watermark must be held in
- * exactly ONE place. Production wires projections through the spawner's
- * `onProjection` port, so if this module also subscribed to the bridge
- * directly there would be two watermarks over one stream, each dropping the
- * other's deliveries as stale - a failure that looks like a projection that
- * updates half the time.
+ * A value rather than a subscription because the watermark must be held in
+ * exactly ONE place, and that place is the spawner: it constructs one of these
+ * per worker from the handlers its caller supplies, and hands back a port with
+ * no `onEvent` on it, so a second reducer over the same stream is unreachable
+ * rather than merely discouraged. Two watermarks would drop each other's
+ * deliveries as stale - a projection that updates half the time.
+ *
+ * Nothing else should construct one. If a caller finds itself wanting to, the
+ * question to answer first is which of the two is supposed to win.
  */
 export interface RuntimeProjectionOrdering {
   deliver(revision: number, value: unknown): void;
