@@ -191,4 +191,33 @@ describe("WorktreeDeleteStreamClient", () => {
     expect(onFailed).toHaveBeenCalledWith("Worktree is in use", undefined);
     client.close();
   });
+
+  it("delivers a 1.2 failed frame with an unknown code instead of dropping it", () => {
+    const session = new StubSession();
+    const wsStreamClient = makeWsStreamClient(session);
+    const onFailed = vi.fn();
+    const client = new WorktreeDeleteStreamClient({
+      wsStreamClient,
+      worktreePath: "/wt/a",
+      scripts: null,
+      stopOwners: false,
+      callbacks: {
+        onStarted: () => {},
+        onPhase: () => {},
+        onOutput: () => {},
+        onComplete: () => {},
+        onFailed,
+        onConnectionStatus: () => {},
+      },
+    });
+    session.emitFrame({
+      kind: "failed",
+      reason: "Worktree is in use",
+      code: "SOME_FUTURE_CODE",
+      holders: HOLDERS,
+      hasBinaryPayload: false,
+    });
+    expect(onFailed).toHaveBeenCalledWith("Worktree is in use", HOLDERS);
+    client.close();
+  });
 });
