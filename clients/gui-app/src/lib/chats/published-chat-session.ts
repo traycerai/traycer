@@ -327,7 +327,6 @@ export function publishedChatSessionState(
     // A published copy is static: nothing evicts, nothing jumps, and there is
     // no stream to request hydration from. All three are the inert values.
     coldRewrittenMessageIds: new Set(),
-    windowWriteDropped: false,
     jumpTargetOrdinal: null,
     requestTranscriptOrdinal: () => undefined,
     accumulatedFileChangeSummaries: [],
