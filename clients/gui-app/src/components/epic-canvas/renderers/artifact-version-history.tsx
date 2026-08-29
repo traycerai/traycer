@@ -51,7 +51,11 @@ import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mut
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useArtifactVersionHistoryAvailable } from "@/hooks/epic/use-artifact-version-history-available";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
+import { isEditableRole } from "@/lib/epic-permissions";
+import {
+  epicNodeRefForNodeId,
+  useEpicPermissionRole,
+} from "@/lib/epic-selectors";
 import { epicMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -374,6 +378,7 @@ function ArtifactVersionHistoryPanel(props: {
 }): ReactNode {
   const tileNavigation = useEpicTileNavigation();
   const viewTabId = useEpicViewTabId();
+  const canRestore = isEditableRole(useEpicPermissionRole());
   const [maximized, setMaximized] = useState(false);
   const panelWidthPx = useArtifactVersionHistoryPanelWidthPx();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -484,6 +489,7 @@ function ArtifactVersionHistoryPanel(props: {
     entry: ArtifactVersionObservationEntry,
     conflict: boolean,
   ): void => {
+    if (!canRestore) return;
     setRestoreTarget(entry);
     setUnavailable(null);
     setPreflightFailed(false);
@@ -519,7 +525,7 @@ function ArtifactVersionHistoryPanel(props: {
   };
 
   const executeRestore = (): void => {
-    if (restoreTarget === null || preflight === null) return;
+    if (!canRestore || restoreTarget === null || preflight === null) return;
     restore.mutate(
       {
         epicId: props.epicId,
@@ -715,6 +721,7 @@ function ArtifactVersionHistoryPanel(props: {
             afterMarkdown={selectedBlob.data?.markdown ?? null}
             loading={selectedBlob.isLoading || comparisonBlob.isLoading}
             failed={selectedBlob.isError || comparisonBlob.isError}
+            canRestore={canRestore}
             outcome={
               outcome !== null &&
               selected !== null &&
@@ -969,6 +976,7 @@ function VersionDiffView(props: {
   readonly afterMarkdown: string | null;
   readonly loading: boolean;
   readonly failed: boolean;
+  readonly canRestore: boolean;
   readonly outcome: OutcomeNotice["status"] | null;
   readonly onRetry: () => void;
   readonly onRestore: () => void;
@@ -1021,7 +1029,11 @@ function VersionDiffView(props: {
             {props.comparisonLabel ?? "Oldest saved version — shown in full"}
           </p>
         </div>
-        <Button size="sm" onClick={props.onRestore}>
+        <Button
+          size="sm"
+          disabled={!props.canRestore}
+          onClick={props.onRestore}
+        >
           <RotateCcwIcon className="size-4" />
           Restore this version
         </Button>

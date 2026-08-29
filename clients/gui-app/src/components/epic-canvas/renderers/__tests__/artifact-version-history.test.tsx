@@ -12,6 +12,7 @@ import type {
   ArtifactVersionsListResponse,
   ArtifactVersionsRestoreResponse,
 } from "@traycer/protocol/host/epic/artifact-versions";
+import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import {
@@ -98,6 +99,7 @@ const state = vi.hoisted(() => ({
   } satisfies ArtifactVersionsRestoreResponse,
   preflightError: false,
   restoreExecute: null as ArtifactVersionsRestoreResponse | null,
+  permissionRole: "owner" as PermissionRole,
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -110,6 +112,7 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 
 vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
+  useEpicPermissionRole: () => state.permissionRole,
   epicNodeRefForNodeId: (_state: object, chatId: string, hostId: string) => {
     state.nodeRefCalls.push({ chatId, hostId });
     return {
@@ -361,6 +364,7 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     };
     state.preflightError = false;
     state.restoreExecute = null;
+    state.permissionRole = "owner";
   });
 
   afterEach(() => {
@@ -617,6 +621,26 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
     expect(
       screen.getByRole("button", { name: "Restore this version" }),
     ).toBeTruthy();
+  });
+
+  it("keeps version history browsable but disables restore for viewers", () => {
+    state.permissionRole = "viewer";
+    state.historyEntries = [
+      observation("observation-viewer", "Viewer snapshot"),
+    ];
+
+    openHistory();
+
+    const restore = screen.getByRole("button", {
+      name: "Restore this version",
+    });
+    expect(restore.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(restore);
+    expect(
+      state.mutationCalls.filter(
+        (call) => call.method === "epic.artifactVersions.restore",
+      ),
+    ).toEqual([]);
   });
 
   it("shows a retry control when a version body cannot be loaded", () => {

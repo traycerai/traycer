@@ -1,10 +1,14 @@
 import { Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { DeletedArtifactEntry } from "@traycer/protocol/host/epic/artifact-versions";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { Button } from "@/components/ui/button";
+import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { isEditableRole } from "@/lib/epic-permissions";
+import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown/traycer-markdown";
@@ -36,7 +40,32 @@ function deletedArtifactUnavailableCopy(
 export function DeletedArtifactsTile(props: {
   readonly node: DeletedArtifactsTileRef;
 }): ReactNode {
+  const hostId = useTabHostId();
+  const available = useDeletedArtifactsAvailable(hostId);
+
+  if (!available) {
+    return (
+      <section
+        aria-label="Deleted artifacts"
+        data-testid="deleted-artifacts-tile"
+        className="flex h-full min-h-0 flex-col bg-background"
+      >
+        <DeletedArtifactsHeader />
+        <p className="p-5 text-muted-foreground">
+          Deleted artifacts aren&apos;t available on this host.
+        </p>
+      </section>
+    );
+  }
+
+  return <DeletedArtifactsTileContent node={props.node} />;
+}
+
+function DeletedArtifactsTileContent(props: {
+  readonly node: DeletedArtifactsTileRef;
+}): ReactNode {
   const client = useTabHostClient();
+  const canRestore = isEditableRole(useEpicPermissionRole());
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(
     null,
   );
@@ -64,31 +93,23 @@ export function DeletedArtifactsTile(props: {
       data-testid="deleted-artifacts-tile"
       className="flex h-full min-h-0 flex-col bg-background"
     >
-      <header className="flex shrink-0 items-center gap-3 border-b px-5 py-4">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-          <Trash2 className="size-4" />
-        </div>
-        <div className="min-w-0">
-          <h1 className="font-semibold">Deleted artifacts</h1>
-          <p className="text-ui-sm text-muted-foreground">
-            Restore artifacts retained in this epic&apos;s version history.
-          </p>
-        </div>
-      </header>
+      <DeletedArtifactsHeader />
       <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,2fr)_minmax(0,3fr)] lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:grid-rows-1">
         <DeletedArtifactList
           entries={entries}
           selectedArtifactId={selected?.artifactId ?? null}
           loading={deleted.isLoading}
           failed={deleted.isError}
+          canRestore={canRestore}
           restoringArtifactId={
             revive.isPending ? revive.variables.artifactId : null
           }
           onRetry={() => void deleted.refetch()}
           onSelect={setSelectedArtifactId}
-          onRestore={(artifactId) =>
-            revive.mutate({ epicId: props.node.epicId, artifactId })
-          }
+          onRestore={(artifactId) => {
+            if (!canRestore) return;
+            revive.mutate({ epicId: props.node.epicId, artifactId });
+          }}
         />
         <DeletedArtifactPreviewPane
           epicId={props.node.epicId}
@@ -96,6 +117,22 @@ export function DeletedArtifactsTile(props: {
         />
       </div>
     </section>
+  );
+}
+
+function DeletedArtifactsHeader(): ReactNode {
+  return (
+    <header className="flex shrink-0 items-center gap-3 border-b px-5 py-4">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+        <Trash2 className="size-4" />
+      </div>
+      <div className="min-w-0">
+        <h1 className="font-semibold">Deleted artifacts</h1>
+        <p className="text-ui-sm text-muted-foreground">
+          Restore artifacts retained in this epic&apos;s version history.
+        </p>
+      </div>
+    </header>
   );
 }
 
@@ -141,6 +178,7 @@ function DeletedArtifactList(props: {
   readonly selectedArtifactId: string | null;
   readonly loading: boolean;
   readonly failed: boolean;
+  readonly canRestore: boolean;
   readonly restoringArtifactId: string | null;
   readonly onRetry: () => void;
   readonly onSelect: (artifactId: string) => void;
@@ -183,6 +221,7 @@ function DeletedArtifactList(props: {
             entry={entry}
             selected={props.selectedArtifactId === entry.artifactId}
             restoring={props.restoringArtifactId === entry.artifactId}
+            canRestore={props.canRestore}
             onSelect={props.onSelect}
             onRestore={props.onRestore}
           />
@@ -196,6 +235,7 @@ function DeletedArtifactListEntry(props: {
   readonly entry: DeletedArtifactEntry;
   readonly selected: boolean;
   readonly restoring: boolean;
+  readonly canRestore: boolean;
   readonly onSelect: (artifactId: string) => void;
   readonly onRestore: (artifactId: string) => void;
 }): ReactNode {
@@ -232,7 +272,7 @@ function DeletedArtifactListEntry(props: {
         <Button
           size="sm"
           variant="outline"
-          disabled={reason !== null || props.restoring}
+          disabled={!props.canRestore || reason !== null || props.restoring}
           onClick={() => props.onRestore(props.entry.artifactId)}
         >
           Restore artifact

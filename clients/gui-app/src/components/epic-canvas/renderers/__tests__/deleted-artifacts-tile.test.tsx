@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeletedArtifactEntry } from "@traycer/protocol/host/epic/artifact-versions";
+import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import { makeDeletedArtifactsTileRef } from "@/stores/epics/canvas/tile-schema/deleted-artifacts-tile";
 
 const state = vi.hoisted(() => ({
@@ -11,6 +12,8 @@ const state = vi.hoisted(() => ({
   previewLoading: false,
   previewError: false,
   pendingArtifactId: null as string | null,
+  available: true,
+  permissionRole: "owner" as PermissionRole,
   queryCalls: [] as Array<{
     readonly method: string;
     readonly params: Record<string, unknown>;
@@ -24,6 +27,18 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => "host-a",
+}));
+
+vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
+  useDeletedArtifactsAvailable: () => state.available,
+}));
+
+vi.mock("@/lib/epic-selectors", () => ({
+  useEpicPermissionRole: () => state.permissionRole,
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -94,6 +109,8 @@ describe("<DeletedArtifactsTile />", () => {
     state.previewLoading = false;
     state.previewError = false;
     state.pendingArtifactId = null;
+    state.available = true;
+    state.permissionRole = "owner";
     state.queryCalls = [];
     state.mutations = [];
   });
@@ -109,6 +126,17 @@ describe("<DeletedArtifactsTile />", () => {
         "Restore artifacts retained in this epic's version history.",
       ),
     ).toBeTruthy();
+  });
+
+  it("does not call unsupported recovery methods for a persisted tile", () => {
+    state.available = false;
+
+    renderTile();
+
+    expect(
+      screen.getByText("Deleted artifacts aren't available on this host."),
+    ).toBeTruthy();
+    expect(state.queryCalls).toEqual([]);
   });
 
   it("restores a retained artifact", () => {
@@ -130,6 +158,28 @@ describe("<DeletedArtifactsTile />", () => {
     expect(state.mutations).toEqual([
       { epicId: EPIC_ID, artifactId: "artifact-a" },
     ]);
+  });
+
+  it("keeps deleted artifacts browsable but disables restore for viewers", () => {
+    state.permissionRole = "viewer";
+    state.entries = [
+      {
+        artifactId: "artifact-a",
+        title: "Recovered plan",
+        deletedAt: 1_700_000_000_000,
+        versionCount: 3,
+        lastContentHash: "a".repeat(64),
+        lastObservationId: "observation-a",
+        unrestorable: null,
+      },
+    ];
+
+    renderTile();
+
+    const restore = screen.getByRole("button", { name: "Restore artifact" });
+    expect(restore.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(restore);
+    expect(state.mutations).toEqual([]);
   });
 
   it("explains and disables unrecoverable entries", () => {
