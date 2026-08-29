@@ -11,8 +11,10 @@ import type {
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   assistantRowTurnKey,
+  projectTranscriptRows,
   queueSteerRowId,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { rowRecordIds } from "@traycer/protocol/persistence/chat-transcript/read-range";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
@@ -258,16 +260,6 @@ export interface TranscriptWindow {
    * matching the equivalent index-void path. Other live records clear.
    */
   readonly liveMessages: readonly Message[];
-  /**
-   * Transient assistants present when the current replacement skeleton began.
-   *
-   * A completed skeleton can disprove only this cohort. Records appended after
-   * the snapshot are newer than that authority and must survive its final
-   * chunk until a newer range or skeleton replaces them.
-   */
-  readonly skeletonBaselineTransientAssistantMessageIds: readonly string[];
-  /** Accepted users present when the current replacement skeleton began. */
-  readonly skeletonBaselineProvisionalUserMessageIds: readonly string[];
   readonly liveEvents: readonly ChatEvent[];
   readonly hydratedBytes: number;
   /**
@@ -393,8 +385,6 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     indexRevisionRebuilding: true,
     spans: [],
     liveMessages: [],
-    skeletonBaselineTransientAssistantMessageIds: [],
-    skeletonBaselineProvisionalUserMessageIds: [],
     liveEvents: [],
     hydratedBytes: 0,
     unsettledByteMessageIds: [],
@@ -573,6 +563,37 @@ function completeServedRowIds(
   if (incompleteRowIds.length === 0) return rowIds;
   const incomplete = new Set(incompleteRowIds);
   return rowIds.filter((rowId) => !incomplete.has(rowId));
+}
+
+function recordsForRowIds(
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+  rowIds: ReadonlySet<string>,
+): {
+  readonly messages: Message[];
+  readonly events: ChatEvent[];
+} {
+  const setupRowId = [...rowIds].find((rowId) =>
+    rowId.startsWith("setup-card:"),
+  );
+  const chatId = setupRowId?.match(/^setup-card:(.*):\d+:\d+$/)?.[1] ?? "";
+  const messageIds = new Set<string>();
+  const eventIds = new Set<string>();
+  for (const row of projectTranscriptRows({
+    messages,
+    events,
+    activeTurnId: null,
+    chatId,
+  })) {
+    if (!rowIds.has(row.rowId)) continue;
+    const recordIds = rowRecordIds(row.source);
+    for (const id of recordIds.messageIds) messageIds.add(id);
+    for (const id of recordIds.eventIds) eventIds.add(id);
+  }
+  return {
+    messages: messages.filter((message) => messageIds.has(message.messageId)),
+    events: events.filter((event) => eventIds.has(event.eventId)),
+  };
 }
 
 function declaredCompleteTailRowIds(
@@ -1076,14 +1097,6 @@ function provisionalLiveMessagesForSnapshot(input: {
   );
 }
 
-function replacementSkeletonBaseline<T>(
-  indexRevision: number | null,
-  fresh: readonly T[],
-  held: readonly T[],
-): readonly T[] {
-  return indexRevision === null ? fresh : held;
-}
-
 /**
  * Seat a windowed snapshot.
  *
@@ -1223,25 +1236,10 @@ export function applyWindowedSnapshot(
     missedDeltas,
     rebased,
   });
-  // Only a changed epoch proves its snapshot authority is newer than the live
-  // cohort. Same-epoch snapshots can be generated before an interactive live
-  // record and arrive after it on the bulk lane, so their skeleton absence
-  // cannot safely retire any record already held by the client.
   // Snapshots travel on the bulk lane and can be overtaken by interactive live
   // records even when they announce a new epoch. Their later skeleton may
   // prove where a record belongs, but absence from it cannot prove that a live
   // record already held by this client was deleted.
-  const skeletonBaselineMessages: readonly Message[] = [];
-  const skeletonBaselineTransientAssistantMessageIds = skeletonBaselineMessages
-    .filter(
-      (message) =>
-        message.role === "assistant" &&
-        isTransientLiveAssistantMessageId(message.messageId),
-    )
-    .map((message) => message.messageId);
-  const skeletonBaselineProvisionalUserMessageIds = skeletonBaselineMessages
-    .filter((message) => message.role === "user")
-    .map((message) => message.messageId);
   const base: TranscriptWindow =
     rebased || missedDeltas
       ? {
@@ -1258,8 +1256,6 @@ export function applyWindowedSnapshot(
           // the same turn (see pruneSupersededLiveRecords), despite its
           // intentionally different id.
           liveMessages: provisionalLiveMessages,
-          skeletonBaselineTransientAssistantMessageIds,
-          skeletonBaselineProvisionalUserMessageIds,
           epoch: input.epoch,
           rowCount: input.rowCount,
           indexRevision: input.indexRevision ?? 0,
@@ -1271,24 +1267,9 @@ export function applyWindowedSnapshot(
         }
       : {
           ...window,
-          // A resnapshot retains provisional users while its replacement
-          // skeleton streams. The complete skeleton may retire only the cohort
-          // captured here; a `messageAccepted` delivered AFTER this snapshot is
-          // appended later and survives that older authority. Transient
-          // assistants use the same cohort boundary plus turn identity.
           liveMessages: window.invalidated
             ? provisionalLiveMessages
             : window.liveMessages,
-          skeletonBaselineTransientAssistantMessageIds:
-            input.indexRevision === null
-              ? skeletonBaselineTransientAssistantMessageIds
-              : window.skeletonBaselineTransientAssistantMessageIds,
-          skeletonBaselineProvisionalUserMessageIds:
-            replacementSkeletonBaseline(
-              input.indexRevision,
-              skeletonBaselineProvisionalUserMessageIds,
-              window.skeletonBaselineProvisionalUserMessageIds,
-            ),
           rowCount: input.rowCount,
           // A restreaming snapshot (`null`) leaves the held revision alone: the
           // skeleton chunks that follow do not carry one, so overwriting it here
@@ -1449,6 +1430,10 @@ function seatNonConflictingTailRuns(
     if (runStart < 0) continue;
     const rowIds = input.rowIds.slice(runStart, index);
     const rowIdSet = new Set(rowIds);
+    const records = recordsForRowIds(messages, events, rowIdSet);
+    const rowContext = Object.fromEntries(
+      Object.entries(input.rowContext).filter(([id]) => rowIdSet.has(id)),
+    );
     next = seatSnapshotTailSpan({
       base: next,
       tail: {
@@ -1458,16 +1443,12 @@ function seatNonConflictingTailRuns(
         incompleteRowIds: input.tail.incompleteRowIds?.filter((id) =>
           rowIdSet.has(id),
         ),
-        messages,
-        events,
-        rowContext: Object.fromEntries(
-          Object.entries(input.rowContext).filter(([id]) => rowIdSet.has(id)),
-        ),
+        messages: records.messages,
+        events: records.events,
+        rowContext,
       },
       rowIds,
-      rowContext: Object.fromEntries(
-        Object.entries(input.rowContext).filter(([id]) => rowIdSet.has(id)),
-      ),
+      rowContext,
       clock: input.clock,
     });
     runStart = -1;
@@ -1619,69 +1600,11 @@ export function applySkeletonChunk(
     invalidated: window.invalidated || lost,
     clock: window.clock + 1,
   };
-  return reconcileProvisionalMessagesWithSkeleton(
-    reconcileSpansWithSkeleton(
-      next,
-      chunk.fromOrdinal,
-      chunk.fromOrdinal + chunk.entries.length,
-    ),
+  return reconcileSpansWithSkeleton(
+    next,
+    chunk.fromOrdinal,
+    chunk.fromOrdinal + chunk.entries.length,
   );
-}
-
-/**
- * Retire provisional live records the authoritative replacement index disproves.
- *
- * Only a COMPLETE skeleton can answer absence. Before then, a missing turn may
- * simply sit in a chunk that has not arrived yet. A named user row remains
- * provisional until its range body lands; a present assistant turn is kept
- * until {@link pruneSupersededLiveRecords} replaces the transient message with
- * the freshly served authoritative record by turn identity.
- */
-function reconcileProvisionalMessagesWithSkeleton(
-  window: TranscriptWindow,
-): TranscriptWindow {
-  if (
-    window.invalidated ||
-    !window.skeletonComplete ||
-    window.liveMessages.length === 0
-  ) {
-    return window;
-  }
-  const skeletonAssistantTurnKeys = new Set<string>();
-  const skeletonRowIds = new Set<string>();
-  for (const entry of window.skeleton) {
-    if (entry === undefined) continue;
-    skeletonRowIds.add(entry.rowId);
-    const turnKey = assistantRowTurnKey(entry.rowId);
-    if (turnKey !== null) skeletonAssistantTurnKeys.add(turnKey);
-  }
-  const baselineMessageIds = new Set(
-    window.skeletonBaselineTransientAssistantMessageIds,
-  );
-  const baselineUserMessageIds = new Set(
-    window.skeletonBaselineProvisionalUserMessageIds,
-  );
-  const liveMessages = window.liveMessages.filter((message) =>
-    message.role === "user"
-      ? !baselineUserMessageIds.has(message.messageId) ||
-        skeletonRowIds.has(message.messageId)
-      : !isTransientLiveAssistantMessageId(message.messageId) ||
-        !baselineMessageIds.has(message.messageId) ||
-        skeletonAssistantTurnKeys.has(assistantTurnKey(message)),
-  );
-  if (
-    liveMessages.length === window.liveMessages.length &&
-    baselineMessageIds.size === 0 &&
-    baselineUserMessageIds.size === 0
-  ) {
-    return window;
-  }
-  return {
-    ...window,
-    liveMessages,
-    skeletonBaselineTransientAssistantMessageIds: [],
-    skeletonBaselineProvisionalUserMessageIds: [],
-  };
 }
 
 /**
@@ -2322,12 +2245,13 @@ export function applyRangeResponse(
       if (runStart < 0) continue;
       const rowIds = response.rowIds.slice(runStart, index);
       const rowIdSet = new Set(rowIds);
+      const records = recordsForRowIds(messages, events, rowIdSet);
       next = applyRangeResponse(next, {
         ...response,
         fromOrdinal: response.fromOrdinal + runStart,
         rowIds,
-        messages,
-        events,
+        messages: records.messages,
+        events: records.events,
         incompleteRowIds: response.incompleteRowIds?.filter((id) =>
           rowIdSet.has(id),
         ),

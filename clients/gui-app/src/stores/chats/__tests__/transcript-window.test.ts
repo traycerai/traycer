@@ -2334,6 +2334,15 @@ describe("what an overlap keeps", () => {
       ["user-after"],
     ]);
     expect(
+      partial.spans.map((span) =>
+        span.messages.map((message) => message.messageId),
+      ),
+    ).toEqual([["user-before"], ["user-after"]]);
+    expect(partial.hydratedBytes).toBe(
+      recordByteLength(userMessage("user-before", 0)) +
+        recordByteLength(userMessage("user-after", 3)),
+    );
+    expect(
       hydratedRecords(partial).messages.map((message) => message.messageId),
     ).toEqual(["user-before", "user-after", transientId]);
   });
@@ -2367,6 +2376,11 @@ describe("what an overlap keeps", () => {
       ["user-before"],
       ["user-after"],
     ]);
+    expect(
+      snapshot.spans.map((span) =>
+        span.messages.map((message) => message.messageId),
+      ),
+    ).toEqual([["user-before"], ["user-after"]]);
     expect(
       hydratedRecords(snapshot).messages.map((message) => message.messageId),
     ).toEqual(["user-before", "user-after", transientId]);

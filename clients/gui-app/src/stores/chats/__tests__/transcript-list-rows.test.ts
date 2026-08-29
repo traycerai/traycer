@@ -121,8 +121,6 @@ function windowOf(input: {
     skeletonStreamCoveredThrough: input.skeletonComplete ? input.rowCount : 0,
     spans: input.spans,
     liveMessages: [...(input.liveMessages ?? [])],
-    skeletonBaselineTransientAssistantMessageIds: [],
-    skeletonBaselineProvisionalUserMessageIds: [],
     liveEvents: [...(input.liveEvents ?? [])],
     hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
     unsettledByteMessageIds: [],

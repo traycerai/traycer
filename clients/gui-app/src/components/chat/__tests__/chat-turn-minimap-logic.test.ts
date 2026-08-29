@@ -200,8 +200,6 @@ describe("chatTurnMinimapItems caching", () => {
         },
       ],
       liveMessages: [],
-      skeletonBaselineTransientAssistantMessageIds: [],
-      skeletonBaselineProvisionalUserMessageIds: [],
       liveEvents: [],
       hydratedBytes: 32,
       unsettledByteMessageIds: [],
