@@ -53,8 +53,8 @@ export type SessionImportScanPhase = "scanning" | "complete" | "failed";
  */
 export type SessionImportScanWindow = 7 | 14 | 30 | null;
 
-/** Two weeks: recent enough to be "what I'm working on", the act's premise. */
-export const SESSION_IMPORT_DEFAULT_SCAN_WINDOW: SessionImportScanWindow = 14;
+/** A week: recent enough to be "what I'm working on", the act's premise. */
+export const SESSION_IMPORT_DEFAULT_SCAN_WINDOW: SessionImportScanWindow = 7;
 
 export const SESSION_IMPORT_SCAN_WINDOW_OPTIONS: ReadonlyArray<{
   readonly window: SessionImportScanWindow;
@@ -94,6 +94,13 @@ export interface SessionImportWizardState {
   readonly disabledHarnesses: ReadonlySet<GuiHarnessId>;
   /** How far back the current scan looks; the control the toolbar renders. */
   readonly scanWindow: SessionImportScanWindow;
+  /**
+   * Every provider the host said the scan covers, from its `started` frame.
+   * This is what keeps the pill row STATIC: pills exist from the moment the
+   * scan starts and hold through rescans, instead of each provider's pill
+   * popping in with its first folder and vanishing on every restart.
+   */
+  readonly scannedProviders: ReadonlyArray<GuiHarnessId>;
 }
 
 export const SESSION_IMPORT_INITIAL_STATE: SessionImportWizardState = {
@@ -107,6 +114,7 @@ export const SESSION_IMPORT_INITIAL_STATE: SessionImportWizardState = {
   query: "",
   disabledHarnesses: new Set(),
   scanWindow: SESSION_IMPORT_DEFAULT_SCAN_WINDOW,
+  scannedProviders: [],
 };
 
 /**
@@ -120,6 +128,10 @@ export type SessionImportWizardAction =
   | {
       readonly kind: "scanRestarted";
       readonly reason: SessionImportScanRestartReason;
+    }
+  | {
+      readonly kind: "scanStarted";
+      readonly providers: ReadonlyArray<GuiHarnessId>;
     }
   | { readonly kind: "scanGroupArrived"; readonly group: SessionImportGroup }
   | {
@@ -169,6 +181,7 @@ export function sessionImportWizardReducer(
 ): SessionImportWizardState {
   switch (action.kind) {
     case "scanRestarted":
+    case "scanStarted":
     case "scanGroupArrived":
     case "scanProviderFailed":
     case "scanCompleted":
@@ -212,13 +225,19 @@ function applyScanFrame(
       // A fresh scan starts clean: last visit's picks may already have been
       // imported. Only what the user narrowed the picker to survives - the
       // scan window included, because a window change is itself what starts
-      // most fresh scans.
+      // most fresh scans. The provider roster survives too: which providers
+      // the host scans is not a per-scan fact, and dropping it here is what
+      // made the pill row blink empty on every window change.
       return {
         ...SESSION_IMPORT_INITIAL_STATE,
         query: state.query,
         disabledHarnesses: state.disabledHarnesses,
         scanWindow: state.scanWindow,
+        scannedProviders: state.scannedProviders,
       };
+    }
+    case "scanStarted": {
+      return { ...state, scannedProviders: action.providers };
     }
     case "scanGroupArrived": {
       const key = sessionImportGroupKey(action.group.location);
@@ -540,15 +559,19 @@ function matchesQuery(
 }
 
 /**
- * The pill row: every harness this scan has produced work for, plus any the
- * user has switched off. A switched-off harness has to keep its pill even when
- * a rescan found nothing for it - the unlit pill is the only thing on screen
- * that explains why those rows are missing, and the only way back.
+ * The pill row: every provider the host's scan covers, plus any the scan has
+ * produced work for or the user has switched off. The roster comes from the
+ * scan's `started` frame so the row is complete before the first folder lands
+ * and identical after every rescan - pills that popped in per result read as
+ * flicker. A switched-off harness keeps its pill even when a rescan found
+ * nothing for it - the unlit pill is the only thing on screen that explains
+ * why those rows are missing, and the only way back.
  */
 function providerViewsFor(
   state: SessionImportWizardState,
 ): ReadonlyArray<SessionImportProviderView> {
   const counts = new Map<GuiHarnessId, number>();
+  for (const harness of state.scannedProviders) counts.set(harness, 0);
   for (const harness of state.disabledHarnesses) counts.set(harness, 0);
   for (const group of state.groups) {
     for (const candidate of group.sessions) {
