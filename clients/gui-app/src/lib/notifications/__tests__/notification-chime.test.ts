@@ -4,6 +4,7 @@ import {
   disposeNotificationChimeAudio,
   notificationChimeEventTypeForSeverities,
   playNotificationChimeSound,
+  prepareNotificationChimeAudio,
 } from "@/lib/notifications/notification-chime";
 
 const oscillators: Array<{
@@ -59,6 +60,16 @@ afterEach(() => {
 });
 
 describe("playNotificationChimeSound", () => {
+  it("primes the audio renderer before the first audible chime", () => {
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+
+    prepareNotificationChimeAudio();
+
+    expect(oscillators).toHaveLength(1);
+    expect(oscillators[0].start).toHaveBeenCalledWith(2);
+    expect(oscillators[0].stop).toHaveBeenCalledWith(2.02);
+  });
+
   it("does not create an audio context when chimes are disabled", () => {
     const AudioContext = vi.fn(FakeAudioContext);
     vi.stubGlobal("AudioContext", AudioContext);
@@ -104,6 +115,27 @@ describe("playNotificationChimeSound", () => {
       oscillators[0].frequency.exponentialRampToValueAtTime.mock.calls[0];
     expect(frequencyRamp[0]).toBe(880);
     expect(frequencyRamp[1]).toBeCloseTo(2.095);
+  });
+
+  it("plays Rift as a restrained descending failure cue", () => {
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+
+    playNotificationChimeSound("rift");
+
+    expect(oscillators).toHaveLength(3);
+    expect(oscillators[0].frequency.setValueAtTime).toHaveBeenCalledWith(
+      659.25,
+      2.005,
+    );
+    expect(oscillators[1].frequency.setValueAtTime).toHaveBeenCalledWith(
+      622.25,
+      2.105,
+    );
+    expect(oscillators[2].frequency.setValueAtTime).toHaveBeenCalledWith(
+      440,
+      2.205,
+    );
+    expect(oscillators[2].stop.mock.calls[0][0]).toBeCloseTo(2.415);
   });
 
   it("reuses one interactive audio context across chimes", () => {
@@ -168,7 +200,7 @@ describe("notificationChimeEventTypeForSeverities", () => {
   it("uses distinct semantic defaults for each notification lane", () => {
     expect(DEFAULT_NOTIFICATION_CHIME_SOUNDS).toEqual({
       needs_action: "orbit",
-      failure: "beacon",
+      failure: "rift",
       done: "prism",
       info: "ember",
     });
