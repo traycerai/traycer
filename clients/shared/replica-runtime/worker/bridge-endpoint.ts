@@ -24,11 +24,17 @@
  * worker that answered nothing is not idempotent by assumption).
  */
 import {
+  buildMainCall,
   buildRuntimeWorkerCall,
   CALL_RESPONSE_PARSERS,
   isMainToWorkerFrame,
   isWorkerToMainFrame,
+  MAIN_CALL_RESPONSE_PARSERS,
   type BridgeCallResult,
+  type MainCall,
+  type MainCallKind,
+  type MainCallRequest,
+  type MainCallResponse,
   type MainToWorkerEvent,
   type MainToWorkerFrame,
   type RuntimeWorkerCall,
@@ -38,6 +44,7 @@ import {
   type WorkerToMainEvent,
   type WorkerToMainFrame,
 } from "./bridge-protocol";
+import { NO_TRANSFER } from "./transferable-bytes";
 
 /**
  * The pipe, reduced to what a `Worker`, a `MessagePort` and a worker's own
@@ -78,6 +85,27 @@ export type RuntimeWorkerCallHandlers = {
 };
 
 /**
+ * The main thread's side of the worker->main call.
+ *
+ * Answers a plain response rather than a {@link BridgeReply}, and the asymmetry
+ * with {@link RuntimeWorkerCallHandlers} is deliberate. Bytes travel ONE way on
+ * this bridge - the replica lives in the worker, so it is the worker that hands
+ * over buffers - and the main-thread answer is a small scalar record. Giving
+ * these handlers a transfer list would make every one of them write
+ * `transfer: NO_TRANSFER` to say something that is true by construction. A
+ * second main call that genuinely carried bytes would change this signature, and
+ * it would arrive with the justifying paragraph `MainCallMap` already demands.
+ */
+export type MainCallHandlers = {
+  readonly [K in MainCallKind]: (
+    request: MainCallRequest<K>,
+  ) => Promise<MainCallResponse<K>>;
+};
+
+/** Either direction's call kind, for errors that can be raised by both. */
+export type BridgeCallKind = RuntimeWorkerCallKind | MainCallKind;
+
+/**
  * A rejection that crossed the boundary.
  *
  * Carries the original error's `name` so a caller can still tell one failure
@@ -108,10 +136,13 @@ export class BridgeDisposedError extends Error {
  * message, so a caller can branch on it without parsing prose.
  */
 export class BridgeResponseMismatchError extends Error {
-  readonly kind: RuntimeWorkerCallKind;
+  readonly kind: BridgeCallKind;
 
-  constructor(kind: RuntimeWorkerCallKind) {
-    super(`The runtime worker answered '${kind}' with a foreign payload`);
+  constructor(
+    responder: "runtime worker" | "main thread",
+    kind: BridgeCallKind,
+  ) {
+    super(`The ${responder} answered '${kind}' with a foreign payload`);
     this.name = "BridgeResponseMismatchError";
     this.kind = kind;
   }
@@ -141,6 +172,23 @@ export interface RuntimeWorkerPort {
   ): Promise<RuntimeWorkerCallResponse<K>>;
 }
 
+/**
+ * The ask half of the OTHER direction, and the only half the relocated
+ * composition root is handed.
+ *
+ * Narrower than {@link WorkerBridgeEndpoint} for the same reason
+ * {@link RuntimeWorkerPort} is narrower than {@link MainBridgeEndpoint}: the
+ * event stream has one owner, and the modules that need to ask the main thread
+ * something (the transport's auth recovery, its credential mint) have no
+ * business emitting a projection or subscribing to a bootstrap.
+ */
+export interface MainThreadPort {
+  call<K extends MainCallKind>(
+    kind: K,
+    request: MainCallRequest<K>,
+  ): Promise<MainCallResponse<K>>;
+}
+
 export interface MainBridgeEndpoint extends RuntimeWorkerPort {
   emit(event: MainToWorkerEvent, transfer: readonly ArrayBuffer[]): void;
   onEvent(listener: (event: WorkerToMainEvent) => void): () => void;
@@ -148,7 +196,7 @@ export interface MainBridgeEndpoint extends RuntimeWorkerPort {
   dispose(): void;
 }
 
-export interface WorkerBridgeEndpoint {
+export interface WorkerBridgeEndpoint extends MainThreadPort {
   emit(event: WorkerToMainEvent, transfer: readonly ArrayBuffer[]): void;
   onEvent(listener: (event: MainToWorkerEvent) => void): () => void;
   /** Idempotent. Stops listening; in-flight handlers are left to settle. */
@@ -262,6 +310,7 @@ function issueCall<TUnion, TResponse>(args: {
 
 export function createMainBridgeEndpoint(
   transport: BridgeTransport,
+  handlers: MainCallHandlers,
 ): MainBridgeEndpoint {
   const listeners = new Set<(event: WorkerToMainEvent) => void>();
   const table =
@@ -281,6 +330,13 @@ export function createMainBridgeEndpoint(
       for (const listener of [...listeners]) listener(message.event);
       return;
     }
+    if (message.frame === "main-call") {
+      const { callId } = message;
+      void serveMainCall(handlers, message.call).then((result) => {
+        post({ frame: "main-result", callId, result }, NO_TRANSFER);
+      });
+      return;
+    }
     table.settle(message.callId, message.result);
   });
 
@@ -298,7 +354,7 @@ export function createMainBridgeEndpoint(
       return issueCall({
         table,
         parse,
-        mismatch: () => new BridgeResponseMismatchError(kind),
+        mismatch: () => new BridgeResponseMismatchError("runtime worker", kind),
         post: (callId) => {
           post(
             {
@@ -335,6 +391,7 @@ export function createWorkerBridgeEndpoint(
   handlers: RuntimeWorkerCallHandlers,
 ): WorkerBridgeEndpoint {
   const listeners = new Set<(event: MainToWorkerEvent) => void>();
+  const table = createPendingCallTable<MainCallResponse<MainCallKind>>();
   let disposed = false;
 
   function post(
@@ -351,6 +408,10 @@ export function createWorkerBridgeEndpoint(
       for (const listener of [...listeners]) listener(message.event);
       return;
     }
+    if (message.frame === "main-result") {
+      table.settle(message.callId, message.result);
+      return;
+    }
     const { callId } = message;
     void serve(handlers, message.call).then((reply) => {
       post({ frame: "result", callId, result: reply.result }, reply.transfer);
@@ -360,6 +421,24 @@ export function createWorkerBridgeEndpoint(
   return {
     emit(event, transfer): void {
       post({ frame: "event", event }, transfer);
+    },
+    call<K extends MainCallKind>(
+      kind: K,
+      request: MainCallRequest<K>,
+    ): Promise<MainCallResponse<K>> {
+      if (disposed) return Promise.reject(new BridgeDisposedError());
+      const parse = MAIN_CALL_RESPONSE_PARSERS[kind];
+      return issueCall({
+        table,
+        parse,
+        mismatch: () => new BridgeResponseMismatchError("main thread", kind),
+        post: (callId) => {
+          post(
+            { frame: "main-call", callId, call: buildMainCall(kind, request) },
+            NO_TRANSFER,
+          );
+        },
+      });
     },
     onEvent(listener): () => void {
       listeners.add(listener);
@@ -372,7 +451,53 @@ export function createWorkerBridgeEndpoint(
       disposed = true;
       unsubscribe();
       listeners.clear();
+      // A worker torn down mid-command would otherwise leave its queue awaiting
+      // a verdict forever, inside a thread about to be terminated.
+      table.abortAll(new BridgeDisposedError());
     },
+  };
+}
+
+/**
+ * Runs one worker->main call against the main-side handler map, and never
+ * rejects - for the same reason {@link serve} does not: a rejection here is a
+ * lost call, and the worker's promise would hang with nothing to settle it,
+ * inside a transport that is waiting on a credential.
+ *
+ * The `switch` is again what correlates a request with its handler; indexing
+ * the map by a union-typed key keeps the request correlated with its
+ * handler. The `never` arm makes a second `MainCallMap` member fail to
+ * compile here as well as at its coverage record.
+ */
+async function serveMainCall(
+  handlers: MainCallHandlers,
+  call: MainCall,
+): Promise<BridgeCallResult<MainCallResponse<MainCallKind>>> {
+  try {
+    switch (call.kind) {
+      case "main/write-command": {
+        const value = await handlers["main/write-command"](call.request);
+        return { outcome: "ok", value };
+      }
+      default:
+        return unservedMainCall(call);
+    }
+  } catch (cause: unknown) {
+    return {
+      outcome: "error",
+      name: cause instanceof Error ? cause.name : "Error",
+      message: describe(cause),
+    };
+  }
+}
+
+function unservedMainCall(
+  call: never,
+): BridgeCallResult<MainCallResponse<MainCallKind>> {
+  return {
+    outcome: "error",
+    name: "BridgeUnknownCallError",
+    message: `The main thread has no handler for ${JSON.stringify(call)}`,
   };
 }
 

@@ -27,6 +27,7 @@ import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-str
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   createMainBridgeEndpoint,
+  type MainCallHandlers,
   type RuntimeWorkerPort,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import {
@@ -43,6 +44,7 @@ import {
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 import {
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
+  type WriteCommandOutcome,
   type RuntimeWorkerLogEntry,
   type WorkerToMainEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
@@ -73,6 +75,21 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
    * projections must be told rather than left waiting.
    */
   readonly relay: RuntimeWorkerLogRelay;
+  /**
+   * Sends one epic write command on this session's unary requester, and
+   * CLASSIFIES its failure here on the main thread.
+   *
+   * Classification is main's because an `Error` does not survive structured
+   * clone: the worker must receive `CommandSendFailure` - the classifier's own
+   * union - never a thrown object it would have to reconstruct. The worker's
+   * command queue then re-throws it as a carrier and unwraps it in its own
+   * `classifyFailure`, which leaves the SHARED `CommandQueueOptions` contract
+   * untouched.
+   */
+  readonly writeCommand: (
+    commandId: string,
+    intent: unknown,
+  ) => Promise<WriteCommandOutcome>;
   /**
    * The session's REAL stream client, which stays on this thread.
    *
@@ -143,7 +160,16 @@ export function spawnEpicRuntimeWorker<TProjection>(
   options: SpawnEpicRuntimeWorkerOptions<TProjection>,
 ): EpicRuntimeWorkerHandle {
   const worker = options.createWorker();
-  const bridge = createMainBridgeEndpoint(createMessageTargetTransport(worker));
+  // Built from what the caller holds. The one worker->main call, answered by
+  // the session's own requester - see `MainCallMap` for why it is a call.
+  const mainCallHandlers: MainCallHandlers = {
+    "main/write-command": (request) =>
+      options.writeCommand(request.commandId, request.intent),
+  };
+  const bridge = createMainBridgeEndpoint(
+    createMessageTargetTransport(worker),
+    mainCallHandlers,
+  );
   // The proxy host owns the REAL sessions the worker opens. It is the object
   // this side detaches, not the socket - and it is a SLOT rather than a
   // constant, because a re-attach binds a NEW host over the new transport:

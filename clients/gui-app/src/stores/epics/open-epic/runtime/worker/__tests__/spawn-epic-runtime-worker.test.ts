@@ -55,6 +55,15 @@ function spawnOptions<TProjection>(
     projection: required.projection,
     relay: { log: () => {}, fatal: () => {} },
     streams: createRecordingStreamClient().client,
+    writeCommand: () =>
+      Promise.resolve({
+        ok: false,
+        failure: {
+          kind: "queued",
+          reason: "no write transport in this fixture",
+          boundedRetry: false,
+        },
+      }),
     windowLabel: "window-1",
   };
   return { ...base, ...overrides };

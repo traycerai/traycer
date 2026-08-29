@@ -6,6 +6,7 @@
  * pipe. So a test here exercises the real correlation, the real params
  * narrowing and the real close semantics against a real serialization boundary.
  */
+import { stubMainCallHandlers } from "../test-support/stub-main-call-handlers";
 import { describe, expect, it } from "vitest";
 import { createWorkerStreamClient } from "../worker-stream-client";
 import { createStreamProxyHost } from "../stream-proxy-host";
@@ -24,6 +25,8 @@ import {
 } from "../bridge-endpoint";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
+  isWorkerToMainFrame,
+  MAIN_CALL_KINDS,
   MAIN_TO_WORKER_EVENT_KINDS,
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
   WORKER_TO_MAIN_EVENT_KINDS,
@@ -56,7 +59,10 @@ function connect() {
     },
     (reason) => rejected.push(reason),
   );
-  const mainBridge = createMainBridgeEndpoint(pair.main);
+  const mainBridge = createMainBridgeEndpoint(
+    pair.main,
+    stubMainCallHandlers({}),
+  );
   const host = createStreamProxyHost(
     recording.client,
     (event, transfer) => {
@@ -95,7 +101,7 @@ function connect() {
     }
   });
 
-  return { recording, worker, host, toWorker, rejected, mainBridge };
+  return { recording, worker, host, toWorker, rejected, mainBridge, pair };
 }
 
 describe("the closed method union", () => {
@@ -162,9 +168,10 @@ describe("the bridge vocabulary and its version", () => {
     // the two: editing either union reddens this test, and the comment the
     // reader lands on is the one telling them to bump. That is a prompt, not a
     // proof, and it is named as such rather than dressed up as coverage.
-    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(2);
+    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(3);
     expect(MAIN_TO_WORKER_EVENT_KINDS).toEqual([
       "bootstrap",
+      "current-user",
       "stream/frame",
       "stream/session-version",
       "stream/status",
@@ -182,6 +189,99 @@ describe("the bridge vocabulary and its version", () => {
       "stream/close",
       "fatal",
     ]);
+  });
+});
+
+describe("the one worker->main call", () => {
+  it("names exactly one member", () => {
+    // BY NAME, not counted. This map went 0 -> 2 -> 0 -> 1 across four
+    // rulings; the count alone would have read the same at two of those points
+    // while naming entirely different calls.
+    expect([...MAIN_CALL_KINDS]).toEqual(["main/write-command"]);
+  });
+
+  it("round-trips a classified failure without an Error crossing", async () => {
+    const pair = createFakeBridgePair("queued");
+    // Main CLASSIFIES; the wire carries the verdict. An `Error` does not
+    // survive structured clone, so a handler that threw would reach the worker
+    // as a `BridgeCallError` with the classification lost.
+    createMainBridgeEndpoint(
+      pair.main,
+      stubMainCallHandlers({
+        "main/write-command": () =>
+          Promise.resolve({
+            ok: false,
+            failure: {
+              kind: "unknown-outcome",
+              reason: "keyed attempt went ambiguous",
+            },
+          }),
+      }),
+    );
+    const worker = createWorkerBridgeEndpoint(
+      pair.worker,
+      stubRuntimeWorkerCallHandlers({}),
+    );
+
+    const answered = worker.call("main/write-command", {
+      commandId: "cmd-1",
+      intent: { kind: "noop" },
+    });
+    await pair.flush();
+
+    // `unknown-outcome` specifically: a response typed `queued | dropped` would
+    // have flattened it, and it is the arm that exists so an ambiguous keyed
+    // attempt is NOT retried blindly.
+    await expect(answered).resolves.toEqual({
+      ok: false,
+      failure: {
+        kind: "unknown-outcome",
+        reason: "keyed attempt went ambiguous",
+      },
+    });
+    worker.dispose();
+  });
+
+  it("refuses a queued verdict that lost its retry policy", async () => {
+    const pair = createFakeBridgePair("queued");
+    const listeners = new Set<(message: unknown) => void>();
+    const responder = {
+      post(message: unknown): void {
+        if (!isWorkerToMainFrame(message) || message.frame !== "main-call") {
+          return;
+        }
+        for (const listener of [...listeners]) {
+          listener({
+            frame: "main-result",
+            callId: message.callId,
+            // `boundedRetry` missing. It decides whether a queued command may
+            // wait offline without a deadline, so a defaulted one is a command
+            // with no retry policy at all.
+            result: {
+              outcome: "ok",
+              value: { ok: false, failure: { kind: "queued", reason: "x" } },
+            },
+          });
+        }
+      },
+      subscribe(listener: (message: unknown) => void): () => void {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const worker = createWorkerBridgeEndpoint(
+      responder,
+      stubRuntimeWorkerCallHandlers({}),
+    );
+
+    const pending = worker.call("main/write-command", {
+      commandId: "cmd-1",
+      intent: null,
+    });
+
+    await expect(pending).rejects.toThrow("The main thread answered");
+    worker.dispose();
+    void pair;
   });
 });
 
@@ -402,17 +502,31 @@ describe("stream proxy — payload validation on receive", () => {
   });
 
   it("drops a bad payload on BOTH receive paths, naming the reason", () => {
-    const { host, worker, rejected } = connect();
+    const { pair, rejected } = connect();
+    // Entered through the pair's UNTYPED inlet - `post(message: unknown, …)` -
+    // which is the same `unknown` a real `message` listener sees.
+    //
+    // Handing this to `host.handle(...)` or `worker.deliverFrame(...)` does not
+    // compile, and that is the contract working rather than an obstacle: those
+    // parameters are `StreamProxyFrame`, so a frame with a `DataView` payload
+    // cannot be constructed as one. A negative test has to be BORN `unknown`;
+    // casting it into shape would assert the very thing under test.
     const bad = {
       streamId: 1,
       envelope: { kind: "update", hasBinaryPayload: true },
       binaryPayload: new DataView(new ArrayBuffer(4)),
     };
 
-    // main receive path
-    expect(host.handle({ kind: "stream/send", frame: bad })).toBe(false);
-    // worker receive path
-    worker.deliverFrame(bad);
+    // main receive path: the worker sends
+    pair.worker.post(
+      { frame: "event", event: { kind: "stream/send", frame: bad } },
+      [],
+    );
+    // worker receive path: main delivers
+    pair.main.post(
+      { frame: "event", event: { kind: "stream/frame", frame: bad } },
+      [],
+    );
 
     expect(rejected).toHaveLength(2);
     expect(rejected[0]).toContain("stream/send rejected");

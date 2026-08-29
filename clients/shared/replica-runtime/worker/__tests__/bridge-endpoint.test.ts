@@ -10,6 +10,7 @@
  * A suite that stubbed `createMainBridgeEndpoint` would relocate every
  * invariant below into the stub.
  */
+import { stubMainCallHandlers } from "../test-support/stub-main-call-handlers";
 import { describe, expect, it, vi } from "vitest";
 import {
   BridgeCallError,
@@ -53,7 +54,7 @@ describe("bridge call correlation", () => {
           }),
       }),
     );
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     const first = main.call("attachment/read", { hash: "a" }, NO_TRANSFER);
     const second = main.call("attachment/read", { hash: "b" }, NO_TRANSFER);
@@ -104,7 +105,10 @@ describe("bridge call correlation", () => {
         };
       },
     };
-    const main = createMainBridgeEndpoint(syncResponder);
+    const main = createMainBridgeEndpoint(
+      syncResponder,
+      stubMainCallHandlers({}),
+    );
 
     await expect(
       main.call("body/demote", DEMOTE_REQUEST, NO_TRANSFER),
@@ -123,7 +127,7 @@ describe("bridge call correlation", () => {
         },
       }),
     );
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     const rejection = await main
       .call("body/demote", DEMOTE_REQUEST, NO_TRANSFER)
@@ -142,7 +146,7 @@ describe("bridge call correlation", () => {
     // thing under test is what the MAIN endpoint does with a foreign payload -
     // which is what a stale worker chunk actually sends.
     const pair = createFakeBridgePair("queued");
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     const pending = main.call("body/demote", DEMOTE_REQUEST, NO_TRANSFER);
     const sent = pair.fromMain.at(-1)?.delivered;
@@ -173,7 +177,7 @@ describe("bridge call correlation", () => {
   it("drops a result for a call id it never issued", async () => {
     const pair = createFakeBridgePair("queued");
     createWorkerBridgeEndpoint(pair.worker, stubRuntimeWorkerCallHandlers({}));
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     pair.worker.post(
       {
@@ -208,7 +212,7 @@ describe("bridge byte transfer", () => {
         },
       }),
     );
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     const answer = await main.call(
       "attachment/read",
@@ -228,7 +232,7 @@ describe("bridge byte transfer", () => {
   it("posts no transfer list for a byte-free frame", async () => {
     const pair = createFakeBridgePair("sync");
     createWorkerBridgeEndpoint(pair.worker, stubRuntimeWorkerCallHandlers({}));
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     await main.call("body/demote", DEMOTE_REQUEST, NO_TRANSFER);
 
@@ -240,7 +244,7 @@ describe("the body calls, with nothing behind them", () => {
   it("REFUSES a demote rather than reporting bytes nobody stored", async () => {
     const pair = createFakeBridgePair("sync");
     createWorkerBridgeEndpoint(pair.worker, stubRuntimeWorkerCallHandlers({}));
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     // `accepted: false` is what keeps the main thread's live doc alive. An
     // unowned `true` here tells it to drop a document whose bytes were never
@@ -258,7 +262,7 @@ describe("the body calls, with nothing behind them", () => {
   it("answers a materialize with no body as a null doc key", async () => {
     const pair = createFakeBridgePair("sync");
     createWorkerBridgeEndpoint(pair.worker, stubRuntimeWorkerCallHandlers({}));
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     await expect(
       main.call("body/materialize", { artifactId: "artifact-1" }, NO_TRANSFER),
@@ -280,7 +284,7 @@ describe("bridge lifecycle", () => {
         "body/demote": () => new Promise(() => undefined),
       }),
     );
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     const pending = main.call("body/demote", DEMOTE_REQUEST, NO_TRANSFER);
     main.dispose();
@@ -306,7 +310,7 @@ describe("bridge lifecycle", () => {
           }),
       }),
     );
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     const pending = main.call("body/demote", DEMOTE_REQUEST, NO_TRANSFER);
     await pair.flush();
@@ -321,7 +325,7 @@ describe("bridge lifecycle", () => {
 
   it("ignores a frame that is not ours", () => {
     const pair = createFakeBridgePair("sync");
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
     const seen = vi.fn();
     main.onEvent(seen);
 
@@ -339,7 +343,7 @@ describe("bridge lifecycle", () => {
       pair.worker,
       stubRuntimeWorkerCallHandlers({}),
     );
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     const fromWorker: WorkerToMainEvent[] = [];
     const unsubscribe = main.onEvent((event) => fromWorker.push(event));
@@ -362,7 +366,7 @@ describe("bridge lifecycle", () => {
       pair.worker,
       stubRuntimeWorkerCallHandlers({}),
     );
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
 
     const second = vi.fn();
     const unsubscribeFirst = main.onEvent(() => {

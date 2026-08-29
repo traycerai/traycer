@@ -44,6 +44,7 @@ import type {
   StreamProxyStatus,
   StreamProxyStreamRef,
 } from "./stream-proxy-protocol";
+import type { CommandResolution, CommandSendFailure } from "../command-overlay";
 import type { SendOutcome } from "../adapter";
 import type { RuntimeLogFields } from "../runtime-environment";
 
@@ -55,7 +56,11 @@ import type { RuntimeLogFields } from "../runtime-environment";
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
- * **2** since the stream proxy landed. v1's vocabulary is gone, not extended:
+ * **3** since the composition root landed: `current-user` was added and the
+ * worker->main call direction returned with one member. A v2 worker hits its
+ * own `assertNever` on the first `current-user` push.
+ *
+ * **2** was the stream proxy. v1's vocabulary was gone, not extended:
  * the bearer and endpoint pushes, the bearer probe call and the `main-call` /
  * `main-result` frames were removed and the `stream/*` events added. A v1
  * worker and a v2 spawner share no traffic worth the name.
@@ -68,7 +73,7 @@ import type { RuntimeLogFields } from "../runtime-environment";
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 2;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 3;
 
 /**
  * What the worker was told about the surface it is serving.
@@ -127,6 +132,23 @@ export type MainToWorkerEvent =
        */
       readonly kind: "stream/manifest";
       readonly manifest: StreamProxyManifest;
+    }
+  | {
+      /**
+       * The signed-in user, as the auth store sees it right now.
+       *
+       * Its OWN event, not a field on `stream/manifest`, and the rule is one
+       * event per PRODUCER: the manifest's producer is the transport, this
+       * one's is `useAuthStore`. Folding them together would make a
+       * re-negotiation republish auth state and an identity change republish
+       * method support - two unrelated edges each pretending to be the other.
+       *
+       * `null` is a real state (nobody signed in), read live because a session
+       * constructed before the profile hydrates must pick the id up on its next
+       * projection rather than freezing the absence.
+       */
+      readonly kind: "current-user";
+      readonly userId: string | null;
     }
   | { readonly kind: "shutdown" };
 
@@ -196,6 +218,7 @@ const MAIN_TO_WORKER_EVENT_COVERAGE: {
   readonly [K in MainToWorkerEvent["kind"]]: true;
 } = {
   bootstrap: true,
+  "current-user": true,
   "stream/frame": true,
   "stream/session-version": true,
   "stream/status": true,
@@ -334,6 +357,199 @@ export interface RuntimeWorkerCallMap {
  */
 export type ArtifactBodySeedMode = "full" | "delta-against-offer";
 
+/**
+ * The calls the WORKER may issue to the main thread. Exactly two, forever
+ * unless the header's paragraph is extended.
+ *
+ * Both are app-wide single-flights that must not be copied per worker, and
+ * both are on the recovery path rather than the hot path - a dial that lost
+ * its credential, and a host that needs one minted. Neither is reached while
+ * frames are flowing, which is what keeps this from re-creating the stall the
+ * relocation removes.
+ *
+ * The response types are the CONTRACT's own (`RevalidateOutcome`,
+ * `HostCredentialMintOutcome`), imported rather than restated: a copy here
+ * would drift from the thing that actually produces them.
+ */
+export interface MainCallMap {
+  /**
+   * Send one epic write command through the main thread's unary requester.
+   *
+   * The ONE worker->main call, and the count is the contract. Every other
+   * member of the composition root's options is a value, a push or an event;
+   * this one is not, and the difference is structural rather than stylistic:
+   * `send` is async, its RETURN VALUE is consumed (`{ hostId }`), and its
+   * typed throws are classified into a verdict the command queue acts on.
+   * There is no push or event spelling of "ask, and act on the answer".
+   *
+   * Why the requester cannot simply move, which is the question the earlier
+   * two calls got wrong: the unary messenger shares the same module-scoped
+   * process-wide `RemoteSession` the stream client does, so a worker copy is a
+   * second Noise session and relay socket per (hostId, userId) - the identical
+   * fact that kept the socket on main. See `stream-proxy-protocol.ts`.
+   *
+   * MAIN CLASSIFIES; the wire carries the verdict. An `Error` does not survive
+   * structured clone, so the worker must never see one: main runs the real
+   * send, catches, applies `classifyEpicWriteCommandFailure`, and returns the
+   * classifier's own union. The worker's `send` re-throws it as a carrier and
+   * its `classifyFailure` unwraps it, which leaves the SHARED
+   * `CommandQueueOptions` contract untouched.
+   *
+   * A SECOND worker->main call must not appear without a paragraph like this
+   * one, and `MAIN_CALL_KINDS` pins the count at 1.
+   */
+  readonly "main/write-command": {
+    readonly request: {
+      readonly commandId: string;
+      /** The intent, already reduced to its clonable wire form by the caller. */
+      readonly intent: unknown;
+    };
+    readonly response: WriteCommandOutcome;
+  };
+}
+
+/**
+ * What main answers a write command with.
+ *
+ * `failure` is `CommandSendFailure` - the CONTRACT's own type, imported rather
+ * than restated. It has THREE arms, not two: `queued` (carrying
+ * `boundedRetry`), `unknown-outcome`, and `rejected` (carrying a
+ * `CommandResolution`). A response typed `"queued" | "dropped"` would drop
+ * `unknown-outcome` - the arm that exists precisely so an ambiguous keyed
+ * attempt is NOT retried blindly - and would flatten `rejected`, which carries
+ * the authority's own code and reason.
+ */
+export type WriteCommandOutcome =
+  | { readonly ok: true; readonly hostId: string }
+  | { readonly ok: false; readonly failure: CommandSendFailure };
+
+export type MainCallKind = keyof MainCallMap;
+
+export type MainCallRequest<K extends MainCallKind> = MainCallMap[K]["request"];
+export type MainCallResponse<K extends MainCallKind> =
+  MainCallMap[K]["response"];
+
+export const MAIN_CALL_KIND_COVERAGE: {
+  readonly [K in MainCallKind]: true;
+} = { "main/write-command": true };
+
+/**
+ * The worker->main call kinds, DERIVED from the record so there is one place a
+ * member can be added - and that place fails to compile when incomplete.
+ *
+ * A hand-written array beside a coverage record is two lists and only one is
+ * checked: TypeScript cannot verify an array's ELEMENTS exhaust a union, so a
+ * second member added to the map and the record but not the array leaves the
+ * count pin green while the union has grown.
+ */
+export const MAIN_CALL_KINDS: readonly MainCallKind[] = Object.keys(
+  MAIN_CALL_KIND_COVERAGE,
+).filter((key): key is MainCallKind =>
+  Object.hasOwn(MAIN_CALL_KIND_COVERAGE, key),
+);
+
+export type MainCall = {
+  [K in MainCallKind]: {
+    readonly kind: K;
+    readonly request: MainCallRequest<K>;
+  };
+}[MainCallKind];
+
+const MAIN_CALL_BUILDERS: {
+  readonly [K in MainCallKind]: (request: MainCallRequest<K>) => MainCall;
+} = {
+  "main/write-command": (request) => ({ kind: "main/write-command", request }),
+};
+
+export function buildMainCall<K extends MainCallKind>(
+  kind: K,
+  request: MainCallRequest<K>,
+): MainCall {
+  return MAIN_CALL_BUILDERS[kind](request);
+}
+
+/**
+ * Response parsers for the worker->main direction, for the same reason the
+ * other direction has them: the pending table is keyed by call id and cannot
+ * carry each entry's response type.
+ */
+export const MAIN_CALL_RESPONSE_PARSERS: {
+  readonly [K in MainCallKind]: (value: unknown) => MainCallResponse<K> | null;
+} = {
+  "main/write-command": (value) => {
+    if (!isRecord(value)) return null;
+    if (value.ok === true) {
+      return typeof value.hostId === "string"
+        ? { ok: true, hostId: value.hostId }
+        : null;
+    }
+    if (value.ok !== false) return null;
+    const failure = parseCommandSendFailure(value.failure);
+    return failure === null ? null : { ok: false, failure };
+  },
+};
+
+/**
+ * Narrows the classifier's verdict without asserting.
+ *
+ * Rebuilt arm by arm, and the verbosity is the check: `boundedRetry` decides
+ * whether a queued command may wait offline without a deadline, and a payload
+ * that merely CLAIMED `queued` while missing it would reach the queue as a
+ * command with no retry policy at all.
+ */
+function parseCommandSendFailure(value: unknown): CommandSendFailure | null {
+  if (!isRecord(value)) return null;
+  if (value.kind === "queued") {
+    return typeof value.reason === "string" &&
+      typeof value.boundedRetry === "boolean"
+      ? {
+          kind: "queued",
+          reason: value.reason,
+          boundedRetry: value.boundedRetry,
+        }
+      : null;
+  }
+  if (value.kind === "unknown-outcome") {
+    return typeof value.reason === "string"
+      ? { kind: "unknown-outcome", reason: value.reason }
+      : null;
+  }
+  if (value.kind !== "rejected") return null;
+  const resolution = parseCommandResolution(value.resolution);
+  return resolution === null ? null : { kind: "rejected", resolution };
+}
+
+/**
+ * Narrows a command resolution, arm by arm.
+ *
+ * Three arms, all plain data - checked at source rather than assumed, because
+ * `rejected` is the one that would have carried a live object across if the
+ * authority's answer had ever been wrapped.
+ */
+function parseCommandResolution(value: unknown): CommandResolution | null {
+  if (!isRecord(value)) return null;
+  if (value.kind === "committed") {
+    const { hostId, entityVersion } = value;
+    if (typeof hostId !== "string") return null;
+    if (entityVersion !== null && typeof entityVersion !== "number")
+      return null;
+    return { kind: "committed", hostId, entityVersion };
+  }
+  if (value.kind === "rejected") {
+    const { code, reason, retryable } = value;
+    return typeof code === "string" &&
+      typeof reason === "string" &&
+      typeof retryable === "boolean"
+      ? { kind: "rejected", code, reason, retryable }
+      : null;
+  }
+  if (value.kind !== "superseded") return null;
+  const { observedAtMs, via } = value;
+  return typeof observedAtMs === "number" && typeof via === "string"
+    ? { kind: "superseded", observedAtMs, via }
+    : null;
+}
+
 export type RuntimeWorkerCallKind = keyof RuntimeWorkerCallMap;
 
 export type RuntimeWorkerCallRequest<K extends RuntimeWorkerCallKind> =
@@ -424,6 +640,12 @@ export type MainToWorkerFrame =
       readonly frame: "call";
       readonly callId: number;
       readonly call: RuntimeWorkerCall;
+    }
+  | {
+      /** The main thread ANSWERING the worker's one call. */
+      readonly frame: "main-result";
+      readonly callId: number;
+      readonly result: BridgeCallResult<MainCallResponse<MainCallKind>>;
     };
 
 export type WorkerToMainFrame =
@@ -434,6 +656,17 @@ export type WorkerToMainFrame =
       readonly result: BridgeCallResult<
         RuntimeWorkerCallResponse<RuntimeWorkerCallKind>
       >;
+    }
+  | {
+      /**
+       * The worker ASKING the main thread. Exactly ONE kind - see
+       * {@link MainCallMap}. Its own frame tag rather than reusing `"call"`, so
+       * a reader of either union never has to work out which direction a `call`
+       * frame was travelling.
+       */
+      readonly frame: "main-call";
+      readonly callId: number;
+      readonly call: MainCall;
     };
 
 /**
@@ -452,6 +685,9 @@ export function isMainToWorkerFrame(
 ): value is MainToWorkerFrame {
   if (!isRecord(value)) return false;
   if (value.frame === "event") return isRecord(value.event);
+  if (value.frame === "main-result") {
+    return typeof value.callId === "number" && isRecord(value.result);
+  }
   return (
     value.frame === "call" &&
     typeof value.callId === "number" &&
@@ -465,6 +701,13 @@ export function isWorkerToMainFrame(
 ): value is WorkerToMainFrame {
   if (!isRecord(value)) return false;
   if (value.frame === "event") return isRecord(value.event);
+  if (value.frame === "main-call") {
+    return (
+      typeof value.callId === "number" &&
+      isRecord(value.call) &&
+      typeof value.call.kind === "string"
+    );
+  }
   return (
     value.frame === "result" &&
     typeof value.callId === "number" &&

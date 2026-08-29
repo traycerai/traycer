@@ -13,6 +13,7 @@
  * a lost edit after a respawn, or a document taken out from under a bound
  * editor.
  */
+import { stubMainCallHandlers } from "@traycer-clients/shared/replica-runtime/worker/test-support/stub-main-call-handlers";
 import { describe, expect, it } from "vitest";
 import { createMainBridgeEndpoint } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import {
@@ -129,7 +130,7 @@ function grantedKey(grant: ArtifactBodyGrant): string {
 function setup() {
   const pair = createFakeBridgePair("sync");
   const worker = createWorkerSide(pair, (artifactId) => artifactId);
-  const main = createMainBridgeEndpoint(pair.main);
+  const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
   const docs = createDocs();
   const budget = createBudget();
   const leases = createArtifactBodyLeaseBridge({
@@ -174,7 +175,7 @@ describe("acquire / materialize", () => {
     });
     const docs = createDocs();
     const leases = createArtifactBodyLeaseBridge({
-      bridge: createMainBridgeEndpoint(pair.main),
+      bridge: createMainBridgeEndpoint(pair.main, stubMainCallHandlers({})),
       docs,
       budget: createBudget(),
     });
@@ -294,7 +295,7 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
     const nextPair = createFakeBridgePair("sync");
     const nextWorker = createWorkerSide(nextPair, (artifactId) => artifactId);
     const nextLeases = createArtifactBodyLeaseBridge({
-      bridge: createMainBridgeEndpoint(nextPair.main),
+      bridge: createMainBridgeEndpoint(nextPair.main, stubMainCallHandlers({})),
       docs,
       budget: createBudget(),
     });
@@ -422,7 +423,7 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
     // reach this code at all, which is exactly why it was not evidence.
     const pair = createFakeBridgePair("sync");
     const worker = createWorkerSide(pair, () => "room-1");
-    const main = createMainBridgeEndpoint(pair.main);
+    const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
     const docs = createDocs();
     const budget = createBudget();
     const leases = createArtifactBodyLeaseBridge({

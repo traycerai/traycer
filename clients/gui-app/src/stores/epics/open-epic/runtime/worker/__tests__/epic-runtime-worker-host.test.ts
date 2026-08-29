@@ -1,3 +1,4 @@
+import { stubMainCallHandlers } from "@traycer-clients/shared/replica-runtime/worker/test-support/stub-main-call-handlers";
 import { describe, expect, it, vi } from "vitest";
 import {
   createMainBridgeEndpoint,
@@ -28,7 +29,7 @@ interface HostFixture {
 function createFixture(): HostFixture {
   const pair = createFakeBridgePair("sync");
   const host = startEpicRuntimeWorkerHost(pair.worker);
-  const main = createMainBridgeEndpoint(pair.main);
+  const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
   return { pair, main, host };
 }
 
