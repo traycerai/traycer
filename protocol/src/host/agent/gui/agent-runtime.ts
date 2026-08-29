@@ -1012,8 +1012,45 @@ export const turnStartedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("turn.started"),
   turnId: z.string(),
+  /**
+   * NAME of the environment variable whose credential authenticated this turn
+   * (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`), or absent when the turn
+   * ran on the profile the user signed into.
+   *
+   * A GROUND-TRUTH fact about the spawn, and the reason it rides turn-start
+   * rather than being derived later: only the adapter, at the moment it builds
+   * the spawn env, knows which credential actually won. By the time the turn
+   * ends the shell env may have been re-probed, the override edited, or the
+   * profile switched - so a renderer that recomputed this would answer for the
+   * wrong turn. It is stamped on the turn record and read back verbatim.
+   *
+   * ABSENCE IS MEANINGFUL and must stay that way: no value means the profile
+   * sign-in was used. So an emitter that cannot determine this must not send a
+   * placeholder, and a consumer must not treat absence as "unknown" - that
+   * would quietly turn a positive claim into a shrug on every legacy turn.
+   *
+   * The name only. Never the value: this reaches the persisted transcript,
+   * which replicates cross-host.
+   */
+  envCredentialVar: z.string().optional(),
 });
 export type TurnStartedEvent = z.infer<typeof turnStartedEventSchema>;
+
+/**
+ * Wire-freeze copy of {@link turnStartedEventSchema} at the shape released
+ * `chat.subscribe@1.0–1.6` lines shipped - before `envCredentialVar` existed.
+ * Bound (via the frozen runtime unions below) to those lines' `blockDelta`
+ * frame, so a peer that negotiated a released minor never observes the
+ * credential-provenance field.
+ *
+ * Hand copy, NOT `.omit()` off the live shape - same rule as every freeze in
+ * this file: a future field must not silently leak onto a released line.
+ */
+export const turnStartedEventSchemaPreEnvCredential = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("turn.started"),
+  turnId: z.string(),
+});
 
 export const claudeUserMessageAnchorResolvedSchema = z.object({
   harnessId: z.literal("claude"),
@@ -1336,6 +1373,26 @@ export type ErrorEvent = z.infer<typeof errorEventSchema>;
 export const AUTH_ERROR_CODE = "auth";
 
 /**
+ * Stable `ErrorEvent.code` for an auth failure where the credential that
+ * actually authenticated the run came from an ENVIRONMENT VARIABLE, not the
+ * profile the user signed into.
+ *
+ * Deliberately NOT {@link AUTH_ERROR_CODE}: that code means "reconnect and this
+ * is fixed", and here reconnecting is precisely what cannot help - the provider
+ * CLI prefers an env key/token over its own signed-in credential store, so the
+ * sign-in the banner would offer to repair is not the credential being
+ * rejected. Emitting the banner for this class is what made the original
+ * incident so hard to read: every GUI turn failed 401 while the terminal
+ * worked, and the only remedy on offer (sign in again) was inert.
+ *
+ * The renderer keys on this code to mount a deep link to the provider's
+ * environment-variable settings, where the offending variable can be given an
+ * explicit unset. The variable's NAME is carried in the message text (an
+ * `ErrorEvent` has no structured payload); its VALUE never leaves the host.
+ */
+export const ENV_CREDENTIAL_AUTH_ERROR_CODE = "auth_env_credential";
+
+/**
  * Upserts the image resolution record for a markdown-referenced image in an
  * assistant message (`chat.subscribe@1.6`) - both the initial resolution and
  * any later mid-turn watcher change (see the shared image ingestion
@@ -1465,7 +1522,7 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   commandCompletedEventSchema,
   sessionCreatedEventSchemaPreReasonix,
   sessionResumedEventSchemaPreReasonix,
-  turnStartedEventSchema,
+  turnStartedEventSchemaPreEnvCredential,
   userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,
@@ -1516,7 +1573,7 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   commandCompletedEventSchemaPreBackgroundTask,
   sessionCreatedEventSchemaPreReasonix,
   sessionResumedEventSchemaPreReasonix,
-  turnStartedEventSchema,
+  turnStartedEventSchemaPreEnvCredential,
   userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,
@@ -1575,7 +1632,7 @@ export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
   commandCompletedEventSchema,
   sessionCreatedEventSchemaPreReasonix,
   sessionResumedEventSchemaPreReasonix,
-  turnStartedEventSchema,
+  turnStartedEventSchemaPreEnvCredential,
   userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,

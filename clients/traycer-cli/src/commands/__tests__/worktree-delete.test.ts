@@ -616,4 +616,29 @@ describe("buildWorktreeDeleteCommand legacy stream v1.1 holders", () => {
       details: null,
     });
   });
+
+  it("settles a v1.2 failed frame whose code is unknown to this client", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    legacy.frameHandler?.({
+      kind: "failed",
+      reason: "worktree is busy",
+      code: "SOME_FUTURE_CODE",
+      holders: [
+        {
+          ownerRef: { epicId: "e1", ownerKind: "chat", ownerId: "c1" },
+          holdKind: "chat-turn",
+          activity: "working",
+          label: "Chat: fix flaky test",
+        },
+      ],
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      exitCode: 1,
+      message: expect.stringContaining("Held by Chat: fix flaky test."),
+    });
+  });
 });

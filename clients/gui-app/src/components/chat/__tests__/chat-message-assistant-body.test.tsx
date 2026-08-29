@@ -122,6 +122,7 @@ const META: AssistantTurnMeta = {
   reasoningEffort: "high",
   reasoningEffortLabel: "High",
   serviceTier: null,
+  envCredentialVar: null,
   costUsd: null,
 };
 
@@ -441,5 +442,103 @@ describe("AssistantMessageBody stopped turn rendering", () => {
       expect(screen.getAllByText("Profile").length).toBeGreaterThan(0);
     });
     expect(screen.getAllByText("Work").length).toBeGreaterThan(0);
+  });
+
+  // Ground truth for "what actually ran this turn". The profile label alone
+  // answers that WRONG when a shell env credential outranked the sign-in, which
+  // is exactly the state that made the original incident unreadable.
+  it("annotates the profile row when an env credential bypassed the sign-in", async () => {
+    const user = userEvent.setup();
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          elapsedStartedAt: 0,
+          completedAt: 5_000,
+          meta: {
+            ...META,
+            profileLabel: "Terminal account",
+            envCredentialVar: "ANTHROPIC_API_KEY",
+          },
+        })}
+      />,
+    );
+
+    const footer = screen.getByRole("button", { name: /for 5s/ });
+    await user.tab();
+    expect(document.activeElement).toBe(footer);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Profile").length).toBeGreaterThan(0);
+    });
+    // Annotated IN PLACE, not as a separate row: a reader who skims one line
+    // still gets the true answer rather than the label's wrong one.
+    expect(
+      screen.getAllByText(
+        "Terminal account (bypassed — env: ANTHROPIC_API_KEY)",
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText("Terminal account")).toBeNull();
+  });
+
+  it("leaves the profile row bare when the sign-in was used", async () => {
+    // Absence of the bracket is itself a claim - "the profile sign-in ran this"
+    // - so a normal turn must not grow a badge, or the annotation above stops
+    // meaning anything.
+    const user = userEvent.setup();
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          elapsedStartedAt: 0,
+          completedAt: 5_000,
+          meta: { ...META, envCredentialVar: null },
+        })}
+      />,
+    );
+
+    const footer = screen.getByRole("button", { name: /for 5s/ });
+    await user.tab();
+    expect(document.activeElement).toBe(footer);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Profile").length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText("Work").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/bypassed/)).toBeNull();
+  });
+
+  // Regression: the Profile row used to be gated on `profileLabel` alone, so a
+  // turn with no resolvable anchor label dropped the row entirely - taking the
+  // credential disclosure with it, on exactly the turns least able to explain
+  // themselves.
+  it("still discloses the credential when the turn has no profile label", async () => {
+    const user = userEvent.setup();
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          elapsedStartedAt: 0,
+          completedAt: 5_000,
+          meta: {
+            ...META,
+            profileLabel: null,
+            envCredentialVar: "ANTHROPIC_API_KEY",
+          },
+        })}
+      />,
+    );
+
+    const footer = screen.getByRole("button", { name: /for 5s/ });
+    await user.tab();
+    expect(document.activeElement).toBe(footer);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Profile").length).toBeGreaterThan(0);
+    });
+    // States the credential directly rather than prefixing an empty label.
+    expect(
+      screen.getAllByText("env: ANTHROPIC_API_KEY (sign-in bypassed)").length,
+    ).toBeGreaterThan(0);
   });
 });

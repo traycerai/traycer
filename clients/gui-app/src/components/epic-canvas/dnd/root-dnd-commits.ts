@@ -149,11 +149,11 @@ export function sourceToTileRef(
     const handle = getOpenEpicRegistry().peek(source.epicId);
     if (handle === null) return null;
     // The payload's host, never the app-wide one. The sidebar producers stamp
-    // the Epic SESSION's host (or the row's owner host) into `source.hostId`
-    // precisely because chats and artifacts carry no intrinsic host id, and
-    // the ref minted here is bound for life: this root provider mounts at the
-    // app shell, so during an A->B re-point the app-wide client already
-    // answers B while the dragged row still belongs to the A-backed Epic.
+    // the chat owner (or the Epic session host for artifacts and legacy chats)
+    // into `source.hostId`, and the ref minted here is bound for life: this
+    // root provider mounts at the app shell, so during an A->B re-point the
+    // app-wide client already answers B while the dragged row still belongs
+    // to the A-backed Epic.
     return epicNodeRefForNodeId(
       handle.store.getState(),
       source.nodeId,
