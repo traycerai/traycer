@@ -327,9 +327,16 @@ function createBrowserSessionsCoordinator(args: {
     // `ping` / `pong` is the only ordered round trip this stream has, so it is
     // what "the frame reached the host" means here: the socket has no flush
     // primitive, and `primaryProfileCaptured` is not acknowledged.
-    const streamFlushWaiters = new Set<() => void>();
+    // FIFO: the transport delivers one `pong` per application `ping`, and the
+    // Nth pong answers the Nth ping. Resolving every waiter on the first pong
+    // would let an overlapping capture's promise settle on a pong that was
+    // already in flight before its own frame went out.
+    const streamFlushWaiters: Array<() => void> = [];
+    const resolveOldestStreamFlushWaiter = (): void => {
+      streamFlushWaiters[0]?.();
+    };
     const resolveStreamFlushWaiters = (): void => {
-      for (const settle of Array.from(streamFlushWaiters)) settle();
+      for (const settle of [...streamFlushWaiters]) settle();
     };
     const awaitStreamFlush = (): Promise<void> =>
       new Promise<void>((resolve) => {
@@ -340,14 +347,15 @@ function createBrowserSessionsCoordinator(args: {
         let timer: number | null = null;
         const settle = (): void => {
           if (timer !== null) window.clearTimeout(timer);
-          streamFlushWaiters.delete(settle);
+          const at = streamFlushWaiters.indexOf(settle);
+          if (at >= 0) streamFlushWaiters.splice(at, 1);
           resolve();
         };
         timer = window.setTimeout(
           settle,
           FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
         );
-        streamFlushWaiters.add(settle);
+        streamFlushWaiters.push(settle);
         stream?.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
       });
     const sendLifecycleReadyIfReady = (): void => {
@@ -404,7 +412,7 @@ function createBrowserSessionsCoordinator(args: {
 
     const onServerFrame = (frame: BrowserSessionsServerFrame): void => {
       if (actionChannel !== channel) return;
-      if (frame.kind === "pong") resolveStreamFlushWaiters();
+      if (frame.kind === "pong") resolveOldestStreamFlushWaiter();
       const frameGeneration = connectionGeneration;
       handleBrowserSessionsFrame({
         frame,

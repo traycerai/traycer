@@ -159,6 +159,41 @@ describe("BrowserSessionsStreamClient", () => {
     stream.close();
   });
 
+  it("delivers one pong per application ping and swallows heartbeat pongs", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const kinds: string[] = [];
+    const stream = new BrowserSessionsStreamClient({
+      wsStreamClient: client,
+      epicId: "epic-1",
+      callbacks: {
+        onServerFrame: (frame) => {
+          kinds.push(frame.kind);
+        },
+        onConnectionStatus: () => undefined,
+      },
+    });
+
+    completeHandshake(sockets[0]);
+    // No application ping outstanding: this answers the heartbeat and must
+    // stay inside the transport.
+    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual([]);
+
+    // Two overlapping flushes: two pings, two pongs, two delivered frames.
+    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual(["pong"]);
+    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual(["pong", "pong"]);
+
+    // Both are answered; a later heartbeat pong is swallowed again.
+    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual(["pong", "pong"]);
+    stream.close();
+  });
+
   it("stops sending client frames once closed", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);

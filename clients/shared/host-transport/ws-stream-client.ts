@@ -1282,6 +1282,17 @@ class StreamSession<
   private preProbePongBaselineAt: number | null = null;
   /** Monotonic count of pongs received; the wake probe's liveness signal. */
   private pongSeq = 0;
+  /**
+   * Per-socket FIFO of pings still awaiting a pong; `true` marks one the
+   * application sent. This exists for the ONE thing a stream contract can use
+   * `ping` for: a flush acknowledgement. Every pong is consumed by the
+   * heartbeat below and never reaches the frame handler, so a contract that
+   * pings to learn "my last frame reached the host" would wait out its own
+   * timeout instead. The host answers pings in arrival order, so the queue
+   * says which ping each pong answers - and only an application ping's pong
+   * is delivered upward.
+   */
+  private pendingPings: boolean[] = [];
   private backoffTimer: TimerHandle | null = null;
   /**
    * Armed when the subscribe completes; fires after
@@ -1332,6 +1343,10 @@ class StreamSession<
     }
     if (!this.writeEnvelope(socket, envelope, binaryPayload)) {
       this.onSendFailure(socket);
+      return;
+    }
+    if (envelope.kind === "ping") {
+      this.pendingPings.push(true);
     }
   }
 
@@ -1440,6 +1455,7 @@ class StreamSession<
       this.forceReconnect(reason);
       return;
     }
+    this.pendingPings.push(false);
     // Rebase the heartbeat deadline onto the probe we just sent. After a sleep
     // longer than `pongTimeoutMs`, `lastPongAt` still holds a PRE-sleep
     // timestamp, so the already-armed interval's very next tick takes the
@@ -1636,6 +1652,9 @@ class StreamSession<
     this.openFrameHostId = selected.hostId;
     this.phase = "dialing";
     this.pendingBinaryEnvelope = null;
+    // Ping/pong pairing is per-socket: the previous socket's unanswered pings
+    // must not consume this one's pongs.
+    this.pendingPings = [];
 
     // Every handler ignores events from a socket that is no longer the active
     // one. `teardownSocket` detaches handlers before closing, so a torn-down
@@ -1795,6 +1814,12 @@ class StreamSession<
       // ARRIVED, and two pongs inside the same millisecond are
       // indistinguishable by `lastPongAt` alone.
       this.pongSeq += 1;
+      // Deliver this pong upward only when it answers an APPLICATION ping - a
+      // heartbeat pong still in flight when the contract pinged proves nothing
+      // about the frame the contract wrote just before it.
+      if (this.pendingPings.shift() === true) {
+        this.emitServerFrame(envelope, null);
+      }
       if (
         answersWakeProbe ||
         pongGapMs >= this.config.pingIntervalMs + PONG_GAP_RECOVERY_SLACK_MS
@@ -2331,7 +2356,9 @@ class StreamSession<
       );
       if (!sent) {
         this.onSendFailure(activeSocket);
+        return;
       }
+      this.pendingPings.push(false);
     }, this.config.pingIntervalMs);
   }
 

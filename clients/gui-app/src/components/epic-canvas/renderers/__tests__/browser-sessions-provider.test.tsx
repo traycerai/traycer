@@ -1518,4 +1518,58 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
     expect(framesOfKind(hostAStream.sentFrames, "closeTab")).toEqual([]);
     expect(framesOfKind(hostBStream.sentFrames, "closeTab")).toEqual([]);
   });
+
+  it("resolves one flush waiter per pong when two captures overlap", async () => {
+    const bridge = new FakeBridge();
+    installNativeBridge(bridge);
+    const hostTransport = installTransportForHost("host-a", "ws://host-a/stream");
+    const hostClient = createTestHostClient("user-a");
+
+    render(
+      <BrowserSessionsHostProvider
+        hostId="host-a"
+        hostClient={hostClient}
+        epicId="epic-1"
+      >
+        <SharedProbe id="host-a" />
+      </BrowserSessionsHostProvider>,
+    );
+    await waitFor(() => {
+      expect(hostTransport.wsStreamClient.subscribes).toHaveLength(1);
+    });
+    const stream = hostTransport.wsStreamClient.sessions[0];
+    act(() => {
+      stream.emitStatus("open");
+    });
+
+    // Quit and window-close can both run a final capture: two captures, two
+    // pings, and each promise must wait for ITS OWN pong.
+    let firstDrained = false;
+    let secondDrained = false;
+    const first = captureFinalPrimaryProfiles().then(() => {
+      firstDrained = true;
+    });
+    const second = captureFinalPrimaryProfiles().then(() => {
+      secondDrained = true;
+    });
+
+    await waitFor(() => {
+      expect(framesOfKind(stream.sentFrames, "ping")).toHaveLength(2);
+    });
+    expect(firstDrained).toBe(false);
+    expect(secondDrained).toBe(false);
+
+    act(() => {
+      stream.emit({ kind: "pong", hasBinaryPayload: false }, null);
+    });
+    await first;
+    expect(firstDrained).toBe(true);
+    expect(secondDrained).toBe(false);
+
+    act(() => {
+      stream.emit({ kind: "pong", hasBinaryPayload: false }, null);
+    });
+    await second;
+    expect(secondDrained).toBe(true);
+  });
 });

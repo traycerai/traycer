@@ -200,8 +200,13 @@ export async function seedBrowserViewCookies(
   webContents: BrowserStorageSeedWebContents,
 ): Promise<void> {
   if (storageState === null) return;
-  const cookieDetails =
-    parseStorageState(storageState).cookies.map(toCookieSetDetails);
+  const cookieDetails = parseStorageState(storageState)
+    // Electron's cookies API has no partition key, so setting a partitioned
+    // cookie here would land it in the UNPARTITIONED jar - readable from
+    // top-level sites CHIPS scoped it out of. Skipping it costs a re-login in
+    // that embedded context; restoring it merged is a cross-site leak.
+    .cookies.filter((cookie) => cookie.partitionKey === null)
+    .map(toCookieSetDetails);
   for (const details of cookieDetails) {
     await webContents.session.cookies.set(toElectronCookieSetDetails(details));
   }

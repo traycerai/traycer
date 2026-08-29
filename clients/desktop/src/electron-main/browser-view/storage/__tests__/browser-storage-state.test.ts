@@ -135,6 +135,36 @@ describe("seedBrowserViewCookies", () => {
     expect(set).not.toHaveBeenCalled();
   });
 
+  it("skips partitioned cookies rather than merging them into the unpartitioned jar", async () => {
+    const seeded: string[] = [];
+
+    await seedBrowserViewCookies(
+      {
+        cookies: [
+          {
+            ...storageCookie("partitioned"),
+            partitionKey: "https://top-level.test",
+          },
+          storageCookie("unpartitioned"),
+        ],
+        origins: [],
+      },
+      {
+        session: {
+          cookies: {
+            get: async () => [],
+            flushStore: async () => {},
+            set: async (details) => {
+              seeded.push(details.name ?? "");
+            },
+          },
+        },
+      },
+    );
+
+    expect(seeded).toEqual(["unpartitioned"]);
+  });
+
   it("writes sequentially and stops on a cookie-store failure", async () => {
     const written: string[] = [];
 
