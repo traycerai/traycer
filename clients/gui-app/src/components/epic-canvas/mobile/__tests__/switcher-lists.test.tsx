@@ -4,6 +4,7 @@ import {
   screen,
   type RenderResult,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import type { ReactElement, ReactNode } from "react";
@@ -54,6 +55,15 @@ interface Holder {
   ownerHostIdByNodeId: Record<string, string>;
   indicators: IndicatorFixture;
   search: ArtifactSearchResults;
+  /** What the artifact row's export entries asked the mutation for. */
+  exportCalls: ArtifactExportCall[];
+}
+
+/** The `useEpicExportArtifacts` payload an export entry submits. */
+interface ArtifactExportCall {
+  readonly artifacts: ReadonlyArray<{ readonly id: string }>;
+  readonly format: string;
+  readonly archive: boolean;
 }
 
 interface IndicatorFlags {
@@ -90,6 +100,7 @@ const holder = vi.hoisted((): Holder => ({
     isFetching: false,
     refetch: () => {},
   },
+  exportCalls: [],
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -174,6 +185,18 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
 vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicDeleteArtifact: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+// The artifact row's export entries. Recorded rather than discarded, so what
+// the row asks the shared mutation for is asserted instead of assumed - and
+// mocked at all because the real hook reaches TanStack Query, which this
+// harness deliberately does not mount.
+vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
+  useEpicExportArtifacts: () => ({
+    mutate: (input: ArtifactExportCall) => {
+      holder.exportCalls.push(input);
+    },
+    isPending: false,
+  }),
 }));
 vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
   useTerminalRenameFor: () => ({ mutate: vi.fn(), isPending: false }),
@@ -315,11 +338,67 @@ beforeEach(() => {
   holder.indicatorChatIdCalls = [];
   holder.ownerHostIdByNodeId = {};
   holder.indicators = { epics: {}, chats: {} };
+  holder.exportCalls = [];
   sessionHandle = newSessionHandle();
 });
 afterEach(() => {
   cleanup();
   sessionHandle.dispose();
+});
+
+describe("<SwitcherArtifactsList /> row export", () => {
+  const ARTIFACT_RECORD = {
+    id: "tk-1",
+    parentId: null,
+    name: "Ticket One",
+    type: "ticket" as const,
+    status: 1,
+    hostId: "host-A",
+  };
+
+  it("offers the desktop row menu's export entries on an artifact", async () => {
+    // Mirror-desktop: the desktop artifact row menu offers both formats, so
+    // mounting one and omitting the other would be a curation this list has
+    // no grounds to make.
+    holder.records = [ARTIFACT_RECORD];
+    render(<SwitcherArtifactsList {...PROPS} />);
+
+    await userEvent.click(screen.getByTestId("switcher-more-tk-1"));
+
+    expect(screen.getByTestId("switcher-export-markdown-tk-1")).toBeTruthy();
+    expect(screen.getByTestId("switcher-export-pdf-tk-1")).toBeTruthy();
+  });
+
+  it("exports the row's own artifact, unarchived", async () => {
+    holder.records = [ARTIFACT_RECORD];
+    render(<SwitcherArtifactsList {...PROPS} />);
+
+    await userEvent.click(screen.getByTestId("switcher-more-tk-1"));
+    await userEvent.click(screen.getByTestId("switcher-export-markdown-tk-1"));
+
+    expect(holder.exportCalls).toHaveLength(1);
+    const [call] = holder.exportCalls;
+    expect(call.artifacts.map((a) => a.id)).toEqual(["tk-1"]);
+    expect(call.format).toBe("markdown");
+    // Not a ZIP: one row, one file. The archive path belongs to desktop's
+    // multi-select, which this flat list has no counterpart for.
+    expect(call.archive).toBe(false);
+  });
+
+  it("carries the chosen format through, not a fixed one", async () => {
+    holder.records = [ARTIFACT_RECORD];
+    render(<SwitcherArtifactsList {...PROPS} />);
+
+    await userEvent.click(screen.getByTestId("switcher-more-tk-1"));
+    await userEvent.click(screen.getByTestId("switcher-export-pdf-tk-1"));
+
+    expect(holder.exportCalls.map((c) => c.format)).toEqual(["pdf"]);
+  });
+
+  // The "no export on a chat or terminal row" case is not asserted here: the
+  // agents list pulls in the chat-tree panel, which needs a QueryClient this
+  // harness deliberately does not mount. The gate is `kind === "artifact"` in
+  // `switcher-row-actions.tsx`, structural rather than conditional on data.
 });
 
 describe("<SwitcherArtifactsList />", () => {
