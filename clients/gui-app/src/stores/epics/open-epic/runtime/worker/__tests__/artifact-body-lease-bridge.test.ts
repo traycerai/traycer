@@ -34,6 +34,7 @@ import {
 interface DemoteRecord {
   readonly docKey: string;
   readonly generation: number;
+  readonly docGuid: string;
   readonly bytes: readonly number[];
   settle(answer: { accepted: boolean; settledBytes: number }): void;
 }
@@ -61,16 +62,20 @@ function createWorkerSide(
       respond({
         docKey: docKeyFor(call.request.artifactId),
         update: Uint8Array.from([1, 2, 3]),
+        // A granted materialize always names its document. The bridge refuses
+        // a guidless grant rather than installing a doc it could never demote.
+        docGuid: `guid-${call.request.artifactId}`,
         seedMode: "full",
         hostStateVector: null,
       });
       return;
     }
     if (call.kind === "body/demote") {
-      const { docKey, generation, update } = call.request;
+      const { docKey, generation, docGuid, update } = call.request;
       demotes.push({
         docKey,
         generation,
+        docGuid,
         bytes: [...update],
         settle: (answer) => {
           respond(answer);
@@ -165,6 +170,7 @@ describe("acquire / materialize", () => {
             value: {
               docKey: null,
               update: null,
+              docGuid: null,
               seedMode: "full",
               hostStateVector: null,
             },

@@ -78,6 +78,7 @@ describe("after dispose", () => {
       core.demoteBody({
         docKey: "artifact-1",
         generation: 2,
+        docGuid: "guid-1",
         update: Uint8Array.from([3]),
       }),
     ).resolves.toEqual({ accepted: false, settledBytes: 0 });
@@ -94,6 +95,7 @@ describe("after dispose", () => {
       core.demoteBody({
         docKey: "artifact-1",
         generation: 1,
+        docGuid: "guid-1",
         update: Uint8Array.from([3]),
       }),
     ).resolves.toEqual({ accepted: true, settledBytes: 7 });

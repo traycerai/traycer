@@ -185,7 +185,6 @@ export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
   ...EMPTY_PROJECTED_SLICES,
   chatRecords: EMPTY_CHATS_SLICE,
   chatRecordListAuthoritative: false,
-  installedArm: null,
   chatIngestSeq: 0,
   tuiAgentIngestSeq: 0,
   chatRetractions: EMPTY_CHAT_RETRACTIONS,
@@ -329,6 +328,7 @@ export interface EpicControlProjection {
  */
 export const INITIAL_CONTROL_PROJECTION: EpicControlProjection = Object.freeze({
   permissionRole: null,
+  installedArm: null,
   connectionStatus: "connecting",
   hostTransportStatus: "connecting",
   cloudSyncStatus: "connected",

@@ -25,6 +25,8 @@ export interface InProcessColdState {
   readonly update: Uint8Array;
   readonly seedMode: ArtifactBodySeedMode;
   readonly hostStateVector: string | null;
+  /** The identity these bytes were cut at - the tier's own doc guid. */
+  readonly docGuid: string;
 }
 
 /**
@@ -48,6 +50,7 @@ export interface InProcessRuntimeSource {
   settleColdState(
     docKey: string,
     update: Uint8Array,
+    expectedDocGuid: string,
   ): { readonly accepted: boolean; readonly settledBytes: number };
   sendBodyUpdate(docKey: string, update: Uint8Array): SendOutcome;
 }
@@ -71,6 +74,7 @@ type InProcessHandlers = {
 const BODY_NOT_HELD: RuntimeWorkerCallResponse<"body/materialize"> = {
   docKey: null,
   update: null,
+  docGuid: null,
   seedMode: "full",
   hostStateVector: null,
 };
@@ -97,12 +101,13 @@ export function createInProcessRuntimePort(
       return {
         docKey,
         update: cold.update,
+        docGuid: cold.docGuid,
         seedMode: cold.seedMode,
         hostStateVector: cold.hostStateVector,
       };
     },
     "body/demote": (request) =>
-      source.settleColdState(request.docKey, request.update),
+      source.settleColdState(request.docKey, request.update, request.docGuid),
     "body/update": (request) => ({
       outcome: source.sendBodyUpdate(request.docKey, request.update),
     }),

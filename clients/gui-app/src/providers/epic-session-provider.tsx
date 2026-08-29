@@ -968,7 +968,7 @@ export function EpicSessionProvider(
         nextHandle.dispose();
         presentSession({
           kind: "failed",
-          hostId,
+          targetHostId: hostId,
           originalHostId: originalHostIdRef.current,
         });
         return;
@@ -999,7 +999,7 @@ export function EpicSessionProvider(
       setSession(nextSession);
       presentSession({
         kind: "ready",
-        hostId,
+        targetHostId: hostId,
         originalHostId: originalHostIdRef.current,
       });
     }

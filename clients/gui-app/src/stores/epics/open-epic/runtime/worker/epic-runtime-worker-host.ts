@@ -83,6 +83,8 @@ export interface EpicRuntimeWorkerCore {
   demoteBody(input: {
     readonly docKey: string;
     readonly generation: number;
+    /** What the caller materialized at; a moved identity is refused. */
+    readonly docGuid: string;
     readonly update: Uint8Array;
   }): Promise<{ readonly accepted: boolean; readonly settledBytes: number }>;
   /**
@@ -101,6 +103,8 @@ export interface EpicRuntimeWorkerCore {
 export interface ArtifactBodyMaterialization {
   readonly docKey: string;
   readonly update: Uint8Array;
+  /** The identity these bytes were cut at - see `body/materialize`. */
+  readonly docGuid: string;
   readonly seedMode: ArtifactBodySeedMode;
   readonly hostStateVector: string | null;
 }
@@ -177,6 +181,7 @@ export function startEpicRuntimeWorkerHost(
           value: {
             docKey: null,
             update: null,
+            docGuid: null,
             seedMode: "full",
             hostStateVector: null,
           },
@@ -188,6 +193,7 @@ export function startEpicRuntimeWorkerHost(
         value: {
           docKey: held.docKey,
           update: prepared.bytes,
+          docGuid: held.docGuid,
           seedMode: held.seedMode,
           hostStateVector: held.hostStateVector,
         },

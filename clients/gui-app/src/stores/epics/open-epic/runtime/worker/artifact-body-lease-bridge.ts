@@ -38,6 +38,15 @@ export interface MainThreadBodyDocs {
   install(input: {
     readonly docKey: string;
     readonly update: Uint8Array;
+    /**
+     * The identity these bytes were cut at.
+     *
+     * Held so the demote that eventually returns them can be REFUSED if the
+     * body was replaced in the meantime - a deleted-and-recreated body shares
+     * no ancestor with what was installed, and merging the two is
+     * unrecoverable rather than lossy.
+     */
+    readonly docGuid: string;
     readonly seedMode: ArtifactBodySeedMode;
     readonly hostStateVector: string | null;
   }): void;
@@ -99,6 +108,8 @@ export interface ArtifactBodyLeaseBridge {
 
 interface BodyEntry {
   leases: number;
+  /** What this doc was materialized at; sent back on every demote. */
+  docGuid: string;
   /**
    * Bumped on every demote post AND on every re-acquire.
    *
@@ -118,11 +129,21 @@ export function createArtifactBodyLeaseBridge(options: {
   const entries = new Map<string, BodyEntry>();
 
   function postDemote(docKey: string, generation: number): void {
+    const entry = entries.get(docKey);
+    // No entry means nothing to demote - and no identity to demote it AT. The
+    // guid is not optional on the wire, so this is the honest early return
+    // rather than sending bytes the worker cannot decide about.
+    if (entry === undefined) return;
     const encoded = takeBytesForTransfer(options.docs.encode(docKey));
     void options.bridge
       .call(
         "body/demote",
-        { docKey, generation, update: encoded.bytes },
+        {
+          docKey,
+          generation,
+          docGuid: entry.docGuid,
+          update: encoded.bytes,
+        },
         encoded.transfer,
       )
       .then(
@@ -194,15 +215,23 @@ export function createArtifactBodyLeaseBridge(options: {
       if (raced !== undefined) {
         return reviveAndHold(docKey, raced);
       }
+      // A granted answer with no identity cannot be demoted later - the guid
+      // is what a refusal is decided on - so it is treated as unavailable
+      // rather than installed and stranded.
+      if (answer.docGuid === null) {
+        return { kind: "unavailable", reason: `no identity for ${artifactId}` };
+      }
       options.docs.install({
         docKey,
         update: answer.update,
+        docGuid: answer.docGuid,
         seedMode: answer.seedMode,
         hostStateVector: answer.hostStateVector,
       });
       entries.set(docKey, {
         leases: 1,
         generation: 1,
+        docGuid: answer.docGuid,
         demotingGeneration: null,
       });
       options.budget.chargeHot(docKey);

@@ -56,7 +56,11 @@ import type { RuntimeLogFields } from "../runtime-environment";
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
- * **3** since the composition root landed: `current-user` was added and the
+ * **4** since the body payloads carry `docGuid`: a v3 worker materializes
+ * without an identity and a v3 demote cannot be refused on one, so the two
+ * sides disagree about when a body may be replaced.
+ *
+ * **3** was the composition root: `current-user` was added and the
  * worker->main call direction returned with one member. A v2 worker hits its
  * own `assertNever` on the first `current-user` push.
  *
@@ -73,7 +77,7 @@ import type { RuntimeLogFields } from "../runtime-environment";
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 3;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 4;
 
 /**
  * What the worker was told about the surface it is serving.
@@ -293,6 +297,18 @@ export interface RuntimeWorkerCallMap {
     readonly response: {
       readonly docKey: string | null;
       readonly update: Uint8Array | null;
+      /**
+       * The document identity these bytes were cut at, or `null` on the
+       * not-held arm - which has no document to identify.
+       *
+       * Rides the response so a later demote can be REFUSED when the body was
+       * replaced in between: a deleted-and-recreated body arrives under the
+       * same artifact id with a new guid and a history sharing no ancestor,
+       * and merging the two is unrecoverable rather than lossy. `generation`
+       * beside it answers a different question - the bridge's own ordering -
+       * and the demote arm refuses on either.
+       */
+      readonly docGuid: string | null;
       readonly seedMode: ArtifactBodySeedMode;
       /**
        * The host watermark the bytes were encoded against, base64, or `null`
@@ -314,6 +330,8 @@ export interface RuntimeWorkerCallMap {
     readonly request: {
       readonly docKey: string;
       readonly generation: number;
+      /** The identity the caller materialized at - see `body/materialize`. */
+      readonly docGuid: string;
       readonly update: Uint8Array;
     };
     readonly response: {
@@ -742,14 +760,15 @@ export const CALL_RESPONSE_PARSERS: {
   },
   "body/materialize": (value) => {
     if (!isRecord(value)) return null;
-    const { docKey, update, seedMode, hostStateVector } = value;
+    const { docKey, update, docGuid, seedMode, hostStateVector } = value;
     if (docKey !== null && typeof docKey !== "string") return null;
     if (update !== null && !isUint8Array(update)) return null;
+    if (docGuid !== null && typeof docGuid !== "string") return null;
     if (seedMode !== "full" && seedMode !== "delta-against-offer") return null;
     if (hostStateVector !== null && typeof hostStateVector !== "string") {
       return null;
     }
-    return { docKey, update, seedMode, hostStateVector };
+    return { docKey, update, docGuid, seedMode, hostStateVector };
   },
   "body/demote": (value) => {
     if (!isRecord(value)) return null;

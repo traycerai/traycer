@@ -36,6 +36,7 @@ const REFUSED: BodyDemoteAnswer = { accepted: false, settledBytes: 0 };
 const DEMOTE_REQUEST = {
   docKey: "doc-1",
   generation: 1,
+  docGuid: "guid-1",
   update: Uint8Array.from([1]),
 };
 
@@ -253,7 +254,12 @@ describe("the body calls, with nothing behind them", () => {
     await expect(
       main.call(
         "body/demote",
-        { docKey: "doc-1", generation: 1, update: Uint8Array.from([1]) },
+        {
+          docKey: "doc-1",
+          generation: 1,
+          docGuid: "guid-1",
+          update: Uint8Array.from([1]),
+        },
         NO_TRANSFER,
       ),
     ).resolves.toEqual({ accepted: false, settledBytes: 0 });
@@ -269,6 +275,7 @@ describe("the body calls, with nothing behind them", () => {
     ).resolves.toEqual({
       docKey: null,
       update: null,
+      docGuid: null,
       seedMode: "full",
       hostStateVector: null,
     });

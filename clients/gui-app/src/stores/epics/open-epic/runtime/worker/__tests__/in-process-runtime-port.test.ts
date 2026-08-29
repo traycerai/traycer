@@ -112,7 +112,7 @@ describe("body/demote", () => {
 
     const answer = await port.call(
       "body/demote",
-      { docKey: "doc-1", generation: 1, update: input },
+      { docKey: "doc-1", generation: 1, docGuid: "guid-1", update: input },
       NO_TRANSFER,
     );
 
@@ -132,7 +132,12 @@ describe("body/demote", () => {
     // forever; the caller keeps its live document on `accepted: false`.
     const answer = await port.call(
       "body/demote",
-      { docKey: "doc-1", generation: 1, update: new Uint8Array() },
+      {
+        docKey: "doc-1",
+        generation: 1,
+        docGuid: "guid-1",
+        update: new Uint8Array(),
+      },
       NO_TRANSFER,
     );
 
@@ -172,7 +177,7 @@ describe("the port's shape", () => {
 
     await port.call(
       "body/demote",
-      { docKey: "doc-1", generation: 1, update: bytes },
+      { docKey: "doc-1", generation: 1, docGuid: "guid-1", update: bytes },
       [owned],
     );
 

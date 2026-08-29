@@ -15,8 +15,7 @@
  *     React remount token and stays on this side (the runtime publishes a
  *     monotonic `bindingEpoch` and knows nothing about remounts); the auth store
  *     is read here and handed in as a getter, because a runtime scheduled for a
- *     Web Worker cannot import type { EpicAdapterArm } from "./runtime/epic-adapter-selection";
-import a React store.
+ *     Web Worker cannot import a React store.
  *  3. **Delivery.** Subscription, equality-based re-render skipping and the
  *     batching that keeps a multi-plane frame at one `setState` are consumer
  *     concerns by contract.
@@ -27,6 +26,7 @@ import a React store.
  * getters, whenever the replica is REPLACED - which is what
  * `replicaGeneration()` exists to tell us.
  */
+import type { EpicAdapterArm } from "./runtime/epic-adapter-selection";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type * as Y from "yjs";

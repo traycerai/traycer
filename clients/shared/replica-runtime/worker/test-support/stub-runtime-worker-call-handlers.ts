@@ -26,6 +26,7 @@ export function stubRuntimeWorkerCallHandlers(
         value: {
           docKey: null,
           update: null,
+          docGuid: null,
           seedMode: "full",
           hostStateVector: null,
         },
