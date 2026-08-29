@@ -263,6 +263,7 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: false,
+      expectedHoldersRevision: undefined,
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
