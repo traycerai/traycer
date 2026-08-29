@@ -26,6 +26,14 @@ export const MarkdownClipboard = Extension.create({
         key: new PluginKey("markdownClipboard"),
         props: {
           clipboardTextSerializer: (slice) => {
+            const onlyChild = slice.content.firstChild;
+            if (
+              slice.content.childCount === 1 &&
+              onlyChild?.type.name === "codeBlock" &&
+              (slice.openStart > 0 || slice.openEnd > 0)
+            ) {
+              return onlyChild.textContent;
+            }
             const doc = sliceToDocJson(slice);
             if (doc === null) {
               return slice.content.textBetween(0, slice.content.size, "\n");

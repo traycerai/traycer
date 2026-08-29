@@ -165,6 +165,39 @@ describe("buildArtifactExtensions", () => {
     editor.destroy();
   });
 
+  it("copies a text selection inside a code block without markdown fences", () => {
+    const editor = createArtifactEditor();
+    const command = "bun run compile";
+    editor.commands.setContent(["```sh", command, "```", ""].join("\n"), {
+      contentType: "markdown",
+    });
+
+    const { doc } = editor.state;
+    const { text } = editor.view.serializeForClipboard(
+      doc.slice(1, command.length + 1),
+    );
+
+    expect(text).toBe(command);
+    editor.destroy();
+  });
+
+  it("keeps markdown fences when a whole code block is copied", () => {
+    const editor = createArtifactEditor();
+    const command = "bun run compile";
+    editor.commands.setContent(["```sh", command, "```", ""].join("\n"), {
+      contentType: "markdown",
+    });
+
+    const { doc } = editor.state;
+    const { text } = editor.view.serializeForClipboard(
+      doc.slice(0, doc.content.size),
+    );
+
+    expect(text).toContain("```sh");
+    expect(text).toContain(command);
+    editor.destroy();
+  });
+
   it("pairs the artifact-room doc fragment with artifactRoom awareness - Collaboration binds to the artifact-room doc and CollaborationCaret binds to the same artifactRoom awareness", () => {
     // Per ticket 4a598302-…/Fix: GUI artifact-room-doc awareness and reconnect-safe
     // body edits - when the body fragment lives in a artifact-room doc, the
