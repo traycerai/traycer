@@ -184,14 +184,17 @@ export async function terminateProcessTree(child) {
   }
 }
 
-async function waitForDevToolsUrl(process, readError, readSpawnFailure) {
+async function waitForDevToolsUrl(child, readError, readSpawnFailure) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const spawnFailure = readSpawnFailure();
     if (spawnFailure !== null) {
       throw new Error(`Chrome failed to spawn: ${spawnFailure.message}`);
     }
-    if (process.exitCode !== null) {
+    // A signal-terminated Chrome (an OOM-killed cold start is the CI case)
+    // leaves exitCode null and sets signalCode; without checking both, the
+    // wait would burn its whole deadline on a corpse instead of retrying.
+    if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
         `Chrome exited before DevTools was ready:\n${readError()}`,
       );
