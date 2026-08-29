@@ -2,6 +2,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 
 import {
   DEFAULT_PERMISSION,
+  isKimiK3Model,
   isPermissionMode,
 } from "@/components/home/data/landing-options";
 import type {
@@ -87,7 +88,8 @@ export function modelSupportsImageAttachments(model: ModelOption): boolean {
     model.metadata.supportsImages === true ||
     model.metadata.supportsImageAttachments === true ||
     model.metadata.multimodal === true ||
-    model.metadata.vision === true
+    model.metadata.vision === true ||
+    isKimiK3Model(model)
   );
 }
 
