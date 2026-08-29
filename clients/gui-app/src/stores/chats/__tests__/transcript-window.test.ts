@@ -2025,6 +2025,49 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
+  it("retires a carried setup event after completed authority omits it", () => {
+    const setup: ChatEvent = {
+      eventId: "setup-deleted-by-rebuild",
+      type: "setup.running",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [],
+      events: [setup],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveEvents).toEqual([]);
+  });
+
   it("keeps an assistant through its overtaken empty stream", () => {
     const turnId = "turn-after-empty-rebase";
     const transientId = transientLiveAssistantMessageId(turnId);
@@ -2769,6 +2812,95 @@ describe("what an overlap keeps", () => {
     expect(
       partial.spans.map((span) => span.events.map((event) => event.eventId)),
     ).toEqual([["setup-first"], ["setup-second"]]);
+  });
+
+  it("counts a withheld setup row before seating a later range setup", () => {
+    const setupEvent = (
+      eventId: string,
+      type: ChatEvent["type"],
+      timestamp: number,
+    ): ChatEvent => ({
+      eventId,
+      type,
+      timestamp,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    });
+    const partial = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 2 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["setup-card:chat-1:1:100", "setup-card:chat-1:2:200"],
+        incompleteRowIds: ["setup-card:chat-1:1:100"],
+        messages: [],
+        events: [
+          setupEvent("setup-first", "setup.running", 100),
+          setupEvent("setup-boundary", "worktree.missing", 150),
+          setupEvent("setup-second", "setup.running", 200),
+        ],
+      }),
+    );
+
+    expect(partial.spans.map((span) => span.rowIds)).toEqual([
+      ["setup-card:chat-1:2:200"],
+    ]);
+    expect(partial.spans[0].events.map((event) => event.eventId)).toEqual([
+      "setup-second",
+    ]);
+  });
+
+  it("counts a withheld setup row before seating a later inline-tail setup", () => {
+    const setupEvent = (
+      eventId: string,
+      type: ChatEvent["type"],
+      timestamp: number,
+    ): ChatEvent => ({
+      eventId,
+      type,
+      timestamp,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    });
+    const partial = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: null,
+      tail: {
+        fromOrdinal: 0,
+        rowIds: ["setup-card:chat-1:1:100", "setup-card:chat-1:2:200"],
+        incompleteRowIds: ["setup-card:chat-1:1:100"],
+        messages: [],
+        events: [
+          setupEvent("setup-first", "setup.running", 100),
+          setupEvent("setup-boundary", "worktree.missing", 150),
+          setupEvent("setup-second", "setup.running", 200),
+        ],
+      },
+    });
+
+    expect(partial.spans.map((span) => span.rowIds)).toEqual([
+      ["setup-card:chat-1:2:200"],
+    ]);
+    expect(partial.spans[0].events.map((event) => event.eventId)).toEqual([
+      "setup-second",
+    ]);
   });
 
   it("withholds an incomplete steer row that shares the live assistant turn", () => {

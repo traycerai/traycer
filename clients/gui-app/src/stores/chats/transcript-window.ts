@@ -270,6 +270,8 @@ export interface TranscriptWindow {
    * after the boundary.
    */
   readonly snapshotProvisionalMessageIds: readonly string[];
+  /** Row-producing live events carried across the latest snapshot boundary. */
+  readonly snapshotProvisionalEventIds: readonly string[];
   readonly hydratedBytes: number;
   /**
    * MESSAGE ids whose latest rewrite is not yet reflected in
@@ -396,6 +398,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     liveMessages: [],
     liveEvents: [],
     snapshotProvisionalMessageIds: [],
+    snapshotProvisionalEventIds: [],
     hydratedBytes: 0,
     unsettledByteMessageIds: [],
     invalidated: false,
@@ -1177,12 +1180,56 @@ function provisionalLiveEventsForSnapshot(input: {
     : [];
 }
 
-function reconcileSnapshotProvisionalMessages(
+function namedLiveEventIds(
+  window: TranscriptWindow,
+  skeletonRowIds: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const setupCreatedAt = new Set(
+    [...skeletonRowIds]
+      .filter((rowId) => rowId.startsWith("setup-card:"))
+      .map((rowId) => rowId.slice(rowId.lastIndexOf(":") + 1)),
+  );
+  const named = new Set<string>();
+  for (const row of projectTranscriptRows({
+    messages: window.liveMessages,
+    events: window.liveEvents,
+    activeTurnId: null,
+    chatId: "",
+  })) {
+    const setupNamed =
+      row.source.kind === "setup-card" &&
+      setupCreatedAt.has(String(row.createdAt));
+    if (!setupNamed && !skeletonRowIds.has(row.rowId)) continue;
+    for (const eventId of rowRecordIds(row.source).eventIds) {
+      named.add(eventId);
+    }
+  }
+  return named;
+}
+
+function rowProducingEventIds(
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const row of projectTranscriptRows({
+    messages,
+    events,
+    activeTurnId: null,
+    chatId: "",
+  })) {
+    for (const eventId of rowRecordIds(row.source).eventIds) ids.add(eventId);
+  }
+  return ids;
+}
+
+function reconcileSnapshotProvisionalRecords(
   window: TranscriptWindow,
 ): TranscriptWindow {
   if (
     !window.skeletonComplete ||
-    window.snapshotProvisionalMessageIds.length === 0
+    (window.snapshotProvisionalMessageIds.length === 0 &&
+      window.snapshotProvisionalEventIds.length === 0)
   ) {
     return window;
   }
@@ -1208,10 +1255,19 @@ function reconcileSnapshotProvisionalMessages(
         return skeletonAssistantTurnKeys.has(assistantTurnKey(message));
     }
   });
+  const provisionalEventIds = new Set(window.snapshotProvisionalEventIds);
+  const namedEventIds = namedLiveEventIds(window, skeletonRowIds);
+  const liveEvents = window.liveEvents.filter(
+    (event) =>
+      !provisionalEventIds.has(event.eventId) ||
+      namedEventIds.has(event.eventId),
+  );
   return {
     ...window,
     liveMessages,
+    liveEvents,
     snapshotProvisionalMessageIds: [],
+    snapshotProvisionalEventIds: [],
   };
 }
 
@@ -1355,7 +1411,7 @@ export function applyWindowedSnapshot(
     rebased,
   );
   if (verdict === "straggler") return window;
-  const reconciledWindow = reconcileSnapshotProvisionalMessages(window);
+  const reconciledWindow = reconcileSnapshotProvisionalRecords(window);
   const missedDeltas = verdict === "gap";
   const provisionalLiveMessages = provisionalLiveMessagesForSnapshot({
     window: reconciledWindow,
@@ -1460,11 +1516,18 @@ export function applyWindowedSnapshot(
           invalidated: false,
           clock,
         };
+  const provisionalRowProducingEventIds = rowProducingEventIds(
+    provisionalLiveMessages,
+    provisionalLiveEvents,
+  );
   const snapshotBase = {
     ...base,
     snapshotProvisionalMessageIds: provisionalLiveMessages.map(
       (message) => message.messageId,
     ),
+    snapshotProvisionalEventIds: provisionalLiveEvents
+      .filter((event) => provisionalRowProducingEventIds.has(event.eventId))
+      .map((event) => event.eventId),
   };
 
   // `rowCount` is authoritative even when a same-epoch `null` revision merely
@@ -1577,39 +1640,43 @@ function seatNonConflictingTailRuns(
       if (runStart < 0) runStart = index;
       continue;
     }
-    if (runStart < 0) continue;
-    const rowIds = input.rowIds.slice(runStart, index);
-    const rowIdSet = new Set(rowIds);
-    const records = recordsForRowIds(
-      messages,
-      events,
-      rowIdSet,
-      setupRowsBeforeRun,
-    );
-    const rowContext = Object.fromEntries(
-      Object.entries(input.rowContext).filter(([id]) => rowIdSet.has(id)),
-    );
-    next = seatSnapshotTailSpan({
-      base: next,
-      tail: {
-        ...input.tail,
-        fromOrdinal: input.tail.fromOrdinal + runStart,
+    if (runStart >= 0) {
+      const rowIds = input.rowIds.slice(runStart, index);
+      const rowIdSet = new Set(rowIds);
+      const records = recordsForRowIds(
+        messages,
+        events,
+        rowIdSet,
+        setupRowsBeforeRun,
+      );
+      const rowContext = Object.fromEntries(
+        Object.entries(input.rowContext).filter(([id]) => rowIdSet.has(id)),
+      );
+      next = seatSnapshotTailSpan({
+        base: next,
+        tail: {
+          ...input.tail,
+          fromOrdinal: input.tail.fromOrdinal + runStart,
+          rowIds,
+          incompleteRowIds: input.tail.incompleteRowIds?.filter((id) =>
+            rowIdSet.has(id),
+          ),
+          messages: records.messages,
+          events: records.events,
+          rowContext,
+        },
         rowIds,
-        incompleteRowIds: input.tail.incompleteRowIds?.filter((id) =>
-          rowIdSet.has(id),
-        ),
-        messages: records.messages,
-        events: records.events,
         rowContext,
-      },
-      rowIds,
-      rowContext,
-      clock: input.clock,
-    });
-    setupRowsBeforeRun += rowIds.filter((rowId) =>
-      rowId.startsWith("setup-card:"),
-    ).length;
-    runStart = -1;
+        clock: input.clock,
+      });
+      setupRowsBeforeRun += rowIds.filter((rowId) =>
+        rowId.startsWith("setup-card:"),
+      ).length;
+      runStart = -1;
+    }
+    if (!atEnd && input.rowIds[index].startsWith("setup-card:")) {
+      setupRowsBeforeRun += 1;
+    }
   }
   return next;
 }
@@ -2401,36 +2468,40 @@ export function applyRangeResponse(
         if (runStart < 0) runStart = index;
         continue;
       }
-      if (runStart < 0) continue;
-      const rowIds = response.rowIds.slice(runStart, index);
-      const rowIdSet = new Set(rowIds);
-      const records = recordsForRowIds(
-        messages,
-        events,
-        rowIdSet,
-        setupRowsBeforeRun,
-      );
-      next = applyRangeResponse(next, {
-        ...response,
-        fromOrdinal: response.fromOrdinal + runStart,
-        rowIds,
-        messages: records.messages,
-        events: records.events,
-        incompleteRowIds: response.incompleteRowIds?.filter((id) =>
-          rowIdSet.has(id),
-        ),
-        rowContext: Object.fromEntries(
-          Object.entries(response.rowContext).filter(([id]) =>
+      if (runStart >= 0) {
+        const rowIds = response.rowIds.slice(runStart, index);
+        const rowIdSet = new Set(rowIds);
+        const records = recordsForRowIds(
+          messages,
+          events,
+          rowIdSet,
+          setupRowsBeforeRun,
+        );
+        next = applyRangeResponse(next, {
+          ...response,
+          fromOrdinal: response.fromOrdinal + runStart,
+          rowIds,
+          messages: records.messages,
+          events: records.events,
+          incompleteRowIds: response.incompleteRowIds?.filter((id) =>
             rowIdSet.has(id),
           ),
-        ),
-        reachedStart: response.reachedStart && runStart === 0,
-        reachedEnd: response.reachedEnd && index === response.rowIds.length,
-      });
-      setupRowsBeforeRun += rowIds.filter((rowId) =>
-        rowId.startsWith("setup-card:"),
-      ).length;
-      runStart = -1;
+          rowContext: Object.fromEntries(
+            Object.entries(response.rowContext).filter(([id]) =>
+              rowIdSet.has(id),
+            ),
+          ),
+          reachedStart: response.reachedStart && runStart === 0,
+          reachedEnd: response.reachedEnd && index === response.rowIds.length,
+        });
+        setupRowsBeforeRun += rowIds.filter((rowId) =>
+          rowId.startsWith("setup-card:"),
+        ).length;
+        runStart = -1;
+      }
+      if (!atEnd && response.rowIds[index].startsWith("setup-card:")) {
+        setupRowsBeforeRun += 1;
+      }
     }
     return next;
   }

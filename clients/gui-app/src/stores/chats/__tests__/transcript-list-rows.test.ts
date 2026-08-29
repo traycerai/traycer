@@ -123,6 +123,7 @@ function windowOf(input: {
     liveMessages: [...(input.liveMessages ?? [])],
     liveEvents: [...(input.liveEvents ?? [])],
     snapshotProvisionalMessageIds: [],
+    snapshotProvisionalEventIds: [],
     hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
     unsettledByteMessageIds: [],
     invalidated: input.invalidated,
