@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { AlertTriangle, Pause, Radio, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
@@ -21,6 +21,7 @@ import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
 import {
   useScreencastSession,
   type ScreencastDialog,
+  type ScreencastImage,
   type ScreencastLifecycle,
 } from "@/lib/browser-view/sessions/use-screencast-session";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
@@ -42,6 +43,47 @@ export type BrowserPeekNode = Pick<
 > & {
   readonly initialUrl: string;
 };
+
+/**
+ * Best-effort last-known frame per tab, outside React state on purpose.
+ *
+ * The dormant placeholder (`browser-session-tile.tsx`, decision #9) greys
+ * this out when a tab's host goes unreachable - and by the time that happens
+ * this tile has usually already unmounted, since the parent stops rendering
+ * it in favour of the placeholder. A frame kept only in this component's own
+ * state would already be gone by then, so it is retained here, keyed the
+ * same way the screencast session itself is (host+session+tab+tile
+ * instance), and read directly rather than through a subscription - the
+ * placeholder only ever needs the value at the moment it first renders.
+ *
+ * NOT freed on this tile's own unmount: the same key remounts on every
+ * `runtime.revision` bump (`<BrowserPeekTile key={revision}>` in
+ * browser-session-tile.tsx) and again whenever the placeholder replaces this
+ * tile and later hands back to it, and an unmount-cleanup delete raced the
+ * placeholder's own read of this cache in that same commit. Freed instead by
+ * `clearLastBrowserPeekFrame`, called from the one place that knows the tab
+ * is genuinely gone rather than merely swapping surfaces.
+ */
+const lastFrameCache = new Map<string, ScreencastImage>();
+
+// eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
+export function getLastBrowserPeekFrame(key: string): ScreencastImage | null {
+  return lastFrameCache.get(key) ?? null;
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
+export function clearLastBrowserPeekFrame(key: string): void {
+  lastFrameCache.delete(key);
+}
+
+function useRetainLastBrowserPeekFrame(
+  key: string,
+  image: ScreencastImage | null,
+): void {
+  useEffect(() => {
+    if (image !== null) lastFrameCache.set(key, image);
+  }, [key, image]);
+}
 
 interface BrowserPeekTileProps {
   readonly epicId: string;
@@ -77,6 +119,13 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const { image, frameSize, navState, armedEpoch, dialog } = session;
   const { tileRef, viewportRef, overlayButtonRef, imageRef, imeInputRef } =
     session.refs;
+  const frameCacheKey = compositeKey(
+    node.hostId,
+    node.sessionId,
+    node.tabId,
+    node.instanceId,
+  );
+  useRetainLastBrowserPeekFrame(frameCacheKey, image);
   const inputOwnerId =
     armedEpoch === null
       ? null
