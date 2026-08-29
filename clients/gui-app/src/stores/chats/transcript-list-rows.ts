@@ -1,4 +1,7 @@
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  ChatEvent,
+  Message,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -167,8 +170,34 @@ const spanBackedRowIdCache = new WeakMap<
 >();
 
 /**
+ * Fold one record set's BACKABLE identities into `into` - the derived id
+ * shapes every tier produces the same way: a message backs the row carrying
+ * its id, an event backs both its transcript row and its forked-chat-link
+ * row, and a stopped turn's event backs that turn's assistant row.
+ *
+ * One fold consumed by both tiers' id channels, so a new derived shape cannot
+ * land in one tier and not the other - previously a doc convention ("keep in
+ * step"), now structural.
+ */
+function addRecordBackedRowIds(
+  into: Set<string>,
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): void {
+  for (const message of messages) into.add(message.messageId);
+  for (const event of events) {
+    into.add(chatTranscriptEventRowId(event.eventId));
+    into.add(forkedChatLinkRowId(event.eventId));
+    if (event.type === "turn.stopped" && event.turnId !== null) {
+      into.add(assistantRowId(event.turnId));
+    }
+  }
+}
+
+/**
  * Every id a tier's contents can be rendered FROM - the mirror of
- * {@link liveRecordRowIds} over a hydrated tier.
+ * {@link liveRecordRowIds} over a hydrated tier, sharing its fold
+ * ({@link addRecordBackedRowIds}).
  *
  * Deliberately not {@link spanRowIds}, and the distinction is the point. Those
  * are the rows a span DRAWS. These are the identities its contents can back,
@@ -180,9 +209,6 @@ const spanBackedRowIdCache = new WeakMap<
  * the question is "is this row already drawn" over-suppresses - a record can
  * ride in `span.messages` to render a DIFFERENT row of the same turn without
  * the span drawing a row for it at all.
- *
- * Keep in step with {@link liveRecordRowIds}: the two answer one question
- * about two tiers, so a channel added to either belongs in both.
  */
 function spanBackedRowIds(
   spans: TranscriptWindow["spans"],
@@ -192,56 +218,150 @@ function spanBackedRowIds(
   const rowIds = new Set<string>();
   for (const span of spans) {
     for (const rowId of span.rowIds) rowIds.add(rowId);
-    for (const message of span.messages) rowIds.add(message.messageId);
-    for (const event of span.events) {
-      rowIds.add(chatTranscriptEventRowId(event.eventId));
-      rowIds.add(forkedChatLinkRowId(event.eventId));
-      if (event.type === "turn.stopped" && event.turnId !== null) {
-        rowIds.add(assistantRowId(event.turnId));
-      }
-    }
+    addRecordBackedRowIds(rowIds, span.messages, span.events);
   }
   spanBackedRowIdCache.set(spans, rowIds);
   return rowIds;
 }
 
 /**
- * "Is this rendered model backed by the STALE tier?" - the mirror of
- * {@link liveBackingLookup}, with the same three channels in the same order
- * and for the same reasons, because they are one question asked of two tiers.
+ * Which tier a backing channel may serve. The two tiers ask ONE question -
+ * "is this rendered model backed by something you hold?" - and previously
+ * answered it through two hand-written lookups held in step by doc
+ * convention. The registry below is that convention made structural.
+ */
+type BackingTier = "live" | "stale";
+
+/**
+ * One tier's lazily-built answer sources for the backing channels.
  *
- * A model carrying a `persistentMessageId` was PROJECTED from a record, so that
- * id is where its backing lives. A model without one can only be an inference
- * the renderer drew from a sibling's blocks - and an inferred row was never
- * SERVED, so no id-set fold can ever contain it. That is not an omission the
- * id channels could be widened to cover: `planAssistantTurnRows` emits a steer
- * entry for any turn holding a steer block, and when the steered user record is
- * absent the row takes a synthesized `steer:<queueItemId>` id that appears in
- * no span's `rowIds` and in no record. So the projection has to be run.
+ * Lazy because the folds are O(records) or O(history) while most models
+ * answer on the first membership test, and the lookups run on the per-token
+ * path. Each source memoizes on first read, per lookup instance.
+ */
+interface BackingTierSources {
+  readonly tier: BackingTier;
+  /**
+   * True when the tier holds nothing at all - the cheap short-circuit. The
+   * live tier never short-circuits: its status-label channel answers about
+   * the MODEL, so it must run even when the window holds no live record.
+   */
+  readonly holdsNothing: () => boolean;
+  /** The tier's row ids plus derived backable shapes, one fold. */
+  readonly rowIds: () => ReadonlySet<string>;
+  /**
+   * Setup-card rows the tier's event log materializes. `null` for a tier the
+   * setup channel does not serve - the absence is typed rather than an empty
+   * answer, so an ineligible tier cannot be handed the channel by accident.
+   */
+  readonly setupRowIds: (() => ReadonlySet<string>) | null;
+  /** Steer rows projected from this tier's turn set. */
+  readonly steerRowIds: () => ReadonlySet<string>;
+}
+
+/**
+ * One way a tier's contents reach the renderer.
  *
- * Scoped to turns the stale tier holds ALONE. A turn the live or fresh tier
- * also holds is not pre-rebase history, and suppressing its steer row would
- * hide a current one - the over-suppression this pass has already been bitten
- * by twice. The live gate downstream is a second guard, not the first.
+ * `servesTiers` is declared PER CHANNEL because eligibility is a property of
+ * the channel, not the tier: the status-label shortcut is live-only BY
+ * CONSTRUCTION (a model the renderer itself calls Pending or Streaming is
+ * live whatever the record plumbing says - and precisely because it says
+ * nothing about records, it can never place a row in the stale tier, which
+ * drives SUPPRESSION; handing it there is the over-suppression defect this
+ * pass has been bitten by twice). A channel added without a tier declaration
+ * does not exist, which is the point.
+ */
+interface BackingChannel {
+  readonly servesTiers: readonly BackingTier[];
+  readonly isBacked: (
+    model: ChatMessageModel,
+    sources: BackingTierSources,
+  ) => boolean;
+}
+
+/**
+ * The backing channels, in answer order (cheapest first, and the live
+ * lookup's historical order is preserved exactly; the stale lookup's is the
+ * same list with the live-only members filtered out).
  *
- * Lazy in the same shape and for the same reason: the projection is O(records)
- * and most models answer on the first membership test.
+ * Two KEY KINDS, deliberately distinct channels: `model.id` is a ROW identity
+ * - synthetic projections included - while `persistentMessageId` is a
+ * PERSISTED-RECORD key. The same fold answers both memberships today, but the
+ * questions differ ("which row is this" vs "which record was this projected
+ * from"), and collapsing them into one disjunct is how a record key ends up
+ * compared against row ids elsewhere.
+ *
+ * The persistent-record and steer channels are EXCLUSIVE by
+ * `persistentMessageId`: a model carrying one was projected FROM a record, so
+ * that id is where its backing lives; a model without one can only be an
+ * inference the renderer drew from a sibling's blocks - `planAssistantTurnRows`
+ * emits a steer entry for any turn holding a steer block, and when the steered
+ * user record is absent the row takes a synthesized `steer:<queueItemId>` id
+ * that appears in no fold. Neither test says anything about the other kind of
+ * model.
+ */
+const BACKING_CHANNELS: readonly BackingChannel[] = [
+  {
+    servesTiers: ["live"],
+    isBacked: (model) => isExplicitlyPendingOrStreaming(model),
+  },
+  {
+    servesTiers: ["live", "stale"],
+    isBacked: (model, sources) => sources.rowIds().has(model.id),
+  },
+  {
+    servesTiers: ["live"],
+    isBacked: (model, sources) =>
+      sources.setupRowIds !== null && sources.setupRowIds().has(model.id),
+  },
+  {
+    servesTiers: ["live", "stale"],
+    isBacked: (model, sources) =>
+      model.persistentMessageId !== null &&
+      sources.rowIds().has(model.persistentMessageId),
+  },
+  {
+    servesTiers: ["live", "stale"],
+    isBacked: (model, sources) =>
+      model.persistentMessageId === null && sources.steerRowIds().has(model.id),
+  },
+];
+
+/** The one lookup implementation both tiers instantiate. */
+function backingLookup(
+  sources: BackingTierSources,
+): (model: ChatMessageModel) => boolean {
+  const channels = BACKING_CHANNELS.filter((channel) =>
+    channel.servesTiers.includes(sources.tier),
+  );
+  return (model) => {
+    if (sources.holdsNothing()) return false;
+    return channels.some((channel) => channel.isBacked(model, sources));
+  };
+}
+
+/**
+ * "Is this rendered model backed by the STALE tier?" - the same channel list
+ * as {@link liveBackingLookup} with the live-only members filtered out,
+ * because they are one question asked of two tiers.
+ *
+ * The steer source is scoped to turns the stale tier holds ALONE
+ * ({@link staleOnlySteerRowIds}). A turn the live or fresh tier also holds is
+ * not pre-rebase history, and suppressing its steer row would hide a current
+ * one. The live gate downstream is a second guard, not the first.
  */
 function staleBackingLookup(
   window: TranscriptWindow,
 ): (model: ChatMessageModel) => boolean {
   let rowIds: ReadonlySet<string> | null = null;
   let steerRowIds: ReadonlySet<string> | null = null;
-  return (model) => {
-    if (window.staleSpans.length === 0) return false;
-    rowIds ??= spanBackedRowIds(window.staleSpans);
-    if (rowIds.has(model.id)) return true;
-    if (model.persistentMessageId !== null) {
-      return rowIds.has(model.persistentMessageId);
-    }
-    steerRowIds ??= staleOnlySteerRowIds(window);
-    return steerRowIds.has(model.id);
-  };
+  return backingLookup({
+    tier: "stale",
+    holdsNothing: () => window.staleSpans.length === 0,
+    rowIds: () => (rowIds ??= spanBackedRowIds(window.staleSpans)),
+    setupRowIds: null,
+    steerRowIds: () => (steerRowIds ??= staleOnlySteerRowIds(window)),
+  });
 }
 
 /**
@@ -353,14 +473,7 @@ function staleOnlySteerRowIds(window: TranscriptWindow): ReadonlySet<string> {
  */
 function liveRecordRowIds(window: TranscriptWindow): ReadonlySet<string> {
   const rowIds = new Set<string>();
-  for (const message of window.liveMessages) rowIds.add(message.messageId);
-  for (const event of window.liveEvents) {
-    rowIds.add(chatTranscriptEventRowId(event.eventId));
-    rowIds.add(forkedChatLinkRowId(event.eventId));
-    if (event.type === "turn.stopped" && event.turnId !== null) {
-      rowIds.add(assistantRowId(event.turnId));
-    }
-  }
+  addRecordBackedRowIds(rowIds, window.liveMessages, window.liveEvents);
   return rowIds;
 }
 
@@ -429,27 +542,18 @@ function isExplicitlyPendingOrStreaming(model: ChatMessageModel): boolean {
 /**
  * "Is this rendered model backed by something the client holds LIVE?"
  *
- * One predicate, because two callers ask it about the same models for the same
- * reason and a second copy drifts: the invalidated merge asks it to decide
- * which unplaced records still belong at the tail, and
+ * One predicate, because three callers ask it about the same models for the
+ * same reason and a second copy drifts: the invalidated merge asks it to
+ * decide which unplaced records still belong at the tail,
  * {@link appendUnplacedRenderedRows} asks it to decide whether a model the
- * STALE tier also backs is nonetheless the newest thing the client holds. A
- * narrower answer in either place hides an active row behind a placeholder
- * until replacement hydration arrives, which is the failure the stale tier
- * exists to prevent.
+ * STALE tier also backs is nonetheless the newest thing the client holds, and
+ * {@link seatLiveRecords} asks it to decide which models seat at the ordinals
+ * the index has started naming. A narrower answer in any of them hides an
+ * active row behind a placeholder until replacement hydration arrives, which
+ * is the failure the stale tier exists to prevent - and consuming a channel
+ * SUBSET was exactly how `seatLiveRecords` lost setup cards and steer splits.
  *
- * The four backings are four different ways a live record reaches the
- * renderer: as a row id, as a persistent id the row was projected under, as a
- * setup card the event log materialized, and as a steer split inferred from a
- * transient assistant's blocks. The status label is a fifth and cheapest
- * answer - a model the renderer is itself calling Pending or Streaming is live
- * whatever the record plumbing says.
- *
- * Returned as a closure over lazily-built sets rather than computed per model:
- * `transientLiveSteerRowIds` projects the whole hydrated record set and
- * `projectedLiveSetupRowIds` projects the live one, and this runs on the
- * per-token path where most calls never get past the first two membership
- * tests.
+ * The channels are the live rows of {@link BACKING_CHANNELS}, in that order.
  */
 function liveBackingLookup(
   window: TranscriptWindow,
@@ -458,23 +562,14 @@ function liveBackingLookup(
   let liveRowIds: ReadonlySet<string> | null = null;
   let setupRowIds: ReadonlySet<string> | null = null;
   let steerRowIds: ReadonlySet<string> | null = null;
-  return (model) => {
-    if (isExplicitlyPendingOrStreaming(model)) return true;
-    liveRowIds ??= liveRecordRowIds(window);
-    if (liveRowIds.has(model.id)) return true;
-    setupRowIds ??= projectedLiveSetupRowIds(window, rendered);
-    if (setupRowIds.has(model.id)) return true;
-    // A model carrying a persistent id was projected FROM a record, so that id
-    // is where its liveness lives; one without a persistent id can only be an
-    // inference the renderer drew from a sibling's blocks, which is what the
-    // steer projection answers for. Neither test says anything about the other
-    // kind of model, so they are exclusive rather than a second disjunct.
-    if (model.persistentMessageId !== null) {
-      return liveRowIds.has(model.persistentMessageId);
-    }
-    steerRowIds ??= transientLiveSteerRowIds(window);
-    return steerRowIds.has(model.id);
-  };
+  return backingLookup({
+    tier: "live",
+    holdsNothing: () => false,
+    rowIds: () => (liveRowIds ??= liveRecordRowIds(window)),
+    setupRowIds: () =>
+      (setupRowIds ??= projectedLiveSetupRowIds(window, rendered)),
+    steerRowIds: () => (steerRowIds ??= transientLiveSteerRowIds(window)),
+  });
 }
 
 /**
@@ -639,6 +734,15 @@ function seatStaleRows(input: {
  * Extracted rather than inlined only because the merge below is already at the
  * lint's complexity ceiling; the reasoning for it lives at the call site.
  *
+ * Consumes {@link liveBackingLookup}'s FULL channel set, not an id subset.
+ * The two-channel version of this pass (row ids + persistent ids) left a
+ * skeleton-named setup card, steer split, or Pending/Streaming model behind
+ * its placeholder: not seated here, and not appended at the tail either,
+ * because {@link appendUnplacedRenderedRows} skips every model the skeleton
+ * names. Whether a model is live-backed is ONE question with one answer set;
+ * which ordinal it seats at stays this pass's own judgement (the skeleton
+ * gate below).
+ *
  * Writes into `modelByOrdinal` and `placedRowIds` - the same two structures the
  * span pass fills - so everything downstream reads one answer per ordinal
  * regardless of which pass produced it.
@@ -651,14 +755,9 @@ function seatLiveRecords(input: {
   readonly placedRowIds: Set<string>;
   readonly suppressedOrdinals: ReadonlySet<number>;
 }): void {
-  const liveRowIds = liveRecordRowIds(input.window);
-  if (liveRowIds.size === 0) return;
+  const isLiveBacked = liveBackingLookup(input.window, input.rendered);
   for (const model of input.rendered) {
-    const backedByLiveRecord =
-      liveRowIds.has(model.id) ||
-      (model.persistentMessageId !== null &&
-        liveRowIds.has(model.persistentMessageId));
-    if (!backedByLiveRecord) continue;
+    if (!isLiveBacked(model)) continue;
     if (input.placedRowIds.has(model.id)) continue;
     const ordinal = input.skeletonOrdinals.get(model.id);
     if (ordinal === undefined || ordinal >= input.window.rowCount) continue;

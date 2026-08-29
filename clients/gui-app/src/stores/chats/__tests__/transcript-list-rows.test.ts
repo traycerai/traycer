@@ -1211,6 +1211,163 @@ describe("transcriptListRows", () => {
   });
 });
 
+describe("tier-parameterized backing", () => {
+  it("a Pending model the skeleton names with no live record behind it seats at its ordinal", () => {
+    // BACKING_CHANNELS' status-label channel is live-only, and seatLiveRecords
+    // now consumes the FULL live channel set (not the old row-id/persistent-id
+    // subset). A model the renderer itself calls "Pending" is live-backed
+    // through that channel alone - no span, no live record, no persistent id
+    // needed - so it must seat at the ordinal the skeleton names for it.
+    // Under the old two-channel seatLiveRecords this model backed nothing:
+    // seating skipped it, and appendUnplacedRenderedRows also skips every
+    // model the skeleton names, so it used to vanish behind a bare
+    // placeholder instead of ever drawing.
+    const pendingRowId = "pending-named-in-skeleton";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [skeletonEntry(pendingRowId)],
+        skeletonComplete: true,
+        invalidated: false,
+      }),
+      rendered: [pendingModel(pendingRowId)],
+    });
+
+    expect(kinds(rows)).toEqual([`H:${pendingRowId}`]);
+    expect(rows.filter((row) => row.key === pendingRowId)).toHaveLength(1);
+  });
+
+  it("a skeleton-named setup card projected from live events seats at its ordinal", () => {
+    // The setup-card channel is also live-only and was likewise absent from
+    // the old two-channel seatLiveRecords. Mirrors the module's own
+    // `projectedLiveSetupRowIds` fixture shape (see "keeps a setup card
+    // projected from live events while invalidated" above): one live
+    // `setup.*` event projects exactly one setup-card row for window index 0
+    // at the event's timestamp, and the rendered model carrying that same
+    // synthesized id is the only candidate for that createdAt, so it is the
+    // one `projectedLiveSetupRowIds` returns.
+    const setup: ChatEvent = {
+      eventId: "setup-live-seated",
+      type: "setup.running",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const setupRowId = "setup-card:chat-1:0:2";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [skeletonEntry(setupRowId)],
+        skeletonComplete: true,
+        invalidated: false,
+        liveEvents: [setup],
+      }),
+      rendered: [modelWithoutPersistentMessageId(setupRowId)],
+    });
+
+    expect(kinds(rows)).toEqual([`H:${setupRowId}`]);
+    expect(rows[0].ordinal).toBe(0);
+  });
+
+  it("a Pending status backs nothing in the stale tier", () => {
+    // The status-label channel is declared live-only in BACKING_CHANNELS
+    // precisely so a model the renderer calls Pending can never be read as
+    // STALE-backed off the label alone. Pin the observable half of that: a
+    // Pending model with no record membership in any stale span still reaches
+    // the tail (through its own live channel), while a row that genuinely
+    // sits ONLY in a stale span, carries no Pending/Streaming label, and has
+    // no live backing of its own stays withheld behind its placeholder - the
+    // same contrast "still withholds a stale-only row that nothing live
+    // backs" pins, with a Pending model added alongside to show the tier
+    // boundary does not swallow it too.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 2,
+        spans: [],
+        skeleton: [skeletonEntry("r-0"), skeletonEntry("r-1")],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [span(0, ["history-row"])],
+      }),
+      rendered: [pendingModel("pending-user"), model("history-row")],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "P:1", "H:pending-user"]);
+  });
+
+  it("a steer-split model with no persistent id resolves through the steer channel on both tiers", () => {
+    // The append-tail half of steer eligibility (stale-only suppression vs.
+    // live-turn survival) is already pinned by "withholds a steer row
+    // inferred from a turn only the stale tier holds" and "keeps a steer row
+    // whose turn the LIVE tier also holds" above. What those never exercise
+    // is seatLiveRecords: the old two-channel version (row ids + persistent
+    // ids) could not answer for a steer row at all, since a steer projection
+    // with no steered user record carries neither a row id any span drew nor
+    // a persistent id any record owns - only the synthesized `steer:<queueItemId>`
+    // id the steer channel matches. Seated at the ordinal the skeleton names
+    // for it, exactly like the Pending and setup-card cases above.
+    const turnId = "turn-live-steer-seated";
+    const transient: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientLiveAssistantMessageId(turnId),
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          blockId: "steer-seated",
+          status: "completed",
+          timestamp: 1,
+          type: "steer",
+          queueItemId: "queue-seated",
+          messageId: "missing-steered-user-seated",
+          content: { type: "doc" },
+          mode: "safe_point",
+          sender: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 2,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+    };
+    const steerRowId = queueSteerRowId("queue-seated");
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [skeletonEntry(steerRowId)],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [transient],
+      }),
+      rendered: [modelWithoutPersistentMessageId(steerRowId)],
+    });
+
+    expect(kinds(rows)).toEqual([`H:${steerRowId}`]);
+    expect(rows[0].ordinal).toBe(0);
+  });
+});
+
 describe("visibleOrdinalRange", () => {
   const rows = transcriptListRows({
     window: windowOf({
