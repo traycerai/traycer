@@ -1,10 +1,13 @@
-import type { ReactElement } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
+import { Slot } from "radix-ui";
 
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { FullPathSheet } from "@/components/folder-picker-path-view";
+import { useLongPress } from "@/hooks/ui/use-long-press";
 
 interface FilePathTooltipProps {
   /** The trigger element (typically a truncated path span). Must accept a
@@ -46,5 +49,54 @@ export function FilePathTooltip(props: FilePathTooltipProps) {
         {props.content}
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+/**
+ * {@link FilePathTooltip} plus the touch half of the same disclosure: a long
+ * press carries the identical string into the full-path sheet, the way an
+ * abbreviated row in the remote folder picker does. Hover and press reveal one
+ * string, so a truncated path is never a pointer-only fact.
+ *
+ * The press lives on the path line rather than on the row around it. Rows that
+ * carry a truncated path routinely disable themselves - a launch in flight, a
+ * worktree that is still `checking` - and a disabled row takes
+ * `pointer-events-none` for its whole box, so a row-level recognizer would go
+ * dead on exactly the row whose location someone most wants to read. Those
+ * lines already re-open that one hole with `pointer-events-auto`; this hangs
+ * off the same element.
+ *
+ * A row that wires its own long press (the remote picker's, which spans the
+ * whole row because nothing there disables) keeps using {@link FilePathTooltip}
+ * directly - two recognizers over one gesture would open two sheets.
+ */
+export function FilePathReveal(props: FilePathTooltipProps): ReactNode {
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const longPress = useLongPress({
+    onLongPress: () => setRevealed(props.content),
+    disabled: false,
+  });
+  return (
+    <>
+      <FilePathTooltip content={props.content} side={props.side}>
+        {/* `Slot.Root` nested inside `TooltipTrigger asChild` composes these
+            handlers with the child's own instead of replacing them. */}
+        <Slot.Root
+          {...longPress.handlers}
+          onClick={(event) => {
+            // The browser still delivers a click after a long press. Here that
+            // click reaches the enclosing menu or command item and picks the
+            // row - moving the user off the path the press just revealed - so
+            // the press that already answered the gesture swallows it.
+            if (!longPress.consumedTap()) return;
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          {props.children}
+        </Slot.Root>
+      </FilePathTooltip>
+      <FullPathSheet path={revealed} onClose={() => setRevealed(null)} />
+    </>
   );
 }

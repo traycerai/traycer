@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/command";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { FilePathTooltip } from "@/components/file-path-tooltip";
+import { FilePathReveal } from "@/components/file-path-tooltip";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
 import { cn } from "@/lib/utils";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
@@ -123,11 +123,11 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
                         row whose location someone most wants to read - would
                         otherwise have no reachable trigger. Selection stays
                         shut: `onSelect` returns early while disabled. */}
-                    <FilePathTooltip content={secondary} side="bottom">
+                    <FilePathReveal content={secondary} side="bottom">
                       <StartTruncatedText className="pointer-events-auto block min-w-0 text-ui-xs text-muted-foreground">
                         {secondary}
                       </StartTruncatedText>
-                    </FilePathTooltip>
+                    </FilePathReveal>
                   </div>
                   {badge === null ? null : (
                     <WorktreeRowStatusBadge

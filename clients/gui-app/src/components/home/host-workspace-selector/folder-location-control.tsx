@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/input-group";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { FilePathTooltip } from "@/components/file-path-tooltip";
+import { FilePathReveal } from "@/components/file-path-tooltip";
 import {
   worktreeImportRows,
   type UnifiedPickerWorktreeRow,
@@ -403,11 +403,11 @@ function ExistingWorktreeList(props: {
                   <span className="truncate">
                     {row.branch ?? workspaceFolderName(row.worktreePath)}
                   </span>
-                  <FilePathTooltip content={row.worktreePath} side="bottom">
+                  <FilePathReveal content={row.worktreePath} side="bottom">
                     <StartTruncatedText className="block text-ui-xs text-muted-foreground">
                       {row.worktreePath}
                     </StartTruncatedText>
-                  </FilePathTooltip>
+                  </FilePathReveal>
                 </span>
                 {uncommitted !== undefined && uncommitted > 0 ? (
                   <span className="shrink-0 text-ui-xs text-muted-foreground">
