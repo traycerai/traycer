@@ -36,10 +36,12 @@ import type {
   WebSocketMessageEvent,
 } from "./ws-factory";
 import {
+  CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
   checkCompatibility,
   hostFrameSchema,
   toClientHandshakeIdentity,
   RPC_REQUEST_TIMEOUT_FATAL_CODE,
+  UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   type ClientHandshakeIdentity,
   type FirstPartyClientIdentity,
   type ClientFrame,
@@ -295,12 +297,14 @@ export class WsRpcClient<
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    idempotencyKey: string | null,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     return this.requestWithResponseTimeout(
       method,
       params,
       this.frameTimeoutMs,
+      idempotencyKey,
       authority,
     );
   }
@@ -309,6 +313,7 @@ export class WsRpcClient<
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    idempotencyKey: string | null,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const requestId = this.requestIdProvider();
@@ -359,6 +364,7 @@ export class WsRpcClient<
         token,
         manifest: clientManifest.manifest,
         optionalManifest: clientManifest.optionalManifest,
+        capabilities: [CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1],
         clientIdentity: this.clientIdentity,
       });
 
@@ -396,6 +402,12 @@ export class WsRpcClient<
       recordNegotiatedHostManifest(selected.hostId, mergedHostManifest);
       const clientCanonical = mergedClientManifest[method];
       const hostCanonical = mergedHostManifest[method];
+      const wireIdempotencyKey =
+        idempotencyKey !== null &&
+        ackFrame.capabilities?.includes(UNARY_CAPABILITY_IDEMPOTENCY_KEY) ===
+          true
+          ? idempotencyKey
+          : null;
 
       const compat = checkCompatibility(
         this.registry,
@@ -445,6 +457,7 @@ export class WsRpcClient<
           requestId,
           responseTimeoutMs,
           selected.hostId,
+          wireIdempotencyKey,
         );
       }
 
@@ -461,6 +474,7 @@ export class WsRpcClient<
         requestId,
         responseTimeoutMs,
         selected.hostId,
+        wireIdempotencyKey,
       );
     } finally {
       authority.abortSignal.removeEventListener("abort", onAbort);
@@ -489,6 +503,7 @@ async function executeAvailableMethodRequest<Payload, Response>(
   requestId: string,
   responseTimeoutMs: number,
   hostId: string,
+  idempotencyKey: string | null,
 ): Promise<Response> {
   const preparedRequest = prepareRequestPayload<Payload>(
     methodRegistry,
@@ -505,6 +520,7 @@ async function executeAvailableMethodRequest<Payload, Response>(
     method,
     schemaVersion: preparedRequest.onWireVersion,
     params: preparedRequest.onWirePayload,
+    idempotencyKey,
   });
 
   const responseFrame = await session.next(responseTimeoutMs);
@@ -551,6 +567,7 @@ async function executeUnavailableMethodDegrade<
   requestId: string,
   responseTimeoutMs: number,
   hostId: string,
+  idempotencyKey: string | null,
 ): Promise<ResponseOfMethod<Registry, Method>> {
   // Degrade POLICY is shared with the remote mux transport (see
   // `unavailable-method-degrade.ts`); only the dispatch below is ws-specific.
@@ -574,6 +591,7 @@ async function executeUnavailableMethodDegrade<
         requestId,
         responseTimeoutMs,
         hostId,
+        idempotencyKey,
       ),
   })) as ResponseOfMethod<Registry, Method>;
 }
@@ -1140,10 +1158,13 @@ function openSession(options: SessionOptions): Session {
   // point every transient failure is provably pre-send (the host never saw the
   // call), so it surfaces as a `RetryableTransportError`; after it, the same
   // failure shapes stay a non-retryable `HostTransportFailureError` because a
-  // retry could re-execute a non-idempotent method. Only the host itself can
-  // lift that ambiguity, by attesting it never dispatched the request - which
+  // retry could re-execute a non-idempotent method. A negotiated idempotency
+  // key is the other safe case: the host replays the original result instead
+  // of dispatching twice. Without that negotiated key only the host itself can
+  // lift the ambiguity, by attesting it never dispatched the request - which
   // is what the attestation grace below waits for.
   let requestSent = false;
+  let requestReplaySafe = false;
   let failure: HostRpcError | null = null;
   // Non-null only for the duration of the attestation grace: the ambiguous
   // post-send response timeout that will be raised unless the host attests,
@@ -1159,7 +1180,7 @@ function openSession(options: SessionOptions): Session {
    * host-originated error never routes through here.
    */
   const transientFailure = (message: string): HostRpcError =>
-    requestSent
+    requestSent && !requestReplaySafe
       ? new HostTransportFailureError({
           code: "RPC_ERROR",
           message,
@@ -1512,10 +1533,12 @@ function openSession(options: SessionOptions): Session {
     },
 
     send(frame: ClientFrame): void {
-      // Past this point a transient failure is no longer safe to auto-retry for
-      // non-idempotent methods - the host may have already begun applying it.
+      // Past this point a transient failure is safe to auto-retry only when
+      // this exact connection negotiated a non-null idempotency key. A key an
+      // older host stripped or never advertised never reaches this branch.
       if (frame.kind === "request") {
         requestSent = true;
+        requestReplaySafe = typeof frame.idempotencyKey === "string";
       }
       socket.send(JSON.stringify(frame));
     },

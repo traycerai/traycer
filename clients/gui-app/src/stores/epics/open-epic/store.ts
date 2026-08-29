@@ -44,6 +44,9 @@ import type {
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { EpicDeletedAttribution } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import { basePersistOptions, openEpicKey } from "@/lib/persist";
 import type {
   AgentRolesSlice,
@@ -78,6 +81,10 @@ import type {
   SnapshotFetchError,
 } from "./runtime/epic-runtime-projection";
 import type { EpicStreamClientFactory } from "./runtime/legacy-epic-stream-adapter";
+import {
+  EpicWriteCommandTransportUnavailableError,
+  type EpicWriteCommandIntent,
+} from "./runtime/epic-write-command";
 
 export type { EpicStreamClientFactory };
 export type {
@@ -108,6 +115,8 @@ export interface OpenEpicStoreOptions {
    * auth-recovery path.
    */
   readonly onAuthError: (() => void) | null;
+  /** Production's host-pinned requester; omitted by stores that never write. */
+  readonly commandRequester?: HostRequester<HostRpcRegistry> | null;
 }
 
 /**
@@ -322,6 +331,7 @@ export interface OpenEpicState {
   readonly dirtyWatermarkStateVectorBase64: string | null;
   readonly latestHostStateVectorBase64: string | null;
   readonly unsyncedQueueSize: number;
+  readonly writeCommands: readonly CommandRecord<EpicWriteCommandIntent>[];
 
   // ── Persisted UI focus ───────────────────────────────────────────────
   readonly lastFocusedArtifactId: string | null;
@@ -351,6 +361,12 @@ export interface OpenEpicState {
    * No-op when no migration has been observed on this session.
    */
   retryMigration: () => void;
+  enqueueWriteCommand: (intent: EpicWriteCommandIntent) => string | null;
+  waitForWriteCommand: (
+    commandId: string,
+  ) => Promise<CommandRecord<EpicWriteCommandIntent>>;
+  retryWriteCommand: (commandId: string) => void;
+  discardWriteCommand: (commandId: string) => void;
   /**
    * Publishes the host's `epic.listChatRecords` answer into the record table.
    *
@@ -734,6 +750,7 @@ export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {
   const { epicId, userId } = options;
+  const commandRequester = options.commandRequester ?? null;
   const mintedIngestFenceIdentity = nextIngestFenceIdentity;
   nextIngestFenceIdentity += 1;
 
@@ -799,6 +816,7 @@ export function createOpenEpicStore(
 
   const runtime = createEpicReplicaRuntime({
     epicId,
+    hostId: options.commandRequester?.getActiveHostId() ?? "unbound",
     environment: createRendererRuntimeEnvironment(),
     streamClientFactory: options.streamClientFactory,
     delivery,
@@ -810,6 +828,73 @@ export function createOpenEpicStore(
     // next projection.
     getCurrentUserId: () => useAuthStore.getState().profile?.userId ?? null,
     onAuthError: options.onAuthError,
+    commandIdFactory: { next: () => crypto.randomUUID() },
+    writeCommandSender: {
+      currentHostId: () => commandRequester?.getActiveHostId() ?? null,
+      async send(commandId, intent) {
+        const hostId = commandRequester?.getActiveHostId() ?? null;
+        if (commandRequester === null || hostId === null) {
+          throw new EpicWriteCommandTransportUnavailableError();
+        }
+        switch (intent.kind) {
+          case "rename-artifact":
+            await commandRequester.requestWithIdempotencyKey(
+              "epic.renameArtifact",
+              {
+                epicId,
+                artifactId: intent.artifactId,
+                title: intent.title,
+              },
+              commandId,
+            );
+            break;
+          case "delete-artifact":
+            await commandRequester.requestWithIdempotencyKey(
+              "epic.deleteArtifact",
+              { epicId, artifactId: intent.artifactId },
+              commandId,
+            );
+            break;
+          case "reparent-artifact":
+            await commandRequester.requestWithIdempotencyKey(
+              "epic.reparentArtifact",
+              {
+                epicId,
+                artifactId: intent.artifactId,
+                newParentId: intent.parentId,
+              },
+              commandId,
+            );
+            break;
+          case "update-artifact-status":
+            await commandRequester.requestWithIdempotencyKey(
+              "epic.updateArtifactStatus",
+              {
+                epicId,
+                artifactId: intent.artifactId,
+                artifactType: intent.artifactType,
+                status: intent.status,
+              },
+              commandId,
+            );
+            break;
+          case "update-epic-title":
+            await commandRequester.requestWithIdempotencyKey(
+              "epic.updateTitle",
+              {
+                epicDelta: {
+                  id: epicId,
+                  title: intent.title,
+                  updatedAt: intent.updatedAt,
+                },
+              },
+              commandId,
+            );
+            break;
+        }
+        return { hostId };
+      },
+    },
   });
   runtimeRef = runtime;
 
@@ -855,6 +940,34 @@ export function createOpenEpicStore(
           },
           retryMigration: () => {
             runtime.retryMigration();
+          },
+          enqueueWriteCommand: (intent) =>
+            runtime.enqueueWriteCommand(intent)?.commandId ?? null,
+          waitForWriteCommand: (commandId) => {
+            const current = get().writeCommands.find(
+              (command) => command.commandId === commandId,
+            );
+            if (current !== undefined && current.state !== "pending") {
+              return Promise.resolve(current);
+            }
+            return new Promise((resolve) => {
+              const unsubscribe = api.subscribe((state) => {
+                const command = state.writeCommands.find(
+                  (candidate) => candidate.commandId === commandId,
+                );
+                if (command === undefined || command.state === "pending") {
+                  return;
+                }
+                unsubscribe();
+                resolve(command);
+              });
+            });
+          },
+          retryWriteCommand: (commandId) => {
+            runtime.retryWriteCommand(commandId);
+          },
+          discardWriteCommand: (commandId) => {
+            runtime.discardWriteCommand(commandId);
           },
 
           applyChatRecords: (records, issuedAtSeq) => {
@@ -992,6 +1105,7 @@ export function createOpenEpicStore(
       return (
         state.snapshotLoaded &&
         !state.isDirty &&
+        state.writeCommands.length === 0 &&
         state.hostTransportStatus === "open"
       );
     },

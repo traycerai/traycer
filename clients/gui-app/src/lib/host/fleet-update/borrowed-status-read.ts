@@ -66,7 +66,7 @@ export async function readUpdateStatusOverBorrowedSession(input: {
     // session and cannot prolong one — and `release()` below is balanced on
     // every path including the wait.
     const status = await runWithFleetReadSlot(() =>
-      borrowed.sendUnary("host.status", {}, input.abortSignal, undefined),
+      borrowed.sendUnary("host.status", {}, null, input.abortSignal, undefined),
     );
     return observationFromStatus({
       hostId: input.hostId,

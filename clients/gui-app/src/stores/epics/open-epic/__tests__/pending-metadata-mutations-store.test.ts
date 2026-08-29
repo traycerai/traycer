@@ -23,6 +23,47 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import {
+  createMetadataOverlayStore,
+  type MetadataOverlaySources,
+} from "../runtime/metadata-overlay-store";
+import type { PendingRename } from "../pending-metadata-overlay";
+
+function metadataOverlayFixture() {
+  const scheduled: Array<() => void> = [];
+  const reconciled = vi.fn();
+  const sources: MetadataOverlaySources = {
+    environment: {
+      clock: { now: () => 0 },
+      scheduler: {
+        schedule: (_delayMs, callback) => {
+          let canceled = false;
+          scheduled.push(() => {
+            if (!canceled) callback();
+          });
+          return {
+            cancel: () => {
+              canceled = true;
+            },
+          };
+        },
+        scheduleMicrotask: (callback) => callback(),
+      },
+      logger: {
+        debug: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      },
+    },
+    republish: () => undefined,
+    isProjectorAttached: () => true,
+    hasFreshRootSnapshotForOpenCycle: () => true,
+    recordPlaneServesNode: () => true,
+    isDisposed: () => false,
+    onReconciled: reconciled,
+  };
+  return { store: createMetadataOverlayStore(sources), reconciled, scheduled };
+}
 
 function chatRecord(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
   return {
@@ -546,6 +587,81 @@ describe("detachTransport", () => {
 });
 
 describe("landed-entry TTL", () => {
+  it("reports landed TTL retirement with the exact superseded outcome and source", () => {
+    const { store, reconciled, scheduled } = metadataOverlayFixture();
+    const mutation: PendingRename = {
+      kind: "rename",
+      requestId: "ttl-request",
+      nodeId: "artifact-1",
+      title: "Renamed",
+      baseline: "Original",
+      landed: false,
+    };
+
+    store.stamp(mutation);
+    expect(store.retire(mutation.requestId, "landed")).toBe(true);
+    scheduled[0]?.();
+
+    expect(reconciled).toHaveBeenCalledWith(
+      "ttl-request",
+      "superseded",
+      "landed-overlay-ttl",
+    );
+  });
+
+  it("reports authoritative echo reconciliation with the exact echo outcome and source", () => {
+    const { store, reconciled } = metadataOverlayFixture();
+    const mutation: PendingRename = {
+      kind: "rename",
+      requestId: "echo-request",
+      nodeId: "artifact-1",
+      title: "Renamed",
+      baseline: "Original",
+      landed: true,
+    };
+
+    store.stamp(mutation);
+    store.collectDead([{ requestId: "echo-request", outcome: "echo" }]);
+
+    expect(reconciled).toHaveBeenCalledWith(
+      "echo-request",
+      "echo",
+      "authoritative-projection",
+    );
+  });
+
+  it("cancels an ambiguous TTL when explicitly retried, so only the fresh landed TTL can reconcile", () => {
+    const { store, reconciled, scheduled } = metadataOverlayFixture();
+    const mutation: PendingRename = {
+      kind: "rename",
+      requestId: "retry-request",
+      nodeId: "artifact-1",
+      title: "Renamed",
+      baseline: "Original",
+      landed: false,
+    };
+
+    store.stamp(mutation);
+    expect(store.markUnknownOutcome(mutation.requestId)).toBe(true);
+    expect(store.markUnknownOutcomeRetrying(mutation.requestId)).toBe(true);
+    expect(store.retire(mutation.requestId, "landed")).toBe(true);
+    expect(scheduled).toHaveLength(2);
+
+    // This is the old ambiguous deadline. Its cancellation must make it a
+    // no-op after the explicit retry and the fresh landed acknowledgement.
+    scheduled[0]?.();
+    expect(reconciled).not.toHaveBeenCalled();
+
+    // The post-retry commit owns a new TTL and is the only expiry allowed to
+    // supersede the retained overlay.
+    scheduled[1]?.();
+    expect(reconciled).toHaveBeenCalledWith(
+      "retry-request",
+      "superseded",
+      "landed-overlay-ttl",
+    );
+  });
+
   it("a landed entry self-expires and row-wins once LANDED_MUTATION_TTL_MS passes with no echo - the bounded bridge for a peer's write-back to the baseline", () => {
     vi.useFakeTimers();
     try {

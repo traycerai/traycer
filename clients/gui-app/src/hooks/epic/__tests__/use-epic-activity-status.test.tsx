@@ -29,6 +29,7 @@ import {
   publishAgentActivity,
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const EPIC_ID = "epic-activity";
 const AGENT_ID = "chat-1";
@@ -82,6 +83,7 @@ function registerChatSession(
     },
     () =>
       createChatSessionStore({
+        environment: CHAT_STORE_TEST_ENVIRONMENT,
         hostId: "host-a",
         epicId: EPIC_ID,
         chatId,

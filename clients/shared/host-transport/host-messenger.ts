@@ -55,6 +55,7 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
   request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    idempotencyKey: string | null,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>>;
 
@@ -72,6 +73,7 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    idempotencyKey: string | null,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>>;
 }

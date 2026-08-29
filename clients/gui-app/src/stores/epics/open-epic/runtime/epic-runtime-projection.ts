@@ -24,12 +24,14 @@ import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { EpicDeletedAttribution } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import type {
   ArtifactRoomsSlice,
   ChatsSlice,
   EpicProjectedSlices,
   TerminalAgentsSlice,
 } from "../types";
+import type { EpicWriteCommandIntent } from "./epic-write-command";
 import {
   EMPTY_ARTIFACT_ROOM_DIRTY,
   EMPTY_ARTIFACT_ROOMS_SLICE,
@@ -145,6 +147,8 @@ export interface EpicRecordsProjection extends EpicProjectedSlices {
   readonly dirtyWatermarkStateVectorBase64: string | null;
   readonly latestHostStateVectorBase64: string | null;
   readonly unsyncedQueueSize: number;
+  /** Pending and terminal-unacknowledged write commands, in issue order. */
+  readonly writeCommands: readonly CommandRecord<EpicWriteCommandIntent>[];
 }
 
 export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
@@ -163,6 +167,7 @@ export const EMPTY_RECORDS_PROJECTION: EpicRecordsProjection = Object.freeze({
   dirtyWatermarkStateVectorBase64: null,
   latestHostStateVectorBase64: null,
   unsyncedQueueSize: 0,
+  writeCommands: Object.freeze([]),
 });
 
 // ─── Artifact-body doc plane ──────────────────────────────────────────────

@@ -77,7 +77,10 @@ import {
   unionTerminalAgentsSlice,
 } from "../projection-helpers";
 import type { ProjectionInputs } from "../projection-helpers";
-import type { PendingMetadataOverlay } from "../pending-metadata-overlay";
+import type {
+  DeadPendingMutation,
+  PendingMetadataOverlay,
+} from "../pending-metadata-overlay";
 import type {
   AgentRolesSlice,
   ArtifactsSlice,
@@ -260,7 +263,7 @@ export interface EpicProjectorSources {
    * overwrote it). Must NOT republish - a dead chain already displays the
    * authoritative value, so the deletion is invisible by construction.
    */
-  readonly onDeadMutations: (requestIds: readonly string[]) => void;
+  readonly onDeadMutations: (outcomes: readonly DeadPendingMutation[]) => void;
 }
 
 export function createEpicProjector(

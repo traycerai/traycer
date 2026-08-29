@@ -131,6 +131,7 @@ describe("createRetryingMessenger", () => {
     const result = await createRetryingMessenger(messenger, policy).request(
       "host.echo",
       { message: "hi" },
+      null,
       authority(),
     );
 
@@ -146,6 +147,7 @@ describe("createRetryingMessenger", () => {
     const result = await createRetryingMessenger(messenger, policy).request(
       "host.echo",
       { message: "hi" },
+      null,
       authority(),
     );
 
@@ -169,6 +171,7 @@ describe("createRetryingMessenger", () => {
         {
           message: "hi",
         },
+        null,
         authority(),
       ),
     ).rejects.toBeInstanceOf(RetryableTransportError);
@@ -186,6 +189,7 @@ describe("createRetryingMessenger", () => {
         {
           message: "hi",
         },
+        null,
         authority(),
       ),
     ).rejects.toSatisfy(
@@ -204,6 +208,7 @@ describe("createRetryingMessenger", () => {
       createRetryingMessenger(messenger, NO_RETRY_TRANSPORT_POLICY).request(
         "host.echo",
         { message: "hi" },
+        null,
         authority(),
       ),
     ).rejects.toBeInstanceOf(RetryableTransportError);
@@ -220,6 +225,7 @@ describe("createRetryingMessenger", () => {
       {
         message: "hi",
       },
+      null,
       authority(),
     );
 

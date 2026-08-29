@@ -1002,6 +1002,7 @@ import {
   BASE_PAD_LEFT,
   INDENT_PX,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const TAB_ID = "tab-1";
 const EPIC_ID = "epic-1";
@@ -3110,6 +3111,7 @@ const createdSessionHandles: ChatSessionStoreHandle[] = [];
  */
 function createSessionHandle(chatId: string): ChatSessionStoreHandle {
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId,

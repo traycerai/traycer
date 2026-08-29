@@ -12,14 +12,10 @@ import { toast } from "sonner";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import {
   getEpicSessionHandleHostClient,
-  getEpicSessionHandleHostId,
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
-import { getAppHostClientSnapshot } from "@/lib/host/runtime";
-import { toastFromHostError } from "@/lib/host-error-toast";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 
 /**
@@ -82,16 +78,6 @@ export function MobileEpicHeaderTitle(props: {
       // because this renders outside the epic session tree, exactly as the
       // permission-role read above does.
       const handle = getOpenEpicRegistry().peek(epicId);
-      const requestId =
-        handle?.store.getState().beginEpicTitleMutation(next) ?? null;
-      // Retire rides the promise, not a per-call `onSettled` - TanStack drops
-      // those on unmount, and this control UNMOUNTS on the very resize the
-      // 768px parity contract is about. Contract note in
-      // `use-rename-canvas-tab.ts`.
-      const retire = (outcome: "landed" | "failed"): void => {
-        if (requestId === null) return;
-        handle?.store.getState().retirePendingMutation(requestId, outcome);
-      };
       // HOST-SCOPED where a live session exists, exactly as the wide
       // viewport's tab strip resolves `epicRenameClient(tab.hostId)`: the
       // overlay above was stamped on the SESSION's store, so the RPC must go
@@ -119,71 +105,45 @@ export function MobileEpicHeaderTitle(props: {
       //     overlay is stamped on that session's store, so an app-wide ack
       //     would mark it landed for a rename its host never saw, against
       //     another host's copy. Refuse and drop the stamp, as the strip does.
-      const sessionClient =
-        handle === null ? null : getEpicSessionHandleHostClient(handle);
-      if (handle !== null && sessionClient === null) {
-        // An ABSENT entry and a `null` one both arrive here and are not the
-        // same state - `handleHostClients` says so in as many words: absent is
-        // a handle the provider never saw, `null` is a session with no serving
-        // client just now. The host id is what separates them, and it is the
-        // handle's stable transport binding, so it does not drift the way the
-        // client legitimately rotates on reconnect.
-        const sessionHostId = getEpicSessionHandleHostId(handle);
-        const appWideHostId =
-          getAppHostClientSnapshot()?.getActiveHostId() ?? null;
-        if (sessionHostId !== null && sessionHostId !== appWideHostId) {
-          // No RPC ever fired, so nothing can land this stamp - drop it.
-          retire("failed");
-          reportableErrorToast(
-            "Couldn't reach the host to rename the epic.",
-            undefined,
-            {
-              title: "Could not rename Epic",
-              message: "The host was unavailable.",
-              code: null,
-              source: "Epic mobile header",
-            },
-          );
-          return;
-        }
-      }
-      if (sessionClient !== null) {
-        const hostId = sessionClient.getActiveHostId();
-        const userId = sessionClient.getRequestContextUserId();
-        void sessionClient
-          .request("epic.updateTitle", {
-            epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
-          })
-          .then(
-            () => {
-              retire("landed");
-              // Emitted here because this arm BYPASSES `useEpicUpdateTitle`,
-              // whose own `onSuccess` is where the event otherwise comes from
-              // (`use-epic-title-mutation.ts`). Without it the event fires on
-              // the app-wide fallback and nowhere else - so it would go
-              // missing precisely when a session is live, which is the normal
-              // case, and read downstream as mobile renames falling off a
-              // cliff rather than as a routing change.
-              Analytics.getInstance().track(AnalyticsEvent.TaskRenamed, {
-                source: "direct_ui",
-              });
-              toast.success("Epic renamed");
-              if (userId === null) return;
-              updateEpicTitleInCloudTaskCaches(
-                queryClient,
-                { hostId, userId },
-                epicId,
-                next,
-              );
-            },
-            (error: unknown) => {
-              retire("failed");
-              toastFromHostError(
-                toHostRpcError(error, "epic.updateTitle"),
-                "Couldn't rename epic.",
-              );
-            },
-          );
+      if (handle !== null) {
+        const sessionClient = getEpicSessionHandleHostClient(handle);
+        const hostId = sessionClient?.getActiveHostId() ?? null;
+        const userId = sessionClient?.getRequestContextUserId() ?? null;
+        const state = handle.store.getState();
+        const commandId = state.enqueueWriteCommand({
+          kind: "update-epic-title",
+          title: next,
+          updatedAt: Date.now(),
+        });
+        if (commandId === null) return;
+        void state.waitForWriteCommand(commandId).then((command) => {
+          if (command.state === "committed") {
+            // This arm bypasses `useEpicUpdateTitle`, so it owns the analytics
+            // and cache update that hook normally performs.
+            Analytics.getInstance().track(AnalyticsEvent.TaskRenamed, {
+              source: "direct_ui",
+            });
+            toast.success("Epic renamed");
+            if (userId === null) return;
+            updateEpicTitleInCloudTaskCaches(
+              queryClient,
+              { hostId, userId },
+              epicId,
+              next,
+            );
+            return;
+          }
+          const message =
+            command.resolution?.kind === "rejected"
+              ? command.resolution.reason
+              : "A newer authoritative title superseded this rename.";
+          reportableErrorToast("Couldn't rename epic.", undefined, {
+            title: "Could not rename Epic",
+            message,
+            code: null,
+            source: "Epic mobile header",
+          });
+        });
         return;
       }
       void updateTitle
@@ -191,12 +151,8 @@ export function MobileEpicHeaderTitle(props: {
           epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
         })
         .then(
-          () => {
-            retire("landed");
-          },
-          () => {
-            retire("failed");
-          },
+          () => {},
+          () => {},
         );
     },
     [epicId, queryClient, updateTitle],

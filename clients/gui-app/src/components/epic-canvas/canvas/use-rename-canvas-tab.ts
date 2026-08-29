@@ -71,6 +71,15 @@ export function useRenameCanvasTab(
           return;
         }
       }
+      if (tab.type !== "chat" && tab.type !== "terminal-agent") {
+        void renameArtifact
+          .mutateAsync({ epicId, artifactId: id, title: trimmed })
+          .then(
+            () => renameArtifactInTab(viewTabId, id, trimmed),
+            () => {},
+          );
+        return;
+      }
       // The optimistic overlay, NOT the doc write this used to do. The doc
       // write covered artifacts and doc-backed chats and silently no-opped for
       // every registry-backed row, which post chats-off-YJS is most of the
@@ -129,10 +138,6 @@ export function useRenameCanvasTab(
       } else if (tab.type === "terminal-agent") {
         void renameTerminalAgent
           .mutateAsync({ epicId, tuiAgentId: id, title: trimmed })
-          .then(landed, failed);
-      } else {
-        void renameArtifact
-          .mutateAsync({ epicId, artifactId: id, title: trimmed })
           .then(landed, failed);
       }
     },

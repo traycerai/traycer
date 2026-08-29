@@ -102,16 +102,18 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
     request<Method extends keyof Registry & string>(
       method: Method,
       params: RequestOfMethod<Registry, Method>,
+      idempotencyKey: string | null,
       authority: HostRequestAuthority,
     ): Promise<ResponseOfMethod<Registry, Method>> {
       return runWithAuthRecovery(authority, method, () =>
-        inner.request(method, params, authority),
+        inner.request(method, params, idempotencyKey, authority),
       );
     },
     requestWithResponseTimeout<Method extends keyof Registry & string>(
       method: Method,
       params: RequestOfMethod<Registry, Method>,
       responseTimeoutMs: number,
+      idempotencyKey: string | null,
       authority: HostRequestAuthority,
     ): Promise<ResponseOfMethod<Registry, Method>> {
       return runWithAuthRecovery(authority, method, () =>
@@ -119,6 +121,7 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
           method,
           params,
           responseTimeoutMs,
+          idempotencyKey,
           authority,
         ),
       );

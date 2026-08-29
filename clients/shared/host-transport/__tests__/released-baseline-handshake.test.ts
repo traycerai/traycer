@@ -333,6 +333,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         workspace: null,
         profileSelection: { kind: "ambient" },
       },
+      null,
       authority,
     );
     await flush();
@@ -379,6 +380,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         fastMode: false,
         permissionMode: "full_access",
       },
+      null,
       authority,
     );
     await flush();
@@ -436,6 +438,7 @@ describe.skipIf(baselines.length === 0)(
         const pending = client.request(
           "host.status",
           {},
+          null,
           authorityForContext(ctx),
         );
         await flush();
@@ -542,6 +545,7 @@ describe.skipIf(baselines.length === 0)(
           {
             label: "x",
           },
+          null,
           authorityForContext(ctx),
         );
         await flush();
@@ -612,6 +616,7 @@ describe.skipIf(baselines.length === 0)(
         const pending = client.request(
           "synthetic.baselineUnsupported",
           {},
+          null,
           authorityForContext(ctx),
         );
         await flush();

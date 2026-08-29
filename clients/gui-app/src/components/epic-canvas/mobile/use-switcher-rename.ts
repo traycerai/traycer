@@ -95,6 +95,10 @@ export function useSwitcherRename(
           return;
         }
       }
+      if (kind === "artifact") {
+        renameArtifact.mutate({ epicId, artifactId: nodeId, title: trimmed });
+        return;
+      }
       const requestId = epicHandle.store
         .getState()
         .beginRenameMutation(nodeId, trimmed);
@@ -118,10 +122,6 @@ export function useSwitcherRename(
       } else if (kind === "terminal-agent") {
         void renameTuiAgent
           .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
-          .then(landed, failed);
-      } else {
-        void renameArtifact
-          .mutateAsync({ epicId, artifactId: nodeId, title: trimmed })
           .then(landed, failed);
       }
     },

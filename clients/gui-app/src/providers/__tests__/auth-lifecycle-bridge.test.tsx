@@ -14,6 +14,7 @@ import {
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /** Chat sessions are keyed by (epic, chat, host); sign-out / user-switch
  *  teardown is host-agnostic, so one host id serves every fixture here. */
@@ -58,6 +59,7 @@ function fakeChatHandle(
   const calls = { close: 0 };
   return {
     handle: createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
       hostId: "host-a",
       epicId,
       chatId,

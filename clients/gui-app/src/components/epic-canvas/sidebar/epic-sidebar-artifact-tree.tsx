@@ -951,37 +951,12 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     // mode. Deliberately NOT re-opening the editor on failure — that would
     // steal focus seconds later, wherever the user had moved on to.
     setIsRenaming(false);
-    // The optimistic overlay, in place of the `renameArtifact` doc write this
-    // used to do — rationale and the promise-carried retire contract live in
-    // `use-rename-canvas-tab.ts`, which this mirrors.
-    const requestId = epicHandle.store
-      .getState()
-      .beginRenameMutation(nodeId, trimmed);
-    const retire = (outcome: "landed" | "failed"): void => {
-      if (requestId === null) return;
-      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
-    };
+    // The command queue owns the optimistic overlay and its terminal record.
     void renameArtifact
       .mutateAsync({ epicId, artifactId: nodeId, title: trimmed })
       .then(
-        () => {
-          retire("landed");
-          // The tab snapshot only on settlement - it is a persisted fallback
-          // with no rollback path, so a speculative write would preserve a
-          // rejected title across restarts - and only while this is still
-          // the LATEST stamped rename for the node: settles are unordered,
-          // and an older ack landing last must not overwrite the newer
-          // snapshot. See `use-rename-canvas-tab.ts`.
-          if (
-            requestId === null ||
-            epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
-          ) {
-            renameArtifactInTab(tabId, nodeId, trimmed);
-          }
-        },
-        () => {
-          retire("failed");
-        },
+        () => renameArtifactInTab(tabId, nodeId, trimmed),
+        () => {},
       );
   }, [
     epicHandle,
@@ -1013,7 +988,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   };
 
   const confirmDelete = () => {
-    epicHandle.store.getState().deleteArtifact(nodeId);
     markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
       setConfirmDeleteOpen(false);

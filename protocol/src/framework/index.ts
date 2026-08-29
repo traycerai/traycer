@@ -175,8 +175,10 @@ export type {
 } from "./ws-protocol";
 
 export {
+  CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
   HOST_RESTARTING_FATAL_CODE,
   RPC_REQUEST_TIMEOUT_FATAL_CODE,
+  UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   clientFrameSchema,
   clientOpenFrameSchema,
   clientRequestFrameSchema,

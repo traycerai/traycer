@@ -19,8 +19,10 @@ import type {
   RuntimeTimer,
 } from "@traycer-clients/shared/replica-runtime";
 import type {
+  DeadPendingMutation,
   PendingMetadataMutation,
   PendingMetadataOverlay,
+  PendingMetadataValue,
 } from "../pending-metadata-overlay";
 
 /**
@@ -58,6 +60,11 @@ export interface MetadataOverlaySources {
    */
   readonly recordPlaneServesNode: (nodeId: string) => boolean;
   readonly isDisposed: () => boolean;
+  readonly onReconciled: (
+    requestId: string,
+    outcome: "echo" | "superseded",
+    via: "authoritative-projection" | "landed-overlay-ttl",
+  ) => void;
 }
 
 export interface MetadataOverlayStore {
@@ -67,6 +74,14 @@ export interface MetadataOverlayStore {
   markRegistryBacked(): void;
   /** Stamp a mutation, mark its chain's provenance, and republish. */
   stamp(mutation: PendingMetadataMutation): string;
+  /** Keep an ambiguous post-send outcome until an echo or the bounded TTL. */
+  markUnknownOutcome(requestId: string): boolean;
+  /**
+   * Turn an ambiguous entry back into an ordinary pending overlay before the
+   * user's explicit retry. Its existing timer may remain armed: while this
+   * entry is unlanded the chain rule re-arms instead of expiring it.
+   */
+  markUnknownOutcomeRetrying(requestId: string): boolean;
   retire(requestId: string, outcome: "landed" | "failed"): boolean;
   /**
    * The AUTHORITATIVE value a new mutation should record as its baseline.
@@ -79,11 +94,11 @@ export interface MetadataOverlayStore {
    * that baseline is both correct and the only reading available here. With no
    * chain, nothing is overlaid and the projected value IS authoritative.
    */
-  baselineFor(
+  baselineFor<Value extends PendingMetadataValue>(
     kind: PendingMetadataMutation["kind"],
     nodeId: string | null,
-    projected: string | null,
-  ): string | null;
+    projected: Value,
+  ): Value;
   /** Record the last-stamped rename for a node. See {@link isLatestRenameStamp}. */
   recordRenameStamp(nodeId: string, requestId: string): void;
   /**
@@ -99,7 +114,7 @@ export interface MetadataOverlayStore {
    */
   isLatestRenameStamp(nodeId: string, requestId: string): boolean;
   /** The projector's `onDeadMutations` sink. */
-  collectDead(requestIds: readonly string[]): void;
+  collectDead(outcomes: readonly DeadPendingMutation[]): void;
   /**
    * Drop landed entries when the transport detaches but the replica is
    * retained. Their sweep runs inside full projections, and a detached
@@ -122,6 +137,7 @@ export function createMetadataOverlayStore(
     hasFreshRootSnapshotForOpenCycle,
     recordPlaneServesNode,
     isDisposed,
+    onReconciled,
   } = sources;
 
   /**
@@ -132,6 +148,10 @@ export function createMetadataOverlayStore(
    * the order the user made them.
    */
   const pending = new Map<string, PendingMetadataMutation>();
+  /** Ambiguous sends temporarily use the landed chain's echo/TTL machinery. */
+  const unknownOutcomeRequestIds = new Set<string>();
+  /** One active landed/ambiguous expiry per request id. */
+  const landedExpiryByRequestId = new Map<string, RuntimeTimer>();
 
   /**
    * The last-stamped rename request per node, SURVIVING the chain: the dead
@@ -256,7 +276,11 @@ export function createMetadataOverlayStore(
    * landing never needs to reschedule anything for the same reason.
    */
   function scheduleLandedExpiry(requestId: string): RuntimeTimer {
-    return environment.scheduler.schedule(LANDED_MUTATION_TTL_MS, () => {
+    landedExpiryByRequestId.get(requestId)?.cancel();
+    let timer: RuntimeTimer;
+    timer = environment.scheduler.schedule(LANDED_MUTATION_TTL_MS, () => {
+      if (landedExpiryByRequestId.get(requestId) !== timer) return;
+      landedExpiryByRequestId.delete(requestId);
       if (isDisposed()) return;
       const entry = pending.get(requestId);
       if (entry === undefined) return;
@@ -276,11 +300,23 @@ export function createMetadataOverlayStore(
         return;
       }
       for (const id of chainRequestIds) {
+        landedExpiryByRequestId.get(id)?.cancel();
+        landedExpiryByRequestId.delete(id);
+        onReconciled(id, "superseded", "landed-overlay-ttl");
+        // Reconciliation may synchronously resolve the queue, whose terminal
+        // callback calls `retire` and arms a fresh timer before control returns
+        // here. This sweep is already deleting the entry, so cancel that
+        // re-entrant timer too.
+        landedExpiryByRequestId.get(id)?.cancel();
+        landedExpiryByRequestId.delete(id);
         pending.delete(id);
         registryBackedRequestIds.delete(id);
+        unknownOutcomeRequestIds.delete(id);
       }
       republish();
     });
+    landedExpiryByRequestId.set(requestId, timer);
+    return timer;
   }
 
   return {
@@ -296,6 +332,36 @@ export function createMetadataOverlayStore(
       markRegistryBacked();
       republish();
       return mutation.requestId;
+    },
+
+    markUnknownOutcome(requestId) {
+      const entry = pending.get(requestId);
+      if (entry === undefined || entry.landed) return false;
+      // This is NOT an ACK. The target becomes a provisional causal anchor so
+      // an authoritative value equal to it can close the ambiguous command,
+      // while the same retained 30s bound prevents a stale overlay from
+      // outranking the row indefinitely when no echo arrives.
+      unknownOutcomeRequestIds.add(requestId);
+      pending.set(requestId, { ...entry, landed: true });
+      scheduleLandedExpiry(requestId);
+      republish();
+      return true;
+    },
+
+    markUnknownOutcomeRetrying(requestId) {
+      const entry = pending.get(requestId);
+      if (
+        entry === undefined ||
+        !entry.landed ||
+        !unknownOutcomeRequestIds.delete(requestId)
+      ) {
+        return false;
+      }
+      landedExpiryByRequestId.get(requestId)?.cancel();
+      landedExpiryByRequestId.delete(requestId);
+      pending.set(requestId, { ...entry, landed: false });
+      republish();
+      return true;
     },
 
     /**
@@ -316,12 +382,15 @@ export function createMetadataOverlayStore(
     retire(requestId, outcome) {
       const entry = pending.get(requestId);
       if (entry === undefined) return false;
+      unknownOutcomeRequestIds.delete(requestId);
       // A landed outcome is only worth KEEPING while the projector can still
       // observe the echo that sweeps it. Detached (a retained buffer), the
       // display is frozen and no projection will ever run again - a kept entry
       // would just sit in the map for the handle's life, so delete on both
       // outcomes there.
       if (outcome === "failed" || !isProjectorAttached()) {
+        landedExpiryByRequestId.get(requestId)?.cancel();
+        landedExpiryByRequestId.delete(requestId);
         pending.delete(requestId);
         registryBackedRequestIds.delete(requestId);
       } else {
@@ -344,12 +413,16 @@ export function createMetadataOverlayStore(
       return true;
     },
 
-    baselineFor(kind, nodeId, projected) {
+    baselineFor<Value extends PendingMetadataValue>(
+      kind: PendingMetadataMutation["kind"],
+      nodeId: string | null,
+      projected: Value,
+    ): Value {
       for (const mutation of pending.values()) {
         if (mutation.kind !== kind) continue;
         const id = mutation.kind === "epic-title" ? null : mutation.nodeId;
         if (id !== nodeId) continue;
-        return mutation.baseline;
+        return mutation.baseline as Value;
       }
       return projected;
     },
@@ -395,10 +468,10 @@ export function createMetadataOverlayStore(
      * and suppressing the rest, leaving a remainder whose baseline no longer
      * means anything.
      */
-    collectDead(requestIds) {
-      const honored: string[] = [];
-      for (const requestId of requestIds) {
-        const mutation = pending.get(requestId);
+    collectDead(outcomes) {
+      const honored: DeadPendingMutation[] = [];
+      for (const outcome of outcomes) {
+        const mutation = pending.get(outcome.requestId);
         if (mutation === undefined) continue;
         if (
           !hasFreshRootSnapshotForOpenCycle() &&
@@ -406,17 +479,30 @@ export function createMetadataOverlayStore(
         ) {
           continue;
         }
-        honored.push(requestId);
+        honored.push(outcome);
       }
-      for (const requestId of honored) {
-        pending.delete(requestId);
-        registryBackedRequestIds.delete(requestId);
+      for (const outcome of honored) {
+        landedExpiryByRequestId.get(outcome.requestId)?.cancel();
+        landedExpiryByRequestId.delete(outcome.requestId);
+        onReconciled(
+          outcome.requestId,
+          outcome.outcome,
+          "authoritative-projection",
+        );
+        // See the TTL sweep's matching post-callback cancellation above.
+        landedExpiryByRequestId.get(outcome.requestId)?.cancel();
+        landedExpiryByRequestId.delete(outcome.requestId);
+        pending.delete(outcome.requestId);
+        registryBackedRequestIds.delete(outcome.requestId);
+        unknownOutcomeRequestIds.delete(outcome.requestId);
       }
     },
 
     dropLandedOnDetach() {
       for (const [requestId, entry] of pending) {
-        if (entry.landed) {
+        if (entry.landed && !unknownOutcomeRequestIds.has(requestId)) {
+          landedExpiryByRequestId.get(requestId)?.cancel();
+          landedExpiryByRequestId.delete(requestId);
           pending.delete(requestId);
           registryBackedRequestIds.delete(requestId);
         }
@@ -424,8 +510,11 @@ export function createMetadataOverlayStore(
     },
 
     clear() {
+      for (const timer of landedExpiryByRequestId.values()) timer.cancel();
+      landedExpiryByRequestId.clear();
       pending.clear();
       registryBackedRequestIds.clear();
+      unknownOutcomeRequestIds.clear();
       latestRenameStampByNode.clear();
     },
   };

@@ -36,6 +36,8 @@ import type {
 import type { EpicSubscribeClientSeedOffer } from "@traycer/protocol/host/epic/subscribe";
 import type {
   ClassFreshness,
+  CommandIdFactory,
+  CommandRecord,
   ProjectionSink,
   Replica,
   ReplicaApplyOutcome,
@@ -85,6 +87,7 @@ import {
 import type { EpicSessionFacts } from "./session-facts";
 import { isWritablePermissionRole } from "./session-facts";
 import { deriveClassFreshness } from "./plane-freshness";
+import type { EpicWriteCommandIntent } from "./epic-write-command";
 
 export const EPIC_RECORDS_PLANE_ID = "epic-records";
 
@@ -119,6 +122,12 @@ export interface EpicRecordsReplicaSources {
    */
   readonly hasRoomDivergence: () => boolean;
   readonly isDisposed: () => boolean;
+  readonly commandIdFactory: CommandIdFactory;
+  readonly onCommandReconciled: (
+    commandId: string,
+    outcome: "echo" | "superseded",
+    via: "authoritative-projection" | "landed-overlay-ttl",
+  ) => void;
 }
 
 export interface EpicRecordsReplica extends Replica<
@@ -252,6 +261,8 @@ export interface EpicRecordsReplica extends Replica<
     nodeId: string,
     newParentId: string | null,
   ): string | null;
+  /** Stamp the optimistic projection using the queue's already-minted id. */
+  stampWriteCommand(command: CommandRecord<EpicWriteCommandIntent>): boolean;
 
   /** Settle in-flight attachment reads and drop the projector. */
   detach(): void;
@@ -272,6 +283,8 @@ export function createEpicRecordsReplica(
     send,
     hasRoomDivergence,
     isDisposed,
+    commandIdFactory,
+    onCommandReconciled,
   } = sources;
 
   let doc = new Y.Doc();
@@ -368,6 +381,7 @@ export function createEpicRecordsReplica(
       );
     },
     isDisposed,
+    onReconciled: onCommandReconciled,
   });
 
   const projector: EpicProjector = createEpicProjector({
@@ -832,14 +846,19 @@ export function createEpicRecordsReplica(
     return null;
   }
 
-  function beginRenameMutation(
+  function beginRenameMutationWithId(
+    requestId: string,
     nodeId: string,
     nextTitle: string,
+    artifactOnly: boolean,
   ): string | null {
     if (isDisposed()) return null;
     const trimmed = nextTitle.trim();
     if (trimmed.length === 0) return null;
     if (!isWritablePermissionRole(session.writeGateRole())) return null;
+    if (artifactOnly && !Object.hasOwn(sink.read().artifacts.byId, nodeId)) {
+      return null;
+    }
     const row = readUnionRow(nodeId);
     if (row === null) return null;
     // No-op against what the user SEES (the overlaid title), never the chain
@@ -851,9 +870,9 @@ export function createEpicRecordsReplica(
     if (row.title === trimmed) return null;
     const baseline = overlay.baselineFor("rename", nodeId, row.title);
     if (baseline === null) return null;
-    const requestId = overlay.stamp({
+    overlay.stamp({
       kind: "rename",
-      requestId: crypto.randomUUID(),
+      requestId,
       nodeId,
       title: trimmed,
       baseline,
@@ -864,10 +883,26 @@ export function createEpicRecordsReplica(
     return requestId;
   }
 
-  function beginEpicTitleMutation(nextTitle: string): string | null {
+  function beginRenameMutation(
+    nodeId: string,
+    nextTitle: string,
+  ): string | null {
+    return beginRenameMutationWithId(
+      commandIdFactory.next(),
+      nodeId,
+      nextTitle,
+      false,
+    );
+  }
+
+  function beginEpicTitleMutationWithId(
+    requestId: string,
+    nextTitle: string,
+  ): string | null {
     if (isDisposed()) return null;
     const trimmed = nextTitle.trim();
     if (trimmed.length === 0) return null;
+    if (!isWritablePermissionRole(session.writeGateRole())) return null;
     // The OVERLAID (displayed) value; the no-op check runs against it for the
     // same rename-back-to-baseline reason as `beginRenameMutation`.
     // `baselineFor` then anchors a chained entry on the original authoritative
@@ -878,19 +913,28 @@ export function createEpicRecordsReplica(
     if (baseline === null) return null;
     return overlay.stamp({
       kind: "epic-title",
-      requestId: crypto.randomUUID(),
+      requestId,
       title: trimmed,
       baseline,
       landed: false,
     });
   }
 
-  function beginReparentMutation(
+  function beginEpicTitleMutation(nextTitle: string): string | null {
+    return beginEpicTitleMutationWithId(commandIdFactory.next(), nextTitle);
+  }
+
+  function beginReparentMutationWithId(
+    requestId: string,
     nodeId: string,
     newParentId: string | null,
+    artifactOnly: boolean,
   ): string | null {
     if (isDisposed()) return null;
     if (!isWritablePermissionRole(session.writeGateRole())) return null;
+    if (artifactOnly && !Object.hasOwn(sink.read().artifacts.byId, nodeId)) {
+      return null;
+    }
     // Validated against the projected tree, exactly as the write path is (4.3) -
     // one evaluator, one tree, so the overlay can never accept a move the commit
     // would refuse.
@@ -904,12 +948,94 @@ export function createEpicRecordsReplica(
     if (row === null) return null;
     return overlay.stamp({
       kind: "reparent",
-      requestId: crypto.randomUUID(),
+      requestId,
       nodeId,
       parentId: newParentId,
       baseline: overlay.baselineFor("reparent", nodeId, row.parentId),
       landed: false,
     });
+  }
+
+  function beginReparentMutation(
+    nodeId: string,
+    newParentId: string | null,
+  ): string | null {
+    return beginReparentMutationWithId(
+      commandIdFactory.next(),
+      nodeId,
+      newParentId,
+      false,
+    );
+  }
+
+  function stampArtifactStatus(
+    requestId: string,
+    intent: Extract<EpicWriteCommandIntent, { kind: "update-artifact-status" }>,
+  ): boolean {
+    if (isDisposed()) return false;
+    if (!isWritablePermissionRole(session.writeGateRole())) return false;
+    if (!Number.isInteger(intent.status)) return false;
+    const artifacts = sink.read().artifacts;
+    if (!Object.hasOwn(artifacts.byId, intent.artifactId)) return false;
+    const row = artifacts.byId[intent.artifactId];
+    if (row.kind !== intent.artifactType || row.status === intent.status) {
+      return false;
+    }
+    overlay.stamp({
+      kind: "status",
+      requestId,
+      nodeId: intent.artifactId,
+      status: intent.status,
+      baseline: overlay.baselineFor("status", intent.artifactId, row.status),
+      landed: false,
+    });
+    return true;
+  }
+
+  function stampArtifactDelete(requestId: string, artifactId: string): boolean {
+    if (isDisposed()) return false;
+    if (!isWritablePermissionRole(session.writeGateRole())) return false;
+    if (!Object.hasOwn(sink.read().artifacts.byId, artifactId)) return false;
+    overlay.stamp({
+      kind: "delete",
+      requestId,
+      nodeId: artifactId,
+      baseline: true,
+      landed: false,
+    });
+    return true;
+  }
+
+  function stampWriteCommand(
+    command: CommandRecord<EpicWriteCommandIntent>,
+  ): boolean {
+    const { commandId, intent } = command;
+    switch (intent.kind) {
+      case "rename-artifact":
+        return (
+          beginRenameMutationWithId(
+            commandId,
+            intent.artifactId,
+            intent.title,
+            true,
+          ) !== null
+        );
+      case "delete-artifact":
+        return stampArtifactDelete(commandId, intent.artifactId);
+      case "reparent-artifact":
+        return (
+          beginReparentMutationWithId(
+            commandId,
+            intent.artifactId,
+            intent.parentId,
+            true,
+          ) !== null
+        );
+      case "update-artifact-status":
+        return stampArtifactStatus(commandId, intent);
+      case "update-epic-title":
+        return beginEpicTitleMutationWithId(commandId, intent.title) !== null;
+    }
   }
 
   // ── Assembly ──────────────────────────────────────────────────────────────
@@ -1243,6 +1369,7 @@ export function createEpicRecordsReplica(
     beginRenameMutation,
     beginEpicTitleMutation,
     beginReparentMutation,
+    stampWriteCommand,
 
     detach(): void {
       overlay.dropLandedOnDetach();

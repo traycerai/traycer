@@ -173,7 +173,7 @@ const selectHostDirtyState = createSelector(
 );
 
 /**
- * The sync pill's single source of truth. Weighs all four legs of the
+ * The sync pill's single source of truth. Weighs all five legs of the
  * durability chain rather than the lossy blended `connectionStatus` the pill
  * used to read on its own - see `@/lib/epic-sync-pill-state` for the ordering
  * contract and why each leg has to be visible separately.
@@ -188,7 +188,7 @@ export function useEpicSyncPillState(): EpicSyncPillState {
       cloudSyncStatus: s.cloudSyncStatus,
       hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
       hostDirtyState: selectHostDirtyState(s),
-      hasUnsyncedLocalChanges: s.isDirty,
+      hasUnsyncedLocalChanges: s.isDirty || s.writeCommands.length > 0,
       hasConnectedOnce: s.hasConnectedOnce,
     }),
   );

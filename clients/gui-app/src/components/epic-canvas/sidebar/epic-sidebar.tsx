@@ -1410,7 +1410,6 @@ function SidebarBulkDeleteController(props: {
   const selection = useSidebarBulkSelection();
   const liveRecords = useEpicArtifactRecords();
   const tree = useEpicTreeIndex();
-  const epicHandle = useOpenEpicHandle();
   const navigateNested = useEpicNestedFocusNavigation();
   const closeCanvasTab = useEpicCanvasStore((s) => s.closeCanvasTab);
   const markArtifactSelfDeleted = useEpicCanvasStore(
@@ -1451,7 +1450,6 @@ function SidebarBulkDeleteController(props: {
       return;
     }
     targets.forEach((target) => {
-      epicHandle.store.getState().deleteArtifact(target.id);
       markArtifactSelfDeleted(target.id);
     });
     setDeletePending(true);
@@ -1526,7 +1524,6 @@ function SidebarBulkDeleteController(props: {
     deleteChat,
     deletePending,
     deleteTerminalAgent,
-    epicHandle,
     markArtifactSelfDeleted,
     navigateNested,
     pendingDeleteIds,

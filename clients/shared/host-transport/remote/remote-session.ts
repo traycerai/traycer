@@ -1,6 +1,8 @@
 import {
+  CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
   checkCompatibility,
   isRpcErrorCode,
+  UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   type ConnectionManifest,
   type FatalErrorDetails,
   type MethodVersionRegistry,
@@ -352,6 +354,7 @@ export interface IRemoteSession<
   sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
+    idempotencyKey: string | null,
     abortSignal: AbortSignal | null,
     /**
      * Per-request response budget, overriding `UNARY_RESPONSE_TIMEOUT_MS`.
@@ -500,6 +503,8 @@ interface PendingUnary {
   readonly hostCanonical: SchemaVersion;
   readonly methodRegistry: MethodVersionRegistry;
   readonly onWireRequest: unknown;
+  /** This connection promised replay-by-key, so an unheard result may retry. */
+  readonly replaySafe: boolean;
   readonly resolve: (result: unknown) => void;
   readonly reject: (error: HostRpcError) => void;
   timer: TimerHandle | null;
@@ -521,6 +526,7 @@ interface ActiveConnection {
    */
   hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
+  idempotencyKeySupported: boolean;
   /**
    * Whether the HOST advertised that it can inflate compressed frames, i.e.
    * whether frames this client sends may set `MuxFlags.COMPRESSED`. Starts
@@ -950,6 +956,7 @@ export class RemoteSession<
   async sendUnary<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
+    idempotencyKey: string | null,
     abortSignal: AbortSignal | null,
     responseTimeoutMs: number | undefined,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
@@ -1057,6 +1064,7 @@ export class RemoteSession<
         params,
         requestId,
         responseTimeoutMs,
+        idempotencyKey,
       );
     }
 
@@ -1069,6 +1077,7 @@ export class RemoteSession<
       params,
       requestId,
       responseTimeoutMs,
+      idempotencyKey,
     ) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
 
@@ -1198,6 +1207,7 @@ export class RemoteSession<
     params: unknown,
     requestId: string,
     responseTimeoutMs: number | undefined,
+    idempotencyKey: string | null,
   ): Promise<unknown> {
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
@@ -1214,10 +1224,23 @@ export class RemoteSession<
     }
 
     const streamId = this.allocateStreamId();
+    const wireIdempotencyKey = connection.idempotencyKeySupported
+      ? idempotencyKey
+      : null;
+    const replaySafe = wireIdempotencyKey !== null;
     return new Promise<unknown>((resolve, reject) => {
       {
         const timer = setTimeout(() => {
-          this.rejectUnary(streamId, unaryTimeoutError(requestId, method));
+          this.rejectUnary(
+            streamId,
+            replaySafe
+              ? retryableUnaryFailure(
+                  requestId,
+                  method,
+                  `Remote unary '${method}' timed out awaiting a response`,
+                )
+              : unaryTimeoutError(requestId, method),
+          );
         }, responseTimeoutMs ?? UNARY_RESPONSE_TIMEOUT_MS);
         this.pendingUnary.set(streamId, {
           requestId,
@@ -1226,6 +1249,7 @@ export class RemoteSession<
           hostCanonical,
           methodRegistry,
           onWireRequest: prepared.onWirePayload,
+          replaySafe,
           resolve,
           reject,
           timer,
@@ -1240,7 +1264,7 @@ export class RemoteSession<
               method,
               schemaVersion: prepared.onWireVersion,
               params: prepared.onWirePayload,
-              idempotencyKey: null,
+              idempotencyKey: wireIdempotencyKey,
             },
             binary: null,
           });
@@ -1707,6 +1731,7 @@ export class RemoteSession<
       hostManifest: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
+      idempotencyKeySupported: false,
       bodyCompressionSupported: false,
       hostAttached: true,
     };
@@ -2002,6 +2027,7 @@ export class RemoteSession<
       capabilities: [
         SESSION_CAPABILITY_BODY_COMPRESSION,
         SESSION_CAPABILITY_FINE_CREDITS,
+        CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
       ],
       clientIdentity: this.clientIdentity,
     };
@@ -2224,6 +2250,7 @@ export class RemoteSession<
     params: RequestOfMethod<RpcRegistry, Method>,
     requestId: string,
     responseTimeoutMs: number | undefined,
+    idempotencyKey: string | null,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     return resolveUnavailableMethodDegrade({
       registry: this.options.rpcRegistry,
@@ -2253,6 +2280,7 @@ export class RemoteSession<
           // contract, so it keeps that caller's budget rather than silently
           // reverting to the shared default.
           responseTimeoutMs,
+          idempotencyKey,
         ),
     }) as Promise<ResponseOfMethod<RpcRegistry, Method>>;
   }
@@ -2303,6 +2331,9 @@ export class RemoteSession<
     connection.hostRpcMerged = hostRpcMerged;
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
+    );
+    connection.idempotencyKeySupported = parsed.data.capabilities.includes(
+      UNARY_CAPABILITY_IDEMPOTENCY_KEY,
     );
     connection.bodyCompressionSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_BODY_COMPRESSION,
@@ -2833,17 +2864,9 @@ export class RemoteSession<
     // stays - a resolver that keeps failing its init must keep climbing the
     // backoff across session drops, not restart it.
     this.clearAllStreamReopens();
-    // In-flight unary calls are post-send from the caller's view → not
-    // retryable (the host may have applied them). Reject, never replay.
-    this.rejectAllPendingUnary(
-      new HostRpcError({
-        code: "RPC_ERROR",
-        message: "Remote session dropped before the response arrived",
-        requestId: "session-drop",
-        method: "",
-        fatalDetails: null,
-      }),
-    );
+    // Only requests carrying a key this connection negotiated are replayable.
+    // Unkeyed calls retain the old ambiguous-outcome failure on first drop.
+    this.rejectPendingOnConnectionDrop();
     // Callers parked awaiting THIS attach are still pre-send, so they keep
     // their retry license - but they must be released rather than left to
     // ride an unbounded number of further attempts inside one call.
@@ -3708,6 +3731,31 @@ export class RemoteSession<
     }
   }
 
+  private rejectPendingOnConnectionDrop(): void {
+    for (const [streamId, entry] of Array.from(this.pendingUnary)) {
+      if (entry.timer !== null) {
+        clearTimeout(entry.timer);
+      }
+      this.pendingUnary.delete(streamId);
+      this.outboundSeq.delete(streamId);
+      entry.reject(
+        entry.replaySafe
+          ? retryableUnaryFailure(
+              entry.requestId,
+              entry.method,
+              "Remote session dropped before the response arrived",
+            )
+          : new HostTransportFailureError({
+              code: "RPC_ERROR",
+              message: "Remote session dropped before the response arrived",
+              requestId: entry.requestId,
+              method: entry.method,
+              fatalDetails: null,
+            }),
+      );
+    }
+  }
+
   // ---- Small helpers ----------------------------------------------------- //
 
   private markStreamsReconnecting(): void {
@@ -4227,6 +4275,20 @@ function unaryTimeoutError(
   return new HostTransportFailureError({
     code: "RPC_ERROR",
     message: `Remote unary '${method}' timed out awaiting a response`,
+    requestId,
+    method,
+    fatalDetails: null,
+  });
+}
+
+function retryableUnaryFailure(
+  requestId: string,
+  method: string,
+  message: string,
+): RetryableTransportError {
+  return new RetryableTransportError({
+    code: "RPC_ERROR",
+    message,
     requestId,
     method,
     fatalDetails: null,

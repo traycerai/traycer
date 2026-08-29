@@ -816,39 +816,29 @@ export function commitSidebarReparentDrop(
     // A rejection is logged, never toasted: an invalid drop is a silent cancel
     // by this file's own rule, and two reads of one tree disagreeing is an
     // internal invariant mismatch the user cannot act on.
-    let mutated = false;
-    try {
-      mutated = handle.store
-        .getState()
-        .reparentArtifact(input.sourceNodeId, input.newParentId);
-    } catch (error: unknown) {
-      appLogger.error(
-        "[epic-dnd] doc reparent rejected after the projected gate passed",
-        {
-          epicId: input.epicId,
-          sourceNodeId: input.sourceNodeId,
-          newParentId: input.newParentId,
-          nodeType: evaluation.node.type,
-        },
-        error,
-      );
-      return;
-    }
-    if (mutated && evaluation.node.family === "artifact") {
-      const artifactClient = getEpicSessionHandleHostClient(handle);
-      if (artifactClient !== null) {
-        void artifactClient
-          .request("epic.reparentArtifact", {
+    if (evaluation.node.family === "artifact") {
+      handle.store.getState().enqueueWriteCommand({
+        kind: "reparent-artifact",
+        artifactId: input.sourceNodeId,
+        parentId: input.newParentId,
+      });
+    } else {
+      try {
+        handle.store
+          .getState()
+          .reparentArtifact(input.sourceNodeId, input.newParentId);
+      } catch (error: unknown) {
+        appLogger.error(
+          "[epic-dnd] doc reparent rejected after the projected gate passed",
+          {
             epicId: input.epicId,
-            artifactId: input.sourceNodeId,
+            sourceNodeId: input.sourceNodeId,
             newParentId: input.newParentId,
-          })
-          .catch((error: unknown) => {
-            toastFromHostError(
-              toHostRpcError(error, "epic.reparentArtifact"),
-              "Couldn't move this artifact.",
-            );
-          });
+            nodeType: evaluation.node.type,
+          },
+          error,
+        );
+        return;
       }
     }
   }

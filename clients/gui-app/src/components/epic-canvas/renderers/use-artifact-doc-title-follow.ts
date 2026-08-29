@@ -120,9 +120,7 @@ export function useArtifactDocTitleFollow(params: {
   const handle = useOpenEpicHandle();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
   const renameArtifact = useEpicRenameArtifact(false);
-  // TanStack Query keeps `mutate` referentially stable, so depending on it
-  // does not re-subscribe the editor listener on every mutation state change.
-  const persistRename = renameArtifact.mutate;
+  const persistRename = renameArtifact.mutateAsync;
 
   useEffect(() => {
     if (editor === null || !editable) return;
@@ -137,14 +135,10 @@ export function useArtifactDocTitleFollow(params: {
       const title = pendingPersistTitle;
       pendingPersistTitle = null;
       if (title === null) return;
-      const artifacts = handle.store.getState().artifacts;
-      const artifact = Object.hasOwn(artifacts.byId, artifactId)
-        ? artifacts.byId[artifactId]
-        : null;
-      // A competing rename (sidebar, another client) superseded the debounced
-      // value while it waited - that path persists its own title.
-      if (artifact === null || artifact.title !== title) return;
-      persistRename({ epicId, artifactId, title });
+      void persistRename({ epicId, artifactId, title }).then(
+        () => renameArtifactInTab(viewTabId, artifactId, title),
+        () => {},
+      );
     };
 
     const onUpdate = ({ transaction }: EditorEvents["update"]): void => {
@@ -162,8 +156,6 @@ export function useArtifactDocTitleFollow(params: {
       });
       lastDocTitle = result.lastDocTitle;
       if (result.renameTo === null) return;
-      state.renameArtifact(artifactId, result.renameTo);
-      renameArtifactInTab(viewTabId, artifactId, result.renameTo);
       pendingPersistTitle = result.renameTo;
       if (persistTimer !== null) window.clearTimeout(persistTimer);
       persistTimer = window.setTimeout(

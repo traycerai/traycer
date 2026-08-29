@@ -526,6 +526,7 @@ export function EpicSessionProvider(
         streamClientFactory,
         userId: sessionUserId,
         onAuthError: handleSessionAuthError,
+        commandRequester: resolvedSessionHostClient,
       });
       // Construction-honest stamp, written exactly once: `streamClientFactory`
       // above captures this run's `targetHostId` into the transport it opens,

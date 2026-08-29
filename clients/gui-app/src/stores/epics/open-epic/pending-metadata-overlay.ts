@@ -1,6 +1,6 @@
 /**
- * Optimistic overlay for single-row metadata: rename, epic title, and artifact
- * reparent. Phase 1.1 of the GUI store rework.
+ * Optimistic overlay for command metadata: rename, epic title, artifact
+ * reparent/status, and subtree deletion. Phase 1.1 of the GUI store rework.
  *
  * ## What this replaces, and what it RESTORES
  *
@@ -108,10 +108,33 @@ export interface PendingReparent {
   readonly landed: boolean;
 }
 
+/** Ticket/story status command projected over the artifact row. */
+export interface PendingArtifactStatus {
+  readonly kind: "status";
+  readonly requestId: string;
+  readonly nodeId: string;
+  readonly status: number;
+  readonly baseline: number | null;
+  readonly landed: boolean;
+}
+
+/** Artifact subtree deletion. Descendants are derived from the base slice. */
+export interface PendingArtifactDelete {
+  readonly kind: "delete";
+  readonly requestId: string;
+  readonly nodeId: string;
+  readonly baseline: true;
+  readonly landed: boolean;
+}
+
 export type PendingMetadataMutation =
   | PendingRename
   | PendingEpicTitle
-  | PendingReparent;
+  | PendingReparent
+  | PendingArtifactStatus
+  | PendingArtifactDelete;
+
+export type PendingMetadataValue = string | number | boolean | null;
 
 /**
  * Every mutation this client has stamped and not yet finished with, keyed by
@@ -151,12 +174,24 @@ function mutationNodeId(mutation: PendingMetadataMutation): string | null {
  * The value a mutation is asking for, in the shape the row carries it. Renames
  * and the epic title patch a `string`; a reparent patches `string | null`.
  */
-function mutationTarget(mutation: PendingMetadataMutation): string | null {
-  return mutation.kind === "reparent" ? mutation.parentId : mutation.title;
+function mutationTarget(
+  mutation: PendingMetadataMutation,
+): PendingMetadataValue {
+  switch (mutation.kind) {
+    case "reparent":
+      return mutation.parentId;
+    case "rename":
+    case "epic-title":
+      return mutation.title;
+    case "status":
+      return mutation.status;
+    case "delete":
+      return false;
+  }
 }
 
 interface ResolvedPendingChain {
-  readonly value: string | null;
+  readonly value: PendingMetadataValue;
   readonly changed: boolean;
   /**
    * Every entry in this chain is finished business and the whole chain can be
@@ -168,6 +203,7 @@ interface ResolvedPendingChain {
    * baseline, and must not hold `baselineFor` hostage for the next begin).
    */
   readonly dead: boolean;
+  readonly deadReason: "echo" | "superseded" | null;
 }
 
 /**
@@ -215,11 +251,16 @@ interface ResolvedPendingChain {
  *   terminal even mid-flight).
  */
 function resolvePendingChain(
-  authoritative: string | null,
+  authoritative: PendingMetadataValue,
   chain: readonly PendingMetadataMutation[],
 ): ResolvedPendingChain {
   if (chain.length === 0) {
-    return { value: authoritative, changed: false, dead: false };
+    return {
+      value: authoritative,
+      changed: false,
+      dead: false,
+      deadReason: null,
+    };
   }
   const baseline = chain[0].baseline;
   const pending = chain.filter((mutation) => !mutation.landed);
@@ -229,7 +270,14 @@ function resolvePendingChain(
   if (pending.length > 0) {
     const anchored =
       authoritative === baseline || landedTargets.includes(authoritative);
-    if (!anchored) return { value: authoritative, changed: false, dead: true };
+    if (!anchored) {
+      return {
+        value: authoritative,
+        changed: false,
+        dead: true,
+        deadReason: "superseded",
+      };
+    }
     // The LAST-STAMPED target, not the last still-pending one: ACKs settle
     // out of order, and filtering landed entries out of display selection
     // walks the UI backward when the newest intent acks first (rename B
@@ -239,16 +287,36 @@ function resolvePendingChain(
     // all-landed branch below will keep showing, so display is continuous
     // across the final settle.
     const value = mutationTarget(chain[chain.length - 1]);
-    return { value, changed: value !== authoritative, dead: false };
+    return {
+      value,
+      changed: value !== authoritative,
+      dead: false,
+      deadReason: null,
+    };
   }
   const lastLanded = landedTargets[landedTargets.length - 1];
   if (authoritative === lastLanded) {
-    return { value: authoritative, changed: false, dead: true };
+    return {
+      value: authoritative,
+      changed: false,
+      dead: true,
+      deadReason: "echo",
+    };
   }
   if (authoritative === baseline) {
-    return { value: lastLanded, changed: true, dead: false };
+    return {
+      value: lastLanded,
+      changed: true,
+      dead: false,
+      deadReason: null,
+    };
   }
-  return { value: authoritative, changed: false, dead: true };
+  return {
+    value: authoritative,
+    changed: false,
+    dead: true,
+    deadReason: "superseded",
+  };
 }
 
 /** Mutations of one kind for one node, in the order they were stamped. */
@@ -335,8 +403,15 @@ function applyPendingOverlayToSlice<Row extends OverlayPatchableRow>(
     // `Row` and overriding two properties types as a fresh object literal,
     // not as `Row`, while the assign form's intersection stays assignable.
     byId[id] = Object.assign({}, row, {
-      title: title.changed && title.value !== null ? title.value : row.title,
-      parentId: parent.changed ? parent.value : row.parentId,
+      title:
+        title.changed && typeof title.value === "string"
+          ? title.value
+          : row.title,
+      parentId:
+        parent.changed &&
+        (parent.value === null || typeof parent.value === "string")
+          ? parent.value
+          : row.parentId,
     });
   }
   if (byId === null) return slice;
@@ -348,7 +423,60 @@ export function applyPendingOverlayToArtifacts(
   artifacts: ArtifactsSlice,
   overlay: PendingMetadataOverlay,
 ): ArtifactsSlice {
-  return applyPendingOverlayToSlice(artifacts, overlay);
+  const metadata = applyPendingOverlayToSlice(artifacts, overlay);
+  let byId: Record<string, ArtifactsSlice["byId"][string]> | null = null;
+
+  for (const id of nodesWithMutations(overlay, "status")) {
+    if (!Object.hasOwn(metadata.byId, id)) continue;
+    const row = metadata.byId[id];
+    const status = resolvePendingChain(
+      row.status,
+      chainFor(overlay, "status", id),
+    );
+    if (
+      !status.changed ||
+      (status.value !== null && typeof status.value !== "number")
+    ) {
+      continue;
+    }
+    byId ??= { ...metadata.byId };
+    byId[id] = { ...row, status: status.value };
+  }
+
+  const removed = new Set<string>();
+  for (const id of nodesWithMutations(overlay, "delete")) {
+    const present = Object.hasOwn(metadata.byId, id);
+    const deletion = resolvePendingChain(
+      present,
+      chainFor(overlay, "delete", id),
+    );
+    if (deletion.value === false) removed.add(id);
+  }
+  let discovered = true;
+  while (discovered) {
+    discovered = false;
+    for (const id of metadata.allIds) {
+      if (removed.has(id)) continue;
+      const row = metadata.byId[id];
+      if (row.parentId !== null && removed.has(row.parentId)) {
+        removed.add(id);
+        discovered = true;
+      }
+    }
+  }
+  if (removed.size > 0) {
+    byId ??= { ...metadata.byId };
+    for (const id of removed) delete byId[id];
+  }
+
+  if (byId === null) return metadata;
+  return {
+    byId,
+    allIds:
+      removed.size === 0
+        ? metadata.allIds
+        : metadata.allIds.filter((id) => !removed.has(id)),
+  };
 }
 
 /** `chats` with pending renames and reparents applied. */
@@ -377,7 +505,7 @@ export function applyPendingOverlayToEpicHeader(
     epic.title,
     chainFor(overlay, "epic-title", null),
   );
-  if (!resolved.changed || resolved.value === null) return epic;
+  if (!resolved.changed || typeof resolved.value !== "string") return epic;
   return { ...epic, title: resolved.value };
 }
 
@@ -409,9 +537,21 @@ function authoritativeValueFor(
   state: PendingOverlayAuthoritativeState,
   kind: PendingMetadataMutation["kind"],
   nodeId: string | null,
-): { readonly found: boolean; readonly value: string | null } {
+): { readonly found: boolean; readonly value: PendingMetadataValue } {
   if (kind === "epic-title") return { found: true, value: state.epicTitle };
   if (nodeId === null) return { found: false, value: null };
+  if (kind === "delete") {
+    return {
+      found: true,
+      value: Object.hasOwn(state.artifacts.byId, nodeId),
+    };
+  }
+  if (kind === "status") {
+    if (!Object.hasOwn(state.artifacts.byId, nodeId)) {
+      return { found: false, value: null };
+    }
+    return { found: true, value: state.artifacts.byId[nodeId].status };
+  }
   for (const byId of [
     state.artifacts.byId,
     state.chats.byId,
@@ -425,6 +565,11 @@ function authoritativeValueFor(
     };
   }
   return { found: false, value: null };
+}
+
+export interface DeadPendingMutation {
+  readonly requestId: string;
+  readonly outcome: "echo" | "superseded";
 }
 
 /**
@@ -456,9 +601,19 @@ export function collectDeadPendingMutations(
   overlay: PendingMetadataOverlay,
   state: PendingOverlayAuthoritativeState,
 ): readonly string[] {
-  if (overlay.size === 0) return EMPTY_REQUEST_IDS;
+  const detailed = collectDeadPendingMutationOutcomes(overlay, state);
+  return detailed.length === 0
+    ? EMPTY_REQUEST_IDS
+    : detailed.map((entry) => entry.requestId);
+}
+
+export function collectDeadPendingMutationOutcomes(
+  overlay: PendingMetadataOverlay,
+  state: PendingOverlayAuthoritativeState,
+): readonly DeadPendingMutation[] {
+  if (overlay.size === 0) return EMPTY_DEAD_MUTATIONS;
   const seen = new Set<string>();
-  const dead: string[] = [];
+  const dead: DeadPendingMutation[] = [];
   for (const mutation of overlay.values()) {
     const nodeId = mutationNodeId(mutation);
     const chainKey = `${mutation.kind}:${nodeId ?? ""}`;
@@ -472,10 +627,14 @@ export function collectDeadPendingMutations(
     // A vanished node is dead the same way a caught-up one is: there is no
     // row left for the patch to apply to, and no RPC outcome still owed.
     if (resolved === null || resolved.dead) {
-      for (const entry of chain) dead.push(entry.requestId);
+      const outcome = resolved?.deadReason ?? "superseded";
+      for (const entry of chain) {
+        dead.push({ requestId: entry.requestId, outcome });
+      }
     }
   }
-  return dead.length === 0 ? EMPTY_REQUEST_IDS : dead;
+  return dead.length === 0 ? EMPTY_DEAD_MUTATIONS : dead;
 }
 
 const EMPTY_REQUEST_IDS: readonly string[] = Object.freeze([]);
+const EMPTY_DEAD_MUTATIONS: readonly DeadPendingMutation[] = Object.freeze([]);

@@ -2,6 +2,33 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { useOpenEpicHandle } from "@/providers/epic-session-provider";
+import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
+import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { toast } from "sonner";
+
+interface CommandMutationCallbacks<Response, Variables> {
+  readonly onSuccess?: (response: Response, variables: Variables) => void;
+  readonly onError?: (error: Error, variables: Variables) => void;
+}
+
+async function enqueueAndWait(
+  handle: OpenEpicStoreHandle,
+  intent: EpicWriteCommandIntent,
+): Promise<CommandRecord<EpicWriteCommandIntent>> {
+  const state = handle.store.getState();
+  const commandId = state.enqueueWriteCommand(intent);
+  if (commandId === null) {
+    throw new Error("The write was refused by the current epic projection");
+  }
+  const command = await state.waitForWriteCommand(commandId);
+  if (command.state === "committed") return command;
+  if (command.resolution?.kind === "rejected") {
+    throw new Error(command.resolution.reason);
+  }
+  throw new Error("A newer authoritative change superseded this write");
+}
 
 /**
  * EVERY MUTATION HERE ADDRESSES THE EPIC SESSION'S HOST, never the app-wide
@@ -59,20 +86,53 @@ export function useEpicCreateArtifact() {
  * pending state; success is silent.
  */
 export function useEpicDeleteArtifact() {
-  const client = useEpicSessionHostClient();
-  return useHostMutation({
-    client,
-    method: "epic.deleteArtifact",
-    mapVariables: (variables) => variables,
-    options: {
-      onSuccess: () => {
-        Analytics.getInstance().track(AnalyticsEvent.ArtifactDeleted, null);
-      },
-      onError: (error) => {
-        toastFromHostError(error, "Couldn't delete artifact.");
-      },
-    },
-  });
+  const handle = useOpenEpicHandle();
+  const isPending = handle.store((state) =>
+    state.writeCommands.some(
+      (command) =>
+        command.state === "pending" &&
+        command.intent.kind === "delete-artifact",
+    ),
+  );
+  interface Variables {
+    readonly epicId: string;
+    readonly artifactId: string;
+  }
+  interface Response {
+    readonly deleted: boolean;
+  }
+  const mutateAsync = async (variables: Variables): Promise<Response> => {
+    try {
+      await enqueueAndWait(handle, {
+        kind: "delete-artifact",
+        artifactId: variables.artifactId,
+      });
+      Analytics.getInstance().track(AnalyticsEvent.ArtifactDeleted, null);
+      return { deleted: true };
+    } catch (error: unknown) {
+      const normalized =
+        error instanceof Error ? error : new Error(String(error));
+      toast.error("Couldn't delete artifact.", {
+        description: normalized.message,
+      });
+      throw normalized;
+    }
+  };
+  function mutate(variables: Variables): void;
+  function mutate(
+    variables: Variables,
+    callbacks: CommandMutationCallbacks<Response, Variables>,
+  ): void;
+  function mutate(
+    variables: Variables,
+    callbacks: CommandMutationCallbacks<Response, Variables> | undefined,
+  ): void {
+    void mutateAsync(variables).then(
+      (response) => callbacks?.onSuccess?.(response, variables),
+      (error: Error) => callbacks?.onError?.(error, variables),
+    );
+  }
+  return { mutate, mutateAsync, isPending };
 }
 
 /**
@@ -81,23 +141,49 @@ export function useEpicDeleteArtifact() {
  * Pill enters pending state; success is silent.
  */
 export function useEpicUpdateArtifactStatus() {
-  const client = useEpicSessionHostClient();
-  return useHostMutation({
-    client,
-    method: "epic.updateArtifactStatus",
-    mapVariables: (variables) => variables,
-    options: {
-      onSuccess: (_data, variables) => {
-        Analytics.getInstance().track(AnalyticsEvent.ArtifactStatusChanged, {
-          kind: variables.artifactType,
-          status: analyticsTicketStatus(variables.status),
-        });
-      },
-      onError: (error) => {
-        toastFromHostError(error, "Couldn't update status.");
-      },
-    },
-  });
+  const handle = useOpenEpicHandle();
+  const isPending = handle.store((state) =>
+    state.writeCommands.some(
+      (command) =>
+        command.state === "pending" &&
+        command.intent.kind === "update-artifact-status",
+    ),
+  );
+  interface Variables {
+    readonly epicId: string;
+    readonly artifactId: string;
+    readonly artifactType: "ticket" | "story";
+    readonly status: 0 | 1 | 2;
+  }
+  interface Response {
+    readonly updated: boolean;
+  }
+  const mutateAsync = async (variables: Variables): Promise<Response> => {
+    try {
+      await enqueueAndWait(handle, {
+        kind: "update-artifact-status",
+        artifactId: variables.artifactId,
+        artifactType: variables.artifactType,
+        status: variables.status,
+      });
+      Analytics.getInstance().track(AnalyticsEvent.ArtifactStatusChanged, {
+        kind: variables.artifactType,
+        status: analyticsTicketStatus(variables.status),
+      });
+      return { updated: true };
+    } catch (error: unknown) {
+      const normalized =
+        error instanceof Error ? error : new Error(String(error));
+      toast.error("Couldn't update status.", {
+        description: normalized.message,
+      });
+      throw normalized;
+    }
+  };
+  const mutate = (variables: Variables): void => {
+    void mutateAsync(variables);
+  };
+  return { mutate, mutateAsync, isPending };
 }
 
 function analyticsTicketStatus(status: number): 0 | 1 | 2 {
@@ -111,20 +197,44 @@ function analyticsTicketStatus(status: number): 0 | 1 | 2 {
  * Input/title enters pending (read-only) state; success is silent.
  */
 export function useEpicRenameArtifact(trackUserIntent: boolean) {
-  const client = useEpicSessionHostClient();
-  return useHostMutation({
-    client,
-    method: "epic.renameArtifact",
-    mapVariables: (variables) => variables,
-    options: {
-      onSuccess: () => {
-        if (trackUserIntent) {
-          Analytics.getInstance().track(AnalyticsEvent.ArtifactRenamed, null);
-        }
-      },
-      onError: (error) => {
-        toastFromHostError(error, "Couldn't rename artifact.");
-      },
-    },
-  });
+  const handle = useOpenEpicHandle();
+  const isPending = handle.store((state) =>
+    state.writeCommands.some(
+      (command) =>
+        command.state === "pending" &&
+        command.intent.kind === "rename-artifact",
+    ),
+  );
+  interface Variables {
+    readonly epicId: string;
+    readonly artifactId: string;
+    readonly title: string;
+  }
+  interface Response {
+    readonly updated: boolean;
+  }
+  const mutateAsync = async (variables: Variables): Promise<Response> => {
+    try {
+      await enqueueAndWait(handle, {
+        kind: "rename-artifact",
+        artifactId: variables.artifactId,
+        title: variables.title,
+      });
+      if (trackUserIntent) {
+        Analytics.getInstance().track(AnalyticsEvent.ArtifactRenamed, null);
+      }
+      return { updated: true };
+    } catch (error: unknown) {
+      const normalized =
+        error instanceof Error ? error : new Error(String(error));
+      toast.error("Couldn't rename artifact.", {
+        description: normalized.message,
+      });
+      throw normalized;
+    }
+  };
+  const mutate = (variables: Variables): void => {
+    void mutateAsync(variables);
+  };
+  return { mutate, mutateAsync, isPending };
 }

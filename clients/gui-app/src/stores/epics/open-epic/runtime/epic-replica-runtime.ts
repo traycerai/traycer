@@ -38,10 +38,29 @@ import type {
   TuiAgentRecordDelta,
 } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type {
+  CommandIdFactory,
+  CommandQueue,
+  CommandRecord,
   FreshnessReport,
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
-import { createTransactionalProjectionSink } from "@traycer-clients/shared/replica-runtime";
+import {
+  BUDGET_PLANE_IDS,
+  createCommandQueue,
+  createTransactionalProjectionSink,
+} from "@traycer-clients/shared/replica-runtime";
+import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
+import { jsonByteLength } from "@/stores/replica-memory/json-bytes";
+import {
+  hotDocHolderId,
+  type HotDocBudgetSink,
+} from "@/stores/replica-memory/hot-doc-budget";
+import {
+  epicColdRoomHolderId,
+  epicCommandOverlayHolderId,
+  epicReplicaBookKey,
+  epicRootHolderId,
+} from "@/stores/replica-memory/epic-replica-budget";
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
 import type { EpicArtifactRoomAvailability } from "../types";
 import type { PendingChatCreation } from "../pending-chat-creations";
@@ -67,9 +86,16 @@ import {
   createLegacyEpicStreamAdapter,
   type EpicStreamClientFactory,
 } from "./legacy-epic-stream-adapter";
+import {
+  classifyEpicWriteCommandFailure,
+  EpicWriteCommandTransportUnavailableError,
+  type EpicWriteCommandIntent,
+  type EpicWriteCommandSender,
+} from "./epic-write-command";
 
 export interface EpicReplicaRuntimeOptions {
   readonly epicId: string;
+  readonly hostId: string;
   readonly environment: RuntimeEnvironment;
   readonly streamClientFactory: EpicStreamClientFactory;
   /**
@@ -89,6 +115,8 @@ export interface EpicReplicaRuntimeOptions {
    * May be `null` in tests that do not exercise the auth-recovery path.
    */
   readonly onAuthError: (() => void) | null;
+  readonly commandIdFactory: CommandIdFactory;
+  readonly writeCommandSender: EpicWriteCommandSender;
 }
 
 export interface EpicReplicaRuntime {
@@ -114,6 +142,11 @@ export interface EpicReplicaRuntime {
   discardUnsyncedEdits(): void;
   requestFreshSnapshot(): void;
   retryMigration(): void;
+  enqueueWriteCommand(
+    intent: EpicWriteCommandIntent,
+  ): CommandRecord<EpicWriteCommandIntent> | null;
+  retryWriteCommand(commandId: string): void;
+  discardWriteCommand(commandId: string): void;
 
   // ── Record channels ─────────────────────────────────────────────────────
   applyChatRecords(
@@ -196,11 +229,14 @@ export function createEpicReplicaRuntime(
 ): EpicReplicaRuntime {
   const {
     epicId,
+    hostId,
     environment,
     streamClientFactory,
     delivery,
     getCurrentUserId,
     onAuthError,
+    commandIdFactory,
+    writeCommandSender,
   } = options;
 
   let disposed = false;
@@ -217,6 +253,47 @@ export function createEpicReplicaRuntime(
    */
   let replicaGenerationCounter = 0;
   const isDisposed = (): boolean => disposed;
+  const memory = ensureProcessMemoryRuntime(environment);
+  const runtimeToken = memory.nextRuntimeToken();
+  const bookKey = epicReplicaBookKey(hostId, epicId, runtimeToken);
+  /**
+   * Last snapshot's wire bytes, not a live encode of the resident doc.
+   * Honest while `@1` is the wire: the floor is measured-not-evicted, and
+   * the snapshot is the figure we actually received.
+   */
+  let rootSettledBytes = 0;
+  const budgetSink: HotDocBudgetSink = {
+    settle(artifactRoomId, bytes) {
+      memory.hotDocs.settle(
+        memory.accountant,
+        hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
+        bytes,
+      );
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.hotDocs);
+    },
+    settleCold(artifactRoomId, bytes) {
+      memory.epicReplicas.settleColdRoom(
+        memory.accountant,
+        bookKey,
+        epicColdRoomHolderId(hostId, epicId, runtimeToken, artifactRoomId),
+        bytes,
+      );
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
+    },
+    chargeProvisional(artifactRoomId, bytes) {
+      memory.hotDocs.chargeProvisional(
+        memory.accountant,
+        hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
+        bytes,
+      );
+    },
+    release(artifactRoomId) {
+      memory.hotDocs.release(
+        memory.accountant,
+        hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
+      );
+    },
+  };
 
   // Explicit type arguments on every sink, and typed constants rather than
   // object literals for the seeds: the shared factory infers its projection
@@ -275,6 +352,7 @@ export function createEpicReplicaRuntime(
     // inbound room frame, and the closure gated them for that reason.
     onDivergenceChanged: () => records.refreshDivergence(),
     isDisposed,
+    budget: budgetSink,
   });
 
   const rooms = createEpicRoomsReplica({
@@ -296,6 +374,10 @@ export function createEpicReplicaRuntime(
     },
     hasRoomDivergence: () => tier.hasDivergence(),
     isDisposed,
+    commandIdFactory,
+    onCommandReconciled: (commandId, outcome, via) => {
+      reconcileWriteCommand(commandId, outcome, via);
+    },
   });
 
   const adapter = createLegacyEpicStreamAdapter({
@@ -303,6 +385,114 @@ export function createEpicReplicaRuntime(
     streamClientFactory,
     readSeedOffer: () => records.readSeedOffer(),
     isDisposed,
+  });
+
+  const attemptedHostByCommandId = new Map<string, string>();
+  const commandQueue: CommandQueue<EpicWriteCommandIntent> =
+    createCommandQueue<EpicWriteCommandIntent>({
+      environment,
+      idFactory: commandIdFactory,
+      accept: () => !disposed,
+      onEnqueued: (command) => records.stampWriteCommand(command),
+      onUnknownOutcome: (command) => {
+        records.overlay.markUnknownOutcome(command.commandId);
+      },
+      onResolved: (command) => {
+        records.overlay.retire(
+          command.commandId,
+          command.state === "committed" ? "landed" : "failed",
+        );
+        attemptedHostByCommandId.delete(command.commandId);
+      },
+      classifyFailure: classifyEpicWriteCommandFailure,
+      send: async (command) => {
+        if (
+          transportDetached ||
+          control.facts.transportStatus() !== "open" ||
+          !control.facts.hasFreshRootSnapshotForOpenCycle()
+        ) {
+          throw new EpicWriteCommandTransportUnavailableError();
+        }
+        const hostId = writeCommandSender.currentHostId();
+        if (hostId === null) {
+          throw new EpicWriteCommandTransportUnavailableError();
+        }
+        attemptedHostByCommandId.set(command.commandId, hostId);
+        const result = await writeCommandSender.send(
+          command.commandId,
+          command.intent,
+        );
+        return {
+          kind: "committed",
+          hostId: result.hostId,
+          entityVersion: null,
+        };
+      },
+    });
+
+  function reconcileWriteCommand(
+    commandId: string,
+    outcome: "echo" | "superseded",
+    via: "authoritative-projection" | "landed-overlay-ttl",
+  ): void {
+    const command = commandQueue
+      .list()
+      .find((candidate) => candidate.commandId === commandId);
+    if (command === undefined) return;
+    if (outcome === "echo") {
+      if (
+        command.state !== "pending" ||
+        command.delivery !== "unknown-outcome"
+      ) {
+        return;
+      }
+      const hostId = attemptedHostByCommandId.get(commandId);
+      if (hostId === undefined) return;
+      commandQueue.resolve(commandId, {
+        kind: "committed",
+        hostId,
+        entityVersion: null,
+      });
+      return;
+    }
+    commandQueue.resolve(commandId, {
+      kind: "superseded",
+      observedAtMs: environment.clock.now(),
+      via,
+    });
+  }
+
+  function publishWriteCommands(): void {
+    const writeCommands = commandQueue.list();
+    recordsSink.publish({ ...recordsSink.read(), writeCommands });
+    memory.epicReplicas.settleCommandOverlay(
+      memory.accountant,
+      epicCommandOverlayHolderId(hostId, epicId, runtimeToken),
+      jsonByteLength(commandQueue.pending()),
+    );
+  }
+
+  const unsubscribeCommandQueue = commandQueue.subscribe(publishWriteCommands);
+
+  memory.hotDocs.attach({
+    key: bookKey,
+    materializedIds: () => tier.materializedIds(),
+    demoteColdestUnpinned: (overBytes) => tier.demoteColdestUnpinned(overBytes),
+  });
+  memory.epicReplicas.attach({
+    key: bookKey,
+    measure: () => rootSettledBytes,
+    projectionCounts: () => {
+      const projection = records.sink.read();
+      return {
+        artifacts: projection.artifacts.allIds.length,
+        chats: projection.chats.allIds.length,
+        tuiAgents: projection.tuiAgents.allIds.length,
+        deletedArtifacts: projection.deletedArtifacts.allIds.length,
+        roleClaims: Object.keys(projection.agentRoles.byAgentId).length,
+        treeNodes: Object.keys(projection.tree.nodeById).length,
+      };
+    },
   });
 
   // ── Sequencing ────────────────────────────────────────────────────────────
@@ -322,6 +512,13 @@ export function createEpicReplicaRuntime(
    */
   function applyRootSnapshot(meta: SnapshotMetaEpic, update: Uint8Array): void {
     const divergence = records.ingestSnapshot(meta, update);
+    rootSettledBytes = update.byteLength;
+    memory.epicReplicas.settleRoot(
+      memory.accountant,
+      epicRootHolderId(hostId, epicId, runtimeToken),
+      update.byteLength,
+    );
+    memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
     control.adoptSnapshotRole(meta.permissionRole);
     records.publishSnapshotLanded(meta, divergence);
     control.noteSnapshotLanded(meta.permissionRole);
@@ -335,6 +532,7 @@ export function createEpicReplicaRuntime(
     }
     if (control.facts.transportStatus() === "open") {
       tier.flushAllPending();
+      commandQueue.retryPending();
     }
   }
 
@@ -350,6 +548,7 @@ export function createEpicReplicaRuntime(
     if (!control.facts.hasFreshRootSnapshotForOpenCycle()) return;
     records.flushPendingRootUpdates();
     tier.flushAllPending();
+    commandQueue.retryPending();
     records.emitCurrentAwareness();
   }
 
@@ -475,6 +674,14 @@ export function createEpicReplicaRuntime(
       control.markMigrationRetrying();
       if (!reopen) adapter.send({ kind: "retry-migration" });
     },
+
+    enqueueWriteCommand: (intent) =>
+      commandQueue.enqueue({ intent, expectedEntityVersion: null }),
+    retryWriteCommand: (commandId) => {
+      records.overlay.markUnknownOutcomeRetrying(commandId);
+      commandQueue.retry(commandId);
+    },
+    discardWriteCommand: (commandId) => commandQueue.discard(commandId),
 
     applyChatRecords: (recordRows, issuedAtSeq) => {
       records.applyChatRecords(recordRows, issuedAtSeq);
@@ -622,9 +829,20 @@ export function createEpicReplicaRuntime(
       // above would already refuse it, "already refused" is a weaker property
       // than "the socket was gone first".
       adapter.detach("disposed");
+      unsubscribeCommandQueue();
+      commandQueue.dispose();
+      attemptedHostByCommandId.clear();
+      memory.epicReplicas.settleCommandOverlay(
+        memory.accountant,
+        epicCommandOverlayHolderId(hostId, epicId, runtimeToken),
+        0,
+      );
       records.dispose();
       control.dispose();
       rooms.dispose();
+      memory.hotDocs.detach(bookKey);
+      memory.epicReplicas.detach(bookKey);
+      memory.epicReplicas.release(memory.accountant, bookKey);
     },
 
     isDisposed,

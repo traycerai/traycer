@@ -35,6 +35,7 @@ export class RemoteHostMessenger<
   request<Method extends keyof RpcRegistry & string>(
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
+    idempotencyKey: string | null,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     // The authority's abort signal is forwarded, not dropped. It is the only
@@ -48,6 +49,7 @@ export class RemoteHostMessenger<
     return this.session.sendUnary(
       method,
       params,
+      idempotencyKey,
       authority.abortSignal,
       // No caller-specific budget: the session's shared
       // `UNARY_RESPONSE_TIMEOUT_MS` applies, as it always has.
@@ -72,11 +74,13 @@ export class RemoteHostMessenger<
     method: Method,
     params: RequestOfMethod<RpcRegistry, Method>,
     responseTimeoutMs: number,
+    idempotencyKey: string | null,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     return this.session.sendUnary(
       method,
       params,
+      idempotencyKey,
       authority.abortSignal,
       responseTimeoutMs,
     );

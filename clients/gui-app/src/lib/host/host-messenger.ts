@@ -294,6 +294,7 @@ class RuntimeHostMessenger<
   request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    idempotencyKey: string | null,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const disposedRejection = this.rejectIfDisposed(method);
@@ -312,7 +313,12 @@ class RuntimeHostMessenger<
     const target = this.resolveTarget(authority.endpoint.hostId);
     if (target === null || target.kind !== "remote") {
       this.closeRemoteTransport();
-      return this.localMessenger.request(method, params, authority);
+      return this.localMessenger.request(
+        method,
+        params,
+        idempotencyKey,
+        authority,
+      );
     }
 
     const verdictRejection = this.rejectIfTerminalVerdict(
@@ -335,13 +341,14 @@ class RuntimeHostMessenger<
         }),
       );
     }
-    return remoteMessenger.request(method, params, authority);
+    return remoteMessenger.request(method, params, idempotencyKey, authority);
   }
 
   requestWithResponseTimeout<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    idempotencyKey: string | null,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const disposedRejection = this.rejectIfDisposed(method);
@@ -362,6 +369,7 @@ class RuntimeHostMessenger<
         method,
         params,
         responseTimeoutMs,
+        idempotencyKey,
         authority,
       );
     }
@@ -390,6 +398,7 @@ class RuntimeHostMessenger<
       method,
       params,
       responseTimeoutMs,
+      idempotencyKey,
       authority,
     );
   }

@@ -54,16 +54,16 @@ export const NO_RETRY_TRANSPORT_POLICY: TransportRetryPolicy = {
 };
 
 /**
- * Wraps an `IHostMessenger` so a `RetryableTransportError` - a transient
- * transport failure for which the host is known not to have dispatched the
- * request (dial/handshake failure, or an explicit post-open request timeout) -
- * is retried on a fresh dial with jittered exponential backoff, up to
- * `policy.maxRetries` times.
+ * Wraps an `IHostMessenger` so a `RetryableTransportError` is retried on a
+ * fresh dial with jittered exponential backoff, up to `policy.maxRetries`
+ * times. That classification covers either a provably pre-dispatch failure or
+ * a post-send failure carrying a key the host negotiated and deduplicates.
  *
  * Only `RetryableTransportError` is retried: an ambiguous post-send drop, a
  * malformed frame, an `UNAUTHORIZED`, or any other host-originated
- * `HostRpcError` propagates on the first attempt. The no-dispatch guarantee is
- * what makes the retry safe even for non-idempotent methods.
+ * `HostRpcError` propagates on the first attempt. A no-dispatch guarantee or a
+ * negotiated replay key is what makes the retry safe for non-idempotent
+ * methods; an ambiguous unkeyed failure never receives this class.
  *
  * Compose this *outside* `createAuthAwareMessenger`: the auth wrapper only acts
  * on `UNAUTHORIZED` (never a `RetryableTransportError`), so the two layers
@@ -111,16 +111,18 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
     request<Method extends keyof Registry & string>(
       method: Method,
       params: RequestOfMethod<Registry, Method>,
+      idempotencyKey: string | null,
       authority: HostRequestAuthority,
     ): Promise<ResponseOfMethod<Registry, Method>> {
       return runWithRetries(authority, method, () =>
-        inner.request(method, params, authority),
+        inner.request(method, params, idempotencyKey, authority),
       );
     },
     requestWithResponseTimeout<Method extends keyof Registry & string>(
       method: Method,
       params: RequestOfMethod<Registry, Method>,
       responseTimeoutMs: number,
+      idempotencyKey: string | null,
       authority: HostRequestAuthority,
     ): Promise<ResponseOfMethod<Registry, Method>> {
       return runWithRetries(authority, method, () =>
@@ -128,6 +130,7 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
           method,
           params,
           responseTimeoutMs,
+          idempotencyKey,
           authority,
         ),
       );

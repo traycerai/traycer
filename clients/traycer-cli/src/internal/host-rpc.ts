@@ -243,7 +243,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     abortSignal: callLifetime.signal,
   };
   try {
-    const response = await messenger.request(method, params, authority);
+    const response = await messenger.request(method, params, null, authority);
     logger.debug("Host RPC completed", {
       environment: config.environment,
       method,

@@ -230,22 +230,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       const epicId = tab.epicId;
       const tabHostId = tab.hostId;
       const handle = getOpenEpicRegistry().peek(epicId);
-      // Optimistic overlay for instant feedback. This used to capture the
-      // prior title and write it back on failure; the overlay makes that pair
-      // unnecessary, because the patch sits OVER the authoritative value and
-      // dropping it reveals whatever the host actually has. Do not reintroduce
-      // a write-back - a second `setEpicTitle` on the failure path would
-      // persist the old title as a fresh local mutation rather than reverting
-      // to the server's.
-      const requestId =
-        handle?.store.getState().beginEpicTitleMutation(next) ?? null;
-      // "landed" keeps the patch applied until the doc echoes the new title
-      // back (the ack is proof the host has it); "failed" drops it, revealing
-      // the authoritative value. Both keep the pending map bounded.
-      const retire = (outcome: "landed" | "failed") => {
-        if (requestId === null) return;
-        handle?.store.getState().retirePendingMutation(requestId, outcome);
-      };
       // The header strip is app-global and not guaranteed to sit inside a
       // HostRuntimeProvider, so reach the host client through the snapshot
       // rather than a render-time hook. It is the app-wide client, already
@@ -262,9 +246,41 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       // where the epic actually lives. `null` (no live session) keeps the
       // app-wide client, which is all this surface ever had.
       const client = epicRenameClient(tabHostId);
+      if (handle !== null) {
+        const hostId = client?.getActiveHostId() ?? null;
+        const userId = client?.getRequestContextUserId() ?? null;
+        const state = handle.store.getState();
+        const commandId = state.enqueueWriteCommand({
+          kind: "update-epic-title",
+          title: next,
+          updatedAt: Date.now(),
+        });
+        if (commandId === null) return;
+        void state.waitForWriteCommand(commandId).then((command) => {
+          if (command.state === "committed") {
+            if (userId === null) return;
+            updateEpicTitleInCloudTaskCaches(
+              queryClient,
+              { hostId, userId },
+              epicId,
+              next,
+            );
+            return;
+          }
+          const message =
+            command.resolution?.kind === "rejected"
+              ? command.resolution.reason
+              : "A newer authoritative title superseded this rename.";
+          reportableErrorToast("Couldn't rename epic.", undefined, {
+            title: "Could not rename Epic",
+            message,
+            code: null,
+            source: "Epic tabs",
+          });
+        });
+        return;
+      }
       if (client === null) {
-        // No RPC ever fired, so nothing can land this stamp - drop it.
-        retire("failed");
         reportableErrorToast(
           "Couldn't reach the host to rename the epic.",
           undefined,
@@ -285,9 +301,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         })
         .then(
           () => {
-            // Before the early return below - a null user id means there is no
-            // cloud cache to patch, not that the mutation is still pending.
-            retire("landed");
             if (userId === null) return;
             updateEpicTitleInCloudTaskCaches(
               queryClient,
@@ -297,7 +310,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             );
           },
           (error: unknown) => {
-            retire("failed");
             if (error instanceof HostRpcError) {
               toastFromHostError(error, "Couldn't rename epic.");
             } else {

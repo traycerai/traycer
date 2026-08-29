@@ -241,6 +241,7 @@ function harness(): {
         .request(
           "host.status",
           {},
+          null,
           authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
         )
         .catch(() => undefined);
@@ -249,31 +250,30 @@ function harness(): {
       binding.messenger.request(
         "host.status",
         {},
+        null,
         authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
       ),
     requestRemoteWithSignal: (abortSignal: AbortSignal) =>
-      binding.messenger.request(
+      binding.messenger.request("host.status", {}, null, {
+        ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+        abortSignal,
+      }),
+    requestRemoteWithTimeoutAndSignal: (abortSignal: AbortSignal) =>
+      binding.messenger.requestWithResponseTimeout(
         "host.status",
         {},
+        5_000,
+        null,
         {
           ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
           abortSignal,
         },
       ),
-    requestRemoteWithTimeoutAndSignal: (abortSignal: AbortSignal) =>
-      binding.messenger.requestWithResponseTimeout("host.status", {}, 5_000, {
-        ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+    requestLocalWithSignal: (abortSignal: AbortSignal) =>
+      binding.messenger.request("host.status", {}, null, {
+        ...authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
         abortSignal,
       }),
-    requestLocalWithSignal: (abortSignal: AbortSignal) =>
-      binding.messenger.request(
-        "host.status",
-        {},
-        {
-          ...authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
-          abortSignal,
-        },
-      ),
     reset: () => binding.reset(),
     // The local branch dials for real; the dial itself is irrelevant here -
     // what matters is that taking this branch evicts the remote binding first.
@@ -282,6 +282,7 @@ function harness(): {
         .request(
           "host.status",
           {},
+          null,
           authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
         )
         .catch(() => undefined);
@@ -713,6 +714,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       binding.messenger.request(
         "host.status",
         {},
+        null,
         authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
       );
 

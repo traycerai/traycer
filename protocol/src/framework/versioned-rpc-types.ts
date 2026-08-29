@@ -45,6 +45,10 @@ export const RPC_ERROR_CODES = [
   // error with role-specific copy, distinct from the generic epic-access
   // FORBIDDEN whose "check Task access" guidance would mislead here.
   "E_ROLE_FORBIDDEN",
+  // The epic document is sealed, newer than this host understands, or cannot
+  // be read safely. Distinct from FORBIDDEN: the caller may hold editor access
+  // while the document itself is intentionally read-only.
+  "E_EPIC_READ_ONLY",
   "TERMINAL_ID_TAKEN",
   // A durable terminal is mid-delete. 409, not 500: the caller can retry
   // after the marker settles. Additive and degrade-safe like E_INVALID_ARGUMENT.

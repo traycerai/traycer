@@ -43,7 +43,10 @@ export interface CommandIdFactory {
 export type CommandState =
   /** Issued, unanswered. The overlay is applied. */
   | "pending"
-  /** The serving host applied it. Terminal, and host-scoped. */
+  /**
+   * The serving host applied it. Host-terminal, but not globally terminal: a
+   * later cross-host merge may still move this record to `superseded`.
+   */
   | "committed"
   /** The authority refused it. Terminal; the intent is retained. */
   | "rejected"
@@ -64,7 +67,8 @@ export type CommandResolution =
        * host-committed and must never imply epic-global durability.
        */
       readonly hostId: string;
-      readonly entityVersion: number;
+      /** `null` for released unary contracts that do not return a revision. */
+      readonly entityVersion: number | null;
     }
   | {
       readonly kind: "rejected";
@@ -89,6 +93,19 @@ export type CommandResolution =
       readonly via: string;
     };
 
+export type CommandDeliveryState =
+  /** Waiting for the first send or an explicit reconnect drain. */
+  | "queued"
+  /** One transport attempt currently owns the command. */
+  | "sending"
+  /**
+   * The request may have reached an unnegotiated host. Never auto-retried: the
+   * overlay waits for an echo/TTL verdict until the user explicitly retries.
+   */
+  | "unknown-outcome"
+  /** The command has a resolution. */
+  | "settled";
+
 export interface CommandRecord<TIntent> {
   readonly commandId: CommandId;
   /**
@@ -99,6 +116,7 @@ export interface CommandRecord<TIntent> {
    */
   readonly intent: TIntent;
   readonly state: CommandState;
+  readonly delivery: CommandDeliveryState;
   readonly issuedAtMs: number;
   /** Send attempts so far. >1 means it survived at least one disconnect. */
   readonly attempts: number;
@@ -119,7 +137,9 @@ export interface CommandEnqueueRequest<TIntent> {
 
 export interface CommandQueue<TIntent> {
   /** Mints an id, records the command as pending, and attempts a send. */
-  enqueue(request: CommandEnqueueRequest<TIntent>): CommandRecord<TIntent>;
+  enqueue(
+    request: CommandEnqueueRequest<TIntent>,
+  ): CommandRecord<TIntent> | null;
 
   /**
    * Re-send everything still pending, in issue order.
@@ -129,6 +149,9 @@ export interface CommandQueue<TIntent> {
    * re-sending safe.
    */
   retryPending(): void;
+
+  /** Explicit user retry, including an `unknown-outcome` command. */
+  retry(commandId: CommandId): void;
 
   /** Record the authority's answer. Idempotent per command id. */
   resolve(commandId: CommandId, resolution: CommandResolution): void;
@@ -180,7 +203,256 @@ export interface CommandOverlay<TProjection, TIntent> {
   ): TProjection;
 }
 
-export interface CommandQueueOptions {
+export type CommandSendFailure =
+  | {
+      readonly kind: "queued";
+      readonly reason: string;
+      /**
+       * True when safety depends on the host retaining a negotiated replay
+       * key. Pure pre-send failures may wait offline without a deadline.
+       */
+      readonly boundedRetry: boolean;
+    }
+  | { readonly kind: "unknown-outcome"; readonly reason: string }
+  | { readonly kind: "rejected"; readonly resolution: CommandResolution };
+
+/**
+ * The longest automatic reconnect retry after a keyed attempt becomes
+ * ambiguous. The host retains outcomes for twice this interval; after it, the
+ * queue surfaces `unknown-outcome` and waits for echo/TTL or an explicit user
+ * retry instead of assuming the key is still resident.
+ */
+export const COMMAND_AUTO_RETRY_WINDOW_MS = 5 * 60 * 1_000;
+
+export interface CommandQueueOptions<TIntent> {
   readonly environment: RuntimeEnvironment;
   readonly idFactory: CommandIdFactory;
+  /** One attempt. The queue serializes calls in issue order. */
+  readonly send: (
+    command: CommandRecord<TIntent>,
+  ) => Promise<CommandResolution>;
+  readonly classifyFailure: (error: unknown) => CommandSendFailure;
+  /** Validates against the current authoritative-plus-overlay projection. */
+  readonly accept: (request: CommandEnqueueRequest<TIntent>) => boolean;
+  /** Applies the optimistic overlay after the id exists and before send. */
+  readonly onEnqueued: (command: CommandRecord<TIntent>) => boolean;
+  /** Arms echo/TTL reconciliation after an ambiguous unkeyed delivery. */
+  readonly onUnknownOutcome: (command: CommandRecord<TIntent>) => void;
+  /** Runs exactly once for each accepted lifecycle transition. */
+  readonly onResolved: (command: CommandRecord<TIntent>) => void;
+}
+
+/** Concrete minimal FIFO used by the epic write path. */
+export function createCommandQueue<TIntent>(
+  options: CommandQueueOptions<TIntent>,
+): CommandQueue<TIntent> {
+  let disposed = false;
+  let sendingCommandId: CommandId | null = null;
+  const records: CommandRecord<TIntent>[] = [];
+  const blockedUntilRetry = new Set<CommandId>();
+  const retryDeadlineByCommandId = new Map<CommandId, number>();
+  const listeners = new Set<() => void>();
+
+  function publish(): void {
+    for (const listener of [...listeners]) listener();
+  }
+
+  function replace(
+    commandId: CommandId,
+    update: (record: CommandRecord<TIntent>) => CommandRecord<TIntent>,
+  ): CommandRecord<TIntent> | null {
+    const index = records.findIndex((record) => record.commandId === commandId);
+    if (index < 0) return null;
+    const next = update(records[index]);
+    records[index] = next;
+    publish();
+    return next;
+  }
+
+  function resolve(commandId: CommandId, resolution: CommandResolution): void {
+    const index = records.findIndex((record) => record.commandId === commandId);
+    if (index < 0) return;
+    const current = records[index];
+    const accepted =
+      current.state === "pending" ||
+      (current.state === "committed" && resolution.kind === "superseded");
+    if (!accepted) return;
+    const next: CommandRecord<TIntent> = {
+      ...current,
+      state: resolution.kind,
+      delivery: "settled",
+      resolution,
+    };
+    records[index] = next;
+    blockedUntilRetry.delete(commandId);
+    retryDeadlineByCommandId.delete(commandId);
+    publish();
+    options.onResolved(next);
+    pump();
+  }
+
+  function pump(): void {
+    if (disposed || sendingCommandId !== null) return;
+    const command = records.find((record) => record.state === "pending");
+    if (
+      command === undefined ||
+      command.delivery !== "queued" ||
+      blockedUntilRetry.has(command.commandId)
+    ) {
+      return;
+    }
+    sendingCommandId = command.commandId;
+    const sending = replace(command.commandId, (current) => ({
+      ...current,
+      delivery: "sending",
+      attempts: current.attempts + 1,
+    }));
+    if (sending === null) {
+      sendingCommandId = null;
+      return;
+    }
+    void options
+      .send(sending)
+      .then(
+        (resolution) => {
+          if (!disposed) resolve(sending.commandId, resolution);
+        },
+        (error: unknown) => {
+          if (disposed) return;
+          const failure = options.classifyFailure(error);
+          if (failure.kind === "rejected") {
+            resolve(sending.commandId, failure.resolution);
+            return;
+          }
+          const uncertain = replace(sending.commandId, (current) => {
+            if (current.state !== "pending") return current;
+            return {
+              ...current,
+              delivery:
+                failure.kind === "unknown-outcome"
+                  ? "unknown-outcome"
+                  : "queued",
+            };
+          });
+          if (
+            failure.kind === "unknown-outcome" &&
+            uncertain?.state === "pending" &&
+            uncertain.delivery === "unknown-outcome"
+          ) {
+            options.onUnknownOutcome(uncertain);
+          }
+          if (failure.kind === "queued") {
+            blockedUntilRetry.add(sending.commandId);
+            // The FIRST ambiguous keyed attempt starts the safety window. Never
+            // slide or clear that deadline after another reconnect attempt: a
+            // sequence of four-minute failures must not keep the command alive
+            // past the host cache's ten-minute retention and eventually execute
+            // it again after the dedupe entry expires. A later pure pre-send
+            // failure is still part of the same bounded replay episode.
+            if (
+              failure.boundedRetry &&
+              !retryDeadlineByCommandId.has(sending.commandId)
+            ) {
+              retryDeadlineByCommandId.set(
+                sending.commandId,
+                options.environment.clock.now() + COMMAND_AUTO_RETRY_WINDOW_MS,
+              );
+            }
+          }
+        },
+      )
+      .finally(() => {
+        if (sendingCommandId === sending.commandId) sendingCommandId = null;
+        pump();
+      });
+  }
+
+  return {
+    enqueue(request) {
+      if (!options.accept(request)) return null;
+      const record: CommandRecord<TIntent> = {
+        commandId: options.idFactory.next(),
+        intent: request.intent,
+        state: "pending",
+        delivery: "queued",
+        issuedAtMs: options.environment.clock.now(),
+        attempts: 0,
+        expectedEntityVersion: request.expectedEntityVersion,
+        resolution: null,
+      };
+      records.push(record);
+      if (!options.onEnqueued(record)) {
+        records.pop();
+        return null;
+      }
+      publish();
+      pump();
+      return record;
+    },
+
+    retryPending(): void {
+      for (const record of records) {
+        if (record.state === "pending" && record.delivery === "queued") {
+          const retryDeadline = retryDeadlineByCommandId.get(record.commandId);
+          if (
+            retryDeadline !== undefined &&
+            retryDeadline <= options.environment.clock.now()
+          ) {
+            retryDeadlineByCommandId.delete(record.commandId);
+            blockedUntilRetry.delete(record.commandId);
+            const uncertain = replace(record.commandId, (current) => ({
+              ...current,
+              delivery: "unknown-outcome",
+            }));
+            if (uncertain !== null) options.onUnknownOutcome(uncertain);
+            continue;
+          }
+          blockedUntilRetry.delete(record.commandId);
+        }
+      }
+      pump();
+    },
+
+    retry(commandId): void {
+      replace(commandId, (current) => {
+        if (current.state !== "pending") return current;
+        return { ...current, delivery: "queued" };
+      });
+      blockedUntilRetry.delete(commandId);
+      retryDeadlineByCommandId.delete(commandId);
+      pump();
+    },
+
+    resolve,
+
+    discard(commandId): void {
+      const index = records.findIndex(
+        (record) => record.commandId === commandId,
+      );
+      if (index < 0 || records[index].state === "pending") return;
+      records.splice(index, 1);
+      blockedUntilRetry.delete(commandId);
+      retryDeadlineByCommandId.delete(commandId);
+      publish();
+    },
+
+    list: () => records.slice(),
+    pending: () => records.filter((record) => record.state === "pending"),
+    unacknowledged: () =>
+      records.filter((record) => record.state !== "pending"),
+
+    subscribe(listener): () => void {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+
+    dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      records.splice(0, records.length);
+      blockedUntilRetry.clear();
+      retryDeadlineByCommandId.clear();
+      listeners.clear();
+    },
+  };
 }

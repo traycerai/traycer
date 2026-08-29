@@ -63,6 +63,7 @@ import {
 } from "vitest";
 
 import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const notificationIndicatorTestState = vi.hoisted(
   (): {
@@ -375,6 +376,7 @@ function registerChatSession(epicId: string, chatId: string): void {
     },
     (factoryEpicId, factoryChatId) =>
       createChatSessionStore({
+        environment: CHAT_STORE_TEST_ENVIRONMENT,
         hostId: "host-a",
         epicId: factoryEpicId,
         chatId: factoryChatId,

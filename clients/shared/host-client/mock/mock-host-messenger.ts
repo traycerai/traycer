@@ -112,6 +112,7 @@ export class MockHostMessenger<
     readonly method: string;
     readonly params: unknown;
     readonly requestId: string;
+    readonly idempotencyKey: string | null;
     readonly authority: HostRequestAuthority;
   }> = [];
   readonly phases: MockPhaseEvent[] = [];
@@ -141,21 +142,23 @@ export class MockHostMessenger<
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    idempotencyKey: string | null,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     // The mock runs handlers inline with no transport timers, so the extended
     // response budget has nothing to bound - the call delegates unchanged.
     void responseTimeoutMs;
-    return this.request(method, params, authority);
+    return this.request(method, params, idempotencyKey, authority);
   }
 
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    idempotencyKey: string | null,
     authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const requestId = this.requestIdProvider();
-    this.calls.push({ method, params, requestId, authority });
+    this.calls.push({ method, params, requestId, idempotencyKey, authority });
 
     this.emit({ kind: "open", method, requestId });
     this.emit({ kind: "auth", method, requestId });

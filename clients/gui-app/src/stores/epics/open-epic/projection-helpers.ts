@@ -41,13 +41,16 @@ import {
   type RoleClaim,
 } from "@traycer/protocol/persistence/epic/role-claims";
 import * as Y from "yjs";
-import type { PendingMetadataOverlay } from "./pending-metadata-overlay";
+import type {
+  DeadPendingMutation,
+  PendingMetadataOverlay,
+} from "./pending-metadata-overlay";
 import {
   applyPendingOverlayToArtifacts,
   applyPendingOverlayToChats,
   applyPendingOverlayToEpicHeader,
   applyPendingOverlayToTuiAgents,
-  collectDeadPendingMutations,
+  collectDeadPendingMutationOutcomes,
 } from "./pending-metadata-overlay";
 import type {
   ArtifactProjection,
@@ -1233,7 +1236,7 @@ export interface ProjectionInputs {
    * projecting a bare doc).
    */
   readonly reportDeadMutations:
-    | ((requestIds: readonly string[]) => void)
+    | ((outcomes: readonly DeadPendingMutation[]) => void)
     | null;
 }
 
@@ -1258,7 +1261,7 @@ export function projectFullState(
   // nothing else mid-projection; the appliers below read the same `pendingOverlay`
   // reference, which the callback edits in place).
   if (reportDeadMutations !== null && pendingOverlay.size > 0) {
-    const dead = collectDeadPendingMutations(pendingOverlay, {
+    const dead = collectDeadPendingMutationOutcomes(pendingOverlay, {
       artifacts,
       chats,
       tuiAgents,
