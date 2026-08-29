@@ -1,4 +1,5 @@
 import { Extension } from "@tiptap/core";
+import type { Fragment, Slice } from "@tiptap/pm/model";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 
 import { sliceToDocJson } from "@/lib/editor/prosemirror-json";
@@ -26,14 +27,8 @@ export const MarkdownClipboard = Extension.create({
         key: new PluginKey("markdownClipboard"),
         props: {
           clipboardTextSerializer: (slice) => {
-            const onlyChild = slice.content.firstChild;
-            if (
-              slice.content.childCount === 1 &&
-              onlyChild?.type.name === "codeBlock" &&
-              (slice.openStart > 0 || slice.openEnd > 0)
-            ) {
-              return onlyChild.textContent;
-            }
+            const codeText = selectedCodeText(slice);
+            if (codeText !== null) return codeText;
             const doc = sliceToDocJson(slice);
             if (doc === null) {
               return slice.content.textBetween(0, slice.content.size, "\n");
@@ -45,3 +40,19 @@ export const MarkdownClipboard = Extension.create({
     ];
   },
 });
+
+function selectedCodeText(slice: Slice): string | null {
+  let content: Fragment = slice.content;
+  let depth = 0;
+  while (content.childCount === 1) {
+    const onlyChild = content.firstChild;
+    if (onlyChild === null) return null;
+    if (onlyChild.type.name === "codeBlock") {
+      const codeBlockIsOpen = depth < slice.openStart && depth < slice.openEnd;
+      return codeBlockIsOpen ? onlyChild.textContent : null;
+    }
+    content = onlyChild.content;
+    depth += 1;
+  }
+  return null;
+}
