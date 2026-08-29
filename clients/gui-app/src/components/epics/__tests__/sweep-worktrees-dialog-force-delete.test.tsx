@@ -447,7 +447,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
       },
     ];
     renderDialog();
-    const selectAll = screen.getByTestId("sweep-worktrees-select-all");
+    const selectAll = screen.getByRole("checkbox", { name: "Select all" });
     expect(selectAll.getAttribute("aria-checked")).toBe("mixed");
     expect(screen.getByTestId("sweep-worktrees-count").textContent).toBe(
       "1 of 5 selected",
@@ -558,7 +558,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     testState.lastVariables = { worktrees: [] };
     testState.rows = mixed;
     renderDialog();
-    fireEvent.click(screen.getByTestId("sweep-worktrees-select-all"));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
     fireEvent.click(
       screen.getByRole("button", { name: "Review consequences" }),
     );
