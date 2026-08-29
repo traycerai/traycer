@@ -3944,21 +3944,38 @@ export function createChatSessionStoreWithNotificationDependencies(
               get().transcriptWindow,
               activeTurnId,
             ));
-        if (!streamingEcho) {
-          // BEFORE the fold, because it reads the epoch the in-flight request
-          // was framed against and the fold can move it.
-          supersedeInFlightHydration({
-            epoch: frame.epoch,
-            changes: frame.changes,
-          });
-        }
-        const window = applyIndexChange(get().transcriptWindow, {
+        // Folded FIRST, but not published yet - the two orderings this has to
+        // satisfy pull in opposite directions and this is what satisfies both.
+        //
+        // `supersedeInFlightHydration` must read the PRE-fold window, because
+        // it compares against the epoch each in-flight request was framed
+        // against and the fold can move it. But it must not run for a frame
+        // the window REJECTS: `applyIndexChange` drops a duplicated or
+        // reordered same-epoch frame on `indexRevision <= window.indexRevision`
+        // and changes nothing, while the supersede has already marked a valid
+        // in-flight request - so its answer is discarded and re-asked for a
+        // frame that moved nothing, extending the placeholders it was going to
+        // fill. Repeated stragglers can keep a range from ever settling.
+        //
+        // Computing the fold without `set` gives both: `get()` still returns
+        // the pre-fold window below, and identity tells us whether the frame
+        // was accepted. Deliberately NOT a second copy of the acceptance rule -
+        // the epoch, revision and rebuild-suspension checks are intricate
+        // enough that a mirror of them here would drift.
+        const beforeFold = get().transcriptWindow;
+        const window = applyIndexChange(beforeFold, {
           epoch: frame.epoch,
           rowCount: frame.rowCount,
           indexRevision: frame.indexRevision,
           changes: frame.changes,
           activeTurnId,
         });
+        if (!streamingEcho && window !== beforeFold) {
+          supersedeInFlightHydration({
+            epoch: frame.epoch,
+            changes: frame.changes,
+          });
+        }
         publishWindowedTranscript(window, null);
         // Covers the `reindexed` case too: `requestPlannedHydration` sends a
         // `resnapshot` rather than a range when the window is invalidated.

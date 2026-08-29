@@ -1611,6 +1611,78 @@ describe("the active turn's streaming echo does not starve in-flight hydration",
     }
   });
 
+  it("does not supersede in-flight hydration for a frame the window REJECTS", () => {
+    // `supersedeInFlightHydration` ran before `applyIndexChange` had judged the
+    // frame. A duplicated or reordered same-epoch straggler is dropped on
+    // `indexRevision <= window.indexRevision` and changes nothing - but the
+    // ledger had already marked the in-flight request, so its valid answer was
+    // discarded and re-asked, extending exactly the placeholders it would have
+    // filled. Repeated stragglers can keep a range from settling at all.
+    const harness = createWindowedHarness();
+    try {
+      // A concrete revision, so `indexRevisionRebuilding` is disarmed and the
+      // revision checks actually apply - the default `null` suspends them.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 1,
+          rowCount: 40,
+          tailFromOrdinal: 20,
+          tailMessages: [userMessage("tail", 20)],
+          accumulatedFileChangeCount: 0,
+          indexRevision: 5,
+        }),
+      );
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+
+      // Names a DIFFERENT turn, so the streaming-echo exemption cannot be what
+      // saves the request - only the rejection can.
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 5,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 10,
+                  entry: {
+                    rowId: assistantRowId("other-turn"),
+                    createdAt: 10,
+                    role: "assistant",
+                    byteLength: 4096,
+                    bodyDigest: "d10-straggler",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("other-turn")],
+          messages: [assistantWithBlocks("assistant-10", 10, "other-turn", [])],
+        }),
+      );
+
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
   it("a streaming echo still supersedes when the turn's record is not held", () => {
     // The cold-row boundary of the exemption: a copy the window does not
     // hold is not being rewritten - its deltas are dropped - so an answer
