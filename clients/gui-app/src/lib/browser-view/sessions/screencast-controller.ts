@@ -364,6 +364,11 @@ export function createScreencastController(options: {
     const queued = pendingTouchGestures;
     pendingTouchGestures = [];
     if (activeArmEpoch === null) return;
+    // A multi-click chain describes what the PAGE received. Discarding a stale
+    // tap breaks it, so nothing after the discard may claim to continue it -
+    // neither the taps still in this queue, whose counts were stamped when they
+    // were made, nor the next tap the finger produces.
+    let chainBroken = false;
     for (const gesture of queued) {
       if (gesture.kind === "wheel") {
         const frame = buildPointerFrame({
@@ -376,10 +381,18 @@ export function createScreencastController(options: {
         if (frame !== null) sendDiscretePointer(frame);
         continue;
       }
-      if (gesture.down.castSequence !== presentedSequence) continue;
-      sendDiscretePointer(gesture.down);
-      sendDiscretePointer(gesture.up);
+      if (gesture.down.castSequence !== presentedSequence) {
+        chainBroken = true;
+        continue;
+      }
+      sendDiscretePointer(
+        chainBroken ? { ...gesture.down, clickCount: 1 } : gesture.down,
+      );
+      sendDiscretePointer(
+        chainBroken ? { ...gesture.up, clickCount: 1 } : gesture.up,
+      );
     }
+    if (chainBroken) pointerClickCount = null;
   };
 
   const noteArmed = (armEpoch: number): void => {
