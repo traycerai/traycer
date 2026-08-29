@@ -327,8 +327,11 @@ export interface OrdinalRange {
  * transcript, so this has to be well under that while still being large enough
  * that ordinary scrolling does not thrash: a reader paging back through a long
  * chat should find the rows they just left still hydrated.
+ *
+ * Defined once in `budget-limits.ts` so the process-wide pool and this
+ * per-window unit cannot drift.
  */
-export const TRANSCRIPT_WINDOW_MAX_BYTES = 8 * 1024 * 1024;
+export { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/replica-memory/budget-limits";
 
 /**
  * How large a span may grow by absorbing the span NEXT to it.

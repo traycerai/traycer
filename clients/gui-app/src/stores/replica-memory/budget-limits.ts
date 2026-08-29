@@ -1,17 +1,26 @@
-import { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/chats/transcript-window";
+/**
+ * Per-window hydrated-body ceiling. The process-wide chat-windows pool is a
+ * multiple of this unit. The window module re-exports it so existing
+ * `transcript-window` importers keep working against one definition.
+ */
+export const TRANSCRIPT_WINDOW_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
- * Same value as `ARTIFACT_ROOM_LEASE_POLICY.maxMaterialized`. Duplicated so
- * this module does not import the tier — the tier is the one that will
- * import the budget, and a cycle there is how a second demand book creeps in.
+ * Hot-doc working-set count cap. The artifact-room tier's
+ * `ARTIFACT_ROOM_LEASE_POLICY.maxMaterialized` is this value — imported, not
+ * copied. At 8 the LRU evicted on ordinary scrolling; treat a lower value as
+ * a regression.
  */
 export const HOT_DOCS_MAX_MATERIALIZED = 32;
 
 /**
- * Same value as `DEFAULT_MAX_LIVE_EPICS`. Duplicated for the same
- * cycle-avoidance reason: the epic session registry is T4's file.
+ * Live-epic count cap. The session registry's `DEFAULT_MAX_LIVE_EPICS` is
+ * this value. T4 re-exports it; this is the one definition.
  */
 export const EPIC_REPLICAS_MAX_LIVE = 5;
+
+/** Public alias the epic session registry already exports. Same binding. */
+export const DEFAULT_MAX_LIVE_EPICS = EPIC_REPLICAS_MAX_LIVE;
 
 /**
  * Fraction of a plane's soft limit at which pressure becomes `"near"`.
@@ -48,7 +57,7 @@ export const HOT_DOCS_SOFT_LIMIT_BYTES =
 /**
  * Per-epic observational allowance. The root replica floor is measured, not
  * evicted, while `@1` is the wire (honesty constraint: Phase 1 cannot
- * control it). `DEFAULT_MAX_LIVE_EPICS` is the count input.
+ * control it). {@link EPIC_REPLICAS_MAX_LIVE} is the count input.
  */
 export const EPIC_REPLICA_BYTES_PER_EPIC_ALLOWANCE = 32 * 1024 * 1024;
 

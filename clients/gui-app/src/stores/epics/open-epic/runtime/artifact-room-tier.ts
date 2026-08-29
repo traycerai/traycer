@@ -55,6 +55,7 @@ import type {
   RuntimeTimer,
 } from "@traycer-clients/shared/replica-runtime";
 import type { HotDocBudgetSink } from "@/stores/replica-memory/hot-doc-budget";
+import { HOT_DOCS_MAX_MATERIALIZED } from "@/stores/replica-memory/budget-limits";
 import { createMonotonicSequence } from "@traycer-clients/shared/replica-runtime";
 import type { EpicOutboundRequest } from "./epic-runtime-events";
 import type { EpicSessionFacts } from "./session-facts";
@@ -206,7 +207,7 @@ const COLD_ROOM_COLLAPSE_ENTRIES = 32;
  */
 export const ARTIFACT_ROOM_LEASE_POLICY: LeasePolicy = {
   cooldownMs: 60_000,
-  maxMaterialized: 32,
+  maxMaterialized: HOT_DOCS_MAX_MATERIALIZED,
 };
 
 /**

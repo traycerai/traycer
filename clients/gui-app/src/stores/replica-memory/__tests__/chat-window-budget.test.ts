@@ -29,8 +29,11 @@ import type { ChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscri
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   CHAT_WINDOWS_SOFT_LIMIT_BYTES,
-  HOT_DOCS_SOFT_LIMIT_BYTES,
+  DEFAULT_MAX_LIVE_EPICS,
+  EPIC_REPLICAS_MAX_LIVE,
   EPIC_REPLICAS_SOFT_LIMIT_BYTES,
+  HOT_DOCS_SOFT_LIMIT_BYTES,
+  TRANSCRIPT_WINDOW_MAX_BYTES as BUDGET_TRANSCRIPT_WINDOW_MAX_BYTES,
 } from "@/stores/replica-memory/budget-limits";
 
 const CONTENT: JsonContent = {
@@ -265,5 +268,12 @@ describe("TRANSCRIPT_WINDOW_MAX_BYTES remains the per-window unit", () => {
   it("is still 8 MiB, and the process pool is a multiple of it", () => {
     expect(TRANSCRIPT_WINDOW_MAX_BYTES).toBe(8 * 1024 * 1024);
     expect(CHAT_WINDOWS_SOFT_LIMIT_BYTES).toBe(4 * TRANSCRIPT_WINDOW_MAX_BYTES);
+  });
+
+  it("is the same binding the window module re-exports, not a second copy", () => {
+    expect(TRANSCRIPT_WINDOW_MAX_BYTES).toBe(
+      BUDGET_TRANSCRIPT_WINDOW_MAX_BYTES,
+    );
+    expect(DEFAULT_MAX_LIVE_EPICS).toBe(EPIC_REPLICAS_MAX_LIVE);
   });
 });

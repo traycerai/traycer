@@ -41,6 +41,7 @@ import {
   type ArtifactRoomReplicaEntry,
   type ArtifactRoomTier,
 } from "../artifact-room-tier";
+import { HOT_DOCS_MAX_MATERIALIZED } from "@/stores/replica-memory/budget-limits";
 import type { EpicSessionFacts } from "../session-facts";
 import { encodeDocStateVectorBase64 } from "../dirty-watermark";
 import type { EpicOutboundRequest } from "../epic-runtime-events";
@@ -237,6 +238,14 @@ function leaseOf(grant: LeaseGrant<ArtifactRoomReplicaEntry>): LeaseHandle {
   }
   return grant.lease;
 }
+
+describe("ARTIFACT_ROOM_LEASE_POLICY.maxMaterialized", () => {
+  it("is the budget-limits constant, not a second copy of 32", () => {
+    expect(ARTIFACT_ROOM_LEASE_POLICY.maxMaterialized).toBe(
+      HOT_DOCS_MAX_MATERIALIZED,
+    );
+  });
+});
 
 describe("isPinned — three independent arms, verified via demoteIdle()", () => {
   it("an unpinned control room (no lease, no divergence, no remote peers) demotes", () => {
