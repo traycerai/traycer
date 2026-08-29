@@ -11,7 +11,9 @@ import {
   type MediaPeerHandlers,
   type WebrtcIceCandidate,
   type WebrtcSignalPort,
+  type WebrtcVideoStatsFields,
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
+import type { WebrtcVideoStatsSample } from "@/lib/browser-view/sessions/webrtc-video-stats";
 
 /**
  * The tile's plane machine driven against the REAL media registry (ticket 09),
@@ -23,6 +25,52 @@ interface FakePeer extends MediaPeer {
   readonly offers: string[];
   readonly remoteCandidates: WebrtcIceCandidate[];
   closeCount: number;
+  /** `null` reads as "no inbound-rtp yet" - `mapWebrtcVideoStats` returns null for it. */
+  statsReport: RTCStatsReport | null;
+}
+
+/** A minimal `RTCStatsReport`-shaped report: inbound-rtp + a nominated candidate pair. */
+function fakeStatsReport(input: {
+  readonly framesDecoded: number;
+  readonly framesDropped: number;
+  readonly packetsLost: number;
+  readonly jitter: number;
+  readonly roundTripTime: number;
+  readonly candidateType: string;
+}): RTCStatsReport {
+  const map = new Map<string, unknown>([
+    [
+      "inbound-1",
+      {
+        type: "inbound-rtp",
+        kind: "video",
+        framesDecoded: input.framesDecoded,
+        framesDropped: input.framesDropped,
+        packetsLost: input.packetsLost,
+        jitter: input.jitter,
+      },
+    ],
+    [
+      "pair-1",
+      {
+        type: "candidate-pair",
+        id: "pair-1",
+        nominated: true,
+        state: "succeeded",
+        currentRoundTripTime: input.roundTripTime,
+        localCandidateId: "local-1",
+      },
+    ],
+    [
+      "local-1",
+      {
+        type: "local-candidate",
+        id: "local-1",
+        candidateType: input.candidateType,
+      },
+    ],
+  ]);
+  return map;
 }
 
 interface PlaneState {
@@ -32,6 +80,8 @@ interface PlaneState {
     state: "live" | "failed";
     reason: string | null;
   }[];
+  readonly statsFrames: ({ negotiationId: number } & WebrtcVideoStatsFields)[];
+  readonly statsSamples: (WebrtcVideoStatsSample | null)[];
   readonly views: VideoPlaneView[];
   readonly peers: FakePeer[];
   readonly session: VideoPlaneSession;
@@ -49,11 +99,14 @@ function setup(): PlaneState {
   const peers: FakePeer[] = [];
   const answers: PlaneState["answers"] = [];
   const states: PlaneState["states"] = [];
+  const statsFrames: PlaneState["statsFrames"] = [];
+  const statsSamples: PlaneState["statsSamples"] = [];
   const views: VideoPlaneView[] = [];
   const port: WebrtcSignalPort = {
     sendSdpAnswer: (input) => answers.push({ ...input }),
     sendIceCandidate: () => {},
     sendVideoPlaneState: (input) => states.push({ ...input }),
+    sendVideoStats: (input) => statsFrames.push({ ...input }),
   };
   keyCounter += 1;
   const media = acquireBrowserMediaEntry({
@@ -68,6 +121,7 @@ function setup(): PlaneState {
         offers: [],
         remoteCandidates: [],
         closeCount: 0,
+        statsReport: null,
         answerOffer: (sdp) => {
           peer.offers.push(sdp);
           return Promise.resolve(`answer-for:${sdp}`);
@@ -76,6 +130,7 @@ function setup(): PlaneState {
           peer.remoteCandidates.push(candidate);
           return Promise.resolve();
         },
+        getStats: () => Promise.resolve(peer.statsReport ?? new Map()),
         close: () => {
           peer.closeCount += 1;
         },
@@ -88,8 +143,9 @@ function setup(): PlaneState {
     media,
     port,
     onChange: (view) => views.push(view),
+    onVideoStats: (sample) => statsSamples.push(sample),
   });
-  return { answers, states, views, peers, session };
+  return { answers, states, statsFrames, statsSamples, views, peers, session };
 }
 
 function offerFrame(
@@ -256,6 +312,78 @@ describe("video plane session", () => {
     expect(
       plane.peers[0]?.remoteCandidates.map((entry) => entry.candidate),
     ).toEqual(["candidate:remote"]);
+  });
+
+  it("samples getStats every 5s while live and sends the round's negotiationId", async () => {
+    const plane = setup();
+    plane.session.handleServerFrame(offerFrame(3, "offer-sdp"));
+    await settle();
+    plane.peers[0]?.handlers.onStream(fakeStream("track"));
+    plane.session.noteVideoFrame();
+    const peer = plane.peers[0];
+    peer.statsReport = fakeStatsReport({
+      framesDecoded: 150,
+      framesDropped: 1,
+      packetsLost: 0,
+      jitter: 0.004,
+      roundTripTime: 0.042,
+      candidateType: "relay",
+    });
+
+    // The live-round entry publish() already ran a sample; advancing one
+    // more interval is the cadence assertion.
+    await settle();
+    vi.advanceTimersByTime(5_000);
+    await settle();
+
+    expect(plane.statsFrames.at(-1)).toEqual({
+      negotiationId: 3,
+      framesDecoded: 150,
+      framesDropped: 1,
+      packetsLost: 0,
+      jitterMs: 4,
+      roundTripTimeMs: 42,
+      glassToGlassMs: null,
+      iceCandidatePairType: "relay",
+    });
+    expect(plane.statsSamples.at(-1)).toEqual({
+      framesDecoded: 150,
+      framesDropped: 1,
+      packetsLost: 0,
+      jitterMs: 4,
+      roundTripTimeMs: 42,
+      iceCandidatePairType: "relay",
+    });
+
+    peer.statsReport = fakeStatsReport({
+      framesDecoded: 300,
+      framesDropped: 1,
+      packetsLost: 0,
+      jitter: 0.003,
+      roundTripTime: 0.04,
+      candidateType: "relay",
+    });
+    vi.advanceTimersByTime(5_000);
+    await settle();
+
+    expect(plane.statsFrames).toHaveLength(2);
+    expect(plane.statsFrames.at(-1)?.framesDecoded).toBe(300);
+  });
+
+  it("stops sampling stats once the round is no longer live", async () => {
+    const plane = setup();
+    plane.session.handleServerFrame(offerFrame(1, "offer-sdp"));
+    await settle();
+    plane.peers[0]?.handlers.onStream(fakeStream("track"));
+    plane.session.noteVideoFrame();
+    await settle();
+    const sampledWhileLive = plane.statsFrames.length;
+
+    plane.peers[0]?.handlers.onFailure("track-ended");
+    vi.advanceTimersByTime(20_000);
+    await settle();
+
+    expect(plane.statsFrames).toHaveLength(sampledWhileLive);
   });
 
   it("stops publishing and cancels its deadline once closed", async () => {

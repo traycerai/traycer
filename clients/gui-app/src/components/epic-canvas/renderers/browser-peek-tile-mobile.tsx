@@ -12,9 +12,11 @@ import { SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX } from "@/components/epic-canvas/re
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import {
   browserPeekFrameKey,
+  snapshotVideoFrameIntoPeekCache,
   useRetainLastBrowserPeekFrame,
   type BrowserPeekNode,
 } from "@/components/epic-canvas/renderers/browser-peek-tile";
+import { AgentCursorOverlay } from "@/components/epic-canvas/renderers/agent-cursor-overlay";
 import { ScreencastSurface } from "@/components/epic-canvas/renderers/screencast-surface";
 import { useScreencastTileChrome } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -77,6 +79,7 @@ export function BrowserPeekTileMobile(props: BrowserPeekTileMobileProps) {
     tabId: node.tabId,
     visible,
   });
+  const frameCacheKey = browserPeekFrameKey(node);
   const session = useScreencastSession({
     client,
     epicId,
@@ -84,10 +87,12 @@ export function BrowserPeekTileMobile(props: BrowserPeekTileMobileProps) {
     sessionId: node.sessionId,
     tabId: node.tabId,
     visible,
+    captureDormantSnapshot: (video, wasActivePlane) => {
+      snapshotVideoFrameIntoPeekCache(frameCacheKey, video, wasActivePlane);
+    },
   });
   const { image, frameSize, navState, armedEpoch, dialog } = session;
   const { tileRef, viewportRef, overlayButtonRef, imeInputRef } = session.refs;
-  const frameCacheKey = browserPeekFrameKey(node);
   useRetainLastBrowserPeekFrame(frameCacheKey, image);
   const inputOwnerId =
     armedEpoch === null
@@ -170,6 +175,10 @@ export function BrowserPeekTileMobile(props: BrowserPeekTileMobileProps) {
           <ScreencastSurface
             session={session}
             emptyHint="Tap the screencast to control this browser tab."
+          />
+          <AgentCursorOverlay
+            cursor={session.agentCursor}
+            frameSize={frameSize}
           />
           {frameSize === null ? null : (
             <div className="pointer-events-none absolute left-3 top-3 rounded-sm bg-background/80 px-2 py-1 font-mono text-ui-xs text-muted-foreground">

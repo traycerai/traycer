@@ -198,6 +198,27 @@ export function isScreencastModChord(
   );
 }
 
+/**
+ * The box a frame actually paints inside a surface of `box`, under the
+ * `object-contain` letterboxing both display planes use - null when the
+ * surface has no area yet.
+ *
+ * Shared by the two directions this mapping runs in: pointer input out
+ * (below) and the agent ghost cursor back in (`agent-cursor-overlay.tsx`).
+ * They must stay exact inverses, so they read the same box.
+ */
+export function containFit(
+  box: { readonly width: number; readonly height: number },
+  frameSize: ScreencastFrameSize,
+): { readonly width: number; readonly height: number } | null {
+  const scale = Math.min(
+    box.width / frameSize.width,
+    box.height / frameSize.height,
+  );
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  return { width: frameSize.width * scale, height: frameSize.height * scale };
+}
+
 function normalizedPointerPosition(request: {
   readonly clientX: number;
   readonly clientY: number;
@@ -207,13 +228,9 @@ function normalizedPointerPosition(request: {
 }): { readonly normalizedX: number; readonly normalizedY: number } | null {
   if (request.surface === null || request.frameSize === null) return null;
   const rect = request.surface.getBoundingClientRect();
-  const scale = Math.min(
-    rect.width / request.frameSize.width,
-    rect.height / request.frameSize.height,
-  );
-  if (!Number.isFinite(scale) || scale <= 0) return null;
-  const width = request.frameSize.width * scale;
-  const height = request.frameSize.height * scale;
+  const painted = containFit(rect, request.frameSize);
+  if (painted === null) return null;
+  const { width, height } = painted;
   const rawX = request.clientX - rect.left - (rect.width - width) / 2;
   const rawY = request.clientY - rect.top - (rect.height - height) / 2;
   const x = request.clampToEdge ? Math.min(width, Math.max(0, rawX)) : rawX;

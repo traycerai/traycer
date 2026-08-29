@@ -40,6 +40,7 @@ function peerHarness(): PeerHarness {
           peer.remoteCandidates.push(candidate);
           return Promise.resolve();
         },
+        getStats: () => Promise.resolve(new Map()),
         close: () => {
           peer.closeCount += 1;
         },
@@ -58,6 +59,7 @@ interface RecordingPort extends WebrtcSignalPort {
     state: "live" | "failed";
     reason: string | null;
   }[];
+  readonly stats: { negotiationId: number }[];
 }
 
 function recordingPort(): RecordingPort {
@@ -65,6 +67,7 @@ function recordingPort(): RecordingPort {
     answers: [],
     candidates: [],
     states: [],
+    stats: [],
     sendSdpAnswer: (input) => {
       port.answers.push({ ...input });
     },
@@ -73,6 +76,9 @@ function recordingPort(): RecordingPort {
     },
     sendVideoPlaneState: (input) => {
       port.states.push({ ...input });
+    },
+    sendVideoStats: (input) => {
+      port.stats.push({ negotiationId: input.negotiationId });
     },
   };
   return port;
@@ -349,6 +355,7 @@ describe("webrtc media registry", () => {
       createPeer: () => ({
         answerOffer: () => Promise.reject(new Error("no m-line")),
         addRemoteCandidate: () => Promise.resolve(),
+        getStats: () => Promise.resolve(new Map()),
         close: () => {},
       }),
     });

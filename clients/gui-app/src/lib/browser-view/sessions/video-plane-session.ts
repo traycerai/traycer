@@ -4,6 +4,10 @@ import type {
   BrowserMediaSnapshot,
   WebrtcSignalPort,
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
+import {
+  mapWebrtcVideoStats,
+  type WebrtcVideoStatsSample,
+} from "@/lib/browser-view/sessions/webrtc-video-stats";
 
 /**
  * The tile's display plane, as three named states:
@@ -69,6 +73,14 @@ export const JPEG_VIEW: VideoPlaneView = { mode: "jpeg", media: null };
  */
 const FIRST_FRAME_DEADLINE_MS = 15_000;
 
+/**
+ * Ticket 11's stats cadence. Sampled only while the round is live (a
+ * `negotiating` round has no inbound-rtp stats worth reading yet), and both
+ * sent to the host (`WebrtcSignalPort.sendVideoStats`) and handed to
+ * `onVideoStats` for the tile's debug overlay - one sample, two consumers.
+ */
+export const STATS_SAMPLE_INTERVAL_MS = 5_000;
+
 export function createVideoPlaneSession(options: {
   /** One `acquireBrowserMediaEntry(...)` result; closing releases it. */
   readonly media: {
@@ -77,14 +89,17 @@ export function createVideoPlaneSession(options: {
   };
   readonly port: WebrtcSignalPort;
   readonly onChange: (view: VideoPlaneView) => void;
+  /** Latest mapped sample for the tile's debug overlay; `null` off the live round. */
+  readonly onVideoStats: (sample: WebrtcVideoStatsSample | null) => void;
 }): VideoPlaneSession {
-  const { media, onChange, port } = options;
+  const { media, onChange, onVideoStats, port } = options;
   const { entry } = media;
   /** The round whose first decoded frame has been reported. */
   let liveRound: number | null = null;
   let lastFrameAt: number | null = null;
   let deadlineRound: number | null = null;
   let cancelDeadline: (() => void) | null = null;
+  let statsTimer: number | null = null;
   let closed = false;
 
   const isLive = (snapshot: BrowserMediaSnapshot): boolean =>
@@ -120,10 +135,56 @@ export function createVideoPlaneSession(options: {
     };
   };
 
+  const stopStatsTimer = (): void => {
+    if (statsTimer === null) return;
+    window.clearInterval(statsTimer);
+    statsTimer = null;
+  };
+
+  const sampleStats = (): void => {
+    if (closed) return;
+    const snapshot = entry.getSnapshot();
+    if (!isLive(snapshot) || snapshot.negotiationId === null) return;
+    const negotiationId = snapshot.negotiationId;
+    void entry
+      .getStats()
+      .then((report) => {
+        if (closed) return;
+        const sample = report === null ? null : mapWebrtcVideoStats(report);
+        onVideoStats(sample);
+        if (sample === null) return;
+        port.sendVideoStats({
+          negotiationId,
+          ...sample,
+          // No honest client-side proxy for capture-to-paint latency exists
+          // yet (see the module doc comment) - reporting null rather than the
+          // decode-side rVFC timing, which would misrepresent it.
+          glassToGlassMs: null,
+        });
+      })
+      .catch(() => {
+        // The interval can overlap teardown by design (it stops on the next
+        // `publish()`, not synchronously with the peer closing), and
+        // `getStats()` on a closed connection rejects - a skipped sample,
+        // not a failure worth surfacing.
+      });
+  };
+
+  const syncStatsTimer = (snapshot: BrowserMediaSnapshot): void => {
+    if (!isLive(snapshot)) {
+      stopStatsTimer();
+      return;
+    }
+    if (statsTimer !== null) return;
+    sampleStats();
+    statsTimer = window.setInterval(sampleStats, STATS_SAMPLE_INTERVAL_MS);
+  };
+
   const publish = (): void => {
     if (closed) return;
     const snapshot = entry.getSnapshot();
     syncDeadline(snapshot);
+    syncStatsTimer(snapshot);
     if (snapshot.phase === "streaming") {
       onChange({
         mode: isLive(snapshot) ? "video" : "negotiating",
@@ -180,6 +241,7 @@ export function createVideoPlaneSession(options: {
       if (closed) return;
       closed = true;
       clearDeadline();
+      stopStatsTimer();
       unsubscribe();
       media.release();
     },

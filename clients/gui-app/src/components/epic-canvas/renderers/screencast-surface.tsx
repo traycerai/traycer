@@ -1,5 +1,6 @@
 import type { ScreencastSession } from "@/lib/browser-view/sessions/use-screencast-session";
 import { cn } from "@/lib/utils";
+import { BrowserVideoStatsOverlay } from "./browser-video-stats-overlay";
 
 /**
  * The pixels of a screencast tile, for both viewers (pointer and touch).
@@ -59,6 +60,9 @@ export function ScreencastSurface(props: {
           )}
         />
       )}
+      {import.meta.env.DEV ? (
+        <BrowserVideoStatsOverlay session={session} />
+      ) : null}
     </>
   );
 }

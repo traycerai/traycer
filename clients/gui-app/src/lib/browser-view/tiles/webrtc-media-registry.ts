@@ -59,6 +59,20 @@ export interface WebrtcSignalPort {
     readonly state: "live" | "failed";
     readonly reason: string | null;
   }): void;
+  sendVideoStats(
+    input: { readonly negotiationId: number } & WebrtcVideoStatsFields,
+  ): void;
+}
+
+/** The `videoStats` wire frame's payload, minus the envelope. */
+export interface WebrtcVideoStatsFields {
+  readonly framesDecoded: number;
+  readonly framesDropped: number;
+  readonly packetsLost: number;
+  readonly jitterMs: number;
+  readonly roundTripTimeMs: number;
+  readonly glassToGlassMs: number | null;
+  readonly iceCandidatePairType: string;
 }
 
 export interface MediaPeerHandlers {
@@ -79,6 +93,12 @@ export interface MediaPeer {
   /** setRemoteDescription(offer) -> createAnswer -> setLocalDescription. */
   answerOffer(sdp: string): Promise<string>;
   addRemoteCandidate(candidate: WebrtcIceCandidate): Promise<void>;
+  /**
+   * Passthrough to `RTCPeerConnection.getStats()` (ticket 11) - the registry
+   * stays DOM-free otherwise, so the caller (the video-plane session) maps
+   * the raw report into the wire's `videoStats` shape.
+   */
+  getStats(): Promise<RTCStatsReport>;
   /** Stops the received tracks and closes the connection. Idempotent. */
   close(): void;
 }
@@ -116,6 +136,11 @@ export interface BrowserMediaEntry {
   reportFirstDecodedFrame(): void;
   /** A sink-level failure the registry cannot observe (deadlines, decode). */
   reportFailure(reason: string): void;
+  /**
+   * The current round's raw stats report, or `null` when no round is in
+   * flight (ticket 11's periodic sampler skips a tick rather than throwing).
+   */
+  getStats(): Promise<RTCStatsReport | null>;
 }
 
 /**
@@ -320,6 +345,8 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     reportFailure: (reason) => {
       fail(reason);
     },
+
+    getStats: () => round?.peer.getStats() ?? Promise.resolve(null),
   };
 
   return {
@@ -383,6 +410,7 @@ export function createBrowserMediaPeer(handlers: MediaPeerHandlers): MediaPeer {
       return connection.localDescription?.sdp ?? answer.sdp ?? "";
     },
     addRemoteCandidate: (candidate) => connection.addIceCandidate(candidate),
+    getStats: () => connection.getStats(),
     close: () => {
       for (const track of stream?.getTracks() ?? []) track.stop();
       stream = null;

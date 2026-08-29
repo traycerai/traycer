@@ -9,6 +9,9 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BrowserPeekTile,
+  browserPeekFrameKey,
+  clearLastBrowserPeekFrame,
+  getLastBrowserPeekFrame,
   type BrowserPeekNode,
 } from "@/components/epic-canvas/renderers/browser-peek-tile";
 import {
@@ -40,6 +43,7 @@ vi.mock("@/lib/browser-view/tiles/webrtc-media-registry", async (original) => {
     return {
       answerOffer: (sdp) => Promise.resolve(`answer-for:${sdp}`),
       addRemoteCandidate: () => Promise.resolve(),
+      getStats: () => Promise.resolve(new Map()),
       close: () => {
         peer.closed = true;
       },
@@ -207,6 +211,65 @@ function screencastImage(): HTMLImageElement | null {
   return image instanceof HTMLImageElement ? image : null;
 }
 
+/**
+ * jsdom's `<video>` always reports 0x0 - a decoded frame here is simulated,
+ * not real, so `snapshotVideoFrameIntoPeekCache`'s dimension guard passes.
+ */
+function markDecodedSize(
+  video: HTMLVideoElement,
+  width: number,
+  height: number,
+): void {
+  Object.defineProperties(video, {
+    videoWidth: { configurable: true, value: width },
+    videoHeight: { configurable: true, value: height },
+  });
+}
+
+/**
+ * jsdom has no canvas 2D backend - stubbed the same way
+ * `browser-peek-tile-video-snapshot.test.ts` stubs it, so this suite can
+ * assert the hook actually reaches `snapshotVideoFrameIntoPeekCache` at the
+ * right teardown moment, not just that the pure function's guards hold in
+ * isolation.
+ */
+function stubCanvasPrototype(dataUrl: string): void {
+  Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+    configurable: true,
+    value: () => ({ drawImage: () => {} }),
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, "toDataURL", {
+    configurable: true,
+    value: () => dataUrl,
+  });
+}
+
+const originalGetContext = Object.getOwnPropertyDescriptor(
+  HTMLCanvasElement.prototype,
+  "getContext",
+);
+const originalToDataURL = Object.getOwnPropertyDescriptor(
+  HTMLCanvasElement.prototype,
+  "toDataURL",
+);
+
+function restoreCanvasPrototype(): void {
+  if (originalGetContext !== undefined) {
+    Object.defineProperty(
+      HTMLCanvasElement.prototype,
+      "getContext",
+      originalGetContext,
+    );
+  }
+  if (originalToDataURL !== undefined) {
+    Object.defineProperty(
+      HTMLCanvasElement.prototype,
+      "toDataURL",
+      originalToDataURL,
+    );
+  }
+}
+
 describe("BrowserPeekTile video plane", () => {
   beforeEach(() => {
     peers.length = 0;
@@ -218,6 +281,8 @@ describe("BrowserPeekTile video plane", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    clearLastBrowserPeekFrame(browserPeekFrameKey(peekNode));
+    restoreCanvasPrototype();
   });
 
   it("answers the offer, keeps painting JPEG, and swaps on the first decoded frame", async () => {
@@ -281,6 +346,35 @@ describe("BrowserPeekTile video plane", () => {
     const after = screencastImage();
     expect(after?.hidden).toBe(false);
     expect(after?.src).not.toBe(before);
+  });
+
+  it("snapshots the last decoded video frame into the dormant cache on plane fallback (ticket 13)", async () => {
+    stubCanvasPrototype("data:image/jpeg;base64,DORMANT_SNAPSHOT");
+    renderTile();
+    await offer(1);
+    const video = attachTrack(0);
+    markDecodedSize(video, 640, 480);
+    decodeFrame(video);
+    expect(screen.getByText("Live")).toBeTruthy();
+
+    const key = browserPeekFrameKey(peekNode);
+    // The JPEG cache write already ran once at mount (`renderTile`'s
+    // `jpegFrame(7, ...)`); the video snapshot below must overwrite it.
+    const beforeFallback = getLastBrowserPeekFrame(key)?.src;
+
+    act(() => {
+      peers[0]?.handlers.onFailure("track-ended");
+    });
+
+    // B1 regression: the video plane's own state (and `videoActive`) has
+    // already flipped to JPEG by the time this teardown runs - the same
+    // commit that unmounts `<video>`. Only a snapshot taken from the value
+    // as of the render being torn down, not the new one, lands here.
+    expect(screen.queryByTestId("browser-screencast-video")).toBeNull();
+    expect(getLastBrowserPeekFrame(key)?.src).toBe(
+      "data:image/jpeg;base64,DORMANT_SNAPSHOT",
+    );
+    expect(getLastBrowserPeekFrame(key)?.src).not.toBe(beforeFallback);
   });
 
   it("keeps a video tile live past the JPEG stale window", async () => {

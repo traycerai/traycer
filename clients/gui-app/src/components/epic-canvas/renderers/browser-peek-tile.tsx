@@ -9,6 +9,7 @@ import {
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
+import { AgentCursorOverlay } from "@/components/epic-canvas/renderers/agent-cursor-overlay";
 import { ScreencastSurface } from "@/components/epic-canvas/renderers/screencast-surface";
 import { useScreencastTileChrome } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -110,6 +111,52 @@ export function useRetainLastBrowserPeekFrame(
   }, [key, image]);
 }
 
+const VIDEO_SNAPSHOT_JPEG_QUALITY = 0.7;
+
+/**
+ * Draws a `<video>` element's currently decoded frame into the SAME dormant
+ * frame cache the JPEG pump writes (`lastFrameCache`, `useRetainLastBrowserPeekFrame`
+ * above), under the SAME key - so the dormant placeholder in
+ * `browser-session-tile.tsx` still has something to show when a tab's last
+ * live pixels arrived over WebRTC rather than JPEG.
+ *
+ * Called from the video plane's teardown (`use-screencast-session.ts`'s
+ * `captureDormantSnapshot` option), while the element still has its last
+ * frame and before `srcObject` is cleared.
+ *
+ * Both guards live here, not at the call site, so a test can pin them
+ * directly against this pure function:
+ * - `wasActivePlane` - only write when the video plane was actually the one
+ *   painting (not merely attached-but-negotiating); otherwise this would
+ *   overwrite a fresher JPEG frame with stale/blank video pixels on every
+ *   ordinary fallback-to-JPEG teardown.
+ * - `videoWidth`/`videoHeight` - a video element with no decoded frame yet
+ *   reports 0x0; drawing that would cache a blank image.
+ *
+ * Same-origin media (the host's own peer connection) never taints the
+ * canvas, so `toDataURL` needs no `crossOrigin` handling here the way a
+ * cross-origin `<video>` would.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
+export function snapshotVideoFrameIntoPeekCache(
+  key: string,
+  video: HTMLVideoElement,
+  wasActivePlane: boolean,
+): void {
+  if (!wasActivePlane) return;
+  if (video.videoWidth <= 0 || video.videoHeight <= 0) return;
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const context = canvas.getContext("2d");
+  if (context === null) return;
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  lastFrameCache.set(key, {
+    src: canvas.toDataURL("image/jpeg", VIDEO_SNAPSHOT_JPEG_QUALITY),
+    sequence: -1, // never read back; the dormant placeholder only reads `.src`.
+  });
+}
+
 interface BrowserPeekTileProps {
   readonly epicId: string;
   readonly node: BrowserPeekNode;
@@ -134,6 +181,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     tabId: node.tabId,
     visible,
   });
+  const frameCacheKey = browserPeekFrameKey(node);
   const session = useScreencastSession({
     client,
     epicId,
@@ -141,10 +189,12 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     sessionId: node.sessionId,
     tabId: node.tabId,
     visible,
+    captureDormantSnapshot: (video, wasActivePlane) => {
+      snapshotVideoFrameIntoPeekCache(frameCacheKey, video, wasActivePlane);
+    },
   });
   const { image, frameSize, navState, armedEpoch, dialog } = session;
   const { tileRef, viewportRef, overlayButtonRef, imeInputRef } = session.refs;
-  const frameCacheKey = browserPeekFrameKey(node);
   useRetainLastBrowserPeekFrame(frameCacheKey, image);
   const inputOwnerId =
     armedEpoch === null
@@ -248,6 +298,10 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           <ScreencastSurface
             session={session}
             emptyHint="Click the screencast to control this browser tab."
+          />
+          <AgentCursorOverlay
+            cursor={session.agentCursor}
+            frameSize={frameSize}
           />
           {status.overlay === null ? null : (
             <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded border border-border bg-popover/95 px-3 py-2 text-ui-sm text-popover-foreground shadow-sm">
