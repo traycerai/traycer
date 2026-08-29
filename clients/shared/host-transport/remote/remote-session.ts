@@ -3140,10 +3140,27 @@ export class RemoteSession<
       clearTimeout(this.backoffTimer);
       this.backoffTimer = null;
     }
-    this.reportEvidenceOutcome(this.credentialAttemptId(), "indeterminate");
+    // SUBSCRIBE BEFORE THE EXTERNAL CALLBACK, and re-check after it. The twin
+    // of the local transport's status-emit hazard: `reportEvidenceOutcome`
+    // hands control to the selection authority synchronously, and that is a
+    // component whose whole job is to react to transport evidence - a verdict
+    // that retires this host can close this very session before the call
+    // returns. Assigning the handle first means a re-entrant `close()` finds
+    // something to release instead of nulling nothing and leaving the tracker
+    // holding a dead session for the life of the page.
     this.clockParkUnsubscribe = clock.subscribeToRecovery(() => {
       this.resumeFromClockPark();
     });
+    this.reportEvidenceOutcome(this.credentialAttemptId(), "indeterminate");
+    // Through `isClosed()`, not a bare `this.phase === "closed"`. The early
+    // return at the top of this method narrows `phase` to exclude `"closed"`,
+    // and the checker does not know the call above can re-enter and change it -
+    // so the direct comparison type-errors as impossible. That narrowing IS the
+    // hazard this check exists for; reading the phase through the accessor is
+    // what keeps the check honest.
+    if (this.isClosed()) {
+      this.clearClockPark();
+    }
     return true;
   }
 

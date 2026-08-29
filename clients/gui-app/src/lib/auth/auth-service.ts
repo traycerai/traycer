@@ -2172,12 +2172,18 @@ export class AuthService {
   // the refresh scheduler. The single point every same-user adoption goes through
   // (locked-rotate outcomes and the §4 reconcile worker).
   private rotateLiveBearer(userId: string, bearerToken: string): void {
-    // The second server-time input, and the only one that needs no response
-    // headers: this token was minted seconds ago by authn's correct clock, so
-    // its `iat` IS server time. Every same-user adoption funnels through here,
-    // which is what makes "freshly issued" true of the argument - a token
-    // rehydrated from the credentials file never reaches this method.
-    recordRotatedBearer(bearerToken);
+    // NO server-time sample here, deliberately. This is the generic
+    // lease-adoption helper, and MOST of what it adopts is not freshly minted:
+    // `applyReconciledOutcome` passes a token read straight off disk, and the
+    // `superseded`/`commit-failed` rotate arms adopt a pair some other window
+    // already committed. A backgrounded window that reconciles after five
+    // minutes adopts a perfectly valid token whose `iat` is legitimately that
+    // old - and sampling it would report the token's AGE as a server-time
+    // offset, flipping the app-wide verdict to `skewed` on a correct clock.
+    // That is a false banner plus every transport made eligible to park on the
+    // next unrelated auth failure. See `applyLiveRotateOutcome` for the one
+    // arm that is genuinely mint-proven.
+    //
     // COMMIT BEFORE EMIT (see `applySignedIn`): `rotateCurrentBearer` notifies
     // its rotation listeners synchronously. The profile is unchanged - a
     // rotation is the same account with a new token - and passing the live one
@@ -2230,7 +2236,24 @@ export class AuthService {
       outcome: rotated.outcome,
     });
     switch (rotated.outcome) {
-      case "applied":
+      case "applied": {
+        // THE server-time sample site, and the only one: `applied` means THIS
+        // process's locked rotate just spent the refresh against authn and
+        // committed the pair it minted, so the token is seconds old and its
+        // `iat` IS authn's clock. The neighbouring arms are deliberately not
+        // sampled - `superseded` adopts a pair another window committed and
+        // `commit-failed` can carry a pending pair of unknown age, and a token
+        // whose age we cannot bound reads as an offset we did not measure.
+        const applied = this.adoptRotatedPairIntoLiveSession(
+          rotated.pair,
+          userId,
+          generation,
+        );
+        if (applied.status === "rotated") {
+          recordRotatedBearer(applied.token);
+        }
+        return applied;
+      }
       case "superseded":
       case "commit-failed":
         // `superseded` is same-user by the store's user-mismatch-before-token

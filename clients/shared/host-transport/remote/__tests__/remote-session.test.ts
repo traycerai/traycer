@@ -7317,3 +7317,67 @@ describe("RemoteSession clock-skew park", () => {
     TEST_BUDGET_MS,
   );
 });
+
+/**
+ * The remote twin of the local park's status-emit hazard. Here the external
+ * callback inside the park is `reportEvidenceOutcome`, which hands control to
+ * the selection authority - a component whose entire job is to react to
+ * transport evidence, and which can retire this host (closing this session)
+ * before the call returns.
+ */
+describe("RemoteSession clock-skew park re-entrancy", () => {
+  it(
+    "leaves NO subscription behind when the evidence sink closes the session re-entrantly",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const recoveryListeners = new Set<() => void>();
+      const clock: ServerClockSkewSignal = {
+        currentState: (): ServerClockState => ({
+          verdict: "skewed",
+          offsetMs: -7 * 3_600_000,
+        }),
+        isSkewed: () => true,
+        subscribe: () => () => undefined,
+        subscribeToRecovery: (listener) => {
+          recoveryListeners.add(listener);
+          return () => {
+            recoveryListeners.delete(listener);
+          };
+        },
+      };
+      let session: RemoteSession<
+        VersionedRpcRegistry,
+        VersionedStreamRpcRegistry
+      > | null = null;
+      const closingEvidence: TransportEvidenceReporter = {
+        ...NO_TRANSPORT_EVIDENCE,
+        reportDialIndeterminate: () => {
+          session?.close();
+        },
+      };
+      session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+        clock,
+        evidence: closingEvidence,
+      });
+      const live = session;
+      try {
+        live.start();
+        // The park reports `indeterminate`, the sink closes the session inside
+        // that call, and the park must still own a handle to release.
+        await vi.waitFor(() => expect(live.isClosed()).toBe(true), WAIT);
+        expect(recoveryListeners.size).toBe(0);
+      } finally {
+        live.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});

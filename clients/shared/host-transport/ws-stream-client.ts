@@ -2356,13 +2356,26 @@ class StreamSession<
     this.teardownTimers();
     this.teardownSocket(1000, "clock-skew-park");
     this.phase = "idle";
+    // SUBSCRIBE BEFORE THE STATUS EMIT, and re-check disposal after it.
+    // `transitionTo` invokes the consumer's handler SYNCHRONOUSLY, and a
+    // consumer closing the session from inside it (an unmounting owner does
+    // exactly that) runs `disposeSession` → `clearClockPark` against a handle
+    // this method has not assigned yet. Control then returns here and installs
+    // a recovery listener on an already-disposed session, which
+    // `resumeFromClockPark` refuses to act on and therefore never releases -
+    // the app-wide tracker would retain the dead session for the life of the
+    // page. Assigning first means the re-entrant `clearClockPark` finds a real
+    // handle; the post-emit check covers the ordering either way.
+    this.clockParkUnsubscribe = clock.subscribeToRecovery(() => {
+      this.resumeFromClockPark();
+    });
     // "reconnecting", not "closed": the session IS coming back, and consumers
     // already render this state as an interruption rather than a failure. The
     // app-level clock banner is what names the cause.
     this.transitionTo("reconnecting", null);
-    this.clockParkUnsubscribe = clock.subscribeToRecovery(() => {
-      this.resumeFromClockPark();
-    });
+    if (this.disposed) {
+      this.clearClockPark();
+    }
     return true;
   }
 
@@ -2375,7 +2388,14 @@ class StreamSession<
    * a long backoff - or, worse, into the terminal bound.
    */
   private resumeFromClockPark(): void {
-    if (this.clockParkUnsubscribe === null || this.disposed) {
+    if (this.clockParkUnsubscribe === null) {
+      return;
+    }
+    if (this.disposed) {
+      // RELEASE, never just bail: a disposed session that returns here still
+      // holding its handle stays in the tracker's listener set forever. Belt
+      // and braces alongside `parkIfClockSkewed`'s post-emit check.
+      this.clearClockPark();
       return;
     }
     console.info(

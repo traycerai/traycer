@@ -68,10 +68,19 @@ export function recordAuthServerTime(
 }
 
 /**
- * Feeds the `iat` of a token authn minted moments ago. Call ONLY from the
- * rotation-adoption path: a token read back from the credentials file is not a
- * server-time sample, and treating one as fresh would report an offset the size
- * of however long the app was closed.
+ * Feeds the `iat` of a token THIS process just minted against authn.
+ *
+ * The bar is mint-proven, not merely adopted, and it is narrow on purpose. An
+ * `iat` is only a server-time reading while the token's age is bounded by the
+ * round trip that produced it; for anything else it is the token's AGE, and
+ * feeding that in reports a skew that does not exist. Two shapes of caller must
+ * therefore stay out: a token read back from the credentials file (its `iat` is
+ * however long ago the last session started), and a pair some other window
+ * committed (valid, same user, arbitrary age). Both are ordinary events on a
+ * perfectly correct clock — a window backgrounded past the 5-minute threshold
+ * hits the first every time it reconciles.
+ *
+ * Today's single caller is the `applied` arm of `AuthService`'s locked rotate.
  */
 export function recordRotatedBearer(token: string): void {
   appServerClock.recordFreshlyIssuedToken(token);

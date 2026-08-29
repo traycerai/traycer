@@ -5497,3 +5497,112 @@ describe("WsStreamClient clock-skew park", () => {
     session.close();
   });
 });
+
+/**
+ * Re-entrancy at the park's own status emit. Split into its own describe so
+ * the helpers above stay about the park's ordinary behaviour.
+ */
+describe("WsStreamClient clock-skew park re-entrancy", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const UNAUTHORIZED_FATAL = {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "bearer expired",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  } as const;
+
+  function wait(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  it("leaves NO subscription behind when a consumer closes the session from the park's status callback", async () => {
+    // `transitionTo` runs the consumer's handler synchronously, and an owner
+    // unmounting on a status change is ordinary React. If the park installs
+    // its recovery listener AFTER that emit, the re-entrant `close()` runs
+    // `clearClockPark` against a handle that does not exist yet - and the
+    // listener installed a moment later belongs to a disposed session that
+    // will never release it. The app-wide tracker would then hold that dead
+    // session for the life of the page.
+    const { factory, sockets } = makeFactory();
+    const ctx = makeRequestContext("plain-bearer");
+    const recoveryListeners = new Set<() => void>();
+    const clock: ServerClockSkewSignal = {
+      currentState: (): ServerClockState => ({
+        verdict: "skewed",
+        offsetMs: -7 * 3_600_000,
+      }),
+      isSkewed: () => true,
+      subscribe: () => () => undefined,
+      subscribeToRecovery: (listener) => {
+        recoveryListeners.add(listener);
+        return () => {
+          recoveryListeners.delete(listener);
+        };
+      },
+    };
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => ctx.credentials,
+      auth: {
+        revalidateForReconnect: async (): Promise<RevalidateOutcome> =>
+          "rotated",
+      },
+      clock,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 50,
+    });
+
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    // Two "reconnecting" emits follow the fatal: `resetForReconnect`'s, then
+    // the park's own. Closing on the FIRST would dispose before the park ever
+    // ran and prove nothing, so the close is aimed at the second.
+    let reconnectingAfterFatal = 0;
+    let armed = false;
+    session.onStatusChange((status) => {
+      if (!armed || status !== "reconnecting") {
+        return;
+      }
+      reconnectingAfterFatal += 1;
+      if (reconnectingAfterFatal === 2) {
+        session.close();
+      }
+    });
+
+    await wait(30);
+    expect(sockets).toHaveLength(1);
+    sockets[0].socket.fireOpen();
+    armed = true;
+    sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
+    await wait(120);
+
+    // The park really did reach its emit (otherwise this asserts nothing).
+    expect(reconnectingAfterFatal).toBe(2);
+    expect(recoveryListeners.size).toBe(0);
+
+    // And the dead session cannot be revived by a later clock fix.
+    for (const listener of [...recoveryListeners]) {
+      listener();
+    }
+    await wait(40);
+    expect(sockets).toHaveLength(1);
+  });
+});
