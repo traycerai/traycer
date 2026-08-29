@@ -700,8 +700,13 @@ vi.mock("@/stores/epics/canvas/store", () => ({
   useOpenTileContentIds: () => testState.openTileContentIds,
 }));
 
-// Stable across selector calls, so a test can assert which expansion action a
-// row asked for. A fresh `vi.fn()` per call would record nothing observable.
+// Recording spies a test can assert against. The store itself still hands the
+// selector a FRESH closure per call, exactly as it did before these existed:
+// those identities feed `useCallback` dependency arrays, so making them stable
+// would remove re-renders this file's other suites settle on, and two of them
+// fail on the render they no longer get. The wrappers keep the old instability
+// and forward to these, so what a row asked for is observable without changing
+// how often anything renders.
 const expansionActions = vi.hoisted(() => ({
   collapse: vi.fn(),
   collapseAll: vi.fn(),
@@ -711,7 +716,13 @@ const expansionActions = vi.hoisted(() => ({
 vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
   useEpicSidebarEffectiveExpanded: () => testState.expandedIds,
   useEpicSidebarExpansionStore: (selector: (state: unknown) => unknown) =>
-    selector(expansionActions),
+    selector({
+      collapse: (tabId: string, panelId: string, id: string) =>
+        expansionActions.collapse(tabId, panelId, id),
+      collapseAll: () => expansionActions.collapseAll(),
+      expand: (tabId: string, panelId: string, id: string) =>
+        expansionActions.expand(tabId, panelId, id),
+    }),
 }));
 
 vi.mock("@/stores/epics/left-panel-store", () => ({
