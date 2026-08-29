@@ -152,6 +152,7 @@ function steeredAssistant(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -834,6 +835,7 @@ describe("transcriptListRows", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      envCredentialVar: null,
       imageResolutions: [],
     };
     const rows = transcriptListRows({
