@@ -103,7 +103,8 @@ export type WorkerToMainEvent =
        * carries is the STORE's published slice, which this module has no
        * business knowing and which would drift the moment the store's owner
        * added a field. The composition root supplies the narrowing, exactly as
-       * it does for a call response - see `subscribeRuntimeProjection`.
+       * it does for a call response, and the spawner owns the one reducer
+       * that applies them in order (`createRuntimeProjectionOrdering`).
        *
        * `revision` is the sink's own (`ProjectionSink.revision()`), so the two
        * sides share one ordering. It is strictly increasing per worker, and

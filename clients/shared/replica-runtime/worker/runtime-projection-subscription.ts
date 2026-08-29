@@ -18,7 +18,6 @@
  * response parser, and for the same reason: a boundary that hard-codes the
  * store's shape drifts the first time the store's owner adds a field.
  */
-import type { MainBridgeEndpoint } from "./bridge-endpoint";
 
 export interface RuntimeProjectionHandlers<TProjection> {
   /**
@@ -79,23 +78,4 @@ export function createRuntimeProjectionOrdering<TProjection>(
       handlers.apply(accepted, revision);
     },
   };
-}
-
-/**
- * Subscribes an ordering directly to a bridge. Returns the unsubscribe.
- *
- * For a caller that owns its bridge outright. The production composition root
- * does NOT use this - it hands `ordering.deliver` to the spawner, which owns
- * the one subscription - so reaching for it beside a spawned worker is the
- * two-watermark mistake described above.
- */
-export function subscribeRuntimeProjection<TProjection>(
-  bridge: MainBridgeEndpoint,
-  handlers: RuntimeProjectionHandlers<TProjection>,
-): () => void {
-  const ordering = createRuntimeProjectionOrdering(handlers);
-  return bridge.onEvent((event) => {
-    if (event.kind !== "projection") return;
-    ordering.deliver(event.revision, event.value);
-  });
 }

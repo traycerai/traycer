@@ -105,13 +105,31 @@ export class BridgeResponseMismatchError extends Error {
   }
 }
 
-export interface MainBridgeEndpoint {
-  emit(event: MainToWorkerEvent, transfer: readonly ArrayBuffer[]): void;
+/**
+ * The ask half of the bridge, and the ONLY half a consumer of a spawned worker
+ * is handed.
+ *
+ * Narrower than {@link MainBridgeEndpoint} on purpose. The event stream has
+ * exactly one legitimate subscriber per worker - the spawner, which owns the
+ * projection watermark - and an interface carrying `onEvent` is an open
+ * invitation to a second one. Two watermarks over one whole-value stream drop
+ * each other's deliveries as stale, which presents as a projection that
+ * updates half the time. Making that unreachable beats documenting it.
+ *
+ * `call` only, because `call` is the only member any consumer uses: every
+ * main-to-worker EVENT (bootstrap, bearer, shutdown) is the spawner's own.
+ * Add a member here when a caller needs it, not in advance.
+ */
+export interface RuntimeWorkerPort {
   call<K extends RuntimeWorkerCallKind>(
     kind: K,
     request: RuntimeWorkerCallRequest<K>,
     transfer: readonly ArrayBuffer[],
   ): Promise<RuntimeWorkerCallResponse<K>>;
+}
+
+export interface MainBridgeEndpoint extends RuntimeWorkerPort {
+  emit(event: MainToWorkerEvent, transfer: readonly ArrayBuffer[]): void;
   onEvent(listener: (event: WorkerToMainEvent) => void): () => void;
   /** Idempotent. Rejects every in-flight call and stops listening. */
   dispose(): void;

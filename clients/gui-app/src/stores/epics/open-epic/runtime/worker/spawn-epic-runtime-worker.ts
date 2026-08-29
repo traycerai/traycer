@@ -21,8 +21,12 @@
  */
 import {
   createMainBridgeEndpoint,
-  type MainBridgeEndpoint,
+  type RuntimeWorkerPort,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
+import {
+  createRuntimeProjectionOrdering,
+  type RuntimeProjectionHandlers,
+} from "@traycer-clients/shared/replica-runtime/worker/runtime-projection-subscription";
 import {
   createMessageTargetTransport,
   type BridgeMessageTargetLike,
@@ -55,28 +59,35 @@ export interface RuntimeWorkerLogRelay {
   fatal(message: string, stack: string | null): void;
 }
 
-export interface SpawnEpicRuntimeWorkerOptions {
+export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
   readonly createWorker: () => RuntimeWorkerLike;
   readonly hostClient: BearerPumpHostClient;
   readonly relay: RuntimeWorkerLogRelay;
   /**
-   * Where published projection slices go.
+   * What to do with published projection slices.
    *
-   * The spawner owns the ONE subscription to this stream and forwards it here
-   * verbatim, un-narrowed. It does not narrow because the slice's shape is the
-   * store's, and it does not hold a watermark because the ordering belongs to
-   * exactly one place (`createRuntimeProjectionOrdering`) - two watermarks over
-   * one stream drop each other's deliveries as stale, which presents as a
-   * projection that updates half the time.
+   * Handlers rather than a raw callback, because the spawner constructs the
+   * ONE reducer that orders them. Handing a caller `(revision, value)` would
+   * let it build a second reducer with a second watermark over the same
+   * stream, and two watermarks drop each other's deliveries as stale - a
+   * projection that updates half the time. The spawner still does not NARROW:
+   * `accept` is the caller's, because the slice's shape is the store's.
    */
-  readonly onProjection: (revision: number, value: unknown) => void;
+  readonly projection: RuntimeProjectionHandlers<TProjection>;
   /** Identifies this renderer window in the worker's log lines. */
   readonly windowLabel: string;
 }
 
 export interface EpicRuntimeWorkerHandle {
-  /** The typed bridge. The composition root that moves in speaks through it. */
-  readonly bridge: MainBridgeEndpoint;
+  /**
+   * The ask half of the bridge - `call` and nothing else.
+   *
+   * Deliberately NOT the endpoint. Handing out `onEvent` would let a caller
+   * subscribe a second projection reducer beside the one this spawner owns,
+   * which is the two-watermark defect; a narrower type makes that unreachable
+   * instead of merely discouraged.
+   */
+  readonly port: RuntimeWorkerPort;
   /**
    * Resolves when the worker has acknowledged the bootstrap, and rejects if it
    * reported a protocol mismatch instead.
@@ -90,8 +101,8 @@ export interface EpicRuntimeWorkerHandle {
   dispose(): void;
 }
 
-export function spawnEpicRuntimeWorker(
-  options: SpawnEpicRuntimeWorkerOptions,
+export function spawnEpicRuntimeWorker<TProjection>(
+  options: SpawnEpicRuntimeWorkerOptions<TProjection>,
 ): EpicRuntimeWorkerHandle {
   const worker = options.createWorker();
   const bridge = createMainBridgeEndpoint(createMessageTargetTransport(worker));
@@ -108,6 +119,10 @@ export function spawnEpicRuntimeWorker(
   // leaving the rejection visible to anyone who does await.
   void ready.catch(() => undefined);
 
+  // The one reducer for this worker's projection stream, constructed here so
+  // there can be no second one.
+  const projections = createRuntimeProjectionOrdering(options.projection);
+
   const unsubscribeEvents = bridge.onEvent((event: WorkerToMainEvent) => {
     switch (event.kind) {
       case "ready":
@@ -117,7 +132,7 @@ export function spawnEpicRuntimeWorker(
         options.relay.log(event.entry);
         return;
       case "projection":
-        options.onProjection(event.revision, event.value);
+        projections.deliver(event.revision, event.value);
         return;
       case "fatal":
         options.relay.fatal(event.message, event.stack);
@@ -159,7 +174,7 @@ export function spawnEpicRuntimeWorker(
 
   let disposed = false;
   return {
-    bridge,
+    port: bridge,
     ready,
     dispose(): void {
       if (disposed) return;

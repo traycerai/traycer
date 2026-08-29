@@ -19,10 +19,7 @@
  * only by an opaque `docKey`. Splitting it that way is what makes the
  * lifecycle testable without standing up a document tier.
  */
-import {
-  BridgeDisposedError,
-  type MainBridgeEndpoint,
-} from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
+import type { RuntimeWorkerPort } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import {
   NO_TRANSFER,
   takeBytesForTransfer,
@@ -114,7 +111,7 @@ interface BodyEntry {
 }
 
 export function createArtifactBodyLeaseBridge(options: {
-  readonly bridge: MainBridgeEndpoint;
+  readonly bridge: RuntimeWorkerPort;
   readonly docs: MainThreadBodyDocs;
   readonly budget: HotBodyBudget;
 }): ArtifactBodyLeaseBridge {
@@ -147,13 +144,17 @@ export function createArtifactBodyLeaseBridge(options: {
           options.budget.settleCold(docKey, answer.settledBytes);
           options.docs.drop(docKey);
         },
-        (cause: unknown) => {
-          // The worker went away mid-demote. The doc stays live and the entry
-          // stays pending; `resendUnacknowledgedDemotes` re-posts it to the
-          // replacement. Any other rejection gets the same treatment for the
-          // same reason: the one thing that must never happen is dropping the
-          // doc without a settled ack.
-          void (cause instanceof BridgeDisposedError);
+        () => {
+          // The worker went away mid-demote (the call rejects rather than
+          // hanging), or the post failed. Either way the doc stays live and the
+          // entry stays pending, so `resendUnacknowledgedDemotes` re-posts it
+          // to the replacement. Every rejection is treated alike, because the
+          // one thing that must never happen is dropping the doc without a
+          // settled ack - and a rejection is never a settled ack.
+          //
+          // A rejection handler rather than a trailing `.catch`: a `.catch`
+          // would also swallow a throw from the success arm above, where
+          // `docs.drop` failing silently is a real doc leak.
         },
       );
   }
