@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
@@ -87,6 +88,37 @@ describe("WorktreeFolderList path on touch", () => {
     expect(sheet.textContent).toContain(RUNNING_DIR);
 
     fireEvent.click(line);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("does not select the row underneath when the sheet is dismissed", () => {
+    // A device run saw a terminal launch when the sheet's Close was tapped,
+    // and could not tell a real pass-through from an artefact of synthetic
+    // input. This is the half that is decidable here: dismissing the sheet
+    // must not reach the row that raised it. A row-level recognizer, or a
+    // sheet rendered inside the row's own click path, would fail this.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const onSelect = vi.fn();
+    renderList(onSelect);
+
+    const line = screen.getByText(RUNNING_DIR);
+    fireEvent.pointerDown(line, {
+      clientX: 10,
+      clientY: 10,
+      pointerId: 1,
+      pointerType: "touch",
+      isPrimary: true,
+    });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    const close = within(screen.getByRole("dialog")).getByRole("button", {
+      name: /close/i,
+    });
+    fireEvent.click(close);
+
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(onSelect).not.toHaveBeenCalled();
   });
 });
