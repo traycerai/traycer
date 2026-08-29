@@ -539,6 +539,18 @@ function servedAssistantTurnKeys(
   return keys;
 }
 
+function completeServedRowIds(
+  rowIds: readonly string[],
+  incompleteRowIds: readonly string[] | undefined,
+): readonly string[] {
+  // Field absence is an already-deployed 1.8 host: retain its pre-change
+  // behavior rather than keeping a transient duplicate forever.
+  if (incompleteRowIds === undefined) return rowIds;
+  if (incompleteRowIds.length === 0) return rowIds;
+  const incomplete = new Set(incompleteRowIds);
+  return rowIds.filter((rowId) => !incomplete.has(rowId));
+}
+
 function declaredCompleteTailRowIds(
   tail: ChatTranscriptWindow,
 ): readonly string[] {
@@ -546,7 +558,7 @@ function declaredCompleteTailRowIds(
   // retained skeleton. During a rebuild that skeleton may be stale, so those
   // fallback ids cannot prove which row the fresh records completed.
   if (tail.rowIds === undefined) return [];
-  return tail.completeRowIds ?? [];
+  return completeServedRowIds(tail.rowIds, tail.incompleteRowIds);
 }
 
 /**
@@ -2178,7 +2190,10 @@ export function applyRangeResponse(
       hydratedBytes: totalBytes(spans),
       clock,
     },
-    servedAssistantTurnKeys(response.completeRowIds ?? [], response.messages),
+    servedAssistantTurnKeys(
+      completeServedRowIds(response.rowIds, response.incompleteRowIds),
+      response.messages,
+    ),
   );
 }
 

@@ -130,7 +130,7 @@ function rangeResponse(input: {
   readonly epoch: number;
   readonly fromOrdinal: number;
   readonly rowIds: readonly string[];
-  readonly completeRowIds?: readonly string[];
+  readonly incompleteRowIds?: readonly string[];
   readonly messages: readonly Message[];
   readonly events?: readonly ChatEvent[];
 }): ChatRangeResponse {
@@ -139,7 +139,7 @@ function rangeResponse(input: {
     epoch: input.epoch,
     fromOrdinal: input.fromOrdinal,
     rowIds: [...input.rowIds],
-    completeRowIds: [...(input.completeRowIds ?? input.rowIds)],
+    incompleteRowIds: [...(input.incompleteRowIds ?? [])],
     messages: [...input.messages],
     events: [...(input.events ?? [])],
     rowContext: {},
@@ -2298,7 +2298,7 @@ describe("what an overlap keeps", () => {
         epoch: 1,
         fromOrdinal: 0,
         rowIds: [assistantRowId(turnId)],
-        completeRowIds: [],
+        incompleteRowIds: [assistantRowId(turnId)],
         messages: [
           {
             ...assistantMessage("assistant-first", turnId, 1),
@@ -2348,6 +2348,28 @@ describe("what an overlap keeps", () => {
         ],
       }),
     );
+
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
+  it("retains legacy range retirement when completeness metadata is absent", () => {
+    const turnId = "turn-legacy-range";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [assistantMessage(transientId, turnId, 2)],
+        events: [],
+      },
+    );
+    const { incompleteRowIds: _omitted, ...legacyResponse } = rangeResponse({
+      epoch: 1,
+      fromOrdinal: 0,
+      rowIds: [assistantRowId(turnId)],
+      messages: [assistantMessage("assistant-durable", turnId, 1)],
+    });
+
+    const hydrated = applyRangeResponse(live, legacyResponse);
 
     expect(hydrated.liveMessages).toEqual([]);
   });
