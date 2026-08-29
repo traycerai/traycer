@@ -1099,6 +1099,31 @@ describe("held-copy preference for the active turn", () => {
     return seated.blocks;
   }
 
+  function windowHoldingAssistant(
+    turnId: string,
+    message: Extract<Message, { role: "assistant" }>,
+  ): TranscriptWindow {
+    const seeded = applySkeletonChunk(
+      applyWindowedSnapshot(
+        emptyTranscriptWindow(),
+        {
+          epoch: 1,
+          rowCount: 1,
+          indexRevision: null,
+          tail: { fromOrdinal: 1, messages: [], events: [] },
+        },
+        null,
+      ),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [skeletonEntry(assistantRowId(turnId), 0)],
+        isFinal: true,
+      },
+    );
+    return appendLiveRecords(seeded, { messages: [message], events: [] });
+  }
+
   function heldLongerCopyWindow(turnId: string, messageId: string) {
     const seeded = applySkeletonChunk(
       applyWindowedSnapshot(
@@ -1148,6 +1173,79 @@ describe("held-copy preference for the active turn", () => {
     );
 
     // The held (longer) body wins over the served (shorter, stale) one.
+    expect(seatedAssistantBlocks(seated, messageId)).toEqual([
+      firstBlock,
+      secondBlock,
+    ]);
+  });
+
+  it("yields to a served copy the host stamped newer than the held one", () => {
+    // Holding a copy is not the same as having applied every delta to it. A
+    // block write can be lost while the stream stays open, and then the held
+    // copy is behind - but the row is hydrated, so it leaves no gap for the
+    // planner and no later request repairs it. This seat is the only place
+    // the two copies meet, and `blocksVersion` is the host's own monotonic
+    // write counter, so it is answerable here at no cost.
+    const turnId = "turn-lost-write";
+    const messageId = "assistant-lost-write";
+    const held = windowHoldingAssistant(turnId, {
+      ...assistantMessage(messageId, turnId, 2),
+      blocks: [firstBlock],
+      blocksVersion: 3,
+    });
+
+    const seated = applyRangeResponse(
+      held,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          {
+            ...assistantMessage(messageId, turnId, 2),
+            blocks: [firstBlock, secondBlock],
+            blocksVersion: 5,
+          },
+        ],
+      }),
+      turnId,
+    );
+
+    expect(seatedAssistantBlocks(seated, messageId)).toEqual([
+      firstBlock,
+      secondBlock,
+    ]);
+  });
+
+  it("keeps the held copy when the host stamped it newer", () => {
+    // The ordinary streaming case with stamps present on both sides: the
+    // client's delta-rewritten copy is ahead, and the freshness gate must not
+    // become a reason to discard it.
+    const turnId = "turn-ahead";
+    const messageId = "assistant-ahead";
+    const held = windowHoldingAssistant(turnId, {
+      ...assistantMessage(messageId, turnId, 2),
+      blocks: [firstBlock, secondBlock],
+      blocksVersion: 7,
+    });
+
+    const seated = applyRangeResponse(
+      held,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          {
+            ...assistantMessage(messageId, turnId, 2),
+            blocks: [firstBlock],
+            blocksVersion: 5,
+          },
+        ],
+      }),
+      turnId,
+    );
+
     expect(seatedAssistantBlocks(seated, messageId)).toEqual([
       firstBlock,
       secondBlock,
@@ -1918,6 +2016,91 @@ describe("stale spans", () => {
     });
 
     expect(named.staleSpans).toEqual([]);
+  });
+
+  it("keeps the carried span the reader is looking at when the budget rebalances", () => {
+    // Warmth is the only thing that speaks for a stale span - it has no tail,
+    // viewport or required-ordinal protection - and a viewport report used to
+    // touch fresh spans only. So the carry ON SCREEN aged while an off-screen
+    // one stayed warmer, and the first unrelated range to grow the fresh tier
+    // discarded exactly the rows the reader was reading.
+    const bulk = "x".repeat(Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.47));
+    // Seated first, so it is the COLDER of the two by seat order; only the
+    // viewport touch can make it the survivor.
+    const withOnScreen = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [messageWithText(userMessage("m-0", 0), bulk)],
+      }),
+      null,
+    );
+    const seeded = applyRangeResponse(
+      withOnScreen,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 10,
+        rowIds: ["row-10"],
+        messages: [messageWithText(userMessage("m-10", 10), bulk)],
+      }),
+      null,
+    );
+    const rebased = applyWindowedSnapshot(
+      seeded,
+      {
+        epoch: 2,
+        rowCount: 30,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 29,
+          messages: [userMessage("m-29", 29)],
+          events: [],
+        },
+      },
+      null,
+    );
+    expect(rebased.staleSpans.map((span) => span.rowIds)).toEqual([
+      ["row-0"],
+      ["row-10"],
+    ]);
+
+    // The replacement index names the carried row at ordinal 0, which is
+    // where the row merger draws it - so that is where "on screen" is decided,
+    // not at the span's own stale coordinates.
+    const named = applySkeletonChunk(rebased, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("row-0", 0)],
+      isFinal: false,
+    });
+    const read = touchTranscriptRange(named, {
+      fromOrdinal: 0,
+      toOrdinal: 2,
+    });
+
+    // A late, unrelated range grows the fresh tier past what both carries fit
+    // beside, so the rebalance has to choose one.
+    const rebalanced = applyRangeResponse(
+      read,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 20,
+        rowIds: ["row-20"],
+        messages: [
+          messageWithText(
+            userMessage("m-20", 20),
+            "y".repeat(Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.15)),
+          ),
+        ],
+      }),
+      null,
+    );
+
+    expect(rebalanced.staleSpans.map((span) => span.rowIds)).toEqual([
+      ["row-0"],
+    ]);
   });
 
   it("retires a stale span mixing a marker with a survivor once the skeleton completes", () => {

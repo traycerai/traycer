@@ -3187,6 +3187,15 @@ export function holdsActiveTurnAssistantMessage(
  * Only the ACTIVE turn's assistant message: every other record is not being
  * rewritten client-side, so the served copy is the freshest thing the client
  * can hold.
+ *
+ * "The stream is the authority" is a statement about which copy is USUALLY
+ * ahead, not a guarantee that it always is, so the substitution is gated on
+ * the held copy not being demonstrably BEHIND - see
+ * {@link heldCopyIsBehindServed}. Holding a copy is not the same as having
+ * applied every delta to it: a write can be lost while the stream stays open,
+ * and then this preference would pin the incomplete body in place. Nothing
+ * would repair it, either - the row is hydrated, so it leaves no gap for the
+ * planner to re-request.
  */
 function preferHeldActiveTurnMessages(
   window: TranscriptWindow,
@@ -3202,10 +3211,34 @@ function preferHeldActiveTurnMessages(
     if (message.role !== "assistant") return;
     if (assistantTurnKey(message) !== activeTurnId) return;
     const held = heldMessageCopy(window, message.messageId);
-    if (held !== null) substitutions.set(index, held);
+    if (held === null || heldCopyIsBehindServed(held, message)) return;
+    substitutions.set(index, held);
   });
   if (substitutions.size === 0) return messages;
   return messages.map((message, index) => substitutions.get(index) ?? message);
+}
+
+/**
+ * Can the held copy be PROVEN older than the one the host just served?
+ *
+ * `blocksVersion` is the host's monotonic per-record write counter, carried on
+ * the record itself and advanced by the same block writes the client mirrors -
+ * so comparing it is an exact answer where one exists, and costs no
+ * serialization on a path that seats whole ranges.
+ *
+ * Deliberately "proven behind" rather than "not proven ahead". Absence is
+ * ordinary - the field is optional and pre-dates records still in storage -
+ * and a comparison that cannot be made must not become a reason to discard
+ * the streamed copy, which is the regression this preference exists to
+ * prevent. So an unanswerable comparison keeps the previous behaviour and only
+ * a strictly lower version overrides it.
+ */
+function heldCopyIsBehindServed(held: Message, served: Message): boolean {
+  if (held.role !== "assistant" || served.role !== "assistant") return false;
+  const heldVersion = held.blocksVersion;
+  const servedVersion = served.blocksVersion;
+  if (heldVersion === undefined || servedVersion === undefined) return false;
+  return heldVersion < servedVersion;
 }
 
 /**
@@ -3691,6 +3724,14 @@ function dedupeByFreshestSpan<T>(
  * late responses push the cache over budget - evicting the span under the
  * reader as "coldest" while keeping scrollback they already left.
  *
+ * The STALE tier needs it more, not less. Warmth is the only thing that
+ * speaks for a carried span - it has no tail, viewport or required-ordinal
+ * protection - so a stale span the reader is looking at and that nothing
+ * re-touches is the first thing {@link boundedStaleSpans} discards when an
+ * unrelated late range grows the fresh tier. The rows on screen would then
+ * repaint as placeholders until their own request lands, which is the flash
+ * the tier exists to prevent.
+ *
  * Identity-stable when nothing overlaps, so a viewport resting on
  * placeholders or the unplaced live tail does not churn the store.
  */
@@ -3700,12 +3741,64 @@ export function touchTranscriptRange(
 ): TranscriptWindow {
   const overlaps = (span: HydratedSpan): boolean =>
     span.fromOrdinal < range.toOrdinal && spanEnd(span) > range.fromOrdinal;
-  if (!window.spans.some(overlaps)) return window;
+  const staleVisible = staleSpanVisibleIn(window, range);
+  const touchedSpans = window.spans.some(overlaps);
+  const touchedStale = window.staleSpans.some((span) => staleVisible(span));
+  if (!touchedSpans && !touchedStale) return window;
   const clock = window.clock + 1;
-  const spans = window.spans.map((span) =>
-    overlaps(span) ? { ...span, touchedAt: clock } : span,
-  );
-  return { ...window, spans, clock };
+  return {
+    ...window,
+    spans: touchedSpans
+      ? window.spans.map((span) =>
+          overlaps(span) ? { ...span, touchedAt: clock } : span,
+        )
+      : window.spans,
+    staleSpans: touchedStale
+      ? window.staleSpans.map((span) =>
+          staleVisible(span) ? { ...span, touchedAt: clock } : span,
+        )
+      : window.staleSpans,
+    clock,
+  };
+}
+
+/**
+ * Is this carried span drawing any of the rows currently on screen?
+ *
+ * Not an ordinal overlap: a stale span keeps its PREVIOUS coordinates, so
+ * comparing them against a range expressed in the replacement space compares
+ * two different spaces. The honest question is where the row merger actually
+ * draws it, and that is `seatStaleRows`' two rules - by replacement-skeleton
+ * NAME wherever the new index has named one of its rows, and otherwise at its
+ * own old ordinal, but only into an ordinal the skeleton has not named at all.
+ * Warmth follows the same two rules so that "warm" means "on screen" in both
+ * placements rather than only the second.
+ */
+function staleSpanVisibleIn(
+  window: TranscriptWindow,
+  range: OrdinalRange,
+): (span: HydratedSpan) => boolean {
+  // No carry, no question - and this runs on every viewport report, so the
+  // ordinary window must not pay for the skeleton scan below.
+  if (window.staleSpans.length === 0) return () => false;
+  const from = Math.max(0, range.fromOrdinal);
+  const to = Math.min(range.toOrdinal, window.rowCount);
+  const namedInView = new Set<string>();
+  for (let ordinal = from; ordinal < to; ordinal += 1) {
+    const entry = window.skeleton[ordinal];
+    if (entry !== undefined) namedInView.add(entry.rowId);
+  }
+  return (span) =>
+    span.rowIds.some((rowId, offset) => {
+      // The marker is not an identity, so it can only be placed positionally.
+      if (rowId !== "" && namedInView.has(rowId)) return true;
+      const oldOrdinal = span.fromOrdinal + offset;
+      return (
+        oldOrdinal >= from &&
+        oldOrdinal < to &&
+        window.skeleton[oldOrdinal] === undefined
+      );
+    });
 }
 
 /**

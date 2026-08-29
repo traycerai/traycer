@@ -1951,6 +1951,110 @@ describe("accumulated-change chunks", () => {
     }
   });
 
+  it("does not seat a non-final chunk whose length matches a transiently stale count", () => {
+    // `accumulatedFileChangeCount` is an aux field and aux is
+    // last-write-wins, so a delayed same-epoch snapshot restores an older,
+    // smaller count for a frame. A non-final prefix of the generation being
+    // assembled can have exactly that length - and publishing on the
+    // coincidence seats the generation permanently: later chunks push the
+    // assembly past the count, it never matches again, the flag is never
+    // cleared, and the completion watchdog then measures the published prefix
+    // against the stale count, agrees, and disarms. The rest of the summaries
+    // are hidden for the life of the connection.
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      const snapshotWithCount = (count: number): void => {
+        harness.callbacks().onWindowedSnapshot(
+          windowedSnapshot({
+            epoch: 4,
+            rowCount: 1,
+            tailFromOrdinal: 0,
+            tailMessages: [userMessage("m-0", 0)],
+            accumulatedFileChangeCount: count,
+          }),
+        );
+      };
+      const chunk = (
+        fromIndex: number,
+        summaries: readonly ChatAccumulatedFileChangeSummary[],
+        isFinal: boolean,
+      ): void => {
+        harness.callbacks().onAccumulatedChanges({
+          kind: "accumulatedChanges",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          chunk: {
+            epoch: 4,
+            fromIndex,
+            generation: 2,
+            summaries: [...summaries],
+            isFinal,
+          },
+        });
+      };
+
+      snapshotWithCount(3);
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [summary("a.ts"), summary("b.ts"), summary("c.ts")],
+          isFinal: true,
+        },
+      });
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
+
+      // The delayed snapshot rewinds the count to a length the next prefix
+      // happens to match.
+      snapshotWithCount(1);
+      chunk(0, [summary("x.ts")], false);
+
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(false);
+
+      // Left unseated, the rest of the generation still assembles and lands
+      // on the final chunk - the gate blocks a coincidence, not a completion.
+      // (The count is authoritative again by then in the ordinary case; the
+      // neighbouring test pins that swap.)
+      chunk(1, [summary("y.ts")], true);
+
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(false);
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
   /**
    * An aux-only re-broadcast - a queue change, an approval - re-sends the
    * snapshot against summaries the host has already sent, and it never re-sends

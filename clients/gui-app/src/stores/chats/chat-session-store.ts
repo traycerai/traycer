@@ -4009,11 +4009,32 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Published only once whole. Until then the previous set keeps the
         // panel honest, and the watchdog - armed below off the un-seated
         // flag - is what recovers a replacement stream that stops short.
-        if (summaries.length === get().accumulatedFileChangeCount) {
+        //
+        // Whole means the host SAID so, not merely that the length agrees.
+        // `accumulatedFileChangeCount` is an aux field, and aux is
+        // last-write-wins: a delayed same-epoch snapshot restores an older,
+        // smaller count for a frame. A non-final prefix of the generation
+        // being assembled can have exactly that length, and publishing it
+        // would seat the generation on a coincidence - after which the
+        // remaining chunks push the assembly past the count, never match it
+        // again, and never clear the flag, so the completion watchdog
+        // measures the published prefix against the stale count, agrees with
+        // itself, and disarms. Absent another snapshot the rest of the file
+        // summaries are then hidden for the life of the connection.
+        //
+        // The `isFinal` half of the chunk contract is what the count cannot
+        // express, so both halves are required - and a non-final chunk
+        // actively un-seats, so a generation can never stay seated across one.
+        if (
+          frame.chunk.isFinal &&
+          summaries.length === get().accumulatedFileChangeCount
+        ) {
           set({
             accumulatedFileChangeSummaries: summaries,
             accumulatedSummaryGenerationSeated: true,
           });
+        } else if (get().accumulatedSummaryGenerationSeated) {
+          set({ accumulatedSummaryGenerationSeated: false });
         }
         // The gap check above only fires when a LATER chunk exposes the hole,
         // so it cannot see the stream simply stopping. Armed after the `set`
