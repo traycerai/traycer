@@ -103,6 +103,24 @@ export interface EpicLaneArmSources {
    * both transports.
    */
   readonly onProbeOutcome: (outcome: EpicLaneProbeOutcome) => void;
+  /**
+   * A lane this arm REQUIRES has been refused by the host, reported at most
+   * once per arm.
+   *
+   * Separate from {@link onProbeOutcome} because it is a different question
+   * asked at a different time. The probe answers "can this connection serve
+   * lanes at all", once, before anything is installed. This answers "a lane
+   * the installed arm depends on is not served", which can only be learned
+   * AFTER installation - and on a forever-unknown remote connection it is the
+   * only way it can ever be learned, since the manifest never resolves.
+   *
+   * The arm is only an arm if every required lane is served. A host that
+   * serves status but refuses state is a real class (a rolling upgrade, a lane
+   * behind a flag), and on it a "lanes" arm renders no records at all - which
+   * is not "degraded relative to `@1`", it is empty. So this is a fallback to
+   * legacy, not a partial mode.
+   */
+  readonly onRequiredLaneUnsupported: () => void;
 }
 
 /**
@@ -189,6 +207,7 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     readDocSeed,
     onRoomEvent,
     onProbeOutcome,
+    onRequiredLaneUnsupported,
   } = sources;
 
   const stateReplica: EpicLaneStateReplica = createEpicLaneStateReplica({
@@ -234,6 +253,13 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
       // auth cascade) - so it is routed as a control event rather than acted on
       // here, exactly as the `@1` arm routes it.
       reportStatus: (status) => {
+        // The records lane is REQUIRED. A host that served status and refuses
+        // this one renders no records at all, and on a forever-unknown remote
+        // connection nothing else would ever say so - the manifest never
+        // resolves, and the status lane is already happily connected.
+        if (isMethodIncompatibleClose(status.closeReason)) {
+          reportRequiredLaneUnsupported();
+        }
         onControlEvent({
           kind: "transport-status",
           status: status.connection,
@@ -256,6 +282,11 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     isDisposed,
     onRoomEvent,
     onReplacementRequested,
+    // Bodies are required too: rendering them is the one thing `@1` does that
+    // an arm without `artifact.subscribe` cannot. Routed through the arm's
+    // once-per-arm reporter, so a canvas with twelve open tiles asks for ONE
+    // replacement rather than twelve.
+    onLaneUnsupported: reportRequiredLaneUnsupported,
   });
 
   /**
@@ -269,6 +300,21 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     if (probeAnswered) return;
     probeAnswered = true;
     onProbeOutcome(outcome);
+  }
+
+  /**
+   * Whether this arm has already reported a required lane refused.
+   *
+   * Once per ARM, not once per lane and emphatically not once per tile: a
+   * canvas with twelve open bodies whose host refuses `artifact.subscribe`
+   * would otherwise ask for twelve replacements of one replica.
+   */
+  let requiredLaneUnsupportedReported = false;
+
+  function reportRequiredLaneUnsupported(): void {
+    if (requiredLaneUnsupportedReported) return;
+    requiredLaneUnsupportedReported = true;
+    onRequiredLaneUnsupported();
   }
 
   function attachStatus(): void {
@@ -298,7 +344,12 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
         // never as a queryable pre-check. A client that waits for
         // `getMethodSupport` to move waits forever.
         if (isMethodIncompatibleClose(status.closeReason)) {
+          // Before the probe answers, this IS the answer. After it, the arm is
+          // already installed and this is a required lane going away, which
+          // `answerProbe` would swallow (one answer per arm). Both are routed,
+          // and each guards itself.
           answerProbe("unsupported");
+          reportRequiredLaneUnsupported();
         }
         onControlEvent({
           kind: "transport-status",

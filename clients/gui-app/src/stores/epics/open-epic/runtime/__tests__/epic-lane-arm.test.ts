@@ -170,6 +170,12 @@ interface ArmRig {
   readonly artifacts: UnusedArtifactFactory;
   /** Every outcome `onProbeOutcome` has reported, in order. */
   readonly probeOutcomes: EpicLaneProbeOutcome[];
+  /**
+   * How many times the arm has reported a REQUIRED lane refused. Counted
+   * rather than flagged: the contract is once per arm however many lanes and
+   * tiles hit the refusal.
+   */
+  readonly requiredLaneUnsupportedCount: () => number;
 }
 
 /**
@@ -183,6 +189,7 @@ function buildArmRig(): ArmRig {
   const state = createCountingStateFactory();
   const artifacts = createUnusedArtifactFactory();
   const probeOutcomes: EpicLaneProbeOutcome[] = [];
+  let requiredLaneUnsupported = 0;
   const arm = createEpicLaneArm({
     epicId: "epic-lane-arm-test",
     environment: createRendererRuntimeEnvironment(),
@@ -199,8 +206,18 @@ function buildArmRig(): ArmRig {
     onProbeOutcome: (outcome) => {
       probeOutcomes.push(outcome);
     },
+    onRequiredLaneUnsupported: () => {
+      requiredLaneUnsupported += 1;
+    },
   });
-  return { arm, status, state, artifacts, probeOutcomes };
+  return {
+    arm,
+    status,
+    state,
+    artifacts,
+    probeOutcomes,
+    requiredLaneUnsupportedCount: () => requiredLaneUnsupported,
+  };
 }
 
 // ── 1. probe() opens the status lane only ───────────────────────────────────

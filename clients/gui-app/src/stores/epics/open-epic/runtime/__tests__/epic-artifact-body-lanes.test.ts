@@ -171,6 +171,13 @@ interface LanesRig {
   readonly artifacts: CountingArtifactFactory;
   readonly roomEvents: readonly EpicRoomEvent[];
   readonly replacementReasons: readonly ReplicaReplacementReason[];
+  /**
+   * How many times this module reported the host refusing
+   * `artifact.subscribe`. Exposed so a pin can assert the count rather than
+   * merely that it happened - the arm above coalesces across tiles, and a
+   * per-tile fan-out is only visible as a number.
+   */
+  laneUnsupportedCount(): number;
   setAuthorityEpoch(epoch: string | null): void;
 }
 
@@ -183,6 +190,12 @@ function createLanesRig(initialAuthorityEpoch: string | null): LanesRig {
   const artifacts = createCountingArtifactFactory();
   const roomEvents: EpicRoomEvent[] = [];
   const replacementReasons: ReplicaReplacementReason[] = [];
+  /**
+   * How many times the host has been observed refusing `artifact.subscribe`.
+   * Counted rather than flagged: the arm above coalesces across tiles, and a
+   * per-tile fan-out would show up here as a number greater than one.
+   */
+  let laneUnsupportedCount = 0;
   let authorityEpoch = initialAuthorityEpoch;
   const lanes = createEpicArtifactBodyLanes({
     epicId: "epic-1",
@@ -197,12 +210,16 @@ function createLanesRig(initialAuthorityEpoch: string | null): LanesRig {
     onReplacementRequested: (reason) => {
       replacementReasons.push(reason);
     },
+    onLaneUnsupported: () => {
+      laneUnsupportedCount += 1;
+    },
   });
   return {
     lanes,
     artifacts,
     roomEvents,
     replacementReasons,
+    laneUnsupportedCount: () => laneUnsupportedCount,
     setAuthorityEpoch: (epoch) => {
       authorityEpoch = epoch;
     },
@@ -392,5 +409,69 @@ describe("createEpicArtifactBodyLanes - demand-tracked artifact body lanes", () 
     expect(rig.replacementReasons).toHaveLength(
       replacementCountAfterStaleEpoch,
     );
+  });
+
+  it("(i) two demands, one release keeps the stream open; the second release closes it", () => {
+    const rig = createLanesRig("epoch-1");
+    rig.lanes.ensureAttached("art-1");
+    rig.lanes.ensureAttached("art-1");
+    expect(rig.artifacts.clients).toHaveLength(1);
+    const client = requireAt(rig.artifacts.clients, 0);
+
+    rig.lanes.release("art-1", "superseded");
+
+    // One of two demands let go, not the last one - the client must still be
+    // open. Asserted on the CLIENT'S close count, not on attachedArtifactIds()
+    // alone: a demand-tracking bug that forgot to keep the lane open would
+    // still report "art-1" as attached right up until the map entry it never
+    // closed was deleted some other way.
+    expect(client.closeCount()).toBe(0);
+    expect(rig.lanes.attachedArtifactIds()).toEqual(["art-1"]);
+
+    rig.lanes.release("art-1", "superseded");
+
+    expect(client.closeCount()).toBe(1);
+    expect(rig.lanes.attachedArtifactIds()).toEqual([]);
+  });
+
+  it("(j) a body with zero demand is not reopened by a later epoch change", () => {
+    const rig = createLanesRig("epoch-1");
+    rig.lanes.ensureAttached("art-1");
+    expect(rig.artifacts.clients).toHaveLength(1);
+
+    rig.lanes.release("art-1", "superseded");
+    expect(requireAt(rig.artifacts.clients, 0).closeCount()).toBe(1);
+    expect(rig.lanes.attachedArtifactIds()).toEqual([]);
+
+    rig.setAuthorityEpoch("epoch-2");
+    rig.lanes.syncToAuthorityEpoch();
+
+    // This is the leak the ref-count exists to stop: before it, every tile
+    // ever opened was rebuilt on every epoch change forever, including one
+    // with no demand left at all. No new client for "art-1" - the demand set
+    // to rebuild from no longer contains it.
+    expect(rig.artifacts.clients).toHaveLength(1);
+    expect(rig.lanes.attachedArtifactIds()).toEqual([]);
+  });
+
+  it("(k) a release with nothing held is a no-op: no throw, no client constructed, no close", () => {
+    const rig = createLanesRig("epoch-1");
+
+    // Never attached at all - the shape of a lease taken before an arm
+    // replacement, released after every lane is already gone.
+    expect(() => rig.lanes.release("art-none", "superseded")).not.toThrow();
+    expect(rig.artifacts.clients).toHaveLength(0);
+
+    rig.lanes.ensureAttached("art-1");
+    rig.lanes.release("art-1", "superseded");
+    const client = requireAt(rig.artifacts.clients, 0);
+    expect(client.closeCount()).toBe(1);
+
+    // Released again with nothing held this time.
+    expect(() => rig.lanes.release("art-1", "superseded")).not.toThrow();
+    // No new client was constructed, and the one already closed was not
+    // closed a second time.
+    expect(rig.artifacts.clients).toHaveLength(1);
+    expect(client.closeCount()).toBe(1);
   });
 });

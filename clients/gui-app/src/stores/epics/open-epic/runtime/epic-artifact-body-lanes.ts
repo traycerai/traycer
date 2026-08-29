@@ -43,6 +43,7 @@ import type {
 import { createArtifactLaneAdapter } from "@traycer-clients/shared/epic-lanes";
 import type { ArtifactSubscribeSeedOffer } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type { EpicRoomEvent } from "./epic-runtime-events";
+import { isMethodIncompatibleClose } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { laneBodyTranslationOf } from "./lane-body-translation";
 
 export interface EpicArtifactBodyLanesSources {
@@ -67,6 +68,18 @@ export interface EpicArtifactBodyLanesSources {
   readonly onRoomEvent: (event: EpicRoomEvent) => void;
   /** The authority is not serving the epoch a body attached under. */
   readonly onReplacementRequested: (reason: ReplicaReplacementReason) => void;
+  /**
+   * The host refuses `artifact.subscribe` outright.
+   *
+   * Not a per-body state and not a retry: it says the installed arm cannot
+   * render bodies at all, which is the one thing `@1` can always do. The
+   * consumer's answer is to fall back to legacy, so this is reported to the
+   * ARM rather than folded into an availability value - a body greying out
+   * would leave the epic on an arm that can never show a body again.
+   *
+   * Called once per refusing lane; the arm coalesces across tiles.
+   */
+  readonly onLaneUnsupported: () => void;
 }
 
 export interface EpicArtifactBodyLanes {
@@ -78,7 +91,15 @@ export interface EpicArtifactBodyLanes {
    * and {@link syncToAuthorityEpoch} opens it later.
    */
   ensureAttached(artifactId: string): void;
-  /** Drop demand for one body and close its lane. */
+  /**
+   * Drop ONE demand for a body, closing its lane when the last one goes.
+   *
+   * Ref-counted, because demand is per LEASE and several tiles legitimately
+   * show the same artifact at once (a canvas tile and the mobile switcher's
+   * preview, a split view). Closing on the first release would take the body
+   * out from under every other holder; never closing leaks a subscription per
+   * tile ever opened, and rebuilds all of them on every epoch change.
+   */
   release(artifactId: string, reason: AdapterDetachReason): void;
   /**
    * Reconcile every lane against the epoch the status lane now reports.
@@ -133,10 +154,17 @@ export function createEpicArtifactBodyLanes(
     isDisposed,
     onRoomEvent,
     onReplacementRequested,
+    onLaneUnsupported,
   } = sources;
 
-  /** Bodies someone wants open, whether or not one currently is. */
-  const demand = new Set<string>();
+  /**
+   * How many live leases want each body open, whether or not one currently is.
+   *
+   * A COUNT rather than a set: `ensureAttached` is called once per lease and
+   * `release` once per release, and those pair up only if the second is as
+   * granular as the first.
+   */
+  const demand = new Map<string, number>();
   const open = new Map<string, OpenBodyLane>();
 
   function closeLane(artifactId: string, reason: AdapterDetachReason): void {
@@ -179,11 +207,20 @@ export function createEpicArtifactBodyLanes(
       // much of it do I hold", which rides `readDocSeed` on the open request
       // rather than a lane position.
       reportResume: () => {},
-      // Deliberately not routed to the control replica. A body lane's socket is
-      // one of many; letting each one publish epic-wide transport status would
-      // make the epic read as disconnected because a single tile's stream
-      // blipped. The records and status lanes own that signal.
-      reportStatus: () => {},
+      // Transport status is deliberately NOT routed to the control replica: a
+      // body lane's socket is one of many, and letting each publish epic-wide
+      // status would make the epic read as disconnected because a single
+      // tile's stream blipped. The records and status lanes own that signal.
+      //
+      // A method-incompatible close is different in kind. It is not this
+      // body's connection failing, it is the host saying it does not serve
+      // this METHOD - a statement about the arm, not the tile - and on a
+      // forever-unknown remote connection nothing else will ever say it.
+      reportStatus: (status) => {
+        if (isMethodIncompatibleClose(status.closeReason)) {
+          onLaneUnsupported();
+        }
+      },
       requestReplacement: onReplacementRequested,
     });
   }
@@ -191,7 +228,7 @@ export function createEpicArtifactBodyLanes(
   return {
     ensureAttached(artifactId): void {
       if (isDisposed()) return;
-      demand.add(artifactId);
+      demand.set(artifactId, (demand.get(artifactId) ?? 0) + 1);
       const authorityEpoch = readAuthorityEpoch();
       // No epoch yet: the demand is recorded and `syncToAuthorityEpoch` opens
       // this body when the first status snapshot names one.
@@ -205,6 +242,16 @@ export function createEpicArtifactBodyLanes(
     },
 
     release(artifactId, reason): void {
+      const held = demand.get(artifactId);
+      // A release with nothing held is a no-op, not an error: a lease taken
+      // before the arm was replaced is released after it, and the replacement
+      // already tore every lane down. Throwing there would turn an ordinary
+      // unmount into a crash.
+      if (held === undefined) return;
+      if (held > 1) {
+        demand.set(artifactId, held - 1);
+        return;
+      }
       demand.delete(artifactId);
       closeLane(artifactId, reason);
     },
@@ -213,7 +260,7 @@ export function createEpicArtifactBodyLanes(
       if (isDisposed()) return;
       const authorityEpoch = readAuthorityEpoch();
       if (authorityEpoch === null) return;
-      for (const artifactId of demand) {
+      for (const artifactId of demand.keys()) {
         const existing = open.get(artifactId);
         if (existing !== undefined) {
           if (existing.authorityEpoch === authorityEpoch) continue;

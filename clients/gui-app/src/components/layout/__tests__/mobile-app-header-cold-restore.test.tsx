@@ -17,6 +17,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import * as Y from "yjs";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import {
   __getOpenEpicRegistryForTests,
@@ -31,6 +32,16 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 
 // Host-backed chrome only; the registry accessors the header reads for the
 // epic's title and permission role stay REAL here - they are the half of the
@@ -86,6 +97,132 @@ function registerSession(title: string): OpenEpicStoreHandle {
   });
   __getOpenEpicRegistryForTests().acquire(EPIC_ID, () => handle);
   return handle;
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+interface EpicUpdateTitleCall {
+  readonly epicDelta: {
+    readonly id: string;
+    readonly title: string;
+    readonly updatedAt: number;
+  };
+}
+
+/**
+ * A registered session whose write-command queue can actually SEND and
+ * settle, for the one test that drives a rename through to commit. Unlike
+ * {@link registerSession}, this seeds the epic title into the real Y.Doc and
+ * opens the transport (`onConnectionStatus` before `onSnapshot` - the
+ * control replica clears `hasFreshRootSnapshotForOpenCycle` on every
+ * transport-status transition, including into "open", so opening first is
+ * what lets the snapshot's own landing set it back to true) so the queue's
+ * send gate (`transportStatus === "open" && hasFreshRootSnapshotForOpenCycle`)
+ * is actually satisfied - `registerSession`'s bare `setState` never touches
+ * that gate, so a rename fired against it would sit "queued" forever.
+ */
+function registerCommittableSession(title: string): {
+  readonly handle: OpenEpicStoreHandle;
+  readonly titleCalls: () => readonly EpicUpdateTitleCall[];
+  readonly settleTitleUpdate: () => void;
+} {
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const factory: EpicStreamClientFactory = (_id, callbacks) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  const titleCalls: EpicUpdateTitleCall[] = [];
+  const pendingSettles: (() => void)[] = [];
+  const entry: HostDirectoryEntry = {
+    hostId: "host-cold",
+    label: "host-cold",
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:0",
+    version: "1.5.0",
+    transportDialability: "dialable",
+  };
+  const handlers: MockHandlerMap<HostRpcRegistry> = {
+    "epic.updateTitle": (params) => {
+      titleCalls.push(params);
+      return new Promise((resolve) => {
+        pendingSettles.push(() => resolve({ updated: true }));
+      });
+    },
+  };
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (candidateHostId) =>
+      candidateHostId === entry.hostId ? entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${entry.hostId}`,
+      handlers,
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  const commandRequester: HostRequester<HostRpcRegistry> =
+    spine.createRequester(entry);
+
+  const handle = createOpenEpicStore({
+    epicId: EPIC_ID,
+    streamClientFactory: factory,
+    userId: null,
+    onAuthError: null,
+    laneSelection: null,
+    commandRequester,
+  });
+  if (captured.value === null) throw new Error("factory not invoked");
+  // Seeded into the real Y.Doc BEFORE the snapshot lands, so the FULL
+  // projection the snapshot triggers reads it back as the epic header - the
+  // honest replacement for forcing the projected `epic` slice directly.
+  handle.doc.getMap("epic").set("title", title);
+  handle.doc.getMap("epic").set("updatedAt", 1);
+  captured.value.onConnectionStatus("open", null);
+  captured.value.onSnapshot(
+    {
+      schemaVersion: "1.0",
+      epicLight: {
+        id: EPIC_ID,
+        title,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "open",
+        createdAt: 0,
+        updatedAt: 0,
+        createdBy: "u",
+        version: "1",
+      },
+      permissionRole: "owner",
+      repos: [],
+      workspaces: [],
+      repoMapping: [],
+      workspaceFolders: [],
+      unresolvedRepos: [],
+      hostStateVectorBase64: encodeBase64(Y.encodeStateVector(new Y.Doc())),
+    },
+    Y.encodeStateAsUpdate(new Y.Doc()),
+  );
+  __getOpenEpicRegistryForTests().acquire(EPIC_ID, () => handle);
+  return {
+    handle,
+    titleCalls: () => titleCalls,
+    settleTitleUpdate: () => pendingSettles[pendingSettles.length - 1]?.(),
+  };
 }
 
 /** The persisted tab record a restore rehydrates from localStorage. */
@@ -244,7 +381,8 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
   // across the next restart too.
   it("shows the committed name after a rename, not the stale tab record", async () => {
     seedTabRecord("Old name");
-    const handle = registerSession("Old name");
+    const { handle, titleCalls, settleTitleUpdate } =
+      registerCommittableSession("Old name");
     renderRestoredAtLanding();
 
     const field = await screen.findByTestId("mobile-epic-header-title");
@@ -253,26 +391,43 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     fireEvent.change(input, { target: { value: "Renamed on the phone" } });
     fireEvent.blur(input);
 
-    expect(updateTitleMutateAsyncSpy).toHaveBeenCalledTimes(1);
-    // Flush the retire `.then` arm before the manual echo below, so the
-    // "landed" retire and the doc-echo overlay resolution happen in the
-    // documented order rather than racing.
-    await act(async () => {
-      await Promise.resolve();
-    });
-    // The committed title landing in the epic doc is what the live session
-    // projects back; the host round trip is the mocked half.
-    handle.store.setState({
-      epic: {
-        title: "Renamed on the phone",
-        updatedAt: 2,
+    // Post-T11 this dispatches through the session's own write-command
+    // queue, never `useEpicUpdateTitle` - and the queue's `onEnqueued` stamps
+    // an optimistic overlay onto the projected `epic.title` the same way it
+    // does an artifact rename onto `artifacts.byId`
+    // (`epic-records-replica.ts`'s `stampWriteCommand` has an
+    // `update-epic-title` arm calling `beginEpicTitleMutationWithId`, same
+    // shape as the artifact arms beside it). So the header already reads the
+    // committed-to-be title from the enqueue alone - no forced doc echo
+    // needed to observe it.
+    expect(titleCalls()).toEqual([
+      {
+        epicDelta: {
+          id: EPIC_ID,
+          title: "Renamed on the phone",
+          updatedAt: expect.any(Number),
+        },
       },
-    });
-
+    ]);
     await waitFor(() =>
       expect(screen.getByTestId("mobile-header-title").textContent).toBe(
         "Renamed on the phone",
       ),
+    );
+
+    // Settle the RPC so the command actually reaches "committed" (rather
+    // than leaving it permanently "queued", which the header's optimistic
+    // read alone would not catch a regression in).
+    settleTitleUpdate();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(handle.store.getState().epic.title).toBe("Renamed on the phone");
+
+    // The header still reads the committed name after settlement.
+    expect(screen.getByTestId("mobile-header-title").textContent).toBe(
+      "Renamed on the phone",
     );
     // The record really is still stale - the header is right because it stopped
     // reading it first, not because something refreshed it.

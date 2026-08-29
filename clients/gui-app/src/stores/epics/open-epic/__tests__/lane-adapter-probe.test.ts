@@ -28,6 +28,7 @@ import type {
   EpicStateStreamClientFactory,
   EpicStatusStreamClientFactory,
 } from "@traycer-clients/shared/epic-lanes";
+import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   EpicStatusSnapshotFrame,
@@ -107,37 +108,54 @@ interface CountingArtifactFactory {
   readonly factory: ArtifactStreamClientFactory;
   openCount(): number;
   /**
-   * Deliver a terminal `staleAuthorityEpoch` for the most recently opened
-   * body, the way the host does when the generation a body attached under is
-   * no longer served.
+   * Deliver a terminal `staleAuthorityEpoch` for the named body, the way the
+   * host does when the generation it attached under is no longer served.
    */
   deliverStaleAuthorityEpoch(artifactId: string): void;
+  /**
+   * Resolve the named body as method-incompatible, the way the mux does when
+   * `artifact.subscribe` itself is refused - a statement about the ARM, not
+   * the tile. Keyed per artifact because more than one body lane may be open
+   * at once, each with its own captured callbacks.
+   */
+  deliverMethodUnsupported(artifactId: string): void;
 }
 
-/** The body-lane factory, capturing callbacks so a test can deliver frames. */
+/**
+ * The body-lane factory, capturing each constructed body's OWN callbacks -
+ * keyed by artifact id - so a test can deliver frames to one tile among
+ * several without disturbing the others.
+ */
 function createCountingArtifactFactory(): CountingArtifactFactory {
   let opens = 0;
-  let live: ArtifactStreamCallbacks | null = null;
+  const live = new Map<string, ArtifactStreamCallbacks>();
   const factory: ArtifactStreamClientFactory = (
     _epicId,
-    _artifactId,
+    artifactId,
     _authorityEpoch,
     callbacks,
     _seedOfferProvider,
   ) => {
     opens += 1;
-    live = callbacks;
+    live.set(artifactId, callbacks);
     return {
       applyUpdate: () => undefined,
       awareness: () => undefined,
       close: () => undefined,
     };
   };
+  function requireLive(artifactId: string): ArtifactStreamCallbacks {
+    const callbacks = live.get(artifactId);
+    if (callbacks === undefined) {
+      throw new Error(`no artifact client was constructed for ${artifactId}`);
+    }
+    return callbacks;
+  }
   return {
     factory,
     openCount: () => opens,
     deliverStaleAuthorityEpoch(artifactId): void {
-      if (live === null) throw new Error("no artifact client was constructed");
+      const callbacks = requireLive(artifactId);
       const parsed = artifactSubscribeServerFrameSchemaV10.parse({
         kind: "unavailable",
         hasBinaryPayload: false,
@@ -150,7 +168,19 @@ function createCountingArtifactFactory(): CountingArtifactFactory {
       if (parsed.kind !== "unavailable") {
         throw new Error(`expected an unavailable frame, got ${parsed.kind}`);
       }
-      live.onUnavailable(parsed);
+      callbacks.onUnavailable(parsed);
+    },
+    deliverMethodUnsupported(artifactId): void {
+      const callbacks = requireLive(artifactId);
+      callbacks.onConnectionStatus("closed", {
+        kind: "fatalError",
+        details: {
+          code: "INCOMPATIBLE",
+          reason: "artifact.subscribe is not served by this host",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
     },
   };
 }
@@ -245,24 +275,50 @@ interface CountingStateFactory {
   readonly factory: EpicStateStreamClientFactory;
   openCount(): number;
   closeCount(): number;
+  /**
+   * Resolve the records lane as method-incompatible, the way the mux does for
+   * a lane behind a flag or a rolling upgrade - a fatal close carrying
+   * `INCOMPATIBLE`. Mirrors `CountingStatusFactory.deliverMethodUnsupported`:
+   * this is the only capability evidence a REMOTE session ever produces for
+   * this lane.
+   */
+  deliverMethodUnsupported(): void;
 }
 
 function createCountingStateFactory(): CountingStateFactory {
   let opens = 0;
   let closes = 0;
+  let live: EpicStateStreamCallbacks | null = null;
   const factory: EpicStateStreamClientFactory = (
     _epicId,
-    _callbacks,
+    callbacks,
     _resumeProvider,
   ) => {
     opens += 1;
+    live = callbacks;
     return {
       close: () => {
         closes += 1;
       },
     };
   };
-  return { factory, openCount: () => opens, closeCount: () => closes };
+  return {
+    factory,
+    openCount: () => opens,
+    closeCount: () => closes,
+    deliverMethodUnsupported(): void {
+      if (live === null) throw new Error("no state client was constructed");
+      live.onConnectionStatus("closed", {
+        kind: "fatalError",
+        details: {
+          code: "INCOMPATIBLE",
+          reason: "epic.state.subscribe is not served by this host",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+    },
+  };
 }
 
 interface CountingLegacyFactory {
@@ -524,5 +580,81 @@ describe("lane adapter probe - forever-unknown support must still reach the lane
 
       expect(rig.status.closeCount()).toBe(1);
     });
+  });
+
+  it("(f) status success -> state INCOMPATIBLE -> legacy, while support stays unknown throughout", () => {
+    const rig = buildRuntimeRig("forever-unknown");
+    runtimes.push(rig.runtime);
+
+    rig.runtime.start();
+    rig.status.deliverSnapshot();
+    expect(rig.state.openCount()).toBe(1);
+    expect(rig.legacy.openCount()).toBe(0);
+
+    // The records lane is REQUIRED, and support on this rig never moves off
+    // "unknown" - see `FOREVER_UNKNOWN_SUPPORT`. Nothing but this typed close
+    // could have produced the fallback below.
+    rig.state.deliverMethodUnsupported();
+
+    expect(rig.legacy.openCount()).toBe(1);
+    // One attempted open (the records lane never reopens on this arm), not
+    // zero and not two.
+    expect(rig.state.openCount()).toBe(1);
+    expect(rig.state.closeCount()).toBe(1);
+    // The status lane is part of the same arm and comes down with it.
+    expect(rig.status.closeCount()).toBe(1);
+  });
+
+  it("(g) status + state success -> first body INCOMPATIBLE -> legacy, exactly ONE replacement with N>1 tiles", () => {
+    const rig = buildRuntimeRig("forever-unknown");
+    runtimes.push(rig.runtime);
+
+    rig.runtime.start();
+    rig.status.deliverSnapshot();
+    expect(rig.state.openCount()).toBe(1);
+
+    const releaseA = rig.runtime.acquireArtifactBodyLease("art-1");
+    const releaseB = rig.runtime.acquireArtifactBodyLease("art-2");
+    const releaseC = rig.runtime.acquireArtifactBodyLease("art-3");
+    expect(rig.artifacts.openCount()).toBe(3);
+
+    const before = rig.runtime.replicaGeneration();
+
+    // Only ONE of the three open tiles reports the refusal - the arm's
+    // contract is to coalesce across every body under it, not to fall back
+    // per tile.
+    rig.artifacts.deliverMethodUnsupported("art-1");
+
+    // Exactly one whole-epic legacy install, not one per open tile.
+    expect(rig.legacy.openCount()).toBe(1);
+    // `toBe`, not `toBeGreaterThan`: a per-tile fallback that replaced once
+    // per open body would still "work" (end up on legacy) and must fail
+    // here on the generation step count alone.
+    expect(rig.runtime.replicaGeneration()).toBe(before + 1);
+
+    releaseA();
+    releaseB();
+    releaseC();
+  });
+
+  it("(h) the typed manifest answer agrees with the close answer: artifact.subscribe unsupported installs legacy, not lanes", () => {
+    const rig = buildRuntimeRig("controllable");
+    runtimes.push(rig.runtime);
+    const support = requireSupport(rig);
+    markAllLaneMethodsSupported(support);
+    // The real wire method name, read off the shared tuple rather than typed
+    // by hand - `EPIC_LANE_METHODS` orders them state, status, artifact.
+    support.set(EPIC_LANE_METHODS[2], "unsupported");
+
+    rig.runtime.start();
+
+    // Same destination as (g), reached through the manifest instead of a
+    // close: one required lane refused is enough to keep the arm off
+    // "lanes" entirely - never a partial install with two lanes serving and
+    // one missing.
+    expect(rig.legacy.openCount()).toBe(1);
+    expect(rig.status.openCount()).toBe(0);
+    expect(rig.state.openCount()).toBe(0);
+    expect(rig.artifacts.openCount()).toBe(0);
   });
 });

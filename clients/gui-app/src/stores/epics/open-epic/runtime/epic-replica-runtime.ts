@@ -773,6 +773,9 @@ export function createEpicReplicaRuntime(
           onProbeOutcome: (outcome) => {
             applyProbeOutcome(outcome);
           },
+          onRequiredLaneUnsupported: () => {
+            applyRequiredLaneUnsupported();
+          },
         });
 
   let installedArm: EpicAdapterArm | null = null;
@@ -973,6 +976,27 @@ export function createEpicReplicaRuntime(
    * Ignored once an arm is installed: a manifest that resolved first has
    * already settled this, and the probe's stream was adopted by that install.
    */
+  /**
+   * A lane the installed arm requires is not served. Fall back to legacy.
+   *
+   * The arm is installed on ALL its required lanes being served, not on the
+   * first one that answers. A host can serve `epic.status.subscribe` and
+   * refuse `epic.state.subscribe` - a rolling upgrade, a lane behind a flag -
+   * and on that host the probe succeeds, the arm installs, and the records
+   * lane then dies with a typed refusal that no manifest will ever repeat. The
+   * result is an epic that renders nothing, on the arm whose whole contract is
+   * to be indistinguishable from `@1`.
+   *
+   * So this is a full replacement rather than a degraded mode: detach the lane
+   * arm, reset the planes, open `@1`. Idempotent - the arm reports once, and
+   * an arm already replaced is not replaced again.
+   */
+  function applyRequiredLaneUnsupported(): void {
+    if (disposed) return;
+    if (installedArm !== "lanes") return;
+    executeTransition("legacy");
+  }
+
   function applyProbeOutcome(outcome: EpicLaneProbeOutcome): void {
     if (disposed) return;
     if (installedArm !== null) return;
@@ -1238,12 +1262,16 @@ export function createEpicReplicaRuntime(
       // a body is not served until something asks for it - unlike `@1`, where
       // every room arrives whether or not a tile is open - so the lease is
       // also the subscribe. Idempotent, and a no-op on the legacy arm.
-      if (installedArm === "lanes") laneArm?.bodies.ensureAttached(artifactId);
+      const bodyDemanded = installedArm === "lanes" && laneArm !== null;
+      if (bodyDemanded) laneArm.bodies.ensureAttached(artifactId);
       const hadReplica = tier.peek(docKey) !== null;
       const grant = rooms.acquireLease(docKey);
       if (grant.kind === "unavailable") {
-        // The one arm that registered no demand, so there is nothing to
-        // release. Reached only for a disposed tier.
+        // No tier lease was registered, so there is nothing to release there -
+        // but the body demand above WAS taken, and must come back off or this
+        // artifact stays subscribed for the session. Reached only for a
+        // disposed tier.
+        if (bodyDemanded) laneArm.bodies.release(artifactId, "superseded");
         return () => {};
       }
       if (!hadReplica && grant.kind === "granted") {
@@ -1261,7 +1289,17 @@ export function createEpicReplicaRuntime(
       // Released the same way from either lease-bearing arm - "if you got a
       // lease, you release it" - so a holder never has to know whether its
       // room had bytes when it asked.
-      return () => grant.lease.release();
+      //
+      // BOTH halves come off, and this closure is the only place that pairing
+      // exists. Releasing the tier lease alone would leave the body lane
+      // subscribed for the rest of the session and rebuilt on every later
+      // epoch change - a leak that grows with every tile ever opened, and one
+      // that is invisible because the tier, the projection and the tile all
+      // look correct throughout.
+      return () => {
+        grant.lease.release();
+        if (bodyDemanded) laneArm.bodies.release(artifactId, "superseded");
+      };
     },
 
     hasAttachmentBytes: (hash) => records.hasAttachmentBytes(hash),
