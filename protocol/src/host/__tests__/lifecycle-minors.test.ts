@@ -91,14 +91,24 @@ describe("WORKTREE_BUSY typed holders", () => {
     expect(parsed.holdersRevision).toBeUndefined();
   });
 
-  it("accepts holdersRevision on a WORKTREE_BUSY envelope", () => {
+  it("accepts a digest holdersRevision on a WORKTREE_BUSY envelope", () => {
+    const parsed = worktreeBusyErrorDetailsSchema.parse({
+      code: "WORKTREE_BUSY",
+      message: "Worktree is in use by an active agent or terminal.",
+      holders: [holder],
+      holdersRevision: HOLDERS_REVISION_DIGEST,
+    });
+    expect(parsed.holdersRevision).toBe(HOLDERS_REVISION_DIGEST);
+  });
+
+  it("sanitizes a non-digest holdersRevision on a WORKTREE_BUSY envelope to absent", () => {
     const parsed = worktreeBusyErrorDetailsSchema.parse({
       code: "WORKTREE_BUSY",
       message: "Worktree is in use by an active agent or terminal.",
       holders: [holder],
       holdersRevision: "rev-1",
     });
-    expect(parsed.holdersRevision).toBe("rev-1");
+    expect(parsed.holdersRevision).toBeUndefined();
   });
 
   it("keeps holders on the current error envelope", () => {
@@ -360,17 +370,29 @@ describe("worktree.delete@1.2 expectedHoldersRevision", () => {
     expect(parsed).not.toHaveProperty("expectedHoldersRevision");
   });
 
-  it("parses a WORKTREE_HOLDERS_CHANGED envelope with holders and revision", () => {
+  it("parses a WORKTREE_HOLDERS_CHANGED envelope with holders and a digest revision", () => {
     const parsed = worktreeHoldersChangedErrorDetailsSchema.parse({
       code: "WORKTREE_HOLDERS_CHANGED",
       message: "holders changed",
       holders: [{ ...holder, holderId: "chat:chat-1" }],
-      holdersRevision: "rev-abc",
+      holdersRevision: HOLDERS_REVISION_DIGEST,
     });
     expect(parsed.code).toBe("WORKTREE_HOLDERS_CHANGED");
     expect(parsed.holders).toHaveLength(1);
     expect(parsed.holders?.[0]?.holderId).toBe("chat:chat-1");
-    expect(parsed.holdersRevision).toBe("rev-abc");
+    expect(parsed.holdersRevision).toBe(HOLDERS_REVISION_DIGEST);
+  });
+
+  it("sanitizes a non-digest holdersRevision on a WORKTREE_HOLDERS_CHANGED envelope to absent", () => {
+    const parsed = worktreeHoldersChangedErrorDetailsSchema.parse({
+      code: "WORKTREE_HOLDERS_CHANGED",
+      message: "holders changed",
+      holders: [holder],
+      holdersRevision: "rev-1",
+    });
+    expect(parsed.code).toBe("WORKTREE_HOLDERS_CHANGED");
+    expect(parsed.holders).toEqual([holder]);
+    expect(parsed.holdersRevision).toBeUndefined();
   });
 });
 
@@ -523,6 +545,37 @@ describe("worktree.deleteByPath@1.2 expectedHoldersRevision", () => {
     expect(parsed.kind).toBe("failed");
     if (parsed.kind === "failed") {
       expect(parsed.holdersRevision).toBeUndefined();
+    }
+  });
+
+  it("1.2 failed frame sanitizes an unknown code to absent without dropping the terminal frame", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV12.parse({
+      kind: "failed",
+      reason: "holders changed",
+      code: "SOME_FUTURE_CODE",
+      holders: [holder],
+      holdersRevision: HOLDERS_REVISION_DIGEST,
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("failed");
+    if (parsed.kind === "failed") {
+      expect(parsed.code).toBeUndefined();
+      expect(parsed.reason).toBe("holders changed");
+      expect(parsed.holders).toEqual([holder]);
+      expect(parsed.holdersRevision).toBe(HOLDERS_REVISION_DIGEST);
+    }
+  });
+
+  it("1.2 failed frame keeps a known WORKTREE_BUSY code", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV12.parse({
+      kind: "failed",
+      reason: "in use",
+      code: "WORKTREE_BUSY",
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("failed");
+    if (parsed.kind === "failed") {
+      expect(parsed.code).toBe("WORKTREE_BUSY");
     }
   });
 

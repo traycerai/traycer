@@ -286,8 +286,13 @@ jobs:
           restore-keys: |
             nx-${{ runner.os }}-@traycer-clients/desktop-
       - run: bun install --frozen-lockfile
+      # `--outputStyle=stream` for the same reason as the `test` job above:
+      # Nx's default replay is capped, and this job's only failure log to date
+      # cut off mid-replay before Vitest printed the `×` lines - the failing
+      # test was unrecoverable from CI. It replaces `--tui=false` (the two are
+      # mutually exclusive; `stream` is already a non-TUI style).
       - name: Desktop unit tests (darwin-gated blocks included)
-        run: bunx nx run-many --target=test --projects="@traycer-clients/desktop" --tui=false
+        run: bunx nx run-many --target=test --projects="@traycer-clients/desktop" --outputStyle=stream
       - name: Real electron-builder packaging test
         run: bun run test:packaging
         working-directory: clients/desktop

@@ -230,6 +230,20 @@ describe("seriesKeysByTotalCost / buildUsageSeriesScaleForBuckets (cost ranking)
     expect(scale.colorVar("zeta")).toBe("var(--usage-series-2)");
   });
 
+  it("applies harness brand anchors without applying them to model slugs", () => {
+    const buckets = [
+      bucket({ harnessId: "claude", model: "codex", knownCostUsd: 2 }),
+      bucket({ harnessId: "codex", model: "claude", knownCostUsd: 1 }),
+    ];
+    const harnessScale = buildUsageSeriesScaleForBuckets(buckets, "harness");
+    const modelScale = buildUsageSeriesScaleForBuckets(buckets, "model");
+
+    expect(harnessScale.colorVar("claude")).toBe("var(--usage-harness-claude)");
+    expect(harnessScale.colorVar("codex")).toBe("var(--usage-harness-codex)");
+    expect(modelScale.colorVar("claude")).toBe("var(--usage-series-1)");
+    expect(modelScale.colorVar("codex")).toBe("var(--usage-series-2)");
+  });
+
   it("keeps each series' color when a refetch merely reorders magnitudes", () => {
     // The regression this decoupling exists for: B overtakes A between two
     // responses while both stay well inside the cap. Ranking the SLOTS by

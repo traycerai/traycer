@@ -11,6 +11,7 @@ describe("sweepWorktreeSummary", () => {
         removed: ["/wt/a", "/wt/b"],
         failed: [],
         uncertain: [],
+        holdersChanged: [],
       }),
     ).toEqual({ level: "success", message: "2 worktrees swept" });
   });
@@ -21,6 +22,7 @@ describe("sweepWorktreeSummary", () => {
         removed: ["/wt/a"],
         failed: ["/wt/b"],
         uncertain: ["/wt/c", "/wt/d"],
+        holdersChanged: [],
       }),
     ).toEqual({
       level: "warning",
@@ -31,7 +33,12 @@ describe("sweepWorktreeSummary", () => {
 
   it("says nothing when no worktree was part of the command", () => {
     expect(
-      sweepWorktreeSummary({ removed: [], failed: [], uncertain: [] }),
+      sweepWorktreeSummary({
+        removed: [],
+        failed: [],
+        uncertain: [],
+        holdersChanged: [],
+      }),
     ).toBeNull();
   });
 });
@@ -42,6 +49,7 @@ describe("sweepingWorktreePathsForHost", () => {
     branch: null,
     repoIdentifier: null,
     stopOwners: false,
+    expectedHoldersRevision: undefined,
   });
 
   it("does not let a sweep on one host reserve the same path on another", () => {

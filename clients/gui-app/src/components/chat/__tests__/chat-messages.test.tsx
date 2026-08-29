@@ -9,6 +9,9 @@ import {
 import {
   StrictMode,
   useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -42,7 +45,11 @@ import {
 } from "@/stores/chats/chat-tab-state-cache";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
 import { flushChatTabViewportHandoff } from "@/stores/chats/chat-tab-viewport-handoff";
-import type { OrdinalRange } from "@/stores/chats/transcript-window";
+import type {
+  OrdinalRange,
+  TranscriptWindow,
+} from "@/stores/chats/transcript-window";
+import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
@@ -96,6 +103,11 @@ const activityGroupOpenIds = vi.hoisted(() => ({
   setOpenCalls: [] as Array<{ groupId: string; open: boolean }>,
 }));
 const legendListItemSizeChanges = vi.hoisted(() => ({ count: 0 }));
+const legendListViewabilityProbe = vi.hoisted(() => ({
+  enabled: false,
+  start: 0,
+  end: 0,
+}));
 
 vi.mock("@/lib/keybindings/platform", async (importOriginal) => {
   const actual =
@@ -156,6 +168,7 @@ vi.mock("@legendapp/list/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@legendapp/list/react")>();
   const TeedLegendList: typeof actual.LegendList = (props) => {
     const { ref, onItemSizeChanged, ...rest } = props;
+    const installedViewabilityCallback = useRef(props.onViewableItemsChanged);
     const teeRef = useCallback(
       (instance: import("@legendapp/list/react").LegendListRef | null) => {
         legendListRefHolder.current = instance;
@@ -167,6 +180,22 @@ vi.mock("@legendapp/list/react", async (importOriginal) => {
       },
       [ref],
     );
+    useLayoutEffect(() => {
+      if (!legendListViewabilityProbe.enabled) return;
+      installedViewabilityCallback.current?.({
+        changed: [],
+        end: legendListViewabilityProbe.end,
+        endBuffered: legendListViewabilityProbe.end,
+        start: legendListViewabilityProbe.start,
+        startBuffered: legendListViewabilityProbe.start,
+        viewableItems: [],
+      });
+    }, [props.data]);
+    // Match LegendList 3.3.4: a changed callback prop is installed only after
+    // the new-data layout pass has already had a chance to publish indexes.
+    useEffect(() => {
+      installedViewabilityCallback.current = props.onViewableItemsChanged;
+    }, [props.onViewableItemsChanged]);
     return (
       <actual.LegendList
         {...rest}
@@ -772,6 +801,8 @@ interface RenderChatMessagesOptions {
   readonly coldRewrittenMessageIds?: ReadonlySet<string>;
   /** Test-only seam: captures the adapter registered by ChatMessages. */
   readonly tileFindContext?: TileFindContextValue;
+  readonly transcriptWindow?: TranscriptWindow | null;
+  readonly onVisibleOrdinalRangeChange?: (range: OrdinalRange | null) => void;
 }
 
 interface ChatMessagesRenderState {
@@ -787,6 +818,8 @@ interface ChatMessagesRenderState {
   visible: boolean;
   tileActive: boolean;
   composerOverlayHeight: number;
+  transcriptWindow: TranscriptWindow | null;
+  onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
 }
 
 /** Synthetic dual-key identity for tests (ticket 15). */
@@ -834,6 +867,9 @@ function initialRenderState(
     tileActive: options.tileActive ?? true,
     composerOverlayHeight:
       options.composerOverlayHeight ?? DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX,
+    transcriptWindow: options.transcriptWindow ?? null,
+    onVisibleOrdinalRangeChange:
+      options.onVisibleOrdinalRangeChange ?? noOpOnVisibleOrdinalRangeChange,
   };
 }
 
@@ -910,8 +946,8 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           systemOverlayActive={state.systemOverlayActive}
           scrollRequest={state.scrollRequest}
           composerOverlayHeight={state.composerOverlayHeight}
-          transcriptWindow={null}
-          onVisibleOrdinalRangeChange={noOpOnVisibleOrdinalRangeChange}
+          transcriptWindow={state.transcriptWindow}
+          onVisibleOrdinalRangeChange={state.onVisibleOrdinalRangeChange}
           coldRewrittenMessageIds={state.coldRewrittenMessageIds}
         />
       </div>
@@ -996,6 +1032,9 @@ describe("ChatMessages scroll policy", () => {
     platformMock.isMac = true;
     tileLiveness.live = false;
     legendListItemSizeChanges.count = 0;
+    legendListViewabilityProbe.enabled = false;
+    legendListViewabilityProbe.start = 0;
+    legendListViewabilityProbe.end = 0;
     installLegendListViewportMetrics();
     vi.useRealTimers();
     useSettingsStore.setState({
@@ -1018,6 +1057,36 @@ describe("ChatMessages scroll policy", () => {
     // harness default epic so later tests' freshOpen paths see a true empty
     // chat-key cache rather than a leftover following-end/free-scrolling seed.
     evictChatTabPersistenceForEpic("epic-1");
+  });
+
+  it("reports ordinals from the rows committed with a child layout callback", () => {
+    const reported: Array<OrdinalRange | null> = [];
+    const initialMessage = makeMessage(0, "assistant");
+    const { rerenderWith } = renderChatMessages({
+      messages: [initialMessage],
+      instanceId: "windowed-viewability-layout-order",
+      onVisibleOrdinalRangeChange: (range) => reported.push(range),
+    });
+    const skeletonEntry = {
+      rowId: initialMessage.id,
+      createdAt: initialMessage.createdAt,
+      role: "assistant" as const,
+      byteLength: 80,
+      bodyDigest: "digest-0",
+    };
+    const transcriptWindow: TranscriptWindow = {
+      ...emptyTranscriptWindow(),
+      rowCount: 1,
+      skeleton: [skeletonEntry],
+      skeletonComplete: true,
+      skeletonStreamCoveredThrough: 1,
+      indexRevisionRebuilding: false,
+    };
+
+    legendListViewabilityProbe.enabled = true;
+    rerenderWith({ transcriptWindow });
+
+    expect(reported.at(-1)).toEqual({ fromOrdinal: 0, toOrdinal: 1 });
   });
 
   it("re-syncs a virtualized find highlight from row mount without a resize", async () => {
