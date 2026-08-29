@@ -577,6 +577,15 @@ function TuiAgentTileLive(
     // resume, `prepareLaunch` would mint a new provider session rather than
     // resuming the conversation. The reaped tile falls to the unavailable
     // banner instead, and the agent is restarted where it lives.
+    //
+    // DEFENSIVE, and stated as such after a review asked why no test can make
+    // it fail: `adoptOnly` above already shuts the create effect permanently,
+    // and `bootstrap.retry` only clears the dispatch latch and refetches the
+    // session list - it never creates on its own. So removing this line does
+    // not currently let a replica be recreated. What it saves is an
+    // ARM-RESTART-SUPPRESSION that has nothing to suppress, and it keeps the
+    // refusal readable at the call site instead of resting entirely on a flag
+    // handed to a hook three files away.
     if (isCloudReplica) return;
     armRestartSuppression();
     retryTerminal();

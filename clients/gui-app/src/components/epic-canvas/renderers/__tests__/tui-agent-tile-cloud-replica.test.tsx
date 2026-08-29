@@ -10,7 +10,18 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
+
+type PrepareLaunchRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "agent.tui.prepareLaunch"
+>;
+type TerminalCreateRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "terminal.create"
+>;
 
 let mockBinding: WorktreeBinding | null = null;
 let mockBindingResolved = true;
@@ -29,15 +40,19 @@ const tileMocks = vi.hoisted(() => ({
   showAgentsAction: false,
   /** Flipped per test - the ONE input these cases vary. */
   origin: "registry" as "registry" | "cloud",
-  /** Every `agent.startTerminalSession` this render attempted. */
-  prepareCalls: [] as unknown[],
-  /** Every `terminal.create` this render attempted. */
-  createCalls: [] as unknown[],
+  /**
+   * Every `agent.tui.prepareLaunch` this render attempted, typed as the RPC's
+   * own request. Concretely typed rather than `unknown[]`: the repo bans
+   * `as unknown` in tests as well as production, and the point of the ban
+   * shows here - an untyped spy would keep accepting payloads after the
+   * mocked boundary's signature drifted.
+   */
+  prepareCalls: [] as PrepareLaunchRequest[],
+  /** Every `terminal.create` this render attempted, typed the same way. */
+  createCalls: [] as TerminalCreateRequest[],
   /** The `adoptOnly` the tile handed the bootstrap on its last render. */
   adoptOnly: null as boolean | null | undefined,
-  /** The tile's reaped-exit callback, so a test can fire one. */
-  onReapedExit: null as (() => void) | null,
-  /** Times the tile asked the bootstrap to retry (i.e. to create). */
+  /** Times the tile asked the bootstrap to retry. */
   retryCalls: 0,
   /** What the owner host reports about a running PTY for this agent. */
   hostHasSession: false as boolean | null,
@@ -160,7 +175,7 @@ vi.mock("@/hooks/terminal/use-terminal-create-mutation", () => ({
     isSuccess: false,
     error: null,
     reset: () => undefined,
-    mutate: (input: unknown) => {
+    mutate: (input: TerminalCreateRequest) => {
       tileMocks.createCalls.push(input);
     },
   }),
@@ -173,7 +188,7 @@ vi.mock("@/hooks/agent/use-prepare-tui-launch-mutation", () => ({
     isIdle: true,
     error: null,
     reset: () => undefined,
-    mutateAsync: (input: unknown) => {
+    mutateAsync: (input: PrepareLaunchRequest) => {
       tileMocks.prepareCalls.push(input);
       return new Promise(() => {});
     },
@@ -351,9 +366,10 @@ describe("<TuiAgentTile /> cross-host replica", () => {
 
     await screen.findByText(/is not running on/);
     expect(tileMocks.adoptOnly).toBe(true);
-    // And the reaped-exit revive, which is the path that re-dispatches a
-    // create WITHOUT waiting on the grid, never asked for one.
-    expect(tileMocks.retryCalls).toBe(0);
+    // Nothing was prepared or created on the way to that state either. Weaker
+    // than the flag above and kept as a corroborating observation, not as the
+    // proof: a create needs a measured grid, so this zero holds under jsdom
+    // whether or not the gate exists.
     expect(tileMocks.prepareCalls).toEqual([]);
     expect(tileMocks.createCalls).toEqual([]);
   });
