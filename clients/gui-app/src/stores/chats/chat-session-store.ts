@@ -26,6 +26,12 @@ import {
   removeOptimisticQueuedItemByClientActionId,
   removeOptimisticQueuedItemByMessageId,
 } from "@/stores/chats/optimistic-queue";
+import {
+  BUDGET_PLANE_IDS,
+  createGenerationGuard,
+  guardHandler,
+  type GenerationGuard,
+} from "@traycer-clients/shared/replica-runtime";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { TRANSCRIPT_RANGE_MAX_BYTES } from "@traycer/protocol/persistence/chat-transcript/read-range";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
@@ -53,11 +59,21 @@ import {
   recordSharingOrdinals,
   streamWindowMessage,
   touchTranscriptRange,
+  transcriptWindowChargedBytes,
   updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
   type OrdinalRange,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
+import { getProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
+import {
+  chatHolderId,
+  chatSessionChargeBytes,
+  chatWholeSetSliceBytes,
+  evictChatWindowForAccountant,
+  legacyTranscriptResidencyBytes,
+  type ChatWholeSetSlices,
+} from "@/stores/replica-memory/chat-window-budget";
 import type {
   StreamFlushCoordinator,
   StreamFlushLease,
@@ -91,6 +107,11 @@ import type {
   ChatStreamCallbacks,
   ChatStreamClient,
 } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import {
+  createLegacyChatTranscriptAdapter,
+  type LegacyChatTranscriptSnapshotEvent,
+} from "@/stores/chats/legacy-chat-transcript-adapter";
+import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
@@ -1790,17 +1811,60 @@ export interface ChatSessionNotificationDependencies {
   >;
 }
 
+function chatSlicesOf(state: ChatSessionState): ChatWholeSetSlices {
+  return {
+    queue: state.queue,
+    pendingApprovals: state.pendingApprovals,
+    pendingFileEditApprovals: state.pendingFileEditApprovals,
+    pendingInterviews: state.pendingInterviews,
+    backgroundItems: state.backgroundItems,
+    managedCommands: state.managedCommands,
+  };
+}
+
 export function createChatSessionStoreWithNotificationDependencies(
   options: ChatSessionStoreOptions,
   notificationDependencies: ChatSessionNotificationDependencies,
 ): ChatSessionStoreHandle {
   const notificationUserId = options.userId;
+  const memory = getProcessMemoryRuntime();
+  const holderId = chatHolderId(options.hostId, options.epicId, options.chatId);
+  let budgetClock = 0;
+  let reconciling = false;
   let disposed = false;
   let streamClient: ChatStreamClientHandle | null = null;
   // Assigned synchronously inside the `create()` initializer below, where the
   // delta buffer lives; read by the handle's surface-visibility rollup.
   let flushLease: StreamFlushLease | null = null;
-  let activeStreamGeneration = 0;
+  /**
+   * The counter half of this store's stream guard - shared, so the check that
+   * keeps a superseded socket's frames out of the live store exists once rather
+   * than once per plane.
+   *
+   * The DISPOSAL half is this store's own and is composed over it in
+   * {@link streamGuard}, not folded into the shared counter: a retired
+   * generation and a dead store are different facts, and only one of them is
+   * about which socket a frame came from.
+   */
+  const streamGenerations = createGenerationGuard();
+  /**
+   * What every stream handler is actually guarded on: a live store AND a
+   * current generation.
+   *
+   * `disposed` is deliberately kept as its own conjunct rather than argued
+   * redundant. It IS redundant on the path anyone would check - `dispose()`
+   * calls `closeStreamClient()`, which retires the generation - but only while
+   * `streamClient !== null`, since that method early-returns otherwise, and
+   * only for as long as nothing builds a stream after disposal. Both of those
+   * are properties of code elsewhere in this file, not of the guard, so the
+   * conjunct stays where it cannot be invalidated from a distance.
+   */
+  const streamGuard: GenerationGuard = {
+    current: () => streamGenerations.current(),
+    next: () => streamGenerations.next(),
+    isCurrent: (candidate) =>
+      !disposed && streamGenerations.isCurrent(candidate),
+  };
   let fatalCloseNotificationGeneration: number | null = null;
   // `activeTurn` is cleared as soon as a stream fatally closes. Retain the
   // turn that produced that close so another renderer's later live completion
@@ -2010,7 +2074,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     if (streamClient === null) return;
     const client = streamClient;
     streamClient = null;
-    activeStreamGeneration += 1;
+    streamGuard.next();
     // A replaced client is a new connection - the old one's `closed` status
     // event is suppressed by the generation guard, so bump here too.
     connectionEpoch += 1;
@@ -2135,9 +2199,6 @@ export function createChatSessionStoreWithNotificationDependencies(
     const flushBlockDeltas = (): void => {
       applyBufferedDeltas();
     };
-
-    const isCurrentStream = (streamGeneration: number): boolean =>
-      !disposed && streamGeneration === activeStreamGeneration;
 
     /**
      * The authoritative-snapshot fold, shared by BOTH lines.
@@ -3243,6 +3304,42 @@ export function createChatSessionStoreWithNotificationDependencies(
      * The steady-state path for every windowed frame that changes hydration
      * without being authoritative about anything else.
      */
+    const commitChatWindowBudget = (window: TranscriptWindow): void => {
+      budgetClock += 1;
+      memory.chatWindows.settle(
+        memory.accountant,
+        holderId,
+        chatSessionChargeBytes(window, chatSlicesOf(get())),
+      );
+      if (reconciling) return;
+      reconciling = true;
+      try {
+        memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
+      } finally {
+        reconciling = false;
+      }
+    };
+
+    const legacyTranscriptChargeBytes = (state: ChatSessionState): number =>
+      legacyTranscriptResidencyBytes(state.messages, state.events) +
+      chatWholeSetSliceBytes(chatSlicesOf(state));
+
+    const commitLegacyTranscriptBudget = (): void => {
+      budgetClock += 1;
+      memory.chatWindows.settle(
+        memory.accountant,
+        holderId,
+        legacyTranscriptChargeBytes(get()),
+      );
+      if (reconciling) return;
+      reconciling = true;
+      try {
+        memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
+      } finally {
+        reconciling = false;
+      }
+    };
+
     const publishWindowedTranscript = (
       window: TranscriptWindow,
       // How the rows got here, when that is something a consumer has to know.
@@ -3259,7 +3356,54 @@ export function createChatSessionStoreWithNotificationDependencies(
         transcriptRowContext: records.rowContext,
         ...(provenance ?? {}),
       });
+      commitChatWindowBudget(window);
     };
+
+    memory.chatWindows.attach({
+      holderId,
+      touchedAt: () => budgetClock,
+      measure: () =>
+        chatSessionChargeBytes(get().transcriptWindow, chatSlicesOf(get())),
+      evict: (overBytes) => {
+        const state = get();
+        if (!windowedLine) {
+          const transcriptBytes = legacyTranscriptResidencyBytes(
+            state.messages,
+            state.events,
+          );
+          // No ordinal/range exists on the legacy line, so this transcript is
+          // the sole recoverable copy rather than an evictable window.
+          memory.chatWindows.settle(
+            memory.accountant,
+            holderId,
+            transcriptBytes + chatWholeSetSliceBytes(chatSlicesOf(state)),
+          );
+          return {
+            reclaimedBytes: 0,
+            protectedBytesByKind:
+              transcriptBytes === 0
+                ? []
+                : [{ kind: "sole-copy", bytes: transcriptBytes }],
+          };
+        }
+        const current = transcriptWindowChargedBytes(state.transcriptWindow);
+        const { window, outcome } = evictChatWindowForAccountant(
+          state.transcriptWindow,
+          Math.max(0, current - overBytes),
+          visibleTranscriptRange,
+          requiredHydrationOrdinalsOf(state),
+        );
+        if (window !== state.transcriptWindow) {
+          publishWindowedTranscript(window, null);
+        }
+        memory.chatWindows.settle(
+          memory.accountant,
+          holderId,
+          chatSessionChargeBytes(window, chatSlicesOf(get())),
+        );
+        return outcome;
+      },
+    });
 
     /**
      * Route a record that arrived with no ordinal into the window.
@@ -3473,58 +3617,91 @@ export function createChatSessionStoreWithNotificationDependencies(
       );
     };
 
-    const callbacks: ChatStreamCallbacks = {
-      onSnapshot: (frame) => {
-        if (!windowedLine) {
-          // The legacy line's `messages` IS the transcript, so the scan is the
-          // whole-transcript answer here and needs no host help.
-          applyAuthoritativeSnapshot(
-            frame,
-            null,
-            latestAssistantAuthFailureTurnKey(frame.snapshot.chat.messages),
-          );
-          return;
-        }
-        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
-          return;
-        }
-        // A LEGACY snapshot on a session that had negotiated `1.8`: the
-        // reconnect renegotiated onto an older line (a host rolled back below
-        // `1.8`, or a fallback route to an older peer). The windowed state is
-        // not stale-but-usable, it is unaddressable - no current peer serves
-        // the epoch its ordinals live in, so stale placeholders could never
-        // hydrate - and left in place it would make the appliers treat this
-        // WHOLE transcript as a hydrated subset and merge it against a dead
-        // skeleton. Drop all of it, atomically with the snapshot's own
-        // publish (`extra` below), and fall back to the legacy shape the
-        // discriminator now reports.
-        windowedLine = false;
-        clearInFlightHydration();
-        clearStreamCompletionWatchdog();
-        // Not merely unawaited: this line no longer HAS ordinals, so an answer
-        // still in the air describes a coordinate space nothing here can read.
-        forgetOutstandingHydration();
-        clearResnapshotRequest();
-        forgetDeferredWindowedSnapshot();
+    const applyLegacyTranscriptEvent = (
+      event: LegacyChatTranscriptSnapshotEvent,
+    ): void => {
+      const { frame } = event;
+      if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+        return;
+      }
+      if (!windowedLine) {
+        // The legacy line's `messages` IS the transcript, so the scan is the
+        // whole-transcript answer here and needs no host help.
+        //
+        // This event is also a whole-transcript RESIDENCY claim, not merely a
+        // decode buffer: `applyAuthoritativeSnapshot` retains both arrays in the
+        // replica. T5's process-wide accountant must charge that complete cost;
+        // this line has no ordinal/range mechanism with which to evict part of
+        // it and later recover it.
         applyAuthoritativeSnapshot(
           frame,
-          {
-            transcriptWindow: emptyTranscriptWindow(),
-            transcriptDerived: null,
-            // The rest of the windowed line's aux state, back to its initial
-            // values: nothing reads either once `transcriptDerived` is null,
-            // but a LATER re-upgrade must start from the same blank state a
-            // fresh store does.
-            accumulatedFileChangeCount: 0,
-            coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
-            jumpTargetOrdinal: null,
-            accumulatedFileChangeSummaries: [],
-            accumulatedSummaryGenerationSeated: false,
-          },
-          // A downgrade frame is a LEGACY snapshot - full records - so the
-          // scan is again the whole-transcript answer.
+          null,
           latestAssistantAuthFailureTurnKey(frame.snapshot.chat.messages),
         );
+        commitLegacyTranscriptBudget();
+        return;
+      }
+      // A LEGACY snapshot on a session that had negotiated `1.8`: the
+      // reconnect renegotiated onto an older line (a host rolled back below
+      // `1.8`, or a fallback route to an older peer). The windowed state is
+      // not stale-but-usable, it is unaddressable - no current peer serves
+      // the epoch its ordinals live in, so stale placeholders could never
+      // hydrate - and left in place it would make the appliers treat this
+      // WHOLE transcript as a hydrated subset and merge it against a dead
+      // skeleton. Drop all of it, atomically with the snapshot's own publish
+      // (`extra` below), and fall back to the legacy shape the discriminator
+      // now reports.
+      windowedLine = false;
+      clearInFlightHydration();
+      clearStreamCompletionWatchdog();
+      // Not merely unawaited: this line no longer HAS ordinals, so an answer
+      // still in the air describes a coordinate space nothing here can read.
+      forgetOutstandingHydration();
+      clearResnapshotRequest();
+      forgetDeferredWindowedSnapshot();
+      applyAuthoritativeSnapshot(
+        frame,
+        {
+          transcriptWindow: emptyTranscriptWindow(),
+          transcriptDerived: null,
+          // The rest of the windowed line's aux state, back to its initial
+          // values: nothing reads either once `transcriptDerived` is null,
+          // but a LATER re-upgrade must start from the same blank state a
+          // fresh store does.
+          accumulatedFileChangeCount: 0,
+          coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
+          jumpTargetOrdinal: null,
+          accumulatedFileChangeSummaries: [],
+          accumulatedSummaryGenerationSeated: false,
+        },
+        // A downgrade frame is a LEGACY snapshot - full records - so the
+        // scan is again the whole-transcript answer.
+        latestAssistantAuthFailureTurnKey(frame.snapshot.chat.messages),
+      );
+      commitLegacyTranscriptBudget();
+    };
+
+    const legacyTranscriptAdapter = createLegacyChatTranscriptAdapter();
+    legacyTranscriptAdapter.attach({
+      environment: createRendererRuntimeEnvironment(),
+      emit: applyLegacyTranscriptEvent,
+      // Pre-windowed chat has no cursor and therefore no resume outcome.
+      reportResume: () => {},
+      // The multiplexed `ChatStreamClient` owns connection status; this decode
+      // arm receives only the legacy snapshot callback.
+      reportStatus: () => {},
+      // No epoch/cursor exists on this line from which an authority-side
+      // replacement could be inferred. In particular, this is not a client
+      // reseed escape hatch: AdapterHost intentionally has no such capability.
+      requestReplacement: () => {},
+    });
+
+    const callbacks: ChatStreamCallbacks = {
+      onSnapshot: (frame) => {
+        // The adapter emits synchronously. Keeping the callback itself free of
+        // projection writes is the proof that the legacy arm is behind the
+        // runtime seam rather than a parallel store mutation path.
+        legacyTranscriptAdapter.ingestSnapshot(frame);
       },
       onWorktreeStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -3712,6 +3889,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // leave it empty, with the header still counting the files it can no
           // longer list.
         });
+        commitChatWindowBudget(window);
         // An aux-only re-broadcast - a queue change, an approval - clears the
         // resnapshot latch and `invalidated` while sending no chunks at all
         // (see the comment just above). If the re-stream this client asked for
@@ -3855,6 +4033,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // then would fold the deltas into the same empty state the hold
           // exists to keep them out of.
           if (deferredWindowedSnapshot === null) flushBlockDeltas();
+          commitChatWindowBudget(window);
         }
         requestPlannedHydration();
       },
@@ -4837,156 +5016,109 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
     };
 
-    const makeCallbacks = (streamGeneration: number): ChatStreamCallbacks => ({
-      onSnapshot: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onSnapshot(frame);
-        const activeTurnId = get().activeTurn?.turnId ?? null;
-        if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
-          fatalCloseTurnId = null;
-        }
-      },
-      onWorktreeStateChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onWorktreeStateChanged(frame);
-      },
-      onManagedCommandsChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onManagedCommandsChanged(frame);
-      },
-      onHeldUpdatesChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onHeldUpdatesChanged(frame);
-      },
-      // Guarded like every frame above rather than passed through: whatever
-      // binds these must not apply a hydration response from a stream
-      // generation this store has already replaced.
-      onWindowedSnapshot: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onWindowedSnapshot(frame);
-      },
-      onSkeletonChunk: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onSkeletonChunk(frame);
-      },
-      onIndexChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onIndexChanged(frame);
-      },
-      onRange: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onRange(frame);
-      },
-      onAccumulatedChanges: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onAccumulatedChanges(frame);
-      },
-      onActionAck: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onActionAck(frame);
-      },
-      onMessageAccepted: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onMessageAccepted(frame);
-      },
-      onQueueChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onQueueChanged(frame);
-      },
-      onTurnStateChanged: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onTurnStateChanged(frame);
-        const activeTurnId = get().activeTurn?.turnId ?? null;
-        if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
-          fatalCloseTurnId = null;
-        }
-      },
-      onBlockDelta: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onBlockDelta(frame);
-      },
-      onApprovalRequested: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onApprovalRequested(frame);
-      },
-      onApprovalResolved: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onApprovalResolved(frame);
-      },
-      onFileEditApprovalRequested: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onFileEditApprovalRequested(frame);
-      },
-      onFileEditApprovalResolved: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onFileEditApprovalResolved(frame);
-      },
-      onInterviewRequested: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onInterviewRequested(frame);
-      },
-      onInterviewAnswered: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onInterviewAnswered(frame);
-      },
-      onInterviewErrored: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onInterviewErrored(frame);
-      },
-      onEventAppended: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onEventAppended(frame);
-      },
-      onRestoreStarted: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onRestoreStarted(frame);
-      },
-      onRestoreProgress: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onRestoreProgress(frame);
-      },
-      onRestoreCompleted: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onRestoreCompleted(frame);
-      },
-      onErrorNotice: (frame) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        callbacks.onErrorNotice(frame);
-      },
-      onConnectionStatus: (status, reason) => {
-        if (!isCurrentStream(streamGeneration)) return;
-        // A RETRYABLE fatalError is the transport saying "not now" - the client
-        // is already reconnecting on its own backoff and the user needs to do
-        // nothing. Notifying on it turned an overnight sleep into a stack of
-        // "Agent stream closed unexpectedly" rows (one per dark wake), which
-        // read as data loss when nothing was lost. Only an adjudicated close -
-        // one the user must act on - is worth a notification.
-        if (
-          status === "closed" &&
-          reason?.kind === "fatalError" &&
-          reason.details.retryable !== true &&
-          fatalCloseNotificationGeneration !== streamGeneration
-        ) {
-          fatalCloseNotificationGeneration = streamGeneration;
-          fatalCloseTurnId = get().activeTurn?.turnId ?? null;
-          notificationDependencies.appLocalNotifications
-            .getState()
-            .upsertRecurringFailure(
-              chatStreamErrorNotification({
-                hostId: options.hostId,
-                epicId: options.epicId,
-                chatId: options.chatId,
-                details: reason.details,
-              }),
-            );
-        }
-        callbacks.onConnectionStatus(status, reason);
-      },
-    });
+    /**
+     * The stream-facing callbacks: every frame this store accepts, each inert
+     * once its generation is retired.
+     *
+     * The guard used to be written out by hand on all twenty-seven, and the bug
+     * it prevents - a superseded socket's frame landing in the live store -
+     * returned the moment a twenty-eighth was added without the line. The
+     * pass-through frames now wire it through the shared {@link guardHandler},
+     * which is the same check in one place; the three that do more than forward
+     * keep their bodies and check {@link streamGuard} themselves, because the
+     * work they do after the frame is this store's, not the guard's.
+     *
+     * `callbacks.onX` is read here, when the handler is wired, rather than per
+     * frame. Nothing reassigns a member of that object, and a future change
+     * that wants to swap one at runtime has to take that up with this line.
+     */
+    const makeCallbacks = (streamGeneration: number): ChatStreamCallbacks => {
+      const guarded = <TArgs extends unknown[]>(
+        handler: (...args: TArgs) => void,
+      ): ((...args: TArgs) => void) =>
+        guardHandler(streamGuard, streamGeneration, handler);
+      return {
+        onSnapshot: (frame) => {
+          if (!streamGuard.isCurrent(streamGeneration)) return;
+          callbacks.onSnapshot(frame);
+          const activeTurnId = get().activeTurn?.turnId ?? null;
+          if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
+            fatalCloseTurnId = null;
+          }
+        },
+        onWorktreeStateChanged: guarded(callbacks.onWorktreeStateChanged),
+        onManagedCommandsChanged: guarded(callbacks.onManagedCommandsChanged),
+        onHeldUpdatesChanged: guarded(callbacks.onHeldUpdatesChanged),
+        // Guarded like every frame above rather than passed through: whatever
+        // binds these must not apply a hydration response from a stream
+        // generation this store has already replaced.
+        onWindowedSnapshot: guarded(callbacks.onWindowedSnapshot),
+        onSkeletonChunk: guarded(callbacks.onSkeletonChunk),
+        onIndexChanged: guarded(callbacks.onIndexChanged),
+        onRange: guarded(callbacks.onRange),
+        onAccumulatedChanges: guarded(callbacks.onAccumulatedChanges),
+        onActionAck: guarded(callbacks.onActionAck),
+        onMessageAccepted: guarded(callbacks.onMessageAccepted),
+        onQueueChanged: guarded(callbacks.onQueueChanged),
+        onTurnStateChanged: (frame) => {
+          if (!streamGuard.isCurrent(streamGeneration)) return;
+          callbacks.onTurnStateChanged(frame);
+          const activeTurnId = get().activeTurn?.turnId ?? null;
+          if (activeTurnId !== null && activeTurnId !== fatalCloseTurnId) {
+            fatalCloseTurnId = null;
+          }
+        },
+        onBlockDelta: guarded(callbacks.onBlockDelta),
+        onApprovalRequested: guarded(callbacks.onApprovalRequested),
+        onApprovalResolved: guarded(callbacks.onApprovalResolved),
+        onFileEditApprovalRequested: guarded(
+          callbacks.onFileEditApprovalRequested,
+        ),
+        onFileEditApprovalResolved: guarded(
+          callbacks.onFileEditApprovalResolved,
+        ),
+        onInterviewRequested: guarded(callbacks.onInterviewRequested),
+        onInterviewAnswered: guarded(callbacks.onInterviewAnswered),
+        onInterviewErrored: guarded(callbacks.onInterviewErrored),
+        onEventAppended: guarded(callbacks.onEventAppended),
+        onRestoreStarted: guarded(callbacks.onRestoreStarted),
+        onRestoreProgress: guarded(callbacks.onRestoreProgress),
+        onRestoreCompleted: guarded(callbacks.onRestoreCompleted),
+        onErrorNotice: guarded(callbacks.onErrorNotice),
+        onConnectionStatus: (status, reason) => {
+          if (!streamGuard.isCurrent(streamGeneration)) return;
+          // A RETRYABLE fatalError is the transport saying "not now" - the client
+          // is already reconnecting on its own backoff and the user needs to do
+          // nothing. Notifying on it turned an overnight sleep into a stack of
+          // "Agent stream closed unexpectedly" rows (one per dark wake), which
+          // read as data loss when nothing was lost. Only an adjudicated close -
+          // one the user must act on - is worth a notification.
+          if (
+            status === "closed" &&
+            reason?.kind === "fatalError" &&
+            reason.details.retryable !== true &&
+            fatalCloseNotificationGeneration !== streamGeneration
+          ) {
+            fatalCloseNotificationGeneration = streamGeneration;
+            fatalCloseTurnId = get().activeTurn?.turnId ?? null;
+            notificationDependencies.appLocalNotifications
+              .getState()
+              .upsertRecurringFailure(
+                chatStreamErrorNotification({
+                  hostId: options.hostId,
+                  epicId: options.epicId,
+                  chatId: options.chatId,
+                  details: reason.details,
+                }),
+              );
+          }
+          callbacks.onConnectionStatus(status, reason);
+        },
+      };
+    };
 
     const createStreamClient = (): ChatStreamClientHandle => {
-      activeStreamGeneration += 1;
-      const streamGeneration = activeStreamGeneration;
+      const streamGeneration = streamGuard.next();
       return options.streamClientFactory(
         options.epicId,
         options.chatId,
@@ -6134,6 +6266,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         forgetOutstandingHydration();
         clearResnapshotRequest();
         clearStreamCompletionWatchdog();
+        legacyTranscriptAdapter.detach("disposed");
+        memory.chatWindows.detach(holderId);
+        memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
         closeStreamClient();
       },
     };

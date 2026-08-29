@@ -15,10 +15,26 @@ import type {
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
+  BUDGET_PLANE_IDS,
+  type PlaneUsage,
+} from "@traycer-clients/shared/replica-runtime";
+import {
   createChatSessionStore,
+  type ChatSessionState,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import {
+  getProcessMemoryRuntime,
+  type ProcessMemoryRuntime,
+} from "@/stores/replica-memory/process-memory-accountant";
+import { CHAT_WINDOWS_SOFT_LIMIT_BYTES } from "@/stores/replica-memory/budget-limits";
+import {
+  chatHolderId,
+  chatWholeSetSliceBytes,
+  legacyTranscriptResidencyBytes,
+  type ChatWholeSetSlices,
+} from "@/stores/replica-memory/chat-window-budget";
 
 /**
  * The windowed (`chat.subscribe@1.8`) -> legacy (`chat.subscribe@1.0-1.7`)
@@ -597,6 +613,179 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
       expect(afterStraggler).toBe(beforeStraggler);
     } finally {
       harness.handle.dispose();
+    }
+  });
+});
+
+// ─── T5's process-wide chat-windows holder, driven by the same real frames ─
+
+function sixWholeSetSlicesOf(state: ChatSessionState): ChatWholeSetSlices {
+  return {
+    queue: state.queue,
+    pendingApprovals: state.pendingApprovals,
+    pendingFileEditApprovals: state.pendingFileEditApprovals,
+    pendingInterviews: state.pendingInterviews,
+    backgroundItems: state.backgroundItems,
+    managedCommands: state.managedCommands,
+  };
+}
+
+/**
+ * The independently-recomputed legacy charge: the two EXPORTED building
+ * blocks (`legacyTranscriptResidencyBytes`, `chatWholeSetSliceBytes`) summed
+ * here, in the test - not the production module's own private
+ * `legacyTranscriptChargeBytes`, which this file cannot import.
+ */
+function expectedLegacyChargeBytes(state: ChatSessionState): number {
+  return (
+    legacyTranscriptResidencyBytes(state.messages, state.events) +
+    chatWholeSetSliceBytes(sixWholeSetSlicesOf(state))
+  );
+}
+
+function chatWindowsUsage(memory: ProcessMemoryRuntime): PlaneUsage {
+  const usage = memory.accountant
+    .snapshot()
+    .planes.find((plane) => plane.planeId === BUDGET_PLANE_IDS.chatWindows);
+  if (usage === undefined) {
+    throw new Error("Expected the chat-windows plane to be registered");
+  }
+  return usage;
+}
+
+describe("chat-session-store - real legacy snapshots settle the process-wide chat-windows holder", () => {
+  it("a steady (non-downgrade) legacy snapshot settles to legacy residency + the six whole-set slices, with exactly one holder", () => {
+    const memory = getProcessMemoryRuntime();
+    const harness = createConsumerHarness();
+    try {
+      // Negotiated at the legacy line from the very first frame - `windowedLine`
+      // never becomes true, so this exercises `applyLegacyTranscriptEvent`'s
+      // `!windowedLine` branch (`commitLegacyTranscriptBudget()` at its OWN call
+      // site), not the downgrade branch below.
+      harness.session.negotiatedVersion = LEGACY_VERSION;
+      harness.session.emitStatus("open", null);
+      harness.session.fireServerFrame(capturedLegacySnapshotEnvelope());
+
+      const state = harness.handle.store.getState();
+      const expectedBytes = expectedLegacyChargeBytes(state);
+      // Non-vacuous: the captured transcript's two messages + three events
+      // alone make this fail on a `0` remeasurement.
+      expect(expectedBytes).toBeGreaterThan(0);
+
+      const usage = chatWindowsUsage(memory);
+      expect(usage.settledBytes).toBe(expectedBytes);
+      expect(usage.holderCount).toBe(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("the windowed -> legacy downgrade settles to the legacy amount, proven distinct from the prior windowed amount", () => {
+    const memory = getProcessMemoryRuntime();
+    const harness = createConsumerHarness();
+    try {
+      harness.session.emitStatus("open", null);
+      harness.session.fireServerFrame(windowedSnapshotEnvelope());
+
+      const windowedSettledBytes = chatWindowsUsage(memory).settledBytes;
+      expect(windowedSettledBytes).toBeGreaterThan(0);
+
+      harness.session.emitStatus("reconnecting", null);
+      harness.session.negotiatedVersion = LEGACY_VERSION;
+      harness.session.emitStatus("open", null);
+      harness.session.fireServerFrame(capturedLegacySnapshotEnvelope());
+
+      const state = harness.handle.store.getState();
+      const expectedLegacyBytes = expectedLegacyChargeBytes(state);
+
+      const usage = chatWindowsUsage(memory);
+      // A missing legacy settle (the downgrade branch's OWN
+      // `commitLegacyTranscriptBudget()` call, distinct from the steady
+      // branch's) would leave the stale windowed figure standing, which
+      // `toBe(expectedLegacyBytes)` alone could still coincidentally pass if
+      // the two figures happened to collide - proving they differ first is
+      // what rules that out.
+      expect(usage.settledBytes).not.toBe(windowedSettledBytes);
+      expect(usage.settledBytes).toBe(expectedLegacyBytes);
+      expect(usage.holderCount).toBe(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a real legacy snapshot that pushes chat-windows over budget settles the sole-copy amount, requests one eviction, reclaims nothing, and latches over-protected", () => {
+    const memory = getProcessMemoryRuntime();
+    // An accountant-only primer: settled directly, never attached to
+    // `memory.chatWindows`, so the book's own eviction sweep (which only
+    // visits ATTACHED sessions) can never touch it - it exists purely to push
+    // the plane to exactly the soft limit before the real chat holder adds
+    // anything.
+    const primerHolderId = "primer:chat-windows-pressure-path";
+    memory.accountant.settle(
+      BUDGET_PLANE_IDS.chatWindows,
+      primerHolderId,
+      CHAT_WINDOWS_SOFT_LIMIT_BYTES,
+    );
+    // Cumulative telemetry (evictionsRequested/bytesReclaimed) is process-wide
+    // and never reset between tests, so every assertion on it below reads a
+    // DELTA off this pre-snapshot baseline rather than an absolute value.
+    const baseline = chatWindowsUsage(memory);
+    const harness = createConsumerHarness();
+    try {
+      harness.session.negotiatedVersion = LEGACY_VERSION;
+      harness.session.emitStatus("open", null);
+      harness.session.fireServerFrame(capturedLegacySnapshotEnvelope());
+
+      const state = harness.handle.store.getState();
+      const expectedLegacyBytes = expectedLegacyChargeBytes(state);
+      expect(expectedLegacyBytes).toBeGreaterThan(0);
+
+      const usage = chatWindowsUsage(memory);
+      expect(usage.settledBytes - CHAT_WINDOWS_SOFT_LIMIT_BYTES).toBe(
+        expectedLegacyBytes,
+      );
+      expect(usage.evictionsRequested - baseline.evictionsRequested).toBe(1);
+      expect(usage.bytesReclaimed - baseline.bytesReclaimed).toBe(0);
+      // Asserted BEFORE the direct `chatWindows.evict()` probe below: that
+      // probe re-settles the same holder as a side effect, which clears the
+      // accountant's `protectedLatch` outside `accountant.reconcile()` and
+      // would make this read `"over"` (or better) instead of the terminal
+      // state production's own `commitLegacyTranscriptBudget()` -> `reconcile`
+      // actually left the plane in.
+      expect(memory.accountant.pressure(BUDGET_PLANE_IDS.chatWindows)).toBe(
+        "over-protected",
+      );
+
+      // Diagnostic-only, and deliberately last: call the book's eviction sweep
+      // directly to inspect what it told the accountant, rather than
+      // re-deriving it from private state. The legacy branch's `evict` never
+      // reads `overBytes` (there is no ordinal/range to evict a PART of), so
+      // any positive value drives the same outcome.
+      const transcriptBytes = legacyTranscriptResidencyBytes(
+        state.messages,
+        state.events,
+      );
+      // Deliberately falsify only this holder's ledger while leaving the
+      // resident transcript untouched. The direct eviction probe must
+      // remeasure and restore the whole legacy charge; without the legacy
+      // branch's own `settle`, its zero-reclaimed outcome could otherwise pass
+      // while merely inheriting the correct landing-time charge.
+      memory.accountant.settle(
+        BUDGET_PLANE_IDS.chatWindows,
+        chatHolderId("host-1", EPIC_ID, CHAT_ID),
+        0,
+      );
+      const outcome = memory.chatWindows.evict(1);
+      expect(outcome.reclaimedBytes).toBe(0);
+      expect(outcome.protectedBytesByKind).toEqual([
+        { kind: "sole-copy", bytes: transcriptBytes },
+      ]);
+      expect(
+        chatWindowsUsage(memory).settledBytes - CHAT_WINDOWS_SOFT_LIMIT_BYTES,
+      ).toBe(expectedLegacyBytes);
+    } finally {
+      harness.handle.dispose();
+      memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, primerHolderId);
     }
   });
 });
