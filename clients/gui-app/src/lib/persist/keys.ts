@@ -331,13 +331,6 @@ export const PERSIST_STORES = [
     leaf: "github-mention-filters",
     kind: "static",
   },
-  // Dismissal of the quiet "bring your CLI sessions over" row above the task
-  // list. One flag, never re-armed.
-  {
-    camelName: "sessionImportPrompt",
-    leaf: "session-import-prompt",
-    kind: "static",
-  },
   // Imported tasks the user has not opened yet: the task list's unread dot.
   // Epic ids are cloud entities, so no host scoping; entries clear on first
   // open and the set is small (one import run's worth at most).

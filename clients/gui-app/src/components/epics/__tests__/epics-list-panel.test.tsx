@@ -25,7 +25,6 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
 import {
   EpicsListPanel,
   type EpicsListPanelVariant,
@@ -35,8 +34,6 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { useSessionImportPromptStore } from "@/stores/session-import/session-import-prompt-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
@@ -219,30 +216,6 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
-// The session-import prompt row sits above the list and reads the same host
-// runtime this file renders without. An unadvertised capability is what a host
-// that predates session import reports, and it draws no row at all - which is
-// the shape every assertion below already expects the panel to have, so that
-// is the default here and `enableSessionImportPrompt` is the one test that
-// wants a row on screen.
-interface SessionImportPromptHarness {
-  available: boolean;
-  status: SessionImportStatusResponse | undefined;
-}
-
-const sessionImport = vi.hoisted((): SessionImportPromptHarness => ({
-  available: false,
-  status: undefined,
-}));
-
-vi.mock("@/hooks/session-import/use-session-import-available", () => ({
-  useSessionImportAvailable: () => sessionImport.available,
-}));
-
-vi.mock("@/hooks/session-import/use-session-import-status-query", () => ({
-  useSessionImportStatus: () => ({ data: sessionImport.status }),
-}));
-
 vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
   useEpicSweepWorktreeCandidatesForClient: () => ({
     hostId: "host-test",
@@ -341,18 +314,6 @@ function renderPanel(variant: EpicsListPanelVariant, initialEntry: string) {
   return renderPanelWithOpenItem(variant, initialEntry, null);
 }
 
-/**
- * Every condition the prompt row needs at once: a host that advertises the
- * capability, onboarding behind the user, no dismissal, and a host that has
- * neither an import running nor one on record.
- */
-function enableSessionImportPrompt(): void {
-  sessionImport.available = true;
-  sessionImport.status = { active: null, lastCompleted: null };
-  useOnboardingStore.setState({ completedAt: 100, step: 0 });
-  useSessionImportPromptStore.setState({ dismissedAt: null });
-}
-
 function renderPanelWithOpenItem(
   variant: EpicsListPanelVariant,
   initialEntry: string,
@@ -415,10 +376,6 @@ function RootOutlet(): ReactNode {
 describe("<EpicsListPanel />", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    sessionImport.available = false;
-    sessionImport.status = undefined;
-    useOnboardingStore.setState({ completedAt: null, step: 0 });
-    useSessionImportPromptStore.setState({ dismissedAt: null });
     testState.items = [historyItem({})];
     testState.availableRepos = [];
     testState.availableWorkspaces = [];
@@ -473,26 +430,6 @@ describe("<EpicsListPanel />", () => {
     // must not open the destructive delete-confirmation flow.
     fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
     expect(screen.queryByText("This action cannot be undone.")).toBeNull();
-  });
-
-  it("offers the session-import prompt above the task list", async () => {
-    enableSessionImportPrompt();
-    renderPanel("page", "/");
-
-    await screen.findByRole("link", { name: "Open task Open from landing" });
-
-    expect(screen.getByTestId("session-import-prompt")).toBeTruthy();
-  });
-
-  it("withholds the session-import prompt from the read-only picker variant", async () => {
-    // Same conditions as the test above, so the variant is the only thing
-    // deciding: a destination browser is not a place to start importing tasks.
-    enableSessionImportPrompt();
-    renderPanel("picker", "/");
-
-    await screen.findByRole("link", { name: "Open task Open from landing" });
-
-    expect(screen.queryByTestId("session-import-prompt")).toBeNull();
   });
 
   it("disables the row sweep affordance in the read-only picker variant", async () => {

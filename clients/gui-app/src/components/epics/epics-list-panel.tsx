@@ -92,7 +92,6 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
 import { useHistoryListKeyboardNav } from "@/components/epics/use-history-list-keyboard-nav";
-import { SessionImportPromptRow } from "@/components/session-import/session-import-prompt-row";
 import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
@@ -611,13 +610,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
-          {/*
-           * The picker embed is a read-only destination browser, so it
-           * offers nothing that creates tasks - and an import started from
-           * inside it would settle behind the chooser the user is still
-           * standing in.
-           */}
-          {variant !== "picker" ? <SessionImportPromptRow /> : null}
           <HistoryListBody
             variant={variant}
             error={error}

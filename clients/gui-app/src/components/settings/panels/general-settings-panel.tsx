@@ -337,7 +337,6 @@ function SessionImportSettingsRow() {
   const active = run.running
     ? { done: run.done, total: run.total }
     : (status?.active ?? null);
-  const lastCompleted = status?.lastCompleted ?? null;
 
   let description =
     "Bring work you already started in Claude Code, Codex, or OpenCode into Traycer as tasks.";
@@ -351,8 +350,6 @@ function SessionImportSettingsRow() {
       active.total === 0
         ? "Starting import…"
         : `Importing ${active.done} of ${active.total}…`;
-  } else if (lastCompleted !== null) {
-    description = `Last import: ${lastCompleted.counts.imported} imported.`;
   }
 
   return (

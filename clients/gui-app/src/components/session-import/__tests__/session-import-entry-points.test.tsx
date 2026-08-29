@@ -1,21 +1,18 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionImportStatusResponse } from "@traycer/protocol/host/session-import/contracts";
-import { SessionImportPromptRow } from "@/components/session-import/session-import-prompt-row";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { useSessionImportPromptStore } from "@/stores/session-import/session-import-prompt-store";
 import {
   progressEntryFrom,
   useSessionImportRunStore,
 } from "@/stores/session-import/session-import-run-store";
 
 /**
- * The two seams both entry-point surfaces sit on. Mocked at module level so
+ * The two seams the settings entry point sits on. Mocked at module level so
  * these tests drive "is the feature available" and "what does the host say
  * the status is" directly, instead of standing up the stream transport that
- * backs the real hooks.
+ * backs the real hook.
  */
 const sessionImportAvailableMock = vi.hoisted(() => ({ value: true }));
 const sessionImportStatusMock = vi.hoisted(
@@ -65,134 +62,10 @@ function statusOf(
   };
 }
 
-describe("SessionImportPromptRow", () => {
-  beforeEach(() => {
-    sessionImportAvailableMock.value = true;
-    sessionImportStatusMock.data = undefined;
-    useOnboardingStore.setState({ completedAt: null, step: 0 });
-    useSessionImportPromptStore.setState({ dismissedAt: null });
-  });
-
-  afterEach(() => {
-    cleanup();
-  });
-
-  function makeEligible(): void {
-    sessionImportAvailableMock.value = true;
-    useOnboardingStore.setState({ completedAt: 100, step: 0 });
-    useSessionImportPromptStore.setState({ dismissedAt: null });
-    sessionImportStatusMock.data = statusOf({});
-  }
-
-  it("is hidden when the host does not support session import", () => {
-    makeEligible();
-    sessionImportAvailableMock.value = false;
-
-    render(<SessionImportPromptRow />);
-
-    expect(screen.queryByTestId("session-import-prompt")).toBeNull();
-  });
-
-  it("is hidden when onboarding has never completed", () => {
-    makeEligible();
-    useOnboardingStore.setState({ completedAt: null, step: 0 });
-
-    render(<SessionImportPromptRow />);
-
-    expect(screen.queryByTestId("session-import-prompt")).toBeNull();
-  });
-
-  it("is hidden once already dismissed", () => {
-    makeEligible();
-    useSessionImportPromptStore.setState({ dismissedAt: Date.now() });
-
-    render(<SessionImportPromptRow />);
-
-    expect(screen.queryByTestId("session-import-prompt")).toBeNull();
-  });
-
-  it("is hidden while the status query has not answered yet, so it does not flash in and out", () => {
-    makeEligible();
-    sessionImportStatusMock.data = undefined;
-
-    render(<SessionImportPromptRow />);
-
-    expect(screen.queryByTestId("session-import-prompt")).toBeNull();
-  });
-
-  it("is hidden when something has already been imported on this host", () => {
-    makeEligible();
-    sessionImportStatusMock.data = statusOf({
-      lastCompleted: {
-        runId: "run-1",
-        counts: { imported: 3, skippedAlreadyImported: 0, failed: 0 },
-        at: Date.now(),
-      },
-    });
-
-    render(<SessionImportPromptRow />);
-
-    expect(screen.queryByTestId("session-import-prompt")).toBeNull();
-  });
-
-  it("is hidden when a run is already active", () => {
-    makeEligible();
-    sessionImportStatusMock.data = statusOf({
-      active: { runId: "run-1", done: 1, total: 4 },
-    });
-
-    render(<SessionImportPromptRow />);
-
-    expect(screen.queryByTestId("session-import-prompt")).toBeNull();
-  });
-
-  it("shows the row, with no session count in its copy, when every condition is met", () => {
-    makeEligible();
-
-    render(<SessionImportPromptRow />);
-
-    const row = screen.getByTestId("session-import-prompt");
-    expect(row).toBeTruthy();
-    expect(
-      screen.getByText(
-        "Work from Claude Code, Codex, and OpenCode can be imported as tasks.",
-      ),
-    ).toBeTruthy();
-    // No digit anywhere in the row's copy: counting would require a
-    // background scan, which the feature deliberately does not do.
-    expect(/\d/.test(row.textContent)).toBe(false);
-  });
-
-  it("dismisses and removes the row when clicking Dismiss", () => {
-    makeEligible();
-
-    render(<SessionImportPromptRow />);
-
-    expect(useSessionImportPromptStore.getState().dismissedAt).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-
-    expect(useSessionImportPromptStore.getState().dismissedAt).not.toBeNull();
-    expect(screen.queryByTestId("session-import-prompt")).toBeNull();
-  });
-
-  it("mounts the import dialog when clicking Import", () => {
-    makeEligible();
-
-    render(<SessionImportPromptRow />);
-
-    expect(screen.queryByTestId("session-import-dialog-stub")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Import" }));
-
-    expect(screen.getByTestId("session-import-dialog-stub")).toBeTruthy();
-  });
-});
-
 describe("SessionImportSettingsRow (via GeneralSettingsPanel)", () => {
   beforeEach(() => {
     sessionImportAvailableMock.value = true;
     sessionImportStatusMock.data = undefined;
-    useOnboardingStore.setState({ completedAt: null, step: 0 });
-    useSessionImportPromptStore.setState({ dismissedAt: null });
     useSessionImportRunStore.getState().reset();
     navigateMock.mockReset();
   });
@@ -283,7 +156,9 @@ describe("SessionImportSettingsRow (via GeneralSettingsPanel)", () => {
     expect(screen.getByText("Importing 2 of 6…")).toBeTruthy();
   });
 
-  it("shows the last-import caption when status.lastCompleted is set and nothing is active", () => {
+  it("keeps the idle description when status.lastCompleted is set and nothing is active", () => {
+    // A finished run leaves no caption behind: the row always reads as the
+    // same quiet offer once nothing is running.
     sessionImportStatusMock.data = statusOf({
       lastCompleted: {
         runId: "run-done",
@@ -294,6 +169,11 @@ describe("SessionImportSettingsRow (via GeneralSettingsPanel)", () => {
 
     renderPanel();
 
-    expect(screen.getByText("Last import: 7 imported.")).toBeTruthy();
+    expect(screen.queryByText(/Last import:/)).toBeNull();
+    expect(
+      screen.getByText(
+        "Bring work you already started in Claude Code, Codex, or OpenCode into Traycer as tasks.",
+      ),
+    ).toBeTruthy();
   });
 });
