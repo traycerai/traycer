@@ -83,20 +83,32 @@ describe("app header tab layer, per shell", () => {
     });
   }
 
-  it("keeps router history controls on a shell that draws no tab layer", () => {
+  it("drops the history controls with the strip they sat beside", () => {
     const webapp = shellSurfaces().find((shell) => shell.name === "webapp");
+    const desktop = shellSurfaces().find((shell) => shell.name === "desktop");
     expect(webapp).toBeDefined();
-    if (webapp === undefined) return;
+    expect(desktop).toBeDefined();
+    if (webapp === undefined || desktop === undefined) return;
+
+    // The control, first: they are chrome this app really does draw, so their
+    // absence below has to be this shell's answer and not a broken stub.
+    render(
+      <RunnerHostProvider runnerHost={desktop.runnerHost}>
+        <AppHeader variant="app" />
+      </RunnerHostProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Go back" })).not.toBeNull();
+    cleanup();
 
     render(
       <RunnerHostProvider runnerHost={webapp.runnerHost}>
         <AppHeader variant="app" />
       </RunnerHostProvider>,
     );
-
-    // Suppressing the tab layer is not the same as suppressing navigation:
-    // these move the router's own history, which exists either way.
-    expect(screen.getByRole("button", { name: "Go back" })).not.toBeNull();
+    // A shell whose surroundings hand the user tabs hands them history with
+    // the same chrome, and its router history IS that history - so in-app
+    // arrows there are the browser's own back and forward, drawn twice.
+    expect(screen.queryByRole("button", { name: "Go back" })).toBeNull();
     expect(screen.queryByRole("tablist", { name: "Open tabs" })).toBeNull();
   });
 
