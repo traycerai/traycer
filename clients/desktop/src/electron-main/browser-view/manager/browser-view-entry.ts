@@ -7,6 +7,7 @@ import type {
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
+import type { BrowserSessionProfile } from "../browser-session";
 import type { BrowserDebugSession } from "../debug/browser-debug-session";
 import type { BrowserViewEntryKey } from "./browser-view-entry-registry";
 import type {
@@ -40,6 +41,12 @@ export interface BrowserViewEntry {
   surfaceBindingId: string | null;
   readonly guestKey: string;
   readonly identity: BrowserViewNativeIdentity;
+  /**
+   * The jar this guest was born into, kept on the entry because teardown is
+   * the only thing that can tell an isolated session's partition it may go:
+   * by then the host frame that named the profile is long gone.
+   */
+  readonly profile: BrowserSessionProfile;
   readonly view: ManagedBrowserView;
   readonly listeners: BrowserViewListenerMap;
   parentWindowId: string | null;

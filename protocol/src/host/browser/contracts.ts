@@ -298,6 +298,10 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       // starts it only after the host accepts the provisioned incarnation.
       requestedUrl: z.string(),
       reason: electronTabCreateReasonSchema,
+      // Which jar the guest gets. `isolated` picks a per-session in-memory
+      // partition on the desktop and is never seeded, so the desktop cannot
+      // infer it from `seedStorageState` being null.
+      profile: browserSessionProfileKindSchema,
       seedStorageState: browserStorageStateSchema.nullable(),
     })
     .strict(),
@@ -326,6 +330,24 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
       // opens a second, opportunistic renderer request path during placement.
       kind: z.literal("capturePrimaryProfile"),
       ...requestFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      // Store-key handshake (keychain refactor ticket 05). The host mints the
+      // per-user store key and asks the elected desktop to wrap it with that
+      // machine's OS keystore; the host keeps the raw bytes in memory only.
+      kind: z.literal("storeKeyWrapRequest"),
+      ...requestFrameFields,
+      rawKey: z.base64(),
+    })
+    .strict(),
+  z
+    .object({
+      // The blob some desktop wrapped earlier, handed back for `decryptString`.
+      kind: z.literal("storeKeyUnwrapRequest"),
+      ...requestFrameFields,
+      wrappedKey: z.base64(),
     })
     .strict(),
   z
@@ -484,6 +506,36 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       storageState: browserStorageStateSchema.nullable(),
       status: z.enum(["captured", "unavailable", "failed"]),
       reason: z.string().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      // "This machine can reach an OS keystore for you." Sent right after
+      // `persistenceStateChanged: enabled`; the host answers with whichever of
+      // the two key requests this user needs. The identity is the stream's
+      // authenticated user, so the frame carries no `userId`, and only the
+      // elected lifecycle subscriber is heard (same gate as
+      // `primaryProfileCaptured`).
+      kind: z.literal("storeKeyOffer"),
+      ...textFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      // `safeStorage.encryptString(rawKey)` for the `requestId` the host sent.
+      kind: z.literal("storeKeyWrapped"),
+      ...requestFrameFields,
+      wrappedKey: z.base64(),
+    })
+    .strict(),
+  z
+    .object({
+      // `safeStorage.decryptString(wrappedKey)`. `null` means this desktop
+      // cannot open the blob (keystore item ACL changed, different machine);
+      // the host then stays sealed and never re-mints over a live blob.
+      kind: z.literal("storeKeyUnwrapped"),
+      ...requestFrameFields,
+      rawKey: z.base64().nullable(),
     })
     .strict(),
   z

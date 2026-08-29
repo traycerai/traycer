@@ -17,6 +17,7 @@ import {
   SquareMousePointer,
   Smartphone,
   Tablet,
+  VenetianMask,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
@@ -48,6 +49,7 @@ import {
 import {
   browserCookieDegradedMessage,
   browserPersistenceShieldCopy,
+  BROWSER_PRIVATE_SESSION_SHIELD_COPY,
   type BrowserPersistenceShieldAction,
   type BrowserPersistenceShieldTone,
 } from "@/lib/browser-view/browser-cookie-degraded-message";
@@ -64,6 +66,7 @@ import type {
   BrowserCookieCryptoState,
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
 
 export interface BrowserPictureInPictureControl {
   readonly disabled: boolean;
@@ -123,6 +126,7 @@ export function BrowserTileToolbar(props: {
     capabilities.annotate ||
     props.pictureInPicture !== null ||
     controller.persistence !== null ||
+    controller.profile === "isolated" ||
     showAdvanced;
   if (!showNav && !showAddress && !showTrailing) return null;
 
@@ -243,6 +247,18 @@ function BrowserOpenExternalButton(props: { readonly url: string }) {
   );
 }
 
+/**
+ * One shield slot, three outcomes: a private session says so and never claims
+ * anything about the shared jar, a primary session shows the persistence
+ * shield, and a tile with no persistence answer yet shows nothing.
+ */
+function BrowserTileShield(props: { readonly controller: TileController }) {
+  const controller = props.controller;
+  if (controller.profile === "isolated") return <BrowserPrivateSessionShield />;
+  if (controller.persistence === null) return null;
+  return <BrowserPersistenceShield persistence={controller.persistence} />;
+}
+
 function BrowserTileToolbarTrailing(props: {
   readonly controller: TileController;
   readonly pictureInPicture: BrowserPictureInPictureControl | null;
@@ -251,9 +267,7 @@ function BrowserTileToolbarTrailing(props: {
   const capabilities = controller.capabilities;
   return (
     <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
-      {controller.persistence === null ? null : (
-        <BrowserPersistenceShield persistence={controller.persistence} />
-      )}
+      <BrowserTileShield controller={controller} />
       {capabilities.annotate && controller.annotation !== null ? (
         <BrowserAnnotateToggle controller={controller.annotation} />
       ) : null}
@@ -287,6 +301,51 @@ const SHIELD_TONE_CLASS: Record<BrowserPersistenceShieldTone, string> = {
   off: "text-muted-foreground hover:text-foreground",
   warning: "text-warning hover:text-warning",
 };
+
+/**
+ * The isolated profile's shield. It replaces the persistence shield outright
+ * rather than adding a state to it: a private session has no saved-login
+ * state to report and nothing to enable, retry or clear, so the popover is
+ * explanation only. Any clear-site action stays out of this tile for the same
+ * reason - closing the session already destroys the jar.
+ */
+function BrowserPrivateSessionShield() {
+  const [open, setOpen] = useState(false);
+  const copy = BROWSER_PRIVATE_SESSION_SHIELD_COPY;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <TooltipWrapper
+        label={copy.headline}
+        side="top"
+        sideOffset={6}
+        align="center"
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Saved logins: ${copy.headline}`}
+            className={cn(
+              "shrink-0 aria-expanded:bg-accent aria-expanded:text-accent-foreground",
+              SHIELD_TONE_CLASS[copy.tone],
+            )}
+          >
+            <VenetianMask aria-hidden />
+          </Button>
+        </PopoverTrigger>
+      </TooltipWrapper>
+      <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
+        <PopoverHeader>
+          <PopoverTitle>{copy.headline}</PopoverTitle>
+          <PopoverDescription className="text-ui-xs">
+            {copy.detail}
+          </PopoverDescription>
+        </PopoverHeader>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 /**
  * Spec §7.1's shield. It is the ONLY always-visible surface that tells the
@@ -419,6 +478,7 @@ function BrowserMoreMenu(props: { readonly controller: TileController }) {
         {capabilities.siteInfo ? (
           <BrowserSiteInfoMenu
             url={controller.url}
+            profile={controller.profile}
             cookieCryptoState={
               controller.persistence?.state?.cryptoState ?? null
             }
@@ -606,8 +666,35 @@ function BrowserViewportPresetMenu(props: {
   );
 }
 
+interface BrowserSiteInfoCookieRow {
+  readonly title: string;
+  readonly detail: string;
+}
+
+/**
+ * A private session never reports the shared jar's state: its cookies live in a
+ * partition of its own and die with the session.
+ */
+function siteInfoCookieRow(
+  profile: BrowserSessionProfileKind,
+  cookieCryptoState: BrowserCookieCryptoState | null,
+): BrowserSiteInfoCookieRow | null {
+  if (profile === "isolated") {
+    return {
+      title: BROWSER_PRIVATE_SESSION_SHIELD_COPY.headline,
+      detail: BROWSER_PRIVATE_SESSION_SHIELD_COPY.detail,
+    };
+  }
+  if (cookieCryptoState === null) return null;
+  return {
+    title: cookieCryptoHeadline(cookieCryptoState),
+    detail: cookieCryptoDetail(cookieCryptoState),
+  };
+}
+
 function BrowserSiteInfoMenu(props: {
   readonly url: string;
+  readonly profile: BrowserSessionProfileKind;
   readonly cookieCryptoState: BrowserCookieCryptoState | null;
 }) {
   const [open, setOpen] = useState(false);
@@ -616,10 +703,9 @@ function BrowserSiteInfoMenu(props: {
   const originDetail = isWebOrigin
     ? "Served over the network from this page's origin."
     : "Not loaded from a web address (for example, a blank tab or an internal page).";
+  const cookieRow = siteInfoCookieRow(props.profile, props.cookieCryptoState);
   const cookieDetail =
-    props.cookieCryptoState === null
-      ? null
-      : `${cookieCryptoHeadline(props.cookieCryptoState)}. ${cookieCryptoDetail(props.cookieCryptoState)}`;
+    cookieRow === null ? null : `${cookieRow.title}. ${cookieRow.detail}`;
   return (
     <DropdownMenuSub open={open} onOpenChange={setOpen}>
       <DropdownMenuSubTrigger
@@ -638,10 +724,10 @@ function BrowserSiteInfoMenu(props: {
         className="w-[min(80vw,18rem)] min-w-0 space-y-3 p-3 text-ui-sm"
       >
         <BrowserSiteInfoRow title={originTitle} detail={originDetail} />
-        {props.cookieCryptoState === null ? null : (
+        {cookieRow === null ? null : (
           <BrowserSiteInfoRow
-            title={cookieCryptoHeadline(props.cookieCryptoState)}
-            detail={cookieCryptoDetail(props.cookieCryptoState)}
+            title={cookieRow.title}
+            detail={cookieRow.detail}
           />
         )}
       </DropdownMenuSubContent>

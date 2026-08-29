@@ -100,6 +100,7 @@ const CHROME_CONTROLLER: TileController = {
     siteInfo: false,
     annotate: false,
   },
+  profile: "primary",
   url: "https://example.com/",
   addressValue: "https://example.com/",
   canGoBack: false,

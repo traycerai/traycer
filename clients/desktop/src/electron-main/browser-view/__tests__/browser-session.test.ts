@@ -148,6 +148,13 @@ class FakePolicySession {
     expect(event).toBe("will-download");
     this.downloadListeners.push(listener);
   }
+
+  clearStorageDataCalls = 0;
+
+  clearStorageData(): Promise<void> {
+    this.clearStorageDataCalls += 1;
+    return Promise.resolve();
+  }
 }
 
 class FakeTrackedWebContents extends EventEmitter {
@@ -317,6 +324,13 @@ const PRIMARY: BrowserSessionProfileRequest = {
   sessionId: "session-1",
 };
 
+const ISOLATED: BrowserSessionProfileRequest = {
+  profile: "isolated",
+  sessionId: "session-9",
+};
+
+const ISOLATED_PARTITION = "traycer-isolated-session-9";
+
 describe("browser view session policy", () => {
   beforeEach(() => {
     electronState.browserSession = new FakePolicySession();
@@ -425,7 +439,7 @@ describe("browser view session policy", () => {
     expect(hardened.downloadListeners).toHaveLength(1);
   });
 
-  it("maps decision x probe to a partition, and refuses isolated until ticket 09", async () => {
+  it("maps decision x probe to a partition for primary guests", async () => {
     const crypto = await import("../storage/browser-cookie-crypto");
     const readState = vi.spyOn(crypto, "ensureBrowserPersistenceForTileOpen");
     const mod = await import("../browser-session");
@@ -467,10 +481,91 @@ describe("browser view session policy", () => {
     expect(mod.BROWSER_VIEW_EPHEMERAL_PARTITION.startsWith("persist:")).toBe(
       false,
     );
+  });
 
-    expect(() => mod.partitionForProfile("isolated", "session-1")).toThrow(
-      mod.BrowserProfileNotSupportedError,
+  it("gives an isolated session its own in-memory partition, hardened alike", async () => {
+    const crypto = await import("../storage/browser-cookie-crypto");
+    // Persistence being fully enabled must not pull an isolated guest onto the
+    // durable jar - the decision is not consulted for this profile at all.
+    const readState = vi
+      .spyOn(crypto, "ensureBrowserPersistenceForTileOpen")
+      .mockReturnValue(realCookieCryptoState());
+    const mod = await import("../browser-session");
+    const isolatedSession = new FakePolicySession();
+    electronState.browserSession = isolatedSession;
+
+    expect(mod.partitionForProfile("isolated", "session-9")).toBe(
+      ISOLATED_PARTITION,
     );
+    expect(ISOLATED_PARTITION.startsWith("persist:")).toBe(false);
+    expect(ISOLATED_PARTITION).toContain("session-9");
+    expect(readState).not.toHaveBeenCalled();
+
+    mod.ensureBrowserViewSession(ISOLATED);
+    const preferences = mod.createBrowserViewWebPreferences(ISOLATED);
+
+    expect(electronState.fromPartitionCalls).toEqual([
+      { partition: ISOLATED_PARTITION, options: { cache: true } },
+    ]);
+    expect(preferences).toMatchObject({
+      partition: ISOLATED_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    });
+    // Same hardening as any other jar: allow-list permissions, no devices,
+    // downloads routed through the app's own prompt.
+    const requestHandler = readRequestHandler(isolatedSession);
+    expect(requestAllowed(requestHandler, "fullscreen")).toBe(true);
+    expect(requestAllowed(requestHandler, "geolocation")).toBe(false);
+    expect(
+      readCheckHandler(isolatedSession)(
+        null,
+        "storage-access",
+        "https://example.com",
+        {},
+      ),
+    ).toBe(true);
+    expect(isolatedSession.devicePermissionHandler?.({})).toBe(false);
+    expect(isolatedSession.usbProtectedClassesHandler?.({})).toEqual([]);
+    expect(isolatedSession.downloadListeners).toHaveLength(1);
+    expect(electronState.defaultSession?.permissionRequestHandler).toBeNull();
+    expect(electronState.defaultSession?.permissionCheckHandler).toBeNull();
+    expect(electronState.defaultSession?.downloadListeners).toEqual([]);
+  });
+
+  it("clears an isolated partition and forgets it on release", async () => {
+    const mod = await import("../browser-session");
+    const first = new FakePolicySession();
+    electronState.browserSession = first;
+
+    expect(mod.ensureBrowserViewSession(ISOLATED)).toBe(first);
+
+    await mod.releaseBrowserViewSession(ISOLATED_PARTITION);
+
+    expect(first.clearStorageDataCalls).toBe(1);
+    // The memo is dropped too, so a later session id collision cannot inherit
+    // the released jar's hardened Session object.
+    const second = new FakePolicySession();
+    electronState.browserSession = second;
+    expect(mod.ensureBrowserViewSession(ISOLATED)).toBe(second);
+    expect(electronState.fromPartitionCalls).toHaveLength(2);
+    expect(second.downloadListeners).toHaveLength(1);
+  });
+
+  it("refuses to clear a shared browser partition", async () => {
+    const mod = await import("../browser-session");
+    const shared = new FakePolicySession();
+    electronState.browserSession = shared;
+    mod.ensureBrowserViewSessionForPartition(mod.BROWSER_VIEW_PARTITION);
+
+    await expect(
+      mod.releaseBrowserViewSession(mod.BROWSER_VIEW_PARTITION),
+    ).rejects.toThrow(/Refusing to clear/);
+    await expect(
+      mod.releaseBrowserViewSession(mod.BROWSER_VIEW_EPHEMERAL_PARTITION),
+    ).rejects.toThrow(/Refusing to clear/);
+    expect(shared.clearStorageDataCalls).toBe(0);
   });
 
   it("installs browser-specific permission and download handlers", async () => {

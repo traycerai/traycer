@@ -7,7 +7,10 @@ import {
   type ReactElement,
 } from "react";
 import { toast } from "sonner";
-import type { BrowserTabDriver } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserSessionProfileKind,
+  BrowserTabDriver,
+} from "@traycer/protocol/host/browser/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
@@ -20,7 +23,10 @@ import {
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
 import { BrowserViewSnapshotLayer } from "@/components/epic-canvas/renderers/browser-view-snapshot-layer";
-import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import {
+  useMaybeBrowserSessionsContext,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { PRIMARY_TILE_CHROME_CAPABILITIES } from "@/components/epic-canvas/renderers/tile-controller";
 import { useBrowserAnnotationSession } from "@/hooks/browser/use-browser-annotation-session";
 import { useBrowserViewSnapshot } from "@/components/epic-canvas/renderers/use-browser-view-snapshot";
@@ -101,6 +107,27 @@ function BrowserPersistenceExplainerSlot(props: {
   );
 }
 
+interface AgentTileSessionFacts {
+  /**
+   * The host's session record is the only source for the profile; a tile
+   * cannot infer a private session from its own state, and a tile whose
+   * session is not in the context yet is treated as primary.
+   */
+  readonly profile: BrowserSessionProfileKind;
+  readonly drivenBy: readonly BrowserTabDriver[];
+}
+
+function agentTileSessionFacts(
+  sessions: BrowserSessionsState | null,
+  sessionId: string,
+  tabId: string,
+): AgentTileSessionFacts {
+  const session = sessions?.items.find((item) => item.sessionId === sessionId);
+  if (session === undefined) return { profile: "primary", drivenBy: [] };
+  const tab = session.tabs.find((item) => item.tabId === tabId);
+  return { profile: session.profile, drivenBy: tab?.drivenBy ?? [] };
+}
+
 /**
  * Electron tile used for agent-created pages and native session tabs.
  * Host-owned Electron tabs always use the primary browser partition.
@@ -137,15 +164,12 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     props.node.url,
   );
   const showStartPage = startPageEpicId !== null;
-  const annotationSession = browserSessions?.items.find(
-    (item) => item.sessionId === props.node.sessionId,
+  const { profile: sessionProfile, drivenBy } = agentTileSessionFacts(
+    browserSessions,
+    props.node.sessionId,
+    props.binding.tabId,
   );
-  const annotationTab = annotationSession?.tabs.find(
-    (item) => item.tabId === props.binding.tabId,
-  );
-  const drivenBy = annotationTab?.drivenBy ?? [];
-  const annotationDriverChatId = drivenBy.at(-1)?.chatId ?? null;
-  const annotationPreferredChatId = annotationDriverChatId;
+  const annotationPreferredChatId = drivenBy.at(-1)?.chatId ?? null;
 
   const tileKey = useMemo<BrowserViewTileKey>(
     () => ({
@@ -302,6 +326,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     attemptedNavigationRef.current = next;
   }, []);
   const chrome = useElectronTabChrome({
+    profile: sessionProfile,
     control: props.binding.control,
     surfaceServices: attachedBrowserView,
     tileKey,

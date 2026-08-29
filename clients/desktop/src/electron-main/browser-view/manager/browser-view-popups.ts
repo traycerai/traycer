@@ -71,7 +71,7 @@ export class BrowserViewPopups {
       overrideBrowserWindowOptions: this.createPopupWindowOptions(
         surface.windowId,
         {
-          profile: "primary",
+          profile: entry.profile,
           sessionId: entry.identity.key.sessionId,
         },
       ),

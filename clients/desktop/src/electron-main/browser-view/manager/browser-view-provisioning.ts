@@ -5,6 +5,7 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
 import { describeLogError, log } from "../../app/logger";
+import type { BrowserSessionProfile } from "../browser-session";
 import type { ManagedBrowserView } from "../browser-view-port";
 import { browserLocalStorageSeedScript } from "../storage/browser-storage-state";
 import type {
@@ -26,6 +27,7 @@ interface BrowserViewProvisioningOptions {
   readonly createEntry: (
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
   ) => BrowserViewEntry;
   readonly seedStorageState: (
     storageState: BrowserStorageState | null,
@@ -49,6 +51,7 @@ export class BrowserViewProvisioning {
   private readonly createEntry: (
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
   ) => BrowserViewEntry;
   private readonly seedStorageState: (
     storageState: BrowserStorageState | null,
@@ -101,7 +104,7 @@ export class BrowserViewProvisioning {
       lifecycle,
     };
     this.windows.ensureResetListener(windowId);
-    const entry = this.createEntry(input.requestedUrl, identity);
+    const entry = this.createEntry(input.requestedUrl, identity, input.profile);
     logEnsureStage(input, startedAt, "entry_created", "ok", null);
     void this.settleNativeTabInitialization(entry, input, startedAt);
     return lifecycle.provisioned;

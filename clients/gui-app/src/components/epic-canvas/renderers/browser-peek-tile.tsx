@@ -7,6 +7,7 @@ import {
   type BrowserPictureInPictureControl,
 } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
+import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import { useScreencastTileChrome } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
@@ -74,6 +75,12 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     tabId: node.tabId,
     visible,
   });
+  // A peeked session can be isolated too; the toolbar has to say so rather
+  // than describe saved logins that this session never had.
+  const browserSessions = useMaybeBrowserSessionsContext();
+  const sessionProfile =
+    browserSessions?.items.find((item) => item.sessionId === node.sessionId)
+      ?.profile ?? "primary";
   const { image, frameSize, navState, armedEpoch, dialog } = session;
   const { tileRef, viewportRef, overlayButtonRef, imageRef, imeInputRef } =
     session.refs;
@@ -97,6 +104,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   );
 
   const chrome = useScreencastTileChrome({
+    profile: sessionProfile,
     navState,
     initialUrl: node.initialUrl,
     disabled: client === null,

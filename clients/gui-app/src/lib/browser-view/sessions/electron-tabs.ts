@@ -381,6 +381,8 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
           sessionId: frame.sessionId,
           tabId: frame.tabId,
           requestedUrl: frame.requestedUrl,
+          // Relayed verbatim: the host owns which jar the guest is born into.
+          profile: frame.profile,
           seedStorageState: frame.seedStorageState,
         })
         .then((provisioned) => {

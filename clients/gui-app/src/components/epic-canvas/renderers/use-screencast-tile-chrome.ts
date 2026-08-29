@@ -2,6 +2,7 @@ import type { SyntheticEvent } from "react";
 import type {
   BrowserNavState,
   BrowserScreencastUnsupportedFeature,
+  BrowserSessionProfileKind,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
   TileChromeCapabilities,
@@ -40,6 +41,7 @@ const SCREENCAST_UNSUPPORTED_INTERACTION_TOASTS = {
 const UNUSED_VIEWPORT_PRESET: BrowserViewViewportPresetId = "responsive";
 
 interface UseScreencastTileChromeArgs {
+  readonly profile: BrowserSessionProfileKind;
   readonly navState: BrowserNavState;
   readonly initialUrl: string;
   readonly disabled: boolean;
@@ -89,6 +91,7 @@ export function useScreencastTileChrome(
 
   const controller: TileController = {
     capabilities: SCREENCAST_TILE_CHROME_CAPABILITIES,
+    profile: args.profile,
     url: liveUrl,
     addressValue,
     canGoBack: navState.canGoBack,

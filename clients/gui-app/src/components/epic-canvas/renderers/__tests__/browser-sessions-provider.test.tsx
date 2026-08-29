@@ -824,6 +824,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
           tabId: "tab-1",
           requestedUrl: "https://app.example",
           reason: "session-bootstrap",
+          profile: "primary",
           seedStorageState: null,
         },
         null,
@@ -835,6 +836,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         sessionId: "session-1",
         tabId: "tab-1",
         requestedUrl: "https://app.example",
+        profile: "primary",
         seedStorageState: null,
       });
       expect(stream.sentFrames).toContainEqual({
@@ -1277,6 +1279,7 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
           tabId: "tab-reconnect",
           requestedUrl: "https://app.example/reconnect",
           reason: "restore",
+          profile: "primary",
           seedStorageState: null,
         },
         null,

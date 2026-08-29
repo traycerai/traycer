@@ -2,6 +2,7 @@ import type { SyntheticEvent } from "react";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
 
 /**
  * Runtime capabilities of one Electron tile. A toolbar control renders
@@ -22,6 +23,12 @@ export interface TileChromeCapabilities {
 
 export interface TileController {
   readonly capabilities: TileChromeCapabilities;
+  /**
+   * The session's credential-sharing profile. `isolated` is a private
+   * session: the toolbar says so instead of reporting saved-login state, and
+   * offers no action, because there is nothing here to save or clear.
+   */
+  readonly profile: BrowserSessionProfileKind;
   readonly url: string;
   readonly addressValue: string;
   readonly canGoBack: boolean;

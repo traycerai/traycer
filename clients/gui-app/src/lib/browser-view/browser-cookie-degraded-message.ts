@@ -36,6 +36,20 @@ export interface BrowserPersistenceShieldCopy {
 }
 
 /**
+ * The isolated profile's shield (spec §6.1, decision #24). It is not one of
+ * the persistence states: a private session has no jar to save, retry or
+ * clear, so it carries no action and never consults the crypto state.
+ */
+export const BROWSER_PRIVATE_SESSION_SHIELD_COPY: BrowserPersistenceShieldCopy =
+  {
+    tone: "off",
+    headline: "Private session",
+    detail:
+      "This session has its own throwaway jar. It starts signed out, shares no cookies with your other tabs, and everything in it is discarded when the session closes.",
+    action: { kind: "none" },
+  };
+
+/**
  * Spec §7.1's states table, in one place so the shield, its tooltip and its
  * accessible label can never describe different states.
  */

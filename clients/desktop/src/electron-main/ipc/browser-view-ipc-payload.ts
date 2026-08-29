@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   browserCdpCommandSchema,
   browserCdpTargetSchema,
+  browserSessionProfileKindSchema,
   browserStorageStateSchema,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -128,6 +129,9 @@ const overlayPaintAckSchema = z.object({ overlayId: z.string() });
 const ensureTabSchema: z.ZodType<BrowserViewEnsureTab> =
   nativeTabKeySchema.extend({
     requestedUrl: nonEmptyStringSchema,
+    // The renderer relays the host's frame verbatim; an older renderer that
+    // does not know about profiles can only mean the shared jar.
+    profile: browserSessionProfileKindSchema.default("primary"),
     seedStorageState: browserStorageStateSchema.nullable().default(null),
   });
 const attachSurfaceSchema: z.ZodType<BrowserViewAttachSurface> =
@@ -151,6 +155,9 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
     quality: z.number().int().min(0).max(100),
   });
 
+/** Base64 key material crossing the store-key handshake (ticket 05). */
+const storeKeyMaterialSchema = z.base64();
+
 export const browserViewIpcPayload = {
   annotationAttachResult: annotationAttachResultSchema,
   annotationStart: annotationStartSchema,
@@ -170,6 +177,7 @@ export const browserViewIpcPayload = {
   overlayPaintAck: overlayPaintAckSchema,
   overlayRelease: overlayReleaseSchema,
   pipCaptureStart: pipCaptureStartSchema,
+  storeKeyMaterial: storeKeyMaterialSchema,
   tileKey: tileKeySchema,
 } as const;
 

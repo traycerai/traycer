@@ -7,7 +7,7 @@ import {
 } from "electron";
 import { randomUUID } from "node:crypto";
 import type { BrowserViewDownloadState } from "@traycer-clients/shared/platform/browser-view";
-import { log } from "../app/logger";
+import { describeLogError, log } from "../app/logger";
 import {
   setBrowserCertificateErrorHandler,
   type CertificateErrorReport,
@@ -16,30 +16,18 @@ import { ensureBrowserPersistenceForTileOpen } from "./storage/browser-cookie-cr
 
 export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
 export const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
+const BROWSER_VIEW_ISOLATED_PARTITION_PREFIX = "traycer-isolated-";
 
 /**
  * Which jar a browser guest gets. `primary` is the one shared identity (user
- * tabs, agent Electron tabs, popups); `isolated` is the per-session throwaway
- * partition, which lands with ticket 09.
+ * tabs, agent Electron tabs, popups); `isolated` is a per-session throwaway
+ * partition that shares cookies with nothing and dies with the session.
  */
 export type BrowserSessionProfile = "primary" | "isolated";
 
 export interface BrowserSessionProfileRequest {
   readonly profile: BrowserSessionProfile;
   readonly sessionId: string;
-}
-
-export class BrowserProfileNotSupportedError extends Error {
-  readonly code = "not-supported";
-  readonly profile: BrowserSessionProfile;
-  readonly sessionId: string;
-
-  constructor(profile: BrowserSessionProfile, sessionId: string) {
-    super(`Browser profile "${profile}" is not supported yet`);
-    this.name = "BrowserProfileNotSupportedError";
-    this.profile = profile;
-    this.sessionId = sessionId;
-  }
 }
 
 type BrowserPermissionRequestHandler = (
@@ -228,12 +216,43 @@ export function partitionForProfile(
   profile: BrowserSessionProfile,
   sessionId: string,
 ): string {
+  // No `persist:` prefix, and the session id in the name: the jar lives in
+  // memory only, is shared by nothing else, and is cleared outright when the
+  // session's last tab goes away (spec §6.1, decision #24). The persistence
+  // decision is deliberately not consulted - an isolated session is ephemeral
+  // whether or not the user enabled saved logins.
   if (profile === "isolated") {
-    throw new BrowserProfileNotSupportedError(profile, sessionId);
+    return `${BROWSER_VIEW_ISOLATED_PARTITION_PREFIX}${sessionId}`;
   }
   return ensureBrowserPersistenceForTileOpen().persistence === "persistent"
     ? BROWSER_VIEW_PARTITION
     : BROWSER_VIEW_EPHEMERAL_PARTITION;
+}
+
+/**
+ * Drops a partition's jar and its memoised session. Only an isolated session's
+ * partition is ever released: the shared `primary` jars outlive every guest,
+ * and clearing one would sign the user out of the whole app.
+ */
+export async function releaseBrowserViewSession(
+  partition: string,
+): Promise<void> {
+  if (!partition.startsWith(BROWSER_VIEW_ISOLATED_PARTITION_PREFIX)) {
+    throw new Error(
+      `Refusing to clear the shared browser partition "${partition}".`,
+    );
+  }
+  const browserSession = sessionsByPartition.get(partition);
+  sessionsByPartition.delete(partition);
+  if (browserSession === undefined) return;
+  try {
+    await browserSession.clearStorageData();
+  } catch (error) {
+    log.warn("[browser-view] isolated partition clear failed", {
+      partition,
+      error: describeLogError(error),
+    });
+  }
 }
 
 function installBrowserViewSessionPolicy(

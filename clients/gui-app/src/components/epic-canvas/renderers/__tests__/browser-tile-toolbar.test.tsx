@@ -80,6 +80,7 @@ function makeController(
 ): TileController {
   return {
     capabilities,
+    profile: "primary",
     url: "https://example.com",
     addressValue: "https://example.com",
     canGoBack: true,
@@ -184,6 +185,61 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     expect(screen.getByRole("menuitem", { name: "Zoom out" })).not.toBeNull();
     expect(screen.getByRole("menuitem", { name: "Reset zoom" })).not.toBeNull();
     expect(screen.getByRole("menuitem", { name: "Zoom in" })).not.toBeNull();
+  });
+
+  it("shows a private-session shield with no action for an isolated session", () => {
+    const controller: TileController = {
+      ...makeController(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION),
+      profile: "isolated",
+    };
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+      </TooltipProvider>,
+    );
+
+    const shield = screen.getByRole("button", {
+      name: "Saved logins: Private session",
+    });
+    // The persistence shield must not also be there: an isolated tile has no
+    // saved-login state to report.
+    expect(
+      screen.queryByRole("button", {
+        name: "Saved logins: Logins saved securely",
+      }),
+    ).toBeNull();
+
+    fireEvent.click(shield);
+
+    expect(screen.getByText("Private session")).not.toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Enable saved logins" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Restart Traycer" }),
+    ).toBeNull();
+    expect(screen.queryByRole("link", { name: /Settings/ })).toBeNull();
+  });
+
+  it("describes the private jar in site information instead of saved logins", () => {
+    const controller: TileController = {
+      ...makeController({ ...DISABLED_CAPABILITIES, siteInfo: true }, null),
+      profile: "isolated",
+    };
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
+      </TooltipProvider>,
+    );
+
+    openMoreMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /^Site information/ }),
+    );
+
+    expect(screen.getAllByText("Private session").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Logins saved securely")).toBeNull();
   });
 
   it("renders no chrome when every capability is false", () => {

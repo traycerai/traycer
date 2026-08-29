@@ -9,6 +9,7 @@ import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { isSameBrowserViewTile } from "@/lib/browser-view/tiles/browser-view-keys";
 import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
 import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
+import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserViewCertificateErrorChange,
   BrowserViewDownloadChange,
@@ -19,6 +20,7 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 
 interface UseElectronTabChromeArgs {
+  readonly profile: BrowserSessionProfileKind;
   readonly control: (
     action: BrowserViewElectronTabControlAction,
   ) => Promise<void>;
@@ -57,6 +59,7 @@ export function useElectronTabChrome(
   args: UseElectronTabChromeArgs,
 ): ElectronTabChrome {
   const {
+    profile,
     control,
     surfaceServices,
     tileKey,
@@ -178,6 +181,7 @@ export function useElectronTabChrome(
 
   const controller: TileController = {
     capabilities,
+    profile,
     url: liveUrl,
     addressValue,
     canGoBack,

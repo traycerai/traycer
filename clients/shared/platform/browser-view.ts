@@ -4,6 +4,7 @@ import type {
   BrowserCdpTarget,
   BrowserElectronTabHandoffSibling,
   BrowserScreencastServerFrame,
+  BrowserSessionProfileKind,
   BrowserSessionsClientFrame,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
@@ -33,6 +34,12 @@ export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey 
 
 export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
   readonly requestedUrl: string;
+  /**
+   * Which jar the guest is born into. It travels from the host's
+   * `createElectronTab` frame; `isolated` selects the session's own in-memory
+   * partition and never carries a seed.
+   */
+  readonly profile: BrowserSessionProfileKind;
   readonly seedStorageState: BrowserStorageState | null;
 }
 
@@ -275,6 +282,24 @@ export type BrowserPersistenceDecision =
 /** The desktop platforms the persistence copy has to speak about by name. */
 export type BrowserPersistencePlatform = "darwin" | "win32" | "linux" | "other";
 
+/**
+ * Answer to one store-key wrap. `ok: false` is an expected outcome, not a bug:
+ * the keystore may be unavailable on this machine, and the host then simply
+ * stays sealed.
+ */
+export type BrowserStoreKeyWrapResult =
+  | { readonly ok: true; readonly wrappedKey: string }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Answer to one store-key unwrap. `ok: false` means this machine cannot open
+ * the host's blob (keystore item ACL changed, or a different machine wrapped
+ * it); the host is told so it can stay sealed instead of re-minting.
+ */
+export type BrowserStoreKeyUnwrapResult =
+  | { readonly ok: true; readonly rawKey: string }
+  | { readonly ok: false; readonly reason: string };
+
 export interface BrowserPersistenceState {
   readonly decision: BrowserPersistenceDecision;
   readonly cryptoState: BrowserCookieCryptoState;
@@ -393,6 +418,14 @@ export interface BrowserViewBridge {
   declinePersistence(): Promise<BrowserPersistenceState>;
   /** Relaunches the desktop so a cached OS denial can be re-asked. */
   relaunchForPersistence(): Promise<void>;
+  /**
+   * Seals the host's freshly minted primary-profile store key with this
+   * machine's OS keystore (spec §6.2). The host keeps the returned blob; it
+   * never sees a key this machine cannot open again.
+   */
+  wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult>;
+  /** Opens a blob wrapped earlier on this machine, so the host can unseal. */
+  unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult>;
   /**
    * Push for every persistence state change (enable / decline / relaunch
    * pending / boot). One shared truth per window, so every open tile's shield

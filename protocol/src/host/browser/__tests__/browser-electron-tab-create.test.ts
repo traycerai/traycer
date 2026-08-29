@@ -12,7 +12,15 @@ const CREATE_REQUEST = {
   tabId: "tab-minted-9",
   requestedUrl: "https://example.com/agent",
   reason: "agent-open",
+  profile: "primary",
   seedStorageState: { cookies: [], origins: [] },
+} as const;
+
+const CREATE_ISOLATED = {
+  ...CREATE_REQUEST,
+  requestId: "req-isolated-1",
+  profile: "isolated",
+  seedStorageState: null,
 } as const;
 
 const CREATE_BOOTSTRAP = {
@@ -80,6 +88,7 @@ describe("browser.sessions Electron tab birth", () => {
       "tabId",
       "requestedUrl",
       "reason",
+      "profile",
       "seedStorageState",
     ] as const) {
       const incomplete: Record<string, unknown> = { ...CREATE_REQUEST };
@@ -88,6 +97,19 @@ describe("browser.sessions Electron tab birth", () => {
         browserSessionsServerFrameSchema.safeParse(incomplete).success,
       ).toBe(false);
     }
+  });
+
+  it("carries the jar the guest must be born into", () => {
+    const parsed = browserSessionsServerFrameSchema.safeParse(CREATE_ISOLATED);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data).toEqual(CREATE_ISOLATED);
+
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...CREATE_REQUEST,
+        profile: "ephemeral",
+      }).success,
+    ).toBe(false);
   });
 
   it("represents bootstrap as a reason, not a background identity", () => {

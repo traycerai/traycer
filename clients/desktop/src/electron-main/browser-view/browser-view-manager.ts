@@ -30,6 +30,7 @@ import { describeLogError, log } from "../app/logger";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
+  BrowserSessionProfile,
   BrowserSessionProfileRequest,
 } from "./browser-session";
 import type {
@@ -122,6 +123,15 @@ interface BrowserViewManagerOptions {
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: ManagedBrowserView["webContents"],
+    profile: BrowserSessionProfile,
+  ) => void;
+  /**
+   * Drops an isolated session's partition once its last native tab is gone.
+   * Only ever called with `profile: "isolated"`; the shared jars outlive
+   * every guest.
+   */
+  readonly releaseSessionStorage: (
+    request: BrowserSessionProfileRequest,
   ) => void;
   /** Remembered localStorage origins, carried by a persistence migration. */
   readonly readMigrationOrigins: () => readonly BrowserStorageOrigin[];
@@ -144,6 +154,9 @@ export class BrowserViewManager {
     windowId: string,
   ) => BrowserViewDevToolsWindow;
   private readonly send: BrowserViewSend;
+  private readonly releaseSessionStorage: (
+    request: BrowserSessionProfileRequest,
+  ) => void;
   private readonly offWindowChange: () => void;
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
@@ -168,6 +181,7 @@ export class BrowserViewManager {
     this.getWindow = options.getWindow;
     this.createDevToolsWindow = options.createDevToolsWindow;
     this.send = options.send;
+    this.releaseSessionStorage = options.releaseSessionStorage;
     this.geometry = new BrowserViewGeometry({
       getWindow: options.getWindow,
       boundsStreamLogIntervalMs: options.boundsStreamLogIntervalMs,
@@ -247,8 +261,8 @@ export class BrowserViewManager {
       entries: this.entries,
       windows: this.windows,
       debugSessions: this.debugSessions,
-      createEntry: (requestedUrl, identity) =>
-        this.entryFactory.create(requestedUrl, identity),
+      createEntry: (requestedUrl, identity, profile) =>
+        this.entryFactory.create(requestedUrl, identity, profile),
       seedStorageState: options.seedStorageState,
       closeEntry: (entry) => this.closeEntry(entry, null),
       navigate: (entry, url) => this.navigate(entry, url),
@@ -523,7 +537,12 @@ export class BrowserViewManager {
   async migrateNativeTabsForPersistence(): Promise<readonly string[]> {
     const migrating = Array.from(this.entries.guestValues()).filter(
       (entry) =>
-        entry.closePromise === null && entry.identity.lifecycle.canHandoff,
+        // Isolated guests have nothing to migrate: their jar is throwaway and
+        // never reaches the persistent partition. Recreating them would only
+        // destroy the private session the user is sitting in.
+        entry.profile === "primary" &&
+        entry.closePromise === null &&
+        entry.identity.lifecycle.canHandoff,
     );
     const migratedKeys = migrating.map((entry) => entry.guestKey);
     await Promise.all(
@@ -929,8 +948,29 @@ export class BrowserViewManager {
     this.geometry.hide(entry);
     webContents.close();
     this.entries.remove(entry);
+    this.releaseIsolatedSessionStorage(entry);
     this.windows.detachResetListenerIfUnused(entry.identity.lifecycleWindowId);
     log.info("[browser-view] view destroy requested", { keyId });
+  }
+
+  /**
+   * An isolated session's partition is throwaway by construction, so it dies
+   * with the session's last native tab - not with each tab, because siblings
+   * of the same session share the one partition.
+   */
+  private releaseIsolatedSessionStorage(entry: BrowserViewEntry): void {
+    if (entry.profile !== "isolated") return;
+    const sessionKey = nativeSessionKey(entry.identity.key);
+    for (const remaining of this.entries.guestValues()) {
+      if (nativeSessionKey(remaining.identity.key) === sessionKey) return;
+    }
+    this.releaseSessionStorage({
+      profile: entry.profile,
+      sessionId: entry.identity.key.sessionId,
+    });
+    log.info("[browser-view] isolated session storage released", {
+      sessionId: entry.identity.key.sessionId,
+    });
   }
 
   private destroyDevToolsWindow(entry: BrowserViewEntry): void {
