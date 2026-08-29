@@ -1,9 +1,11 @@
 import { WorktreeDeleteStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import type { WorktreeDeletionSource } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { appLogger } from "@/lib/logger";
+import { sanitizeHoldersRevision } from "@/lib/worktree/teardown-holder-copy";
 
 export interface WorktreeCleanupOutcome {
   readonly removed: ReadonlyArray<string>;
@@ -19,12 +21,25 @@ export interface WorktreeCleanupOutcome {
    * completion notification with the real counts.
    */
   readonly uncertain: ReadonlyArray<string>;
+  /**
+   * Force paths the host refused with `WORKTREE_HOLDERS_CHANGED` (fresh
+   * inventory attached). The GUI must return to review — never toast this
+   * as a generic failure or auto-retry.
+   */
+  readonly holdersChanged: ReadonlyArray<HoldersChangedPath>;
+}
+
+export interface HoldersChangedPath {
+  readonly worktreePath: string;
+  readonly holders: readonly WorktreeBusyHolder[];
+  readonly holdersRevision: string | undefined;
 }
 
 const EMPTY_OUTCOME: WorktreeCleanupOutcome = {
   removed: [],
   failed: [],
   uncertain: [],
+  holdersChanged: [],
 };
 
 // Fan-out cap for the FALLBACK path only (an older host with no batch command
@@ -65,6 +80,7 @@ export interface WorktreeCleanupRequest {
   readonly paths: ReadonlyArray<string>;
   readonly source: WorktreeDeletionSource;
   readonly stopOwnersPaths: ReadonlySet<string>;
+  readonly expectedHoldersRevisionByPath: ReadonlyMap<string, string>;
 }
 
 export function runWorktreeCleanup(
@@ -88,27 +104,30 @@ export function runWorktreeCleanup(
       request.source,
     );
   }
-  if (normalPaths.length === 0) {
-    return runFallbackCleanup(
-      openStreamTransport,
-      request.hostId,
-      forcePaths,
-      true,
-    );
-  }
-  return Promise.all([
-    runCleanupCommand(
+  // Force paths first: a HOLDERS_CHANGED refusal must not start the batch
+  // delete of the remaining selection.
+  return runFallbackCleanup({
+    openStreamTransport,
+    hostId: request.hostId,
+    paths: forcePaths,
+    stopOwners: true,
+    expectedHoldersRevisionByPath: request.expectedHoldersRevisionByPath,
+  }).then((force) => {
+    if (force.holdersChanged.length > 0 || normalPaths.length === 0) {
+      return force;
+    }
+    return runCleanupCommand(
       openStreamTransport,
       request.hostId,
       normalPaths,
       request.source,
-    ),
-    runFallbackCleanup(openStreamTransport, request.hostId, forcePaths, true),
-  ]).then(([normal, force]) => ({
-    removed: [...normal.removed, ...force.removed],
-    failed: [...normal.failed, ...force.failed],
-    uncertain: [...normal.uncertain, ...force.uncertain],
-  }));
+    ).then((normal) => ({
+      removed: [...normal.removed, ...force.removed],
+      failed: [...normal.failed, ...force.failed],
+      uncertain: [...normal.uncertain, ...force.uncertain],
+      holdersChanged: force.holdersChanged,
+    }));
+  });
 }
 
 /**
@@ -145,6 +164,7 @@ function runCleanupCommand(
         removed,
         failed: unsettledAre === "failed" ? [...failed, ...unsettled] : failed,
         uncertain: unsettledAre === "uncertain" ? unsettled : [],
+        holdersChanged: [],
       });
     };
     /**
@@ -163,17 +183,19 @@ function runCleanupCommand(
       requestClose(holder);
       const remaining = [...pending];
       pending.clear();
-      void runFallbackCleanup(
+      void runFallbackCleanup({
         openStreamTransport,
         hostId,
-        remaining,
-        false,
-      ).then(
+        paths: remaining,
+        stopOwners: false,
+        expectedHoldersRevisionByPath: new Map(),
+      }).then(
         (fallback) =>
           resolve({
             removed: [...removed, ...fallback.removed],
             failed: [...failed, ...fallback.failed],
             uncertain: fallback.uncertain,
+            holdersChanged: fallback.holdersChanged,
           }),
         (error: unknown) => {
           // `runFallbackCleanup` has no rejecting path today - every
@@ -193,7 +215,12 @@ function runCleanupCommand(
           // claiming "couldn't be removed" would be a false statement about the
           // filesystem. Nothing is retried - a destructive operation whose
           // outcome we do not know is exactly what must not be replayed.
-          resolve({ removed, failed, uncertain: remaining });
+          resolve({
+            removed,
+            failed,
+            uncertain: remaining,
+            holdersChanged: [],
+          });
           appLogger.warn(
             "[worktree-cleanup] the per-target fallback failed unexpectedly; those worktrees may or may not have been removed",
             {
@@ -303,42 +330,62 @@ function runCleanupCommand(
  * "always settles" invariant belongs to the caller's promise, not to this
  * function's present implementation.
  */
-async function runFallbackCleanup(
-  openStreamTransport: (hostId: string) => DurableStreamTransport,
-  hostId: string,
-  paths: ReadonlyArray<string>,
-  stopOwners: boolean,
-): Promise<WorktreeCleanupOutcome> {
+async function runFallbackCleanup(input: {
+  readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
+  readonly hostId: string;
+  readonly paths: ReadonlyArray<string>;
+  readonly stopOwners: boolean;
+  readonly expectedHoldersRevisionByPath: ReadonlyMap<string, string>;
+}): Promise<WorktreeCleanupOutcome> {
   const removed: string[] = [];
   const failed: string[] = [];
   const uncertain: string[] = [];
-  const queue = [...paths];
+  const holdersChanged: HoldersChangedPath[] = [];
+  const queue = [...input.paths];
 
   const worker = async (): Promise<void> => {
     for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
-      const outcome = await deleteOneWorktree(
-        openStreamTransport,
-        hostId,
-        path,
-        stopOwners,
-      );
-      if (outcome === "removed") {
+      const outcome = await deleteOneWorktree({
+        openStreamTransport: input.openStreamTransport,
+        hostId: input.hostId,
+        worktreePath: path,
+        stopOwners: input.stopOwners,
+        expectedHoldersRevision: input.expectedHoldersRevisionByPath.get(path),
+      });
+      if (outcome.kind === "removed") {
         removed.push(path);
-      } else if (outcome === "failed") {
+      } else if (outcome.kind === "failed") {
         failed.push(path);
+      } else if (outcome.kind === "holders-changed") {
+        holdersChanged.push({
+          worktreePath: path,
+          holders: outcome.holders,
+          holdersRevision: outcome.holdersRevision,
+        });
       } else {
         uncertain.push(path);
       }
     }
   };
 
-  const workerCount = Math.min(MAX_PARALLEL_CLEANUP_STREAMS, paths.length);
+  const workerCount = Math.min(
+    MAX_PARALLEL_CLEANUP_STREAMS,
+    input.paths.length,
+  );
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-  return { removed, failed, uncertain };
+  return { removed, failed, uncertain, holdersChanged };
 }
 
-type DeleteOneOutcome = "removed" | "failed" | "uncertain";
+type DeleteOneOutcome =
+  | { readonly kind: "removed" }
+  | { readonly kind: "failed" }
+  | { readonly kind: "uncertain" }
+  | {
+      readonly kind: "holders-changed";
+      readonly holders: readonly WorktreeBusyHolder[];
+      readonly holdersRevision: string | undefined;
+    };
 
 /**
  * Every per-path delete settles: on an app terminal frame (`complete`/`failed`),
@@ -352,12 +399,13 @@ type DeleteOneOutcome = "removed" | "failed" | "uncertain";
  * before the session opened, an open failure, or an app terminal failure is
  * `failed`.
  */
-function deleteOneWorktree(
-  openStreamTransport: (hostId: string) => DurableStreamTransport,
-  hostId: string,
-  worktreePath: string,
-  stopOwners: boolean,
-): Promise<DeleteOneOutcome> {
+function deleteOneWorktree(input: {
+  readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
+  readonly hostId: string;
+  readonly worktreePath: string;
+  readonly stopOwners: boolean;
+  readonly expectedHoldersRevision: string | undefined;
+}): Promise<DeleteOneOutcome> {
   return new Promise<DeleteOneOutcome>((resolve) => {
     const holder = newCloseHolder();
     const state = { settled: false, reachedHost: false };
@@ -370,20 +418,34 @@ function deleteOneWorktree(
 
     try {
       const owned = openOwnedDurableStreamClient(
-        openStreamTransport,
-        hostId,
+        input.openStreamTransport,
+        input.hostId,
         (wsStreamClient) =>
           new WorktreeDeleteStreamClient({
             wsStreamClient,
-            worktreePath,
+            worktreePath: input.worktreePath,
             scripts: null,
-            stopOwners,
+            stopOwners: input.stopOwners,
+            expectedHoldersRevision: input.stopOwners
+              ? sanitizeHoldersRevision(input.expectedHoldersRevision)
+              : undefined,
             callbacks: {
               onStarted: () => {},
               onPhase: () => {},
               onOutput: () => {},
-              onComplete: (deleted) => finish(deleted ? "removed" : "failed"),
-              onFailed: () => finish("failed"),
+              onComplete: (deleted) =>
+                finish({ kind: deleted ? "removed" : "failed" }),
+              onFailed: (_reason, holders, code, holdersRevision) => {
+                if (code === "WORKTREE_HOLDERS_CHANGED") {
+                  finish({
+                    kind: "holders-changed",
+                    holders: holders ?? [],
+                    holdersRevision,
+                  });
+                  return;
+                }
+                finish({ kind: "failed" });
+              },
               onConnectionStatus: (status) => {
                 // Fail fast on the FIRST drop after start. The one-shot delete
                 // stream must not silently re-run, but WsStreamClient's own
@@ -403,13 +465,13 @@ function deleteOneWorktree(
                   if (!state.settled) {
                     appLogger.warn(
                       "[worktree-cleanup] delete stream dropped before completing; the worktree may or may not have been removed",
-                      { worktreePath, status },
+                      { worktreePath: input.worktreePath, status },
                     );
                   }
-                  finish("uncertain");
+                  finish({ kind: "uncertain" });
                   return;
                 }
-                finish("failed");
+                finish({ kind: "failed" });
               },
             },
           }),
@@ -417,10 +479,10 @@ function deleteOneWorktree(
       adoptClose(holder, owned.close);
     } catch (error) {
       appLogger.warn("[worktree-cleanup] failed to open delete stream", {
-        worktreePath,
+        worktreePath: input.worktreePath,
         error: error instanceof Error ? error.message : String(error),
       });
-      finish("failed");
+      finish({ kind: "failed" });
     }
   });
 }

@@ -37,6 +37,11 @@ export interface SweepTargetWorktree {
   readonly repoIdentifier: RemovedBranchRepo | null;
   /** In-use rows the user selected deliberately: deleteByPath with stopOwners. */
   readonly stopOwners: boolean;
+  /**
+   * Reviewed `holdersRevision` for a 1.2 compare-and-refuse. `undefined`
+   * on an old host (no digest) — stopOwners still runs.
+   */
+  readonly expectedHoldersRevision: string | undefined;
 }
 
 export interface SweepWorktreesVariables {
@@ -49,6 +54,7 @@ export interface SweepWorktreesResult {
   readonly removed: ReadonlyArray<string>;
   readonly failed: ReadonlyArray<string>;
   readonly uncertain: ReadonlyArray<string>;
+  readonly holdersChanged: WorktreeCleanupOutcome["holdersChanged"];
   readonly hostId: string;
 }
 
@@ -89,22 +95,43 @@ export function useEpicSweepWorktrees(): UseMutationResult<
           target.stopOwners ? [target.worktreePath] : [],
         ),
       );
+      const expectedHoldersRevisionByPath = new Map<string, string>();
+      for (const target of variables.worktrees) {
+        if (
+          target.expectedHoldersRevision !== undefined &&
+          target.expectedHoldersRevision.length > 0
+        ) {
+          expectedHoldersRevisionByPath.set(
+            target.worktreePath,
+            target.expectedHoldersRevision,
+          );
+        }
+      }
       const outcome = await runWorktreeCleanup(openStreamTransport, {
         hostId: variables.hostId,
         paths: variables.worktrees.map((target) => target.worktreePath),
         source: "task_sweep",
         stopOwnersPaths,
+        expectedHoldersRevisionByPath,
       });
       return { ...outcome, hostId: variables.hostId };
     },
     onSuccess: (result, variables) => {
-      emitSweepSummaryToast(result);
-      purgeIntentsForRemovedWorktrees(
-        result.hostId,
-        variables.worktrees,
-        result.removed,
-      );
-      invalidateWorktreeListingAndBindingCaches(queryClient, result.hostId);
+      const settled =
+        result.removed.length > 0 ||
+        result.failed.length > 0 ||
+        result.uncertain.length > 0;
+      if (settled) {
+        emitSweepSummaryToast(result);
+        purgeIntentsForRemovedWorktrees(
+          result.hostId,
+          variables.worktrees,
+          result.removed,
+        );
+        invalidateWorktreeListingAndBindingCaches(queryClient, result.hostId);
+      }
+      if (result.holdersChanged.length > 0) return;
+      if (!settled) emitSweepSummaryToast(result);
     },
     onError: (error) => {
       toast.error(error.message);
