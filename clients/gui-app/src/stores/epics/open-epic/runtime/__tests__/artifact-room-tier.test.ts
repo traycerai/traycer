@@ -254,7 +254,13 @@ describe("isPinned — three independent arms, verified via demoteIdle()", () =>
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
 
     expect(
-      tier.applySnapshot("room-control", bytes, hostStateVectorBase64),
+      tier.applySnapshot({
+        artifactRoomId: "room-control",
+        snapshotBytes: bytes,
+        hostStateVectorBase64,
+        seed: "full",
+        docGuid: null,
+      }),
     ).toBe("filed-cold");
     const leaseGrant = tier.acquireSync("room-control");
     requireHotEntry(tier, "room-control"); // sanity: materialized
@@ -271,7 +277,13 @@ describe("isPinned — three independent arms, verified via demoteIdle()", () =>
     trackTierDisposal(tier);
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
 
-    tier.applySnapshot("room-leased", bytes, hostStateVectorBase64);
+    tier.applySnapshot({
+      artifactRoomId: "room-leased",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
     const leaseGrant = tier.acquireSync("room-leased");
     requireHotEntry(tier, "room-leased");
 
@@ -289,7 +301,13 @@ describe("isPinned — three independent arms, verified via demoteIdle()", () =>
     trackTierDisposal(tier);
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
 
-    tier.applySnapshot("room-dirty", bytes, hostStateVectorBase64);
+    tier.applySnapshot({
+      artifactRoomId: "room-dirty",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
     const leaseGrant = tier.acquireSync("room-dirty");
     const entry = requireHotEntry(tier, "room-dirty");
     leaseOf(leaseGrant).release(); // drop the lease pin so divergence is the ONLY remaining arm
@@ -311,7 +329,13 @@ describe("isPinned — three independent arms, verified via demoteIdle()", () =>
     trackTierDisposal(tier);
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
 
-    tier.applySnapshot("room-peered", bytes, hostStateVectorBase64);
+    tier.applySnapshot({
+      artifactRoomId: "room-peered",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
     const leaseGrant = tier.acquireSync("room-peered");
     requireHotEntry(tier, "room-peered");
     leaseOf(leaseGrant).release(); // drop the lease pin so the remote peer is the ONLY remaining arm
@@ -344,7 +368,13 @@ describe("cooldown timer", () => {
     trackTierDisposal(tier);
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
 
-    tier.applySnapshot("room-cooldown", bytes, hostStateVectorBase64);
+    tier.applySnapshot({
+      artifactRoomId: "room-cooldown",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
     const leaseGrant = tier.acquireSync("room-cooldown");
     requireHotEntry(tier, "room-cooldown");
 
@@ -380,11 +410,13 @@ describe("applySnapshot outcomes", () => {
     trackTierDisposal(tier);
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
 
-    const outcome = tier.applySnapshot(
-      "room-cold",
-      bytes,
+    const outcome = tier.applySnapshot({
+      artifactRoomId: "room-cold",
+      snapshotBytes: bytes,
       hostStateVectorBase64,
-    );
+      seed: "full",
+      docGuid: null,
+    });
 
     expect(outcome).toBe("filed-cold");
     expect(tier.peek("room-cold")).toBeNull();
@@ -398,11 +430,13 @@ describe("applySnapshot outcomes", () => {
     expect(tier.peek("room-seeded")).toBeNull(); // materialize() found nothing to bring up
 
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
-    const outcome = tier.applySnapshot(
-      "room-seeded",
-      bytes,
+    const outcome = tier.applySnapshot({
+      artifactRoomId: "room-seeded",
+      snapshotBytes: bytes,
       hostStateVectorBase64,
-    );
+      seed: "full",
+      docGuid: null,
+    });
 
     expect(outcome).toBe("seeded");
     expect(tier.peek("room-seeded")).not.toBeNull();
@@ -417,19 +451,23 @@ describe("applySnapshot outcomes", () => {
 
     const first = makeSnapshotBytes("first");
     expect(
-      tier.applySnapshot(
-        "room-merged",
-        first.bytes,
-        first.hostStateVectorBase64,
-      ),
+      tier.applySnapshot({
+        artifactRoomId: "room-merged",
+        snapshotBytes: first.bytes,
+        hostStateVectorBase64: first.hostStateVectorBase64,
+        seed: "full",
+        docGuid: null,
+      }),
     ).toBe("seeded");
 
     const second = makeSnapshotBytes("first-and-second");
-    const outcome = tier.applySnapshot(
-      "room-merged",
-      second.bytes,
-      second.hostStateVectorBase64,
-    );
+    const outcome = tier.applySnapshot({
+      artifactRoomId: "room-merged",
+      snapshotBytes: second.bytes,
+      hostStateVectorBase64: second.hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
 
     expect(outcome).toBe("merged");
     leaseOf(leaseGrant).release();
@@ -451,7 +489,13 @@ describe("materialize (via acquire) on a never-seeded room", () => {
     // "merged" — proving no doc existed before this snapshot.
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
     expect(
-      tier.applySnapshot("room-unseeded", bytes, hostStateVectorBase64),
+      tier.applySnapshot({
+        artifactRoomId: "room-unseeded",
+        snapshotBytes: bytes,
+        hostStateVectorBase64,
+        seed: "full",
+        docGuid: null,
+      }),
     ).toBe("seeded");
 
     leaseOf(leaseGrant).release();
@@ -469,7 +513,13 @@ describe("cold awareness frames", () => {
     // File the room cold first — recordColdAwareness only extends a room the
     // host has already snapshotted.
     expect(
-      tier.applySnapshot("room-frames", bytes, hostStateVectorBase64),
+      tier.applySnapshot({
+        artifactRoomId: "room-frames",
+        snapshotBytes: bytes,
+        hostStateVectorBase64,
+        seed: "full",
+        docGuid: null,
+      }),
     ).toBe("filed-cold");
 
     // 40 distinct-clientID frames while the room stays cold (no lease taken
@@ -510,7 +560,13 @@ describe("dispose() — the registry's terminal contract", () => {
     // one is demand on a room with no bytes yet.
     const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("seeded body");
     const seededGrant = tier.acquireSync("room-granted");
-    tier.applySnapshot("room-granted", bytes, hostStateVectorBase64);
+    tier.applySnapshot({
+      artifactRoomId: "room-granted",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
     const grantedAgain = tier.acquireSync("room-granted");
     expect(grantedAgain.kind).toBe("granted");
     const awaitingGrant = tier.acquireSync("room-awaiting");
@@ -544,5 +600,194 @@ describe("dispose() — the registry's terminal contract", () => {
     // And nothing new may be acquired - the one arm that registers no demand.
     expect(tier.acquireSync("room-granted").kind).toBe("unavailable");
     expect(tier.acquireSync("room-fresh").kind).toBe("unavailable");
+  });
+});
+
+// ─── 7. applySnapshot's doc identity (seed/docGuid) and null-vector handling ─
+
+describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermark handling", () => {
+  it('"full" with a CHANGED guid REPLACES the held doc, never splices histories', () => {
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+
+    // Seed the room under "guid-a", holding a lease so it materialises.
+    const leaseGrant = tier.acquireSync("room-replace");
+    const alpha = makeSnapshotBytes("alpha");
+    const seedOutcome = tier.applySnapshot({
+      artifactRoomId: "room-replace",
+      snapshotBytes: alpha.bytes,
+      hostStateVectorBase64: alpha.hostStateVectorBase64,
+      seed: "full",
+      docGuid: "guid-a",
+    });
+    expect(seedOutcome).toBe("seeded");
+    const entryBefore = requireHotEntry(tier, "room-replace");
+    expect(entryBefore.doc.getText("body").toString()).toBe("alpha");
+
+    // A deleted-and-recreated artifact: same room id, new guid, unrelated
+    // content.
+    const beta = makeSnapshotBytes("beta");
+    const replaceOutcome = tier.applySnapshot({
+      artifactRoomId: "room-replace",
+      snapshotBytes: beta.bytes,
+      hostStateVectorBase64: beta.hostStateVectorBase64,
+      seed: "full",
+      docGuid: "guid-b",
+    });
+
+    // "seeded", not "merged" - the room was torn down and rebuilt, so
+    // anything bound to `entryBefore` by reference is now stale and must
+    // rebind.
+    expect(replaceOutcome).toBe("seeded");
+    const entryAfter = requireHotEntry(tier, "room-replace");
+    expect(entryAfter).not.toBe(entryBefore);
+
+    // A splice would leave BOTH texts in the doc (interleaved or
+    // concatenated). Assert the new content is present AND the old content
+    // is explicitly absent - not just that "beta" appears somewhere, which a
+    // splice would also satisfy.
+    const finalText = entryAfter.doc.getText("body").toString();
+    expect(finalText).toBe("beta");
+    expect(finalText).not.toContain("alpha");
+
+    leaseOf(leaseGrant).release();
+  });
+
+  it('"full" with an UNCHANGED guid still merges - local content survives', () => {
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+
+    const leaseGrant = tier.acquireSync("room-merge-same-guid");
+    const seed = makeSnapshotBytes("seed-content");
+    const seedOutcome = tier.applySnapshot({
+      artifactRoomId: "room-merge-same-guid",
+      snapshotBytes: seed.bytes,
+      hostStateVectorBase64: seed.hostStateVectorBase64,
+      seed: "full",
+      docGuid: "guid-c",
+    });
+    expect(seedOutcome).toBe("seeded");
+    const entry = requireHotEntry(tier, "room-merge-same-guid");
+
+    // Local content added BETWEEN the two snapshots.
+    entry.doc.getMap("local-marker").set("kept", "yes");
+
+    const second = makeSnapshotBytes("more-content");
+    const outcome = tier.applySnapshot({
+      artifactRoomId: "room-merge-same-guid",
+      snapshotBytes: second.bytes,
+      hostStateVectorBase64: second.hostStateVectorBase64,
+      seed: "full",
+      docGuid: "guid-c",
+    });
+
+    // "merged", not "seeded" - the SAME guid never tears the room down. This
+    // is the pin that stops a "fix" for the replace case above from just
+    // replacing on every snapshot: that would also produce a new entry
+    // object and wipe the local edit below.
+    expect(outcome).toBe("merged");
+    expect(tier.peek("room-merge-same-guid")).toBe(entry);
+    expect(entry.doc.getMap("local-marker").get("kept")).toBe("yes");
+
+    leaseOf(leaseGrant).release();
+  });
+
+  it('a null docGuid never replaces - two "full" snapshots with no stated identity both merge', () => {
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+
+    // The legacy `@1` arm's exact call shape: docGuid is null on every call.
+    const leaseGrant = tier.acquireSync("room-null-guid");
+    const first = makeSnapshotBytes("first-null-guid");
+    const seedOutcome = tier.applySnapshot({
+      artifactRoomId: "room-null-guid",
+      snapshotBytes: first.bytes,
+      hostStateVectorBase64: first.hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+    expect(seedOutcome).toBe("seeded");
+    const entry = requireHotEntry(tier, "room-null-guid");
+
+    entry.doc.getMap("local-marker").set("kept", "yes");
+
+    const second = makeSnapshotBytes("second-null-guid");
+    const outcome = tier.applySnapshot({
+      artifactRoomId: "room-null-guid",
+      snapshotBytes: second.bytes,
+      hostStateVectorBase64: second.hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+
+    // "merged", the SAME entry survives, and the local edit is intact - the
+    // guarantee that the `@1` arm (which never states an identity) is
+    // unchanged by the guid-replace rule.
+    expect(outcome).toBe("merged");
+    expect(tier.peek("room-null-guid")).toBe(entry);
+    expect(entry.doc.getMap("local-marker").get("kept")).toBe("yes");
+
+    leaseOf(leaseGrant).release();
+  });
+
+  it("hostStateVectorBase64: null does not clear the dirty watermark; a covering vector does", () => {
+    const { tier, session } = createHarness();
+    trackTierDisposal(tier);
+
+    const seed = makeSnapshotBytes("dirty-seed");
+    const leaseGrant = tier.acquireSync("room-null-vector-dirty");
+    tier.applySnapshot({
+      artifactRoomId: "room-null-vector-dirty",
+      snapshotBytes: seed.bytes,
+      hostStateVectorBase64: seed.hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+    const entry = requireHotEntry(tier, "room-null-vector-dirty");
+
+    // Local edit while the room cannot send - the same writable-role gate as
+    // the local-divergence pin above, plus `canSendBodyWrites: false` so the
+    // edit is queued rather than drained immediately.
+    session.state.permissionRole = "owner";
+    session.state.canSendBodyWrites = false;
+    entry.doc.getMap("dirty-marker").set("edit", "1");
+
+    expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
+    expect(tier.hasDivergence()).toBe(true);
+
+    // A snapshot with no watermark proves nothing about what the host has
+    // durably seen - it must NOT clear the dirty mark.
+    const noVectorResend = makeSnapshotBytes("host-resend-no-vector");
+    tier.applySnapshot({
+      artifactRoomId: "room-null-vector-dirty",
+      snapshotBytes: noVectorResend.bytes,
+      hostStateVectorBase64: null,
+      seed: "full",
+      docGuid: null,
+    });
+
+    expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
+    expect(tier.hasDivergence()).toBe(true);
+
+    // A snapshot carrying a vector that actually covers the watermark clears
+    // it - proving the assertions above are not just a tier that never
+    // clears the watermark at all. The covering vector and bytes are the
+    // replica's own current full state taken at the same instant, so the
+    // diff against them is trivial by construction and the coverage check
+    // is unambiguous.
+    const coveringVector = encodeDocStateVectorBase64(entry.doc);
+    const coveringBytes = Y.encodeStateAsUpdate(entry.doc);
+    tier.applySnapshot({
+      artifactRoomId: "room-null-vector-dirty",
+      snapshotBytes: coveringBytes,
+      hostStateVectorBase64: coveringVector,
+      seed: "full",
+      docGuid: null,
+    });
+
+    expect(entry.dirtyWatermarkStateVectorBase64).toBeNull();
+    expect(tier.hasDivergence()).toBe(false);
+
+    leaseOf(leaseGrant).release();
   });
 });

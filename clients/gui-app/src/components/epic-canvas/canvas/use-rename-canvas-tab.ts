@@ -96,6 +96,16 @@ export function useRenameCanvasTab(
               // theirs stands and ours must not be persisted over it; if a
               // peer won with the same title, writing is a no-op.
               //
+              // This reads the PROJECTED slice, which carries the optimistic
+              // overlay (`projection-helpers.ts` lands it on the union outputs
+              // components read). It is authoritative here only because the
+              // overlay entry is already retired by the time this microtask
+              // runs - by the dead sweep on `superseded`, by the rollback on
+              // `rejected`. If either retirement were ever deferred past
+              // settlement, a REJECTED rename would read back its own
+              // optimistic title and persist a title the host refused into the
+              // durable tab snapshot. That ordering is pinned by test.
+              //
               // `noUncheckedIndexedAccess` is off, so the own-key check is
               // what distinguishes a missing row from a present one.
               const artifacts = epicHandle.store.getState().artifacts.byId;

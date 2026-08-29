@@ -680,6 +680,11 @@ export function createEpicReplicaRuntime(
 
   function attachArm(arm: EpicAdapterArm): void {
     if (arm === "legacy") {
+      // Retire an outstanding capability probe first. On this path the probe
+      // has just answered method-unsupported, so its status stream is a socket
+      // held open for a question already settled; the arm's per-lane attach
+      // state makes this a no-op when no probe ran.
+      laneArm?.detach("superseded");
       // The doc head: the projector binds the root `Y.Doc` and the `@1` adapter
       // opens the one multiplexed socket.
       records.start();
@@ -703,6 +708,22 @@ export function createEpicReplicaRuntime(
   function detachArm(arm: EpicAdapterArm, reason: AdapterDetachReason): void {
     if (arm === "legacy") {
       adapter.detach(reason);
+      return;
+    }
+    laneArm?.detach(reason);
+  }
+
+  /**
+   * Close whatever this runtime has open, installed arm or not.
+   *
+   * The `installedArm === null` branch is the one worth naming: a connection
+   * still being probed holds a status stream under NO arm, and a teardown that
+   * only ever detached the installed arm would leave that socket open for the
+   * lifetime of the client.
+   */
+  function detachWhateverIsOpen(reason: AdapterDetachReason): void {
+    if (installedArm !== null) {
+      detachArm(installedArm, reason);
       return;
     }
     laneArm?.detach(reason);
@@ -750,6 +771,17 @@ export function createEpicReplicaRuntime(
    * `"undecided"` one holds whatever is installed - which is what makes this
    * safe to call from a support-change listener that also fires on every
    * reconnect's support reset.
+   *
+   * ## Undecided with nothing installed is the PROBE case, not a hold
+   *
+   * The hold rule ("an undecided verdict never displaces an installed arm")
+   * describes a reconnect, where support was wiped but an arm is already
+   * serving. With NO arm installed there is nothing to hold and, worse,
+   * nothing that would ever make the verdict decide: the client learns a
+   * method's support from a subscribe completing, so a runtime that installs
+   * nothing while it waits opens no subscribe, receives no answer, and stalls
+   * on that connection permanently. So this case probes rather than waits -
+   * see {@link EpicLaneArm.probe}.
    */
   function applySelection(): void {
     if (disposed) return;
@@ -757,6 +789,12 @@ export function createEpicReplicaRuntime(
       laneSelection === null
         ? "legacy"
         : readEpicAdapterVerdict(laneSelection.support);
+    if (installedArm === null && verdict === "undecided") {
+      // Idempotent: the arm opens one status stream however often this is
+      // called, and every reconnect's support reset lands here again.
+      laneArm?.probe();
+      return;
+    }
     const transition = planEpicAdapterTransition(installedArm, verdict);
     if (transition.steps.length === 0) {
       installedArm = transition.installed;
@@ -1067,7 +1105,7 @@ export function createEpicReplicaRuntime(
       // retained.
       delivery.batch(() => {
         records.detach();
-        if (installedArm !== null) detachArm(installedArm, "transport-only");
+        detachWhateverIsOpen("transport-only");
         control.noteTransportDetached();
       });
     },
@@ -1079,7 +1117,7 @@ export function createEpicReplicaRuntime(
       // decoded into a doc that is about to be destroyed, and while the guards
       // above would already refuse it, "already refused" is a weaker property
       // than "the socket was gone first".
-      if (installedArm !== null) detachArm(installedArm, "disposed");
+      detachWhateverIsOpen("disposed");
       unsubscribeLaneSupport?.();
       unsubscribeLaneSupport = null;
       unsubscribeCommandQueue();

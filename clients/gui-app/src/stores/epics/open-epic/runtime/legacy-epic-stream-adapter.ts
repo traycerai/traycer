@@ -201,6 +201,13 @@ export function createLegacyEpicStreamAdapter(
             artifactRoomId,
             update: snapshotBytes,
             hostStateVectorBase64: hostArtifactRoomStateVectorBase64,
+            // This line states neither, and both values say exactly that. A
+            // room snapshot on `@1` is always self-sufficient - there is no
+            // offer protocol here for it to be a delta against - and it claims
+            // no doc identity, which leaves the tier's replace rule
+            // unreachable from this arm by construction rather than by luck.
+            seed: "full",
+            docGuid: null,
           },
         });
       },

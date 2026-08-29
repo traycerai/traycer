@@ -278,7 +278,13 @@ function seedUnpinned(
 ): void {
   const snapshot = makeSnapshotBytes(text);
   expect(
-    tier.applySnapshot(roomId, snapshot.bytes, snapshot.hostStateVectorBase64),
+    tier.applySnapshot({
+      artifactRoomId: roomId,
+      snapshotBytes: snapshot.bytes,
+      hostStateVectorBase64: snapshot.hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    }),
   ).toBe("filed-cold");
   const grant = tier.acquireSync(roomId);
   expect(tier.peek(roomId)).not.toBeNull();
@@ -385,11 +391,13 @@ describe("hot-doc byte budget with a real tier", () => {
     );
     const pinned = makeSnapshotBytes("pinned body");
     expect(
-      harness.tier.applySnapshot(
-        "room-pinned",
-        pinned.bytes,
-        pinned.hostStateVectorBase64,
-      ),
+      harness.tier.applySnapshot({
+        artifactRoomId: "room-pinned",
+        snapshotBytes: pinned.bytes,
+        hostStateVectorBase64: pinned.hostStateVectorBase64,
+        seed: "full",
+        docGuid: null,
+      }),
     ).toBe("filed-cold");
     const pinnedGrant = harness.tier.acquireSync("room-pinned");
     seedUnpinned(harness.tier, "room-cold-a", "x".repeat(200));
@@ -496,11 +504,13 @@ describe("hot-doc byte budget with a real tier", () => {
     const harness = createBudgetedHarness(10_000_000);
     const seed = makeSnapshotBytes("seed");
     expect(
-      harness.tier.applySnapshot(
-        "room-leased",
-        seed.bytes,
-        seed.hostStateVectorBase64,
-      ),
+      harness.tier.applySnapshot({
+        artifactRoomId: "room-leased",
+        snapshotBytes: seed.bytes,
+        hostStateVectorBase64: seed.hostStateVectorBase64,
+        seed: "full",
+        docGuid: null,
+      }),
     ).toBe("filed-cold");
     const grant = harness.tier.acquireSync("room-leased");
     expect(harness.tier.peek("room-leased")).not.toBeNull();
@@ -510,11 +520,13 @@ describe("hot-doc byte budget with a real tier", () => {
 
     const reconnect = makeSnapshotBytes("x".repeat(80_000));
     expect(
-      harness.tier.applySnapshot(
-        "room-leased",
-        reconnect.bytes,
-        reconnect.hostStateVectorBase64,
-      ),
+      harness.tier.applySnapshot({
+        artifactRoomId: "room-leased",
+        snapshotBytes: reconnect.bytes,
+        hostStateVectorBase64: reconnect.hostStateVectorBase64,
+        seed: "full",
+        docGuid: null,
+      }),
     ).toBe("merged");
     expect(
       harness.settle.mock.calls.length +

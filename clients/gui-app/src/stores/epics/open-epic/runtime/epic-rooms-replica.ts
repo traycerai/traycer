@@ -9,6 +9,7 @@
  */
 import type {
   ClassFreshness,
+  DocSeedMode,
   LeaseGrant,
   ProjectionSink,
   Replica,
@@ -152,6 +153,25 @@ export function createEpicRoomsReplica(
    * Bounded by the wire: one entry per room the host has ever named, overwritten
    * in place when it transitions. A retained entry for a room no artifact ever
    * claims simply never reaches the projection.
+   *
+   * ## Why nothing evicts a single room
+   *
+   * There is no removal signal to evict ON. `EpicArtifactRoomAvailability` is
+   * `ready | unavailable | retrying` and every member is a TRANSITION, not a
+   * terminus - `unavailable` is the ordinary network-blip state a room returns
+   * from, so evicting on it would delete the very state the map exists to
+   * report. And a room that genuinely goes away is never announced: the host's
+   * resolver drops a room that disappears from `listArtifactRooms()` by
+   * detaching its listeners and deleting its mirror, emitting no frame
+   * (`epic-stream-resolver.ts`, "ArtifactRooms that disappear ... get their
+   * update / awareness listeners detached and their state mirror cleared").
+   *
+   * So the bound is the RESET, not a per-room eviction: every path that can
+   * invalidate what these entries claim - replacement, resume-too-old,
+   * user-requested reseed, teardown - runs `resetInternal`, which clears the
+   * map wholesale. Do not add an eviction keyed on "no artifact claims this
+   * room": that is indistinguishable from "no artifact claims it YET", which
+   * is the pre-snapshot ordering this map was introduced to preserve.
    */
   const availabilityByRoom = new Map<string, EpicArtifactRoomAvailability>();
   let bindingBumpScheduled = false;
@@ -233,13 +253,21 @@ export function createEpicRoomsReplica(
   function applySnapshot(event: {
     readonly artifactRoomId: string;
     readonly update: Uint8Array;
-    readonly hostStateVectorBase64: string;
+    readonly hostStateVectorBase64: string | null;
+    readonly seed: DocSeedMode;
+    readonly docGuid: string | null;
   }): void {
-    const outcome: RoomSnapshotOutcome = tier.applySnapshot(
-      event.artifactRoomId,
-      event.update,
-      event.hostStateVectorBase64,
-    );
+    // Forwarded, not decided. Which arm delivered this body is not something
+    // this replica knows or should: the arm states what its wire states, and
+    // the tier applies the rule. That is what lets one rooms replica serve
+    // both heads.
+    const outcome: RoomSnapshotOutcome = tier.applySnapshot({
+      artifactRoomId: event.artifactRoomId,
+      snapshotBytes: event.update,
+      hostStateVectorBase64: event.hostStateVectorBase64,
+      seed: event.seed,
+      docGuid: event.docGuid,
+    });
     if (outcome === "filed-cold") {
       // Nothing materialised, so nothing is bound and nothing local can have
       // diverged. Availability alone.
@@ -305,6 +333,12 @@ export function createEpicRoomsReplica(
             event.artifactRoomId,
             event.update,
             event.hostStateVectorBase64,
+          );
+          break;
+        case "room-coverage":
+          tier.applyCoverage(
+            event.artifactRoomId,
+            event.coverageStateVectorBase64,
           );
           break;
         case "room-awareness":

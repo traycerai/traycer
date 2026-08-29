@@ -80,7 +80,31 @@ export interface EpicLaneArmSources {
 }
 
 export interface EpicLaneArm {
-  /** Open both lanes. The status lane is also the capability PROBE. */
+  /**
+   * Open ONLY the status lane, as the capability probe for a connection whose
+   * manifest has not resolved.
+   *
+   * This exists because "unknown support is not a selection" and a subscribe is
+   * the only thing that can settle it: the client learns a method's support
+   * from a subscribe COMPLETING (`applyHostManifest` runs with the subscribed
+   * method's outcome), so a runtime that installs no arm while it waits for
+   * support to resolve waits forever - there is nothing else in the epic
+   * session that would ask.
+   *
+   * The probe is the status lane rather than a throwaway request because the
+   * open is not wasted on the arm it is probing FOR: on a lane host this
+   * stream is the real status lane, and {@link attach} adopts it instead of
+   * opening a second one. On an old host the subscribe resolves
+   * method-unsupported, which is the typed answer that installs legacy, and
+   * the cost is the one rejected subscribe that answer requires.
+   */
+  probe(): void;
+  /**
+   * Open both lanes, adopting a stream {@link probe} already opened.
+   *
+   * Idempotent per lane: attaching after a probe opens the records lane only,
+   * so the probe-then-lanes path costs exactly one status open, not two.
+   */
   attach(): void;
   detach(reason: AdapterDetachReason): void;
   /** Close the sockets, keep the replicas - the retained-handle path. */
@@ -195,7 +219,25 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     });
   }
 
+  // Which lanes hold an open subscription. Tracked here rather than inferred
+  // from the adapters because the probe leaves this arm HALF attached, and
+  // every lifecycle call below has to act on the half that exists: the
+  // adapters' own `openTransport` opens unconditionally, so an ungated
+  // reopen would dial a records lane that was never attached.
+  let statusAttached = false;
+  let stateAttached = false;
+
+  function ensureStatusAttached(): void {
+    if (statusAttached) return;
+    attachStatus();
+    statusAttached = true;
+  }
+
   return {
+    probe(): void {
+      ensureStatusAttached();
+    },
+
     attach(): void {
       // STATUS FIRST, and not for tidiness: on a connection whose manifest has
       // not resolved this open is the capability PROBE. It succeeds on a lane
@@ -204,23 +246,37 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
       // the subscribe resolves method-unsupported, which is the typed answer
       // that settles the arm. Opening the records lane first would make the
       // probe's cost two rejected subscribes instead of one.
-      attachStatus();
+      //
+      // `ensureStatusAttached` rather than `attachStatus`, because the probe
+      // usually got here first and its stream IS this lane.
+      ensureStatusAttached();
+      if (stateAttached) return;
       attachState();
+      stateAttached = true;
     },
 
     detach(reason: AdapterDetachReason): void {
-      statusAdapter.detach(reason);
-      stateAdapter.detach(reason);
+      // Guarded per lane so this also retires a bare probe - the runtime calls
+      // it on the legacy install to close the status stream the probe opened,
+      // and on teardown with no arm installed at all.
+      if (statusAttached) {
+        statusAdapter.detach(reason);
+        statusAttached = false;
+      }
+      if (stateAttached) {
+        stateAdapter.detach(reason);
+        stateAttached = false;
+      }
     },
 
     closeTransport(): void {
-      statusAdapter.closeTransport();
-      stateAdapter.closeTransport();
+      if (statusAttached) statusAdapter.closeTransport();
+      if (stateAttached) stateAdapter.closeTransport();
     },
 
     openTransport(): void {
-      statusAdapter.openTransport();
-      stateAdapter.openTransport();
+      if (statusAttached) statusAdapter.openTransport();
+      if (stateAttached) stateAdapter.openTransport();
     },
 
     observedAuthorityEpoch: () => statusAdapter.observedAuthorityEpoch(),

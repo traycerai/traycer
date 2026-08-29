@@ -1,5 +1,6 @@
+import { useCallback, useSyncExternalStore } from "react";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
-import { useEpicStore } from "@/hooks/use-epic-store";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
 /**
  * Which of the two sources answered for an artifact.
@@ -47,20 +48,50 @@ export function selectLaneCommentThreads(
 }
 
 /**
- * {@link selectLaneCommentThreads} against the live epic store.
+ * {@link selectLaneCommentThreads} against the live epic store, or `null` when
+ * this surface has no epic session at all.
  *
  * Reads ambient context, so it belongs to a surface's WIRING layer. The
  * components under `components/comments/` take the result as a prop and read
  * no ambient context of their own, which is what keeps them mountable outside
  * an epic session - and what lets their tests exercise both sources without
  * standing up a store.
+ *
+ * `useMaybeOpenEpicHandle` rather than `useEpicStore`, which THROWS outside a
+ * provider. `CommentSidebarPanel` is deliberately shared between the desktop
+ * left panel and the mobile switcher's comments category, and only the first
+ * of those is inside an `EpicSessionProvider` today - so a hook that throws
+ * takes the whole mobile surface down rather than degrading it.
+ *
+ * Returning `null` is not a special case invented for that: `null` is already
+ * this function's word for "the lane has said nothing about this artifact",
+ * and no epic session is the purest instance of it. The poll is on the
+ * released floor and answers for every host, so the surface renders comments
+ * from the source it would have used anyway. Same resolution, and the same
+ * reasoning, as `use-chat-write-route.ts`'s session tolerance.
  */
 export function useEpicLaneCommentThreads(
   artifactId: string,
 ): readonly CommentThreadWire[] | null {
-  return useEpicStore((s) =>
-    selectLaneCommentThreads(s.commentThreads.byArtifactId, artifactId),
+  const handle = useMaybeOpenEpicHandle();
+  const subscribe = useCallback(
+    (onStoreChange: () => void): (() => void) =>
+      handle === null ? () => {} : handle.store.subscribe(onStoreChange),
+    [handle],
   );
+  // Returns either the array the slice already holds or `null` - never a fresh
+  // object - so `useSyncExternalStore` sees a stable snapshot.
+  const getSnapshot = useCallback(
+    (): readonly CommentThreadWire[] | null =>
+      handle === null
+        ? null
+        : selectLaneCommentThreads(
+            handle.store.getState().commentThreads.byArtifactId,
+            artifactId,
+          ),
+    [handle, artifactId],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot);
 }
 
 /**

@@ -221,6 +221,14 @@ describe("createLegacyEpicStreamAdapter - decode into plane/event", () => {
             artifactRoomId: "room-1",
             update: bytes,
             hostStateVectorBase64: "sv-base64",
+            // The `@1` arm states no offer protocol and no doc identity. These
+            // two values are what keep the tier's "a changed guid replaces the
+            // held doc" rule unreachable from this arm, so they are asserted
+            // rather than left to the shape check: a future edit that made
+            // this adapter invent a guid would splice two histories together
+            // on the next recreate, and this is the line that would stop it.
+            seed: "full",
+            docGuid: null,
           },
         };
       },

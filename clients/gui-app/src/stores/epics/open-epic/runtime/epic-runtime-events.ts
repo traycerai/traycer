@@ -53,6 +53,7 @@ import type {
   StreamCloseReason,
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { DocSeedMode } from "@traycer-clients/shared/replica-runtime";
 import type { EpicArtifactRoomAvailability } from "../types";
 
 // ─── Root plane ───────────────────────────────────────────────────────────
@@ -99,18 +100,56 @@ export type EpicRootEvent =
  * with a bound editor stays on the main thread and the lease is that boundary.
  */
 export type EpicRoomEvent =
+  /**
+   * A whole body, with the arm's own account of what it is.
+   *
+   * `seed` and `docGuid` are stated by the ARM rather than defaulted here,
+   * which is what lets one rooms replica serve both. The `@1` line has no
+   * offer protocol and no doc identity, so it says `"full"` and `null` - and
+   * saying so explicitly is the point: the tier's replace rule then reads a
+   * value the adapter asserted, not one this type invented on its behalf.
+   *
+   * `hostStateVectorBase64` is nullable for the same reason it is on the seam:
+   * a body can arrive without a watermark, and that is a fact to represent
+   * rather than a field to fill in with `""`.
+   */
   | {
       readonly kind: "room-snapshot";
       readonly artifactRoomId: string;
       readonly update: Uint8Array;
-      readonly hostStateVectorBase64: string;
+      readonly hostStateVectorBase64: string | null;
+      readonly seed: DocSeedMode;
+      readonly docGuid: string | null;
     }
   | {
       readonly kind: "room-update";
       readonly artifactRoomId: string;
       readonly update: Uint8Array;
-      /** The host-side room state AFTER applying {@link update}. */
-      readonly hostStateVectorBase64: string;
+      /**
+       * The host-side room state AFTER applying {@link update}, or `null` on an
+       * arm that does not state one.
+       *
+       * `@1` rides this on every update, which is how that arm retires local
+       * divergence. The body lane does not: `doc-update` describes what OTHERS
+       * wrote and carries no vector, and what this client pushed is answered
+       * separately by `room-coverage`. Defaulting this to `""` for the lane
+       * would read as "the host has nothing", which is the one claim that
+       * silently un-retires a body's dirty mark.
+       */
+      readonly hostStateVectorBase64: string | null;
+    }
+  /**
+   * How much of what THIS client pushed the authority now holds.
+   *
+   * Only the body lane emits it - `@1` folds the same fact into every update's
+   * post-apply vector - and it exists because without it a lane-served body
+   * would read as permanently unsynced after a successful push: there would be
+   * no event on which its divergence could ever be retired.
+   */
+  | {
+      readonly kind: "room-coverage";
+      readonly artifactRoomId: string;
+      readonly coverageStateVectorBase64: string;
     }
   | {
       readonly kind: "room-awareness";

@@ -46,6 +46,7 @@ import {
   encodeAwarenessUpdate,
 } from "y-protocols/awareness";
 import type {
+  DocSeedMode,
   EvictionOutcome,
   LeaseGrant,
   LeaseHandle,
@@ -238,6 +239,65 @@ export const ARTIFACT_ROOM_LEASE_POLICY: LeasePolicy = {
  */
 export type RoomSnapshotOutcome = "filed-cold" | "merged" | "seeded";
 
+/**
+ * One inbound body snapshot, with the authority's own account of what it is.
+ *
+ * The tier used to decide merge-vs-seed by itself - "is there already a replica
+ * for this room" - which is the only thing it COULD do on a wire that states
+ * nothing. `artifact.subscribe` states both halves, and this is the shape that
+ * carries them, so the decision moves to the authority that owns it.
+ */
+/**
+ * This client's position on one body, in the shape `artifact.subscribe`'s open
+ * request takes.
+ *
+ * Both fields are non-empty by the wire's schema, which is why this is `null`
+ * rather than a record with empty strings when there is nothing to offer.
+ */
+export interface ArtifactRoomDocSeed {
+  /**
+   * Taken off the snapshot that seeded the replica, never derived from the
+   * artifact id - an id cannot answer "is my replica the same document as
+   * yours" once a body has been deleted and recreated under it.
+   */
+  readonly knownDocGuid: string;
+  /** Base64 `Y.encodeStateVector` of the replica this client still holds. */
+  readonly stateVectorBase64: string;
+}
+
+export interface ArtifactRoomSnapshotInput {
+  readonly artifactRoomId: string;
+  readonly snapshotBytes: Uint8Array;
+  /**
+   * The authority's state vector at snapshot time, driving the reconcile diff.
+   *
+   * `null` is a REPRESENTED state, not a missing field: the lane may deliver a
+   * body without a watermark, and the honest reading is "this snapshot proves
+   * nothing about what the host has seen". Two things follow, both fail-closed
+   * (see `applySnapshot`): the reconcile is computed against the whole doc
+   * rather than a diff, and the dirty watermark is NOT cleared.
+   */
+  readonly hostStateVectorBase64: string | null;
+  /**
+   * Whether these bytes stand alone or complete an offer this replica made.
+   * `"delta-against-offer"` must be merged onto the replica that made the
+   * offer and can never install a room from cold.
+   */
+  readonly seed: DocSeedMode;
+  /**
+   * The authority's identity for this doc instance, or `null` on an arm that
+   * states none.
+   *
+   * `null` rather than a synthesized id for the `@1` arm on purpose. A
+   * fabricated guid would be indistinguishable from a stated one, and the
+   * replace rule below would then be deciding on a value this client invented;
+   * `null` says "no identity was stated", which is the truth, and reduces the
+   * rule to "never replace" on that arm by construction rather than by a
+   * stability argument about the value chosen.
+   */
+  readonly docGuid: string | null;
+}
+
 export interface ArtifactRoomTierSources {
   readonly environment: RuntimeEnvironment;
   readonly session: EpicSessionFacts;
@@ -295,15 +355,46 @@ export interface ArtifactRoomTier {
   hasDivergence(): boolean;
 
   // ── Inbound frames ──────────────────────────────────────────────────────
-  applySnapshot(
-    artifactRoomId: string,
-    snapshotBytes: Uint8Array,
-    hostStateVectorBase64: string,
-  ): RoomSnapshotOutcome;
+  /**
+   * What this client can offer the authority for one body, or `null` when it
+   * can offer nothing.
+   *
+   * This is the other half of {@link ArtifactRoomSnapshotInput.seed}: the body
+   * lane's `readDocSeed` is wired here, so "the tier holds a replica" and "the
+   * host may answer with a delta" are the SAME fact rather than two that have
+   * to be kept in step. A room that has cooled answers `null` - its update
+   * buffers are not a document and cannot produce a state vector - so the host
+   * sends a full body and the tier files it cold again. That costs bandwidth
+   * and cannot corrupt anything, which is the right side to err on.
+   */
+  readDocSeedOffer(artifactRoomId: string): ArtifactRoomDocSeed | null;
+  applySnapshot(input: ArtifactRoomSnapshotInput): RoomSnapshotOutcome;
+  /**
+   * Remote bytes for one body.
+   *
+   * `hostStateVectorBase64` is nullable for the same reason it is on a
+   * snapshot, and on the body lane it is always `null`: `doc-update` carries
+   * no vector, because it describes what OTHERS wrote. What this client has
+   * pushed is answered separately by {@link applyCoverage}.
+   */
   applyUpdate(
     artifactRoomId: string,
     updateBytes: Uint8Array,
-    hostStateVectorBase64: string,
+    hostStateVectorBase64: string | null,
+  ): void;
+  /**
+   * The authority's coverage of updates this client pushed - the event that
+   * retires local divergence on the body lane.
+   *
+   * Split from {@link applyUpdate} rather than folded into it because the two
+   * answer different questions, and folding them would mean either inventing a
+   * coverage claim on every remote update or never retiring divergence at all.
+   * A room with no live replica has no watermark to retire, so this is a no-op
+   * there rather than something to buffer.
+   */
+  applyCoverage(
+    artifactRoomId: string,
+    coverageStateVectorBase64: string,
   ): void;
   applyAwareness(artifactRoomId: string, awarenessBytes: Uint8Array): void;
   /** A room leaving `ready` invalidates both its hot and cold copies. */
@@ -402,6 +493,57 @@ export function createArtifactRoomTier(
   function unchargeHot(artifactRoomId: string): void {
     lastHotBytes.delete(artifactRoomId);
     if (budget !== null) budget.release(artifactRoomId);
+  }
+
+  /**
+   * Drop everything held for one room - hot replica, cold bytes, recency and
+   * both budget charges - keeping its LEASES.
+   *
+   * Two callers with the same requirement: a room leaving `ready`, and a
+   * snapshot that states a different doc identity. Both mean "what is held is
+   * no longer a valid basis for the next frame", and both rely on a mounted
+   * editor's lease surviving so the next snapshot re-materialises under it.
+   *
+   * Accounting is settled here rather than by the callers, which is what makes
+   * the replace path cost-neutral: `unchargeHot` releases the hot
+   * `HolderCharge` (settled plus provisional) and `notifyCold(id, 0)` settles
+   * the cold charge to zero, so a replaced room is charged for exactly the
+   * bytes the new doc goes on to hold.
+   */
+  function discardEverythingFor(artifactRoomId: string): void {
+    cancelCooldown(artifactRoomId);
+    cold.delete(artifactRoomId);
+    touchSeq.delete(artifactRoomId);
+    destroyReplica(artifactRoomId);
+    unchargeHot(artifactRoomId);
+    notifyCold(artifactRoomId, 0);
+  }
+
+  /**
+   * The authority's doc identity per room, for as long as the room is held.
+   *
+   * Kept beside the hot/cold maps rather than inside either, because identity
+   * spans them: a room that cools and is later re-materialised is the same
+   * document, and a guid stored on the entry would be forgotten exactly when
+   * the replace rule still has to be able to fire.
+   */
+  const docGuidByRoom = new Map<string, string>();
+
+  /**
+   * Whether an incoming snapshot's identity supersedes what this room holds.
+   *
+   * Stated-to-stated difference only. A `null` on either side means no
+   * identity was claimed - by the incoming frame, or by everything held so far
+   * - and an unclaimed identity cannot be observed to change.
+   */
+  function seedReplacesHeldDoc(
+    artifactRoomId: string,
+    incomingGuid: string | null,
+  ): boolean {
+    if (incomingGuid === null) return false;
+    const held = docGuidByRoom.get(artifactRoomId);
+    if (held === undefined) return false;
+    return held !== incomingGuid;
   }
 
   function clearPendingRoomUpdates(entry: ArtifactRoomReplicaEntry): void {
@@ -1012,7 +1154,46 @@ export function createArtifactRoomTier(
       return false;
     },
 
-    applySnapshot(artifactRoomId, snapshotBytes, hostStateVectorBase64) {
+    readDocSeedOffer(artifactRoomId) {
+      const entry = replicas.get(artifactRoomId);
+      if (entry === undefined) return null;
+      const knownDocGuid = docGuidByRoom.get(artifactRoomId);
+      // No stated identity means no offer. Offering a vector without a guid
+      // would ask the host for a delta while leaving it unable to check the
+      // two replicas are the same document - which is the one question the
+      // offer exists to let it answer.
+      if (knownDocGuid === undefined) return null;
+      return {
+        knownDocGuid,
+        stateVectorBase64: encodeDocStateVectorBase64(entry.doc),
+      };
+    },
+
+    applySnapshot(input) {
+      const {
+        artifactRoomId,
+        snapshotBytes,
+        hostStateVectorBase64,
+        seed,
+        docGuid,
+      } = input;
+      // ── Doc identity, before anything is applied ──────────────────────────
+      //
+      // A deleted-and-recreated artifact arrives under the SAME id with a new
+      // guid, and its history shares no ancestor with what this client holds.
+      // Merging the two is not a lossy merge, it is an unrecoverable one: Yjs
+      // would splice both histories into one document and no later frame can
+      // separate them again. So a stated change in identity replaces
+      // everything held for this room - hot replica, cold bytes and watermark
+      // alike - and the snapshot then installs as if the room were new.
+      //
+      // Only a stated-to-stated change counts. `null` on either side means no
+      // identity was claimed (the `@1` arm never claims one), and an unclaimed
+      // identity cannot have changed.
+      if (seedReplacesHeldDoc(artifactRoomId, docGuid)) {
+        discardEverythingFor(artifactRoomId);
+      }
+      if (docGuid !== null) docGuidByRoom.set(artifactRoomId, docGuid);
       // A room nobody is editing never materializes: keep the bytes and let the
       // caller flip availability so the tile can render its state, and let the
       // first lease pay for the `Y.Doc`. There is nothing to reconcile on this
@@ -1023,6 +1204,18 @@ export function createArtifactRoomTier(
       // absent from `materializedIds()` by contract, and it is precisely that
       // holder this branch must not file cold.
       if (!replicas.has(artifactRoomId) && leaseCountOf(artifactRoomId) === 0) {
+        // A delta is only meaningful against the replica that made the offer,
+        // and there is no replica here. Filing it cold would leave the room
+        // holding bytes that decode against a state this client no longer has,
+        // and the first lease would materialise a torn doc out of them.
+        //
+        // This is a fail-safe, not a path: the artifact lane's `readDocSeed`
+        // is wired to this tier, so a room the tier does not hold offers
+        // nothing and the host has nothing to send a delta against. The branch
+        // exists because the alternative to a cheap guard is an unrecoverable
+        // document, and because that wiring is an invariant maintained by a
+        // caller rather than one this module can enforce.
+        if (seed === "delta-against-offer") return "filed-cold";
         recordColdBytes(artifactRoomId, snapshotBytes, hostStateVectorBase64);
         return "filed-cold";
       }
@@ -1034,13 +1227,24 @@ export function createArtifactRoomTier(
       const hadPrior = replicas.has(artifactRoomId);
       const entry = getOrCreateReplica(artifactRoomId);
       Y.applyUpdate(entry.doc, snapshotBytes, BIN_STREAM_ORIGIN);
-      entry.latestHostStateVectorBase64 = hostStateVectorBase64;
+      if (hostStateVectorBase64 !== null) {
+        entry.latestHostStateVectorBase64 = hostStateVectorBase64;
+      }
       // If the local replica is ahead of the host's snapshot, ship a reconcile
       // update so offline edits round-trip.
-      const reconcileUpdate = Y.encodeStateAsUpdate(
-        entry.doc,
-        decodeBase64(hostStateVectorBase64),
-      );
+      //
+      // With no watermark there is no diff to take, so the reconcile is the
+      // WHOLE replica. That is the fail-closed direction: re-sending state the
+      // host already has is idempotent in Yjs and costs bytes, while sending a
+      // diff against a vector we do not have would mean sending nothing and
+      // silently stranding local edits.
+      const reconcileUpdate =
+        hostStateVectorBase64 === null
+          ? Y.encodeStateAsUpdate(entry.doc)
+          : Y.encodeStateAsUpdate(
+              entry.doc,
+              decodeBase64(hostStateVectorBase64),
+            );
       const reconcileNeeded = isNonTrivialYUpdate(reconcileUpdate);
       const canSendNow = session.canSendBodyWrites();
       if (reconcileNeeded && canSendNow) {
@@ -1074,7 +1278,19 @@ export function createArtifactRoomTier(
         clearPendingRoomUpdates(entry);
         entry.pendingReconcileUpdate = null;
       }
+      // A snapshot with no watermark proves nothing about what the host has
+      // durably seen, so it cannot clear the dirty mark: the room stays dirty
+      // until one carrying a vector covers it. Clearing here would report a
+      // body as saved on the strength of a frame that never said so.
+      //
+      // `latestHostCoversDirtyWatermark` already answers `false` for a null
+      // host vector, so this guard changes nothing today. It is here because
+      // that helper's null arm is the kind that gets "simplified" to `true`
+      // ("no vector, nothing to compare") by someone reading it on its own -
+      // and the cost of that edit is silent data loss on this line, not a
+      // failing assertion. The requirement belongs where the consequence is.
       if (
+        hostStateVectorBase64 !== null &&
         latestHostCoversDirtyWatermark(
           hostStateVectorBase64,
           entry.dirtyWatermarkStateVectorBase64,
@@ -1105,16 +1321,47 @@ export function createArtifactRoomTier(
         const coldEntry = cold.get(artifactRoomId);
         if (coldEntry === undefined) return;
         pushColdUpdate(coldEntry, updateBytes);
-        coldEntry.latestHostStateVectorBase64 = hostStateVectorBase64;
+        if (hostStateVectorBase64 !== null) {
+          coldEntry.latestHostStateVectorBase64 = hostStateVectorBase64;
+        }
         notifyCold(artifactRoomId, coldEntry.bytes);
         return;
       }
       Y.applyUpdate(entry.doc, updateBytes, BIN_STREAM_ORIGIN);
-      entry.latestHostStateVectorBase64 = hostStateVectorBase64;
+      if (hostStateVectorBase64 !== null) {
+        entry.latestHostStateVectorBase64 = hostStateVectorBase64;
+      }
       noteHotGrowth(artifactRoomId, updateBytes.byteLength);
+      // Same fail-closed reading as the snapshot path, and redundant for the
+      // same reason - stated here because this is where getting it wrong loses
+      // a user's edit. On the lane arm the null is the NORMAL case, not an
+      // edge one: `doc-update` carries no vector at all, and coverage arrives
+      // on its own event (see `applyCoverage`).
       if (
+        hostStateVectorBase64 !== null &&
         latestHostCoversDirtyWatermark(
           hostStateVectorBase64,
+          entry.dirtyWatermarkStateVectorBase64,
+        )
+      ) {
+        entry.dirtyWatermarkStateVectorBase64 = null;
+      }
+      onDivergenceChanged();
+      scheduleCooldown(artifactRoomId);
+    },
+
+    applyCoverage(artifactRoomId, coverageStateVectorBase64) {
+      // The authority stating how much of what THIS client pushed it now has.
+      // On `@1` the same fact rides every `room-update`'s post-apply vector;
+      // the body lane separates them, because an update is other people's
+      // bytes and coverage is an answer about ours. Both retire the same
+      // watermark, which is why this is not a second notion of divergence.
+      const entry = replicas.get(artifactRoomId);
+      if (entry === undefined) return;
+      entry.latestHostStateVectorBase64 = coverageStateVectorBase64;
+      if (
+        latestHostCoversDirtyWatermark(
+          coverageStateVectorBase64,
           entry.dirtyWatermarkStateVectorBase64,
         )
       ) {
@@ -1154,12 +1401,13 @@ export function createArtifactRoomTier(
       // replica - the next `artifactRoomSnapshot` will rebuild. The cold copy is
       // invalidated with it; leases survive, so a mounted editor
       // re-materializes from that next snapshot.
-      cancelCooldown(artifactRoomId);
-      cold.delete(artifactRoomId);
-      touchSeq.delete(artifactRoomId);
-      destroyReplica(artifactRoomId);
-      unchargeHot(artifactRoomId);
-      notifyCold(artifactRoomId, 0);
+      //
+      // The doc identity is deliberately KEPT: this room is unreachable, not a
+      // different document, and forgetting the guid here would disarm the
+      // replace rule for exactly the window a recreate is most likely to
+      // happen in - the next snapshot would merge two histories and read as a
+      // successful rebuild.
+      discardEverythingFor(artifactRoomId);
     },
 
     scheduleCooldownCheck: scheduleCooldown,
@@ -1202,6 +1450,10 @@ export function createArtifactRoomTier(
       cold.clear();
       touchSeq.clear();
       lastHotBytes.clear();
+      // Unlike `invalidate`, this IS the end of what the tier knows: the plane
+      // above runs it on replacement, reseed and teardown, where the next
+      // snapshot rebuilds from nothing and has no held history to splice into.
+      docGuidByRoom.clear();
       for (const id of hotIds) {
         unchargeHot(id);
       }
