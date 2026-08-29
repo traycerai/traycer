@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 
+import type { IFileSaveHost } from "@traycer-clients/shared/platform/runner-host";
 import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
@@ -27,6 +28,8 @@ export async function performImageAction(params: {
   readonly mediaType: string | null;
   readonly suggestedName: string;
   readonly openSaved: (saved: SavedFile) => void;
+  /** The shell's native save route; `null` falls back to the browser APIs. */
+  readonly fileSave: IFileSaveHost | null;
 }): Promise<void> {
   const blob = await fetchImageBlob(params.src, params.mediaType);
   if (params.action === "copy") {
@@ -34,8 +37,12 @@ export async function performImageAction(params: {
     toast.success("Image copied");
     return;
   }
-  const saved = await saveBlobToDisk(blob, params.suggestedName);
-  if (saved !== null) toastSavedFile(saved, params.openSaved);
+  const saved = await saveBlobToDisk(
+    blob,
+    params.suggestedName,
+    params.fileSave,
+  );
+  if (saved !== null) toastSavedFile(saved, params.openSaved, params.fileSave);
 }
 
 export function imageFileName(
