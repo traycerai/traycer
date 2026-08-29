@@ -645,13 +645,16 @@ export class HostLifecycle extends EventEmitter {
     query: PublishedProcessIdentityQuery,
   ): Promise<PublishedProcessIdentityVerdict> => {
     const cached = this.identityVerdictCache;
-    if (
-      !query.answered &&
-      cached !== null &&
-      cached.pid === query.pid &&
-      Date.now() - cached.readAt < IDENTITY_VERDICT_REUSE_MS
-    ) {
-      return cached.verdict;
+    // Only ALIVE verdicts are cached (death verdicts are not retained), so
+    // the reuse age must be nonnegative before it can satisfy the TTL: a
+    // backward clock step makes it negative, which passes the strict `<`
+    // and would keep serving a live verdict for a process that has since
+    // died — for the whole skew plus the TTL. Negative age = re-probe.
+    if (!query.answered && cached !== null && cached.pid === query.pid) {
+      const reuseAgeMs = Date.now() - cached.readAt;
+      if (reuseAgeMs >= 0 && reuseAgeMs < IDENTITY_VERDICT_REUSE_MS) {
+        return cached.verdict;
+      }
     }
     const verdict = await getPublishedProcessIdentityVerdict(
       query.pid,

@@ -40,7 +40,7 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
     name: draftTabName(source.content),
     icon: LayersPlus,
     canDuplicate: false,
-    canOpenInNewWindow: false,
+    canOpenInNewWindow: true,
   }),
   descriptor: {
     kind: "draft",
@@ -50,7 +50,7 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
       splitEligibility: "eligible",
       duplication: "forbidden",
       singleton: "per-instance",
-      newWindow: "none",
+      newWindow: "move",
       readinessScope: "default-host",
       durableState: { owner: "landing-draft", eviction: "reconstruct" },
     },
@@ -67,7 +67,9 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
       });
     },
     requiresCloseConfirm: () => false,
-    openInNewWindow: () => undefined,
+    openInNewWindow: (tab, deps) => {
+      deps.draftFlow.requestOpenInNewWindow({ draftId: tab.id });
+    },
     matchesPath: (tab, pathname) => pathname === tab.route,
   },
 };

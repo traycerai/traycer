@@ -24,7 +24,7 @@ import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type {
   HostAvailableManifest,
-  HostGetInstallationInfoResponse,
+  HostGetInstallationInfoResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -141,7 +141,7 @@ export function buildOverviewHostFixture(options: {
   readonly busy?: boolean;
   readonly busySessionCount?: number;
   readonly busyBreakdown?: HostBusyBreakdown | null;
-  readonly installation?: HostGetInstallationInfoResponse;
+  readonly installation?: HostGetInstallationInfoResponseV11;
   /**
    * Replaces (rather than merges into) individual method handlers after the
    * defaults are built — for a test that needs a pending/erroring RPC, or a
@@ -180,6 +180,10 @@ export function buildOverviewHostFixture(options: {
         busySessionCount: options.busySessionCount ?? 0,
         updateProgress: null,
         busyBreakdown: options.busyBreakdown ?? null,
+        // `null` = this fixture's host did not report the durable attempt,
+        // which is exactly what host.status@1.2-and-older peers send.
+        updateOperation: null,
+        updateTransaction: null,
       };
     },
     "host.identity.get": () => ({ ...identity }),
@@ -215,7 +219,10 @@ export function buildOverviewHostFixture(options: {
         versions: [],
       },
     }),
-    "host.update.install": () => ({ outcome: "accepted" as const }),
+    "host.update.install": () => ({
+      outcome: "accepted" as const,
+      attemptId: null,
+    }),
     // Answered by default so the Advanced disclosure's OS service section
     // renders its normal shape. Left unanswered, the query rejects and every
     // suite that opens Advanced would read the "couldn't be read" copy — a
@@ -295,6 +302,7 @@ const NOT_INSTALLED_CONTROLLER_STATUS: HostControllerStatus = {
   updateReady: false,
   activation: "unavailable",
   reachable: false,
+  localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-08-12T00:00:00Z",
 };

@@ -107,7 +107,7 @@ function stageMocks(opts: {
     pendingUpgradeFinalisable: () => false,
   }));
   vi.doMock("../../upgrade/finalize-helper", () => ({
-    reconcilePostFinalizeMarker: () => undefined,
+    readPostFinalizeMarker: async () => ({ status: "absent" }),
   }));
 }
 

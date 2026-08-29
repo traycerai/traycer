@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -134,6 +135,52 @@ vi.mock("../../host/host-paths", async (importOriginal) => {
   };
 });
 
+// Deterministic hook for the "manifest reappeared after removal" branch:
+// `removeCliLabelManifest`'s `rm` and `retireLegacyLabelRegistrations`'s
+// positive re-probe are two separate real fs calls with no atomicity between
+// them, so exercising "something wrote the manifest back before the re-probe
+// ran" needs a seam ON `rm` itself rather than a timing race. Every other
+// caller passes through to the real `node:fs/promises` untouched; only a
+// test that sets `afterRemoveRecreate` (and only for the ONE `rm` call it
+// arms for) observes different behavior.
+const rmHook = vi.hoisted(() => ({
+  afterRemoveRecreate: null as (() => void) | null,
+}));
+
+// `bootoutStaleAgent`'s spawn is injected via the production module's
+// `setBootoutSpawnFnForTests` seam (see the rationale on the seam itself),
+// NOT via `vi.mock("node:child_process")`: a mock of the builtin that
+// silently fails to intercept (the `default.spawn` CJS-interop gotcha the
+// `node:fs/promises` mock below documents) does not fail a test — it runs
+// a REAL `launchctl bootout` against the developer's live host agent. The
+// global `beforeEach` installs a throwing backstop so any test that
+// reaches the bootout spawn without arranging a stub surfaces loudly as
+// "bootout-failed" plus this error, never as a real launchctl invocation.
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const mockedRm = async (
+    path: Parameters<typeof actual.rm>[0],
+    opts: Parameters<typeof actual.rm>[1],
+  ): Promise<void> => {
+    const result = await actual.rm(path, opts);
+    if (rmHook.afterRemoveRecreate !== null) {
+      const recreate = rmHook.afterRemoveRecreate;
+      rmHook.afterRemoveRecreate = null;
+      recreate();
+    }
+    return result;
+  };
+  const mocked = { ...actual, rm: mockedRm };
+  // Mirror onto `default` too - Vite/esbuild's CJS interop can read
+  // `default.rm` rather than the top-level named export (see
+  // `install-bundled-cli.test.ts` / `desktop-state-store.test.ts` for the
+  // identical gotcha); a plain spread of the real namespace would otherwise
+  // leave the un-mocked implementation reachable there, silently missing
+  // the call `host-login-item.ts` makes.
+  return { ...mocked, default: mocked };
+});
+
 interface FakeChildHandle {
   readonly child: EventEmitter & { kill: (signal: string) => boolean };
   readonly killCalls: ReadonlyArray<string>;
@@ -172,7 +219,15 @@ const {
   withHostLoginItemRegistrationLock,
   hasPendingLoginItemRevision,
   hasUnappliedPendingLoginItemRevision,
+  unregisterHostLoginItemGuarded,
+  setBootoutSpawnFnForTests,
 } = await import("../host-login-item");
+
+// Module state on the imported singleton — clear it when the file is done
+// so no stub outlives the suite.
+afterAll(() => {
+  setBootoutSpawnFnForTests(null);
+});
 
 // `registerHostLoginItem` clears the pending-login-item-revision marker via
 // `getHostFsLayout(config.environment)` (config is mocked to "production"
@@ -200,6 +255,79 @@ function legacyCliManifestPath(): string {
 function writeLegacyCliManifest(): void {
   mkdirSync(join(workHome, "Library", "LaunchAgents"), { recursive: true });
   writeFileSync(legacyCliManifestPath(), "<plist/>", "utf8");
+}
+
+async function withDarwinCodesignIdentity<T>(
+  initialIdentity: string,
+  fn: (setIdentity: (identity: string) => void) => Promise<T>,
+): Promise<T> {
+  const codesignDir = mkdtempSync(join(tmpdir(), "traycer-codesign-test-"));
+  const codesignPath = join(codesignDir, "codesign");
+  const setIdentity = (identity: string): void => {
+    writeFileSync(
+      codesignPath,
+      `#!/bin/sh\nprintf 'CDHash=${identity}\\n' >&2\n`,
+      "utf8",
+    );
+    chmodSync(codesignPath, 0o755);
+  };
+  setIdentity(initialIdentity);
+  const previousPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  const previousUid = Object.getOwnPropertyDescriptor(process, "getuid");
+  const previousPath = process.env.PATH;
+  Object.defineProperty(process, "platform", {
+    value: "darwin",
+    writable: true,
+    configurable: true,
+  });
+  // Keep this test hermetic: bootout is skipped when no UID resolver exists.
+  Object.defineProperty(process, "getuid", {
+    value: undefined,
+    writable: true,
+    configurable: true,
+  });
+  process.env.PATH = `${codesignDir}${previousPath === undefined ? "" : `:${previousPath}`}`;
+  try {
+    return await fn(setIdentity);
+  } finally {
+    process.env.PATH = previousPath;
+    if (previousPlatform === undefined)
+      delete (process as { platform?: string }).platform;
+    else Object.defineProperty(process, "platform", previousPlatform);
+    if (previousUid === undefined)
+      delete (process as { getuid?: () => number }).getuid;
+    else Object.defineProperty(process, "getuid", previousUid);
+    rmSync(codesignDir, { recursive: true, force: true });
+  }
+}
+
+async function withTestBundleRevision<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+  Object.defineProperty(process, "resourcesPath", {
+    value: join(workHome, "Traycer.app", "Contents", "Resources"),
+    writable: true,
+    configurable: true,
+  });
+  const bundleAgents = join(
+    workHome,
+    "Traycer.app",
+    "Contents",
+    "Library",
+    "LaunchAgents",
+  );
+  mkdirSync(bundleAgents, { recursive: true });
+  writeFileSync(
+    join(bundleAgents, "ai.traycer.host.agent.plist"),
+    "<plist revision='before' />",
+    "utf8",
+  );
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined)
+      delete (process as { resourcesPath?: string }).resourcesPath;
+    else Object.defineProperty(process, "resourcesPath", previous);
+  }
 }
 
 function buildTestHostFsLayout(environment: string): {
@@ -244,17 +372,150 @@ beforeEach(() => {
   getLoginItemSettings.mockReset();
   isHostRemovedByUserMock.mockReset().mockResolvedValue(false);
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-login-item-"));
+  // Throwing backstop, re-armed for every test: reaching the bootout spawn
+  // without an explicit stub is a test bug, and the ONLY acceptable failure
+  // mode for that bug is a loud error — never the real `launchctl`.
+  // (`bootoutStaleAgent` catches the throw and reports "bootout-failed".)
+  setBootoutSpawnFnForTests(() => {
+    throw new Error(
+      "test reached bootoutStaleAgent's spawn without arranging a stub — " +
+        "install one via setBootoutSpawnFnForTests before driving a darwin " +
+        "register/unregister flow",
+    );
+  });
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  rmHook.afterRemoveRecreate = null;
   rmSync(workHome, { recursive: true, force: true });
 });
 
 describe("registerHostLoginItem", () => {
+  it("parks authority loss without compensating registration when the nested helper identity changes", async () => {
+    await withDarwinCodesignIdentity("before", async (setIdentity) =>
+      withTestBundleRevision(async () => {
+        // Snapshot reads primary first, then legacy. Losing authority after
+        // the second destructive edge must park the cycle; even an exact
+        // prior registration is not a license for a compensating mutation
+        // once the nested helper identity has changed.
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "enabled" })
+          .mockReturnValueOnce({ status: "not-registered" })
+          .mockReturnValue({ status: "not-registered" });
+        const revalidate = vi.fn(() =>
+          Promise.resolve().then(() => {
+            if (setLoginItemSettings.mock.calls.length >= 2) {
+              setIdentity("after");
+              return false;
+            }
+            return true;
+          }),
+        );
+
+        await expect(registerHostLoginItem(revalidate)).resolves.toBe(
+          "deferred-busy",
+        );
+        expect(
+          setLoginItemSettings.mock.calls.some(
+            ([options]) => options.openAtLogin === true,
+          ),
+        ).toBe(false);
+      }),
+    );
+  });
+
+  it("does not manufacture a registration when the pre-cycle state was absent", async () => {
+    await withTestBundleRevision(async () => {
+      getLoginItemSettings.mockReturnValue({ status: "not-registered" });
+      const revalidate = vi.fn(() =>
+        Promise.resolve(setLoginItemSettings.mock.calls.length < 2),
+      );
+
+      await expect(registerHostLoginItem(revalidate)).resolves.toBe(
+        "deferred-busy",
+      );
+      expect(
+        setLoginItemSettings.mock.calls.some(
+          ([options]) => options.openAtLogin === true,
+        ),
+      ).toBe(false);
+    });
+  });
+
+  // Overturns the pre-ruling contract: a READABLE `present` manifest is now
+  // migration work this cycle performs (see Part 3 below), not a park
+  // condition - collapsing it into "present therefore park" is exactly the
+  // defect that permanently deadlocked the <=1.1.6 upgrade cohort.
+  // `unreadable` is the only remaining disqualifier: we cannot retire what
+  // we cannot see, and must not register a second label beside it.
+  it.skipIf(process.getuid?.() === 0)(
+    "parks before destructive registration when the legacy manifest is unreadable, not merely present",
+    async () => {
+      const originalManifest = "<plist legacy='before'/>";
+      writeLegacyCliManifest();
+      writeFileSync(legacyCliManifestPath(), originalManifest, "utf8");
+      const agentsDir = join(workHome, "Library", "LaunchAgents");
+      // Drops the SEARCH (execute) bit, so `access()` on the known filename
+      // fails EACCES rather than ENOENT - the probe's unreadable branch.
+      chmodSync(agentsDir, 0o600);
+      try {
+        await withDarwinCodesignIdentity("before", async () =>
+          withTestBundleRevision(async () => {
+            getLoginItemSettings
+              .mockReturnValueOnce({ status: "enabled" }) // snapshot: primary
+              .mockReturnValueOnce({ status: "enabled" }) // snapshot: legacy
+              .mockReturnValue({ status: "not-registered" });
+            await expect(registerHostLoginItem(undefined)).resolves.toBe(
+              "enabled",
+            );
+            expect(setLoginItemSettings).not.toHaveBeenCalled();
+          }),
+        );
+      } finally {
+        chmodSync(agentsDir, 0o755);
+      }
+      expect(existsSync(legacyCliManifestPath())).toBe(true);
+      expect(readFileSync(legacyCliManifestPath(), "utf8")).toBe(
+        originalManifest,
+      );
+    },
+  );
+
+  it("parks instead of restoring when the bundle revision changes before compensation", async () => {
+    await withDarwinCodesignIdentity("before", async (setIdentity) =>
+      withTestBundleRevision(async () => {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "enabled" })
+          .mockReturnValueOnce({ status: "not-registered" })
+          .mockReturnValue({ status: "not-registered" });
+        const revalidate = vi.fn(() => {
+          if (setLoginItemSettings.mock.calls.length >= 2) {
+            setIdentity("after");
+            return Promise.resolve(false);
+          }
+          return Promise.resolve(true);
+        });
+
+        await expect(registerHostLoginItem(revalidate)).resolves.toBe(
+          "deferred-busy",
+        );
+        expect(
+          setLoginItemSettings.mock.calls.some(
+            ([options]) => options.openAtLogin === true,
+          ),
+        ).toBe(false);
+      }),
+    );
+  });
+
   it("runs the label-split cycle: legacy-serviceName unregister, then agent unregister → register - the agent label (`.agent`) is the only one ever registered", async () => {
-    // 1st read: post-unregister status; 2nd: first post-register read
+    // `snapshotLoginItemRegistration` reads primary then legacy FIRST (both
+    // must be `not-registered`/`enabled` to pass the entry guard); then:
+    // 3rd read: post-unregister status; 4th: first post-register read
     // (which returns 'enabled' so the BTM-commit poll exits immediately).
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
@@ -282,6 +543,8 @@ describe("registerHostLoginItem", () => {
 
   it("removes the legacy CLI LaunchAgent manifest once the cycle is committed - the old label's RunAtLoad agent must not start a competing host at next login", async () => {
     writeLegacyCliManifest();
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
@@ -289,19 +552,31 @@ describe("registerHostLoginItem", () => {
     expect(existsSync(legacyCliManifestPath())).toBe(false);
   });
 
-  it("continues to the agent register when the legacy-serviceName unregister throws - legacy cleanup is best-effort and must never block the escape to the fresh label", async () => {
+  it("parks with `deferred-busy` when the legacy-serviceName unregister throws - a throwing clear is a FAILED teardown, not best-effort noise to skip past into the fresh label", async () => {
+    // `false` from `setLoginItemSettingsWithGuard` now means the Electron
+    // call THREW, distinct from a clean "nothing to clear". The old
+    // behaviour ("legacy cleanup is best-effort, always continue") let a
+    // still-live legacy registration coexist with a freshly registered
+    // agent label; `retireLegacyLabelRegistrations` now reports the failure
+    // upward and the cycle parks before ever touching the agent label.
     setLoginItemSettings.mockImplementationOnce(() => {
       throw new Error("no inert old plist in this bundle");
     });
-    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
-    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
 
-    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
-    expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "deferred-busy",
+    );
+    // Only the one throwing call — the cycle never reaches the agent-label
+    // unregister/register pair.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(1);
   });
 
   it("returns the post-register status verbatim so callers can branch on `requires-approval`", async () => {
-    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "requires-approval" });
 
     await expect(registerHostLoginItem(undefined)).resolves.toBe(
@@ -332,17 +607,27 @@ describe("registerHostLoginItem", () => {
   });
 
   it("surfaces `not-registered` instead of throwing when the AGENT `setLoginItemSettings` throws - the boundary catch keeps Electron API errors from poisoning the renderer", async () => {
-    // Every call throws: the first (legacy-serviceName unregister) is
-    // swallowed as best-effort cleanup, the second (agent unregister)
-    // fails the cycle closed before any status read.
-    setLoginItemSettings.mockImplementation(() => {
-      throw new Error("SMAppService bridge said no");
-    });
+    // `snapshotLoginItemRegistration` reads primary then legacy before any
+    // destructive edge - both must pass the entry guard for this test to
+    // actually exercise the throw path below, rather than parking earlier.
+    //
+    // Isolates the AGENT (primary) clear specifically: the legacy-
+    // serviceName unregister must SUCCEED here, otherwise
+    // `retireLegacyLabelRegistrations`'s own failed-clear park (pinned
+    // above) fires first and this test would stop proving anything about
+    // the agent-side catch it names.
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+    setLoginItemSettings
+      .mockImplementationOnce(() => undefined) // legacy-serviceName unregister succeeds
+      .mockImplementation(() => {
+        throw new Error("SMAppService bridge said no");
+      });
 
     await expect(registerHostLoginItem(undefined)).resolves.toBe(
       "not-registered",
     );
-    expect(getLoginItemSettings).not.toHaveBeenCalled();
+    expect(getLoginItemSettings).toHaveBeenCalledTimes(2);
   });
 
   it("refuses the whole cycle with `removed-by-user` when the removal sentinel is set - no SMAppService mutation runs and the legacy manifest stays intact", async () => {
@@ -386,13 +671,366 @@ describe("registerHostLoginItem", () => {
 
   it("proceeds with the cycle when the revalidation guard passes", async () => {
     const revalidate = vi.fn().mockResolvedValue(true);
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
     await expect(registerHostLoginItem(revalidate)).resolves.toBe("enabled");
-    expect(revalidate).toHaveBeenCalledTimes(1);
+    // Re-checked adjacent to every destructive edge (the top-level entry
+    // guard, then once per edge: legacy bootout, legacy clear, primary
+    // bootout, primary clear, primary register, pending-revision marker
+    // removal) - not just once at the top. This count is a pre-existing
+    // property of `mutationAllowed` threading, unrelated to this ticket's
+    // guard fix; pinning it exactly rather than `toHaveBeenCalled()` keeps
+    // a future edge that drops its re-check from passing silently.
+    expect(revalidate).toHaveBeenCalledTimes(7);
     expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
   });
+});
+
+// Acceptance evidence for the <=1.1.6 deadlock fix: a `present` legacy
+// manifest is now migration work the cycle performs, not a park condition.
+// No prior test in this file ever put a manifest on disk AND let the cycle
+// proceed - which is exactly how the regression shipped unnoticed. These
+// cover both directions the ruling promises: the manifest actually gets
+// retired and the cycle reaches primary registration (progress), and every
+// way that retirement can go wrong still fails closed before primary
+// registration (fail-closed).
+describe("registerHostLoginItem - legacy manifest retirement (present-manifest deadlock fix)", () => {
+  it("progress: a present legacy manifest is actually retired, re-probed absent, and the real post-register status (including requires-approval) propagates", async () => {
+    writeLegacyCliManifest();
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: legacy
+      .mockReturnValueOnce({ status: "not-registered" }) // post-primary-clear read
+      .mockReturnValueOnce({ status: "requires-approval" }); // post-register (terminal)
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "requires-approval",
+    );
+    // Genuinely removed, not merely "the cycle didn't park".
+    expect(existsSync(legacyCliManifestPath())).toBe(false);
+    expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
+      openAtLogin: false,
+      serviceName: "ai.traycer.host.plist",
+    });
+    expect(setLoginItemSettings.mock.calls[2]?.[0]).toMatchObject({
+      openAtLogin: true,
+      serviceName: "ai.traycer.host.agent.plist",
+    });
+    // `requires-approval` means registered, only the user's toggle is off -
+    // it must reach the caller as the real terminal status, not read as a
+    // registration failure the way an `unreadable`/`failed` park would.
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "fail-closed: a legacy manifest removal that FAILS parks before primary registration - the second half of the original defect",
+    async () => {
+      writeLegacyCliManifest();
+      const agentsDir = join(workHome, "Library", "LaunchAgents");
+      // Readable/searchable (the probe succeeds, sees `present`) but not
+      // writable, so the `rm` itself throws - distinct from the unreadable-
+      // probe park, and the half of the original defect where a legacy
+      // manifest that could not be removed still let the cycle register a
+      // second, competing label beside it. Root bypasses the write bit, so
+      // this fixture is meaningless under root - skip it there, exactly like
+      // the unreadable-directory tests in this file already do.
+      chmodSync(agentsDir, 0o500);
+      try {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "enabled" }) // snapshot: primary
+          .mockReturnValueOnce({ status: "enabled" }) // snapshot: legacy
+          .mockReturnValue({ status: "not-registered" });
+
+        await expect(registerHostLoginItem(undefined)).resolves.toBe(
+          "deferred-busy",
+        );
+        expect(setLoginItemSettings).not.toHaveBeenCalled();
+      } finally {
+        chmodSync(agentsDir, 0o755);
+      }
+      expect(existsSync(legacyCliManifestPath())).toBe(true);
+    },
+  );
+
+  it("fail-closed: a manifest that reappears immediately after removal never reaches primary registration", async () => {
+    writeLegacyCliManifest();
+    // Arms the ONE `rm` call this cycle makes: right after it genuinely
+    // deletes the manifest, something else (a concurrent CLI install, a
+    // race with the launch repair) writes it straight back. The positive
+    // re-probe after removal must catch this - `rm(force)` alone cannot
+    // distinguish "removed it" from "there was nothing there", so a removal
+    // that reports success is not proof the machine is actually clean.
+    rmHook.afterRemoveRecreate = () => {
+      writeFileSync(legacyCliManifestPath(), "<plist reappeared/>", "utf8");
+    };
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "enabled" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "enabled" }) // snapshot: legacy
+      .mockReturnValue({ status: "not-registered" });
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "deferred-busy",
+    );
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    expect(existsSync(legacyCliManifestPath())).toBe(true);
+  });
+
+  it("a park BEFORE the first mutation reports the truthful prior primary status, never `deferred-busy` - unlike the two fail-closed cases above", async () => {
+    // Contrast with the two fail-closed cases above: THIS park happens at
+    // the very first guard (`canBeginDestructiveRegistration`), before any
+    // edge has run, so there is no authority-loss ambiguity - the snapshot
+    // IS still current and safe to hand back verbatim. A POST-mutation park
+    // (a failed/reappeared manifest removal, or any edge after that point)
+    // cannot make the same claim - a mutation may already have landed under
+    // a since-lost capability, so it reports the busy-continuation sentinel
+    // instead of pretending the stale snapshot is still truthful.
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "requires-approval" }) // snapshot: primary - disqualifying
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe(
+      "requires-approval",
+    );
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+  });
+});
+
+// F7 (round 5 review): 46 tests above and not one of them exercised
+// unregister. That absence is how the defect shipped - register removed the
+// raw `RunAtLoad` plist, unregister only booted out the jobs and cleared the
+// SMAppService records, so a migration machine reported successful
+// deregistration while `~/Library/LaunchAgents/<cli-label>.plist` was still
+// on disk, and launchd started the host again at next login.
+//
+// The fix shares `removeCliLabelManifestProvably` between register and
+// unregister. These tests mirror the register-side "legacy manifest
+// retirement" describe block above one-for-one, from the unregister
+// direction, plus one case (`absent`) that block does not need in the same
+// shape and one (register-side regression) that is the existing 46 tests
+// staying green unmodified.
+//
+// `unregisterHostLoginItemGuarded`'s snapshot/bootout/clear steps consume
+// `revalidateBeforeMutation` in a FIXED, deterministic order under the
+// test's forced non-darwin platform (`bootoutStaleAgent` returns right after
+// its own `mutationAllowed` check once `process.platform !== "darwin"` -
+// confirmed by reading the production source, not assumed): bootout(agent),
+// bootout(legacy), clear(primary), clear(legacy), then - only if the
+// manifest is PRESENT and readable - the manifest removal's own
+// `mutationAllowed` check. A revalidator that returns `true` for the first N
+// calls and `false` after is how the "guard refuses mid-teardown" case below
+// lands exactly on the manifest step rather than anywhere earlier.
+describe("unregisterHostLoginItemGuarded - CLI LaunchAgent manifest retirement (register/unregister symmetry)", () => {
+  function countingRevalidator(
+    trueForFirstNCalls: number,
+  ): () => Promise<boolean> {
+    let calls = 0;
+    return async () => {
+      calls += 1;
+      return calls <= trueForFirstNCalls;
+    };
+  }
+
+  it("happy path: a present manifest is genuinely removed and unregister reports true", async () => {
+    writeLegacyCliManifest();
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(true);
+
+    expect(existsSync(legacyCliManifestPath())).toBe(false);
+    // Order AND count matter here, not just "was called" - both service
+    // names are cleared, primary first.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
+    expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
+      openAtLogin: false,
+      serviceName: "ai.traycer.host.agent.plist",
+    });
+    expect(setLoginItemSettings.mock.calls[1]?.[0]).toMatchObject({
+      openAtLogin: false,
+      serviceName: "ai.traycer.host.plist",
+    });
+
+    // Ablated (verification-only, never committed): temporarily removed the
+    // `removeCliLabelManifestProvably` call from
+    // `unregisterHostLoginItemUnserialized` (returning `true` unconditionally
+    // right after the two `setLoginItemSettingsWithGuard` clears, matching
+    // the pre-fix behavior exactly). Re-ran this test: it went red on
+    // `existsSync(legacyCliManifestPath()) === false` - the function still
+    // resolved `true`, but the manifest was still on disk, reproducing the
+    // original defect precisely (teardown reported success while the raw
+    // manifest survived). Reverted before committing anything;
+    // `host-login-item.ts` was never touched.
+  });
+
+  it("`deferred`: the guard refusing mid-teardown (at the manifest step specifically) reports false and does not claim teardown succeeded", async () => {
+    writeLegacyCliManifest();
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" })
+      .mockReturnValueOnce({ status: "not-registered" });
+
+    // True for calls 1-4 (both bootouts, both clears), false on call 5 -
+    // which lands inside `removeCliLabelManifest`'s own `mutationAllowed`
+    // check, since the manifest is present and readable.
+    await expect(
+      unregisterHostLoginItemGuarded(countingRevalidator(4)),
+    ).resolves.toBe(false);
+
+    // The earlier edges already ran (this is authority lost MID-teardown,
+    // not at the first guard) - both clears landed...
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
+    // ...but the manifest removal itself never ran, so the file survives -
+    // this is exactly why the overall result must be `false` and not `true`.
+    expect(existsSync(legacyCliManifestPath())).toBe(true);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "`failed`: a manifest removal that errors reports false and leaves the manifest in place",
+    async () => {
+      writeLegacyCliManifest();
+      const agentsDir = join(workHome, "Library", "LaunchAgents");
+      // Readable/searchable (probe sees `present`) but not writable, so `rm`
+      // itself throws - mirrors the register-side "removal FAILS" fixture.
+      // Root bypasses the write bit, so this fixture is meaningless under
+      // root - skip it there, exactly like the unreadable-directory tests in
+      // this file already do.
+      chmodSync(agentsDir, 0o500);
+      try {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "not-registered" })
+          .mockReturnValueOnce({ status: "not-registered" });
+
+        await expect(
+          unregisterHostLoginItemGuarded(async () => true),
+        ).resolves.toBe(false);
+      } finally {
+        chmodSync(agentsDir, 0o755);
+      }
+      expect(existsSync(legacyCliManifestPath())).toBe(true);
+      // Both clears still ran - the manifest step is last, and a failure
+      // there does not retroactively undo the two clears that already
+      // committed. `false` is what tells the caller teardown is incomplete.
+      expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.skipIf(process.getuid?.() === 0)(
+    "`unreadable` probe: an unreadable LaunchAgents directory parks at the FIRST guard, before any bootout or clear",
+    async () => {
+      writeLegacyCliManifest();
+      const agentsDir = join(workHome, "Library", "LaunchAgents");
+      // Drops the search bit - `access()` on the known filename fails
+      // EACCES rather than ENOENT, the probe's `unreadable` branch. This is
+      // caught by `canBeginDestructiveRegistration`'s shared snapshot guard
+      // (the same one register's own "unreadable" test exercises above),
+      // before `removeCliLabelManifestProvably` is ever reached - asserting
+      // the OBSERVABLE outcome (parks, nothing ran) rather than which
+      // internal function produced it, per the brief.
+      chmodSync(agentsDir, 0o600);
+      try {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "not-registered" })
+          .mockReturnValueOnce({ status: "not-registered" });
+
+        await expect(
+          unregisterHostLoginItemGuarded(async () => true),
+        ).resolves.toBe(false);
+        expect(setLoginItemSettings).not.toHaveBeenCalled();
+      } finally {
+        chmodSync(agentsDir, 0o755);
+      }
+    },
+  );
+
+  it("reappeared: a manifest that comes back immediately after removal reports false, not a false success", async () => {
+    writeLegacyCliManifest();
+    // Arms the ONE `rm` call this cycle makes, same fixture the register
+    // side's reappeared test uses.
+    rmHook.afterRemoveRecreate = () => {
+      writeFileSync(legacyCliManifestPath(), "<plist reappeared/>", "utf8");
+    };
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" })
+      .mockReturnValueOnce({ status: "not-registered" });
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+
+    expect(existsSync(legacyCliManifestPath())).toBe(true);
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("absent: a clean machine with no manifest still succeeds - the fix must not turn a clean machine into a park", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" })
+      .mockReturnValueOnce({ status: "not-registered" });
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(true);
+
+    expect(existsSync(legacyCliManifestPath())).toBe(false);
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
+  });
+
+  // `false` from `setLoginItemSettingsWithGuard` means the Electron call
+  // THREW - a failed teardown, not a clean "nothing was registered". The
+  // fix this pair pins: neither clear may report "torn down" over a throw
+  // it never observed succeeding, and a failed primary clear must not go on
+  // to attempt the legacy clear or manifest removal as if it had.
+  it("primary clear throws: reports false rather than success, and never reaches the legacy clear or manifest removal", async () => {
+    writeLegacyCliManifest();
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+    setLoginItemSettings.mockImplementationOnce(() => {
+      throw new Error("SMAppService bridge said no (primary clear)");
+    });
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+
+    // Only the one throwing call - the primary clear's failure short-
+    // circuits before the legacy clear is ever attempted.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(1);
+    expect(existsSync(legacyCliManifestPath())).toBe(true);
+  });
+
+  it("legacy clear throws after a successful primary clear: reports false and leaves the manifest in place", async () => {
+    writeLegacyCliManifest();
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+    setLoginItemSettings
+      .mockImplementationOnce(() => undefined) // primary clear succeeds
+      .mockImplementationOnce(() => {
+        throw new Error("SMAppService bridge said no (legacy clear)");
+      });
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(2);
+    // The manifest removal step never runs - the legacy clear's failure
+    // short-circuits before it, so the raw RunAtLoad manifest survives.
+    expect(existsSync(legacyCliManifestPath())).toBe(true);
+  });
+
+  // Register-side regression guard (#7 of the brief): all 4 tests in
+  // "registerHostLoginItem - legacy manifest retirement" above are
+  // UNMODIFIED by this change - same fixtures, same assertions, same
+  // expected outcomes. Since both callers now share
+  // `removeCliLabelManifestProvably`, that block passing unchanged in the
+  // same run as everything above IS the register-side regression guard;
+  // splitting it into a separate duplicate test would only assert the same
+  // property twice under a different name.
 });
 
 describe("runLaunchctlBootout", () => {
@@ -403,6 +1041,12 @@ describe("runLaunchctlBootout", () => {
   // These tests pin the argv shape, the exit-code classification
   // (success / "not loaded" no-op / unexpected failure), and the
   // failure-mode safety net (timeout kill, error event).
+  //
+  // Production change A: `runLaunchctlBootout` now resolves `Promise<boolean>`
+  // (previously `Promise<void>`) so `bootoutStaleAgent` can distinguish "BTM
+  // is provably cleared/clean" from "the BTM entry may still be present" -
+  // the register cycle treats the latter as best-effort and proceeds, while
+  // the uninstall teardown treats it as a failed deregistration.
 
   it("invokes `/bin/launchctl bootout <target>` with `stdio: ignore` so output never leaks into the Electron main process", async () => {
     const fake = makeFakeChild();
@@ -422,19 +1066,20 @@ describe("runLaunchctlBootout", () => {
     expect(spawnFn.mock.calls[0]?.[2]).toEqual({ stdio: "ignore" });
   });
 
-  it("resolves cleanly when launchctl exits 0 — agent was loaded and is now gone", async () => {
+  it("resolves true when launchctl exits 0 — agent was loaded and is now gone", async () => {
     const fake = makeFakeChild();
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
     queueMicrotask(() => {
       fake.fireExit();
     });
 
-    await runLaunchctlBootout("gui/501/test.label", spawnFn);
-
+    await expect(
+      runLaunchctlBootout("gui/501/test.label", spawnFn),
+    ).resolves.toBe(true);
     expect(fake.killCalls).toHaveLength(0);
   });
 
-  it("treats exit codes 3 / 5 / 113 as 'not loaded' no-ops — clean-machine bootout has nothing to clear and that's success", async () => {
+  it("treats exit codes 3 / 5 / 113 as 'not loaded' no-ops and resolves true — clean-machine bootout has nothing to clear and that's success", async () => {
     for (const code of [3, 5, 113]) {
       const fake = makeFakeChild();
       const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
@@ -444,11 +1089,27 @@ describe("runLaunchctlBootout", () => {
 
       await expect(
         runLaunchctlBootout("gui/501/test.label", spawnFn),
-      ).resolves.toBeUndefined();
+      ).resolves.toBe(true);
     }
   });
 
-  it("resolves (never throws) when the child emits an error event — degrades to the pre-fix behavior rather than failing the register cycle", async () => {
+  // New regression coverage (production change A): any OTHER exit code is a
+  // real launchctl failure - the BTM entry may still be present - and must
+  // resolve `false` so `bootoutStaleAgent` reports "bootout-failed" rather
+  // than silently claiming the clear succeeded.
+  it("resolves false on an unexpected exit code — the BTM entry may still be present", async () => {
+    const fake = makeFakeChild();
+    const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
+    queueMicrotask(() => {
+      fake.child.emit("exit", 1, null);
+    });
+
+    await expect(
+      runLaunchctlBootout("gui/501/test.label", spawnFn),
+    ).resolves.toBe(false);
+  });
+
+  it("resolves false (never throws) when the child emits an error event — degrades to a bootout-failed verdict rather than failing the register cycle", async () => {
     const fake = makeFakeChild();
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
     queueMicrotask(() => {
@@ -457,10 +1118,10 @@ describe("runLaunchctlBootout", () => {
 
     await expect(
       runLaunchctlBootout("gui/501/test.label", spawnFn),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
   });
 
-  it("kills the child with SIGTERM once the timeout elapses — a wedged launchctl cannot hold the register cycle hostage", async () => {
+  it("kills the child with SIGTERM once the timeout elapses and resolves false — a wedged launchctl cannot hold the register cycle hostage", async () => {
     vi.useFakeTimers();
     const fake = makeFakeChild();
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
@@ -469,8 +1130,8 @@ describe("runLaunchctlBootout", () => {
     // Advance past the 5s bootout timeout; the child never fires
     // exit or error, so only the setTimeout path can resolve us.
     await vi.advanceTimersByTimeAsync(5_000);
-    await promise;
 
+    await expect(promise).resolves.toBe(false);
     expect(fake.killCalls).toContain("SIGTERM");
   });
 });
@@ -504,6 +1165,8 @@ describe("readHostLoginItemStatus", () => {
 describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
   it("clears the marker when the register cycle ends enabled", async () => {
     writePendingRevisionMarker();
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
@@ -515,6 +1178,8 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
 
   it("leaves the marker in place when the register cycle ends requires-approval", async () => {
     writePendingRevisionMarker();
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
     getLoginItemSettings.mockReturnValueOnce({ status: "requires-approval" });
 
@@ -537,6 +1202,8 @@ describe("registerHostLoginItem - pending LaunchAgent revision marker", () => {
   });
 
   it("is a no-op when no marker was ever written", async () => {
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
@@ -581,6 +1248,8 @@ describe("hasUnappliedPendingLoginItemRevision (M-B)", () => {
 
   it("is false again after a successful register cycle deletes the marker", async () => {
     writePendingRevisionMarker();
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
 
@@ -598,6 +1267,8 @@ describe("hasUnappliedPendingLoginItemRevision (M-B)", () => {
     // the register cycle applies the revision but leaves the marker on disk -
     // the exact best-effort-clear-failed condition M-B guards.
     chmodSync(markerDir, 0o555);
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: primary
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
     getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
     getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
     await registerHostLoginItem(undefined);
@@ -916,5 +1587,201 @@ describe("retireCompetingCliRegistrationAtLaunch", () => {
     await Promise.all([cycle, repair]);
 
     expect(order).toEqual(["cycle:start", "cycle:end", "repair"]);
+  });
+});
+
+// Codex #2. `requires-approval` means REGISTERED with the user's toggle off —
+// `pollRegisterStatusUntilSettled` says so in as many words. Removal shared its
+// entry guard with REGISTRATION, which refuses that state for a reason that
+// does not apply to removal: registration boots out and re-registers, so it
+// must refuse any prior state it could not put back. Removal has nothing to
+// put back.
+//
+// The consequence was that a user who had toggled the login item off could
+// never remove it: an explicit deregister parked on exactly the state it exists
+// to clear, and the registration outlived the uninstall.
+describe("unregisterHostLoginItemGuarded - removable-state entry guard", () => {
+  it("REMOVES a registered-but-disabled (requires-approval) login item", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "requires-approval" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(true);
+
+    // Not merely "returned true": the SMAppService record was actually cleared.
+    expect(setLoginItemSettings).toHaveBeenCalled();
+  });
+
+  it("REMOVES it on the legacy label too", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "requires-approval" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(true);
+    expect(setLoginItemSettings).toHaveBeenCalled();
+  });
+
+  // Reversed direction (production change 3(i)): `not-found`/`not-supported`
+  // no longer refuse removal outright — a status we could read (even one with
+  // nothing to clear) admits the removal, and only that label's own
+  // SMAppService clear leg is skipped as meaningless. The bootouts and the
+  // manifest retirement still run; the OTHER label's clear (here,
+  // `not-registered`, which IS clearable) still fires. Only `null` (unreadable
+  // status) or an unreadable legacy manifest still refuse outright.
+  it("not-found admits removal — its own clear leg is skipped, the other label's still runs", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(true);
+    // Only the legacy label's clear ran — the primary leg has nothing to
+    // clear under `not-found` and is skipped, not attempted-and-ignored.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(1);
+    expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
+      openAtLogin: false,
+      serviceName: "ai.traycer.host.plist",
+    });
+  });
+
+  it("not-supported admits removal — its own clear leg is skipped, the other label's still runs", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-supported" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(true);
+    // Only the primary label's clear ran — the legacy leg has no API to
+    // clear with under `not-supported` and is skipped, not attempted.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(1);
+    expect(setLoginItemSettings.mock.calls[0]?.[0]).toMatchObject({
+      openAtLogin: false,
+      serviceName: "ai.traycer.host.agent.plist",
+    });
+  });
+});
+
+// Production change A, items (2) and (3): `bootoutStaleAgent` now
+// distinguishes "ok" from "bootout-failed" by the REAL launchctl exit code
+// (not just the caller's revalidation guard, which the existing
+// "deferred-busy"/"authority-lost" tests above already cover). These
+// blocks exercise that distinction end to end through the production
+// module's `setBootoutSpawnFnForTests` seam: the register cycle's
+// best-effort proceed, and the uninstall teardown's hard failure.
+describe("registerHostLoginItem / unregisterHostLoginItemGuarded - launchctl bootout failure (production change A)", () => {
+  const originalGetuid = Object.getOwnPropertyDescriptor(process, "getuid");
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", {
+      value: "darwin",
+      writable: true,
+      configurable: true,
+    });
+    // A concrete UID resolver, independent of the machine running the
+    // suite: `bootoutStaleAgent` short-circuits to "ok" without one (see
+    // `withDarwinCodesignIdentity`, which relies on exactly that), and
+    // these tests need the bootout to RUN.
+    Object.defineProperty(process, "getuid", {
+      value: () => 501,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      value: "linux",
+      writable: true,
+      configurable: true,
+    });
+    if (originalGetuid === undefined) {
+      delete (process as { getuid?: () => number }).getuid;
+    } else {
+      Object.defineProperty(process, "getuid", originalGetuid);
+    }
+  });
+
+  // Every `runLaunchctlBootout` call this fixture drives gets its OWN fresh
+  // fake child that exits with the scripted code on the next microtask -
+  // two calls (one per label) must each observe an exit, not share one
+  // already-consumed EventEmitter. Returns the spy so tests can assert the
+  // bootouts actually RAN - a fixture that trips an earlier guard would
+  // produce the same return value with zero spawns, which is exactly the
+  // vacuous pass these counts exist to rule out.
+  function scriptBootoutExits(codes: ReadonlyArray<number>) {
+    let calls = 0;
+    const spawnStub = vi.fn(() => {
+      const code = codes[Math.min(calls, codes.length - 1)];
+      calls += 1;
+      const fake = makeFakeChild();
+      queueMicrotask(() => {
+        fake.child.emit("exit", code, null);
+      });
+      return fake.child;
+    });
+    setBootoutSpawnFnForTests(spawnStub);
+    return spawnStub;
+  }
+
+  it("register cycle: completes and reaches `enabled` even when both launchctl bootouts fail - best-effort, not a park", async () => {
+    // Every bootout exits 1 => "bootout-failed" at each edge.
+    const spawnStub = scriptBootoutExits([1]);
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: legacy
+      .mockReturnValueOnce({ status: "not-registered" }) // post-clear read
+      .mockReturnValueOnce({ status: "enabled" }); // post-register (BTM committed)
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+    // The agent-label clear/register pair (and the legacy-serviceName
+    // unregister) still ran despite both bootouts failing - the register
+    // cycle's docstring promise that bootout failure degrades to the
+    // pre-fix behavior for this one call, not a park.
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
+    // Both bootout edges ran and failed: the legacy retirement's CLI-label
+    // bootout and the step-4 agent-label BTM flush.
+    expect(spawnStub).toHaveBeenCalledTimes(2);
+  });
+
+  it("unregister teardown: returns false (not parked) when the primary launchctl bootout exits with an unexpected code - teardown is incomplete", async () => {
+    const spawnStub = scriptBootoutExits([1]);
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+    // A TEARDOWN must not report success over an unproven bootout: the
+    // primary bootout's failure short-circuits before either SMAppService
+    // clear or the legacy bootout ever runs, unlike the register cycle's
+    // best-effort proceed above.
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    // Exactly the primary (agent-label) bootout ran - proving the false
+    // came from ITS failure, not from the removable-state entry guard.
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("unregister teardown: still returns false when only the LEGACY bootout fails after a successful primary bootout", async () => {
+    // Primary bootout clears (0); legacy bootout fails (1).
+    const spawnStub = scriptBootoutExits([0, 1]);
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+    // The legacy bootout's failure short-circuits before either
+    // SMAppService clear runs.
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    // Both bootouts ran: primary succeeded, legacy failed.
+    expect(spawnStub).toHaveBeenCalledTimes(2);
   });
 });

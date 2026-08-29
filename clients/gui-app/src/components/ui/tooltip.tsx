@@ -87,6 +87,7 @@ function TooltipContent({
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
+        data-browser-overlay="tooltip"
         sideOffset={sideOffset}
         // The safe-area insets are the DEFAULT collision padding, because the
         // guarantee has to hold for tooltips nobody thought about. Radix

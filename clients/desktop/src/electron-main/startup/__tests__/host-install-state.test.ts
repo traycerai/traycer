@@ -26,6 +26,7 @@ function statusWith(installedVersion: string | null): HostControllerStatus {
     updateReady: false,
     activation: "unavailable",
     reachable: false,
+    localAttempt: null,
     removedByUser: false,
     checkedAt: "2026-08-05T00:00:00.000Z",
   };

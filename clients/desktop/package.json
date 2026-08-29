@@ -40,8 +40,10 @@
     "electron-updater": "^6.8.9",
     "encrypt-storage": "catalog:",
     "font-list": "^2.1.0",
+    "perfect-freehand": "catalog:",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@rolldown/plugin-babel": "catalog:",
@@ -74,7 +76,7 @@
     "asar": true,
     "electronFuses": {
       "runAsNode": false,
-      "enableCookieEncryption": false,
+      "enableCookieEncryption": true,
       "enableEmbeddedAsarIntegrityValidation": true,
       "onlyLoadAppFromAsar": true,
       "enableNodeOptionsEnvironmentVariable": false,

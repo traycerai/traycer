@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildHarnessUsageSeriesScale,
   buildUsageSeriesScale,
   USAGE_SERIES_OTHER_KEY,
 } from "@/lib/usage-analytics/usage-series-scale";
@@ -90,5 +91,69 @@ describe("buildUsageSeriesScale", () => {
   it("an unrecognized key (not in the built order) falls back to the Other color", () => {
     const scale = buildUsageSeriesScale(["claude"]);
     expect(scale.colorVar("some-unknown-id")).toBe("var(--usage-series-other)");
+  });
+});
+
+describe("buildHarnessUsageSeriesScale", () => {
+  it("keeps Claude orange, Codex blue, and OpenCode neutral regardless of input order", () => {
+    const scale = buildHarnessUsageSeriesScale(["opencode", "codex", "claude"]);
+    expect(scale.colorVar("claude")).toBe("var(--usage-harness-claude)");
+    expect(scale.colorVar("codex")).toBe("var(--usage-harness-codex)");
+    expect(scale.colorVar("opencode")).toBe("var(--usage-harness-opencode)");
+  });
+
+  it("uses distinct fallback slots when brand-adjacent preferences collide", () => {
+    const scale = buildHarnessUsageSeriesScale([
+      "claude",
+      "omp",
+      "codex",
+      "reasonix",
+      "qwen",
+      "kiro",
+    ]);
+    const colors = scale.order.map((key) => scale.colorVar(key));
+    expect(new Set(colors).size).toBe(colors.length);
+    expect(scale.colorVar("omp")).not.toMatch(/--usage-series-(2|10)\)/);
+    expect(scale.colorVar("reasonix")).not.toMatch(/--usage-series-(1|9)\)/);
+    expect(scale.colorVar("qwen")).not.toBe(scale.colorVar("kiro"));
+  });
+
+  it("uses audited brand accents when their color family is available", () => {
+    const scale = buildHarnessUsageSeriesScale([
+      "amp",
+      "huggingface",
+      "omp",
+      "reasonix",
+    ]);
+    expect(scale.colorVar("amp")).toBe("var(--usage-harness-amp)");
+    expect(scale.colorVar("huggingface")).toBe(
+      "var(--usage-harness-huggingface)",
+    );
+    expect(scale.colorVar("omp")).toBe("var(--usage-harness-omp)");
+    expect(scale.colorVar("reasonix")).toBe("var(--usage-harness-reasonix)");
+  });
+
+  it("keeps all selected supported harnesses visually distinct", () => {
+    const supportedHarnesses = [
+      "amp",
+      "claude",
+      "codex",
+      "copilot",
+      "cursor",
+      "devin",
+      "droid",
+      "grok",
+      "hermes",
+      "huggingface",
+      "kilocode",
+      "kimi",
+      "kiro",
+      "omp",
+      "opencode",
+      "openrouter",
+    ];
+    const scale = buildHarnessUsageSeriesScale(supportedHarnesses);
+    const colors = scale.order.map((key) => scale.colorVar(key));
+    expect(new Set(colors).size).toBe(colors.length);
   });
 });

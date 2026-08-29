@@ -6,6 +6,7 @@ const TILE_KIND_TICKET = "ticket";
 const TILE_KIND_STORY = "story";
 const TILE_KIND_REVIEW = "review";
 const TILE_KIND_TERMINAL = "terminal";
+export const TILE_KIND_BROWSER_SESSION = "browser-session";
 const TILE_KIND_WORKSPACE_FILE = "workspace-file";
 export const TILE_KIND_GIT_DIFF = "git-diff";
 export const TILE_KIND_SNAPSHOT_DIFF = "snapshot-diff";
@@ -46,6 +47,7 @@ export type TileKindId =
   | typeof TILE_KIND_STORY
   | typeof TILE_KIND_REVIEW
   | typeof TILE_KIND_TERMINAL
+  | typeof TILE_KIND_BROWSER_SESSION
   | typeof TILE_KIND_WORKSPACE_FILE
   | typeof TILE_KIND_GIT_DIFF
   | typeof TILE_KIND_SNAPSHOT_DIFF
@@ -64,6 +66,7 @@ export const isTileKind = makeLiteralGuard<TileKindId>({
   [TILE_KIND_STORY]: true,
   [TILE_KIND_REVIEW]: true,
   [TILE_KIND_TERMINAL]: true,
+  [TILE_KIND_BROWSER_SESSION]: true,
   [TILE_KIND_WORKSPACE_FILE]: true,
   [TILE_KIND_GIT_DIFF]: true,
   [TILE_KIND_SNAPSHOT_DIFF]: true,

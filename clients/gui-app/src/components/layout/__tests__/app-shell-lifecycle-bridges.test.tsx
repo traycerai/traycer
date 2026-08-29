@@ -43,6 +43,12 @@ vi.mock("@/components/epic-canvas/tile-find/tile-find-owner-bridge", () => ({
   TileFindOwnerBridge: () => <div data-testid="tile-find-owner-bridge" />,
 }));
 
+vi.mock("@/components/epic-canvas/browser-overlay-coordinator-bridge", () => ({
+  BrowserOverlayCoordinatorBridge: () => (
+    <div data-testid="browser-overlay-coordinator" />
+  ),
+}));
+
 vi.mock("@/components/migration/migration-run-controller", () => ({
   MigrationRunController: () => null,
 }));
@@ -178,6 +184,7 @@ describe("<AppShell />", () => {
     expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
     expect(screen.getByTestId("app-shell-child")).not.toBeNull();
     expect(screen.getByTestId("tile-find-owner-bridge")).not.toBeNull();
+    expect(screen.getByTestId("browser-overlay-coordinator")).not.toBeNull();
     const routeLayer = screen.getByTestId("route-adapter-layer");
     expect(routeLayer.className).toContain("pointer-events-none");
     expect(routeLayer.className).toContain("[&>*]:pointer-events-auto");

@@ -1,5 +1,6 @@
 import type { UsageSummaryResponse } from "@/hooks/usage-analytics/use-usage-summary-query";
 import {
+  buildHarnessUsageSeriesScale,
   buildUsageSeriesScale,
   USAGE_SERIES_OTHER_KEY,
   USAGE_SERIES_SLOT_COUNT,
@@ -178,8 +179,10 @@ export function seriesKeysByTotalCost(
  * - **Selection** is by spend (`seriesKeysByTotalCost`): the top
  *   `USAGE_SERIES_SLOT_COUNT` keys get palette slots and the rest fold into
  *   "Other", so the fold is always the long tail.
- * - **Slot assignment** among the selected keys is alphabetical, which is
- *   independent of the totals. Ranking cannot drive it: the scale is
+ * - **Stable ordering** among the selected keys is alphabetical, which is
+ *   independent of the totals. Harness colors then apply fixed brand anchors
+ *   and collision-safe preferences; model colors retain positional slots.
+ *   Ranking cannot drive either path: the scale is
  *   rebuilt from every response, so a refetch in which one series merely
  *   overtakes another ($9 -> $11 past a steady $10) would swap two entities'
  *   colors in the chart AND in the harness split beside it, while the
@@ -188,8 +191,8 @@ export function seriesKeysByTotalCost(
  *   a series is toggled off. Changing magnitudes now move a series' place in
  *   the stack only if they move it across the selection cutoff.
  *
- * Overflow keys are appended after the selected ones purely so
- * `buildUsageSeriesScale` still sees them and emits the "Other" sentinel;
+ * Overflow keys are appended after the selected ones purely so the chosen
+ * scale builder still sees them and emits the "Other" sentinel;
  * their relative order past the cap is immaterial.
  */
 export function buildUsageSeriesScaleForBuckets(
@@ -200,8 +203,11 @@ export function buildUsageSeriesScaleForBuckets(
   const selected = [...ranked.slice(0, USAGE_SERIES_SLOT_COUNT)].sort((a, b) =>
     a.localeCompare(b),
   );
-  return buildUsageSeriesScale([
+  const keysInStableOrder = [
     ...selected,
     ...ranked.slice(USAGE_SERIES_SLOT_COUNT),
-  ]);
+  ];
+  return groupBy === "harness"
+    ? buildHarnessUsageSeriesScale(keysInStableOrder)
+    : buildUsageSeriesScale(keysInStableOrder);
 }

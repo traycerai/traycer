@@ -26,12 +26,14 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
+  updateBrowserTileViewportPreset,
   updateGitDiffTileView,
 } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 import type {
+  BrowserSessionTileRef,
   EpicCanvasState,
   EpicCanvasTileRef,
   EpicNodeRef,
@@ -1082,6 +1084,35 @@ describe("cloneEpicCanvasState", () => {
     expect(cloned.activePaneId).not.toBeNull();
     expect(findPaneById(cloned.root, cloned.activePaneId ?? "")).not.toBeNull();
     expectCanvasInvariants(cloned);
+  });
+});
+
+describe("updateBrowserTileViewportPreset", () => {
+  it("writes viewportPreset on a browser-session pointer", () => {
+    const pointer: BrowserSessionTileRef = {
+      id: "browser-session:s:t",
+      instanceId: "inst-session-1",
+      type: "browser-session",
+      name: "Browser",
+      hostId: TEST_HOST_ID,
+      sessionId: "s",
+      tabId: "t",
+      viewportPreset: "responsive",
+    };
+    const state = openPinned(createEmptyCanvas(), pointer);
+    const next = updateBrowserTileViewportPreset(
+      state,
+      pointer.instanceId,
+      "mobile",
+    );
+
+    expect(next.tilesByInstanceId[pointer.instanceId]).toEqual({
+      ...pointer,
+      viewportPreset: "mobile",
+    });
+    expect(
+      updateBrowserTileViewportPreset(next, pointer.instanceId, "mobile"),
+    ).toBe(next);
   });
 });
 

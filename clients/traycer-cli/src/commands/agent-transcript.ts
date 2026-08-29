@@ -1,7 +1,7 @@
 import { getAgentTranscriptResponseSchema } from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   toAgentCliError,
 } from "../internal/host-rpc";
 import { resolveEpicId } from "../internal/agent-context";
@@ -27,7 +27,8 @@ export function buildAgentTranscriptCommand(opts: {
         agentId: opts.agentId,
       }),
     );
-    const { transcript } = parseHostResponse(
+    const { transcript } = parseCanonicalHostResponse(
+      "agent.getTranscript",
       getAgentTranscriptResponseSchema,
       result,
     );

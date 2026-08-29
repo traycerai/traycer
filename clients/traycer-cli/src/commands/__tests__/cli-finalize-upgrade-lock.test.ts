@@ -51,9 +51,20 @@ vi.mock("../../service", async (importOriginal) => {
       restart: async () => {
         mocks.controllerCalls.push("restart");
       },
+      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
   };
 });
+
+// The attempt-gated service start publishes a host-start adoption and waits
+// for the spawn; nothing real can spawn here, so stub the wait exactly as
+// host-restart.test.ts does.
+vi.mock("../../host/host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => undefined,
+    cancel: async () => undefined,
+  }),
+}));
 
 // `process.env.HOME`/`USERPROFILE` mutation alone is not trustworthy under
 // `bun --bun`, which can honor its own startup home independently of a
@@ -185,7 +196,10 @@ describe.skipIf(process.platform === "win32")(
         writeFileSync(join(holdBarrierDir, "release"), "");
         const result = await pending;
         expect(mocks.finalizeCalls).toEqual(["finalize"]);
-        expect(result.data).toEqual({ status: "no-pending" });
+        expect(result.data).toEqual({
+          status: "no-pending",
+          serviceStartError: null,
+        });
       } finally {
         expect(await exited).toBe(0);
         rmSync(holdBarrierDir, { recursive: true, force: true });

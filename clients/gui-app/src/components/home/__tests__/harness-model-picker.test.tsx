@@ -127,6 +127,15 @@ interface QueryActivity {
   readonly subscribed: boolean;
 }
 
+interface MockHostClient {
+  readonly id: string;
+  getActiveHostId(): string | null;
+}
+
+function mockHostClientKey(client: MockHostClient): string {
+  return client.id;
+}
+
 const queryMock = vi.hoisted(() => ({
   harnesses: [] as HarnessOption[],
   catalogHarnesses: [] as CatalogHarness[],
@@ -152,6 +161,7 @@ const queryMock = vi.hoisted(() => ({
   modelsByClient: new Map<string, Map<string, ReadonlyArray<ModelOption>>>(),
   catalogHarnessesByClient: new Map<string, CatalogHarness[]>(),
   unresolvedHostIds: new Set<string>(),
+  concreteDefaultHostId: null as string | null,
   cloneCatalogOnRead: false,
   calls: {
     harnesses: [] as Array<{
@@ -227,7 +237,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   // `providerStatesByClient`, falling back to the same `providerStates` list
   // `useProvidersList` serves when a test hasn't set up a per-host override.
   useProvidersListForClient: (
-    client: string | null,
+    client: MockHostClient | null,
     activity: QueryActivity,
   ) => {
     // The picker now issues TWO `useProvidersListForClient` calls (the rail,
@@ -258,7 +268,8 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       };
     }
     const providers =
-      queryMock.providerStatesByClient.get(client) ?? queryMock.providerStates;
+      queryMock.providerStatesByClient.get(mockHostClientKey(client)) ??
+      queryMock.providerStates;
     return {
       data: activity.enabled ? { providers } : undefined,
       isPending: false,
@@ -277,15 +288,20 @@ vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
   }),
 }));
 
-// Resolves to a sentinel string standing in for a `HostClient`: "default" for
-// a null host id (mirrors the real hook's app-wide-default fallback), else
-// the raw host id - lets `useProvidersListForClient` above key its
-// per-target-host response without constructing a real client.
+// Resolves to a small `HostClient` stand-in keyed by its requested host. A
+// null request follows the default host, which can be set concretely by a
+// test to cover focus transfer out of a following picker.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) =>
-    hostId !== null && queryMock.unresolvedHostIds.has(hostId)
-      ? null
-      : (hostId ?? "default"),
+  useHostClientForHostId: (hostId: string | null): MockHostClient | null => {
+    if (hostId !== null && queryMock.unresolvedHostIds.has(hostId)) {
+      return null;
+    }
+    return {
+      id: hostId ?? "default",
+      getActiveHostId: () =>
+        hostId ?? queryMock.concreteDefaultHostId ?? "default",
+    };
+  },
 }));
 
 // The capability gate resolves the "Create new profile" row's target host
@@ -449,14 +465,16 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // the `client` argument is only ever recorded, never used to branch, unless
   // a test specifically layers `queryMock.harnessesByClient` (see below).
   useGuiHarnessesQueryForClient: (
-    client: string | null,
+    client: MockHostClient | null,
     activity: QueryActivity,
   ) => {
     queryMock.calls.harnesses.push({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    queryMock.calls.harnessClients.push(client);
+    queryMock.calls.harnessClients.push(
+      client === null ? null : mockHostClientKey(client),
+    );
     // A `null` client models an unresolved run-target host: `useHostQuery`
     // disables the underlying query, so a real disabled query with no cached
     // data reports `isPending: true`/`data: undefined` forever - never the
@@ -465,8 +483,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     if (client === null) {
       return { data: undefined, isPending: true, isError: false, error: null };
     }
-    const harnesses = queryMock.harnessesByClient.has(client)
-      ? (queryMock.harnessesByClient.get(client) ?? [])
+    const clientKey = mockHostClientKey(client);
+    const harnesses = queryMock.harnessesByClient.has(clientKey)
+      ? (queryMock.harnessesByClient.get(clientKey) ?? [])
       : queryMock.harnesses;
     return {
       data: activity.enabled ? { harnesses } : undefined,
@@ -476,7 +495,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     };
   },
   useGuiHarnessModelsQueryForClient: (
-    client: string | null,
+    client: MockHostClient | null,
     harnessId: string,
     workingDirectory: string | null,
     activity: QueryActivity,
@@ -487,7 +506,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    queryMock.calls.modelClients.push(client);
+    queryMock.calls.modelClients.push(
+      client === null ? null : mockHostClientKey(client),
+    );
     // See `useGuiHarnessesQueryForClient` above: a `null` client is a
     // permanently-disabled query, never a default-host fallback.
     if (client === null) {
@@ -499,8 +520,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
         refetch: () => Promise.resolve({ data: undefined }),
       };
     }
-    const modelsByHarness = queryMock.modelsByClient.has(client)
-      ? (queryMock.modelsByClient.get(client) ??
+    const clientKey = mockHostClientKey(client);
+    const modelsByHarness = queryMock.modelsByClient.has(clientKey)
+      ? (queryMock.modelsByClient.get(clientKey) ??
         queryMock.selectedModelsByHarness)
       : queryMock.selectedModelsByHarness;
     return {
@@ -542,7 +564,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     };
   },
   useGuiHarnessCatalogForClient: (
-    client: string | null,
+    client: MockHostClient | null,
     workingDirectory: string | null,
     activity: QueryActivity,
   ) => {
@@ -551,7 +573,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    queryMock.calls.catalogClients.push(client);
+    queryMock.calls.catalogClients.push(
+      client === null ? null : mockHostClientKey(client),
+    );
     // See `useGuiHarnessesQueryForClient` above: with a `null` client the
     // underlying harnesses query is permanently disabled, so the REAL
     // composed hook reports an empty catalog (never the default host's cached
@@ -567,8 +591,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
         modelsLoading: false,
       };
     }
-    const harnesses = queryMock.catalogHarnessesByClient.has(client)
-      ? (queryMock.catalogHarnessesByClient.get(client) ?? [])
+    const clientKey = mockHostClientKey(client);
+    const harnesses = queryMock.catalogHarnessesByClient.has(clientKey)
+      ? (queryMock.catalogHarnessesByClient.get(clientKey) ?? [])
       : catalogHarnessesForRender();
     return {
       harnesses: activity.enabled ? harnesses : [],
@@ -577,8 +602,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       modelsLoading: activity.enabled && queryMock.modelsLoading,
     };
   },
-  useRefreshHarnessCatalogForClient: (client: string | null) => () => {
-    queryMock.calls.refresh.push(client);
+  useRefreshHarnessCatalogForClient: (client: MockHostClient | null) => () => {
+    queryMock.calls.refresh.push(
+      client === null ? null : mockHostClientKey(client),
+    );
     return Promise.resolve();
   },
 }));
@@ -1046,6 +1073,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.modelsByClient = new Map();
     queryMock.catalogHarnessesByClient = new Map();
     queryMock.unresolvedHostIds = new Set();
+    queryMock.concreteDefaultHostId = null;
     queryMock.cloneCatalogOnRead = false;
     queryMock.calls.harnesses = [];
     queryMock.calls.harnessClients = [];
@@ -3628,6 +3656,70 @@ describe("<HarnessModelPicker />", () => {
     expect(openSettingsMock).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+    });
+  });
+
+  it("opens settings on the picker's exact provider, profile, and host", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ];
+    renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: "work-profile",
+      },
+      createProfileHostId: "host-b",
+    });
+
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Provider CLI settings" }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "claude",
+      focusHostId: "host-b",
+      focusTargetHostId: "host-b",
+      focusProfileId: "work-profile",
+      startSignIn: false,
+      focusTab: "usage",
+    });
+    expect(openSettingsMock).toHaveBeenCalledWith({
+      section: "providers",
+      resetToGeneral: false,
+    });
+  });
+
+  it("opens Settings on the concrete default host behind a following picker", async () => {
+    queryMock.concreteDefaultHostId = "default-host-1";
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ];
+    renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: "work-profile",
+      },
+    });
+
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Provider CLI settings" }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "claude",
+      focusHostId: "default-host-1",
+      focusTargetHostId: "default-host-1",
+      focusProfileId: "work-profile",
     });
   });
 

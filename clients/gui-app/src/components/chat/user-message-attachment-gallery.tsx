@@ -12,6 +12,7 @@ import {
   fallbackImageAttachmentDisplayLabel,
   type ImageAttachmentDisplayLabel,
 } from "@/lib/composer/image-attachment-labels";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/schemas";
 import type { Attachment, ImageAttachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 
@@ -19,14 +20,32 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface UserMessageAttachmentGalleryProps {
   readonly align: "start" | "end";
   readonly attachments: ReadonlyArray<Attachment>;
+  /**
+   * Annotation crops are rendered by the reference chips, not here, so the
+   * gallery hides the attachments they own. Taken as the message's own array
+   * (a stable reference) and reduced to hashes inside the memo below - passing
+   * a freshly built `Set` defeated the memo on every parent render.
+   */
+  readonly browserAnnotations:
+    | ReadonlyArray<BrowserAnnotationRecord>
+    | undefined;
 }
 
 export function UserMessageAttachmentGallery({
   align,
   attachments,
+  browserAnnotations,
 }: UserMessageAttachmentGalleryProps): ReactNode {
   const images = useMemo(() => {
-    const imageAttachments = attachments.filter(isImageAttachment);
+    const excludeHashes = new Set(
+      (browserAnnotations ?? []).map((annotation) => annotation.imageHash),
+    );
+    const imageAttachments = attachments
+      .filter(isImageAttachment)
+      .filter(
+        (attachment) =>
+          attachment.hash === null || !excludeHashes.has(attachment.hash),
+      );
     const labels = buildImageAttachmentDisplayLabels(
       imageAttachments.map((attachment, index) => ({
         id: String(index),
@@ -40,7 +59,7 @@ export function UserMessageAttachmentGallery({
       attachment,
       label: labels.get(String(index)),
     }));
-  }, [attachments]);
+  }, [attachments, browserAnnotations]);
   if (images.length === 0) return null;
   return (
     <div

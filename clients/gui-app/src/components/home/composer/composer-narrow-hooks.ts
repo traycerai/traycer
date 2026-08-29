@@ -20,7 +20,7 @@ export function useComposerNarrowObserver(): {
 } {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const ref = useCallback((nextElement: HTMLDivElement | null) => {
-    setElement(nextElement);
+    setElement((current) => (current === nextElement ? current : nextElement));
   }, []);
 
   const subscribe = useCallback(

@@ -5712,6 +5712,71 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  it("opens an ambient profile deep link even when it is not the provider's first profile", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "work-profile",
+              kind: "managed",
+              label: "Work",
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        }),
+      ],
+    };
+    const focus = useProvidersFocusStore.getState();
+    focus.setProfileFocus({
+      harnessId: "claude",
+      hostId: null,
+      profileId: "ambient",
+      startSignIn: false,
+    });
+    focus.setFocusTab("usage");
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      railProviderRow("Claude Code", false).getAttribute("data-active"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Terminal account, Terminal" })
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    expect(hostScopeMocks.setHostId).not.toHaveBeenCalled();
+  });
+
   it("signs in again for an existing profile, states when a different account was applied, and can cancel the restart", async () => {
     providerMocks.listResult.data = {
       providers: [

@@ -6,12 +6,13 @@ import {
 } from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
-import { rotateHostLogForPurge } from "../host/host-log-rotation";
+import { rotateHostLogForPurgeWithVerifier } from "../host/host-log-rotation";
 import {
   hostInstallDir,
   hostPidMetadataPath,
   hostStagedDir,
 } from "../store/paths";
+import { legacyMutationVerifier } from "./aside-dirs";
 import { sweepOldTrash } from "./install";
 
 // Uninstall the installed host directory for a single environment. Always
@@ -29,6 +30,11 @@ import { sweepOldTrash } from "./install";
 export interface UninstallHostOptions {
   readonly environment: Environment;
   readonly purgeChannelRuntime: boolean;
+  /**
+   * Every destructive edge receives an explicit verifier. Legacy callers
+   * use the named `legacyMutationVerifier`, never a nullable omission.
+   */
+  readonly verifyMutationCapability: () => Promise<void>;
 }
 
 export interface UninstallHostResult {
@@ -43,6 +49,23 @@ export async function removeHostPidMetadataForPurge(
   logger: ILogger,
   remove: (path: string, options: { readonly force: true }) => Promise<void>,
 ): Promise<void> {
+  return await removeHostPidMetadataForPurgeWithVerifier(
+    environment,
+    logger,
+    remove,
+    legacyMutationVerifier,
+  );
+}
+
+export async function removeHostPidMetadataForPurgeWithVerifier(
+  environment: Environment,
+  logger: ILogger,
+  remove: (path: string, options: { readonly force: true }) => Promise<void>,
+  verifyMutationCapability: () => Promise<void>,
+): Promise<void> {
+  // A lock/capability failure is an authority failure, not a best-effort
+  // metadata cleanup error. Leave it visible to stop the remaining purge.
+  await verifyMutationCapability();
   try {
     await remove(hostPidMetadataPath(environment), { force: true });
   } catch (err) {
@@ -57,6 +80,7 @@ export async function removeHostPidMetadataForPurge(
 export async function uninstallHost(
   opts: UninstallHostOptions,
 ): Promise<UninstallHostResult> {
+  const verify = opts.verifyMutationCapability;
   const logger = createCliLogger(opts.environment);
   logger.info("Host uninstall started", {
     environment: opts.environment,
@@ -68,6 +92,7 @@ export async function uninstallHost(
     hadInstallRecord: previous !== null,
   });
   let removedInstallDir = false;
+  await verify();
   try {
     await rm(hostInstallDir(opts.environment), {
       recursive: true,
@@ -82,6 +107,7 @@ export async function uninstallHost(
     });
     removedInstallDir = false;
   }
+  await verify();
   await deleteHostInstallRecord(opts.environment);
   logger.info("Host uninstall deleted install record", {
     environment: opts.environment,
@@ -89,7 +115,12 @@ export async function uninstallHost(
   });
   // Sweep any stale `<installDir>.old-*` siblings the atomic swap left
   // behind after a crash. Best-effort; never blocks the uninstall.
-  await sweepOldTrash(hostInstallDir(opts.environment), "install.json", logger);
+  await sweepOldTrash(
+    hostInstallDir(opts.environment),
+    "install.json",
+    logger,
+    verify,
+  );
 
   // A staged update has nothing left to apply to once the host it was
   // staged against is gone - remove `staged/` (and its own `.old-*`
@@ -97,6 +128,7 @@ export async function uninstallHost(
   // own `staged.json` sidecar) alongside `install/` rather than leaving
   // it to be silently swept by the next install/apply's reconcile pass.
   let removedStagedDir = false;
+  await verify();
   try {
     await rm(hostStagedDir(opts.environment), {
       recursive: true,
@@ -111,7 +143,12 @@ export async function uninstallHost(
     });
     removedStagedDir = false;
   }
-  await sweepOldTrash(hostStagedDir(opts.environment), "staged.json", logger);
+  await sweepOldTrash(
+    hostStagedDir(opts.environment),
+    "staged.json",
+    logger,
+    verify,
+  );
 
   let purgedRuntime = false;
   if (opts.purgeChannelRuntime) {
@@ -125,8 +162,16 @@ export async function uninstallHost(
     // could read it. Rotating still clears the live log (a purge that leaves an
     // orphan behind is its own surprise) while keeping one generation, and it
     // cannot accumulate.
-    await removeHostPidMetadataForPurge(opts.environment, logger, rm);
-    const rotated = await rotateHostLogForPurge(opts.environment);
+    await removeHostPidMetadataForPurgeWithVerifier(
+      opts.environment,
+      logger,
+      rm,
+      verify,
+    );
+    const rotated = await rotateHostLogForPurgeWithVerifier(
+      opts.environment,
+      verify,
+    );
     purgedRuntime = true;
     logger.warn("Host uninstall purged runtime files", {
       environment: opts.environment,
