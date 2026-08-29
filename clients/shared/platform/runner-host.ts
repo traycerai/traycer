@@ -1095,7 +1095,9 @@ export interface IDeviceFlowHost {
    * process. Resolves with a `DeviceFlowSession` once authorization succeeds,
    * or `null` when authorization itself fails (network/5xx) or the shell has no
    * device-flow backend - the caller surfaces a launch-style failure and may
-   * retry. The shell supplies its own `client_id` (`"desktop"`) and host label.
+   * retry. The shell supplies its own client kind as `client_id` - the kind it
+   * signs sessions in as (`"desktop"` for the desktop app, `"mobile"` for the
+   * phone shell) - and its host label.
    */
   start(): Promise<DeviceFlowSession | null>;
 }

@@ -657,16 +657,12 @@ export class MobileRunnerHost implements IRunnerHost {
   }
 }
 
-// TEMPORARY: the DEPLOYED authn (verified 2026-08-14 against BOTH
-// authn.dev.traycer.ai and authn.traycer.ai: `/device/authorize` returns 400
-// "client_id must be 'cli' or 'desktop'") predates the "mobile" device client
-// kind, so sign in as "desktop" until the authn-v3 mobile client-kind work is
-// deployed. Flip back to "mobile" then - the approval-page copy and push-token
-// registration are keyed off it. The repo's authn-v3 already accepts "mobile";
-// only the deployment lags. NOTE the cloud /device page fires the
-// return-to-app deep link for both "desktop" and "mobile", so this override
-// does not affect the `return_scheme` behavior below.
-const DEVICE_FLOW_CLIENT_ID: DeviceClientId = "desktop";
+// The client kind this app signs in as. It labels the minted session on the
+// sessions page, keys the approval-page copy, and gates push-token
+// registration. The cloud /device page fires the return-to-app deep link for
+// this kind, so `return_scheme` behaves the same as a desktop sign-in.
+// Requires an authn that accepts the "mobile" device client kind.
+const DEVICE_FLOW_CLIENT_ID: DeviceClientId = "mobile";
 
 class MobileDeviceFlowHost implements IDeviceFlowHost {
   constructor(
