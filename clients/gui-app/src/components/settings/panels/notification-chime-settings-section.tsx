@@ -96,7 +96,6 @@ function NotificationChimeSelect(props: {
       onValueChange={(next) => {
         if (!isNotificationChimeSound(next)) return;
         props.setSoundForEvent(props.eventType, next);
-        playNotificationChimeSound(next);
       }}
     >
       <SelectTrigger
@@ -127,8 +126,16 @@ function NotificationChimeSelect(props: {
 }
 
 function ChimeOption(props: { readonly sound: NotificationChimeSound }) {
+  const preview = (): void => playNotificationChimeSound(props.sound);
+
   return (
-    <SelectItem value={props.sound}>
+    <SelectItem
+      value={props.sound}
+      onPointerUp={preview}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") preview();
+      }}
+    >
       {NOTIFICATION_CHIME_LABELS[props.sound]}
     </SelectItem>
   );
