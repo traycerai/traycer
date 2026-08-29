@@ -740,10 +740,6 @@ export function createScreencastController(options: {
       );
       return;
     }
-    // A tap is a click, and a click is where typing goes - so the hidden IME
-    // input takes focus here rather than on press, which would raise the
-    // phone's keyboard over every scroll.
-    refs.imeInputRef.current?.focus();
     // Built from where the finger LANDED and stamped with the frame that was
     // presented then. Building from the pointer-up event instead would aim the
     // click at the current frame, so a repaint between press and release would
@@ -784,6 +780,17 @@ export function createScreencastController(options: {
       pointerClickCount = null;
       return;
     }
+    // A tap is a click, and a click is where typing goes - so the hidden IME
+    // input takes focus, raising the phone's keyboard. It happens HERE, after
+    // the tap has survived every check: focusing before them raises the
+    // keyboard over a gesture that is then discarded, leaving it covering the
+    // screen for a tap the page never received. Still inside the pointer-up
+    // handler, so it is still the user gesture iOS requires.
+    //
+    // Blurring later is not the alternative: the tile treats focus leaving the
+    // IME input as the user releasing control (`onFocusExit` -> `clearLocalArm`),
+    // so a corrective blur would disarm the tab.
+    refs.imeInputRef.current?.focus();
     const down = { ...pressed, castSequence: downSequence };
     const up = { ...released, castSequence: downSequence };
     if (activeArmEpoch !== null) {
