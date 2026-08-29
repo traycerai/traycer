@@ -547,6 +547,12 @@ function conflictingIncompleteAssistantRowIds(
       liveTurnKeys.add(assistantTurnKey(message));
     }
   }
+  const liveProjection = projectTranscriptRows({
+    messages: liveMessages,
+    events: [],
+    activeTurnId: null,
+    chatId: "",
+  });
   return new Set(
     incompleteRowIds.filter((rowId) => {
       const directTurnKey = assistantRowTurnKey(rowId);
@@ -559,11 +565,25 @@ function conflictingIncompleteAssistantRowIds(
               chatId: "",
             }).find((row) => row.rowId === rowId)
           : undefined;
-      const turnKey =
-        directTurnKey ??
-        (projected !== undefined && "turnKey" in projected.source
-          ? projected.source.turnKey
-          : null);
+      const liveProjected =
+        directTurnKey === null
+          ? liveProjection.find((row) => row.rowId === rowId)
+          : undefined;
+      let turnKey = directTurnKey;
+      if (
+        turnKey === null &&
+        projected !== undefined &&
+        "turnKey" in projected.source
+      ) {
+        turnKey = projected.source.turnKey;
+      }
+      if (
+        turnKey === null &&
+        liveProjected !== undefined &&
+        "turnKey" in liveProjected.source
+      ) {
+        turnKey = liveProjected.source.turnKey;
+      }
       return turnKey !== null && liveTurnKeys.has(turnKey);
     }),
   );
@@ -1501,7 +1521,7 @@ function boundWindowToRowCount(
 ): TranscriptWindow {
   const skeleton = window.skeleton.slice(0, rowCount);
   const spans = window.spans.filter((span) => spanEnd(span) <= rowCount);
-  const liveMessages = rowCount === 0 ? [] : window.liveMessages;
+  const liveMessages = window.liveMessages;
   const changed =
     skeleton.length !== window.skeleton.length ||
     spans.length !== window.spans.length ||

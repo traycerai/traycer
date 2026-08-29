@@ -386,17 +386,20 @@ export function transcriptListRows(input: {
     const retainedSpanRowIds = spanRowIds(window.spans);
     const skeletonRowIds = skeletonOrdinalByRowId(window.skeleton);
     const liveTransientSteerRowIds = transientLiveSteerRowIds(window);
-    const unplacedRendered = rendered.filter(
-      (model) =>
+    const unplacedRendered = rendered.filter((model) => {
+      const liveBacked =
+        isExplicitlyPendingOrStreaming(model) ||
+        liveRowIds.has(model.id) ||
+        (model.persistentMessageId === null &&
+          liveTransientSteerRowIds.has(model.id)) ||
+        (model.persistentMessageId !== null &&
+          liveRowIds.has(model.persistentMessageId));
+      return (
         !retainedSpanRowIds.has(model.id) &&
-        !skeletonRowIds.has(model.id) &&
-        (isExplicitlyPendingOrStreaming(model) ||
-          liveRowIds.has(model.id) ||
-          (model.persistentMessageId === null &&
-            liveTransientSteerRowIds.has(model.id)) ||
-          (model.persistentMessageId !== null &&
-            liveRowIds.has(model.persistentMessageId))),
-    );
+        (!skeletonRowIds.has(model.id) || liveBacked) &&
+        liveBacked
+      );
+    });
     return [
       ...invalidatedPlaceholderRows(window.rowCount),
       ...unplacedRendered.map((model) => ({

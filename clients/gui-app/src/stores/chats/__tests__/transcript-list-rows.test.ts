@@ -477,7 +477,7 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["P:0"]);
   });
 
-  it("does not append a skeleton-named live row after void placeholders", () => {
+  it("keeps a skeleton-named live row after void placeholders", () => {
     const liveId = "accepted-user-in-skeleton";
     const liveMessage: Extract<Message, { role: "assistant" }> = {
       role: "assistant",
@@ -511,7 +511,7 @@ describe("transcriptListRows", () => {
       rendered: [modelWithPersistentMessageId(liveId, liveId)],
     });
 
-    expect(kinds(rows)).toEqual(["P:0"]);
+    expect(kinds(rows)).toEqual(["P:0", `H:${liveId}`]);
   });
 
   it("keeps a genuinely pending null-record row after void placeholders", () => {

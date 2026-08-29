@@ -1932,7 +1932,7 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
-  it("retires a provisional user when zero rows are authoritative", () => {
+  it("keeps a provisional user that overtakes a same-epoch empty snapshot", () => {
     const live = appendLiveRecords(emptyTranscriptWindow(), {
       messages: [userMessage("accepted-user-deleted", 1)],
       events: [],
@@ -1945,8 +1945,9 @@ describe("what an overlap keeps", () => {
       tail: { fromOrdinal: 0, messages: [], events: [] },
     });
 
-    expect(empty.liveMessages).toEqual([]);
-    expect(hydratedRecords(empty).messages).toEqual([]);
+    expect(empty.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user-deleted",
+    ]);
   });
 
   it("keeps a user accepted after a snapshot through its older skeleton", () => {
@@ -2050,7 +2051,7 @@ describe("what an overlap keeps", () => {
     expect(hydratedRecords(rebased).messages).toEqual([]);
   });
 
-  it("drops a frozen assistant on a same-epoch null rebuild to zero rows", () => {
+  it("keeps a frozen assistant across an ambiguous same-epoch empty rebuild", () => {
     const turnId = "turn-restart-deleted";
     const indexed = applySkeletonChunk(
       applyWindowedSnapshot(emptyTranscriptWindow(), {
@@ -2081,8 +2082,9 @@ describe("what an overlap keeps", () => {
     });
 
     expect(rebuilt.skeleton).toEqual([]);
-    expect(rebuilt.liveMessages).toEqual([]);
-    expect(hydratedRecords(rebuilt).messages).toEqual([]);
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      transientLiveAssistantMessageId(turnId),
+    ]);
   });
 
   it("truncates a same-epoch rebuild without retiring its ambiguous stand-in", () => {
@@ -2494,7 +2496,7 @@ describe("what an overlap keeps", () => {
         messages: [
           {
             ...assistantMessage("assistant-partial", turnId, 1),
-            blocks: [steerBlock],
+            blocks: [],
           },
         ],
       }),
