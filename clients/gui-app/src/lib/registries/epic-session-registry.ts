@@ -1,3 +1,7 @@
+import {
+  createEpicRuntimeWorker,
+  type RuntimeWorkerLike,
+} from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 import { createContext } from "react";
 import {
   DEFAULT_MAX_LIVE_EPICS,
@@ -118,6 +122,33 @@ export function __setEpicStreamClientFactoryForTests(
 
 export function getEpicStreamClientFactoryOverride(): EpicStreamClientFactory | null {
   return streamClientFactoryOverride;
+}
+
+/**
+ * Test / production seam for the runtime WORKER, beside the stream one above.
+ *
+ * jsdom has no `Worker`, so every suite that mounts a session needs a
+ * constructor it can supply - and after the composition cut there is no
+ * in-process bypass to fall back on. An overridden stream no longer means "no
+ * worker": it means the worker's composition is built over the caller's stream
+ * instead of the proxy's, through the same explicit factories option. So a test
+ * sets this once per file and reaches the real host, the real core and the real
+ * composition on its own thread.
+ *
+ * `null` uses the production constructor, which is the only path that calls
+ * `new Worker(new URL(...))` - a form Vite must see literally, and which jsdom
+ * cannot execute.
+ */
+let runtimeWorkerFactoryOverride: (() => RuntimeWorkerLike) | null = null;
+
+export function __setEpicRuntimeWorkerFactoryForTests(
+  factory: (() => RuntimeWorkerLike) | null,
+): void {
+  runtimeWorkerFactoryOverride = factory;
+}
+
+export function getEpicRuntimeWorkerFactory(): () => RuntimeWorkerLike {
+  return runtimeWorkerFactoryOverride ?? createEpicRuntimeWorker;
 }
 
 export function __getOpenEpicRegistryForTests(): OpenEpicSessionRegistry {

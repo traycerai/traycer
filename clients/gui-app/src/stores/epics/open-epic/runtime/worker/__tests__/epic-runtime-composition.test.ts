@@ -15,10 +15,12 @@ import { describe, expect, it } from "vitest";
 import { createWorkerStreamClient } from "@traycer-clients/shared/replica-runtime/worker/worker-stream-client";
 import { createStreamProxyHost } from "@traycer-clients/shared/replica-runtime/worker/stream-proxy-host";
 import { createRecordingStreamClient } from "@traycer-clients/shared/replica-runtime/worker/test-support/recording-stream-client";
-import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
-import type { EpicStatusStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
-import type { ArtifactStreamCallbacks } from "@traycer-clients/shared/host-transport/artifact-stream-client";
+import {
+  INERT_ARTIFACT_CALLBACKS,
+  INERT_LEGACY_CALLBACKS,
+  INERT_STATE_CALLBACKS,
+  INERT_STATUS_CALLBACKS,
+} from "../test-support/epic-stream-callback-fixtures";
 import { buildProxiedStreamFactories } from "../epic-runtime-composition";
 
 /** Worker client -> real proxy host -> recording socket. No stub between. */
@@ -52,46 +54,6 @@ function proxied() {
   return { recording, worker, host, rejected };
 }
 
-/**
- * Per-lane callbacks, each TYPED BY its own contract.
- *
- * A single invented literal covered all four wrappers on the first pass, and
- * three of them never called it - so the fixture named methods that exist
- * nowhere (`onUpdate`, `onStatus`, `onFatal`) and only the lane that actually
- * dispatches caught it. The contracts differ; the fixtures do too.
- */
-const LEGACY_CALLBACKS: EpicStreamCallbacks = {
-  onSnapshot: () => {},
-  onUpdate: () => {},
-  onAwareness: () => {},
-  onEarlyMeta: () => {},
-  onEpicDeleted: () => {},
-  onPermissionChanged: () => {},
-};
-
-const STATE_CALLBACKS: EpicStateStreamCallbacks = {
-  onSnapshot: () => {},
-  onDelta: () => {},
-  onResumed: () => {},
-  onTrustChanged: () => {},
-  onConnectionStatus: () => {},
-};
-
-const ARTIFACT_CALLBACKS: ArtifactStreamCallbacks = {
-  onDoc: () => {},
-  onDocUpdate: () => {},
-  onDocAck: () => {},
-  onAwareness: () => {},
-  onUnavailable: () => {},
-  onConnectionStatus: () => {},
-};
-
-const STATUS_CALLBACKS: EpicStatusStreamCallbacks = {
-  onSnapshot: () => {},
-  onTransition: () => {},
-  onConnectionStatus: () => {},
-};
-
 describe("buildProxiedStreamFactories", () => {
   it("opens the legacy arm's subscription on the PROXY", () => {
     const { recording, worker } = proxied();
@@ -101,7 +63,7 @@ describe("buildProxiedStreamFactories", () => {
       subscribeSupport: () => () => {},
     });
 
-    factories.streamClientFactory("epic-1", LEGACY_CALLBACKS, () => null);
+    factories.streamClientFactory("epic-1", INERT_LEGACY_CALLBACKS, () => null);
 
     // The wrapper reached a real session through the real proxy host. Asserting
     // on the recording client rather than on the worker's own bookkeeping is
@@ -122,13 +84,13 @@ describe("buildProxiedStreamFactories", () => {
     expect(lanes).not.toBeNull();
     if (lanes === null) return;
 
-    lanes.stateStreamClientFactory("epic-1", STATE_CALLBACKS, () => null);
-    lanes.statusStreamClientFactory("epic-1", STATUS_CALLBACKS);
+    lanes.stateStreamClientFactory("epic-1", INERT_STATE_CALLBACKS, () => null);
+    lanes.statusStreamClientFactory("epic-1", INERT_STATUS_CALLBACKS);
     lanes.artifactStreamClientFactory(
       "epic-1",
       "artifact-1",
       "epoch-1",
-      ARTIFACT_CALLBACKS,
+      INERT_ARTIFACT_CALLBACKS,
       () => null,
     );
 
@@ -172,7 +134,7 @@ describe("buildProxiedStreamFactories", () => {
     });
     const statuses: string[] = [];
     factories.laneSelection?.statusStreamClientFactory("epic-1", {
-      ...STATUS_CALLBACKS,
+      ...INERT_STATUS_CALLBACKS,
       onConnectionStatus: (status) => statuses.push(status),
     });
 
