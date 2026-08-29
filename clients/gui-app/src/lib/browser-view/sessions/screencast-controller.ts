@@ -652,29 +652,18 @@ export function createScreencastController(options: {
     arm();
   };
 
-  const onTouchPointerMove = (
+  /**
+   * One finger-travel segment, as the page should receive it: inverted, because
+   * the page follows the finger, and in client pixels - the same unit
+   * `handleWheel` converts its own into. Shared by the move handler and the
+   * release, which has its own final segment to account for.
+   */
+  const translateTouchScroll = (
     event: ReactPointerEvent<HTMLButtonElement>,
+    deltaX: number,
+    deltaY: number,
   ): void => {
-    const touch = activeTouch;
-    if (touch === null || touch.pointerId !== event.pointerId) return;
-    const deltaX = event.clientX - touch.lastX;
-    const deltaY = event.clientY - touch.lastY;
-    if (!touch.scrolling) {
-      const travelledX = Math.abs(event.clientX - touch.startX);
-      const travelledY = Math.abs(event.clientY - touch.startY);
-      if (
-        travelledX <= TOUCH_SCROLL_SLOP_PX &&
-        travelledY <= TOUCH_SCROLL_SLOP_PX
-      ) {
-        return;
-      }
-      touch.scrolling = true;
-    }
-    touch.lastX = event.clientX;
-    touch.lastY = event.clientY;
-    // Inverted: the page follows the finger, so dragging up scrolls down. The
-    // deltas are already client pixels, the same unit `handleWheel` converts
-    // its own into.
+    if (deltaX === 0 && deltaY === 0) return;
     if (activeArmEpoch === null) {
       // Queued rather than dropped, and replayed by `noteArmed`. Consecutive
       // moves fold into one wheel entry; a tap in between ends the run, so the
@@ -702,6 +691,31 @@ export function createScreencastController(options: {
     sendDiscretePointer(frame);
   };
 
+  /** Whether the finger has travelled far enough to mean a scroll. */
+  const travelExceedsSlop = (
+    touch: ActiveTouch,
+    clientX: number,
+    clientY: number,
+  ): boolean =>
+    Math.abs(clientX - touch.startX) > TOUCH_SCROLL_SLOP_PX ||
+    Math.abs(clientY - touch.startY) > TOUCH_SCROLL_SLOP_PX;
+
+  const onTouchPointerMove = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ): void => {
+    const touch = activeTouch;
+    if (touch === null || touch.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - touch.lastX;
+    const deltaY = event.clientY - touch.lastY;
+    if (!touch.scrolling) {
+      if (!travelExceedsSlop(touch, event.clientX, event.clientY)) return;
+      touch.scrolling = true;
+    }
+    touch.lastX = event.clientX;
+    touch.lastY = event.clientY;
+    translateTouchScroll(event, deltaX, deltaY);
+  };
+
   const onTouchPointerUp = (
     event: ReactPointerEvent<HTMLButtonElement>,
   ): void => {
@@ -709,7 +723,23 @@ export function createScreencastController(options: {
     if (touch === null || touch.pointerId !== event.pointerId) return;
     activeTouch = null;
     releaseCapturedPointer();
-    if (touch.scrolling) return;
+    // The release carries its own displacement. A flick can cross the slop
+    // between the last `pointermove` and the `pointerup` - browsers coalesce
+    // moves, and a fast one may report almost none - so judging the gesture on
+    // `scrolling` alone would call that a tap, click where the finger LANDED,
+    // and raise the keyboard over what the user meant as a scroll.
+    const scrolled =
+      touch.scrolling || travelExceedsSlop(touch, event.clientX, event.clientY);
+    if (scrolled) {
+      // And the final segment is part of the scroll, whether it is what tipped
+      // the gesture over the slop or the tail of one already under way.
+      translateTouchScroll(
+        event,
+        event.clientX - touch.lastX,
+        event.clientY - touch.lastY,
+      );
+      return;
+    }
     // A tap is a click, and a click is where typing goes - so the hidden IME
     // input takes focus here rather than on press, which would raise the
     // phone's keyboard over every scroll.
