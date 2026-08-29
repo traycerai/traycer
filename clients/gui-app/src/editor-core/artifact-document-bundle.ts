@@ -15,7 +15,6 @@ import {
   TableHeader,
   TableCell,
 } from "@tiptap/extension-table";
-import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import { yXmlFragmentToProseMirrorRootNode } from "@tiptap/y-tiptap";
 import { createLowlight, common } from "lowlight";
 import type * as Y from "yjs";
@@ -23,6 +22,7 @@ import { MermaidNode } from "./nodes/mermaid/mermaid-node";
 import { WireframeNode } from "./nodes/wireframe/wireframe-node";
 import { ThreadAnchor } from "./extensions/thread-anchor";
 import { ArtifactImageNode } from "./nodes/image/artifact-image-node";
+import { ArtifactCodeBlock } from "./nodes/code-block/artifact-code-block";
 
 const lowlight = createLowlight(common);
 
@@ -74,7 +74,7 @@ const extensions: AnyExtension[] = [
   TableCell,
   MermaidNode,
   WireframeNode,
-  CodeBlockLowlight.configure({ lowlight }),
+  ArtifactCodeBlock.configure({ lowlight }),
   // Inline mark anchoring artifact comment threads. It belongs in the shared
   // document schema so editor and export serialization cannot drift.
   ThreadAnchor,

@@ -8,6 +8,11 @@ import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transc
 import type { ChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
+  assistantRowId,
+  queueSteerRowId,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
+import {
   appendLiveRecords,
   MAX_LIVE_EVENTS,
   SPAN_MERGE_MAX_BYTES,
@@ -57,6 +62,33 @@ function userMessage(messageId: string, timestamp: number): Message {
   };
 }
 
+function assistantMessage(
+  messageId: string,
+  turnId: string | null,
+  timestamp: number,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    role: "assistant",
+    messageId,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [],
+    startedAt: timestamp,
+    timestamp,
+    turnId,
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  };
+}
+
 function event(eventId: string, timestamp: number): ChatEvent {
   return {
     eventId,
@@ -98,6 +130,7 @@ function rangeResponse(input: {
   readonly epoch: number;
   readonly fromOrdinal: number;
   readonly rowIds: readonly string[];
+  readonly incompleteRowIds?: readonly string[];
   readonly messages: readonly Message[];
   readonly events?: readonly ChatEvent[];
 }): ChatRangeResponse {
@@ -106,6 +139,7 @@ function rangeResponse(input: {
     epoch: input.epoch,
     fromOrdinal: input.fromOrdinal,
     rowIds: [...input.rowIds],
+    incompleteRowIds: [...(input.incompleteRowIds ?? [])],
     messages: [...input.messages],
     events: [...(input.events ?? [])],
     rowContext: {},
@@ -826,6 +860,25 @@ describe("gaps and what to request next", () => {
     );
     // Two rows hydrated out of ten - the number find has to disclose.
     expect(unhydratedRowCount(window)).toBe(8);
+  });
+
+  it("counts unavailable rows as unhydrated while suppressing their retries", () => {
+    const partial = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-before-skeleton"],
+        incompleteRowIds: ["row-before-skeleton"],
+        messages: [userMessage("row-before-skeleton", 1)],
+      }),
+    );
+
+    expect(partial.unavailableRowOrdinals).toEqual([0]);
+    expect(
+      transcriptHydrationGaps(partial, { fromOrdinal: 0, toOrdinal: 1 }),
+    ).toEqual([]);
+    expect(unhydratedRowCount(partial)).toBe(1);
   });
 
   it("counts nothing unhydrated on the legacy line's inert window", () => {
@@ -1686,6 +1739,1910 @@ describe("what an overlap keeps", () => {
         [],
       ),
     ).not.toBeNull();
+  });
+
+  it("keeps a frozen live assistant across a rebase until its oversized row loads", () => {
+    const turnId = "turn-oversized";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [assistantMessage(transientId, turnId, 1)],
+      events: [],
+    });
+
+    // The completion snapshot arrives before the held subscriber's synchronous
+    // reindexed delta. Its only row exceeds the inline-tail budget.
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+    expect(hydratedRecords(rebased).messages.map((m) => m.messageId)).toEqual([
+      transientId,
+    ]);
+
+    const voided = applyIndexChange(rebased, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    expect(hydratedRecords(voided).messages.map((m) => m.messageId)).toEqual([
+      transientId,
+    ]);
+
+    const resnapshot = applyWindowedSnapshot(voided, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+    expect(
+      hydratedRecords(resnapshot).messages.map((m) => m.messageId),
+    ).toEqual([transientId]);
+
+    const indexed = applySkeletonChunk(resnapshot, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry(assistantRowId(turnId), 0)],
+      isFinal: true,
+    });
+    const hydrated = applyRangeResponse(
+      indexed,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-durable", turnId, 1)],
+      }),
+    );
+
+    // The durable body takes over by turn identity; the stand-in id is
+    // intentionally different and must not leave a duplicate tail row.
+    expect(hydratedRecords(hydrated).messages.map((m) => m.messageId)).toEqual([
+      "assistant-durable",
+    ]);
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
+  it("keeps a frozen live assistant when a snapshot revision gap voids the index", () => {
+    const turnId = "turn-snapshot-gap";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        indexRevision: 1,
+        indexRevisionRebuilding: false,
+      },
+      {
+        messages: [assistantMessage(transientId, turnId, 1)],
+        events: [],
+      },
+    );
+
+    const gapped = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 3,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(gapped.invalidated).toBe(true);
+    expect(hydratedRecords(gapped).messages.map((m) => m.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("keeps an accepted user when a same-epoch snapshot revision gap voids the index", () => {
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 1,
+        indexRevisionRebuilding: false,
+      },
+      { messages: [userMessage("accepted-user-gap", 1)], events: [] },
+    );
+
+    const gapped = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: 3,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(gapped.invalidated).toBe(true);
+    expect(gapped.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user-gap",
+    ]);
+
+    const replacement = applyWindowedSnapshot(gapped, {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(
+      replacement.liveMessages.map((message) => message.messageId),
+    ).toEqual(["accepted-user-gap"]);
+  });
+
+  it("keeps an invalidated user when a delayed replacement skeleton omits it", () => {
+    const invalidated = {
+      ...appendLiveRecords(emptyTranscriptWindow(), {
+        messages: [userMessage("accepted-user-removed", 1)],
+        events: [],
+      }),
+      epoch: 1,
+      rowCount: 1,
+      invalidated: true,
+    };
+    const replacement = applyWindowedSnapshot(invalidated, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(replacement, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("different-user", 0)],
+      isFinal: true,
+    });
+
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user-removed",
+    ]);
+  });
+
+  it("keeps a retained user through a delayed non-invalidated null rebuild", () => {
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 1,
+        indexRevisionRebuilding: false,
+      },
+      { messages: [userMessage("accepted-user-removed", 1)], events: [] },
+    );
+    const replacement = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(replacement, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("different-user", 0)],
+      isFinal: true,
+    });
+
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user-removed",
+    ]);
+  });
+
+  it("keeps a just-accepted user record through an index void", () => {
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 1,
+        indexRevisionRebuilding: false,
+      },
+      { messages: [userMessage("accepted-user", 1)], events: [] },
+    );
+
+    const voided = applyIndexChange(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 2,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(voided.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user",
+    ]);
+  });
+
+  it("keeps a provisional user that overtakes a same-epoch empty snapshot", () => {
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage("accepted-user-deleted", 1)],
+      events: [],
+    });
+
+    const empty = applyWindowedSnapshot(live, {
+      epoch: 0,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(empty.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user-deleted",
+    ]);
+  });
+
+  it("keeps a provisional user after an established empty skeleton", () => {
+    const establishedEmpty = applySkeletonChunk(emptyTranscriptWindow(), {
+      epoch: 0,
+      fromOrdinal: 0,
+      entries: [],
+      isFinal: true,
+    });
+    const live = appendLiveRecords(establishedEmpty, {
+      messages: [userMessage("accepted-after-empty", 1)],
+      events: [],
+    });
+
+    const empty = applyWindowedSnapshot(live, {
+      epoch: 0,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(empty.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-after-empty",
+    ]);
+  });
+
+  it("keeps an accepted user that overtakes a rebasing snapshot", () => {
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage("accepted-after-rebase-snapshot", 2)],
+      events: [],
+    });
+
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(rebased.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-after-rebase-snapshot",
+    ]);
+  });
+
+  it("keeps a live event that overtakes a rebasing snapshot", () => {
+    const setup: ChatEvent = {
+      eventId: "setup-after-rebase-snapshot",
+      type: "setup.running",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [],
+      events: [setup],
+    });
+
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(rebased.liveEvents.map((event) => event.eventId)).toEqual([
+      setup.eventId,
+    ]);
+  });
+
+  it("retires a carried setup event after completed authority omits it", () => {
+    const setup: ChatEvent = {
+      eventId: "setup-deleted-by-rebuild",
+      type: "setup.running",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [],
+      events: [setup],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveEvents).toEqual([]);
+  });
+
+  it("tracks retained events across a same-epoch null-revision rebuild", () => {
+    const setup: ChatEvent = {
+      eventId: "setup-same-epoch-rebuild",
+      type: "setup.running",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 7,
+        indexRevisionRebuilding: false,
+      },
+      { messages: [], events: [setup] },
+    );
+    const rebuilding = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(rebuilding.snapshotProvisionalEventIds).toContain(setup.eventId);
+    const rebuilt = applySkeletonChunk(rebuilding, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(confirmed.liveEvents).toEqual([]);
+  });
+
+  it("tracks a live decorating event using its span-backed assistant", () => {
+    const seeded = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId("turn-1")],
+        messages: [assistantMessage("assistant-durable", "turn-1", 1)],
+      }),
+    );
+    const completion = event("completion-live", 2);
+    const live = appendLiveRecords(seeded, {
+      messages: [],
+      events: [completion],
+    });
+
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 2,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(rebased.snapshotProvisionalEventIds).toContain(completion.eventId);
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: [skeletonEntry(assistantRowId("turn-1"), 0)],
+      isFinal: true,
+    });
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 2,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(confirmed.liveEvents.map((entry) => entry.eventId)).toContain(
+      completion.eventId,
+    );
+  });
+
+  it("does not retain an independent notification from an assistant turn match", () => {
+    const turnId = "turn-with-deleted-notification";
+    const seeded = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-notification", turnId, 1)],
+      }),
+    );
+    const failed: ChatEvent = {
+      ...event("send-failed-deleted", 2),
+      type: "send.failed",
+      turnId,
+      message: "failed",
+      metadata: { notificationAnchor: true },
+    };
+    const live = appendLiveRecords(seeded, {
+      messages: [],
+      events: [failed],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 2,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(rebased.snapshotProvisionalEventIds).toContain(failed.eventId);
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: [skeletonEntry(assistantRowId(turnId), 0)],
+      isFinal: true,
+    });
+    expect(rebuilt.skeletonComplete).toBe(true);
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 2,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(confirmed.liveEvents).toEqual([]);
+  });
+
+  it("matches same-timestamp provisional setup windows one-to-one", () => {
+    const setupEvent = (
+      eventId: string,
+      type: ChatEvent["type"],
+    ): ChatEvent => ({
+      eventId,
+      type,
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    });
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [],
+      events: [
+        setupEvent("setup-first", "setup.running"),
+        setupEvent("setup-boundary", "worktree.missing"),
+        setupEvent("setup-second", "setup.running"),
+      ],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("setup-card:chat-1:9:2", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveEvents.map((event) => event.eventId)).toEqual([
+      "setup-boundary",
+      "setup-second",
+    ]);
+  });
+
+  it("keeps an assistant through its overtaken empty stream", () => {
+    const turnId = "turn-after-empty-rebase";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+
+    const snapshot = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+    expect(snapshot.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+
+    const rebuilt = applySkeletonChunk(snapshot, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [],
+      isFinal: true,
+    });
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("keeps a user accepted after a snapshot through its older skeleton", () => {
+    const rebuilding = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 0,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const live = appendLiveRecords(rebuilding, {
+      messages: [userMessage("accepted-user-absent", 1)],
+      events: [],
+    });
+
+    const rebuilt = applySkeletonChunk(live, {
+      epoch: 0,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("different-user", 0)],
+      isFinal: true,
+    });
+
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user-absent",
+    ]);
+  });
+
+  it("keeps an assistant completed after a snapshot through its older skeleton", () => {
+    const rebuilding = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 0,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const transientId = transientLiveAssistantMessageId("turn-after-snapshot");
+    const live = appendLiveRecords(rebuilding, {
+      messages: [assistantMessage(transientId, "turn-after-snapshot", 1)],
+      events: [],
+    });
+
+    const rebuilt = applySkeletonChunk(live, {
+      epoch: 0,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("different-user", 0)],
+      isFinal: true,
+    });
+
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("retires a legacy transient by the projection timestamp turn key", () => {
+    const turnKey = "ts:42";
+    const transientId = transientLiveAssistantMessageId(turnKey);
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [assistantMessage(transientId, null, 42)],
+      events: [],
+    });
+    const indexed = applySkeletonChunk(
+      { ...live, epoch: 1, rowCount: 1 },
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [skeletonEntry(assistantRowId(turnKey), 0)],
+        isFinal: true,
+      },
+    );
+    const hydrated = applyRangeResponse(
+      indexed,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnKey)],
+        messages: [assistantMessage("assistant-legacy-durable", null, 42)],
+      }),
+    );
+
+    expect(hydrated.liveMessages).toEqual([]);
+    expect(hydratedRecords(hydrated).messages.map((m) => m.messageId)).toEqual([
+      "assistant-legacy-durable",
+    ]);
+  });
+
+  it("drops retained live records on the next confirmed-empty snapshot", () => {
+    const turnId = "turn-deleted";
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [
+        assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
+        userMessage("accepted-deleted", 1),
+      ],
+      events: [],
+    });
+
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    const streamed = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [],
+      isFinal: true,
+    });
+    expect(streamed.liveMessages).toHaveLength(2);
+    const confirmed = applyWindowedSnapshot(streamed, {
+      epoch: 1,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveMessages).toEqual([]);
+    expect(hydratedRecords(confirmed).messages).toEqual([]);
+  });
+
+  it("retires a provisional user after a completed nonempty rebuild omits it", () => {
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage("accepted-before-rebuild", 1)],
+      events: [],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveMessages).toEqual([]);
+  });
+
+  it("keeps provisional provenance through an intermediate snapshot", () => {
+    const messageId = "accepted-before-intermediate";
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage(messageId, 1)],
+      events: [],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const intermediate = applyWindowedSnapshot(rebased, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(intermediate.snapshotProvisionalMessageIds).toContain(messageId);
+    const rebuilt = applySkeletonChunk(intermediate, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveMessages).toEqual([]);
+  });
+
+  it("prunes provisional ids after their live records are span-superseded", () => {
+    const messageId = "accepted-before-span-supersession";
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage(messageId, 1)],
+      events: [],
+    });
+    const rebuilding = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: null,
+      tail: { fromOrdinal: 2, messages: [], events: [] },
+    });
+    expect(rebuilding.snapshotProvisionalMessageIds).toContain(messageId);
+    const superseded = applyRangeResponse(
+      rebuilding,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [messageId],
+        messages: [userMessage(messageId, 1)],
+      }),
+    );
+    expect(superseded.liveMessages).toEqual([]);
+
+    const intermediate = applyWindowedSnapshot(superseded, {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: null,
+      tail: { fromOrdinal: 2, messages: [], events: [] },
+    });
+    expect(intermediate.skeletonComplete).toBe(false);
+    expect(intermediate.snapshotProvisionalMessageIds).toEqual([]);
+  });
+
+  it("tracks retained users across a same-epoch null-revision rebuild", () => {
+    const messageId = "accepted-before-same-epoch-rebuild";
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 7,
+        indexRevisionRebuilding: false,
+      },
+      { messages: [userMessage(messageId, 1)], events: [] },
+    );
+    const rebuilding = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(rebuilding.snapshotProvisionalMessageIds).toContain(messageId);
+    const rebuilt = applySkeletonChunk(rebuilding, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(confirmed.liveMessages).toEqual([]);
+  });
+
+  it("retains a provisional user named by the completed rebuild", () => {
+    const messageId = "accepted-in-rebuild";
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage(messageId, 1)],
+      events: [],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry(messageId, 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveMessages.map((message) => message.messageId)).toEqual([
+      messageId,
+    ]);
+  });
+
+  it("keeps a frozen assistant across an ambiguous same-epoch empty rebuild", () => {
+    const turnId = "turn-restart-deleted";
+    const indexed = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 0,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      }),
+      {
+        epoch: 0,
+        fromOrdinal: 0,
+        entries: [skeletonEntry(assistantRowId(turnId), 0)],
+        isFinal: true,
+      },
+    );
+    const live = appendLiveRecords(indexed, {
+      messages: [
+        assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
+      ],
+      events: [],
+    });
+
+    const rebuilt = applyWindowedSnapshot(live, {
+      epoch: 0,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(rebuilt.skeleton).toEqual([]);
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      transientLiveAssistantMessageId(turnId),
+    ]);
+  });
+
+  it("truncates a same-epoch rebuild without retiring its ambiguous stand-in", () => {
+    const turnId = "turn-restart-shortened";
+    const indexed = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry("user-kept", 0),
+          skeletonEntry(assistantRowId(turnId), 1),
+        ],
+        isFinal: true,
+      },
+    );
+    const live = appendLiveRecords(indexed, {
+      messages: [
+        assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
+      ],
+      events: [],
+    });
+    const rebuilding = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(rebuilding.skeleton).toHaveLength(1);
+    expect(rebuilding.liveMessages).toHaveLength(1);
+
+    const rebuilt = applySkeletonChunk(rebuilding, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("user-kept", 0)],
+      isFinal: true,
+    });
+    expect(rebuilt.skeletonComplete).toBe(true);
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      transientLiveAssistantMessageId("turn-restart-shortened"),
+    ]);
+  });
+
+  it("clamps skeleton stream coverage when a concrete snapshot shrinks", () => {
+    const held: TranscriptWindow = {
+      ...windowWithSkeleton(3),
+      indexRevision: 2,
+      indexRevisionRebuilding: false,
+      skeletonStreamCoveredThrough: 3,
+    };
+
+    const shrunk = applyWindowedSnapshot(held, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 2,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(shrunk.skeleton).toHaveLength(1);
+    expect(shrunk.skeletonStreamCoveredThrough).toBe(1);
+  });
+
+  it("does not retire a completion stand-in because an older span has the turn", () => {
+    const turnId = "turn-stale-span";
+    const seeded = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry(assistantRowId(turnId), 0),
+          skeletonEntry("user-later", 1),
+        ],
+        isFinal: true,
+      },
+    );
+    const beforeCompletion = applyRangeResponse(
+      seeded,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-streaming-copy", turnId, 1)],
+      }),
+    );
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const completed = appendLiveRecords(beforeCompletion, {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+
+    const unrelatedServe = applyRangeResponse(
+      completed,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 1,
+        rowIds: ["user-later"],
+        messages: [userMessage("user-later-record", 3)],
+      }),
+    );
+
+    expect(
+      unrelatedServe.liveMessages.map((message) => message.messageId),
+    ).toEqual([transientId]);
+  });
+
+  it("does not retire a completion stand-in when only a steer row is served", () => {
+    const turnId = "turn-steer-only";
+    const steerRowId = queueSteerRowId("queue-1");
+    const indexed = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 2, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry(assistantRowId(turnId), 0),
+          skeletonEntry(steerRowId, 1),
+        ],
+        isFinal: true,
+      },
+    );
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(indexed, {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+
+    const steerOnly = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 1,
+        rowIds: [steerRowId],
+        messages: [assistantMessage("assistant-shared", turnId, 1)],
+      }),
+    );
+
+    expect(steerOnly.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("retires a stand-in when a complete steer row serves its assistant turn", () => {
+    const turnId = "turn-complete-steer";
+    const steerRowId = queueSteerRowId("queue-complete");
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      { messages: [assistantMessage(transientId, turnId, 2)], events: [] },
+    );
+    const durable = {
+      ...assistantMessage("assistant-steer-durable", turnId, 3),
+      blocks: [
+        {
+          type: "steer" as const,
+          blockId: "steer-block",
+          status: "completed" as const,
+          timestamp: 3,
+          queueItemId: "queue-complete",
+          messageId: "missing-steered-user",
+          content: CONTENT,
+          mode: "safe_point" as const,
+          sender: null,
+        },
+      ],
+    };
+
+    const hydrated = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [steerRowId],
+        messages: [durable],
+      }),
+    );
+
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
+  it("does not retire a newer completion stand-in from an older assistant serve", () => {
+    const turnId = "turn-delayed-serve";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [assistantMessage(transientId, turnId, 2)],
+        events: [],
+      },
+    );
+
+    const delayed = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-stale", turnId, 1)],
+      }),
+    );
+
+    expect(delayed.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("does not retire a finalized stand-in from a same-timestamp stale body", () => {
+    const turnId = "turn-tied-stale-serve";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [
+          {
+            ...assistantMessage(transientId, turnId, 2),
+            blocks: [
+              {
+                type: "text",
+                blockId: "block-1",
+                status: "completed",
+                timestamp: 2,
+                text: "done",
+                providerNotice: null,
+              },
+            ],
+          },
+        ],
+        events: [],
+      },
+    );
+
+    const delayed = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          {
+            ...assistantMessage("assistant-stale", turnId, 2),
+            blocks: [
+              {
+                type: "text",
+                blockId: "block-1",
+                status: "streaming",
+                timestamp: 2,
+                text: "done",
+                providerNotice: null,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(delayed.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("does not retire a completion stand-in when its assistant row has no body", () => {
+    const turnId = "turn-row-without-body";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+      },
+      {
+        messages: [assistantMessage(transientId, turnId, 2)],
+        events: [],
+      },
+    );
+
+    const bodyless = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [],
+      }),
+    );
+
+    expect(bodyless.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("does not retire a completion stand-in from a partial turn response", () => {
+    const turnId = "turn-partial-body";
+    const firstBlock = {
+      type: "text" as const,
+      blockId: "block-1",
+      status: "completed" as const,
+      timestamp: 1,
+      text: "first",
+      providerNotice: null,
+    };
+    const secondBlock = { ...firstBlock, blockId: "block-2", text: "second" };
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = applySkeletonChunk(
+      appendLiveRecords(
+        { ...emptyTranscriptWindow(), epoch: 1, rowCount: 3 },
+        {
+          messages: [
+            {
+              ...assistantMessage(transientId, turnId, 2),
+              blocks: [firstBlock, secondBlock],
+            },
+          ],
+          events: [],
+        },
+      ),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry("user-before", 0),
+          skeletonEntry(assistantRowId(turnId), 1),
+          skeletonEntry("user-after", 2),
+        ],
+        isFinal: true,
+      },
+    );
+
+    const partial = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["user-before", assistantRowId(turnId), "user-after"],
+        incompleteRowIds: [assistantRowId(turnId)],
+        messages: [
+          userMessage("user-before", 0),
+          {
+            ...assistantMessage("assistant-first", turnId, 1),
+            blocks: [firstBlock],
+          },
+          userMessage("user-after", 3),
+        ],
+      }),
+    );
+
+    expect(partial.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+    expect(partial.spans.map((span) => span.rowIds)).toEqual([
+      ["user-before"],
+      ["user-after"],
+    ]);
+    expect(
+      partial.spans.map((span) =>
+        span.messages.map((message) => message.messageId),
+      ),
+    ).toEqual([["user-before"], ["user-after"]]);
+    expect(partial.hydratedBytes).toBe(
+      recordByteLength(userMessage("user-before", 0)) +
+        recordByteLength(userMessage("user-after", 3)),
+    );
+    expect(
+      hydratedRecords(partial).messages.map((message) => message.messageId),
+    ).toEqual(["user-before", "user-after", transientId]);
+  });
+
+  it("seats complete tail siblings around an incomplete live assistant", () => {
+    const turnId = "turn-partial-tail";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const indexed = applySkeletonChunk(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 3 },
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry("user-before", 0),
+          skeletonEntry(assistantRowId(turnId), 1),
+          skeletonEntry("user-after", 2),
+        ],
+        isFinal: true,
+      },
+    );
+    const oldTail = applyRangeResponse(
+      indexed,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["user-before", assistantRowId(turnId), "user-after"],
+        messages: [
+          userMessage("user-before", 0),
+          assistantMessage("assistant-stale", turnId, 1),
+          userMessage("user-after", 3),
+        ],
+      }),
+    );
+    const live = appendLiveRecords(oldTail, {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+
+    const snapshot = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 3,
+      indexRevision: null,
+      tail: {
+        fromOrdinal: 0,
+        rowIds: ["user-before", assistantRowId(turnId), "user-after"],
+        incompleteRowIds: [assistantRowId(turnId)],
+        messages: [
+          userMessage("user-before", 0),
+          assistantMessage("assistant-partial", turnId, 1),
+          userMessage("user-after", 3),
+        ],
+        events: [],
+      },
+    });
+
+    expect(snapshot.spans.map((span) => span.rowIds)).toEqual([
+      ["user-before"],
+      ["user-after"],
+    ]);
+    expect(
+      snapshot.spans.map((span) =>
+        span.messages.map((message) => message.messageId),
+      ),
+    ).toEqual([["user-before"], ["user-after"]]);
+    expect(
+      hydratedRecords(snapshot).messages.map((message) => message.messageId),
+    ).toEqual(["user-before", "user-after", transientId]);
+  });
+
+  it("retains a globally indexed setup card when a partial assistant splits the range", () => {
+    const turnId = "turn-after-setup";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const setupRowId = "setup-card:chat-1:1:100";
+    const setup: ChatEvent = {
+      eventId: "setup-second-window",
+      type: "setup.running",
+      timestamp: 100,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 2 },
+      {
+        messages: [assistantMessage(transientId, turnId, 2)],
+        events: [],
+      },
+    );
+
+    const partial = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [setupRowId, assistantRowId(turnId)],
+        incompleteRowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-partial", turnId, 1)],
+        events: [setup],
+      }),
+    );
+
+    expect(partial.spans.map((held) => held.rowIds)).toEqual([[setupRowId]]);
+    expect(partial.spans[0].events.map((event) => event.eventId)).toEqual([
+      setup.eventId,
+    ]);
+  });
+
+  it("does not assign same-timestamp setup windows to each other's rows", () => {
+    const turnId = "turn-between-setup-windows";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const setupEvent = (
+      eventId: string,
+      type: ChatEvent["type"],
+    ): ChatEvent => ({
+      eventId,
+      type,
+      timestamp: 100,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    });
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 3 },
+      {
+        messages: [assistantMessage(transientId, turnId, 2)],
+        events: [],
+      },
+    );
+
+    const partial = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [
+          "setup-card:chat-1:1:100",
+          assistantRowId(turnId),
+          "setup-card:chat-1:2:100",
+        ],
+        incompleteRowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-partial", turnId, 1)],
+        events: [
+          setupEvent("setup-first", "setup.running"),
+          setupEvent("setup-boundary", "worktree.missing"),
+          setupEvent("setup-second", "setup.running"),
+        ],
+      }),
+    );
+
+    expect(
+      partial.spans.map((span) => span.events.map((event) => event.eventId)),
+    ).toEqual([["setup-first"], ["setup-second"]]);
+  });
+
+  it("counts a withheld setup row before seating a later range setup", () => {
+    const setupEvent = (
+      eventId: string,
+      type: ChatEvent["type"],
+      timestamp: number,
+    ): ChatEvent => ({
+      eventId,
+      type,
+      timestamp,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    });
+    const partial = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 2 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["setup-card:chat-1:1:100", "setup-card:chat-1:2:200"],
+        incompleteRowIds: ["setup-card:chat-1:1:100"],
+        messages: [],
+        events: [
+          setupEvent("setup-first", "setup.running", 100),
+          setupEvent("setup-boundary", "worktree.missing", 150),
+          setupEvent("setup-second", "setup.running", 200),
+        ],
+      }),
+    );
+
+    expect(partial.spans.map((span) => span.rowIds)).toEqual([
+      ["setup-card:chat-1:2:200"],
+    ]);
+    expect(partial.spans[0].events.map((event) => event.eventId)).toEqual([
+      "setup-second",
+    ]);
+  });
+
+  it("counts a withheld setup row before seating a later inline-tail setup", () => {
+    const setupEvent = (
+      eventId: string,
+      type: ChatEvent["type"],
+      timestamp: number,
+    ): ChatEvent => ({
+      eventId,
+      type,
+      timestamp,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    });
+    const partial = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: null,
+      tail: {
+        fromOrdinal: 0,
+        rowIds: ["setup-card:chat-1:1:100", "setup-card:chat-1:2:200"],
+        incompleteRowIds: ["setup-card:chat-1:1:100"],
+        messages: [],
+        events: [
+          setupEvent("setup-first", "setup.running", 100),
+          setupEvent("setup-boundary", "worktree.missing", 150),
+          setupEvent("setup-second", "setup.running", 200),
+        ],
+      },
+    });
+
+    expect(partial.spans.map((span) => span.rowIds)).toEqual([
+      ["setup-card:chat-1:2:200"],
+    ]);
+    expect(partial.spans[0].events.map((event) => event.eventId)).toEqual([
+      "setup-second",
+    ]);
+  });
+
+  it("withholds an incomplete steer row that shares the live assistant turn", () => {
+    const turnId = "turn-partial-steer";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const steerBlock = {
+      blockId: "steer-block",
+      status: "completed" as const,
+      timestamp: 1,
+      type: "steer" as const,
+      queueItemId: "queue-partial",
+      messageId: "missing-user",
+      content: { type: "doc" as const },
+      mode: "safe_point" as const,
+      sender: null,
+    };
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [
+          {
+            ...assistantMessage(transientId, turnId, 2),
+            blocks: [steerBlock],
+          },
+        ],
+        events: [],
+      },
+    );
+
+    const partial = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["steer:queue-partial"],
+        incompleteRowIds: ["steer:queue-partial"],
+        messages: [
+          {
+            ...assistantMessage("assistant-partial", turnId, 1),
+            blocks: [],
+          },
+        ],
+      }),
+    );
+
+    expect(partial.spans).toEqual([]);
+    expect(partial.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("withholds every declared incomplete row without a live assistant", () => {
+    const partial = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["user-incomplete"],
+        incompleteRowIds: ["user-incomplete"],
+        messages: [userMessage("user-incomplete", 1)],
+      }),
+    );
+
+    expect(partial.spans).toEqual([]);
+  });
+
+  it("does not retry an incomplete row until the index changes", () => {
+    const partial = applyRangeResponse(
+      windowWithSkeleton(1),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        incompleteRowIds: ["row-0"],
+        messages: [userMessage("row-0", 1)],
+      }),
+    );
+
+    expect(partial.unavailableRowIds).toEqual(["row-0"]);
+    expect(
+      planTranscriptHydration(partial, { fromOrdinal: 0, toOrdinal: 1 }, []),
+    ).toBeNull();
+
+    const updated = applyIndexChange(partial, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 0, entry: skeletonEntry("row-0", 0) }],
+        },
+      ],
+    });
+    expect(updated.unavailableRowIds).toEqual([]);
+    expect(
+      planTranscriptHydration(updated, { fromOrdinal: 0, toOrdinal: 1 }, []),
+    ).toEqual({ fromOrdinal: 0, toOrdinal: 1 });
+  });
+
+  it("re-arms a pre-skeleton unavailable ordinal when the skeleton names a new row", () => {
+    const partial = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["stale-before-skeleton"],
+        incompleteRowIds: ["stale-before-skeleton"],
+        messages: [userMessage("stale-before-skeleton", 1)],
+      }),
+    );
+    const indexed = applySkeletonChunk(partial, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-row", 0)],
+      isFinal: true,
+    });
+
+    expect(indexed.unavailableRowIds).toEqual([]);
+    expect(indexed.unavailableRowOrdinals).toEqual([]);
+    expect(
+      planTranscriptHydration(indexed, { fromOrdinal: 0, toOrdinal: 1 }, []),
+    ).toEqual({ fromOrdinal: 0, toOrdinal: 1 });
+  });
+
+  it("retires a stand-in when a complete authoritative row rewrites block status", () => {
+    const turnId = "turn-authoritative-status";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const block = {
+      type: "text" as const,
+      blockId: "block-1",
+      status: "errored" as const,
+      timestamp: 1,
+      text: "done",
+      providerNotice: null,
+    };
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [
+          { ...assistantMessage(transientId, turnId, 2), blocks: [block] },
+        ],
+        events: [],
+      },
+    );
+
+    const hydrated = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          {
+            ...assistantMessage("assistant-durable", turnId, 3),
+            blocks: [{ ...block, status: "completed" }],
+          },
+        ],
+      }),
+    );
+
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
+  it("retires structurally equal stand-ins despite nested key insertion order", () => {
+    const turnId = "turn-structural-body";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const transient = {
+      ...assistantMessage(transientId, turnId, 2),
+      usage: {
+        inputTokens: 1,
+        outputTokens: 2,
+        totalTokens: 3,
+        contextWindow: 4,
+      },
+    };
+    const durable = {
+      ...assistantMessage("assistant-structural-body", turnId, 2),
+      usage: {
+        contextWindow: 4,
+        totalTokens: 3,
+        outputTokens: 2,
+        inputTokens: 1,
+      },
+    };
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      { messages: [transient], events: [] },
+    );
+
+    const hydrated = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [durable],
+      }),
+    );
+
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
+  it("folds complete assistant records before comparing a stand-in", () => {
+    const turnId = "turn-multi-record";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const firstBlock = {
+      type: "text" as const,
+      blockId: "block-1",
+      status: "completed" as const,
+      timestamp: 1,
+      text: "first",
+      providerNotice: null,
+    };
+    const secondBlock = { ...firstBlock, blockId: "block-2", text: "second" };
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [
+          {
+            ...assistantMessage(transientId, turnId, 2),
+            blocks: [firstBlock, secondBlock],
+          },
+        ],
+        events: [],
+      },
+    );
+
+    const hydrated = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          {
+            ...assistantMessage("assistant-part-1", turnId, 2),
+            blocks: [firstBlock],
+          },
+          {
+            ...assistantMessage("assistant-part-2", turnId, 2),
+            blocks: [secondBlock],
+          },
+        ],
+      }),
+    );
+
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
+  it("retains legacy range retirement when completeness metadata is absent", () => {
+    const turnId = "turn-legacy-range";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [assistantMessage(transientId, turnId, 2)],
+        events: [],
+      },
+    );
+    const { incompleteRowIds: _omitted, ...legacyResponse } = rangeResponse({
+      epoch: 1,
+      fromOrdinal: 0,
+      rowIds: [assistantRowId(turnId)],
+      messages: [assistantMessage("assistant-durable", turnId, 2)],
+    });
+
+    const hydrated = applyRangeResponse(live, legacyResponse);
+
+    expect(hydrated.liveMessages).toEqual([]);
+  });
+
+  it("does not retire a stand-in from legacy positional tail identities", () => {
+    const turnId = "turn-legacy-tail";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const indexed = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [skeletonEntry(assistantRowId(turnId), 0)],
+        isFinal: true,
+      },
+    );
+    const live = appendLiveRecords(indexed, {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+
+    const replacement = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: {
+        fromOrdinal: 0,
+        messages: [assistantMessage("shared-steer-record", turnId, 1)],
+        events: [],
+      },
+    });
+
+    expect(
+      replacement.liveMessages.map((message) => message.messageId),
+    ).toEqual([transientId]);
+  });
+
+  it("retires a legacy positional-tail stand-in after skeleton identity adoption", () => {
+    const turnId = "turn-legacy-tail-adopted";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+    const replacement = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: {
+        fromOrdinal: 0,
+        messages: [assistantMessage("assistant-durable", turnId, 2)],
+        events: [],
+      },
+    });
+    expect(replacement.liveMessages).toHaveLength(1);
+
+    const identified = applySkeletonChunk(replacement, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry(assistantRowId(turnId), 0)],
+      isFinal: true,
+    });
+
+    expect(identified.liveMessages).toEqual([]);
+  });
+
+  it("does not reconcile stand-ins against a completed void skeleton", () => {
+    const turnId = "turn-void-skeleton";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live: TranscriptWindow = {
+      ...appendLiveRecords(emptyTranscriptWindow(), {
+        messages: [assistantMessage(transientId, turnId, 1)],
+        events: [],
+      }),
+      epoch: 1,
+      rowCount: 1,
+      invalidated: true,
+    };
+
+    const completed = applySkeletonChunk(live, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("different-user", 0)],
+      isFinal: true,
+    });
+
+    expect(completed.invalidated).toBe(true);
+    expect(completed.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
+  it("keeps a newer frozen assistant when a delayed rebasing skeleton omits its turn", () => {
+    const turnId = "turn-rewritten-away";
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [
+        assistantMessage(transientLiveAssistantMessageId(turnId), turnId, 1),
+      ],
+      events: [],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+    expect(rebased.liveMessages).toHaveLength(1);
+
+    const indexed = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user-row", 0)],
+      isFinal: true,
+    });
+
+    expect(indexed.skeletonComplete).toBe(true);
+    expect(indexed.liveMessages).toHaveLength(1);
+    expect(hydratedRecords(indexed).messages).toHaveLength(1);
   });
 
   it("leaves a transcript with no tail rows alone", () => {

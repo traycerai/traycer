@@ -47,7 +47,9 @@ describe("TeardownForceDeleteDialog", () => {
     );
     expect(
       screen.getByTestId("teardown-disclosure-working").textContent,
-    ).toContain("Claude Code agent polite-ocelot is working");
+    ).toContain(
+      "Terminal agent “Claude Code agent polite-ocelot” is working — will be stopped",
+    );
     expect(
       screen.getByTestId("teardown-disclosure-idle").textContent,
     ).toContain("bun run dev");
@@ -107,7 +109,7 @@ describe("TeardownForceDeleteDialog", () => {
     const label = screen.getByTestId("teardown-holder-label");
     const footer = screen.getByTestId("teardown-force-delete-footer");
     const confirm = screen.getByTestId("teardown-force-delete-confirm");
-    expect(label.textContent).toBe(unbrokenToken);
+    expect(label.textContent).toContain(unbrokenToken);
     expect(dialog.contains(label)).toBe(true);
     expect(dialog.contains(confirm)).toBe(true);
     expect(label.className).toContain("wrap-anywhere");
