@@ -87,6 +87,7 @@ export function registerBrowserViewIpc(
     observePrimaryProfileOrigin: (url, webContents) => {
       primaryProfileSnapshots.observe(url, webContents);
     },
+    capturePrimaryProfile: () => primaryProfileSnapshots.capture(),
     boundsStreamLogIntervalMs: BOUNDS_STREAM_LOG_INTERVAL_MS,
     hostPlatform: hostPlatformFromProcessPlatform(process.platform),
   });

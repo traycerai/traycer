@@ -635,6 +635,7 @@ interface Harness {
 
 type HarnessOptions = {
   readonly captureStorageState?: BrowserViewManagerOptions["captureStorageState"];
+  readonly capturePrimaryProfile?: BrowserViewManagerOptions["capturePrimaryProfile"];
   readonly notifyElectronTabHandoff?: (
     windowId: string,
     change: BrowserViewElectronTabHandoffChange,
@@ -666,6 +667,14 @@ function asPayload<T>(payload: unknown): T {
 function record<T>(sink: T[], payload: unknown): void {
   sink.push(asPayload<T>(payload));
 }
+
+const DEFAULT_CAPTURE_PRIMARY_PROFILE: BrowserViewManagerOptions["capturePrimaryProfile"] =
+  () =>
+    Promise.resolve({
+      status: "captured",
+      storageState: { cookies: [], origins: [] },
+      reason: null,
+    });
 
 function createHarness(): Harness {
   return createHarnessWithOptions(undefined);
@@ -794,6 +803,10 @@ function createHarnessWithOptions(
     observePrimaryProfileOrigin: (url) => {
       primaryProfileObservedUrls.push(url);
     },
+    capturePrimaryProfile: () =>
+      (
+        harnessOptions?.capturePrimaryProfile ?? DEFAULT_CAPTURE_PRIMARY_PROFILE
+      )(),
     boundsStreamLogIntervalMs:
       harnessOptions?.boundsStreamLogIntervalMs ?? 1000,
     hostPlatform: harnessOptions?.hostPlatform ?? "darwin",
@@ -1693,6 +1706,139 @@ describe("BrowserViewManager native tab lifecycle", () => {
         reason: "gui-quit",
       },
     ]);
+  });
+
+  it("hands off the whole partition jar with the tab's own origin merged in", async () => {
+    // The coordinator's localStorage only covers the last 8 observed origins,
+    // so the handed-off tab's origin is captured again and must win.
+    const harness = createHarnessWithOptions({
+      capturePrimaryProfile: () =>
+        Promise.resolve({
+          status: "captured",
+          storageState: {
+            cookies: [
+              {
+                name: "sid",
+                value: "partition",
+                domain: "example.com",
+                path: "/",
+                expires: -1,
+                httpOnly: true,
+                secure: true,
+                sameSite: "Lax",
+              },
+            ],
+            origins: [
+              {
+                origin: "https://evicted.example",
+                localStorage: [{ name: "kept", value: "jar" }],
+              },
+            ],
+          },
+          reason: null,
+        }),
+      captureStorageState: () =>
+        Promise.resolve({
+          storageState: {
+            cookies: [],
+            origins: [
+              {
+                origin: "https://example.com",
+                localStorage: [{ name: "theme", value: "own" }],
+              },
+            ],
+          },
+          cookieCount: 0,
+          cookieDomains: [],
+          localStorageCount: 1,
+          localStorageAvailable: true,
+          localStorageReason: null,
+        }),
+    });
+    const ready = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(ready);
+
+    harness.manager.dispose();
+    await flushCloseEntry();
+
+    expect(
+      harness.electronTabHandoffNotifications[0]?.capturedStorageState,
+    ).toEqual({
+      cookies: [
+        {
+          name: "sid",
+          value: "partition",
+          domain: "example.com",
+          path: "/",
+          expires: -1,
+          httpOnly: true,
+          secure: true,
+          sameSite: "Lax",
+        },
+      ],
+      origins: [
+        {
+          origin: "https://example.com",
+          localStorage: [{ name: "theme", value: "own" }],
+        },
+        {
+          origin: "https://evicted.example",
+          localStorage: [{ name: "kept", value: "jar" }],
+        },
+      ],
+    });
+  });
+
+  it("hands off no storage at all when the partition jar is unavailable", async () => {
+    const harness = createHarnessWithOptions({
+      capturePrimaryProfile: () =>
+        Promise.resolve({
+          status: "unavailable",
+          storageState: null,
+          reason: "cookie encryption is degraded",
+        }),
+      captureStorageState: () =>
+        Promise.resolve({
+          storageState: {
+            cookies: [],
+            origins: [
+              {
+                origin: "https://example.com",
+                localStorage: [{ name: "theme", value: "own" }],
+              },
+            ],
+          },
+          cookieCount: 0,
+          cookieDomains: [],
+          localStorageCount: 1,
+          localStorageAvailable: true,
+          localStorageReason: null,
+        }),
+    });
+    const ready = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(ready);
+
+    harness.manager.dispose();
+    await flushCloseEntry();
+
+    // The tab-scoped capture holds one origin's cookies; the host stores what
+    // arrives as the WHOLE jar, so sending it would delete every other
+    // sign-in. Null seeds the session from the cached snapshot instead.
+    expect(
+      harness.electronTabHandoffNotifications[0]?.capturedStorageState,
+    ).toBeNull();
   });
 
   it("reads the live document URL when handing off a native tab", async () => {

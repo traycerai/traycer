@@ -257,7 +257,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
             tabId: sibling.tabId,
             registrationId: sibling.registrationId,
             url: sibling.url,
-            capturedStorageState: sibling.capturedStorageState,
           })),
           reason: change.reason,
         });

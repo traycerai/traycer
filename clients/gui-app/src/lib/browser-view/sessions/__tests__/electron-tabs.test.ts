@@ -1229,7 +1229,6 @@ describe("ElectronTabs", () => {
           tabId: "tab-2",
           registrationId: "registration-2",
           url: "https://example.com/two",
-          capturedStorageState: null,
         },
       ],
       reason: "gui-quit",
@@ -1247,7 +1246,6 @@ describe("ElectronTabs", () => {
           tabId: "tab-2",
           registrationId: "registration-2",
           url: "https://example.com/two",
-          capturedStorageState: null,
         },
       ],
     });

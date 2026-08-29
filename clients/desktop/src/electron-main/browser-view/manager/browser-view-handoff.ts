@@ -1,6 +1,9 @@
 import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
-import type { BrowserViewElectronTabHandoffChange } from "@traycer-clients/shared/platform/browser-view";
+import type {
+  BrowserPrimaryProfileCaptureResult,
+  BrowserViewElectronTabHandoffChange,
+} from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserViewEntry, BrowserViewSend } from "./browser-view-entry";
 import {
   nativeBrowserSessionKey,
@@ -18,12 +21,14 @@ interface BrowserViewHandoffOptions {
     input: { readonly origin: string },
     webContents: ManagedBrowserView["webContents"],
   ) => Promise<BrowserStorageStateCaptureResult>;
+  readonly capturePrimaryProfile: () => Promise<BrowserPrimaryProfileCaptureResult>;
 }
 
 /**
- * Captures a native session's URL + storage state and hands it to the
- * renderer before destructive teardown, so the tab can be re-created
- * headless without losing the page it was on.
+ * Captures a native session's URLs plus one partition-wide storage jar and
+ * hands them to the renderer before destructive teardown, so the tabs can be
+ * re-created headless without losing the pages they were on or the sign-ins
+ * the partition holds.
  */
 export class BrowserViewHandoff {
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
@@ -32,11 +37,13 @@ export class BrowserViewHandoff {
     input: { readonly origin: string },
     webContents: ManagedBrowserView["webContents"],
   ) => Promise<BrowserStorageStateCaptureResult>;
+  private readonly capturePrimaryProfile: () => Promise<BrowserPrimaryProfileCaptureResult>;
 
   constructor(options: BrowserViewHandoffOptions) {
     this.entries = options.entries;
     this.send = options.send;
     this.captureStorageState = options.captureStorageState;
+    this.capturePrimaryProfile = options.capturePrimaryProfile;
   }
 
   async drainForWindow(windowId: string): Promise<void> {
@@ -80,25 +87,16 @@ export class BrowserViewHandoff {
     }));
     let delivered = false;
     try {
-      const capturedStorageState = await this.captureState(
+      const capturedStorageState = await this.capturePartition(
         entry,
         reason,
         capturedUrl,
       );
-      const siblingTabs = await Promise.all(
-        capturedSiblings.map(async ({ entry: sibling, url }) => {
-          return {
-            tabId: sibling.identity.key.tabId,
-            registrationId: sibling.identity.registrationId,
-            url,
-            capturedStorageState: await this.captureState(
-              sibling,
-              sibling.status === "dead" ? "crash-no-capture" : reason,
-              url,
-            ),
-          };
-        }),
-      );
+      const siblingTabs = capturedSiblings.map(({ entry: sibling, url }) => ({
+        tabId: sibling.identity.key.tabId,
+        registrationId: sibling.identity.registrationId,
+        url,
+      }));
       delivered = this.send(
         identity.lifecycleWindowId,
         RunnerHostEvent.browserViewElectronTabHandoff,
@@ -126,6 +124,40 @@ export class BrowserViewHandoff {
       }
       resolveAggregation();
     }
+  }
+
+  /**
+   * One partition-wide jar per handoff, with the handed-off tab's own origin
+   * merged over it. The coordinator only keeps localStorage for the last
+   * `PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT` (8) observed origins, so the
+   * active tab's origin is captured again here rather than risking the one
+   * origin the LRU evicted. No partition jar means no capture at all: the
+   * tab-scoped capture holds only one origin's cookies, and the host stores
+   * whatever arrives here as the whole jar, so sending it would delete every
+   * other sign-in. Null routes the session to the cached snapshot instead.
+   */
+  private async capturePartition(
+    entry: BrowserViewEntry,
+    reason: HandoffReason,
+    capturedUrl: string,
+  ): Promise<BrowserStorageState | null> {
+    if (reason === "crash-no-capture") return null;
+    const profile = await this.capturePrimaryProfile().catch(() => null);
+    const jar =
+      profile !== null && profile.status === "captured"
+        ? profile.storageState
+        : null;
+    if (jar === null) return null;
+    const own = await this.captureState(entry, reason, capturedUrl);
+    if (own === null) return jar;
+    const ownOrigins = new Set(own.origins.map((origin) => origin.origin));
+    return {
+      cookies: jar.cookies,
+      origins: [
+        ...own.origins,
+        ...jar.origins.filter((origin) => !ownOrigins.has(origin.origin)),
+      ],
+    };
   }
 
   private async captureState(

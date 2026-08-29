@@ -369,13 +369,17 @@ export type BrowserSessionsServerFrame = z.infer<
   typeof browserSessionsServerFrameSchema
 >;
 
-/** One tab captured alongside the tab being handed off to headless. */
+/**
+ * One tab captured alongside the tab being handed off to headless. Storage is
+ * not per-tab: the handoff frame carries one partition-wide capture. The
+ * `registrationId` is load-bearing - the host rejects a handoff naming a stale
+ * native incarnation.
+ */
 export const browserElectronTabHandoffSiblingSchema = z
   .object({
     tabId: z.string(),
     registrationId: z.string(),
     url: z.string(),
-    capturedStorageState: browserStorageStateSchema.nullable(),
   })
   .strict();
 export type BrowserElectronTabHandoffSibling = z.infer<
@@ -477,9 +481,11 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Captures one exact native incarnation before teardown. Sibling state is
+      // Captures one exact native incarnation before teardown. Siblings are
       // grouped into the same frame so the host can hand off the session once.
-      // Null storage means desktop could not safely capture it.
+      // `capturedStorageState` is the whole Electron partition jar shared by
+      // every tab in the session (spec decision #7), not the triggering tab's
+      // slice; null means desktop could not safely capture it.
       kind: z.literal("electronTabHandoff"),
       ...requestFrameFields,
       sessionId: z.string(),

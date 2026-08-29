@@ -19,6 +19,7 @@ import type {
   BrowserViewElectronTabControl,
   BrowserViewNativeTabCapability,
   BrowserViewElectronTabHandoffChange,
+  BrowserPrimaryProfileCaptureResult,
   BrowserViewTileKey,
   BrowserViewViewportPresetId,
   PipCaptureStartInput,
@@ -118,6 +119,8 @@ interface BrowserViewManagerOptions {
     url: string,
     webContents: ManagedBrowserView["webContents"],
   ) => void;
+  /** The whole Electron partition jar, used once per Electron→headless handoff. */
+  readonly capturePrimaryProfile: () => Promise<BrowserPrimaryProfileCaptureResult>;
   /** Flush window for the aggregate `bounds_stream` perf log. */
   readonly boundsStreamLogIntervalMs: number;
   /** Platform used to resolve reserved chords (BT-301). */
@@ -213,6 +216,7 @@ export class BrowserViewManager {
       entries: this.entries,
       send: options.send,
       captureStorageState: options.captureStorageState,
+      capturePrimaryProfile: options.capturePrimaryProfile,
     });
     this.entryFactory = new BrowserViewEntryFactory({
       createView: options.createView,

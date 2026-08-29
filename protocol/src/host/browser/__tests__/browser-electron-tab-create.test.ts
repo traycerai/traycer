@@ -185,7 +185,6 @@ describe("browser.sessions Electron tab birth", () => {
           tabId: "tab-minted-10",
           registrationId: "native-2",
           url: "https://example.com/sibling",
-          capturedStorageState: null,
         },
       ],
     } as const;
@@ -202,5 +201,42 @@ describe("browser.sessions Electron tab birth", () => {
       browserSessionsClientFrameSchema.safeParse(siblingWithoutIncarnation)
         .success,
     ).toBe(false);
+    // Storage travels once, partition-wide, on the frame - never per sibling.
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...withSibling,
+        siblingTabs: withSibling.siblingTabs.map((sibling) => ({
+          ...sibling,
+          capturedStorageState: null,
+        })),
+      }).success,
+    ).toBe(false);
+    const withPartitionJar = {
+      ...withSibling,
+      capturedStorageState: {
+        cookies: [
+          {
+            name: "sid",
+            value: "jar",
+            domain: "example.com",
+            path: "/",
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+          },
+        ],
+        origins: [
+          {
+            origin: "https://example.com",
+            localStorage: [{ name: "theme", value: "dark" }],
+          },
+        ],
+      },
+    } as const;
+    const parsedJar =
+      browserSessionsClientFrameSchema.safeParse(withPartitionJar);
+    expect(parsedJar.success).toBe(true);
+    if (parsedJar.success) expect(parsedJar.data).toEqual(withPartitionJar);
   });
 });
