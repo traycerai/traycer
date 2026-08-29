@@ -169,7 +169,7 @@ const testQueryClient = new QueryClient({
   },
 });
 
-function renderList(onClose: () => void = () => undefined) {
+function renderList(onClose: () => void) {
   return render(
     <QueryClientProvider client={testQueryClient}>
       <TooltipProvider delayDuration={0}>
@@ -228,13 +228,13 @@ describe("SwitcherBrowsersList", () => {
   });
 
   it("lists every tab of every session on the surface's host", () => {
-    renderList();
+    renderList(() => undefined);
     expect(screen.getByRole("button", { name: /^Cart/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /^Guide/ })).toBeTruthy();
   });
 
   it("shows the URL on the row, where desktop only has a hover tooltip", () => {
-    renderList();
+    renderList(() => undefined);
     expect(screen.getByText("https://shop.example/cart")).toBeTruthy();
   });
 
@@ -254,7 +254,7 @@ describe("SwitcherBrowsersList", () => {
 
   it("replaces the shown tile rather than stacking one per tap", async () => {
     const user = userEvent.setup();
-    renderList();
+    renderList(() => undefined);
 
     await user.click(screen.getByRole("button", { name: /^Cart/ }));
     await user.click(screen.getByRole("button", { name: /^Guide/ }));
@@ -266,7 +266,7 @@ describe("SwitcherBrowsersList", () => {
 
   it("narrows the list by title or URL", async () => {
     const user = userEvent.setup();
-    renderList();
+    renderList(() => undefined);
 
     await user.type(screen.getByLabelText("Search browsers"), "docs.example");
 
@@ -320,7 +320,7 @@ describe("SwitcherBrowsersList", () => {
   it("closes a tab from the row's own action", async () => {
     const user = userEvent.setup();
     closeTab.mockResolvedValue(undefined);
-    renderList();
+    renderList(() => undefined);
 
     await user.click(screen.getByRole("button", { name: "Close Cart" }));
 
@@ -354,7 +354,7 @@ describe("SwitcherBrowsersList", () => {
       "live",
     );
     vi.useFakeTimers();
-    renderList();
+    renderList(() => undefined);
     // The glyph is coalesced in both directions, so it only exists once the
     // same chat is still driving after the delay.
     act(() => {
@@ -371,7 +371,7 @@ describe("SwitcherBrowsersList", () => {
 
   it("mounts the desktop empty state, add affordance included", () => {
     replaceSessions([], "live");
-    renderList();
+    renderList(() => undefined);
     const empty = screen.getByTestId("epic-browsers-panel-empty");
     expect(empty).toBeTruthy();
     // On an empty list the header "+" and this labelled button are BOTH on
@@ -388,7 +388,7 @@ describe("SwitcherBrowsersList", () => {
 
   it("mounts the desktop unavailable state with its retry", () => {
     replaceSessions([], "failed");
-    renderList();
+    renderList(() => undefined);
     expect(screen.getByText("Browsers unavailable.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });

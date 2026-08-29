@@ -16,6 +16,7 @@ import {
 import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
 import { browserTabDriverNames } from "@/components/epic-canvas/sidebar/browser-driver-coalescing";
+import { browserTabOrigin } from "@/lib/browser-view/browser-tab-display";
 import {
   BrowserHostFilterChoices,
   BROWSERS_PANEL_ID,
@@ -266,7 +267,16 @@ function SwitcherBrowserRow(props: {
     <SwitcherListRow
       icon={
         <BrowserFavicon
-          faviconUrl={identity.faviconUrl}
+          // The settled identity survives a transient status, so mid-navigation
+          // it still holds the PREVIOUS document's favicon. Showing it beside
+          // the new URL would label the row with the site it just left, so the
+          // icon is withheld until the origins agree again - the same guard the
+          // desktop row applies.
+          faviconUrl={
+            browserTabOrigin(tab.url) === browserTabOrigin(identity.url)
+              ? identity.faviconUrl
+              : null
+          }
           isolated={session.profile === "isolated"}
           className="size-4"
         />

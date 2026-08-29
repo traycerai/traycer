@@ -137,6 +137,12 @@ interface ActiveTouch {
   readonly pointerId: number;
   readonly startX: number;
   readonly startY: number;
+  /**
+   * The frame that was on screen when the finger LANDED. A click means "this
+   * point of what I was looking at", and what the user was looking at is the
+   * frame under the press - not whatever has repainted by the time they lift.
+   */
+  readonly downSequence: number | null;
   lastX: number;
   lastY: number;
   scrolling: boolean;
@@ -607,6 +613,22 @@ export function createScreencastController(options: {
     shiftKey: event.shiftKey,
   });
 
+  /** The same pointer, reported where the finger first touched down. */
+  const touchPointerLikeAt = (
+    touch: ActiveTouch,
+    event: ReactPointerEvent<HTMLButtonElement>,
+    buttons: number,
+  ): PointerLike => ({
+    clientX: touch.startX,
+    clientY: touch.startY,
+    button: 0,
+    buttons,
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    shiftKey: event.shiftKey,
+  });
+
   const onTouchPointerDown = (
     event: ReactPointerEvent<HTMLButtonElement>,
   ): void => {
@@ -620,6 +642,7 @@ export function createScreencastController(options: {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      downSequence: presentedSequence,
       lastX: event.clientX,
       lastY: event.clientY,
       scrolling: false,
@@ -691,21 +714,31 @@ export function createScreencastController(options: {
     // input takes focus here rather than on press, which would raise the
     // phone's keyboard over every scroll.
     refs.imeInputRef.current?.focus();
-    const down = buildPointerFrame({
-      event: touchPointerLike(event, 1),
+    // Built from where the finger LANDED and stamped with the frame that was
+    // presented then. Building from the pointer-up event instead would aim the
+    // click at the current frame, so a repaint between press and release would
+    // click whatever moved under the finger - and the stale-frame check below
+    // would wave it through, because it would be comparing the new frame
+    // against itself.
+    const downSequence = touch.downSequence;
+    if (downSequence === null) return;
+    const pressed = buildPointerFrame({
+      event: touchPointerLikeAt(touch, event, 1),
       type: "down",
       clampToEdge: true,
       deltaX: 0,
       deltaY: 0,
     });
-    const up = buildPointerFrame({
-      event: touchPointerLike(event, 0),
+    const released = buildPointerFrame({
+      event: touchPointerLikeAt(touch, event, 0),
       type: "up",
       clampToEdge: true,
       deltaX: 0,
       deltaY: 0,
     });
-    if (down === null || up === null) return;
+    if (pressed === null || released === null) return;
+    const down = { ...pressed, castSequence: downSequence };
+    const up = { ...released, castSequence: downSequence };
     if (activeArmEpoch !== null) {
       sendDiscretePointer(down);
       sendDiscretePointer(up);

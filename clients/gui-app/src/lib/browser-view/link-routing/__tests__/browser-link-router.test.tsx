@@ -24,6 +24,12 @@ const sessionsState = vi.hoisted<{ value: BrowserSessionsState | null }>(
 );
 let routingSource: BrowserLinkSource | null = null;
 
+/** What `sessions.openTab` reports when the host has opened a tab. */
+interface OpenedTab {
+  readonly sessionId: string;
+  readonly tabId: string;
+}
+
 vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   useIsMobileViewport: () => viewportState.mobile,
   isMobileViewport: () => viewportState.mobile,
@@ -111,6 +117,38 @@ describe("useBrowserLinkRouterForRunnerHost", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+  });
+
+  it("falls back when the tab opens but has nowhere to land", async () => {
+    const runnerHost = { openExternalLink: vi.fn(() => Promise.resolve()) };
+    // Held open deliberately: the pane has to disappear WHILE the round trip
+    // is in flight, and resolving immediately would race the teardown against
+    // the `.then()` on the microtask queue.
+    let settleOpen: ((opened: OpenedTab) => void) | null = null;
+    // The executor runs synchronously, so the resolver exists by the time the
+    // promise does.
+    const pendingOpen = new Promise<OpenedTab>((resolve) => {
+      settleOpen = resolve;
+    });
+    const settle = settleOpen;
+    if (settle === null) throw new Error("expected a resolver");
+    sessionsState.value = liveSessions(() => pendingOpen);
+    const { result } = renderRouter(runnerHost);
+
+    result.current("markdown", "https://example.test/docs", null);
+
+    // The pane the link was clicked in closes before the host answers.
+    useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
+    // The host then reports success - a FULFILLED promise - but the tile has
+    // nowhere to land, so placement returns false. The link is as lost as it
+    // is on a rejection, and takes the same fallback.
+    settle({ sessionId: "sess-1", tabId: "tab-1" });
+
+    await waitFor(() => {
+      expect(runnerHost.openExternalLink).toHaveBeenCalledWith(
+        "https://example.test/docs",
+      );
+    });
   });
 
   it("sends the link outside Traycer when the in-app open is refused", async () => {

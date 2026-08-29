@@ -41,37 +41,44 @@ export function useBrowserLinkRouterForRunnerHost(
       ) {
         return false;
       }
+      // The answer is committed before the host round trip settles - the click
+      // has to be handled in its own turn - so a refusal cannot be reported by
+      // returning false any more. Sending the link where it would have gone
+      // had the session never been live keeps a failed open from swallowing
+      // the navigation outright.
+      //
+      // The claim waits for the fallback to land: a shell that cannot open the
+      // URL either leaves the user nowhere, and saying otherwise is worse than
+      // saying nothing happened.
+      const fallBackToExternal = (): void => {
+        void runnerHost
+          .openExternalLink(url)
+          .then(() => {
+            toast.error(
+              "Couldn't open the browser tab. Opened it outside Traycer instead.",
+            );
+          })
+          .catch(() => {
+            toast.error("Couldn't open this link.");
+          });
+      };
       void sessions
         .openTab(null, url)
         .then((opened) => {
-          openBrowserSessionTileFromPage({
+          // A REJECTION is not the only way this fails. The tab can open on
+          // the host and still have nowhere to land - the pane the link was
+          // clicked in may have closed while the round trip was in flight -
+          // and that arrives as a fulfilled promise with `false`. The link is
+          // just as lost either way, so both take the same fallback.
+          const placed = openBrowserSessionTileFromPage({
             ...source,
             ...opened,
             url,
             placement: singleTileViewport ? "same-pane" : "split-right",
           });
+          if (!placed) fallBackToExternal();
         })
-        .catch(() => {
-          // The answer is committed before the host round trip settles - the
-          // click has to be handled in its own turn - so a refusal cannot be
-          // reported by returning false any more. Sending the link where it
-          // would have gone had the session never been live keeps a failed
-          // open from swallowing the navigation outright.
-          //
-          // The claim waits for the fallback to land: a shell that cannot open
-          // the URL either leaves the user nowhere, and saying otherwise is
-          // worse than saying nothing happened.
-          void runnerHost
-            .openExternalLink(url)
-            .then(() => {
-              toast.error(
-                "Couldn't open the browser tab. Opened it outside Traycer instead.",
-              );
-            })
-            .catch(() => {
-              toast.error("Couldn't open this link.");
-            });
-        });
+        .catch(fallBackToExternal);
       return true;
     },
     [runnerHost, sessions, singleTileViewport],
