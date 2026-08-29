@@ -511,11 +511,14 @@ async function waitForDevToolsUrl(process, readError) {
  * deadline outright (its FIRST stderr line arrived 21s after spawn), and a
  * single flat deadline makes that a hard failure. A retry only helps when it
  * starts clean, so each attempt gets a fresh profile directory, and a
- * timed-out attempt is fully killed (SIGTERM, then SIGKILL after a grace
- * period, awaited to the exit event) and its profile removed before the next
+ * timed-out attempt's whole process GROUP is terminated and verified gone
+ * (see `terminateProcessTree`) and its profile removed before the next
  * spawn - otherwise the retry inherits a locked profile plus the previous
  * attempt's crashpad children, which is exactly the orphan pile the runner
- * had to reap.
+ * had to reap. `detached: true` is what makes that possible: it puts Chrome
+ * at the head of its own process group, so renderers and crashpad handlers
+ * are addressable together as one negative-PGID signal instead of only the
+ * browser PID.
  */
 async function launchChromeWithDevTools(chromePath, chromeEnv) {
   const attempts = 3;
@@ -541,7 +544,7 @@ async function launchChromeWithDevTools(chromePath, chromeEnv) {
         `--user-data-dir=${profilePath}`,
         "about:blank",
       ],
-      { env: chromeEnv, stdio: ["ignore", "ignore", "pipe"] },
+      { env: chromeEnv, stdio: ["ignore", "ignore", "pipe"], detached: true },
     );
     let chromeError = "";
     chrome.stderr.setEncoding("utf8");
@@ -572,21 +575,43 @@ async function launchChromeWithDevTools(chromePath, chromeEnv) {
 }
 
 /**
- * Ends a spawned process for real: SIGTERM, a 2s grace period, then SIGKILL,
- * resolving only once the `exit` event has fired. Chrome ignores SIGTERM
- * during early startup, and a fire-and-forget kill left it (and its crashpad
- * handlers) alive for the CI runner to reap as orphans.
+ * Terminates a detached child's whole process TREE, with a bounded wait.
+ *
+ * The child is spawned `detached`, so it leads its own process group and its
+ * descendants (Chrome's renderers and crashpad handlers, which survive a
+ * plain parent kill - the CI runner had to reap exactly that pile) are all
+ * addressable as one negative-PGID signal. SIGTERM first (Chrome ignores it
+ * during early startup), a 2s grace, then SIGKILL to the group, then a
+ * BOUNDED verification that no group member remains. A tree that somehow
+ * survives SIGKILL fails loudly rather than letting a retry - or the final
+ * cleanup - proceed over a half-dead tree.
  */
 async function terminateProcessTree(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise((resolve) => {
-    child.once("exit", () => resolve(true));
-  });
-  child.kill("SIGTERM");
-  const terminated = await Promise.race([exited, delay(2_000, false)]);
-  if (terminated === false) {
-    child.kill("SIGKILL");
-    await exited;
+  const groupId = child.pid;
+  if (groupId === undefined) return;
+  const signalGroup = (signal) => {
+    try {
+      process.kill(-groupId, signal);
+      return true;
+    } catch {
+      // ESRCH: every member of the group is already gone.
+      return false;
+    }
+  };
+  if (!signalGroup("SIGTERM")) return;
+  const termDeadline = Date.now() + 2_000;
+  while (signalGroup(0) && Date.now() < termDeadline) {
+    await delay(50);
+  }
+  if (!signalGroup("SIGKILL")) return;
+  const killDeadline = Date.now() + 2_000;
+  while (signalGroup(0) && Date.now() < killDeadline) {
+    await delay(50);
+  }
+  if (signalGroup(0)) {
+    throw new Error(
+      `Chrome process group ${groupId} survived SIGKILL; refusing to continue over a half-dead tree`,
+    );
   }
 }
 
