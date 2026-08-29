@@ -1851,7 +1851,7 @@ describe("what an overlap keeps", () => {
     ).toEqual(["accepted-user-gap"]);
   });
 
-  it("retires a pre-snapshot accepted user when the replacement skeleton omits it", () => {
+  it("keeps an invalidated user when a delayed replacement skeleton omits it", () => {
     const invalidated = {
       ...appendLiveRecords(emptyTranscriptWindow(), {
         messages: [userMessage("accepted-user-removed", 1)],
@@ -1874,7 +1874,9 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
 
-    expect(rebuilt.liveMessages).toEqual([]);
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      "accepted-user-removed",
+    ]);
   });
 
   it("keeps a retained user through a delayed non-invalidated null rebuild", () => {
@@ -2083,7 +2085,7 @@ describe("what an overlap keeps", () => {
     expect(hydratedRecords(rebuilt).messages).toEqual([]);
   });
 
-  it("truncates a same-epoch null rebuild before reconciling a shorter skeleton", () => {
+  it("truncates a same-epoch rebuild without retiring its ambiguous stand-in", () => {
     const turnId = "turn-restart-shortened";
     const indexed = applySkeletonChunk(
       applyWindowedSnapshot(emptyTranscriptWindow(), {
@@ -2125,7 +2127,9 @@ describe("what an overlap keeps", () => {
       isFinal: true,
     });
     expect(rebuilt.skeletonComplete).toBe(true);
-    expect(rebuilt.liveMessages).toEqual([]);
+    expect(rebuilt.liveMessages.map((message) => message.messageId)).toEqual([
+      transientLiveAssistantMessageId("turn-restart-shortened"),
+    ]);
   });
 
   it("clamps skeleton stream coverage when a concrete snapshot shrinks", () => {
@@ -2311,6 +2315,7 @@ describe("what an overlap keeps", () => {
     expect(partial.liveMessages.map((message) => message.messageId)).toEqual([
       transientId,
     ]);
+    expect(partial.spans).toEqual([]);
   });
 
   it("retires a stand-in when a complete authoritative row rewrites block status", () => {

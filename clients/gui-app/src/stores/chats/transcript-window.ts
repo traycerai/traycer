@@ -539,6 +539,28 @@ function servedAssistantTurnKeys(
   return keys;
 }
 
+function incompleteServeConflictsWithLiveAssistant(
+  incompleteRowIds: readonly string[] | undefined,
+  liveMessages: readonly Message[],
+): boolean {
+  if (incompleteRowIds === undefined || incompleteRowIds.length === 0) {
+    return false;
+  }
+  const liveTurnKeys = new Set<string>();
+  for (const message of liveMessages) {
+    if (
+      message.role === "assistant" &&
+      isTransientLiveAssistantMessageId(message.messageId)
+    ) {
+      liveTurnKeys.add(assistantTurnKey(message));
+    }
+  }
+  return incompleteRowIds.some((rowId) => {
+    const turnKey = assistantRowTurnKey(rowId);
+    return turnKey !== null && liveTurnKeys.has(turnKey);
+  });
+}
+
 function completeServedRowIds(
   rowIds: readonly string[],
   incompleteRowIds: readonly string[] | undefined,
@@ -1060,6 +1082,13 @@ function replacementSkeletonBaseline<T>(
   return indexRevision === null ? fresh : held;
 }
 
+function authoritativeSkeletonBaseline(
+  rebased: boolean,
+  messages: readonly Message[],
+): readonly Message[] {
+  return rebased ? messages : [];
+}
+
 /**
  * Seat a windowed snapshot.
  *
@@ -1199,14 +1228,22 @@ export function applyWindowedSnapshot(
     missedDeltas,
     rebased,
   });
-  const skeletonBaselineTransientAssistantMessageIds = provisionalLiveMessages
+  // Only a changed epoch proves its snapshot authority is newer than the live
+  // cohort. Same-epoch snapshots can be generated before an interactive live
+  // record and arrive after it on the bulk lane, so their skeleton absence
+  // cannot safely retire any record already held by the client.
+  const skeletonBaselineMessages = authoritativeSkeletonBaseline(
+    rebased,
+    provisionalLiveMessages,
+  );
+  const skeletonBaselineTransientAssistantMessageIds = skeletonBaselineMessages
     .filter(
       (message) =>
         message.role === "assistant" &&
         isTransientLiveAssistantMessageId(message.messageId),
     )
     .map((message) => message.messageId);
-  const skeletonBaselineProvisionalUserMessageIds = provisionalLiveMessages
+  const skeletonBaselineProvisionalUserMessageIds = skeletonBaselineMessages
     .filter((message) => message.role === "user")
     .map((message) => message.messageId);
   const base: TranscriptWindow =
@@ -1336,33 +1373,47 @@ export function applyWindowedSnapshot(
   // positional ids `tailRowIdsFor` falls back to simply misses every lookup
   // rather than seating context under the wrong row.
   const tailRowContext = input.tail.rowContext ?? {};
-  const tailContextBytes = contextByteLength(tailRowContext);
-  const tailSpan: HydratedSpan = {
-    fromOrdinal: input.tail.fromOrdinal,
+  return seatSnapshotTailSpan({
+    base: boundedBase,
+    tail: input.tail,
     rowIds: tailRowIds,
     rowContext: tailRowContext,
-    messages: input.tail.messages,
-    events: input.tail.events,
-    bytes:
-      recordsByteLength(input.tail.messages, input.tail.events) +
-      tailContextBytes,
-    contextBytes: tailContextBytes,
+    clock,
+  });
+}
+
+function seatSnapshotTailSpan(input: {
+  readonly base: TranscriptWindow;
+  readonly tail: ChatTranscriptWindow;
+  readonly rowIds: readonly string[];
+  readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
+  readonly clock: number;
+}): TranscriptWindow {
+  const { base, tail, rowIds, rowContext, clock } = input;
+  if (
+    incompleteServeConflictsWithLiveAssistant(
+      tail.incompleteRowIds,
+      base.liveMessages,
+    )
+  ) {
+    return base;
+  }
+  const contextBytes = contextByteLength(rowContext);
+  const tailSpan: HydratedSpan = {
+    fromOrdinal: tail.fromOrdinal,
+    rowIds,
+    rowContext,
+    messages: tail.messages,
+    events: tail.events,
+    bytes: recordsByteLength(tail.messages, tail.events) + contextBytes,
+    contextBytes,
     touchedAt: clock,
-    // A snapshot's tail is the host's current answer for those rows, so it is a
-    // serve and outranks any older span still holding a copy of the same turn.
     servedAt: clock,
   };
-  const spans = insertSpan(boundedBase.spans, tailSpan);
+  const spans = insertSpan(base.spans, tailSpan);
   return pruneSupersededLiveRecords(
-    {
-      ...boundedBase,
-      spans,
-      hydratedBytes: totalBytes(spans),
-    },
-    servedAssistantTurnKeys(
-      declaredCompleteTailRowIds(input.tail),
-      input.tail.messages,
-    ),
+    { ...base, spans, hydratedBytes: totalBytes(spans) },
+    servedAssistantTurnKeys(declaredCompleteTailRowIds(tail), tail.messages),
   );
 }
 
@@ -2180,6 +2231,14 @@ export function applyRangeResponse(
   if (response.rowIds.length === 0) return window;
   if (skeletonContradicts(window, response.fromOrdinal, response.rowIds)) {
     return window.invalidated ? window : { ...window, invalidated: true };
+  }
+  if (
+    incompleteServeConflictsWithLiveAssistant(
+      response.incompleteRowIds,
+      window.liveMessages,
+    )
+  ) {
+    return window;
   }
   const clock = window.clock + 1;
   const contextBytes = contextByteLength(response.rowContext);
