@@ -25,7 +25,6 @@ const sessionsState = vi.hoisted<{ value: BrowserSessionsState | null }>(
 );
 let routingSource: BrowserLinkSource | null = null;
 
-
 vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   useIsMobileViewport: () => viewportState.mobile,
   isMobileViewport: () => viewportState.mobile,
