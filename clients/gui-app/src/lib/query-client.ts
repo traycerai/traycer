@@ -11,6 +11,7 @@ import {
 import {
   appLogger,
   describeLogError,
+  describeLogErrorSummary,
   type AppLogFields,
   type AppLogValue,
 } from "@/lib/logger";
@@ -98,45 +99,46 @@ export const queryClient = createAppQueryClient();
  * The app-wide catch-all for failed host RPCs, so this is the ONE log line most
  * support reports carry about a failure.
  *
- * It used to record `describeLogErrorSummary`, which keeps the error's name and
- * replaces its text with `messageLength` - a number. That reduced every report
- * to `{ name: "HostRpcError", messageLength: 198, stack: null }`, which
+ * It used to record `describeLogErrorSummary` for EVERY error, which keeps the
+ * name and replaces the text with `messageLength` - a number. That reduced every
+ * report to `{ name: "HostRpcError", messageLength: 198, stack: null }`, which
  * identifies nothing: two unrelated failures with equal-length messages are
  * indistinguishable, and no failure can be diagnosed at all.
  *
- * Privacy, stated precisely. `redactLogText` (inside `describeLogError`) is a
- * CREDENTIAL scrubber - Authorization/Bearer/Cookie/digest/AWS4/userinfo and
- * sensitive query params, then a 1000-char truncation. It does NOT remove
- * filesystem paths, submitted URLs, or other request-derived text, and a host
- * RPC message can interpolate any of those. Do not cite it as though it made
- * arbitrary text safe. What justifies the full message here is the destination
- * and the existing convention, not the scrubber:
+ * The split is by error TYPE, because the two kinds have different AUTHORS:
  *
- * - it lands in a LOCAL log file (`console.warn` -> the desktop shell's
- *   `console-message` handler -> `traycer-desktop.log`); there is no telemetry
- *   sink on this path;
- * - the support bundle that log feeds already tails the HOST's own log
- *   (`diagnostics.logs.tail`), which carries absolute paths by construction, so
- *   summarizing here removes nothing from what a report actually ships;
- * - full message + stack is already this renderer's default - `appLogger.error`
- *   and every nested `Error` go through `describeLogError` unconditionally.
+ * - `HostRpcError` is host-authored diagnostic text and the thing support
+ *   reports actually need. Logged in full, plus the structured `code` /
+ *   `method` / `requestId` the message does not carry and which were dropped
+ *   entirely.
+ * - Everything else reaching these callbacks is app-authored and can quote the
+ *   USER. `use-epic-export-artifacts-mutation` throws
+ *   `"<artifact.title>" is still loading.`, and SIX hooks feeding this cache
+ *   deliberately call `appLogger.errorSummary` in their own `onError`
+ *   (export-artifacts, send-queued-invites, open-saved-file, mermaid-png-
+ *   download, usage-image-export, git-file-diffs-batched). A global full log
+ *   fires BEFORE theirs and would defeat every one of those decisions, so this
+ *   branch keeps the summary.
  *
- * A new sink for these logs (telemetry, auto-upload) invalidates the first two
- * and this call site must be revisited with it.
- *
- * `describeLogErrorSummary` remains correct where the message can quote the
- * USER - see `interview-draft-store`, whose `JSON.parse` failures echo a
- * fragment of the person's own draft. Do not sweep that call site.
+ * On the host branch specifically: `redactLogText` (inside `describeLogError`)
+ * is a CREDENTIAL scrubber - it removes no filesystem path, URL, or other
+ * request-derived text, so do not cite it as though it made arbitrary text
+ * safe. What justifies the full message is the destination: it lands in a LOCAL
+ * log file (`console.warn` -> the desktop shell's `console-message` handler ->
+ * `traycer-desktop.log`) with no telemetry sink, and the support bundle that
+ * log feeds already tails the HOST's own log verbatim (`diagnostics.logs.tail`),
+ * which carries absolute paths by construction. A new sink for these logs
+ * (telemetry, auto-upload) invalidates that, and this call site must be
+ * revisited with it.
  */
 function describeRequestError(error: unknown): AppLogFields {
-  const described = describeLogError(error);
   if (!(error instanceof HostRpcError)) {
-    return described;
+    return describeLogErrorSummary(error);
   }
   // Structured attribution the message text does not carry, and which was
   // previously dropped entirely.
   return {
-    ...described,
+    ...describeLogError(error),
     code: error.code,
     method: error.method,
     requestId: error.requestId,
