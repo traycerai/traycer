@@ -20,6 +20,16 @@ const FIRST_NEXT_STEP = "Use /implementation-validation to validate the work";
 const tileNavigationMocks = vi.hoisted(() => ({
   openTileInEpic: vi.fn(),
 }));
+const agentReferenceHostState = vi.hoisted(() => ({
+  ownerHostId: "host-1" as string | null,
+  ownerUserId: "user-1" as string | null,
+  sessionHostId: "host-session" as string | null,
+  reachabilityStatus: "reachable" as
+    | "checking"
+    | "reachable"
+    | "unreachable"
+    | "host-starting",
+}));
 
 vi.mock("@/lib/epic-selectors", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
@@ -52,9 +62,27 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => {
       },
     ],
     useEpicChatHarnessId: () => null,
+    useEpicNodeHostId: () => agentReferenceHostState.ownerHostId,
+    useEpicNodeOwnerUserId: () => agentReferenceHostState.ownerUserId,
     useMaybeEpicTuiAgentHarnessId: () => null,
   };
 });
+
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({
+    status: agentReferenceHostState.reachabilityStatus,
+    hostLabel: agentReferenceHostState.ownerHostId ?? "unknown host",
+    unavailability:
+      agentReferenceHostState.reachabilityStatus === "unreachable"
+        ? "offline"
+        : null,
+    basis: "directory",
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => agentReferenceHostState.sessionHostId,
+}));
 
 vi.mock("@/components/ui/tooltip-wrapper", () => ({
   TooltipWrapper: ({ children }: { readonly children: ReactNode }) => (
@@ -130,6 +158,10 @@ describe("TextSegment next steps rendering", () => {
       },
     });
     tileNavigationMocks.openTileInEpic.mockClear();
+    agentReferenceHostState.ownerHostId = "host-1";
+    agentReferenceHostState.ownerUserId = "user-1";
+    agentReferenceHostState.sessionHostId = "host-session";
+    agentReferenceHostState.reachabilityStatus = "reachable";
     const clipboard = {
       writeText: vi.fn((value: string) => {
         copiedText = value;
@@ -407,6 +439,34 @@ describe("TextSegment next steps rendering", () => {
     );
     expect(screen.queryByText(KNOWN_ROLE_CLAIM_ID)).toBeNull();
     expect(screen.queryByText(KNOWN_ROLE_CLAIM_ID.slice(0, 8))).toBeNull();
+  });
+
+  it("opens an unreachable referenced chat as the published copy served by the session host", () => {
+    agentReferenceHostState.ownerHostId = "host-owner";
+    agentReferenceHostState.ownerUserId = "user-owner";
+    agentReferenceHostState.reachabilityStatus = "unreachable";
+
+    render(
+      <TextSegment
+        findUnitId={null}
+        markdown={`Agent ${KNOWN_AGENT_ID.slice(0, 8)} accepted the handoff.`}
+        isStreaming={false}
+        nextStepActions={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Planning Agent" }));
+    expect(tileNavigationMocks.openTileInEpic).toHaveBeenCalledWith(
+      "epic-1",
+      expect.objectContaining({
+        type: "published-chat",
+        hostId: "host-session",
+        taskId: "epic-1",
+        chatId: KNOWN_AGENT_ID,
+        ownerHostId: "host-owner",
+        ownerUserId: "user-owner",
+      }),
+    );
   });
 
   it("leaves ambiguous UUID prefixes as plain text", () => {
