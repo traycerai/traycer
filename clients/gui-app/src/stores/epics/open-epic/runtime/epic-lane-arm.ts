@@ -308,6 +308,18 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
    * Once per ARM, not once per lane and emphatically not once per tile: a
    * canvas with twelve open bodies whose host refuses `artifact.subscribe`
    * would otherwise ask for twelve replacements of one replica.
+   *
+   * Cleared by {@link detach}, which is what makes it once per arm rather than
+   * once per SESSION. This object outlives the arms it serves: a fallback to
+   * `@1` detaches, a later host upgrade re-selects lanes, and that is a NEW
+   * arm on the same instance. A latch that never cleared would swallow the
+   * second arm's refusal and leave the lanes half-installed with nothing left
+   * to repair it - the exact state this signal exists to prevent, reachable
+   * again one selection later.
+   *
+   * `detach` and not `attach`, and not a reconnect: a HOLD-resume plans no
+   * transition steps, so it never detaches, which is precisely how the
+   * once-per-arm guarantee survives a support reset.
    */
   let requiredLaneUnsupportedReported = false;
 
@@ -409,6 +421,10 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
         stateAdapter.detach(reason);
         stateAttached = false;
       }
+      // This arm is over. Whatever attaches next is a new one and gets its own
+      // single answer - see the latch's own doc for why session-scoped was a
+      // defect rather than a simplification.
+      requiredLaneUnsupportedReported = false;
       // Sockets down, DEMAND kept: a transport-only detach and a replacement
       // are both followed by a reopen that must restore the same bodies.
       bodies.detachAll(reason);

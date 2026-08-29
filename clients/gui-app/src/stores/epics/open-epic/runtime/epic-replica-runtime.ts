@@ -1296,7 +1296,18 @@ export function createEpicReplicaRuntime(
       // epoch change - a leak that grows with every tile ever opened, and one
       // that is invisible because the tier, the projection and the tile all
       // look correct throughout.
+      // IDEMPOTENT, and it has to be explicitly rather than by luck. The tier
+      // lease guards itself internally, so double-invoking this closure used
+      // to be harmless on that half - but `bodies.release` decrements a
+      // ref-count, and a second call would take the count past this holder's
+      // own demand and close a body stream another live lease is using. A
+      // `finally` backstop firing after an early release is exactly that
+      // shape, and it is a pattern this codebase already guards against
+      // elsewhere.
+      let released = false;
       return () => {
+        if (released) return;
+        released = true;
         grant.lease.release();
         if (bodyDemanded) laneArm.bodies.release(artifactId, "superseded");
       };

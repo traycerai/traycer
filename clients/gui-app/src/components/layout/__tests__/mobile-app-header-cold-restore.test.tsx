@@ -42,6 +42,7 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { UpdateEpicRequest } from "@traycer/protocol/host/epic/unary-schemas";
 
 // Host-backed chrome only; the registry accessors the header reads for the
 // epic's title and permission role stay REAL here - they are the half of the
@@ -103,14 +104,6 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
 }
 
-interface EpicUpdateTitleCall {
-  readonly epicDelta: {
-    readonly id: string;
-    readonly title: string;
-    readonly updatedAt: number;
-  };
-}
-
 /**
  * A registered session whose write-command queue can actually SEND and
  * settle, for the one test that drives a rename through to commit. Unlike
@@ -125,7 +118,7 @@ interface EpicUpdateTitleCall {
  */
 function registerCommittableSession(title: string): {
   readonly handle: OpenEpicStoreHandle;
-  readonly titleCalls: () => readonly EpicUpdateTitleCall[];
+  readonly titleCalls: () => readonly UpdateEpicRequest[];
   readonly settleTitleUpdate: () => void;
 } {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
@@ -140,7 +133,7 @@ function registerCommittableSession(title: string): {
       close: () => undefined,
     };
   };
-  const titleCalls: EpicUpdateTitleCall[] = [];
+  const titleCalls: UpdateEpicRequest[] = [];
   const pendingSettles: (() => void)[] = [];
   const entry: HostDirectoryEntry = {
     hostId: "host-cold",

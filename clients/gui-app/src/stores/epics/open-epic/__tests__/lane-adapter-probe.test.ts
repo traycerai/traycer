@@ -108,6 +108,14 @@ interface CountingArtifactFactory {
   readonly factory: ArtifactStreamClientFactory;
   openCount(): number;
   /**
+   * How many constructed body clients have had `close()` invoked, summed
+   * across every artifact this factory has ever built one for.
+   *
+   * Added for the lease-closure idempotency pin below - no pre-existing test
+   * in this file reads it, and `close()` itself stays a no-op otherwise.
+   */
+  closeCount(): number;
+  /**
    * Deliver a terminal `staleAuthorityEpoch` for the named body, the way the
    * host does when the generation it attached under is no longer served.
    */
@@ -128,6 +136,7 @@ interface CountingArtifactFactory {
  */
 function createCountingArtifactFactory(): CountingArtifactFactory {
   let opens = 0;
+  let closes = 0;
   const live = new Map<string, ArtifactStreamCallbacks>();
   const factory: ArtifactStreamClientFactory = (
     _epicId,
@@ -141,7 +150,9 @@ function createCountingArtifactFactory(): CountingArtifactFactory {
     return {
       applyUpdate: () => undefined,
       awareness: () => undefined,
-      close: () => undefined,
+      close: () => {
+        closes += 1;
+      },
     };
   };
   function requireLive(artifactId: string): ArtifactStreamCallbacks {
@@ -154,6 +165,7 @@ function createCountingArtifactFactory(): CountingArtifactFactory {
   return {
     factory,
     openCount: () => opens,
+    closeCount: () => closes,
     deliverStaleAuthorityEpoch(artifactId): void {
       const callbacks = requireLive(artifactId);
       const parsed = artifactSubscribeServerFrameSchemaV10.parse({
@@ -656,5 +668,101 @@ describe("lane adapter probe - forever-unknown support must still reach the lane
     expect(rig.status.openCount()).toBe(0);
     expect(rig.state.openCount()).toBe(0);
     expect(rig.artifacts.openCount()).toBe(0);
+  });
+
+  it("(i) the required-lane latch is per ARM, not per session: two transitions on one arm object", () => {
+    // The "controllable" rig, not the frozen one: this pin needs a SECOND
+    // manifest resolution after the first fallback to legacy, and
+    // `FOREVER_UNKNOWN_SUPPORT.subscribeSupport` is a hardcoded
+    // `() => () => {}` with no `set` and nothing to `notify` - a rig built on
+    // it cannot express that resolve at all. Building a second runtime for
+    // that half would prove two transitions on TWO arm objects, not the one
+    // this pin is about - `createEpicLaneArm` is constructed once per runtime
+    // and outlives every arm it serves (see its own module doc). Left
+    // entirely unset before `start()`, every method reads "unknown" by
+    // `createSupportController`'s own default, which is the same undecided
+    // verdict the frozen rig starts on - so the probe half below runs exactly
+    // like (a)/(b) until the manifest is deliberately resolved.
+    const rig = buildRuntimeRig("controllable");
+    runtimes.push(rig.runtime);
+    const support = requireSupport(rig);
+
+    rig.runtime.start();
+    expect(rig.status.openCount()).toBe(1);
+    expect(rig.state.openCount()).toBe(0);
+    expect(rig.legacy.openCount()).toBe(0);
+
+    // The probe succeeds: lanes install as arm #1.
+    rig.status.deliverSnapshot();
+    expect(rig.state.openCount()).toBe(1);
+    expect(rig.legacy.openCount()).toBe(0);
+
+    // Transition 1: the records lane - required - is refused on arm #1.
+    rig.state.deliverMethodUnsupported();
+    expect(rig.legacy.openCount()).toBe(1);
+
+    // A later host upgrade re-selects lanes on the SAME `laneArm` object -
+    // the manifest resolving "lanes" mid-session, which is exactly what
+    // `subscribeSupport`'s listener (registered in `start()`) exists to
+    // carry without a reopen.
+    markAllLaneMethodsSupported(support);
+    support.notify();
+
+    // Lanes are attached again as arm #2, on the object that already fell
+    // back once: a fresh state client was opened, and legacy has not opened
+    // a second time from this alone.
+    expect(rig.state.openCount()).toBe(2);
+    expect(rig.legacy.openCount()).toBe(1);
+
+    // Transition 2: the records lane is refused again, on arm #2. With the
+    // latch cleared in `detach()` this is arm #2's own first report and goes
+    // through; with a session-scoped latch, arm #1's report already set it
+    // and this call is silently swallowed - `onRequiredLaneUnsupported` never
+    // fires, `installedArm` stays "lanes" on a dead records lane, and the
+    // epic renders nothing with no path left to repair it.
+    rig.state.deliverMethodUnsupported();
+
+    // Asserted on the COUNT, not on a boolean "is legacy installed" - a
+    // boolean would already read true from transition 1 and pass under the
+    // bug. Only the second transition actually happening moves this to 2.
+    expect(rig.legacy.openCount()).toBe(2);
+  });
+
+  it("(j) acquireArtifactBodyLease's lease closure is idempotent on the demand half, not just the tier half", () => {
+    const rig = buildRuntimeRig("forever-unknown");
+    runtimes.push(rig.runtime);
+
+    rig.runtime.start();
+    rig.status.deliverSnapshot();
+    expect(rig.state.openCount()).toBe(1);
+
+    // Two independent runtime leases on the SAME artifact - a canvas tile and
+    // the mobile switcher's preview both wanting "art-1" open at once is the
+    // ordinary case `EpicArtifactBodyLanes.release`'s own doc names.
+    const releaseA = rig.runtime.acquireArtifactBodyLease("art-1");
+    const releaseB = rig.runtime.acquireArtifactBodyLease("art-1");
+    // One body client, not two: the second `ensureAttached` finds the lane
+    // already open under the observed epoch and only adds demand.
+    expect(rig.artifacts.openCount()).toBe(1);
+    expect(rig.artifacts.closeCount()).toBe(0);
+
+    // Lease A's own closure invoked TWICE - the `finally` backstop shape the
+    // fix's doc comment names (an early release followed by a defensive
+    // re-release on the same holder). The tier lease already guards itself
+    // internally, so this is entirely about the demand half.
+    releaseA();
+    releaseA();
+
+    // Still open: lease B never released and still wants this body. Without
+    // the `released` flag the second `releaseA()` call is a second,
+    // unguarded `laneArm.bodies.release("art-1", ...)`, which drives demand
+    // 2 -> 1 -> 0 and closes a body lease B is still using - this is the
+    // assertion that catches it; it reads 1 here without the fix.
+    expect(rig.artifacts.closeCount()).toBe(0);
+
+    // Lease B releases once. Demand is now genuinely at zero.
+    releaseB();
+
+    expect(rig.artifacts.closeCount()).toBe(1);
   });
 });
