@@ -700,13 +700,35 @@ vi.mock("@/stores/epics/canvas/store", () => ({
   useOpenTileContentIds: () => testState.openTileContentIds,
 }));
 
+// Recording spies a test can assert against. The store itself still hands the
+// selector a FRESH closure per call, exactly as it did before these existed:
+// those identities feed `useCallback` dependency arrays, so making them stable
+// would remove re-renders this file's other suites settle on, and two of them
+// fail on the render they no longer get. The wrappers keep the old instability
+// and forward to these, so what a row asked for is observable without changing
+// how often anything renders.
+const expansionActions = vi.hoisted(() => ({
+  collapse: vi.fn(),
+  collapseAll: vi.fn(),
+  expand: vi.fn(),
+}));
+
 vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
   useEpicSidebarEffectiveExpanded: () => testState.expandedIds,
   useEpicSidebarExpansionStore: (selector: (state: unknown) => unknown) =>
+    // Block bodies, not concise ones: `vi.fn()` returns `any`, so an expression
+    // body would forward that `any` out of a function the store types as void.
+    // The fresh closure per call - the point of the wrappers - is unaffected.
     selector({
-      collapse: vi.fn(),
-      collapseAll: vi.fn(),
-      expand: vi.fn(),
+      collapse: (tabId: string, panelId: string, id: string) => {
+        expansionActions.collapse(tabId, panelId, id);
+      },
+      collapseAll: () => {
+        expansionActions.collapseAll();
+      },
+      expand: (tabId: string, panelId: string, id: string) => {
+        expansionActions.expand(tabId, panelId, id);
+      },
     }),
 }));
 
@@ -4958,5 +4980,106 @@ describe("chat tree on a mounting surface", () => {
     expect(
       desktop.container.querySelector('[class*="before:-inset-2"]'),
     ).toBeNull();
+  });
+});
+
+describe("chat tree expansion keys", () => {
+  beforeEach(() => {
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    const root = treeNode("chat-root", null, "Root chat", "chat");
+    const child = treeNode("chat-child", "chat-root", "Child chat", "chat");
+    const leaf = treeNode("chat-leaf", null, "Leaf chat", "chat");
+    testState.tree = {
+      rootIds: ["chat-root", "chat-leaf"],
+      childrenByParent: { "chat-root": ["chat-child"] },
+      nodeById: {
+        "chat-root": root,
+        "chat-child": child,
+        "chat-leaf": leaf,
+      },
+    };
+    testState.records = [root, child, leaf].map(recordFromNode);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+  });
+
+  // By role: these keys are only reachable on the focusable control, so the
+  // query should name the same button a keyboard user lands on.
+  function row(name: string): HTMLElement {
+    return screen.getByRole("button", { name });
+  }
+
+  function pressOnRoot(key: string): boolean {
+    return fireEvent.keyDown(row("Root chat"), { key });
+  }
+
+  it("opens a collapsed branch on ArrowRight and closes it on ArrowLeft", () => {
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    // The whole point: the descendant is not mounted, and the chevron that
+    // would reveal it takes a pointer.
+    expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
+
+    // `false` is jsdom's "the handler called preventDefault" - the row claimed
+    // the key rather than leaving it to the browser.
+    expect(pressOnRoot("ArrowRight")).toBe(false);
+    expect(expansionActions.expand).toHaveBeenCalledWith(
+      TAB_ID,
+      "chats",
+      "chat-root",
+    );
+    expect(expansionActions.collapse).not.toHaveBeenCalled();
+
+    // The store is mocked, so re-render at the state the call asks for and
+    // drive the other direction from there.
+    testState.expandedIds = new Set(["chat-root"]);
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(screen.getByTestId("epic-sidebar-item-chat-child")).toBeTruthy();
+
+    expect(pressOnRoot("ArrowLeft")).toBe(false);
+    expect(expansionActions.collapse).toHaveBeenCalledWith(
+      TAB_ID,
+      "chats",
+      "chat-root",
+    );
+  });
+
+  it("is directional, not a toggle", () => {
+    // The discriminating case. A row that answered both keys with
+    // `toggleExpanded` would pass every assertion above and then close a
+    // branch the user pressed Right on - the one thing Right must never do.
+    testState.expandedIds = new Set(["chat-root"]);
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(pressOnRoot("ArrowRight")).toBe(true);
+    expect(expansionActions.collapse).not.toHaveBeenCalled();
+    expect(expansionActions.expand).not.toHaveBeenCalled();
+  });
+
+  it("leaves ArrowLeft on an already-closed branch to the browser", () => {
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(pressOnRoot("ArrowLeft")).toBe(true);
+    expect(expansionActions.collapse).not.toHaveBeenCalled();
+  });
+
+  it("does not claim the keys on a row with no branch to open", () => {
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    const leaf = row("Leaf chat");
+
+    expect(fireEvent.keyDown(leaf, { key: "ArrowRight" })).toBe(true);
+    expect(fireEvent.keyDown(leaf, { key: "ArrowLeft" })).toBe(true);
+    expect(expansionActions.expand).not.toHaveBeenCalled();
+    expect(expansionActions.collapse).not.toHaveBeenCalled();
   });
 });
