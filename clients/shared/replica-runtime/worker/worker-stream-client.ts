@@ -27,7 +27,11 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { WorkerToMainEvent } from "./bridge-protocol";
-import type { StreamProxyManifest } from "./stream-proxy-protocol";
+import {
+  parseStreamProxyFrame,
+  type StreamProxyFrame,
+  type StreamProxyManifest,
+} from "./stream-proxy-protocol";
 import { takeBytesForTransfer, NO_TRANSFER } from "./transferable-bytes";
 
 /** What the client needs from its owner to put an event on the wire. */
@@ -38,12 +42,11 @@ export type StreamProxyEmit = (
 
 export interface WorkerStreamClientHandle {
   readonly client: IStreamClient<HostStreamRpcRegistry>;
-  /** A frame from main, for one session. Dropped if that session is gone. */
-  deliverFrame(
-    streamId: number,
-    envelope: StreamFrameEnvelope,
-    binaryPayload: Uint8Array | null,
-  ): void;
+  /**
+   * A frame from main, for one session. Validated before delivery and dropped
+   * (with its reason) if the payload is not bytes or the session is gone.
+   */
+  deliverFrame(frame: StreamProxyFrame): void;
   /** A status transition from main. Dropped if that session is gone. */
   deliverStatus(
     streamId: number,
@@ -79,6 +82,8 @@ interface ProxiedSession {
 
 export function createWorkerStreamClient(
   emit: StreamProxyEmit,
+  /** Where a rejected frame's reason goes. Required, for the same reason. */
+  onReject: (reason: string) => void,
 ): WorkerStreamClientHandle {
   const sessions = new Map<number, ProxiedSession>();
   const manifestListeners = new Set<() => void>();
@@ -196,8 +201,15 @@ export function createWorkerStreamClient(
 
   return {
     client,
-    deliverFrame(streamId, envelope, binaryPayload): void {
-      sessions.get(streamId)?.deliverFrame(envelope, binaryPayload);
+    deliverFrame(frame): void {
+      const parsed = parseStreamProxyFrame(frame);
+      if (!parsed.ok) {
+        onReject(`stream/frame rejected: ${parsed.reason}`);
+        return;
+      }
+      sessions
+        .get(parsed.frame.streamId)
+        ?.deliverFrame(parsed.frame.envelope, parsed.frame.binaryPayload);
     },
     deliverStatus(streamId, status, reason): void {
       const entry = sessions.get(streamId);

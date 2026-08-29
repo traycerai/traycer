@@ -129,7 +129,8 @@ export class BridgeResponseMismatchError extends Error {
  * updates half the time. Making that unreachable beats documenting it.
  *
  * `call` only, because `call` is the only member any consumer uses: every
- * main-to-worker EVENT (bootstrap, bearer, shutdown) is the spawner's own.
+ * main-to-worker EVENT (bootstrap, the stream pushes, shutdown) is the
+ * spawner's own.
  * Add a member here when a caller needs it, not in advance.
  */
 export interface RuntimeWorkerPort {

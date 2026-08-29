@@ -89,6 +89,28 @@ describe("startEpicRuntimeWorkerHost", () => {
     main.dispose();
   });
 
+  it("refuses the PREVIOUS protocol version, naming both numbers", () => {
+    // The real skew, not a synthetic one: a stale worker chunk surviving an HMR
+    // reload speaks the version before this one. That case was UNGUARDED until
+    // this round - the constant did not move when 2c replaced the event
+    // vocabulary, so both sides read `1`, the handshake matched, and the stale
+    // worker answered `ready` and then ignored every stream frame it was sent.
+    const { pair, main, host } = createFixture();
+
+    main.emit(bootstrap(RUNTIME_BRIDGE_PROTOCOL_VERSION - 1), []);
+
+    const events = workerEvents(pair);
+    const fatal = events.filter((event) => event.kind === "fatal");
+    expect(fatal).toHaveLength(1);
+    expect(events.filter((event) => event.kind === "ready")).toHaveLength(0);
+    // Both numbers, so a reader of the log knows which side is stale.
+    const message = fatal[0]?.kind === "fatal" ? fatal[0].message : "";
+    expect(message).toContain(String(RUNTIME_BRIDGE_PROTOCOL_VERSION - 1));
+    expect(message).toContain(String(RUNTIME_BRIDGE_PROTOCOL_VERSION));
+    host.shutdown();
+    main.dispose();
+  });
+
   it("emits fatal and no ready event for a mismatched bootstrap", () => {
     const { pair, main, host } = createFixture();
 

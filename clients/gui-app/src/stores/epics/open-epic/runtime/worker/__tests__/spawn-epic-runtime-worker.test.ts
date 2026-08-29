@@ -184,6 +184,109 @@ describe("spawnEpicRuntimeWorker", () => {
     await expect(handle.ready).rejects.toThrow("disposed before it was ready");
   });
 
+  /** Opens `count` streams through the handle's bridge and returns the events. */
+  function openStreams(fixture: SpawnFixture, count: number): void {
+    for (let streamId = 1; streamId <= count; streamId += 1) {
+      fixture.pair.worker.post(
+        {
+          frame: "event",
+          event: {
+            kind: "stream/open",
+            open: {
+              streamId,
+              method: "epic.status.subscribe",
+              params: { epicId: `epic-${String(streamId)}` },
+              withParamsProvider: false,
+            },
+          },
+        },
+        [],
+      );
+    }
+  }
+
+  function closeReportsTo(fixture: SpawnFixture): MainToWorkerEvent[] {
+    return mainEvents(fixture.pair).filter(
+      (event) => event.kind === "stream/status",
+    );
+  }
+
+  it("detach reports every close to a worker that SURVIVES", () => {
+    // Path 2 (`detachTransport`): the transport ends, the replica does not. The
+    // reports are the only signal the surviving worker gets - without them its
+    // streams merely go quiet, which is indistinguishable from a slow host.
+    const fixture = createFixture(false);
+    const recording = createRecordingStreamClient();
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { streams: recording.client },
+      ),
+    );
+    openStreams(fixture, 3);
+
+    handle.detach();
+
+    expect(recording.closedCount()).toBe(3);
+    // Through the HANDLE and over the real bridge - the ordering bug this pin
+    // exists for was invisible to a pin that drove the proxy host directly.
+    expect(closeReportsTo(fixture)).toHaveLength(3);
+    // The worker is untouched: no shutdown, no terminate.
+    expect(fixture.terminate).not.toHaveBeenCalled();
+    expect(
+      mainEvents(fixture.pair).some((event) => event.kind === "shutdown"),
+    ).toBe(false);
+    handle.dispose();
+  });
+
+  it("attach re-binds to a NEW host, leaving none open on the old", () => {
+    const fixture = createFixture(false);
+    const first = createRecordingStreamClient();
+    const second = createRecordingStreamClient();
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { streams: first.client },
+      ),
+    );
+    openStreams(fixture, 2);
+
+    handle.attach(second.client);
+    openStreams(fixture, 2);
+
+    // Zero left on the old, both on the new. A host that SWAPPED its client
+    // instead of being replaced would have the two generations' worker-assigned
+    // `streamId`s colliding in one map.
+    expect(first.closedCount()).toBe(2);
+    expect(second.opened()).toHaveLength(2);
+    expect(second.closedCount()).toBe(0);
+    handle.dispose();
+  });
+
+  it("dispose reports every close BEFORE it tears the bridge down", () => {
+    const fixture = createFixture(false);
+    const recording = createRecordingStreamClient();
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { streams: recording.client },
+      ),
+    );
+    openStreams(fixture, 2);
+
+    handle.dispose();
+
+    expect(recording.closedCount()).toBe(2);
+    // Both reports landed, and the shutdown came AFTER them. Tearing down
+    // first posts them into a disposed bridge, where they are dropped - which
+    // is what shipped, and what a proxy-level pin could not see.
+    const kinds = mainEvents(fixture.pair).map((event) => event.kind);
+    expect(kinds.filter((kind) => kind === "stream/status")).toHaveLength(2);
+    expect(kinds.lastIndexOf("stream/status")).toBeLessThan(
+      kinds.indexOf("shutdown"),
+    );
+  });
+
   it("closes every real session the worker opened when it disposes", () => {
     // Rule 3: a worker that is terminated mid-life never sends its own closes.
     // A real session left subscribed is a socket carrying frames nothing reads.

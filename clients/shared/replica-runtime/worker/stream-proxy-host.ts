@@ -25,6 +25,7 @@ import type { MainToWorkerEvent, WorkerToMainEvent } from "./bridge-protocol";
 import {
   EPIC_WORKER_STREAM_METHODS,
   OPEN_PARAMS_PARSERS,
+  parseStreamProxyFrame,
   STREAM_PROXY_UNKNOWN_METHOD_CODE,
   type EpicWorkerStreamMethod,
 } from "./stream-proxy-protocol";
@@ -58,6 +59,12 @@ function isCarriedMethod(method: string): method is EpicWorkerStreamMethod {
 export function createStreamProxyHost(
   streams: IStreamClient<HostStreamRpcRegistry>,
   push: StreamProxyPush,
+  /**
+   * Where a rejected frame's reason goes. Required, not optional: a frame
+   * dropped silently on this path is indistinguishable from a host that went
+   * quiet, and this is the boundary a stale chunk arrives at.
+   */
+  onReject: (reason: string) => void,
 ): StreamProxyHost {
   const sessions = new Map<number, IStreamSession>();
   /** Last params the worker pushed, per stream, for the provider form. */
@@ -163,11 +170,16 @@ export function createStreamProxyHost(
           return true;
         }
         case "stream/send": {
-          const session = sessions.get(event.frame.streamId);
+          const parsed = parseStreamProxyFrame(event.frame);
+          if (!parsed.ok) {
+            onReject(`stream/send rejected: ${parsed.reason}`);
+            return false;
+          }
+          const session = sessions.get(parsed.frame.streamId);
           if (session === undefined) return false;
           session.sendClientFrame(
-            event.frame.envelope,
-            event.frame.binaryPayload,
+            parsed.frame.envelope,
+            parsed.frame.binaryPayload,
           );
           return true;
         }

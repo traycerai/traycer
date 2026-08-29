@@ -116,7 +116,26 @@ export interface EpicRuntimeWorkerHandle {
    * skipped by accident.
    */
   readonly ready: Promise<void>;
-  /** Idempotent. Stops the pump, asks the worker to stop, then terminates it. */
+  /**
+   * Ends the TRANSPORT while the worker lives on - path 2 (`detachTransport`),
+   * where a retained-dirty buffer must stop dialling a host this window has
+   * left but keeps its replica. Every real session is reported closed to the
+   * worker first. Idempotent.
+   *
+   * Must run BEFORE `closeSessionTransport()` at the call site: closing the
+   * transport first kills the sessions before they can be reported.
+   */
+  detach(): void;
+  /**
+   * Re-binds the worker to a NEW transport after a detach - a fresh proxy host,
+   * never a swap of the old one's client, because `streamId`s are the worker's
+   * and two generations in one map would collide.
+   */
+  attach(streams: IStreamClient<HostStreamRpcRegistry>): void;
+  /**
+   * Idempotent. Detaches (so the worker observes every close), then asks the
+   * worker to stop and terminates it. Paths 1, 3, 4 and 5.
+   */
   dispose(): void;
 }
 
@@ -126,13 +145,28 @@ export function spawnEpicRuntimeWorker<TProjection>(
   const worker = options.createWorker();
   const bridge = createMainBridgeEndpoint(createMessageTargetTransport(worker));
   // The proxy host owns the REAL sessions the worker opens. It is the object
-  // this side detaches, not the socket.
-  const proxy: StreamProxyHost = createStreamProxyHost(
-    options.streams,
-    (event, transfer) => {
-      bridge.emit(event, transfer);
-    },
-  );
+  // this side detaches, not the socket - and it is a SLOT rather than a
+  // constant, because a re-attach binds a NEW host over the new transport:
+  // `streamId`s are the worker's, so two generations sharing one host would
+  // collide in one map.
+  const buildProxy = (
+    streams: IStreamClient<HostStreamRpcRegistry>,
+  ): StreamProxyHost =>
+    createStreamProxyHost(
+      streams,
+      (event, transfer) => {
+        bridge.emit(event, transfer);
+      },
+      (reason) => {
+        options.relay.log({
+          level: "error",
+          message: `[epic-runtime-worker] ${reason}`,
+          fields: { windowLabel: options.windowLabel },
+          error: null,
+        });
+      },
+    );
+  let proxy: StreamProxyHost | null = buildProxy(options.streams);
 
   let settleReady: (() => void) | null = null;
   let failReady: ((cause: Error) => void) | null = null;
@@ -169,7 +203,7 @@ export function spawnEpicRuntimeWorker<TProjection>(
         // Every unknown id is dropped inside the host, silently and on purpose:
         // a frame can be in flight when a session closes, and a throw here is
         // an unhandled error in a `message` listener with no route back.
-        proxy.handle(event);
+        proxy?.handle(event);
         return;
       case "fatal":
         options.relay.fatal(event.message, event.stack);
@@ -195,22 +229,47 @@ export function spawnEpicRuntimeWorker<TProjection>(
   );
 
   let disposed = false;
+
+  function detach(): void {
+    const detaching = proxy;
+    proxy = null;
+    // While the bridge is still LIVE and its events still routed. Every real
+    // session gets its `closed` + `caller` report on the way out, and the
+    // worker's adapters run their close handling instead of watching a stream
+    // go quiet - which is indistinguishable from a slow host.
+    //
+    // This ordering was wrong once, in exactly the way that is invisible: the
+    // teardown ran first, so the reports were posted into a disposed bridge
+    // and dropped, and the pin missed it because it drove the proxy host
+    // directly rather than this handle.
+    detaching?.dispose();
+  }
+
   return {
     port: bridge,
     ready,
+    detach,
+    attach(streams): void {
+      if (disposed) return;
+      // A FRESH host, never a swap of the old one's client.
+      detach();
+      proxy = buildProxy(streams);
+    },
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      // Detach FIRST, and through the same function the detach-only path uses -
+      // one copy of the close-then-teardown ordering, because a second copy is
+      // what got it wrong the first time.
+      detach();
+      // Only then stop routing. Unsubscribing before the detach drops every
+      // report even on a live bridge.
       unsubscribeEvents();
       // Ask before killing. `shutdown` lets the worker dispose its own core -
       // a durable store mid-write, a transport mid-close - whereas
       // `terminate()` stops it between two machine instructions.
       bridge.emit({ kind: "shutdown" }, NO_TRANSFER);
       bridge.dispose();
-      // Every real session this worker opened, closed here. A worker that was
-      // terminated mid-life never sends its own closes, and a session left
-      // subscribed is a socket carrying frames nothing reads.
-      proxy.dispose();
       // Nothing waits on the shutdown being observed: a worker that stopped
       // answering is exactly the case `terminate()` is for, and holding the
       // window open on it would make disposal depend on the health of the

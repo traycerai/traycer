@@ -54,8 +54,21 @@ import type { RuntimeLogFields } from "../runtime-environment";
  * it is a stale chunk surviving a dev HMR reload, which otherwise presents as
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
+ *
+ * **2** since the stream proxy landed. v1's vocabulary is gone, not extended:
+ * the bearer and endpoint pushes, the bearer probe call and the `main-call` /
+ * `main-result` frames were removed and the `stream/*` events added. A v1
+ * worker and a v2 spawner share no traffic worth the name.
+ *
+ * This number did NOT move when that vocabulary was replaced, and the comment
+ * above was already describing the exact failure it then permitted: both sides
+ * read `1`, the handshake matched, the stale worker answered `ready` and was
+ * adopted, and it ignored every stream frame it was sent - which is
+ * indistinguishable from a runtime that is merely slow. A version constant
+ * that does not move with its contract is not a check; it is a comment that
+ * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 1;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 2;
 
 /**
  * What the worker was told about the surface it is serving.
@@ -167,6 +180,54 @@ export type WorkerToMainEvent =
       readonly message: string;
       readonly stack: string | null;
     };
+
+/**
+ * The event vocabulary, as values.
+ *
+ * Derived from mapped coverage records so a member added to either union fails
+ * to compile here, exactly as `MainCallKind` was. Their PURPOSE is different
+ * though: these exist so that changing the vocabulary reddens a test sitting
+ * next to {@link RUNTIME_BRIDGE_PROTOCOL_VERSION}, because the version failing
+ * to move with the vocabulary is a defect nothing else can see - both sides
+ * read the same number, the handshake matches, and a stale worker is adopted
+ * and then ignores half its traffic.
+ */
+const MAIN_TO_WORKER_EVENT_COVERAGE: {
+  readonly [K in MainToWorkerEvent["kind"]]: true;
+} = {
+  bootstrap: true,
+  "stream/frame": true,
+  "stream/session-version": true,
+  "stream/status": true,
+  "stream/manifest": true,
+  shutdown: true,
+};
+
+const WORKER_TO_MAIN_EVENT_COVERAGE: {
+  readonly [K in WorkerToMainEvent["kind"]]: true;
+} = {
+  ready: true,
+  log: true,
+  projection: true,
+  "stream/open": true,
+  "stream/params": true,
+  "stream/send": true,
+  "stream/reconnect": true,
+  "stream/close": true,
+  fatal: true,
+};
+
+export const MAIN_TO_WORKER_EVENT_KINDS: readonly MainToWorkerEvent["kind"][] =
+  Object.keys(MAIN_TO_WORKER_EVENT_COVERAGE).filter(
+    (key): key is MainToWorkerEvent["kind"] =>
+      Object.hasOwn(MAIN_TO_WORKER_EVENT_COVERAGE, key),
+  );
+
+export const WORKER_TO_MAIN_EVENT_KINDS: readonly WorkerToMainEvent["kind"][] =
+  Object.keys(WORKER_TO_MAIN_EVENT_COVERAGE).filter(
+    (key): key is WorkerToMainEvent["kind"] =>
+      Object.hasOwn(WORKER_TO_MAIN_EVENT_COVERAGE, key),
+  );
 
 /**
  * Every call the main thread may issue, paired with its answer.

@@ -273,6 +273,78 @@ export interface StreamProxyManifest {
   readonly docArm: unknown;
 }
 
+/**
+ * Narrows a received frame, on BOTH receive paths.
+ *
+ * One parser rather than one per direction, because the check that matters is
+ * identical and a second copy is the one that gets written with `instanceof`.
+ *
+ * `instanceof Uint8Array` is the obvious spelling and it is WRONG here: it asks
+ * "was this built by MY realm's constructor", and a structured clone
+ * deserializes into the RECEIVING realm - which under jsdom is Node's while the
+ * module's binding is jsdom's. That validator's verdict depends on which realm
+ * minted the object, and it has already cost this ticket one debugging round.
+ * `ArrayBuffer.isView` reads an internal slot and `toStringTag` is the type's
+ * own, so both cross realms intact - and together they still reject a
+ * `DataView` or an `Int16Array`, which is the point of checking at all.
+ *
+ * Returns the REASON on rejection rather than a bare `null`: a frame dropped
+ * silently on a hot path is indistinguishable from a host that went quiet, and
+ * this is the boundary a stale chunk or a foreign `postMessage` arrives at.
+ */
+export type StreamProxyFrameParse =
+  | { readonly ok: true; readonly frame: StreamProxyFrame }
+  | { readonly ok: false; readonly reason: string };
+
+export function parseStreamProxyFrame(value: unknown): StreamProxyFrameParse {
+  if (typeof value !== "object" || value === null) {
+    return { ok: false, reason: "frame is not an object" };
+  }
+  const candidate: Record<string, unknown> = { ...value };
+  const { streamId, envelope, binaryPayload } = candidate;
+  if (typeof streamId !== "number") {
+    return { ok: false, reason: "streamId is not a number" };
+  }
+  if (typeof envelope !== "object" || envelope === null) {
+    return { ok: false, reason: "envelope is not an object" };
+  }
+  const envelopeRecord: Record<string, unknown> = { ...envelope };
+  if (typeof envelopeRecord.kind !== "string") {
+    return { ok: false, reason: "envelope.kind is not a string" };
+  }
+  if (typeof envelopeRecord.hasBinaryPayload !== "boolean") {
+    return { ok: false, reason: "envelope.hasBinaryPayload is not a boolean" };
+  }
+  if (binaryPayload !== null && !isTransferredBytes(binaryPayload)) {
+    // A `DataView` and an `Int16Array` both pass `ArrayBuffer.isView`; only the
+    // tag separates them, and handing either to a typed consumer expecting Yjs
+    // bytes produces a decode failure far from here.
+    return {
+      ok: false,
+      reason: "binaryPayload is neither null nor Uint8Array",
+    };
+  }
+  return {
+    ok: true,
+    frame: {
+      streamId,
+      envelope: {
+        ...envelopeRecord,
+        kind: envelopeRecord.kind,
+        hasBinaryPayload: envelopeRecord.hasBinaryPayload,
+      },
+      binaryPayload,
+    },
+  };
+}
+
+function isTransferredBytes(value: unknown): value is Uint8Array {
+  return (
+    ArrayBuffer.isView(value) &&
+    Object.prototype.toString.call(value) === "[object Uint8Array]"
+  );
+}
+
 /** Identifies one session for the members that carry nothing else. */
 export interface StreamProxyStreamRef {
   readonly streamId: number;

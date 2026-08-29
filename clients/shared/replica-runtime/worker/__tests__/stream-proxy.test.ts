@@ -12,32 +12,67 @@ import { createStreamProxyHost } from "../stream-proxy-host";
 import {
   EPIC_WORKER_STREAM_METHOD_LIST,
   OPEN_PARAMS_SCHEMA_SOURCES,
+  parseStreamProxyFrame,
   STREAM_PROXY_UNKNOWN_METHOD_CODE,
 } from "../stream-proxy-protocol";
 import { createRecordingStreamClient } from "../test-support/recording-stream-client";
+import { createFakeBridgePair } from "../test-support/fake-bridge-pair";
+import { stubRuntimeWorkerCallHandlers } from "../test-support/stub-runtime-worker-call-handlers";
+import {
+  createMainBridgeEndpoint,
+  createWorkerBridgeEndpoint,
+} from "../bridge-endpoint";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { MainToWorkerEvent } from "../bridge-protocol";
+import {
+  MAIN_TO_WORKER_EVENT_KINDS,
+  RUNTIME_BRIDGE_PROTOCOL_VERSION,
+  WORKER_TO_MAIN_EVENT_KINDS,
+  type MainToWorkerEvent,
+} from "../bridge-protocol";
 
 /**
- * Wires the two halves directly, so an event posted by one is applied by the
- * other in the same tick. A `structuredClone` boundary is exercised by the
- * bridge's own suite; what matters here is the proxy's behaviour.
+ * Wires the two halves through the REAL bridge pair.
+ *
+ * An earlier version of this helper handed each side's event straight to the
+ * other through a callback. Every pin in this file passed against it - and one
+ * of them was asserting about traffic that, in production, was posted into a
+ * bridge that had already been disposed. A harness that bypasses the channel
+ * cannot observe the channel; it reports on a path the code does not take. So
+ * the pipe here is the production pipe, and only the thread is not.
  */
 function connect() {
   const recording = createRecordingStreamClient();
+  const pair = createFakeBridgePair("sync");
   const toWorker: MainToWorkerEvent[] = [];
-  const worker = createWorkerStreamClient((event) => {
+  const rejected: string[] = [];
+
+  const workerBridge = createWorkerBridgeEndpoint(
+    pair.worker,
+    stubRuntimeWorkerCallHandlers({}),
+  );
+  const worker = createWorkerStreamClient(
+    (event, transfer) => {
+      workerBridge.emit(event, transfer);
+    },
+    (reason) => rejected.push(reason),
+  );
+  const mainBridge = createMainBridgeEndpoint(pair.main);
+  const host = createStreamProxyHost(
+    recording.client,
+    (event, transfer) => {
+      toWorker.push(event);
+      mainBridge.emit(event, transfer);
+    },
+    (reason) => rejected.push(reason),
+  );
+
+  mainBridge.onEvent((event) => {
     host.handle(event);
   });
-  const host = createStreamProxyHost(recording.client, (event) => {
-    toWorker.push(event);
+  workerBridge.onEvent((event) => {
     switch (event.kind) {
       case "stream/frame":
-        worker.deliverFrame(
-          event.frame.streamId,
-          event.frame.envelope,
-          event.frame.binaryPayload,
-        );
+        worker.deliverFrame(event.frame);
         return;
       case "stream/session-version":
         worker.deliverSessionVersion(
@@ -59,7 +94,8 @@ function connect() {
         return;
     }
   });
-  return { recording, worker, host, toWorker };
+
+  return { recording, worker, host, toWorker, rejected, mainBridge };
 }
 
 describe("the closed method union", () => {
@@ -112,6 +148,40 @@ describe("the closed method union", () => {
         contract.openRequestSchema,
       );
     }
+  });
+});
+
+describe("the bridge vocabulary and its version", () => {
+  it("names every event kind in both directions, beside the version", () => {
+    // This pin exists because the version constant FAILED to move when 2c
+    // replaced the vocabulary, and no pin could see it: the skew test compares
+    // `VERSION - 1` against `VERSION`, so it stays green at any value. A
+    // relative pin proves the refusal MECHANISM, never the NUMBER.
+    //
+    // Nothing can prove a number should have changed. What this does is couple
+    // the two: editing either union reddens this test, and the comment the
+    // reader lands on is the one telling them to bump. That is a prompt, not a
+    // proof, and it is named as such rather than dressed up as coverage.
+    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(2);
+    expect(MAIN_TO_WORKER_EVENT_KINDS).toEqual([
+      "bootstrap",
+      "stream/frame",
+      "stream/session-version",
+      "stream/status",
+      "stream/manifest",
+      "shutdown",
+    ]);
+    expect(WORKER_TO_MAIN_EVENT_KINDS).toEqual([
+      "ready",
+      "log",
+      "projection",
+      "stream/open",
+      "stream/params",
+      "stream/send",
+      "stream/reconnect",
+      "stream/close",
+      "fatal",
+    ]);
   });
 });
 
@@ -297,6 +367,56 @@ describe("stream proxy — messages for something that is gone", () => {
       host.handle({ kind: "stream/close", stream: { streamId: 99 } }),
     ).toBe(false);
     expect(recording.opened()).toHaveLength(0);
+  });
+});
+
+describe("stream proxy — payload validation on receive", () => {
+  it("accepts bytes that crossed a realm, and an explicit null", () => {
+    // `instanceof Uint8Array` would REJECT the first of these under jsdom, where
+    // the clone arrives from Node's realm while the module's binding is jsdom's.
+    // The check reads an internal slot and the type's own tag instead.
+    for (const payload of [Uint8Array.from([1, 2, 3]), null]) {
+      const parsed = parseStreamProxyFrame({
+        streamId: 1,
+        envelope: { kind: "update", hasBinaryPayload: payload !== null },
+        binaryPayload: payload,
+      });
+      expect(parsed.ok).toBe(true);
+    }
+  });
+
+  it.each([
+    ["DataView", new DataView(new ArrayBuffer(4))],
+    ["Int16Array", Int16Array.from([1, 2])],
+  ])("rejects a %s with a named reason", (_label, payload) => {
+    // Both pass `ArrayBuffer.isView`; only the tag separates them. Handed to a
+    // consumer expecting Yjs bytes, either produces a decode failure far from
+    // this boundary.
+    const parsed = parseStreamProxyFrame({
+      streamId: 1,
+      envelope: { kind: "update", hasBinaryPayload: true },
+      binaryPayload: payload,
+    });
+    expect(parsed.ok).toBe(false);
+    expect(parsed.ok ? "" : parsed.reason).toContain("binaryPayload");
+  });
+
+  it("drops a bad payload on BOTH receive paths, naming the reason", () => {
+    const { host, worker, rejected } = connect();
+    const bad = {
+      streamId: 1,
+      envelope: { kind: "update", hasBinaryPayload: true },
+      binaryPayload: new DataView(new ArrayBuffer(4)),
+    };
+
+    // main receive path
+    expect(host.handle({ kind: "stream/send", frame: bad })).toBe(false);
+    // worker receive path
+    worker.deliverFrame(bad);
+
+    expect(rejected).toHaveLength(2);
+    expect(rejected[0]).toContain("stream/send rejected");
+    expect(rejected[1]).toContain("stream/frame rejected");
   });
 });
 

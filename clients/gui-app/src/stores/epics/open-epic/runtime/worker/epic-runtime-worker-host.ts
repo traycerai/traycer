@@ -17,7 +17,7 @@
  * surviving caller already handles, and not a throw.
  *
  * The two things a core needs from OUTSIDE the worker are reachable here before
- * it exists: `bootstrapFacts()` (the host and user it serves), and `streams` -
+ * it exists: `bootstrapFacts()` (the window it serves), and `streams` -
  * the `IStreamClient` proxy the four typed wrappers are constructed over. The
  * socket behind it never leaves the main thread.
  */
@@ -233,9 +233,21 @@ export function startEpicRuntimeWorkerHost(
   // After the bridge for the same reason the log sink is: its emit closes over
   // a `const`, so a frame produced while the core is being built cannot vanish
   // into a slot that is still null.
-  const streams = createWorkerStreamClient((event, transfer) => {
-    bridge.emit(event, transfer);
-  });
+  const streams = createWorkerStreamClient(
+    (event, transfer) => {
+      bridge.emit(event, transfer);
+    },
+    (reason) => {
+      // Surfaced, never swallowed: a frame dropped on the hot path reads as a
+      // host that went quiet, and this is where a stale chunk arrives.
+      emitLog({
+        level: "error",
+        message: `[epic-runtime-worker] ${reason}`,
+        fields: {},
+        error: null,
+      });
+    },
+  );
   const environment = createWorkerRuntimeEnvironment(emitLog);
 
   const onEvent = (event: MainToWorkerEvent): void => {
@@ -262,10 +274,9 @@ export function startEpicRuntimeWorkerHost(
           return;
         }
         // Recorded only on a MATCHING handshake. A skewed bootstrap's payload
-        // is exactly the thing that must not be trusted - a worker that stored
-        // a mismatched `hostId` and then answered `fatal` would leave the core
-        // builder able to construct a transport against facts the main thread
-        // and this worker do not agree on.
+        // is exactly the thing that must not be trusted: storing it and then
+        // answering `fatal` would leave the core builder able to construct
+        // against facts the two sides do not agree on.
         bootstrap = event.bootstrap;
         bridge.emit(
           { kind: "ready", protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION },
@@ -274,11 +285,7 @@ export function startEpicRuntimeWorkerHost(
         return;
       }
       case "stream/frame": {
-        streams.deliverFrame(
-          event.frame.streamId,
-          event.frame.envelope,
-          event.frame.binaryPayload,
-        );
+        streams.deliverFrame(event.frame);
         return;
       }
       case "stream/session-version": {
