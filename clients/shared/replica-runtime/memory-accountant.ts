@@ -59,14 +59,24 @@ export type BudgetPressure =
  * can report `"over-protected"` honestly rather than reporting a failure.
  */
 export type ProtectedRegionKind =
-  /** Where a live turn happens and where every snapshot re-seats content. */
+  /**
+   * Where a live turn happens and where every snapshot re-seats content.
+   * Re-hydratable: dropping it leaves a gap the planner or the next snapshot
+   * fills. Windowed live records and the tail span use this.
+   */
   | "tail"
   /** On screen right now. */
   | "visible"
   /** Unconditionally re-planned, so evicting it re-requests it immediately. */
   | "required"
   /** Held by a lease - an editor is bound to it, by reference. */
-  | "leased";
+  | "leased"
+  /**
+   * The only copy. There is no cheaper representation and no range hydration
+   * that can restore it. The pre-windowed whole-transcript residency uses
+   * this: reclaiming it would drop the session's only messages/events.
+   */
+  | "sole-copy";
 
 export interface ProtectedBytes {
   readonly kind: ProtectedRegionKind;

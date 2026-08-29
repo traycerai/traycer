@@ -408,4 +408,25 @@ describe("createMemoryAccountant", () => {
     );
     expect(() => accountant.release("p", "nobody")).not.toThrow();
   });
+
+  it("records sole-copy protection without treating it as a retryable over", () => {
+    const accountant = createMemoryAccountant({
+      environment: createFakeEnvironment(),
+      observedCeilingBytes: 1000,
+    });
+    accountant.register(
+      spec({
+        planeId: "p",
+        softLimitBytes: 100,
+        nearThresholdRatio: 0.8,
+        evict: () => ({
+          reclaimedBytes: 0,
+          protectedBytesByKind: [{ kind: "sole-copy", bytes: 500 }],
+        }),
+      }),
+    );
+    accountant.settle("p", "legacy", 500);
+    expect(accountant.reconcile("p")).toBe("over-protected");
+    expect(accountant.snapshot().planes[0].evictionsRefused).toBe(1);
+  });
 });
