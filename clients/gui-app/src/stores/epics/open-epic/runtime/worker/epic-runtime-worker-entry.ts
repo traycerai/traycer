@@ -8,12 +8,15 @@
  * either. What is left here is the one thing that genuinely cannot be tested
  * without a worker: reaching the ambient scope.
  *
- * `globalThis` rather than `self`: this package compiles with `lib: DOM`,
- * where `self` is typed as a `Window` whose `postMessage` signature is the
- * three-argument one. `resolveWorkerScopeTransport` checks the shape it
- * actually needs and throws a legible error if this module is ever imported
- * on the main thread, which is otherwise a runtime that posts into the window
- * and answers nothing.
+ * `self` rather than `globalThis`, and the DOM typing that used to be given as
+ * the reason for the opposite choice is irrelevant: `resolveWorkerScopeTransport`
+ * takes `unknown` and checks the shape at runtime, so what `lib: DOM` calls
+ * `self` never reaches a type position here. `self` is simply the name of the
+ * scope this module runs on. In a real dedicated worker the two are the same
+ * object - `globalThis === self` is true there - so this is a naming
+ * correction, not a behaviour change; the case where they DIVERGE is a scope
+ * that is not a worker at all, and that is the guard's business, not this
+ * line's.
  *
  * Nothing here imports the replica-runtime barrel. A worker entry that pulls
  * `replica-runtime/index.ts` drags the accountant, the session registry and
@@ -23,4 +26,4 @@
 import { resolveWorkerScopeTransport } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 import { startEpicRuntimeWorkerHost } from "./epic-runtime-worker-host";
 
-startEpicRuntimeWorkerHost(resolveWorkerScopeTransport(globalThis));
+startEpicRuntimeWorkerHost(resolveWorkerScopeTransport(self));
