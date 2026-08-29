@@ -2615,6 +2615,74 @@ describe("stale spans", () => {
     expect(touchTranscriptRange(atTail, null)).toBe(atTail);
   });
 
+  it("keeps a held copy whose image entry was REPLACED for a source both list", () => {
+    // `applyImageResolutionDelta` upserts on `canonicalSource`, so a later
+    // update to a source both copies already list replaces the entry in place.
+    // Asking only whether the source APPEARS answers "not ahead" for exactly
+    // the update that moved it, and the delayed serve then wins on `servedAt`.
+    const pending = {
+      source: "https://example.test/b.png",
+      canonicalSource: "https://example.test/b.png",
+      width: null,
+      height: null,
+      state: "consent-required" as const,
+      attachmentHash: null,
+      mediaType: null,
+    };
+    const settled = {
+      ...assistantMessage("a-upsert", "t-upsert", 5),
+      blocksVersion: 3,
+      imageResolutions: [pending],
+    };
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settled],
+      }),
+      null,
+    );
+    // The consent is granted: SAME source, replaced entry, same blocksVersion.
+    const upserted = updateWindowMessage(seeded, "a-upsert", (message) =>
+      message.role !== "assistant"
+        ? message
+        : {
+            ...message,
+            imageResolutions: [
+              {
+                ...pending,
+                state: "resolved" as const,
+                attachmentHash: "b".repeat(64),
+                mediaType: "image/png" as const,
+              },
+            ],
+          },
+    );
+    expect(upserted.held).toBe(true);
+
+    const delayed = applyRangeResponse(
+      upserted.window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settled],
+      }),
+      null,
+    );
+
+    const rendered = hydratedRecords(delayed).messages.find(
+      (message) => message.messageId === "a-upsert",
+    );
+    expect(
+      rendered !== undefined && rendered.role === "assistant"
+        ? rendered.imageResolutions[0].state
+        : "missing",
+    ).toBe("resolved");
+  });
+
   it("keeps a held copy whose image resolved after the serve was sliced", () => {
     // `image_resolution.updated` rewrites `imageResolutions` and the runtime
     // accumulator advances `blocksVersion` only for BLOCK changes, so a range

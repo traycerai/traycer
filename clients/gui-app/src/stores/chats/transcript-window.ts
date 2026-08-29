@@ -3607,26 +3607,42 @@ function heldCopyIsAheadOfServed(held: Message, served: Message): boolean {
 /**
  * Does the held copy carry an image resolution the served one has not heard of?
  *
- * Keyed on `canonicalSource` because that is the entry's stable identity, and
- * an entry appears only once its outcome is known - resolved, blocked,
- * oversized, not-found. So a source the served copy does not list is one the
- * client resolved after the host sliced its answer, which is exactly the
- * freshness `blocksVersion` cannot express.
+ * Keyed on `canonicalSource` because that is the entry's stable identity - and
+ * compared by CONTENT rather than by presence, because
+ * `applyImageResolutionDelta` UPSERTS on that key: a later update to a source
+ * both copies already list replaces the entry in place. Asking only whether the
+ * source appears would then answer "not ahead" for exactly the update that
+ * moved it.
  *
- * Presence, not state: comparing states would have to assume resolution is
- * one-way, and the schema does not say so.
+ * A difference means the held copy is the newer one, and that direction is
+ * sound rather than assumed. A served copy is a slice of the host's state at
+ * slice time; the client applies every `image_resolution.updated` after that to
+ * the record it holds. So the held copy carries a superset of what the serve
+ * could contain, and the two can only diverge forwards. It does NOT rest on
+ * resolution being one-way, which the schema does not promise - a watcher that
+ * moves an entry from resolved back to blocked is still the client having seen
+ * something the slice predates.
  */
 function heldKnowsUnservedImages(
   held: Extract<Message, { role: "assistant" }>,
   served: Extract<Message, { role: "assistant" }>,
 ): boolean {
   if (held.imageResolutions.length === 0) return false;
-  const servedSources = new Set(
-    served.imageResolutions.map((entry) => entry.canonicalSource),
+  const servedBySource = new Map(
+    served.imageResolutions.map((entry) => [entry.canonicalSource, entry]),
   );
-  return held.imageResolutions.some(
-    (entry) => !servedSources.has(entry.canonicalSource),
-  );
+  return held.imageResolutions.some((entry) => {
+    const counterpart = servedBySource.get(entry.canonicalSource);
+    if (counterpart === undefined) return true;
+    return (
+      counterpart.state !== entry.state ||
+      counterpart.attachmentHash !== entry.attachmentHash ||
+      counterpart.mediaType !== entry.mediaType ||
+      counterpart.width !== entry.width ||
+      counterpart.height !== entry.height ||
+      counterpart.source !== entry.source
+    );
+  });
 }
 
 /**
