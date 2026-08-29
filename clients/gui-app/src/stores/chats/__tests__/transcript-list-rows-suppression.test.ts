@@ -96,6 +96,7 @@ function windowOf(
     skeletonComplete: true,
     skeletonStreamCoveredThrough: rowCount,
     spans,
+    staleSpans: [],
     liveMessages: [],
     liveEvents: [],
     snapshotProvisionalMessageIds: [],

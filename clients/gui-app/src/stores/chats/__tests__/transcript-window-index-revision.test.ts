@@ -115,6 +115,7 @@ function windowAtRevision(revision: number): TranscriptWindow {
       rowIds: ["row-0"],
       messages: [userMessage("m-0", 0)],
     }),
+    null,
   );
   // `indexRevisionRebuilding: false` because this models a client that has
   // ALREADY reached `revision` - which only happens by applying frames, and
@@ -168,6 +169,7 @@ describe("applyWindowedSnapshot: the bootstrap suppression (indexRevision: null)
     });
 
     const delta = applyIndexChange(rebuilt, {
+      activeTurnId: null,
       epoch: 4,
       rowCount: 10,
       indexRevision: 6,
@@ -352,6 +354,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     // rewound to 3 it would not have been, and a VALID index would have been
     // declared lost.
     const next = applyIndexChange(straggler, {
+      activeTurnId: null,
       epoch: 4,
       rowCount: 10,
       indexRevision: 6,
@@ -409,6 +412,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     expect(resynced.invalidated).toBe(false);
 
     const next = applyIndexChange(resynced, {
+      activeTurnId: null,
       epoch: 0,
       rowCount: 10,
       indexRevision: 1,
@@ -516,6 +520,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     // is the failure this whole flag exists to prevent, reached by the one path
     // that looks like it has already been handled.
     const voided = applyIndexChange(windowAtRevision(5), {
+      activeTurnId: null,
       epoch: 4,
       rowCount: 10,
       indexRevision: 9, // non-consecutive: a loss, so the coordinate voids
@@ -549,6 +554,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
     });
 
     const adopted = applyIndexChange(announced, {
+      activeTurnId: null,
       epoch: 4,
       rowCount: 10,
       indexRevision: 1,
@@ -564,6 +570,7 @@ describe("applyWindowedSnapshot: a steady-state frame always carries a real numb
 
     // Spent. A non-consecutive revision is a loss again.
     const skipped = applyIndexChange(adopted, {
+      activeTurnId: null,
       epoch: 4,
       rowCount: 10,
       indexRevision: 5,
@@ -583,6 +590,7 @@ describe("applyIndexChange: revision continuity on the append/delta path", () =>
     const window = windowAtRevision(5);
 
     const result = applyIndexChange(window, {
+      activeTurnId: null,
       epoch: 4,
       rowCount: 10,
       indexRevision: 5, // equal to the held revision: a duplicate, not a gap
@@ -603,6 +611,7 @@ describe("applyIndexChange: revision continuity on the append/delta path", () =>
     const window = windowAtRevision(5);
 
     const result = applyIndexChange(window, {
+      activeTurnId: null,
       epoch: 4,
       rowCount: 10,
       indexRevision: 3, // a straggler behind the held revision
@@ -645,6 +654,7 @@ describe("applyIndexChange: revision continuity on the append/delta path", () =>
     changes: [
       { type: "appended", entries: skeletonEntries(fromOrdinal, count) },
     ],
+    activeTurnId: null,
   });
 
   it.each([
@@ -696,6 +706,7 @@ describe("applyIndexChange: revision continuity on the append/delta path", () =>
     expect(window.spans.length).toBeGreaterThan(0);
 
     const result = applyIndexChange(window, {
+      activeTurnId: null,
       epoch: 4,
       rowCount: 10,
       indexRevision: 7, // skips 6: the immediate successor never reached this client

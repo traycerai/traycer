@@ -8,6 +8,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
+import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -829,13 +830,18 @@ describe("windowed snapshot whose tail arrived empty", () => {
     }
   });
 
-  it("clears the previous epoch's rows instead of leaving them on screen", () => {
+  it("carries the previous epoch's rows as placed stale bodies while the new tail loads", () => {
     // A reconnect or reindex rebases the transcript into a new coordinate
-    // space, and `applyWindowedSnapshot` returns an empty window for it. The
-    // fold is held until the new tail lands - but the rows the reader is
-    // looking at belong to the epoch that just ended, and holding them means
-    // the row merge treats them as unplaced rows of a space they were never
-    // numbered in. If the tail is slow or lost, that is what stays on screen.
+    // space. The rows the reader is looking at almost always still exist in
+    // the replacement space under the same row ids, so the fold carries their
+    // spans as STALE display state instead of blanking the transcript for the
+    // length of the resnapshot round trip - the completion "flash". What must
+    // NOT happen is the original hazard this test was written for: those rows
+    // being re-published as unplaced rows of a space they were never numbered
+    // in. They stay ordinal-bound (their old ordinals, yielding to the
+    // replacement skeleton), which `transcriptListRows` owns and its own
+    // suite pins; here the store-level halves are pinned - retention for
+    // display, and a fresh-epoch re-request either way.
     const harness = createWindowedHarness();
     try {
       harness.callbacks().onWindowedSnapshot(
@@ -852,6 +858,37 @@ describe("windowed snapshot whose tail arrived empty", () => {
           .getState()
           .messages.map((message) => message.messageId),
       ).toEqual(["old-0", "old-1"]);
+      // The skeleton stream adopts the positionally-seated tail's row ids, as
+      // it does on every real session before a rebase can arrive - the carry
+      // below preserves ROW IDENTITY, which unadopted empty-string ids cannot
+      // express.
+      harness.callbacks().onSkeletonChunk({
+        kind: "skeletonChunk",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromOrdinal: 0,
+          entries: [
+            {
+              rowId: "old-0",
+              createdAt: 1,
+              role: "user",
+              byteLength: 10,
+              bodyDigest: "d0",
+            },
+            {
+              rowId: "old-1",
+              createdAt: 2,
+              role: "user",
+              byteLength: 10,
+              bodyDigest: "d1",
+            },
+          ],
+          isFinal: true,
+        },
+      });
 
       harness.callbacks().onWindowedSnapshot(
         windowedSnapshot({
@@ -871,8 +908,17 @@ describe("windowed snapshot whose tail arrived empty", () => {
       // true on the first snapshot and a deferral does not clear it.)
       expect(isTailHydrated(state.transcriptWindow)).toBe(false);
       expect(harness.rangeRequests.at(-1)?.epoch).toBe(5);
-      // And nothing from epoch 4 survived into it.
-      expect(state.messages).toEqual([]);
+      // Epoch 4's bodies survive as display-only stale spans - no FRESH span
+      // claims an ordinal of the new space, so nothing can seat a body under
+      // a wrong row id.
+      expect(state.transcriptWindow.spans).toEqual([]);
+      expect(
+        state.transcriptWindow.staleSpans.flatMap((span) => span.rowIds),
+      ).toEqual(["old-0", "old-1"]);
+      expect(state.messages.map((message) => message.messageId)).toEqual([
+        "old-0",
+        "old-1",
+      ]);
       expect(state.events).toEqual([]);
     } finally {
       harness.handle.dispose();
@@ -1354,6 +1400,187 @@ describe("index deltas", () => {
   });
 });
 
+/**
+ * The store-level half of {@link isActiveTurnStreamingEcho}: an `indexChanged`
+ * naming only the active turn's own row must not treat an in-flight hydration
+ * request as stale, or a chat dominated by one long-running turn starves every
+ * scrollback fetch for as long as the turn streams.
+ */
+describe("the active turn's streaming echo does not starve in-flight hydration", () => {
+  type IndexChangedFrame = Parameters<ChatStreamCallbacks["onIndexChanged"]>[0];
+
+  function indexChangedFrame(input: {
+    readonly epoch: number;
+    readonly rowCount: number;
+    readonly indexRevision: number;
+    readonly changes: IndexChangedFrame["changes"];
+  }): IndexChangedFrame {
+    return {
+      kind: "indexChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      epoch: input.epoch,
+      rowCount: input.rowCount,
+      indexRevision: input.indexRevision,
+      changes: [...input.changes],
+    };
+  }
+
+  type RangeFrame = Parameters<ChatStreamCallbacks["onRange"]>[0];
+
+  function rangeFrame(input: {
+    readonly requestId: string;
+    readonly epoch: number;
+    readonly fromOrdinal: number;
+    readonly rowIds: readonly string[];
+    readonly messages: readonly Message[];
+  }): RangeFrame {
+    return {
+      kind: "range",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      range: {
+        requestId: input.requestId,
+        epoch: input.epoch,
+        fromOrdinal: input.fromOrdinal,
+        rowIds: [...input.rowIds],
+        messages: [...input.messages],
+        events: [],
+        rowContext: {},
+        reachedStart: input.fromOrdinal === 0,
+        reachedEnd: false,
+      },
+    };
+  }
+
+  function seatedTail(harness: WindowedHarness): void {
+    harness.callbacks().onWindowedSnapshot(
+      windowedSnapshot({
+        epoch: 1,
+        rowCount: 40,
+        tailFromOrdinal: 20,
+        tailMessages: [userMessage("tail", 20)],
+        accumulatedFileChangeCount: 0,
+      }),
+    );
+  }
+
+  it("a streaming echo does not supersede in-flight hydration", () => {
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+
+      // The index's own echo of the turn already streaming: the deltas that
+      // produced it rewrote the held records in place, so there is nothing
+      // stale about an answer still in flight for this row.
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 10,
+                  entry: {
+                    rowId: assistantRowId("t-9"),
+                    createdAt: 10,
+                    role: "assistant",
+                    byteLength: 4096,
+                    bodyDigest: "d10-echo",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [assistantWithBlocks("assistant-10", 10, "t-9", [])],
+        }),
+      );
+
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a frame naming a DIFFERENT turn's row still supersedes, and the discarded answer is re-planned", () => {
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+      expect(harness.rangeRequests).toHaveLength(1);
+
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 10,
+                  entry: {
+                    rowId: assistantRowId("other-turn"),
+                    createdAt: 10,
+                    role: "assistant",
+                    byteLength: 4096,
+                    bodyDigest: "d10-other",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("other-turn")],
+          messages: [assistantWithBlocks("assistant-10", 10, "other-turn", [])],
+        }),
+      );
+
+      // Discarded: the pre-update body must not seat.
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
+      // And re-planned, because ordinal 10 is still a gap.
+      expect(harness.rangeRequests.length).toBeGreaterThan(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
 describe("accumulated-change chunks", () => {
   it("assembles chunks in order and lets a fresh first chunk replace the set", () => {
     const harness = createWindowedHarness();
@@ -1515,20 +1742,129 @@ describe("accumulated-change chunks", () => {
       });
 
       const state = harness.handle.store.getState();
-      // "d.ts" is NOT seated at index 1 wearing "b.ts"'s position.
+      // "d.ts" is NOT seated at index 1 wearing "b.ts"'s position - and the
+      // partial assembly ("a.ts" alone, 1 of 4) is never published either: a
+      // generation is assembled off-screen and swaps in only once whole, so
+      // the panel shows the previous complete set (here: nothing) rather than
+      // flashing a partial replacement.
       expect(
         state.accumulatedFileChangeSummaries.map((entry) => entry.filePath),
-      ).toEqual(["a.ts"]);
+      ).toEqual([]);
       // And the shortfall stays visible, which is what holds "Review all" back.
       expect(
         state.accumulatedFileChangeCount -
           state.accumulatedFileChangeSummaries.length,
-      ).toBe(3);
+      ).toBe(4);
       // Dropping alone would strand the panel: the host records the set it
       // just sent, so a chunk lost in transit leaves it believing this
       // subscriber holds that generation - ordinary traffic over an unchanged
       // set sends nothing. The resnapshot is the restart.
       expect(harness.resnapshotCount()).toBe(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  /**
+   * A replacement generation assembles off-screen and swaps in atomically.
+   * Publishing its first chunk repainted the panel with a partial set - the
+   * "2 files changed" flash mid-restream over a complete 6-file set - so the
+   * previous complete generation stays published until the replacement
+   * reaches the authoritative count.
+   */
+  it("holds the previous complete summary set until the replacement generation is whole", () => {
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 3,
+        }),
+      );
+      // Generation 1 completes and publishes.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [summary("a.ts"), summary("b.ts"), summary("c.ts")],
+          isFinal: true,
+        },
+      });
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
+
+      // Generation 2's first chunk covers 1 of 3: the published set must not
+      // move, and the un-seated flag is what keeps the completion watchdog
+      // measuring the assembly rather than the retained array.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 2,
+          summaries: [summary("x.ts")],
+          isFinal: false,
+        },
+      });
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(false);
+
+      // The generation completes to the authoritative count: the set swaps
+      // atomically.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 1,
+          generation: 2,
+          summaries: [summary("y.ts"), summary("z.ts")],
+          isFinal: true,
+        },
+      });
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["x.ts", "y.ts", "z.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
     } finally {
       harness.handle.dispose();
     }
@@ -1870,6 +2206,115 @@ describe("accumulated-change chunks", () => {
           .getState()
           .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
       ).toEqual(["current.ts"]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  /**
+   * A fresh generation assembles OFF-SCREEN: publishing its first chunk
+   * immediately would flash a partial replacement over the complete set the
+   * panel is already showing. The previous COMPLETE set must survive until the
+   * replacement reaches the authoritative count, at which point it becomes the
+   * new set atomically.
+   */
+  it("buffers a new generation off-screen until it reaches the authoritative count, then seats it atomically", () => {
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+
+      // Seed a complete published summary set: length equals
+      // accumulatedFileChangeCount.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 3,
+        }),
+      );
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [summary("a.ts"), summary("b.ts"), summary("c.ts")],
+          isFinal: true,
+        },
+      });
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
+
+      // A NEW-generation chunk at fromIndex 0 carrying only 1 of 3 summaries
+      // while the count stays 3 - a partial replacement mid-restream.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 2,
+          summaries: [summary("x.ts")],
+          isFinal: false,
+        },
+      });
+
+      // No partial flash: the previous complete set is still what is published.
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(false);
+
+      // The remaining chunk completes the generation to 3.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 1,
+          generation: 2,
+          summaries: [summary("y.ts"), summary("z.ts")],
+          isFinal: true,
+        },
+      });
+
+      // The array atomically becomes the new set, and the seated flag returns.
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["x.ts", "y.ts", "z.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
     } finally {
       harness.handle.dispose();
     }

@@ -357,6 +357,57 @@ function invalidatedPlaceholderRows(
 }
 
 /**
+ * Seat the carried stale bodies - the spans a rebase or void discarded, kept
+ * for display while their replacement streams in.
+ *
+ * Placement is by REPLACEMENT-SKELETON name first: a stale row the new index
+ * names renders at the ordinal it names, under the same key it had before the
+ * rebase, which is what keeps LegendList's measurements and the reader's
+ * position across a completion handoff. A row the skeleton has not named yet
+ * falls back to its OLD ordinal, and only into an entry-less hole - the
+ * moment an entry arrives for that ordinal, the guess yields to the
+ * authority, so a mispositioned body can survive at most one skeleton chunk.
+ *
+ * Runs after the span and live passes and never displaces either: a fresh
+ * body always outranks a carried one.
+ */
+function seatStaleRows(input: {
+  readonly window: TranscriptWindow;
+  readonly modelsById: ReadonlyMap<string, ChatMessageModel>;
+  readonly skeletonOrdinals: ReadonlyMap<string, number>;
+  readonly modelByOrdinal: Map<number, ChatMessageModel>;
+  readonly placedRowIds: Set<string>;
+  readonly suppressedOrdinals: ReadonlySet<number>;
+}): void {
+  const { window } = input;
+  for (const span of window.staleSpans) {
+    span.rowIds.forEach((rowId, offset) => {
+      // The empty string is a positionally-seated legacy tail's "identity
+      // unverified" marker, not a row id - nothing can match it.
+      if (rowId === "") return;
+      if (input.placedRowIds.has(rowId)) return;
+      let ordinal = input.skeletonOrdinals.get(rowId);
+      if (ordinal === undefined) {
+        const oldOrdinal = span.fromOrdinal + offset;
+        if (window.skeleton[oldOrdinal] !== undefined) return;
+        ordinal = oldOrdinal;
+      }
+      if (ordinal >= window.rowCount) return;
+      if (
+        input.modelByOrdinal.has(ordinal) ||
+        input.suppressedOrdinals.has(ordinal)
+      ) {
+        return;
+      }
+      const model = input.modelsById.get(rowId);
+      if (model === undefined) return;
+      input.modelByOrdinal.set(ordinal, model);
+      input.placedRowIds.add(rowId);
+    });
+  }
+}
+
+/**
  * Seat the live records the index has started naming, in place.
  *
  * Extracted rather than inlined only because the merge below is already at the
@@ -397,6 +448,80 @@ function seatLiveRecords(input: {
 }
 
 /**
+ * The invalidated-window merge, extracted for the complexity ceiling.
+ *
+ * The index identities are void, but the frame that voided them still
+ * authoritatively announced how many rows exist in the replacement space.
+ * Keep the virtualized list mounted with identity-free placeholders so a
+ * known nonempty chat can never flash the brand-new-chat empty state or lose
+ * LegendList's measurements/scroll position during the resnapshot. Only
+ * genuinely unplaced rendered records remain after the ordinal space. Bodies
+ * already backed by a retained span are represented by the identity-free
+ * placeholders until the replacement index lands; appending them too would
+ * draw the same history twice on skeleton-loss paths.
+ *
+ * The carried STALE bodies do better than a placeholder: they render at
+ * their old ordinals, under their real row-id keys, so the void is invisible
+ * wherever the client still holds what was on screen.
+ */
+function invalidatedTranscriptListRows(
+  window: TranscriptWindow,
+  rendered: readonly ChatMessageModel[],
+): readonly TranscriptListRow[] {
+  const liveRowIds = liveRecordRowIds(window);
+  const retainedSpanRowIds = spanRowIds(window.spans);
+  const liveSetupRowIds = projectedLiveSetupRowIds(window, rendered);
+  const staleByOrdinal = new Map<number, ChatMessageModel>();
+  const staleSeatedRowIds = new Set<string>();
+  seatStaleRows({
+    window,
+    modelsById: new Map(rendered.map((model) => [model.id, model])),
+    skeletonOrdinals: skeletonOrdinalByRowId(window.skeleton),
+    modelByOrdinal: staleByOrdinal,
+    placedRowIds: staleSeatedRowIds,
+    suppressedOrdinals: new Set<number>(),
+  });
+  let liveTransientSteerRowIds: ReadonlySet<string> | null = null;
+  const unplacedRendered = rendered.filter((model) => {
+    if (staleSeatedRowIds.has(model.id)) return false;
+    const liveBacked =
+      isExplicitlyPendingOrStreaming(model) ||
+      liveRowIds.has(model.id) ||
+      liveSetupRowIds.has(model.id) ||
+      (model.persistentMessageId === null &&
+        (liveTransientSteerRowIds ??= transientLiveSteerRowIds(window)).has(
+          model.id,
+        )) ||
+      (model.persistentMessageId !== null &&
+        liveRowIds.has(model.persistentMessageId));
+    return !retainedSpanRowIds.has(model.id) && liveBacked;
+  });
+  const placeholders = invalidatedPlaceholderRows(window.rowCount);
+  const ordinalRows =
+    staleByOrdinal.size === 0
+      ? placeholders
+      : placeholders.map((row, ordinal) => {
+          const model = staleByOrdinal.get(ordinal);
+          if (model === undefined) return row;
+          return {
+            kind: "hydrated" as const,
+            key: model.id,
+            ordinal,
+            model,
+          };
+        });
+  return [
+    ...ordinalRows,
+    ...unplacedRendered.map((model) => ({
+      kind: "hydrated" as const,
+      key: model.id,
+      ordinal: null,
+      model,
+    })),
+  ];
+}
+
+/**
  * Merge what the renderer produced with what the window says exists.
  *
  * @param window The transcript window, or `null` on the legacy line - where
@@ -420,41 +545,7 @@ export function transcriptListRows(input: {
   }
 
   if (window.invalidated) {
-    // The index identities are void, but the frame that voided them still
-    // authoritatively announced how many rows exist in the replacement space.
-    // Keep the virtualized list mounted with identity-free placeholders so a
-    // known nonempty chat can never flash the brand-new-chat empty state or
-    // lose LegendList's measurements/scroll position during the resnapshot.
-    // Only genuinely unplaced rendered records remain after the ordinal
-    // space. Bodies already backed by a retained span are represented by the
-    // identity-free placeholders until the replacement index lands; appending
-    // them too would draw the same history twice on skeleton-loss paths.
-    const liveRowIds = liveRecordRowIds(window);
-    const retainedSpanRowIds = spanRowIds(window.spans);
-    const liveSetupRowIds = projectedLiveSetupRowIds(window, rendered);
-    let liveTransientSteerRowIds: ReadonlySet<string> | null = null;
-    const unplacedRendered = rendered.filter((model) => {
-      const liveBacked =
-        isExplicitlyPendingOrStreaming(model) ||
-        liveRowIds.has(model.id) ||
-        liveSetupRowIds.has(model.id) ||
-        (model.persistentMessageId === null &&
-          (liveTransientSteerRowIds ??= transientLiveSteerRowIds(window)).has(
-            model.id,
-          )) ||
-        (model.persistentMessageId !== null &&
-          liveRowIds.has(model.persistentMessageId));
-      return !retainedSpanRowIds.has(model.id) && liveBacked;
-    });
-    return [
-      ...invalidatedPlaceholderRows(window.rowCount),
-      ...unplacedRendered.map((model) => ({
-        kind: "hydrated" as const,
-        key: model.id,
-        ordinal: null,
-        model,
-      })),
-    ];
+    return invalidatedTranscriptListRows(window, rendered);
   }
 
   const modelsById = new Map(rendered.map((model) => [model.id, model]));
@@ -522,6 +613,20 @@ export function transcriptListRows(input: {
     suppressedOrdinals,
   });
 
+  // Carried stale bodies fill whatever the fresh spans and live records did
+  // not - by replacement-skeleton name, or into an entry-less hole at their
+  // old ordinal. After the span and live passes so a fresh body always wins.
+  if (window.staleSpans.length > 0) {
+    seatStaleRows({
+      window,
+      modelsById,
+      skeletonOrdinals,
+      modelByOrdinal,
+      placedRowIds,
+      suppressedOrdinals,
+    });
+  }
+
   let placeholders = placeholderRowsBySkeleton.get(window.skeleton);
   if (placeholders === undefined) {
     placeholders = new Map<number, TranscriptListRow>();
@@ -554,19 +659,56 @@ export function transcriptListRows(input: {
     placeholders.set(ordinal, row);
     rows.push(row);
   }
-  for (const model of rendered) {
-    if (placedRowIds.has(model.id)) continue;
-    // A row the SKELETON names owns an ordinal, so it is not an unplaced
-    // record however it came to be rendered - see the note above the loop.
-    // Two ways to reach here still naming one: the model is a PROJECTION the
-    // renderer inferred from a sibling row's records rather than a record this
-    // client holds (the steer-split turn), or a span already answered for its
-    // ordinal. Either way the ordinal is accounted for, and appending a second,
-    // ordinal-less copy would draw the row twice.
-    if (skeletonOrdinals.has(model.id)) continue;
-    rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
-  }
+  appendUnplacedRenderedRows({
+    window,
+    rendered,
+    placedRowIds,
+    skeletonOrdinals,
+    rows,
+  });
   return rows;
+}
+
+/**
+ * Append the rendered models that own no ordinal - the live tail.
+ *
+ * A row the SKELETON names owns an ordinal, so it is not an unplaced record
+ * however it came to be rendered. Two ways to reach the skeleton check while
+ * still naming one: the model is a PROJECTION the renderer inferred from a
+ * sibling row's records rather than a record this client holds (the
+ * steer-split turn), or a span already answered for its ordinal. Either way
+ * the ordinal is accounted for, and appending a second, ordinal-less copy
+ * would draw the row twice.
+ *
+ * A model only a STALE span backs is pre-rebase history whose place in the
+ * new space is not yet known - appending it to the tail would publish it at a
+ * position it never had. It stays behind its placeholder unless a live record
+ * also backs it, in which case it is the newest thing the client holds and
+ * belongs at the tail exactly as any live record does.
+ */
+function appendUnplacedRenderedRows(input: {
+  readonly window: TranscriptWindow;
+  readonly rendered: readonly ChatMessageModel[];
+  readonly placedRowIds: ReadonlySet<string>;
+  readonly skeletonOrdinals: ReadonlyMap<string, number>;
+  readonly rows: TranscriptListRow[];
+}): void {
+  const { window } = input;
+  let unplacedLiveRowIds: ReadonlySet<string> | null = null;
+  const staleRowIds = spanRowIds(window.staleSpans);
+  for (const model of input.rendered) {
+    if (input.placedRowIds.has(model.id)) continue;
+    if (input.skeletonOrdinals.has(model.id)) continue;
+    if (staleRowIds.has(model.id)) {
+      unplacedLiveRowIds ??= liveRecordRowIds(window);
+      const liveBacked =
+        unplacedLiveRowIds.has(model.id) ||
+        (model.persistentMessageId !== null &&
+          unplacedLiveRowIds.has(model.persistentMessageId));
+      if (!liveBacked) continue;
+    }
+    input.rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
+  }
 }
 
 /**

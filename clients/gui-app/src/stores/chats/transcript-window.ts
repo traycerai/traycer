@@ -238,6 +238,31 @@ export interface TranscriptWindow {
   /** Disjoint and sorted by `fromOrdinal`. */
   readonly spans: readonly HydratedSpan[];
   /**
+   * Spans a rebase or index void discarded, retained for DISPLAY ONLY.
+   *
+   * A completion rebase renumbers ordinals but barely changes row IDENTITY:
+   * nearly every row of the old space exists in the new one under the same row
+   * id. Dropping the bodies outright therefore repaints the whole transcript
+   * as placeholders for the length of a resnapshot round trip - the completion
+   * "flash" - when the client is holding perfectly renderable bodies for rows
+   * the replacement index is about to name again.
+   *
+   * These spans keep their PREVIOUS coordinates. They answer no hydration
+   * question: {@link transcriptHydrationGaps} and every planner read the fresh
+   * spans only, so everything a stale span covers is still refetched. The row
+   * merger alone consumes them, by row id against the replacement skeleton
+   * where one exists and by old ordinal into entry-less holes where it does
+   * not - so a mispositioned guess can survive at most until the entry for
+   * that ordinal arrives.
+   *
+   * Retired by authority, never by trust: a freshly served span covering all
+   * of a stale span's rows replaces it; a complete replacement skeleton
+   * retires every stale span it does not name; a zero-row authority clears
+   * them outright. Bounded by {@link TRANSCRIPT_WINDOW_MAX_BYTES} at the
+   * carry.
+   */
+  readonly staleSpans: readonly HydratedSpan[];
+  /**
    * Records the client holds that the INDEX has not placed yet.
    *
    * The client-side mirror of an asymmetry the host cannot avoid: a
@@ -401,6 +426,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     // mechanism.
     indexRevisionRebuilding: true,
     spans: [],
+    staleSpans: [],
     liveMessages: [],
     liveEvents: [],
     snapshotProvisionalMessageIds: [],
@@ -882,14 +908,23 @@ export function mapWindowMessages(
         }
       : span;
   });
+  // Stale copies too, for the same reason {@link rewriteWindowMessage}
+  // reaches them: a remap that skips a displayed copy leaves that copy
+  // rendering the pre-remap record for as long as it survives.
+  const staleSpans = window.staleSpans.map((span) => {
+    const messages = span.messages.map(update);
+    return changedFrom(span.messages, messages) ? { ...span, messages } : span;
+  });
   const liveMessages = window.liveMessages.map(update);
   const touched =
     changedFrom(window.liveMessages, liveMessages) ||
-    spans.some((span, index) => span !== window.spans[index]);
+    spans.some((span, index) => span !== window.spans[index]) ||
+    staleSpans.some((span, index) => span !== window.staleSpans[index]);
   if (!touched) return window;
   return {
     ...window,
     spans,
+    staleSpans,
     liveMessages,
     hydratedBytes: totalBytes(spans),
   };
@@ -940,12 +975,35 @@ function rewriteWindowMessage(
   // so a second call is harmless" is a property of today's callers, not of the
   // signature.
   const spanIndexes = window.spans.map((span) => indexIn(span.messages));
+  const staleIndexes = window.staleSpans.map((span) => indexIn(span.messages));
   const liveIndex = indexIn(window.liveMessages);
   // Computed rather than accumulated in a flag: an assignment inside a `map`
   // callback is invisible to control-flow narrowing, so a `let held = false`
   // read afterwards is typed `false` and the guard below reads as dead code.
-  const held = liveIndex >= 0 || spanIndexes.some((index) => index >= 0);
+  //
+  // A copy held ONLY by a stale span still counts as held, and rewriting it is
+  // load-bearing rather than tidy: while a turn streams, its row can be
+  // demoted to stale (a rebase, a genuine rewrite of a sibling), and if the
+  // deltas stopped reaching that copy the display would freeze - or worse,
+  // the applier would restart an empty live accumulator and the turn would
+  // render as TWO blocks, the frozen prefix and the post-demotion remainder,
+  // with an in-progress block (a compaction bar) duplicated across both.
+  const held =
+    liveIndex >= 0 ||
+    spanIndexes.some((index) => index >= 0) ||
+    staleIndexes.some((index) => index >= 0);
   if (!held) return { window, held: false };
+  const staleSpans = staleIndexes.every((index) => index < 0)
+    ? window.staleSpans
+    : window.staleSpans.map((span, spanIndex) => {
+        const index = staleIndexes[spanIndex];
+        if (index < 0) return span;
+        const messages = span.messages.slice();
+        messages[index] = update(messages[index]);
+        // Stale bytes are bounded at the carry and never charged to
+        // `hydratedBytes`, so no re-measure here.
+        return { ...span, messages };
+      });
   const spans = window.spans.map((span, spanIndex) => {
     const index = spanIndexes[spanIndex];
     if (index < 0) return span;
@@ -977,6 +1035,7 @@ function rewriteWindowMessage(
     window: {
       ...window,
       spans,
+      staleSpans,
       liveMessages,
       hydratedBytes: totalBytes(spans),
       unsettledByteMessageIds:
@@ -1628,6 +1687,13 @@ export function applyWindowedSnapshot(
           // A concrete revision here IS the new baseline, so the flag the
           // spread armed is spent. `null` leaves it armed for the restream.
           indexRevisionRebuilding: input.indexRevision === null,
+          // The discarded bodies stay renderable while the replacement
+          // skeleton streams in - the completion rebase renames almost no row
+          // id, so repainting the whole chat as placeholders for the length
+          // of the restream trades held content for a flash. See
+          // {@link TranscriptWindow.staleSpans}.
+          staleSpans:
+            input.rowCount > 0 ? staleCarrySpans(reconciledWindow) : [],
           invalidated: missedDeltas,
           clock,
         }
@@ -1800,12 +1866,14 @@ function seatSnapshotTailSpan(input: {
     servedAt: clock,
   };
   const spans = insertSpan(completeBase.spans, tailSpan);
-  return pruneSupersededLiveRecords(
-    { ...completeBase, spans, hydratedBytes: totalBytes(spans) },
-    servedAssistantTurns(
-      declaredCompleteTailRowIds(tail),
-      tail.messages,
-      tail.events,
+  return retireCoveredStaleSpans(
+    pruneSupersededLiveRecords(
+      { ...completeBase, spans, hydratedBytes: totalBytes(spans) },
+      servedAssistantTurns(
+        declaredCompleteTailRowIds(tail),
+        tail.messages,
+        tail.events,
+      ),
     ),
   );
 }
@@ -1898,14 +1966,21 @@ function boundWindowToRowCount(
 ): TranscriptWindow {
   const skeleton = window.skeleton.slice(0, rowCount);
   const spans = window.spans.filter((span) => spanEnd(span) <= rowCount);
+  // Zero rows is authority about the ROWS, not the coordinates: nothing the
+  // stale bodies describe exists any more, whatever ordinals they carried.
+  // A nonzero shrink keeps them - their rows may simply have been renumbered,
+  // and the row merger already clamps display to the announced space.
+  const staleSpans = rowCount === 0 ? [] : window.staleSpans;
   const changed =
     skeleton.length !== window.skeleton.length ||
-    spans.length !== window.spans.length;
+    spans.length !== window.spans.length ||
+    staleSpans.length !== window.staleSpans.length;
   if (!changed) return window;
   return {
     ...window,
     skeleton,
     spans,
+    staleSpans,
     hydratedBytes: totalBytes(spans),
     skeletonStreamCoveredThrough: Math.min(
       window.skeletonStreamCoveredThrough,
@@ -2037,11 +2112,40 @@ export function applySkeletonChunk(
     chunk.fromOrdinal,
     chunk.fromOrdinal + chunk.entries.length,
   );
-  return reconcileSpansWithSkeleton(
-    unavailableReconciled,
-    chunk.fromOrdinal,
-    chunk.fromOrdinal + chunk.entries.length,
+  return retireUnnamedStaleSpans(
+    reconcileSpansWithSkeleton(
+      unavailableReconciled,
+      chunk.fromOrdinal,
+      chunk.fromOrdinal + chunk.entries.length,
+    ),
   );
+}
+
+/**
+ * Once a replacement skeleton is COMPLETE, it is authority on which rows
+ * exist: a stale span none of whose rows it names describes history that is
+ * gone, and keeping it would let a deleted row render forever.
+ *
+ * Only on a complete skeleton - absence from a partial stream proves nothing -
+ * and only from the skeleton-chunk path, which is where every post-rebase
+ * restream ends. Whole spans: a kept span may still hold the odd unnamed row,
+ * which the row merger simply never draws (it places by skeleton name or into
+ * an entry-less hole, and a complete skeleton has no holes).
+ */
+function retireUnnamedStaleSpans(window: TranscriptWindow): TranscriptWindow {
+  if (!window.skeletonComplete || window.staleSpans.length === 0) {
+    return window;
+  }
+  const named = new Set<string>();
+  for (const entry of window.skeleton) {
+    if (entry !== undefined) named.add(entry.rowId);
+  }
+  const kept = window.staleSpans.filter((span) =>
+    span.rowIds.some((rowId) => named.has(rowId)),
+  );
+  return kept.length === window.staleSpans.length
+    ? window
+    : { ...window, staleSpans: kept };
 }
 
 function reconcileUnavailableRowsWithSkeleton(
@@ -2218,6 +2322,50 @@ export function bodyInvalidatingOrdinals(
 /** The `steer:` row-id prefix, taken from the builder rather than restated. */
 const STEER_ROW_ID_PREFIX = queueSteerRowId("");
 
+/**
+ * Is this `updated` frame the index's own echo of the turn the client is
+ * already streaming?
+ *
+ * While a turn streams, the host emits `blockDelta` frames per token batch and,
+ * on the same ordered stream, an `updated` index frame naming the growing
+ * assistant slice. By the time that `updated` arrives, every delta that
+ * produced it has already been applied in place ({@link streamWindowMessage}
+ * rewrites the record wherever the window holds it, live or span), so the
+ * client's copy of the turn's records is at least as fresh as the body the
+ * index frame describes. Dropping spans and superseding in-flight hydration
+ * for such a frame buys nothing - and on a chat dominated by one long-running
+ * turn it is a starvation loop: the per-token-batch `updated` widens to the
+ * whole turn, so every hydration answer for the turn's rows is discarded on
+ * arrival and every span that does seat is destroyed before the next frame,
+ * leaving the entire mid-transcript as placeholders (and a continuous
+ * request/discard traffic loop) for as long as the turn streams.
+ *
+ * The judgement is deliberately strict: every `updated` entry must name a row
+ * of the ACTIVE turn, matched through the same canonical row-turn identity the
+ * rest of this module uses. A frame naming any other row - a steer body, an
+ * event row, a historical turn - keeps today's drop-and-refetch, because those
+ * rewrites are not mirrored by the delta stream. A `reindexed` in the frame
+ * disqualifies it outright; that path voids the window before this question is
+ * ever asked, and answering `true` for it here would be a lie waiting for a
+ * reordering.
+ */
+export function isActiveTurnStreamingEcho(
+  changes: readonly ChatIndexChange[],
+  activeTurnId: string | null,
+): boolean {
+  if (activeTurnId === null) return false;
+  let sawUpdated = false;
+  for (const change of changes) {
+    if (change.type === "reindexed") return false;
+    if (change.type !== "updated") continue;
+    for (const { entry } of change.entries) {
+      sawUpdated = true;
+      if (assistantRowTurnKey(entry.rowId) !== activeTurnId) return false;
+    }
+  }
+  return sawUpdated;
+}
+
 /** The turn an ordinal's row belongs to, or `null` if the skeleton cannot say. */
 function turnKeyAt(window: TranscriptWindow, ordinal: number): string | null {
   const entry = window.skeleton[ordinal];
@@ -2296,6 +2444,64 @@ export function recordSharingOrdinals(
 }
 
 /**
+ * What a rebase or void carries into {@link TranscriptWindow.staleSpans}.
+ *
+ * The freshly discarded spans plus whatever was already stale (a second rebase
+ * before the first one's replacement landed), deduplicated by row coverage -
+ * a span earns its place only by contributing at least one row id nothing
+ * warmer already covers - and bounded by the window budget, warmest first, so
+ * the rows the reader was just looking at are the ones that survive.
+ */
+function staleCarrySpans(window: TranscriptWindow): readonly HydratedSpan[] {
+  return boundedStaleSpans([...window.spans, ...window.staleSpans]);
+}
+
+/**
+ * The dedupe-and-bound shared by every path that demotes spans to stale:
+ * warmest first, a span earns its place only by contributing an uncovered row
+ * id, and the total stays within the window budget.
+ */
+function boundedStaleSpans(
+  candidates: readonly HydratedSpan[],
+): readonly HydratedSpan[] {
+  const sorted = [...candidates].sort(
+    (left, right) => right.touchedAt - left.touchedAt,
+  );
+  const covered = new Set<string>();
+  const carried: HydratedSpan[] = [];
+  let bytes = 0;
+  for (const span of sorted) {
+    if (bytes + span.bytes > TRANSCRIPT_WINDOW_MAX_BYTES) continue;
+    if (!span.rowIds.some((rowId) => !covered.has(rowId))) continue;
+    for (const rowId of span.rowIds) covered.add(rowId);
+    carried.push(span);
+    bytes += span.bytes;
+  }
+  return carried;
+}
+
+/**
+ * Drop every stale span whose rows a FRESH span now fully covers.
+ *
+ * Runs after each seat. Coverage is judged by row id rather than ordinal
+ * because that is the axis a stale span is consumed on - an ordinal
+ * comparison would compare two different coordinate spaces.
+ */
+function retireCoveredStaleSpans(window: TranscriptWindow): TranscriptWindow {
+  if (window.staleSpans.length === 0) return window;
+  const fresh = new Set<string>();
+  for (const span of window.spans) {
+    for (const rowId of span.rowIds) fresh.add(rowId);
+  }
+  const kept = window.staleSpans.filter((span) =>
+    span.rowIds.some((rowId) => !fresh.has(rowId)),
+  );
+  return kept.length === window.staleSpans.length
+    ? window
+    : { ...window, staleSpans: kept };
+}
+
+/**
  * The window a frame has just proved unusable: void, at the frame's own
  * coordinates.
  *
@@ -2334,6 +2540,10 @@ function voidedTranscriptWindow(
     // does. A zero-row authority drops it immediately; otherwise the complete
     // replacement skeleton or durable range retires it.
     liveMessages,
+    // The discarded bodies stay renderable while the replacement index
+    // streams in - see {@link TranscriptWindow.staleSpans}. A zero-row
+    // authority means the rows themselves are gone, so nothing is carried.
+    staleSpans: input.rowCount > 0 ? staleCarrySpans(window) : [],
     invalidated: true,
     clock: window.clock + 1,
   };
@@ -2396,6 +2606,13 @@ export function applyIndexChange(
     readonly rowCount: number;
     readonly indexRevision: number;
     readonly changes: readonly ChatIndexChange[];
+    /**
+     * The turn currently streaming, if any - the store's `activeTurn`. An
+     * `updated` frame that is purely that turn's streaming echo skips the
+     * span drop (see {@link isActiveTurnStreamingEcho}); the skeleton entries
+     * it carries are folded either way.
+     */
+    readonly activeTurnId: string | null;
   },
 ): TranscriptWindow {
   // Before the change kinds are even read: a straggler's `reindexed` describes
@@ -2574,13 +2791,35 @@ export function applyIndexChange(
     appendCursor > appendBase
       ? reconcileSpansWithSkeleton(next, appendBase, appendCursor)
       : next;
-  // Widened to the turn BEFORE the reach is computed: the containing-span seed
-  // below is exact only when the rewritten row is hydrated, and a sibling slice
-  // holding the same turn's records is the case where it is not. See
-  // {@link recordSharingOrdinals}.
+  return reconcileUpdatedBodies(reconciled, input, invalidated);
+}
+
+/**
+ * The `updated` half of a delta's fold: drop the rewritten bodies' spans -
+ * unless the frame is the ACTIVE turn's own streaming echo, whose deltas have
+ * already rewritten the held records in place, in which case there is nothing
+ * stale to drop and dropping anyway starves the turn's hydration for as long
+ * as it streams. See {@link isActiveTurnStreamingEcho}.
+ *
+ * Widened to the turn BEFORE the reach is computed: the containing-span seed
+ * inside the drop is exact only when the rewritten row is hydrated, and a
+ * sibling slice holding the same turn's records is the case where it is not.
+ * See {@link recordSharingOrdinals}.
+ */
+function reconcileUpdatedBodies(
+  window: TranscriptWindow,
+  input: {
+    readonly changes: readonly ChatIndexChange[];
+    readonly activeTurnId: string | null;
+  },
+  invalidated: readonly number[],
+): TranscriptWindow {
+  if (isActiveTurnStreamingEcho(input.changes, input.activeTurnId)) {
+    return window;
+  }
   return dropSpansForUpdatedOrdinals(
-    reconciled,
-    recordSharingOrdinals(reconciled, invalidated),
+    window,
+    recordSharingOrdinals(window, invalidated),
   );
 }
 
@@ -2645,11 +2884,85 @@ function dropSpansForUpdatedOrdinals(
     for (const message of span.messages) staleRecordIds.add(message.messageId);
     for (const event of span.events) staleRecordIds.add(event.eventId);
   }
-  const kept = window.spans.filter(
-    (span) => !containsUpdated(span) && !spanSharesRecord(span, staleRecordIds),
-  );
-  if (kept.length === window.spans.length) return window;
-  return { ...window, spans: kept, hydratedBytes: totalBytes(kept) };
+  const kept: HydratedSpan[] = [];
+  const dropped: HydratedSpan[] = [];
+  for (const span of window.spans) {
+    if (!containsUpdated(span) && !spanSharesRecord(span, staleRecordIds)) {
+      kept.push(span);
+    } else {
+      dropped.push(span);
+    }
+  }
+  if (dropped.length === 0) return window;
+  return {
+    ...window,
+    spans: kept,
+    // The dropped bodies keep rendering while the refetch is in flight - a
+    // rewrite's brief stale body beats a placeholder flash, and the gap the
+    // drop opens still refetches either way. See
+    // {@link TranscriptWindow.staleSpans}.
+    staleSpans: boundedStaleSpans([...dropped, ...window.staleSpans]),
+    hydratedBytes: totalBytes(kept),
+  };
+}
+
+/**
+ * The window's own copy of a record, wherever it is held.
+ *
+ * Live records first: they are the copies the delta stream rewrites most
+ * directly, and the set is small. Spans after, because a span-held copy of a
+ * streaming record is rewritten in place too ({@link streamWindowMessage}).
+ */
+function heldMessageCopy(
+  window: TranscriptWindow,
+  messageId: string,
+): Message | null {
+  for (const message of window.liveMessages) {
+    if (message.messageId === messageId) return message;
+  }
+  for (const span of window.spans) {
+    for (const message of span.messages) {
+      if (message.messageId === messageId) return message;
+    }
+  }
+  return null;
+}
+
+/**
+ * While a turn streams, the held copy of its assistant message outranks any
+ * served one.
+ *
+ * A range response is generated when the host slices it, and the BULK lane can
+ * deliver it long after - during which the delta stream has kept rewriting the
+ * client's copy in place. Seating the served copy verbatim would regress the
+ * visible body, and worse: {@link pruneSupersededLiveRecords} drops a live
+ * record the moment a span carries its id, so the older served copy would
+ * *replace* the fresher one rather than sit beside it. The stream is the
+ * authority on the active turn's body for as long as the turn is active, so
+ * the served copy is substituted with the held one at the seat.
+ *
+ * Only the ACTIVE turn's assistant message: every other record is not being
+ * rewritten client-side, so the served copy is the freshest thing the client
+ * can hold.
+ */
+function preferHeldActiveTurnMessages(
+  window: TranscriptWindow,
+  messages: readonly Message[],
+  activeTurnId: string | null,
+): readonly Message[] {
+  if (activeTurnId === null) return messages;
+  // A Map rather than a copied-array-in-a-closure: an assignment inside a
+  // callback is invisible to control-flow narrowing, which this module has
+  // paid for before (see {@link rewriteWindowMessage}).
+  const substitutions = new Map<number, Message>();
+  messages.forEach((message, index) => {
+    if (message.role !== "assistant") return;
+    if (assistantTurnKey(message) !== activeTurnId) return;
+    const held = heldMessageCopy(window, message.messageId);
+    if (held !== null) substitutions.set(index, held);
+  });
+  if (substitutions.size === 0) return messages;
+  return messages.map((message, index) => substitutions.get(index) ?? message);
 }
 
 /**
@@ -2676,6 +2989,8 @@ function dropSpansForUpdatedOrdinals(
 export function applyRangeResponse(
   window: TranscriptWindow,
   response: ChatRangeResponse,
+  /** The streaming turn, if any - see {@link preferHeldActiveTurnMessages}. */
+  activeTurnId: string | null,
 ): TranscriptWindow {
   if (response.epoch !== window.epoch) return window;
   if (response.rowIds.length === 0) return window;
@@ -2720,23 +3035,27 @@ export function applyRangeResponse(
           rowIdSet,
           setupRowsBeforeRun,
         );
-        next = applyRangeResponse(next, {
-          ...response,
-          fromOrdinal: response.fromOrdinal + runStart,
-          rowIds,
-          messages: records.messages,
-          events: records.events,
-          incompleteRowIds: response.incompleteRowIds?.filter((id) =>
-            rowIdSet.has(id),
-          ),
-          rowContext: Object.fromEntries(
-            Object.entries(response.rowContext).filter(([id]) =>
+        next = applyRangeResponse(
+          next,
+          {
+            ...response,
+            fromOrdinal: response.fromOrdinal + runStart,
+            rowIds,
+            messages: records.messages,
+            events: records.events,
+            incompleteRowIds: response.incompleteRowIds?.filter((id) =>
               rowIdSet.has(id),
             ),
-          ),
-          reachedStart: response.reachedStart && runStart === 0,
-          reachedEnd: response.reachedEnd && index === response.rowIds.length,
-        });
+            rowContext: Object.fromEntries(
+              Object.entries(response.rowContext).filter(([id]) =>
+                rowIdSet.has(id),
+              ),
+            ),
+            reachedStart: response.reachedStart && runStart === 0,
+            reachedEnd: response.reachedEnd && index === response.rowIds.length,
+          },
+          activeTurnId,
+        );
         setupRowsBeforeRun += rowIds.filter((rowId) =>
           rowId.startsWith("setup-card:"),
         ).length;
@@ -2760,29 +3079,36 @@ export function applyRangeResponse(
   );
   const clock = completeWindow.clock + 1;
   const contextBytes = contextByteLength(response.rowContext);
+  const messages = preferHeldActiveTurnMessages(
+    completeWindow,
+    response.messages,
+    activeTurnId,
+  );
   const span: HydratedSpan = {
     fromOrdinal: response.fromOrdinal,
     rowIds: response.rowIds,
     rowContext: response.rowContext,
-    messages: response.messages,
+    messages,
     events: response.events,
-    bytes: recordsByteLength(response.messages, response.events) + contextBytes,
+    bytes: recordsByteLength(messages, response.events) + contextBytes,
     contextBytes,
     touchedAt: clock,
     servedAt: clock,
   };
   const spans = insertSpan(completeWindow.spans, span);
-  return pruneSupersededLiveRecords(
-    {
-      ...completeWindow,
-      spans,
-      hydratedBytes: totalBytes(spans),
-      clock,
-    },
-    servedAssistantTurns(
-      completeServedRowIds(response.rowIds, response.incompleteRowIds),
-      response.messages,
-      response.events,
+  return retireCoveredStaleSpans(
+    pruneSupersededLiveRecords(
+      {
+        ...completeWindow,
+        spans,
+        hydratedBytes: totalBytes(spans),
+        clock,
+      },
+      servedAssistantTurns(
+        completeServedRowIds(response.rowIds, response.incompleteRowIds),
+        messages,
+        response.events,
+      ),
     ),
   );
 }
@@ -2802,6 +3128,14 @@ export function hydratedRowContext(
   window: TranscriptWindow,
 ): Readonly<Record<string, TranscriptRowContext>> {
   const out: Record<string, TranscriptRowContext> = {};
+  // Stale first, so a fresh span's context overwrites a carried copy of the
+  // same row - the map is keyed by row id, which is the axis stale spans are
+  // consumed on.
+  for (const span of window.staleSpans) {
+    for (const rowId of Object.keys(span.rowContext)) {
+      out[rowId] = span.rowContext[rowId];
+    }
+  }
   for (const span of window.spans) {
     for (const rowId of Object.keys(span.rowContext)) {
       out[rowId] = span.rowContext[rowId];
@@ -2970,15 +3304,24 @@ export function hydratedRecords(window: TranscriptWindow): {
    */
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
 } {
+  // Stale spans AFTER the fresh ones, so a record served since the rebase
+  // takes both position and body: `servedAt` rides the window clock, which is
+  // continuous across a rebase, so every post-rebase serve outranks every
+  // carried copy. They must be here at all because the row merger can only
+  // draw a stale row whose records reach `rendered`.
+  const spans =
+    window.staleSpans.length === 0
+      ? window.spans
+      : [...window.spans, ...window.staleSpans];
   return {
     messages: dedupeByFreshestSpan(
-      window.spans,
+      spans,
       (span) => span.messages,
       window.liveMessages,
       (message) => message.messageId,
     ),
     events: dedupeByFreshestSpan(
-      window.spans,
+      spans,
       (span) => span.events,
       window.liveEvents,
       (event) => event.eventId,

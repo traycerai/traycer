@@ -110,6 +110,7 @@ function windowOf(input: {
   invalidated: boolean;
   liveMessages?: readonly Message[];
   liveEvents?: readonly ChatEvent[];
+  staleSpans?: readonly HydratedSpan[];
 }): TranscriptWindow {
   return {
     epoch: 1,
@@ -120,6 +121,7 @@ function windowOf(input: {
     skeletonComplete: input.skeletonComplete,
     skeletonStreamCoveredThrough: input.skeletonComplete ? input.rowCount : 0,
     spans: input.spans,
+    staleSpans: input.staleSpans ?? [],
     liveMessages: [...(input.liveMessages ?? [])],
     liveEvents: [...(input.liveEvents ?? [])],
     snapshotProvisionalMessageIds: [],

@@ -47,6 +47,7 @@ import {
   evictTranscriptWindowToBudget,
   hydratedRecords,
   hydratedRowContext,
+  isActiveTurnStreamingEcho,
   isTailHydrated,
   mapWindowMessages,
   planTranscriptHydration,
@@ -2649,6 +2650,17 @@ export function createChatSessionStoreWithNotificationDependencies(
      * re-stream, over and over for as long as aux traffic keeps arriving.
      */
     let accumulatedSummaryGeneration = -1;
+    /**
+     * The replacement summary generation being assembled, unpublished.
+     *
+     * `null` when no chunk of the current generation has arrived yet. Kept
+     * out of the store so the panel renders the previous COMPLETE set while
+     * a replacement streams in - publishing partial assemblies is the
+     * "2 files changed" flash mid-restream.
+     */
+    let assemblingSummaries:
+      | readonly ChatAccumulatedFileChangeSummary[]
+      | null = null;
 
     const outstandingHydrationRequests = new Map<
       string,
@@ -3677,6 +3689,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // as the summaries themselves, below.
         if (frame.snapshot.indexRevision === null) {
           accumulatedSummaryGeneration = -1;
+          assemblingSummaries = null;
           // The retained array is now the PREVIOUS generation's, so it vouches
           // for nothing until a replacement chunk lands - including when its
           // length already equals the authoritative count.
@@ -3771,17 +3784,30 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           return;
         }
-        // BEFORE the fold, because it reads the epoch the in-flight request
-        // was framed against and the fold can move it.
-        supersedeInFlightHydration({
-          epoch: frame.epoch,
-          changes: frame.changes,
-        });
+        const activeTurnId = get().activeTurn?.turnId ?? null;
+        // The streaming turn's own index echo supersedes nothing: the deltas
+        // that produced it have already rewritten the held records, so an
+        // answer in flight for that turn's rows is not stale. Discarding it
+        // anyway is a starvation loop on a chat dominated by one long turn -
+        // every answer arrives after the next echo and hydration never lands.
+        const streamingEcho = isActiveTurnStreamingEcho(
+          frame.changes,
+          activeTurnId,
+        );
+        if (!streamingEcho) {
+          // BEFORE the fold, because it reads the epoch the in-flight request
+          // was framed against and the fold can move it.
+          supersedeInFlightHydration({
+            epoch: frame.epoch,
+            changes: frame.changes,
+          });
+        }
         const window = applyIndexChange(get().transcriptWindow, {
           epoch: frame.epoch,
           rowCount: frame.rowCount,
           indexRevision: frame.indexRevision,
           changes: frame.changes,
+          activeTurnId,
         });
         publishWindowedTranscript(window, null);
         // Covers the `reindexed` case too: `requestPlannedHydration` sends a
@@ -3825,7 +3851,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           return;
         }
         const window = evictTranscriptWindowToBudget(
-          applyRangeResponse(get().transcriptWindow, frame.range),
+          applyRangeResponse(
+            get().transcriptWindow,
+            frame.range,
+            get().activeTurn?.turnId ?? null,
+          ),
           TRANSCRIPT_WINDOW_MAX_BYTES,
           // What the reader is looking at is never evicted - see the
           // function's own doc for the oversized-row re-fetch loop this
@@ -3920,36 +3950,50 @@ export function createChatSessionStoreWithNotificationDependencies(
             return;
           }
           accumulatedSummaryGeneration = frame.chunk.generation;
+          // A fresh generation assembles OFF-SCREEN. Publishing its first
+          // chunk immediately repainted the panel with a partial replacement
+          // - "2 files changed" flashing mid-restream over a 6-file set - so
+          // the previous complete set stays published until the replacement
+          // reaches the authoritative count. The seated flag goes false so
+          // the completion watchdog measures the ASSEMBLY, not the retained
+          // array whose length may coincide with the count.
+          assemblingSummaries = [];
+          set({ accumulatedSummaryGenerationSeated: false });
         }
-        set((state) => {
-          const assembled = state.accumulatedFileChangeSummaries;
-          // A chunk starting PAST the end is a chunk whose predecessor was
-          // dropped. `slice(0, fromIndex)` cannot express that - on a shorter
-          // array it silently returns the whole thing and appends, so every
-          // entry from here on sits at an index below the one the host gave
-          // it, and the panel's rows are then attributed to the wrong files.
-          //
-          // Dropped rather than seated at the wrong offset - but dropping
-          // alone is not a recovery. The host re-streams these chunks when the
-          // summaries CHANGE, and it records the set it just sent: a chunk lost
-          // in transit leaves the host believing this subscriber holds that
-          // generation, so ordinary traffic over an unchanged set sends nothing
-          // and the panel stays short - "Review all" held back - for the rest
-          // of the connection. A resnapshot is what restarts the stream, and it
-          // is the same recovery a void index uses.
-          if (frame.chunk.fromIndex > assembled.length) {
-            requestSummaryRestream();
-            return {};
-          }
-          const summaries = [
-            ...assembled.slice(0, frame.chunk.fromIndex),
-            ...frame.chunk.summaries,
-          ];
-          return {
+        // A chunk starting PAST the end is a chunk whose predecessor was
+        // dropped. `slice(0, fromIndex)` cannot express that - on a shorter
+        // array it silently returns the whole thing and appends, so every
+        // entry from here on sits at an index below the one the host gave
+        // it, and the panel's rows are then attributed to the wrong files.
+        //
+        // Dropped rather than seated at the wrong offset - but dropping
+        // alone is not a recovery. The host re-streams these chunks when the
+        // summaries CHANGE, and it records the set it just sent: a chunk lost
+        // in transit leaves the host believing this subscriber holds that
+        // generation, so ordinary traffic over an unchanged set sends nothing
+        // and the panel stays short - "Review all" held back - for the rest
+        // of the connection. A resnapshot is what restarts the stream, and it
+        // is the same recovery a void index uses.
+        const assembled =
+          assemblingSummaries ?? get().accumulatedFileChangeSummaries;
+        if (frame.chunk.fromIndex > assembled.length) {
+          requestSummaryRestream();
+          return;
+        }
+        const summaries = [
+          ...assembled.slice(0, frame.chunk.fromIndex),
+          ...frame.chunk.summaries,
+        ];
+        assemblingSummaries = summaries;
+        // Published only once whole. Until then the previous set keeps the
+        // panel honest, and the watchdog - armed below off the un-seated
+        // flag - is what recovers a replacement stream that stops short.
+        if (summaries.length === get().accumulatedFileChangeCount) {
+          set({
             accumulatedFileChangeSummaries: summaries,
             accumulatedSummaryGenerationSeated: true,
-          };
-        });
+          });
+        }
         // The gap check above only fires when a LATER chunk exposes the hole,
         // so it cannot see the stream simply stopping. Armed after the `set`
         // so the watchdog reads the assembled length this chunk produced.

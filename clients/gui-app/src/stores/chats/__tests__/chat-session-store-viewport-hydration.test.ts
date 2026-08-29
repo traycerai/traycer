@@ -1028,7 +1028,18 @@ describe("chat session viewport hydration: review fixes", () => {
   it("ignores a straggling accumulated-change chunk after the downgrade", () => {
     const harness = createViewportHarness();
     try {
-      hydrateTail(harness);
+      // The snapshot must PROMISE the summary the chunk delivers: a
+      // generation publishes only once it reaches the announced count, so a
+      // count of 0 would leave the chunk assembled off-screen forever.
+      const base = snapshot({
+        rowCount: 40,
+        tailFromOrdinal: 20,
+        tailMessages: [userMessage("tail", 20)],
+      });
+      harness.callbacks().onWindowedSnapshot({
+        ...base,
+        snapshot: { ...base.snapshot, accumulatedFileChangeCount: 1 },
+      });
       harness.callbacks().onAccumulatedChanges(accumulatedChanges("a.ts"));
       expect(
         harness.handle.store.getState().accumulatedFileChangeSummaries,

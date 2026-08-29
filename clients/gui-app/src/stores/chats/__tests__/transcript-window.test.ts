@@ -24,6 +24,7 @@ import {
   evictTranscriptWindowToBudget,
   holdsEveryRecordFrom,
   hydratedRecords,
+  isActiveTurnStreamingEcho,
   mapWindowMessages,
   planTranscriptHydration,
   settleWindowBytes,
@@ -186,14 +187,18 @@ describe("windowed snapshot seating", () => {
     // An aux-only re-broadcast (a queue change, an approval) re-sends the
     // snapshot. Dropping hydrated history on one of those would make ordinary
     // chat activity evict the rows on screen.
-    const seeded = applyRangeResponse(windowWithSkeleton(10), {
-      ...rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["row-0", "row-1"],
-        messages: [userMessage("m-0", 0)],
-      }),
-    });
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(10),
+      {
+        ...rangeResponse({
+          epoch: 1,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0)],
+        }),
+      },
+      null,
+    );
     expect(seeded.spans).toHaveLength(1);
 
     const refreshed = applyWindowedSnapshot(seeded, {
@@ -214,6 +219,7 @@ describe("windowed snapshot seating", () => {
         rowIds: ["row-0", "row-1"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
     );
     const rebased = applyWindowedSnapshot(seeded, {
       epoch: 2,
@@ -361,6 +367,7 @@ describe("skeleton chunks", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
     );
     const contradicting = applySkeletonChunk(hydrated, {
       epoch: 1,
@@ -384,8 +391,10 @@ describe("index deltas", () => {
         rowIds: ["row-0", "row-1"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
     );
     const appended = applyIndexChange(held, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 6,
       indexRevision: 1,
@@ -419,6 +428,7 @@ describe("index deltas", () => {
     expect(partial.skeleton).toHaveLength(30);
 
     const appended = applyIndexChange(partial, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 102,
       indexRevision: 1,
@@ -442,6 +452,7 @@ describe("index deltas", () => {
     const held = windowWithSkeleton(100);
 
     const afterLoss = applyIndexChange(held, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 102,
       indexRevision: 1,
@@ -460,6 +471,7 @@ describe("index deltas", () => {
     const held = windowWithSkeleton(100);
 
     const appended = applyIndexChange(held, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 102,
       indexRevision: 1,
@@ -495,6 +507,7 @@ describe("index deltas", () => {
     expect(seeded.rowCount).toBe(1);
 
     const appended = applyIndexChange(seeded, {
+      activeTurnId: null,
       epoch: 0,
       rowCount: 1,
       indexRevision: 1,
@@ -534,6 +547,7 @@ describe("index deltas", () => {
     });
 
     const appended = applyIndexChange(seeded, {
+      activeTurnId: null,
       epoch: 0,
       rowCount: 3,
       indexRevision: 1,
@@ -560,10 +574,12 @@ describe("index deltas", () => {
         rowIds: ["row-0", "row-1", "row-2"],
         messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
       }),
+      null,
     );
     expect(held.spans).toHaveLength(1);
 
     const updated = applyIndexChange(held, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 4,
       indexRevision: 1,
@@ -591,8 +607,10 @@ describe("index deltas", () => {
         rowIds: ["row-2"],
         messages: [userMessage("m-2", 2)],
       }),
+      null,
     );
     const next = applyIndexChange(held, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 5,
       indexRevision: 1,
@@ -620,8 +638,10 @@ describe("index deltas", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
     );
     const reindexed = applyIndexChange(held, {
+      activeTurnId: null,
       epoch: 2,
       rowCount: 3,
       indexRevision: 1,
@@ -643,6 +663,7 @@ describe("index deltas", () => {
       tail: { fromOrdinal: 4, messages: [], events: [] },
     });
     const stale = applyIndexChange(window, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 99,
       indexRevision: 1,
@@ -668,9 +689,11 @@ describe("index deltas", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
     );
     expect(held.spans).toHaveLength(1);
     const ahead = applyIndexChange(held, {
+      activeTurnId: null,
       epoch: 2,
       rowCount: 6,
       indexRevision: 3,
@@ -695,6 +718,7 @@ describe("index deltas", () => {
     // the entries would put real rows at ordinals they do not occupy - the same
     // silent mis-seating the append-count detector exists for, one epoch over.
     const ahead = applyIndexChange(windowWithSkeleton(4), {
+      activeTurnId: null,
       epoch: 2,
       rowCount: 5,
       indexRevision: 1,
@@ -702,6 +726,166 @@ describe("index deltas", () => {
     });
     expect(ahead.skeleton).toEqual([]);
     expect(ahead.skeletonComplete).toBe(false);
+  });
+});
+
+describe("isActiveTurnStreamingEcho", () => {
+  const turnId = "T";
+  const rowId = assistantRowId(turnId);
+
+  it("is false when the frame carries a reindexed change", () => {
+    expect(
+      isActiveTurnStreamingEcho(
+        [
+          {
+            type: "updated",
+            entries: [{ ordinal: 0, entry: skeletonEntry(rowId, 0) }],
+          },
+          { type: "reindexed" },
+        ],
+        turnId,
+      ),
+    ).toBe(false);
+  });
+
+  it("is false when an updated entry names a row outside the active turn", () => {
+    // An event row id, not an assistant row of any turn.
+    expect(
+      isActiveTurnStreamingEcho(
+        [
+          {
+            type: "updated",
+            entries: [{ ordinal: 0, entry: skeletonEntry("event-row-1", 0) }],
+          },
+        ],
+        turnId,
+      ),
+    ).toBe(false);
+  });
+
+  it("is false when the frame carries no updated change at all", () => {
+    expect(
+      isActiveTurnStreamingEcho(
+        [{ type: "appended", entries: skeletonEntries(0, 1) }],
+        turnId,
+      ),
+    ).toBe(false);
+  });
+
+  it("is false when there is no active turn", () => {
+    expect(
+      isActiveTurnStreamingEcho(
+        [
+          {
+            type: "updated",
+            entries: [{ ordinal: 0, entry: skeletonEntry(rowId, 0) }],
+          },
+        ],
+        null,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("the active turn's streaming echo exemption in applyIndexChange", () => {
+  function heldAssistantTurnWindow(turnId: string): TranscriptWindow {
+    const seeded = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [skeletonEntry(assistantRowId(turnId), 0)],
+        isFinal: true,
+      },
+    );
+    return applyRangeResponse(
+      seeded,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-streaming", turnId, 1)],
+      }),
+      null,
+    );
+  }
+
+  it("an updated frame naming only the active turn's assistant rows keeps the turn's spans", () => {
+    const turnId = "T";
+    const held = heldAssistantTurnWindow(turnId);
+    expect(held.spans).toHaveLength(1);
+
+    const rewrittenEntry = {
+      ...skeletonEntry(assistantRowId(turnId), 0),
+      byteLength: 999,
+    };
+    const updated = applyIndexChange(held, {
+      activeTurnId: turnId,
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 0, entry: rewrittenEntry }],
+        },
+      ],
+    });
+
+    // The span is exempt from the drop while it names only the active turn.
+    expect(updated.spans).toHaveLength(1);
+    expect(updated.spans).toBe(held.spans);
+    // The skeleton entry the frame carried is folded in regardless.
+    expect(updated.skeleton[0]?.byteLength).toBe(999);
+  });
+
+  it("drops the span when there is no active turn", () => {
+    const turnId = "T";
+    const held = heldAssistantTurnWindow(turnId);
+
+    const updated = applyIndexChange(held, {
+      activeTurnId: null,
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [
+            { ordinal: 0, entry: skeletonEntry(assistantRowId(turnId), 0) },
+          ],
+        },
+      ],
+    });
+
+    expect(updated.spans).toEqual([]);
+  });
+
+  it("drops the span when the updated entry names a DIFFERENT turn", () => {
+    const turnId = "T";
+    const held = heldAssistantTurnWindow(turnId);
+
+    const updated = applyIndexChange(held, {
+      activeTurnId: "OTHER",
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: 1,
+      changes: [
+        {
+          type: "updated",
+          entries: [
+            { ordinal: 0, entry: skeletonEntry(assistantRowId(turnId), 0) },
+          ],
+        },
+      ],
+    });
+
+    expect(updated.spans).toEqual([]);
   });
 });
 
@@ -719,6 +903,7 @@ describe("range responses", () => {
         rowIds: ["row-1", "SOMETHING-ELSE"],
         messages: [userMessage("m-1", 1)],
       }),
+      null,
     );
     expect(seated.spans).toEqual([]);
   });
@@ -738,6 +923,7 @@ describe("range responses", () => {
         rowIds: ["row-1", "SOMETHING-ELSE"],
         messages: [userMessage("m-1", 1)],
       }),
+      null,
     );
 
     expect(seated.invalidated).toBe(true);
@@ -760,6 +946,7 @@ describe("range responses", () => {
         rowIds: ["row-1"],
         messages: [userMessage("m-1", 1)],
       }),
+      null,
     );
 
     expect(seated.invalidated).toBe(false);
@@ -775,6 +962,7 @@ describe("range responses", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
     );
     expect(seated.spans).toEqual([]);
   });
@@ -796,6 +984,7 @@ describe("range responses", () => {
         messages: [userMessage("m-0", 0), shared],
         events: [sharedEvent],
       }),
+      null,
     );
     const second = applyRangeResponse(
       first,
@@ -806,6 +995,7 @@ describe("range responses", () => {
         messages: [shared, userMessage("m-4", 4)],
         events: [sharedEvent, event("e-4", 4)],
       }),
+      null,
     );
     expect(second.spans).toHaveLength(1);
     const merged = second.spans[0];
@@ -829,6 +1019,103 @@ describe("range responses", () => {
   });
 });
 
+describe("held-copy preference for the active turn", () => {
+  const firstBlock = {
+    type: "text" as const,
+    blockId: "block-1",
+    status: "completed" as const,
+    timestamp: 1,
+    text: "first",
+    providerNotice: null,
+  };
+  const secondBlock = { ...firstBlock, blockId: "block-2", text: "second" };
+
+  function seatedAssistantBlocks(
+    window: TranscriptWindow,
+    messageId: string,
+  ): Extract<Message, { role: "assistant" }>["blocks"] {
+    const seated = hydratedRecords(window).messages.find(
+      (message) => message.messageId === messageId,
+    );
+    if (seated === undefined || seated.role !== "assistant") {
+      throw new Error(`expected an assistant message named ${messageId}`);
+    }
+    return seated.blocks;
+  }
+
+  function heldLongerCopyWindow(turnId: string, messageId: string) {
+    const seeded = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: null,
+        tail: { fromOrdinal: 1, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [skeletonEntry(assistantRowId(turnId), 0)],
+        isFinal: true,
+      },
+    );
+    return appendLiveRecords(seeded, {
+      messages: [
+        {
+          ...assistantMessage(messageId, turnId, 2),
+          blocks: [firstBlock, secondBlock],
+        },
+      ],
+      events: [],
+    });
+  }
+
+  it("a stale range answer cannot regress the actively streaming body", () => {
+    const turnId = "turn-streaming";
+    const messageId = "assistant-streaming";
+    const held = heldLongerCopyWindow(turnId, messageId);
+
+    const seated = applyRangeResponse(
+      held,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          { ...assistantMessage(messageId, turnId, 2), blocks: [firstBlock] },
+        ],
+      }),
+      turnId,
+    );
+
+    // The held (longer) body wins over the served (shorter, stale) one.
+    expect(seatedAssistantBlocks(seated, messageId)).toEqual([
+      firstBlock,
+      secondBlock,
+    ]);
+  });
+
+  it("seats the served copy verbatim when there is no active turn", () => {
+    const turnId = "turn-idle";
+    const messageId = "assistant-idle";
+    const held = heldLongerCopyWindow(turnId, messageId);
+
+    const seated = applyRangeResponse(
+      held,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [assistantRowId(turnId)],
+        messages: [
+          { ...assistantMessage(messageId, turnId, 2), blocks: [firstBlock] },
+        ],
+      }),
+      null,
+    );
+
+    expect(seatedAssistantBlocks(seated, messageId)).toEqual([firstBlock]);
+  });
+});
+
 describe("gaps and what to request next", () => {
   it("reports the unhydrated sub-ranges, clamped to the row count", () => {
     const window = applyRangeResponse(
@@ -839,6 +1126,7 @@ describe("gaps and what to request next", () => {
         rowIds: ["row-4", "row-5"],
         messages: [userMessage("m-4", 4)],
       }),
+      null,
     );
     expect(
       transcriptHydrationGaps(window, { fromOrdinal: 0, toOrdinal: 50 }),
@@ -857,6 +1145,7 @@ describe("gaps and what to request next", () => {
         rowIds: ["row-4", "row-5"],
         messages: [userMessage("m-4", 4)],
       }),
+      null,
     );
     // Two rows hydrated out of ten - the number find has to disclose.
     expect(unhydratedRowCount(window)).toBe(8);
@@ -872,6 +1161,7 @@ describe("gaps and what to request next", () => {
         incompleteRowIds: ["row-before-skeleton"],
         messages: [userMessage("row-before-skeleton", 1)],
       }),
+      null,
     );
 
     expect(partial.unavailableRowOrdinals).toEqual([0]);
@@ -916,6 +1206,7 @@ describe("gaps and what to request next", () => {
         rowIds: Array.from({ length: 20 }, (_u, i) => `row-${20 + i}`),
         messages: [userMessage("m-20", 20)],
       }),
+      null,
     );
     expect(planTranscriptHydration(window, null, [])).toBeNull();
     expect(
@@ -925,6 +1216,7 @@ describe("gaps and what to request next", () => {
 
   it("asks for nothing while the index is void - that owes a resnapshot, not a range", () => {
     const window = applyIndexChange(windowWithSkeleton(10), {
+      activeTurnId: null,
       epoch: 2,
       rowCount: 10,
       indexRevision: 1,
@@ -960,6 +1252,7 @@ describe("gaps and what to request next", () => {
           rowIds: Array.from({ length: 20 }, (_u, i) => `row-${20 + i}`),
           messages: [userMessage("m-20", 20)],
         }),
+        null,
       );
     }
 
@@ -1033,6 +1326,288 @@ describe("gaps and what to request next", () => {
   });
 });
 
+describe("stale spans", () => {
+  it("a rebased snapshot carries the previous spans into staleSpans, and the fresh spans hold only the new inline tail", () => {
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+      }),
+      null,
+    );
+    expect(seeded.spans).toHaveLength(1);
+
+    const rebased = applyWindowedSnapshot(seeded, {
+      epoch: 2,
+      rowCount: 5,
+      indexRevision: null,
+      tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
+    });
+
+    expect(rebased.epoch).toBe(2);
+    expect(rebased.staleSpans).toHaveLength(1);
+    expect(rebased.staleSpans[0].rowIds).toEqual(["row-0", "row-1"]);
+    // The fresh spans hold only the newly seated inline tail.
+    expect(rebased.spans).toHaveLength(1);
+    expect(rebased.spans[0].fromOrdinal).toBe(4);
+  });
+
+  it("carries nothing when the rebased snapshot's rowCount is zero", () => {
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+      null,
+    );
+
+    const rebased = applyWindowedSnapshot(seeded, {
+      epoch: 2,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+    });
+
+    expect(rebased.staleSpans).toEqual([]);
+  });
+
+  it("a reindexed index change carries prior spans into staleSpans and voids the window", () => {
+    const held = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+      null,
+    );
+
+    const reindexed = applyIndexChange(held, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(reindexed.invalidated).toBe(true);
+    expect(reindexed.staleSpans).toHaveLength(1);
+    expect(reindexed.staleSpans[0].rowIds).toEqual(["row-0"]);
+  });
+
+  it("carries nothing when the reindexed frame's rowCount is zero", () => {
+    const held = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+      null,
+    );
+
+    const reindexed = applyIndexChange(held, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 0,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+
+    expect(reindexed.staleSpans).toEqual([]);
+  });
+
+  it("retires a stale span once a fresh range response serves all of its row ids", () => {
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+      }),
+      null,
+    );
+    const rebased = applyWindowedSnapshot(seeded, {
+      epoch: 2,
+      rowCount: 5,
+      indexRevision: null,
+      tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
+    });
+    expect(rebased.staleSpans).toHaveLength(1);
+
+    const skeletoned = applySkeletonChunk(rebased, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: skeletonEntries(0, 5),
+      isFinal: true,
+    });
+
+    const reserved = applyRangeResponse(
+      skeletoned,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("m-0-new", 0), userMessage("m-1-new", 1)],
+      }),
+      null,
+    );
+
+    expect(reserved.staleSpans).toEqual([]);
+  });
+
+  it("retires a stale span the complete replacement skeleton does not name, keeping the ones it does", () => {
+    const seeded = applySkeletonChunk(
+      applyWindowedSnapshot(emptyTranscriptWindow(), {
+        epoch: 1,
+        rowCount: 4,
+        indexRevision: null,
+        tail: { fromOrdinal: 4, messages: [], events: [] },
+      }),
+      {
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry("keep-0", 0),
+          skeletonEntry("mid-1", 1),
+          skeletonEntry("drop-2", 2),
+          skeletonEntry("mid-3", 3),
+        ],
+        isFinal: true,
+      },
+    );
+    const seededA = applyRangeResponse(
+      seeded,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["keep-0"],
+        messages: [userMessage("m-keep", 0)],
+      }),
+      null,
+    );
+    const seededB = applyRangeResponse(
+      seededA,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 2,
+        rowIds: ["drop-2"],
+        messages: [userMessage("m-drop", 2)],
+      }),
+      null,
+    );
+    expect(seededB.spans).toHaveLength(2);
+
+    const reindexed = applyIndexChange(seededB, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 4,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    expect(reindexed.staleSpans).toHaveLength(2);
+
+    const finalSkeleton = applySkeletonChunk(reindexed, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: [
+        skeletonEntry("keep-0", 0),
+        skeletonEntry("unrelated-1", 1),
+        skeletonEntry("unrelated-2", 2),
+        skeletonEntry("unrelated-3", 3),
+      ],
+      isFinal: true,
+    });
+
+    expect(finalSkeleton.skeletonComplete).toBe(true);
+    expect(finalSkeleton.staleSpans).toHaveLength(1);
+    expect(finalSkeleton.staleSpans[0].rowIds).toEqual(["keep-0"]);
+  });
+
+  it("still plans a fetch for a visible range only stale spans cover - stale is display-only", () => {
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+      }),
+      null,
+    );
+    const rebased = applyWindowedSnapshot(seeded, {
+      epoch: 2,
+      rowCount: 5,
+      indexRevision: null,
+      tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
+    });
+    expect(rebased.staleSpans).toHaveLength(1);
+    expect(rebased.invalidated).toBe(false);
+
+    const plan = planTranscriptHydration(
+      rebased,
+      { fromOrdinal: 0, toOrdinal: 2 },
+      [],
+    );
+
+    expect(plan).toEqual({ fromOrdinal: 0, toOrdinal: 2 });
+  });
+
+  /**
+   * The split-block / doubled-in-progress-segment regression: a streaming
+   * rewrite must reach a copy held ONLY by a stale span. If it reported
+   * `held: false` instead, the store's applier would restart an empty live
+   * accumulator mid-turn, and the turn would render as two blocks - the
+   * frozen stale prefix plus the post-demotion remainder - with any
+   * in-progress block (a compaction bar) duplicated across both.
+   */
+  it("a streaming rewrite reaches a copy held only by a stale span", () => {
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+      null,
+    );
+    const rebased = applyWindowedSnapshot(seeded, {
+      epoch: 2,
+      rowCount: 5,
+      indexRevision: null,
+      tail: { fromOrdinal: 4, messages: [userMessage("m-4", 4)], events: [] },
+    });
+    // The only FRESH span is the new inline tail; "m-0" survives in a stale
+    // span alone.
+    expect(rebased.spans).toHaveLength(1);
+    expect(rebased.spans[0].fromOrdinal).toBe(4);
+    expect(rebased.staleSpans.flatMap((span) => span.rowIds)).toEqual([
+      "row-0",
+    ]);
+
+    const rewritten = streamWindowMessage(rebased, "m-0", (message) => ({
+      ...message,
+      timestamp: message.timestamp + 1,
+    }));
+
+    expect(rewritten.held).toBe(true);
+    const held = hydratedRecords(rewritten.window).messages.find(
+      (message) => message.messageId === "m-0",
+    );
+    expect(held?.timestamp).toBe(1);
+  });
+});
+
 describe("eviction", () => {
   it("evicts the coldest span first and never the tail", () => {
     let window = windowWithSkeleton(30);
@@ -1044,6 +1619,7 @@ describe("eviction", () => {
         rowIds: ["row-0", "row-1"],
         messages: [userMessage("cold", 0)],
       }),
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -1053,6 +1629,7 @@ describe("eviction", () => {
         rowIds: ["row-10", "row-11"],
         messages: [userMessage("warm", 10)],
       }),
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -1062,6 +1639,7 @@ describe("eviction", () => {
         rowIds: ["row-28", "row-29"],
         messages: [userMessage("tail", 28)],
       }),
+      null,
     );
 
     // A budget that only two of the three spans can fit.
@@ -1086,6 +1664,7 @@ describe("eviction", () => {
         rowIds: ["row-18", "row-19"],
         messages: [userMessage("tail", 18)],
       }),
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -1095,6 +1674,7 @@ describe("eviction", () => {
         rowIds: ["row-0", "row-1"],
         messages: [userMessage("warmer", 0)],
       }),
+      null,
     );
     const evicted = evictTranscriptWindowToBudget(window, 1, null, []);
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([18]);
@@ -1110,6 +1690,7 @@ describe("eviction", () => {
         rowIds: ["row-0", "row-1"],
         messages: [userMessage("old", 0)],
       }),
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -1119,6 +1700,7 @@ describe("eviction", () => {
         rowIds: ["row-10", "row-11"],
         messages: [userMessage("new", 10)],
       }),
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -1128,6 +1710,7 @@ describe("eviction", () => {
         rowIds: ["row-28", "row-29"],
         messages: [userMessage("tail", 28)],
       }),
+      null,
     );
 
     // The reader is looking at the OLDEST-loaded span. Touching it must
@@ -1163,6 +1746,7 @@ describe("eviction", () => {
         rowIds: ["row-10", "row-11"],
         messages: [userMessage("mid", 10)],
       }),
+      null,
     );
 
     const touched = touchTranscriptRange(window, {
@@ -1184,6 +1768,7 @@ describe("eviction protects the visible span", () => {
         rowIds: ["row-0", "row-1"],
         messages: [userMessage("cold", 0)],
       }),
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -1193,6 +1778,7 @@ describe("eviction protects the visible span", () => {
         rowIds: ["row-10", "row-11"],
         messages: [userMessage("visible", 10)],
       }),
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -1202,6 +1788,7 @@ describe("eviction protects the visible span", () => {
         rowIds: ["row-28", "row-29"],
         messages: [userMessage("tail", 28)],
       }),
+      null,
     );
 
     // A budget of 1 byte: everything alone exceeds it. The visible span (10)
@@ -1234,6 +1821,7 @@ describe("eviction protects the visible span", () => {
         rowIds: ["row-0", "row-1"],
         messages: [userMessage("question", 0)],
       }),
+      null,
     );
     window = applyRangeResponse(
       window,
@@ -1243,6 +1831,7 @@ describe("eviction protects the visible span", () => {
         rowIds: ["row-10", "row-11"],
         messages: [userMessage("cold", 10)],
       }),
+      null,
     );
 
     // Nothing visible, so only the tail rule and the required rule can save a
@@ -1296,6 +1885,7 @@ describe("reading a long chat upward from the tail", () => {
           rowIds: [`row-${fromOrdinal}`, `row-${fromOrdinal + 1}`],
           messages: [fatMessage(`m-${fromOrdinal}`, fromOrdinal)],
         }),
+        null,
       );
     }
     return window;
@@ -1359,6 +1949,7 @@ describe("records the index has not placed yet", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
     );
     const withLive = appendLiveRecords(window, {
       // `m-0` is already hydrated; the host re-sends it on a reconnect
@@ -1412,6 +2003,7 @@ describe("records the index has not placed yet", () => {
         rowIds: ["row-0"],
         messages: [userMessage("m-0", 0)],
       }),
+      null,
     );
     const window = appendLiveRecords(seeded, {
       messages: [userMessage("m-live", 9)],
@@ -1458,6 +2050,7 @@ describe("records the index has not placed yet", () => {
         rowIds: ["row-0", "row-1"],
         messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
       }),
+      null,
     );
     const spanBytes = (window: TranscriptWindow): number =>
       window.spans[0].messages.reduce(
@@ -1496,6 +2089,7 @@ describe("the streaming row's byte charge", () => {
         rowIds: ["row-0"],
         messages: [userMessage("cold", 0)],
       }),
+      null,
     );
     return applyRangeResponse(
       window,
@@ -1505,6 +2099,7 @@ describe("the streaming row's byte charge", () => {
         rowIds: ["row-29"],
         messages: [userMessage("live", 29)],
       }),
+      null,
     );
   }
 
@@ -1612,6 +2207,7 @@ describe("holdsEveryRecordFrom", () => {
           userMessage(`m-${index}`, index),
         ),
       }),
+      null,
     );
   }
 
@@ -1674,30 +2270,38 @@ describe("holdsEveryRecordFrom", () => {
  */
 describe("what an overlap keeps", () => {
   it("takes the incoming body where a merge overlaps a held span", () => {
-    const stale = applyRangeResponse(windowWithSkeleton(10), {
-      ...rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["row-0", "row-1"],
-        messages: [
-          messageWithText(userMessage("row-0", 1), "stale"),
-          userMessage("row-1", 2),
-        ],
-      }),
-    });
+    const stale = applyRangeResponse(
+      windowWithSkeleton(10),
+      {
+        ...rangeResponse({
+          epoch: 1,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [
+            messageWithText(userMessage("row-0", 1), "stale"),
+            userMessage("row-1", 2),
+          ],
+        }),
+      },
+      null,
+    );
     // A later response under the same epoch, overlapping ordinal 0 with an
     // updated body - the shape a reconnect's authoritative tail produces.
-    const merged = applyRangeResponse(stale, {
-      ...rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["row-0", "row-1"],
-        messages: [
-          messageWithText(userMessage("row-0", 1), "fresh"),
-          userMessage("row-1", 2),
-        ],
-      }),
-    });
+    const merged = applyRangeResponse(
+      stale,
+      {
+        ...rangeResponse({
+          epoch: 1,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [
+            messageWithText(userMessage("row-0", 1), "fresh"),
+            userMessage("row-1", 2),
+          ],
+        }),
+      },
+      null,
+    );
     const held = hydratedRecords(merged).messages.find(
       (message) => message.messageId === "row-0",
     );
@@ -1762,6 +2366,7 @@ describe("what an overlap keeps", () => {
     ]);
 
     const voided = applyIndexChange(rebased, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 1,
       indexRevision: 1,
@@ -1795,6 +2400,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [assistantMessage("assistant-durable", turnId, 1)],
       }),
+      null,
     );
 
     // The durable body takes over by turn identity; the stand-in id is
@@ -1940,6 +2546,7 @@ describe("what an overlap keeps", () => {
     );
 
     const voided = applyIndexChange(live, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 1,
       indexRevision: 2,
@@ -2145,6 +2752,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId("turn-1")],
         messages: [assistantMessage("assistant-durable", "turn-1", 1)],
       }),
+      null,
     );
     const completion = event("completion-live", 2);
     const live = appendLiveRecords(seeded, {
@@ -2187,6 +2795,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [assistantMessage("assistant-notification", turnId, 1)],
       }),
+      null,
     );
     const failed: ChatEvent = {
       ...event("send-failed-deleted", 2),
@@ -2378,6 +2987,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnKey)],
         messages: [assistantMessage("assistant-legacy-durable", null, 42)],
       }),
+      null,
     );
 
     expect(hydrated.liveMessages).toEqual([]);
@@ -2506,6 +3116,7 @@ describe("what an overlap keeps", () => {
         rowIds: [messageId],
         messages: [userMessage(messageId, 1)],
       }),
+      null,
     );
     expect(superseded.liveMessages).toEqual([]);
 
@@ -2714,6 +3325,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [assistantMessage("assistant-streaming-copy", turnId, 1)],
       }),
+      null,
     );
     const transientId = transientLiveAssistantMessageId(turnId);
     const completed = appendLiveRecords(beforeCompletion, {
@@ -2729,6 +3341,7 @@ describe("what an overlap keeps", () => {
         rowIds: ["user-later"],
         messages: [userMessage("user-later-record", 3)],
       }),
+      null,
     );
 
     expect(
@@ -2770,6 +3383,7 @@ describe("what an overlap keeps", () => {
         rowIds: [steerRowId],
         messages: [assistantMessage("assistant-shared", turnId, 1)],
       }),
+      null,
     );
 
     expect(steerOnly.liveMessages.map((message) => message.messageId)).toEqual([
@@ -2810,6 +3424,7 @@ describe("what an overlap keeps", () => {
         rowIds: [steerRowId],
         messages: [durable],
       }),
+      null,
     );
 
     expect(hydrated.liveMessages).toEqual([]);
@@ -2834,6 +3449,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [assistantMessage("assistant-stale", turnId, 1)],
       }),
+      null,
     );
 
     expect(delayed.liveMessages.map((message) => message.messageId)).toEqual([
@@ -2888,6 +3504,7 @@ describe("what an overlap keeps", () => {
           },
         ],
       }),
+      null,
     );
 
     expect(delayed.liveMessages.map((message) => message.messageId)).toEqual([
@@ -2918,6 +3535,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [],
       }),
+      null,
     );
 
     expect(bodyless.liveMessages.map((message) => message.messageId)).toEqual([
@@ -2978,6 +3596,7 @@ describe("what an overlap keeps", () => {
           userMessage("user-after", 3),
         ],
       }),
+      null,
     );
 
     expect(partial.liveMessages.map((message) => message.messageId)).toEqual([
@@ -3029,6 +3648,7 @@ describe("what an overlap keeps", () => {
           userMessage("user-after", 3),
         ],
       }),
+      null,
     );
     const live = appendLiveRecords(oldTail, {
       messages: [assistantMessage(transientId, turnId, 2)],
@@ -3103,6 +3723,7 @@ describe("what an overlap keeps", () => {
         messages: [assistantMessage("assistant-partial", turnId, 1)],
         events: [setup],
       }),
+      null,
     );
 
     expect(partial.spans.map((held) => held.rowIds)).toEqual([[setupRowId]]);
@@ -3158,6 +3779,7 @@ describe("what an overlap keeps", () => {
           setupEvent("setup-second", "setup.running"),
         ],
       }),
+      null,
     );
 
     expect(
@@ -3199,6 +3821,7 @@ describe("what an overlap keeps", () => {
           setupEvent("setup-second", "setup.running", 200),
         ],
       }),
+      null,
     );
 
     expect(partial.spans.map((span) => span.rowIds)).toEqual([
@@ -3295,6 +3918,7 @@ describe("what an overlap keeps", () => {
           },
         ],
       }),
+      null,
     );
 
     expect(partial.spans).toEqual([]);
@@ -3313,6 +3937,7 @@ describe("what an overlap keeps", () => {
         incompleteRowIds: ["user-incomplete"],
         messages: [userMessage("user-incomplete", 1)],
       }),
+      null,
     );
 
     expect(partial.spans).toEqual([]);
@@ -3328,6 +3953,7 @@ describe("what an overlap keeps", () => {
         incompleteRowIds: ["row-0"],
         messages: [userMessage("row-0", 1)],
       }),
+      null,
     );
 
     expect(partial.unavailableRowIds).toEqual(["row-0"]);
@@ -3336,6 +3962,7 @@ describe("what an overlap keeps", () => {
     ).toBeNull();
 
     const updated = applyIndexChange(partial, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 1,
       indexRevision: 1,
@@ -3362,6 +3989,7 @@ describe("what an overlap keeps", () => {
         incompleteRowIds: ["stale-before-skeleton"],
         messages: [userMessage("stale-before-skeleton", 1)],
       }),
+      null,
     );
     const indexed = applySkeletonChunk(partial, {
       epoch: 1,
@@ -3411,6 +4039,7 @@ describe("what an overlap keeps", () => {
           },
         ],
       }),
+      null,
     );
 
     expect(hydrated.liveMessages).toEqual([]);
@@ -3450,6 +4079,7 @@ describe("what an overlap keeps", () => {
         rowIds: [assistantRowId(turnId)],
         messages: [durable],
       }),
+      null,
     );
 
     expect(hydrated.liveMessages).toEqual([]);
@@ -3497,6 +4127,7 @@ describe("what an overlap keeps", () => {
           },
         ],
       }),
+      null,
     );
 
     expect(hydrated.liveMessages).toEqual([]);
@@ -3519,7 +4150,7 @@ describe("what an overlap keeps", () => {
       messages: [assistantMessage("assistant-durable", turnId, 2)],
     });
 
-    const hydrated = applyRangeResponse(live, legacyResponse);
+    const hydrated = applyRangeResponse(live, legacyResponse, null);
 
     expect(hydrated.liveMessages).toEqual([]);
   });
@@ -3650,14 +4281,18 @@ describe("what an overlap keeps", () => {
     // `fromOrdinal === rowCount` is "there is no tail", not "the tail was
     // withheld". Without this the positive control above passes for the wrong
     // reason and every aux re-broadcast would wipe the scrollback.
-    const seeded = applyRangeResponse(windowWithSkeleton(3), {
-      ...rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["row-0"],
-        messages: [userMessage("row-0", 1)],
-      }),
-    });
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(3),
+      {
+        ...rangeResponse({
+          epoch: 1,
+          fromOrdinal: 0,
+          rowIds: ["row-0"],
+          messages: [userMessage("row-0", 1)],
+        }),
+      },
+      null,
+    );
     expect(seeded.spans).toHaveLength(1);
     const rebroadcast = applyWindowedSnapshot(seeded, {
       epoch: 1,
@@ -3716,6 +4351,7 @@ describe("what an overlap keeps", () => {
     expect(seeded.spans[0].rowIds).toEqual([""]);
 
     const described = applyIndexChange(seeded, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 1,
       indexRevision: 1,
@@ -3739,14 +4375,18 @@ describe("what an overlap keeps", () => {
         events: [],
       },
     });
-    const contradicted = applyRangeResponse(seeded, {
-      ...rangeResponse({
-        epoch: 1,
-        fromOrdinal: 2,
-        rowIds: ["someone-else"],
-        messages: [userMessage("someone-else", 3)],
-      }),
-    });
+    const contradicted = applyRangeResponse(
+      seeded,
+      {
+        ...rangeResponse({
+          epoch: 1,
+          fromOrdinal: 2,
+          rowIds: ["someone-else"],
+          messages: [userMessage("someone-else", 3)],
+        }),
+      },
+      null,
+    );
     const described = applySkeletonChunk(contradicted, {
       epoch: 1,
       fromOrdinal: 0,
@@ -3777,7 +4417,11 @@ describe("one record across several spans", () => {
       readonly messages: readonly Message[];
     },
   ): TranscriptWindow {
-    return applyRangeResponse(window, rangeResponse({ epoch: 1, ...input }));
+    return applyRangeResponse(
+      window,
+      rangeResponse({ epoch: 1, ...input }),
+      null,
+    );
   }
 
   /** Both slices of one turn, held as disjoint spans with a gap between them. */
@@ -3847,7 +4491,7 @@ describe("one record across several spans", () => {
     expect(added.spans).toHaveLength(2);
   });
 
-  it("drops every COPY of a rewritten row's records, not only its own span", () => {
+  it("drops every COPY of a rewritten row's records, not only its own span - kept stale for display", () => {
     // The reader is parked on an EARLIER slice of one turn while a later slice
     // is rewritten. Geometry alone leaves this span holding a stale copy of the
     // very record that changed - and once the containing span goes it is the
@@ -3856,6 +4500,7 @@ describe("one record across several spans", () => {
     const later = splitTurn(windowWithSkeleton(10), "earlier-first");
     expect(later.spans).toHaveLength(2);
     const rewritten = applyIndexChange(later, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 10,
       indexRevision: 1,
@@ -3867,7 +4512,12 @@ describe("one record across several spans", () => {
       ],
     });
     expect(rewritten.spans).toHaveLength(0);
-    expect(hydratedRecords(rewritten).messages).toHaveLength(0);
+    // Both dropped spans are kept as STALE, display-only copies - a rewrite's
+    // brief stale body beats a placeholder flash while the refetch is in
+    // flight (see `TranscriptWindow.staleSpans`), so the shared record still
+    // renders from one of them.
+    expect(rewritten.staleSpans).toHaveLength(2);
+    expect(hydratedRecords(rewritten).messages).toHaveLength(1);
     // And the rows are gaps again, so the planner re-requests them - which is
     // what makes dropping the far span a repair rather than a silent deletion.
     expect(
@@ -3890,6 +4540,7 @@ describe("one record across several spans", () => {
       messages: [userMessage("m-4", 5)],
     });
     const rewritten = applyIndexChange(other, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 10,
       indexRevision: 1,
@@ -3942,6 +4593,7 @@ describe("one record across several spans", () => {
     expect(window.spans).toHaveLength(1);
 
     const rewritten = applyIndexChange(window, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 10,
       indexRevision: 1,
@@ -3973,6 +4625,7 @@ describe("one record across several spans", () => {
     });
 
     const rewritten = applyIndexChange(window, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 10,
       indexRevision: 1,
@@ -4000,6 +4653,7 @@ describe("one record across several spans", () => {
     });
 
     const rewritten = applyIndexChange(window, {
+      activeTurnId: null,
       epoch: 1,
       rowCount: 10,
       indexRevision: 1,
@@ -4075,15 +4729,19 @@ describe("what a span charges the byte budget", () => {
   };
 
   function hydrated(rowContext: ChatRangeResponse["rowContext"]) {
-    return applyRangeResponse(windowWithSkeleton(10), {
-      ...rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["row-0", "row-1"],
-        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
-      }),
-      rowContext,
-    });
+    return applyRangeResponse(
+      windowWithSkeleton(10),
+      {
+        ...rangeResponse({
+          epoch: 1,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+        }),
+        rowContext,
+      },
+      null,
+    );
   }
 
   it("charges the row context it retains, not only the records", () => {
@@ -4144,15 +4802,19 @@ describe("what a span charges the byte budget", () => {
     // charge summed from the members would bill a re-served row twice and
     // leave the window reporting bytes it does not hold.
     const first = hydrated(CONTEXT);
-    const reserved = applyRangeResponse(first, {
-      ...rangeResponse({
-        epoch: 1,
-        fromOrdinal: 0,
-        rowIds: ["row-0", "row-1"],
-        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
-      }),
-      rowContext: CONTEXT,
-    });
+    const reserved = applyRangeResponse(
+      first,
+      {
+        ...rangeResponse({
+          epoch: 1,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+        }),
+        rowContext: CONTEXT,
+      },
+      null,
+    );
 
     expect(reserved.spans).toHaveLength(1);
     expect(reserved.spans[0].contextBytes).toBe(first.spans[0].contextBytes);
