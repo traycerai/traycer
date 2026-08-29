@@ -512,15 +512,36 @@ export function createSessionRegistry<TSession>(
     return !policy.hasActiveWork(entry.session);
   }
 
-  function armIdleTimer(entry: RegistryEntry<TSession>): void {
+  /**
+   * Arm the expiry timer for `delayMs`.
+   *
+   * The delay is an ARGUMENT rather than always {@link
+   * SessionRegistryPolicy.idleTtlMs}, because the one caller that re-arms an
+   * already-running window has to schedule what is LEFT of it. Passing the full
+   * TTL there extends the warm window by almost a whole second window every
+   * time a timer fires early, which is the thing the early-fire re-check exists
+   * to prevent - it would replace "evicts too soon" with "evicts twice as
+   * late", and the clock re-check would read as a guard while doing the
+   * opposite of what it says.
+   */
+  function armIdleTimer(entry: RegistryEntry<TSession>, delayMs: number): void {
     cancelIdleTimer(entry);
-    const ttlMs = policy.idleTtlMs;
-    if (ttlMs === null) return;
+    if (policy.idleTtlMs === null) return;
     if (!shouldArmIdleTimer(entry)) return;
-    entry.idleTimer = environment.scheduler.schedule(ttlMs, () => {
+    entry.idleTimer = environment.scheduler.schedule(delayMs, () => {
       entry.idleTimer = null;
       expireIfIdle(entry.key);
     });
+  }
+
+  /**
+   * Start a session's warm window from now. Every caller but the early-fire
+   * re-check wants this; that one wants the remainder, and says so.
+   */
+  function armFreshIdleWindow(entry: RegistryEntry<TSession>): void {
+    const ttlMs = policy.idleTtlMs;
+    if (ttlMs === null) return;
+    armIdleTimer(entry, ttlMs);
   }
 
   function expireIfIdle(key: SessionKey): void {
@@ -532,9 +553,18 @@ export function createSessionRegistry<TSession>(
     const checkedAt = environment.clock.now();
     const parkedAtMs = entry.parkedAtMs;
     // A timer that fired is not proof the window elapsed - re-check the clock,
-    // and re-arm for the remainder if it has not.
-    if (parkedAtMs !== null && checkedAt - parkedAtMs < ttlMs) {
-      armIdleTimer(entry);
+    // and re-arm for what is LEFT of the window if it has not.
+    //
+    // The remainder, not a fresh `ttlMs`: a full re-arm would turn every early
+    // fire into an almost-doubled warm window, and a clock that steps BACKWARD
+    // would do it repeatedly. `Math.max(0, …)` on the elapsed term is what
+    // bounds that case - a backward step makes the elapsed time negative, and
+    // without the clamp the remainder would exceed the window the session was
+    // promised. The re-arm can therefore shorten the wait but never lengthen
+    // it past one full window.
+    const elapsedMs = parkedAtMs === null ? ttlMs : checkedAt - parkedAtMs;
+    if (elapsedMs < ttlMs) {
+      armIdleTimer(entry, ttlMs - Math.max(0, elapsedMs));
       return;
     }
     if (policy.hasActiveWork(entry.session)) {
@@ -549,7 +579,7 @@ export function createSessionRegistry<TSession>(
         // the cap. Its eviction ORDER is refreshed on the same plane rule as a
         // release, which is what the incumbent chat registry does here.
         if (policy.refreshOrderOnRelease) entry.order = order.next();
-        armIdleTimer(entry);
+        armFreshIdleWindow(entry);
         return;
       }
     }
@@ -598,7 +628,7 @@ export function createSessionRegistry<TSession>(
       teardown(entry, "released");
       return;
     }
-    armIdleTimer(entry);
+    armFreshIdleWindow(entry);
     enforceWarmCap();
   }
 
@@ -689,12 +719,12 @@ export function createSessionRegistry<TSession>(
           // the only thing keeping the window open AND the only thing closing
           // it.
           existing.parkedAtMs = environment.clock.now();
-          armIdleTimer(existing);
+          armFreshIdleWindow(existing);
         }
         return existing.session;
       }
       const created = createEntry(key, scopeKey, factory(), demand);
-      if (created.demand === 0) armIdleTimer(created);
+      if (created.demand === 0) armFreshIdleWindow(created);
       return created.session;
     });
   }
@@ -736,7 +766,7 @@ export function createSessionRegistry<TSession>(
       entry.order = order.next();
       if (entry.demand === 0) {
         entry.parkedAtMs = environment.clock.now();
-        armIdleTimer(entry);
+        armFreshIdleWindow(entry);
       }
       return entry.session;
     },
@@ -821,7 +851,7 @@ export function createSessionRegistry<TSession>(
         if (verdict === "dispose") policy.dispose(existing.session);
         // A replacement that inherits no demand is warm from the moment it
         // lands, so its window starts here rather than at the next release.
-        if (replacement.demand === 0) armIdleTimer(replacement);
+        if (replacement.demand === 0) armFreshIdleWindow(replacement);
       });
       return true;
     },

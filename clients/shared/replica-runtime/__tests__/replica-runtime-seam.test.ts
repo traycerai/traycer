@@ -337,17 +337,51 @@ type FakeProjection = readonly {
 }[];
 
 /** A controllable clock/scheduler with no real timers and no DOM. */
+interface FakeTimerEntry {
+  readonly fireAt: number;
+  readonly callback: () => void;
+}
+
+/**
+ * The injected environment, with the clock and the scheduler independently
+ * controllable — a suite has to be able to advance timers without moving the
+ * clock, and move the clock without letting a timer fire, or the early-fire
+ * re-check can never be exercised.
+ *
+ * **Firing is the fake's job, never a test's.** A timer fires only by leaving
+ * this object's pending list, so an entry can never fire twice. That is not
+ * tidiness: a test that hand-invokes a captured `schedule` callback leaves the
+ * fake's own entry live, and the STALE entry then fires on the next
+ * `advanceClock` — so an assertion meant to prove a re-armed timer did the work
+ * is satisfied by the original one, and stays green with the re-arm removed
+ * entirely. {@link fireDueTimerEarly} is the sanctioned way to simulate a
+ * throttled background tab.
+ */
 function createFakeEnvironment(): RuntimeEnvironment & {
   advanceClock(ms: number): void;
   drainMicrotasks(): void;
+  /**
+   * Fire the earliest live timer WITHOUT moving the clock, and remove it —
+   * exactly what a throttled tab does. Returns false when nothing is pending.
+   */
+  fireDueTimerEarly(): boolean;
+  /** When the earliest live timer is due, or `null` when none is pending. */
+  nextTimerFireAt(): number | null;
+  pendingTimerCount(): number;
 } {
   let nowMs = 0;
-  const pendingTimers: {
-    fireAt: number;
-    callback: () => void;
-    cancelled: boolean;
-  }[] = [];
+  let pendingTimers: FakeTimerEntry[] = [];
   const pendingMicrotasks: (() => void)[] = [];
+
+  const remove = (entry: FakeTimerEntry): void => {
+    pendingTimers = pendingTimers.filter((candidate) => candidate !== entry);
+  };
+  const earliest = (): FakeTimerEntry | null =>
+    pendingTimers.reduce<FakeTimerEntry | null>(
+      (best, entry) =>
+        best === null || entry.fireAt < best.fireAt ? entry : best,
+      null,
+    );
 
   return {
     clock: {
@@ -357,11 +391,11 @@ function createFakeEnvironment(): RuntimeEnvironment & {
     },
     scheduler: {
       schedule(delayMs, callback) {
-        const entry = { fireAt: nowMs + delayMs, callback, cancelled: false };
+        const entry: FakeTimerEntry = { fireAt: nowMs + delayMs, callback };
         pendingTimers.push(entry);
         return {
           cancel(): void {
-            entry.cancelled = true;
+            remove(entry);
           },
         };
       },
@@ -376,12 +410,31 @@ function createFakeEnvironment(): RuntimeEnvironment & {
     },
     advanceClock(ms: number): void {
       nowMs += ms;
-      for (const entry of pendingTimers) {
-        if (!entry.cancelled && entry.fireAt <= nowMs) {
-          entry.cancelled = true; // fire once
-          entry.callback();
-        }
+      // Collect, remove, then invoke — a callback that re-arms must not be
+      // fired again by the same pass, and the re-armed entry must be judged
+      // against the clock as it now stands rather than mid-iteration. Bounded
+      // so a pathological immediately-due re-arm surfaces as a failed test
+      // rather than a hung suite.
+      for (let pass = 0; pass < 100; pass += 1) {
+        const due = pendingTimers.filter((entry) => entry.fireAt <= nowMs);
+        if (due.length === 0) return;
+        for (const entry of due) remove(entry);
+        for (const entry of due) entry.callback();
       }
+      throw new Error("fake scheduler: timers re-armed as due 100 times");
+    },
+    fireDueTimerEarly(): boolean {
+      const entry = earliest();
+      if (entry === null) return false;
+      remove(entry);
+      entry.callback();
+      return true;
+    },
+    nextTimerFireAt(): number | null {
+      return earliest()?.fireAt ?? null;
+    },
+    pendingTimerCount(): number {
+      return pendingTimers.length;
     },
     drainMicrotasks(): void {
       while (pendingMicrotasks.length > 0) {
@@ -1310,26 +1363,75 @@ describe("createSessionRegistry", () => {
       registry.acquire("s1", "scope", () => session);
       registry.release("s1", "warm");
 
+      // Parked at t=0 for 1000ms.
       expect(scheduleSpy).toHaveBeenCalledTimes(1);
-      const firstScheduledCallback = scheduleSpy.mock.calls[0][1];
+      expect(environment.nextTimerFireAt()).toBe(1000);
 
-      // Fire the scheduled callback directly, WITHOUT moving the clock — the
-      // throttled-background-tab scenario the re-check exists to guard
-      // against. A suite that only ever advances clock and timers together
-      // never exercises this branch.
-      firstScheduledCallback();
+      // 400ms of the window really has elapsed, and then the timer fires
+      // early — the throttled-background-tab scenario the re-check exists to
+      // guard against. A suite that only ever advances clock and timers
+      // together never exercises this branch.
+      environment.advanceClock(400);
+      expect(environment.fireDueTimerEarly()).toBe(true);
 
-      // Not evicted: re-checking against the clock finds 0ms actually
-      // elapsed, so the entry re-arms instead.
+      // Not evicted: re-checking against the clock finds only 400ms elapsed.
       expect(registry.peek("s1")).toBe(session);
       expect(session.disposed).toBe(false);
       expect(scheduleSpy).toHaveBeenCalledTimes(2);
 
-      // Now genuinely advance the clock past the TTL — the re-armed timer
-      // fires and this time the re-check finds the window really elapsed.
-      environment.advanceClock(1000);
+      // THE assertion. The re-armed timer must carry what is LEFT of the
+      // window — 600ms from t=400, i.e. the original t=1000 deadline — not a
+      // fresh full TTL, which would push eviction out to t=1400 and turn every
+      // early fire into an almost-doubled warm window. Asserting the DEADLINE
+      // rather than "something was scheduled" is what makes this test able to
+      // fail: a full re-arm schedules a timer too, and every other assertion
+      // here passes under it.
+      expect(scheduleSpy.mock.calls[1][0]).toBe(600);
+      expect(environment.nextTimerFireAt()).toBe(1000);
+      expect(environment.pendingTimerCount()).toBe(1);
+
+      // 599ms more: the original deadline has NOT arrived, so nothing fires
+      // and the session is still warm.
+      environment.advanceClock(599);
+      expect(session.disposed).toBe(false);
+
+      // The 1000ms mark, on the nose. The re-armed timer — the only one left —
+      // fires, the re-check finds the window genuinely elapsed, and the
+      // session goes.
+      environment.advanceClock(1);
       expect(session.disposed).toBe(true);
       expect(registry.peek("s1")).toBeNull();
+      expect(environment.pendingTimerCount()).toBe(0);
+    });
+
+    it("never lengthens the window past one full TTL when the clock steps BACKWARD", () => {
+      // The case the `Math.max(0, elapsed)` clamp exists for. A backward clock
+      // adjustment makes the elapsed term negative, and an unclamped
+      // `ttl - elapsed` would schedule LONGER than the window the session was
+      // ever promised — repeatedly, since each early fire re-reads the clock.
+      const environment = createFakeEnvironment();
+      const scheduleSpy = vi.spyOn(environment.scheduler, "schedule");
+      const policy = createTrackedPolicy({
+        ...defaultPolicyConfig(),
+        idleTtlMs: 1000,
+      });
+      const registry = createSessionRegistry({ environment, policy });
+      const session = makeSession("s1");
+      registry.acquire("s1", "scope", () => session);
+
+      environment.advanceClock(5000);
+      registry.release("s1", "warm");
+      // Parked at t=5000, due at t=6000.
+      expect(environment.nextTimerFireAt()).toBe(6000);
+
+      // The clock jumps back behind the park time.
+      environment.advanceClock(-3000);
+      expect(environment.fireDueTimerEarly()).toBe(true);
+
+      expect(session.disposed).toBe(false);
+      // 1000, not 4000: capped at one full window rather than
+      // `ttl - (2000 - 5000)`.
+      expect(scheduleSpy.mock.calls[1][0]).toBe(1000);
     });
   });
 });
