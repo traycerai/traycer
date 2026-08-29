@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -279,7 +280,7 @@ describe("SwitcherBrowsersList", () => {
     openTab.mockResolvedValue({ sessionId: "sess-2", tabId: "tab-9" });
     renderList(onClose);
 
-    await user.click(screen.getByLabelText("Add browser"));
+    await user.click(screen.getByTestId("switcher-new-browser"));
 
     expect(openTab).toHaveBeenCalledWith(null, "about:blank");
     await waitFor(() => {
@@ -293,7 +294,7 @@ describe("SwitcherBrowsersList", () => {
     replaceSessions([], "failed");
     renderList(onClose);
 
-    await user.click(screen.getByRole("button", { name: "Add browser" }));
+    await user.click(screen.getByTestId("switcher-new-browser"));
 
     // Nothing opened, so there is nothing for the sheet to get out of the way
     // of - and leaving would take this state's Retry with it.
@@ -308,7 +309,7 @@ describe("SwitcherBrowsersList", () => {
     openTab.mockRejectedValue(new Error("no runtime"));
     renderList(onClose);
 
-    await user.click(screen.getByLabelText("Add browser"));
+    await user.click(screen.getByTestId("switcher-new-browser"));
 
     await waitFor(() => {
       expect(openTab).toHaveBeenCalled();
@@ -371,7 +372,18 @@ describe("SwitcherBrowsersList", () => {
   it("mounts the desktop empty state, add affordance included", () => {
     replaceSessions([], "live");
     renderList();
-    expect(screen.getByTestId("epic-browsers-panel-empty")).toBeTruthy();
+    const empty = screen.getByTestId("epic-browsers-panel-empty");
+    expect(empty).toBeTruthy();
+    // On an empty list the header "+" and this labelled button are BOTH on
+    // screen and share an accessible name, which device verification caught as
+    // a two-match query waiting to happen. Pinned here so the ambiguity is a
+    // stated fact rather than a trap for the next name-only query.
+    expect(screen.getAllByRole("button", { name: "Add browser" })).toHaveLength(
+      2,
+    );
+    expect(
+      within(empty).getByRole("button", { name: "Add browser" }),
+    ).toBeTruthy();
   });
 
   it("mounts the desktop unavailable state with its retry", () => {
