@@ -274,9 +274,20 @@ describe("epic.state.subscribe@1.0", () => {
       kind: "resumed",
       authorityEpoch: "epoch-1",
       position: 5,
+      reconciledWithCloud: false,
       hasBinaryPayload: false,
     });
     expect(result.success).toBe(true);
+  });
+
+  it("resumed requires reconciledWithCloud - a resuming client cannot inherit trust from its previous session; the host may have restarted seed-only since the cursor was persisted", () => {
+    const result = epicStateSubscribeServerFrameSchemaV10.safeParse({
+      kind: "resumed",
+      authorityEpoch: "epoch-1",
+      position: 5,
+      hasBinaryPayload: false,
+    });
+    expect(result.success).toBe(false);
   });
 
   describe("a delta envelope must carry at least one change", () => {
@@ -331,7 +342,10 @@ describe("epic.state.subscribe@1.0", () => {
           commentThreads: [],
         },
       ],
-      ["resumed", { authorityEpoch: "epoch-1", position: 0 }],
+      [
+        "resumed",
+        { authorityEpoch: "epoch-1", position: 0, reconciledWithCloud: false },
+      ],
       [
         "delta",
         {
@@ -344,6 +358,10 @@ describe("epic.state.subscribe@1.0", () => {
           epicMeta: null,
           roleClaims: null,
         },
+      ],
+      [
+        "trustChanged",
+        { authorityEpoch: "epoch-1", reconciledWithCloud: true },
       ],
       ["pong", {}],
     ];
@@ -366,6 +384,52 @@ describe("epic.state.subscribe@1.0", () => {
         expect(withTrue.success).toBe(false);
       },
     );
+  });
+
+  it("the server frame kind set is exactly the five documented kinds", () => {
+    const kinds = epicStateSubscribeServerFrameSchemaV10.options.map(
+      (option) => option.shape.kind.value,
+    );
+    expect(kinds).toEqual([
+      "snapshot",
+      "resumed",
+      "delta",
+      "trustChanged",
+      "pong",
+    ]);
+  });
+
+  describe("trustChanged - the seed-trust marker flipped, with no row changed", () => {
+    it.each([true, false])(
+      "parses reconciledWithCloud: %s",
+      (reconciledWithCloud) => {
+        const result = epicStateSubscribeServerFrameSchemaV10.safeParse({
+          kind: "trustChanged",
+          authorityEpoch: "epoch-1",
+          reconciledWithCloud,
+          hasBinaryPayload: false,
+        });
+        expect(result.success).toBe(true);
+      },
+    );
+
+    it("rejects a frame missing reconciledWithCloud", () => {
+      const result = epicStateSubscribeServerFrameSchemaV10.safeParse({
+        kind: "trustChanged",
+        authorityEpoch: "epoch-1",
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects a frame missing authorityEpoch", () => {
+      const result = epicStateSubscribeServerFrameSchemaV10.safeParse({
+        kind: "trustChanged",
+        reconciledWithCloud: true,
+        hasBinaryPayload: false,
+      });
+      expect(result.success).toBe(false);
+    });
   });
 
   it("the client frame union is exactly ['ping'] - the lane is read-only on the wire", () => {
@@ -531,6 +595,75 @@ describe("epic.state.subscribe@1.0", () => {
         ).success,
       ).toBe(false);
     });
+  });
+
+  it("the completeness sweep: every transition frame kind is readable off a lead frame (snapshot or resumed), and every cited field actually exists there", () => {
+    // Mirrors the completeness sweep built for the status lane. This lane now
+    // has the same shape of contract: `resumed` and `snapshot` are the lead
+    // frames a client can attach to at any point, and every transition kind
+    // (`delta`, `trustChanged`) must be readable off one of them without a
+    // replay. Adding a transition kind without extending this map fails this
+    // test until someone decides where its current state lives.
+    const kindToLeadFrameFields: Readonly<
+      Record<
+        string,
+        {
+          readonly lead: "snapshot" | "resumed" | "both";
+          readonly fields: readonly string[];
+        }
+      >
+    > = {
+      trustChanged: { lead: "both", fields: ["reconciledWithCloud"] },
+      delta: {
+        lead: "snapshot",
+        fields: [
+          "artifactRecords",
+          "deletedArtifacts",
+          "commentThreads",
+          "roleClaims",
+          "epicMeta",
+        ],
+      },
+    };
+
+    const allKinds = epicStateSubscribeServerFrameSchemaV10.options.map(
+      (option) => option.shape.kind.value,
+    );
+    // `snapshot` and `resumed` are the lead frames themselves; `pong` is exempt
+    // for the same reason it is on the status lane - it carries no session
+    // state at all.
+    const transitionKinds = allKinds.filter(
+      (kind) => kind !== "snapshot" && kind !== "resumed" && kind !== "pong",
+    );
+
+    expect(new Set(Object.keys(kindToLeadFrameFields))).toEqual(
+      new Set(transitionKinds),
+    );
+
+    const snapshotOption = epicStateSubscribeServerFrameSchemaV10.options.find(
+      (option) => option.shape.kind.value === "snapshot",
+    );
+    const resumedOption = epicStateSubscribeServerFrameSchemaV10.options.find(
+      (option) => option.shape.kind.value === "resumed",
+    );
+    if (!snapshotOption || !resumedOption) {
+      throw new Error(
+        "no snapshot or resumed variant on epicStateSubscribeServerFrameSchemaV10",
+      );
+    }
+    const snapshotFieldNames = new Set(Object.keys(snapshotOption.shape));
+    const resumedFieldNames = new Set(Object.keys(resumedOption.shape));
+
+    for (const { lead, fields } of Object.values(kindToLeadFrameFields)) {
+      for (const field of fields) {
+        if (lead === "snapshot" || lead === "both") {
+          expect(snapshotFieldNames.has(field)).toBe(true);
+        }
+        if (lead === "resumed" || lead === "both") {
+          expect(resumedFieldNames.has(field)).toBe(true);
+        }
+      }
+    }
   });
 });
 

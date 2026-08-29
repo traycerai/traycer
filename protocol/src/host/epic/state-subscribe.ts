@@ -101,10 +101,28 @@
  *
  * The host serves this lane from its own local replica the moment it has one,
  * and reconciles with the cloud in the background - "hold the client while I
- * ask upstream" is forbidden. `reconciledWithCloud` on the snapshot says which
- * of the two a given seed is, so the client can render immediately, LABEL the
- * staleness, and gate privileged actions on an authority check rather than on a
- * guess.
+ * ask upstream" is forbidden. `reconciledWithCloud` says which of the two a
+ * given seed is, so the client can render immediately, LABEL the staleness, and
+ * gate privileged actions on an authority check rather than on a guess.
+ *
+ * Trust is a fact with a LIFETIME, not a property of one frame, so it appears
+ * in three places and they are one contract:
+ *
+ * - on `snapshot`, as the value at the moment the rows were read;
+ * - on `resumed`, restated because a resuming client cannot inherit it (the
+ *   serving host may have restarted seed-only since the cursor was persisted);
+ * - as `trustChanged`, when the background reconcile flips it mid-subscription.
+ *
+ * The transition frame is not a nicety. A reconcile changes no row, so the
+ * delta path cannot carry it and no snapshot is re-emitted - which left an
+ * attached client labelling its data seed-only forever, with privileged actions
+ * gated on a marker that could be set but never cleared. See
+ * {@link epicStateSubscribeServerFrameSchemaV10}'s `trustChanged` variant.
+ *
+ * Trust stays on THIS lane and is never derived from the control lane's
+ * `cloudSyncStatus`: that is the host's connection state, this is whether these
+ * rows have been reconciled, and blending the two would be one displayed claim
+ * over two classes.
  *
  * Seed-first is CONDITIONAL by nature and the contract does not pretend
  * otherwise: a first open on a host - fresh install, newly shared epic, new
@@ -527,11 +545,74 @@ const epicStateSubscribeSnapshotFrameSchemaV10 = z.object({
  * empty so the acknowledgement is self-describing: a client that persisted a
  * cursor, restarted, and reconnected can verify the host resumed from the point
  * it meant rather than from a stale copy it still had in memory.
+ *
+ * It also restates `reconciledWithCloud`, which is the ONE fact a resuming
+ * client cannot carry over from its previous session. Every other thing this
+ * frame omits is genuinely unchanged - the client still holds its rows, and
+ * that is the point of resuming. Trust is not row state: it describes the
+ * SERVING HOST'S replica, which may have restarted seed-only since the cursor
+ * was persisted. A client that kept its old value would resume believing it was
+ * reconciled against a host that is not, which is the more dangerous direction
+ * of the same bug `trustChanged` exists to fix.
  */
 const epicStateSubscribeResumedFrameSchemaV10 = z.object({
   kind: z.literal("resumed"),
   ...epicLaneEpochFrameFields,
   position: epicLanePositionSchema,
+  /** Current trust, restated - see the frame doc above for why it cannot be
+   * inherited from the client's previous session. */
+  reconciledWithCloud: z.boolean(),
+  ...epicLaneTextFrameFields,
+});
+
+/**
+ * The seed-trust marker FLIPPED. No rows changed, and that is precisely why
+ * this frame has to exist.
+ *
+ * ## Why the delta path cannot carry it
+ *
+ * A background reconcile that finds the local replica already correct changes
+ * NO ROW. There is nothing for a `delta` envelope to carry, and the envelope
+ * refuses to be empty by design - an empty envelope would consume a lane
+ * position for a commit that never happened. Nor can the host re-emit a
+ * `snapshot`: `basis` has no member a trust flip could honestly claim (`cold`,
+ * `authorityEpochChanged` and `resumeTooOld` are all false), and re-sending
+ * every row to move one boolean is the whole-document behaviour these lanes
+ * exist to retire.
+ *
+ * So the fact had no way to reach a client that was already attached. Observed
+ * end to end: a seed-only snapshot, then the cloud connects, then zero events -
+ * and the client labels its data seed-only forever. Wire-lane invariant 7's
+ * freshness marker could be set but never cleared, so any privileged action
+ * gated on it stayed gated for the life of the subscription.
+ *
+ * ## Why it is not read off the control lane
+ *
+ * `epic.status.subscribe`'s `cloudSyncStatus` is a different fact with a
+ * different lifetime: it is the host's CONNECTION state, while this is whether
+ * THIS LANE'S rows have been reconciled against the cloud. A connected socket
+ * does not mean the reconcile finished, and a dropped socket does not un-do one
+ * that did. Deriving trust from the other lane would also blend two classes
+ * into one displayed claim, which the north-star forbids - freshness is labelled
+ * PER CLASS, and this is the records class's own label.
+ *
+ * ## Ordering
+ *
+ * Carries no `seq` and consumes no lane position, for the same reason the delta
+ * path could not carry it: nothing was committed. It is ordered only by
+ * arrival, within its `authorityEpoch`. A client applies it by overwriting its
+ * held trust value - there is no revision guard because there is no entity, and
+ * the host is the sole writer.
+ *
+ * The snapshot's and `resumed`'s `reconciledWithCloud` are this frame's
+ * CURRENT-STATE PROJECTION - the completeness rule the control lane states in
+ * full, applied here: a client that attaches after the flip reads trust off its
+ * lead frame and needs no replay.
+ */
+const epicStateSubscribeTrustChangedFrameSchemaV10 = z.object({
+  kind: z.literal("trustChanged"),
+  ...epicLaneEpochFrameFields,
+  reconciledWithCloud: z.boolean(),
   ...epicLaneTextFrameFields,
 });
 
@@ -607,6 +688,7 @@ type EmptinessCheckedFrame =
     }
   | { readonly kind: "snapshot" }
   | { readonly kind: "resumed" }
+  | { readonly kind: "trustChanged" }
   | { readonly kind: "pong" };
 
 /**
@@ -645,6 +727,7 @@ export const epicStateSubscribeServerFrameSchemaV10 = z
     epicStateSubscribeSnapshotFrameSchemaV10,
     epicStateSubscribeResumedFrameSchemaV10,
     epicStateSubscribeDeltaFrameSchemaV10,
+    epicStateSubscribeTrustChangedFrameSchemaV10,
     z.object({
       kind: z.literal("pong"),
       // No epoch stamp: heartbeats are intercepted by the shared connection
