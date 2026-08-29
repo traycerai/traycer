@@ -222,27 +222,21 @@ function walk(entry: string): GraphWalk {
 
 /**
  * The runtime entry's allowlist. SEPARATE from {@link ALLOWED}, which covers
- * the worker entry and is empty.
+ * the worker entry — and, since 4f, **also empty**.
  *
- * One entry, and it is not 4e's to remove. `epic-write-command.ts:7` imports
- * `StaleHostBindingAuthorityError` for a single `error instanceof` in
- * `classifyEpicWriteCommandFailure` - and importing that error CLASS pulls its
- * whole module, which pulls the process-wide `RemoteSession` cache. The
- * write-command ruling puts classification on MAIN, so the worker never runs
- * the classifier and this chain disappears with that change rather than
- * needing one of its own. Until it lands, the chain is real and is recorded
- * here rather than hidden by scoping the pin to miss it.
+ * It held one entry: `active-remote-sessions`, reached because
+ * `StaleHostBindingAuthorityError` was DECLARED inside
+ * `host-binding-authority-registry.ts`, a module that value-imports the
+ * process-wide `RemoteSession` cache. `epic-write-command.ts` read none of that
+ * registry's members — 0 of its 2 structural exports — and imported the module
+ * only to `instanceof` that one class. 4f moved the class to an import-free
+ * leaf (`host-binding-authority-error.ts`), which cut the chain while keeping
+ * `instanceof` exactly as sharp.
  *
- * **Same T14 gate as the worker allowlist: this must be EMPTY before the OSS**
- * **PR opens.** A green suite with an entry in it means a singleton shipped
- * with permission.
+ * Both allowlists are now empty, which is the T14 gate. Keeping it empty is
+ * the point: an entry here is a singleton with permission to ship.
  */
-const RUNTIME_ALLOWED: ReadonlyMap<string, string> = new Map([
-  [
-    "shared/host-transport/remote/active-remote-sessions.ts",
-    "epic-write-command.ts -> host-binding-authority-registry.ts (one `instanceof`)",
-  ],
-]);
+const RUNTIME_ALLOWED: ReadonlyMap<string, string> = new Map();
 
 describe("the epic replica runtime's value-import graph", () => {
   it("no longer reaches the process memory accountant - 4e's inversion, pinned", () => {

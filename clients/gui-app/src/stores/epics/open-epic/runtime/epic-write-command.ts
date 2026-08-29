@@ -4,7 +4,7 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import { StaleHostBindingAuthorityError } from "@traycer-clients/shared/host-client/host-binding-authority-registry";
+import { StaleHostBindingAuthorityError } from "@traycer-clients/shared/host-client/host-binding-authority-error";
 import type { TicketStatus } from "@traycer/protocol/common/registry";
 
 export type EpicWriteCommandIntent =
