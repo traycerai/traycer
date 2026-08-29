@@ -3,6 +3,7 @@ import {
   createMainBridgeEndpoint,
   type MainBridgeEndpoint,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
+import { stubMainCallHandlers } from "@traycer-clients/shared/replica-runtime/worker/test-support/stub-main-call-handlers";
 import {
   createFakeBridgePair,
   type FakeBridgePair,
@@ -10,6 +11,7 @@ import {
 import {
   isWorkerToMainFrame,
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
+  type RuntimeWorkerBootstrap,
   type WorkerToMainEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import {
@@ -27,7 +29,7 @@ interface HostFixture {
 function createFixture(): HostFixture {
   const pair = createFakeBridgePair("sync");
   const host = startEpicRuntimeWorkerHost(pair.worker);
-  const main = createMainBridgeEndpoint(pair.main);
+  const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
   return { pair, main, host };
 }
 
@@ -40,14 +42,16 @@ function workerEvents(pair: FakeBridgePair): WorkerToMainEvent[] {
 
 function bootstrap(protocolVersion: number): {
   readonly kind: "bootstrap";
-  readonly bootstrap: {
-    readonly protocolVersion: number;
-    readonly windowLabel: string;
-  };
+  readonly bootstrap: RuntimeWorkerBootstrap;
 } {
   return {
     kind: "bootstrap",
-    bootstrap: { protocolVersion, windowLabel: "test-window" },
+    bootstrap: {
+      protocolVersion,
+      hostId: "host-1",
+      userId: "user-1",
+      windowLabel: "test-window",
+    },
   };
 }
 
@@ -127,6 +131,8 @@ describe("startEpicRuntimeWorkerHost", () => {
         kind: "bootstrap",
         bootstrap: {
           protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION,
+          hostId: "host-1",
+          userId: "user-1",
           windowLabel: "window-1",
         },
       },

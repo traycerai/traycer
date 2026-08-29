@@ -11,7 +11,11 @@ import {
   isMainToWorkerFrame,
   type MainToWorkerEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+import { createWorkerBridgeEndpoint } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
+import { stubRuntimeWorkerCallHandlers } from "@traycer-clients/shared/replica-runtime/worker/test-support/stub-runtime-worker-call-handlers";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { HostCredentialMintFlow } from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
 import type { HostClientChangeEvent } from "@traycer-clients/shared/host-client/host-client";
 import type { RequestContext } from "@traycer/protocol/auth/request-context";
 import type { BearerPumpHostClient } from "../epic-runtime-bearer-pump";
@@ -23,6 +27,7 @@ import type { RuntimeProjectionHandlers } from "@traycer-clients/shared/replica-
 import {
   spawnEpicRuntimeWorker,
   type RuntimeWorkerLike,
+  type SpawnEpicRuntimeWorkerOptions,
 } from "../spawn-epic-runtime-worker";
 
 /**
@@ -36,6 +41,50 @@ const SILENT_PROJECTION: RuntimeProjectionHandlers<never> = {
   reject: () => {},
 };
 
+const SILENT_HOST_CLIENT: BearerPumpHostClient = {
+  getRequestContext: () => null,
+  onChange: () => () => {},
+  onBearerRotated: () => () => {},
+};
+
+/**
+ * One construction site for the spawner's options.
+ *
+ * `SpawnEpicRuntimeWorkerOptions` MIRRORS what the worker needs from the main
+ * thread, so it grows every time a push, a call, or a bootstrap fact is added -
+ * and this file had SIX literals before the worker->main direction landed,
+ * which would have been six compile errors for one ruling. The same collapse
+ * `stubCore` and `stubMainCallHandlers` already do on the other seams.
+ *
+ * The defaults are inert rather than realistic: no bearer, no address, a
+ * revalidate that changes nothing and a mint that hands over nothing. A test
+ * that cares about one of them overrides exactly that one, so what it is
+ * actually asserting on is visible at its own call site.
+ */
+function spawnOptions<TProjection>(
+  required: Pick<
+    SpawnEpicRuntimeWorkerOptions<TProjection>,
+    "createWorker" | "projection"
+  >,
+  overrides: Partial<SpawnEpicRuntimeWorkerOptions<TProjection>>,
+): SpawnEpicRuntimeWorkerOptions<TProjection> {
+  const base: SpawnEpicRuntimeWorkerOptions<TProjection> = {
+    createWorker: required.createWorker,
+    projection: required.projection,
+    hostClient: SILENT_HOST_CLIENT,
+    relay: { log: () => {}, fatal: () => {} },
+    hostId: "host-1",
+    userId: "user-1",
+    auth: { revalidateForReconnect: () => Promise.resolve("network-error") },
+    mint: () => Promise.resolve({ kind: "unavailable" }),
+    endpoint: () => null,
+    subscribeEndpointChange: () => () => {},
+    onHostRecovered: () => {},
+    windowLabel: "window-1",
+  };
+  return { ...base, ...overrides };
+}
+
 interface SpawnFixture {
   readonly pair: FakeBridgePair;
   readonly worker: RuntimeWorkerLike;
@@ -44,16 +93,14 @@ interface SpawnFixture {
   readonly rotations: Set<() => void>;
 }
 
-function createFixture(withHost: boolean): SpawnFixture {
-  const pair = createFakeBridgePair("sync");
-  const rotations = new Set<() => void>();
-  const terminate = vi.fn();
+/** The `Worker`-shaped adapter over the fake pair's main side. */
+function attachWorkerTarget(pair: FakeBridgePair): BridgeMessageTargetLike {
   const workerListeners = new Set<(event: BridgeMessageEventLike) => void>();
   pair.main.subscribe((message) => {
     const event: BridgeMessageEventLike = { data: message };
     for (const listener of [...workerListeners]) listener(event);
   });
-  const target: BridgeMessageTargetLike = {
+  return {
     postMessage(message, transfer): void {
       const buffers = transfer.filter(
         (value): value is ArrayBuffer => value instanceof ArrayBuffer,
@@ -73,7 +120,16 @@ function createFixture(withHost: boolean): SpawnFixture {
       workerListeners.delete(listener);
     },
   };
-  const worker: RuntimeWorkerLike = { ...target, terminate };
+}
+
+function createFixture(withHost: boolean): SpawnFixture {
+  const pair = createFakeBridgePair("sync");
+  const rotations = new Set<() => void>();
+  const terminate = vi.fn();
+  const worker: RuntimeWorkerLike = {
+    ...attachWorkerTarget(pair),
+    terminate,
+  };
   const host = withHost ? startEpicRuntimeWorkerHost(pair.worker) : null;
   return { pair, worker, terminate, host, rotations };
 }
@@ -110,35 +166,59 @@ describe("spawnEpicRuntimeWorker", () => {
     const fixture = createFixture(true);
     const relay = { log: vi.fn(), fatal: vi.fn() };
     const { hostClient } = createHostClient(fixture);
-    const handle = spawnEpicRuntimeWorker({
-      createWorker: () => fixture.worker,
-      hostClient,
-      projection: SILENT_PROJECTION,
-      relay,
-      windowLabel: "window-1",
-    });
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { hostClient, relay },
+      ),
+    );
 
     await expect(handle.ready).resolves.toBeUndefined();
+    // All three, by name and in order. Nothing the worker owns may dial before
+    // it has an address AND a credential, and the handshake has to precede
+    // both - a `slice(0, 2)` here would have stayed green when the endpoint
+    // push was added and silently stopped covering the bearer.
     expect(
       mainEvents(fixture.pair)
-        .slice(0, 2)
+        .slice(0, 3)
         .map((event) => event.kind),
-    ).toEqual(["bootstrap", "bearer"]);
+    ).toEqual(["bootstrap", "endpoint", "bearer"]);
     handle.dispose();
     fixture.host?.shutdown();
+  });
+
+  it("carries the host and user it was spawned for in the bootstrap", () => {
+    const fixture = createFixture(false);
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { hostId: "host-7", userId: "user-7" },
+      ),
+    );
+
+    const [first] = mainEvents(fixture.pair);
+    expect(first).toEqual({
+      kind: "bootstrap",
+      bootstrap: {
+        protocolVersion: 1,
+        hostId: "host-7",
+        userId: "user-7",
+        windowLabel: "window-1",
+      },
+    });
+    handle.dispose();
   });
 
   it("relays worker logs and fatal events, rejecting an unresolved ready", async () => {
     const fixture = createFixture(false);
     const relay = { log: vi.fn(), fatal: vi.fn() };
     const { hostClient } = createHostClient(fixture);
-    const handle = spawnEpicRuntimeWorker({
-      createWorker: () => fixture.worker,
-      hostClient,
-      projection: SILENT_PROJECTION,
-      relay,
-      windowLabel: "window-1",
-    });
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { hostClient, relay },
+      ),
+    );
     const logEntry = {
       level: "debug" as const,
       message: "hello",
@@ -164,17 +244,38 @@ describe("spawnEpicRuntimeWorker", () => {
     handle.dispose();
   });
 
+  it("routes a host-recovered event to the caller's notifier", () => {
+    const fixture = createFixture(false);
+    const onHostRecovered = vi.fn();
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { onHostRecovered },
+      ),
+    );
+
+    fixture.pair.worker.post(
+      { frame: "event", event: { kind: "host-recovered" } },
+      [],
+    );
+
+    // Fire-and-forget: the worker gets no answer, and the selection authority
+    // on this side decides what recovery means. A call here would have made
+    // the worker's transport wait on a decision it has no stake in.
+    expect(onHostRecovered).toHaveBeenCalledTimes(1);
+    handle.dispose();
+  });
+
   it("disposes idempotently by sending shutdown before terminating", async () => {
     const fixture = createFixture(false);
     const relay = { log: vi.fn(), fatal: vi.fn() };
     const { hostClient } = createHostClient(fixture);
-    const handle = spawnEpicRuntimeWorker({
-      createWorker: () => fixture.worker,
-      hostClient,
-      projection: SILENT_PROJECTION,
-      relay,
-      windowLabel: "window-1",
-    });
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { hostClient, relay },
+      ),
+    );
 
     handle.dispose();
     handle.dispose();
@@ -189,19 +290,137 @@ describe("spawnEpicRuntimeWorker", () => {
     const fixture = createFixture(false);
     const relay = { log: vi.fn(), fatal: vi.fn() };
     const { hostClient } = createHostClient(fixture);
-    const handle = spawnEpicRuntimeWorker({
-      createWorker: () => fixture.worker,
-      hostClient,
-      projection: SILENT_PROJECTION,
-      relay,
-      windowLabel: "window-1",
-    });
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { hostClient, relay },
+      ),
+    );
     const count = fixture.pair.fromMain.length;
 
     handle.dispose();
     for (const handler of [...fixture.rotations]) handler();
 
     expect(fixture.pair.fromMain).toHaveLength(count + 1);
+  });
+
+  it("stops endpoint pushes after disposal", () => {
+    const fixture = createFixture(false);
+    const changes = new Set<() => void>();
+    let endpointUrl: string | null = "ws://one";
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        {
+          endpoint: () => ({ hostId: "host-1", websocketUrl: endpointUrl }),
+          subscribeEndpointChange: (onChange) => {
+            changes.add(onChange);
+            return () => changes.delete(onChange);
+          },
+        },
+      ),
+    );
+    const count = fixture.pair.fromMain.length;
+
+    handle.dispose();
+    endpointUrl = "ws://two";
+    for (const handler of [...changes]) handler();
+
+    // Only the shutdown event. The directory outlives the worker, so a pump
+    // that survived disposal would keep posting into a terminated thread.
+    expect(fixture.pair.fromMain).toHaveLength(count + 1);
+  });
+});
+
+describe("spawnEpicRuntimeWorker — the two worker->main calls", () => {
+  function setupCalls(
+    overrides: Partial<SpawnEpicRuntimeWorkerOptions<never>>,
+  ) {
+    const pair = createFakeBridgePair("queued");
+    const worker: RuntimeWorkerLike = {
+      ...attachWorkerTarget(pair),
+      terminate: () => {},
+    };
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => worker, projection: SILENT_PROJECTION },
+        overrides,
+      ),
+    );
+    // The REAL worker-side endpoint, so the frames, the correlation and the
+    // response parsers are all production code. A hand-built `main-call` frame
+    // would have proved the main side answers something, not that the two ends
+    // agree on what.
+    const workerEndpoint = createWorkerBridgeEndpoint(
+      pair.worker,
+      stubRuntimeWorkerCallHandlers({}),
+    );
+    return { pair, handle, workerEndpoint };
+  }
+
+  it("answers a revalidate from the instance it was handed, calling it once", async () => {
+    const revalidateForReconnect = vi.fn(() => Promise.resolve("rotated"));
+    const auth: StreamAuthRevalidator = { revalidateForReconnect };
+    const { pair, handle, workerEndpoint } = setupCalls({ auth });
+
+    const answered = workerEndpoint.call("main/auth-revalidate", {});
+    await pair.flush();
+
+    await expect(answered).resolves.toEqual({ outcome: "rotated" });
+    // IDENTITY, not shape. A shape assertion passes just as happily against a
+    // second revalidator the spawner constructed for itself - which is exactly
+    // the defect this call exists to prevent, because the single-flight that
+    // stops 13 consumers stampeding one refresh is a property of the INSTANCE.
+    expect(auth.revalidateForReconnect).toBe(revalidateForReconnect);
+    expect(revalidateForReconnect).toHaveBeenCalledTimes(1);
+    handle.dispose();
+    workerEndpoint.dispose();
+  });
+
+  it("answers a mint from the flow it was handed, forwarding the request", async () => {
+    const mint = vi.fn(() =>
+      Promise.resolve({ kind: "pending-elsewhere", retryAfterMs: 1_500 }),
+    );
+    const { pair, handle, workerEndpoint } = setupCalls({ mint });
+
+    const answered = workerEndpoint.call("main/mint-credential", {
+      mint: { hostId: "host-1", reason: "needs-reauth" },
+    });
+    await pair.flush();
+
+    await expect(answered).resolves.toEqual({
+      outcome: { kind: "pending-elsewhere", retryAfterMs: 1_500 },
+    });
+    expect(mint).toHaveBeenCalledTimes(1);
+    // The request crosses intact: the flow is single-flighted PER HOST, so a
+    // spawner that dropped or rewrote `hostId` would join the wrong host's
+    // attempt - or start a second one for a host that already has one.
+    expect(mint).toHaveBeenCalledWith({
+      hostId: "host-1",
+      reason: "needs-reauth",
+    });
+    handle.dispose();
+    workerEndpoint.dispose();
+  });
+
+  it("reports a throwing handler as a rejection rather than hanging the worker", async () => {
+    const auth: StreamAuthRevalidator = {
+      revalidateForReconnect: () => Promise.reject(new Error("auth exploded")),
+    };
+    const { pair, handle, workerEndpoint } = setupCalls({ auth });
+
+    const answered = workerEndpoint.call("main/auth-revalidate", {});
+    // The worker's transport awaits this deep inside a reconnect. A main-side
+    // throw that produced no frame would park that reconnect forever, on a
+    // thread with no `unhandledrejection` anyone reads.
+    //
+    // Attached before the flush, so the rejection is observed as it happens
+    // rather than surviving a macrotask boundary unhandled.
+    const rejected = expect(answered).rejects.toThrow("auth exploded");
+    await pair.flush();
+    await rejected;
+    handle.dispose();
+    workerEndpoint.dispose();
   });
 });
 
@@ -220,32 +439,10 @@ interface Slice {
 describe("spawnEpicRuntimeWorker — the projection path", () => {
   function setupProjection() {
     const pair = createFakeBridgePair("sync");
-    const workerListeners = new Set<(event: BridgeMessageEventLike) => void>();
-    pair.main.subscribe((message) => {
-      const event: BridgeMessageEventLike = { data: message };
-      for (const listener of [...workerListeners]) listener(event);
-    });
-    const target: BridgeMessageTargetLike = {
-      postMessage(message, transfer): void {
-        const buffers = transfer.filter(
-          (value): value is ArrayBuffer => value instanceof ArrayBuffer,
-        );
-        pair.main.post(message, buffers);
-      },
-      addEventListener(
-        _type: "message",
-        listener: (event: BridgeMessageEventLike) => void,
-      ): void {
-        workerListeners.add(listener);
-      },
-      removeEventListener(
-        _type: "message",
-        listener: (event: BridgeMessageEventLike) => void,
-      ): void {
-        workerListeners.delete(listener);
-      },
+    const worker: RuntimeWorkerLike = {
+      ...attachWorkerTarget(pair),
+      terminate: () => {},
     };
-    const worker: RuntimeWorkerLike = { ...target, terminate: () => {} };
 
     const applied: Array<{ readonly value: Slice; readonly revision: number }> =
       [];
@@ -253,27 +450,25 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
       readonly reason: string;
       readonly revision: number;
     }> = [];
-    const handle = spawnEpicRuntimeWorker<Slice>({
-      createWorker: () => worker,
-      hostClient: {
-        getRequestContext: () => null,
-        onChange: () => () => {},
-        onBearerRotated: () => () => {},
-      },
-      relay: { log: () => {}, fatal: () => {} },
-      projection: {
-        accept: (value) =>
-          typeof value === "object" &&
-          value !== null &&
-          "title" in value &&
-          typeof value.title === "string"
-            ? { title: value.title }
-            : null,
-        apply: (value, revision) => applied.push({ value, revision }),
-        reject: (reason, revision) => rejected.push({ reason, revision }),
-      },
-      windowLabel: "window-1",
-    });
+    const handle = spawnEpicRuntimeWorker<Slice>(
+      spawnOptions<Slice>(
+        {
+          createWorker: () => worker,
+          projection: {
+            accept: (value) =>
+              typeof value === "object" &&
+              value !== null &&
+              "title" in value &&
+              typeof value.title === "string"
+                ? { title: value.title }
+                : null,
+            apply: (value, revision) => applied.push({ value, revision }),
+            reject: (reason, revision) => rejected.push({ reason, revision }),
+          },
+        },
+        {},
+      ),
+    );
 
     const publish = (revision: number, value: unknown): void => {
       pair.worker.post(

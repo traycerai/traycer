@@ -11,14 +11,22 @@
  * replica, projection kernel, cold tier, durable store) is not here yet. It
  * arrives through {@link EpicRuntimeWorkerHost.installCore}, which is the one
  * named seam that phase adds. Until something installs a core, the host is a
- * fully working bridge over an empty runtime: it holds the bearer, it forwards
- * logs, and it answers the reads it can answer - `{ bytes: null }` for an
- * attachment, which is the honest "not available from here" every surviving
- * caller already handles, and not a throw.
+ * fully working bridge over an empty runtime: it holds the bearer and the
+ * dialable endpoint, it records the bootstrap's facts, it forwards logs, and it
+ * answers the reads it can answer - `{ bytes: null }` for an attachment, which
+ * is the honest "not available from here" every surviving caller already
+ * handles, and not a throw.
+ *
+ * The three things a core needs from OUTSIDE the worker are all reachable here
+ * before it exists: the two holders (read synchronously, deep inside a dial),
+ * `bootstrapFacts()` (the host and user it serves), and `mainThread` - the ask
+ * half of the worker->main direction, which is how the relocated transport
+ * reaches the two app-wide single-flights that must not be copied per worker.
  */
 import {
   createWorkerBridgeEndpoint,
   type BridgeTransport,
+  type MainThreadPort,
   type RuntimeWorkerCallHandlers,
   type WorkerBridgeEndpoint,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
@@ -26,6 +34,7 @@ import {
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
   type ArtifactBodySeedMode,
   type MainToWorkerEvent,
+  type RuntimeWorkerBootstrap,
   type RuntimeWorkerLogEntry,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import {
@@ -36,6 +45,10 @@ import {
   createWorkerBearerHolder,
   type WorkerBearerHolder,
 } from "@traycer-clients/shared/replica-runtime/worker/worker-bearer-holder";
+import {
+  createWorkerEndpointHolder,
+  type WorkerEndpointHolder,
+} from "@traycer-clients/shared/replica-runtime/worker/worker-endpoint-holder";
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
 import type { RuntimeEnvironment } from "@traycer-clients/shared/replica-runtime/runtime-environment";
 import { createWorkerRuntimeEnvironment } from "../worker-runtime-environment";
@@ -106,6 +119,28 @@ export interface EpicRuntimeWorkerHost {
    */
   readonly environment: RuntimeEnvironment;
   readonly bearer: WorkerBearerHolder;
+  readonly endpoint: WorkerEndpointHolder;
+  /**
+   * The ask half of the worker->main direction, for the relocated transport's
+   * auth recovery and credential mint. `call` only - the core has no business
+   * emitting a projection or subscribing to a bootstrap.
+   */
+  readonly mainThread: MainThreadPort;
+  /**
+   * What the main thread told this worker about the surface it serves, or
+   * `null` before the bootstrap arrives.
+   *
+   * A read rather than a constructor argument because the host is started by
+   * the entry module, which has nothing to tell it - the facts arrive on the
+   * wire. The core builder is what waits for them.
+   */
+  bootstrapFacts(): RuntimeWorkerBootstrap | null;
+  /**
+   * Reports that this worker's transport reached a host it had lost. Travels
+   * outward as a fire-and-forget event; the selection authority that acts on it
+   * is a main-thread concern.
+   */
+  reportHostRecovered(): void;
   /**
    * Installs the relocated composition root. Called once, by the phase that
    * moves it; a second call replaces the core and disposes the previous one.
@@ -119,7 +154,9 @@ export function startEpicRuntimeWorkerHost(
   transport: BridgeTransport,
 ): EpicRuntimeWorkerHost {
   const bearer = createWorkerBearerHolder();
+  const endpointHolder = createWorkerEndpointHolder();
   let core: EpicRuntimeWorkerCore | null = null;
+  let bootstrap: RuntimeWorkerBootstrap | null = null;
   let stopped = false;
 
   const handlers: RuntimeWorkerCallHandlers = {
@@ -202,14 +239,14 @@ export function startEpicRuntimeWorkerHost(
   };
 
   // Built before the environment, so the log sink can close over a `const`
-  // endpoint rather than a slot that is null until construction finishes -
+  // bridge rather than a slot that is null until construction finishes -
   // a log line emitted while the core is being built would otherwise vanish.
-  const endpoint: WorkerBridgeEndpoint = createWorkerBridgeEndpoint(
+  const bridge: WorkerBridgeEndpoint = createWorkerBridgeEndpoint(
     transport,
     handlers,
   );
   const emitLog = (entry: RuntimeWorkerLogEntry): void => {
-    endpoint.emit({ kind: "log", entry }, NO_TRANSFER);
+    bridge.emit({ kind: "log", entry }, NO_TRANSFER);
   };
   const environment = createWorkerRuntimeEnvironment(emitLog);
 
@@ -224,7 +261,7 @@ export function startEpicRuntimeWorkerHost(
           // answered `ready` would be adopted by the main thread and then
           // ignore half the traffic it was sent, which reads as a runtime that
           // is merely slow.
-          endpoint.emit(
+          bridge.emit(
             {
               kind: "fatal",
               message: `Runtime worker bridge protocol mismatch: main thread speaks ${String(
@@ -236,10 +273,24 @@ export function startEpicRuntimeWorkerHost(
           );
           return;
         }
-        endpoint.emit(
+        // Recorded only on a MATCHING handshake. A skewed bootstrap's payload
+        // is exactly the thing that must not be trusted - a worker that stored
+        // a mismatched `hostId` and then answered `fatal` would leave the core
+        // builder able to construct a transport against facts the main thread
+        // and this worker do not agree on.
+        bootstrap = event.bootstrap;
+        bridge.emit(
           { kind: "ready", protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION },
           NO_TRANSFER,
         );
+        return;
+      }
+      case "endpoint": {
+        // Held whether or not the handshake has completed, for the bearer
+        // push's reason: an address dropped because a handshake had not
+        // finished would be failing closed for a reason that is not about
+        // addresses at all, and the main thread does not re-push on `ready`.
+        endpointHolder.apply(event.endpoint);
         return;
       }
       case "bearer": {
@@ -259,14 +310,14 @@ export function startEpicRuntimeWorkerHost(
     }
   };
 
-  const unsubscribe = endpoint.onEvent((event) => {
+  const unsubscribe = bridge.onEvent((event) => {
     try {
       onEvent(event);
     } catch (cause: unknown) {
       // A throw inside a message listener is otherwise an unhandled error with
       // no route back to the main thread, which then waits on a runtime that
       // has already failed.
-      endpoint.emit(
+      bridge.emit(
         {
           kind: "fatal",
           message:
@@ -290,12 +341,18 @@ export function startEpicRuntimeWorkerHost(
     const disposing = core;
     core = null;
     disposing?.dispose();
-    endpoint.dispose();
+    bridge.dispose();
   }
 
   return {
     environment,
     bearer,
+    endpoint: endpointHolder,
+    mainThread: bridge,
+    bootstrapFacts: () => bootstrap,
+    reportHostRecovered(): void {
+      bridge.emit({ kind: "host-recovered" }, NO_TRANSFER);
+    },
     installCore(next): void {
       const previous = core;
       core = next;

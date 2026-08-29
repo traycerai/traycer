@@ -354,24 +354,42 @@ export type MainCallResponse<K extends MainCallKind> =
   MainCallMap[K]["response"];
 
 /**
- * The worker->main call kinds, enumerated as a value.
+ * The one place a worker->main call kind is written as a VALUE.
  *
- * A runtime list beside the type so the COUNT is pinnable: the ruling is "two,
- * and a third needs its own justification", and a type alone cannot be
- * asserted on. A member added to {@link MainCallMap} without a line here fails
- * the exhaustiveness check below.
+ * A mapped type over {@link MainCallKind}, so the compiler checks it in both
+ * directions: a member added to {@link MainCallMap} without a line here is a
+ * missing property, and a line here naming a kind the map does not have is an
+ * excess property on an object literal. Neither compiles.
  */
-export const MAIN_CALL_KINDS: readonly MainCallKind[] = [
-  "main/auth-revalidate",
-  "main/mint-credential",
-];
-
-/** Compile-time proof that {@link MAIN_CALL_KINDS} names every member. */
 const MAIN_CALL_KIND_COVERAGE: { readonly [K in MainCallKind]: true } = {
   "main/auth-revalidate": true,
   "main/mint-credential": true,
 };
-void MAIN_CALL_KIND_COVERAGE;
+
+/**
+ * The worker->main call kinds, enumerated as a value, DERIVED from the record
+ * above rather than written a second time.
+ *
+ * A runtime list is what makes the count pinnable - the ruling is "two, and a
+ * third needs its own paragraph", and a type alone cannot be asserted on. But a
+ * hand-written array beside a coverage record is two lists and only one of them
+ * is checked: TypeScript cannot verify that an array's ELEMENTS exhaust a union
+ * (`readonly MainCallKind[]` is satisfied by `[]`), so a third member added to
+ * the map and the record but not the array leaves the count pin green at two
+ * while the union is three - the pin reporting the answer it was written to
+ * catch.
+ *
+ * Deriving removes the second list. The predicate narrows rather than asserts:
+ * every key `Object.keys` returns for this object is an own enumerable property
+ * of a record whose type has exactly the union's keys, and the object is a
+ * `const` literal that is never mutated, so the claim it makes is the one the
+ * type already states.
+ */
+export const MAIN_CALL_KINDS: readonly MainCallKind[] = Object.keys(
+  MAIN_CALL_KIND_COVERAGE,
+).filter((key): key is MainCallKind =>
+  Object.hasOwn(MAIN_CALL_KIND_COVERAGE, key),
+);
 
 export type MainCall = {
   [K in MainCallKind]: {

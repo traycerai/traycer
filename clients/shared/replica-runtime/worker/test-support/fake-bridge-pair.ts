@@ -134,13 +134,32 @@ export function createFakeBridgePair(
       // Round-based rather than a single pass: a delivery enqueues more work
       // (a call answered inside a handler), and that work only appears after
       // the handler's promise has run. Each round drains what is there, then
-      // yields the microtask queue so the frames those deliveries produce are
-      // enqueued before the next round looks.
+      // waits for the frames those deliveries produce to be enqueued.
+      //
+      // That wait is a MACROTASK, and counting microtasks instead is what this
+      // originally did - two `await Promise.resolve()` per round. It was enough
+      // for the one-directional case and silently too shallow for a round trip:
+      // a `main-call` answered by an async handler inside an async `serve`
+      // needs about five ticks before its reply is posted, so the second round
+      // found an empty queue, declared the pipe settled, and returned while the
+      // reply was still two ticks away. The test that noticed did not report a
+      // missing reply - it timed out, twenty seconds later, pointing at the
+      // production call rather than at this line.
+      //
+      // A macrotask boundary is not a bigger guess. Every pending microtask
+      // runs to completion before a `setTimeout` callback does, so any chain of
+      // `await`s has finished by the time the next round looks - no depth to
+      // tune, and no reply that settles just after the harness stopped looking.
+      //
+      // The one thing it assumes is REAL timers. No suite driving this harness
+      // installs fake ones; one that did would hang here rather than pass with
+      // a frame undelivered, which is the failure worth having.
       for (let round = 0; round < MAX_FLUSH_ROUNDS; round += 1) {
         const batch = queue.splice(0, queue.length);
         for (const deliver of batch) deliver();
-        await Promise.resolve();
-        await Promise.resolve();
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
         if (queue.length === 0) return;
       }
       // A bound, not a safety net: a pipe that never settles means the code
