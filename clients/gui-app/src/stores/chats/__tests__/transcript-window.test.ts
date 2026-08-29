@@ -2087,6 +2087,55 @@ describe("what an overlap keeps", () => {
     expect(confirmed.liveEvents).toEqual([]);
   });
 
+  it("tracks retained events across a same-epoch null-revision rebuild", () => {
+    const setup: ChatEvent = {
+      eventId: "setup-same-epoch-rebuild",
+      type: "setup.running",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 7,
+        indexRevisionRebuilding: false,
+      },
+      { messages: [], events: [setup] },
+    );
+    const rebuilding = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(rebuilding.snapshotProvisionalEventIds).toContain(setup.eventId);
+    const rebuilt = applySkeletonChunk(rebuilding, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(confirmed.liveEvents).toEqual([]);
+  });
+
   it("tracks a live decorating event using its span-backed assistant", () => {
     const seeded = applyRangeResponse(
       { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
@@ -2111,6 +2160,21 @@ describe("what an overlap keeps", () => {
     });
 
     expect(rebased.snapshotProvisionalEventIds).toContain(completion.eventId);
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 2,
+      fromOrdinal: 0,
+      entries: [skeletonEntry(assistantRowId("turn-1"), 0)],
+      isFinal: true,
+    });
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 2,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(confirmed.liveEvents.map((entry) => entry.eventId)).toContain(
+      completion.eventId,
+    );
   });
 
   it("matches same-timestamp provisional setup windows one-to-one", () => {

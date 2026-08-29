@@ -1264,8 +1264,12 @@ function provisionalLiveEventsForSnapshot(input: {
   readonly window: TranscriptWindow;
   readonly missedDeltas: boolean;
   readonly rebased: boolean;
+  readonly rebuilding: boolean;
 }): readonly ChatEvent[] {
-  return input.rebased || input.missedDeltas || input.window.invalidated
+  return input.rebased ||
+    input.missedDeltas ||
+    input.window.invalidated ||
+    input.rebuilding
     ? input.window.liveEvents
     : [];
 }
@@ -1281,6 +1285,23 @@ function namedLiveEventIds(
     chatId: "",
   });
   const named = setupEventIdsNamedBySkeleton(projectedRows, skeletonRowIds);
+  const namedAssistantTurnKeys = new Set(
+    [...skeletonRowIds]
+      .map(assistantRowTurnKey)
+      .filter((turnKey): turnKey is string => turnKey !== null),
+  );
+  // A decorating event can survive a rebase after the old span carrying its
+  // assistant dependency is discarded. Its turn key still provides the exact
+  // link to the replacement skeleton row, so do not require local projection
+  // to reconstruct an association the skeleton already names.
+  for (const event of window.liveEvents) {
+    if (
+      typeof event.turnId === "string" &&
+      namedAssistantTurnKeys.has(event.turnId)
+    ) {
+      named.add(event.eventId);
+    }
+  }
   for (const row of projectedRows) {
     if (row.source.kind === "setup-card") continue;
     if (!skeletonRowIds.has(row.rowId)) continue;
@@ -1542,6 +1563,7 @@ export function applyWindowedSnapshot(
     window: reconciledWindow,
     missedDeltas,
     rebased,
+    rebuilding: input.indexRevision === null,
   });
   const replaceLiveRecords = reconciledWindow.invalidated;
   // Snapshots travel on the bulk lane and can be overtaken by interactive live
