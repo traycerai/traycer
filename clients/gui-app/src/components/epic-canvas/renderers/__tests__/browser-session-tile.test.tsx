@@ -20,6 +20,21 @@ const harness = vi.hoisted(() => ({
   closeCanvasTile: vi.fn(),
 }));
 
+/**
+ * Cross-host fence bookkeeping (ticket 13): who each seam was actually
+ * called for, so a test can prove the tile bound to the TILE's own
+ * `node.hostId` rather than the canvas host.
+ */
+const hostBindingHarness = vi.hoisted(() => ({
+  boundaryHostIds: [] as string[],
+  reachabilityHostIds: [] as string[],
+  electronBindingCalls: [] as Array<{
+    readonly sessionId: string;
+    readonly tabId: string;
+    readonly hostId: string;
+  }>,
+}));
+
 type ReachabilityStatus =
   | "checking"
   | "reachable"
@@ -48,7 +63,14 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   }),
 }));
 vi.mock("@/lib/browser-view/sessions/electron-tabs", () => ({
-  useElectronTabBindingOnHost: () => harness.binding,
+  useElectronTabBindingOnHost: (
+    sessionId: string,
+    tabId: string,
+    hostId: string,
+  ) => {
+    hostBindingHarness.electronBindingCalls.push({ sessionId, tabId, hostId });
+    return harness.binding;
+  },
 }));
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => "host-test",
@@ -64,8 +86,14 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
     readonly children: React.ReactNode;
   }) => props.children,
   BrowserSessionsHostBoundary: (props: {
+    readonly hostId: string | null;
     readonly children: React.ReactNode;
-  }) => props.children,
+  }) => {
+    if (props.hostId !== null) {
+      hostBindingHarness.boundaryHostIds.push(props.hostId);
+    }
+    return props.children;
+  },
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
@@ -102,13 +130,16 @@ vi.mock("@/components/epic-canvas/renderers/browser-peek-tile", () => ({
   }) => `${node.hostId}:${node.sessionId}:${node.tabId}:${node.instanceId}`,
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
-  useHostReachability: () => ({
-    status: reachabilityHarness.status,
-    hostLabel: reachabilityHarness.hostLabel,
-    unavailability:
-      reachabilityHarness.status === "unreachable" ? "offline" : null,
-    basis: "directory",
-  }),
+  useHostReachability: (hostId: string) => {
+    hostBindingHarness.reachabilityHostIds.push(hostId);
+    return {
+      status: reachabilityHarness.status,
+      hostLabel: reachabilityHarness.hostLabel,
+      unavailability:
+        reachabilityHarness.status === "unreachable" ? "offline" : null,
+      basis: "directory",
+    };
+  },
 }));
 
 const NODE: BrowserSessionTileRef = {
@@ -179,6 +210,9 @@ describe("BrowserSessionTile lifecycle projection", () => {
     reachabilityHarness.status = "reachable";
     reachabilityHarness.hostLabel = "host-test";
     peekFrameHarness.frame = null;
+    hostBindingHarness.boundaryHostIds = [];
+    hostBindingHarness.reachabilityHostIds = [];
+    hostBindingHarness.electronBindingCalls = [];
   });
 
   afterEach(() => {
@@ -447,5 +481,41 @@ describe("BrowserSessionTile lifecycle projection", () => {
     );
 
     expect(screen.queryByTestId("browser-runtime-demotion-note")).toBeNull();
+  });
+
+  it("binds the boundary, reachability, and the electron binding lookup to the tile's OWN hostId, not the canvas host", () => {
+    // The canvas host (`useCanvasHostId`, mocked above) is always
+    // "host-test". This node names a different host - the first case in
+    // this suite where a browser tile's hostId diverges from the canvas
+    // it's rendered on. Every per-host seam the tile touches must key off
+    // `node.hostId`, never the canvas host it happens to be pinned inside.
+    const remoteNode: BrowserSessionTileRef = {
+      ...NODE,
+      hostId: "host-remote",
+    };
+    harness.items = [
+      { ...session("ready", "headless"), hostId: "host-remote" },
+    ];
+
+    render(
+      <BrowserSessionTile
+        node={remoteNode}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+
+    expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+      "tab-1",
+    );
+    expect(hostBindingHarness.boundaryHostIds).toEqual(["host-remote"]);
+    expect(hostBindingHarness.reachabilityHostIds).toContain("host-remote");
+    expect(hostBindingHarness.reachabilityHostIds).not.toContain("host-test");
+    expect(hostBindingHarness.electronBindingCalls).toContainEqual({
+      sessionId: "sess-1",
+      tabId: "tab-1",
+      hostId: "host-remote",
+    });
   });
 });
