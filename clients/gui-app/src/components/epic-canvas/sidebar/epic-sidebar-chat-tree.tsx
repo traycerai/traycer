@@ -532,18 +532,6 @@ interface ExpansionController {
   ensureExpanded: (id: string) => void;
 }
 
-/**
- * The expansion a key asks a tree row for, or `null` when the key is asking for
- * something else. Right opens, left closes - the direction the branch moves on
- * screen, which is why both are absolute rather than a toggle: pressing Right
- * twice must not close what the first press opened.
- */
-function expansionKeyIntent(key: string): boolean | null {
-  if (key === "ArrowRight") return true;
-  if (key === "ArrowLeft") return false;
-  return null;
-}
-
 function usePanelRootIds(
   panelId: RootCreatePanelId,
   comparator: NodeComparator | null,
@@ -1574,28 +1562,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     [nodeId, toggleExpanded],
   );
 
-  // The tree's expansion keys. Without them the chevron is the only way to open
-  // a branch, and the chevron is pointer-only - so a keyboard reaches every row
-  // it can already see and none of the descendants behind a collapsed parent.
-  //
-  // Expansion ONLY. The rest of the tree pattern - ArrowUp/Down between rows,
-  // ArrowLeft walking to the parent, Home/End - would each need a roving
-  // tabindex this tree does not have: every row is a natively tabbable
-  // `<button>`, so Tab already walks them in tree order. Half a focus model
-  // layered over a working one is worse than none, and it is not what is
-  // missing. A key that would be a no-op (ArrowRight on a leaf or on an
-  // already-open branch) is left to the browser rather than swallowed.
-  const handleExpansionKey = useCallback(
-    (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (!hasChildren) return;
-      const intent = expansionKeyIntent(event.key);
-      if (intent === null || intent === expanded) return;
-      event.preventDefault();
-      toggleExpanded(nodeId);
-    },
-    [expanded, hasChildren, nodeId, toggleExpanded],
-  );
-
   const startRename = useCallback(() => {
     if (!canMutate) return;
     setRenameValue(nodeName);
@@ -1786,7 +1752,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onCommitRename={commitRename}
       onRenameKeyDown={handleRenameKeyDown}
       onToggle={handleToggle}
-      onExpansionKey={handleExpansionKey}
       onClick={rowClick}
       onDoubleClick={rowDoubleClick}
       treeFilter={treeFilter}
@@ -1834,7 +1799,6 @@ interface ChatNodeShellProps {
   readonly onCommitRename: () => void;
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
-  readonly onExpansionKey: (event: KeyboardEvent<HTMLButtonElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onDoubleClick: () => void;
   readonly onStartRename: () => void;
@@ -1936,7 +1900,6 @@ function ChatNodeShellBody(
     onCommitRename,
     onRenameKeyDown,
     onToggle,
-    onExpansionKey,
     onClick,
     onDoubleClick,
     onStartRename,
@@ -2056,7 +2019,6 @@ function ChatNodeShellBody(
             hasChildren={hasChildren}
             expanded={expanded}
             onToggle={onToggle}
-            onExpansionKey={onExpansionKey}
             onClick={onClick}
             onDoubleClick={onDoubleClick}
             selectionMode={selectionMode}
@@ -2142,9 +2104,12 @@ function NodeChevron(props: NodeChevronProps) {
       // hit area and nothing else, so exposing a second nameless control would
       // be noise rather than access.
       //
-      // It does NOT claim keyboard reachability, and does not need to: the row
-      // button owns the tree's expansion keys, so a focused row opens and
-      // closes its branch without this hit box being reachable at all.
+      // It does NOT claim keyboard reachability. Expansion in this tree is
+      // pointer-only on BOTH form factors - desktop binds no ArrowRight/Left
+      // and neither does the row button - so a keyboard-only user cannot open
+      // a collapsed branch here. That gap is desktop's and predates this
+      // mount; what the mount changed is that a phone now inherits it, where
+      // the flat list it replaced had listed every descendant outright.
       aria-hidden="true"
       onClick={onToggle}
       className="relative inline-flex cursor-pointer before:absolute before:-inset-2 before:content-['']"
@@ -2609,7 +2574,6 @@ interface ChatRowButtonProps {
   readonly hasChildren: boolean;
   readonly expanded: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
-  readonly onExpansionKey: (event: KeyboardEvent<HTMLButtonElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onDoubleClick: () => void;
   readonly selectionMode: boolean;
@@ -2727,7 +2691,6 @@ function ChatRowButton(props: ChatRowButtonProps) {
     hasChildren,
     expanded,
     onToggle,
-    onExpansionKey,
     onClick,
     onDoubleClick,
     selectionMode,
@@ -2899,10 +2862,6 @@ function ChatRowButton(props: ChatRowButtonProps) {
       }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
-      // Capture, so the drag listeners spread above keep their own `onKeyDown`:
-      // that is the keyboard sensor's activator, and a bubble-phase handler
-      // here would replace it and take keyboard reparenting with it.
-      onKeyDownCapture={onExpansionKey}
     >
       <NodeChevron
         hasChildren={hasChildren}
