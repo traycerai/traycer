@@ -8,8 +8,7 @@ export function worktreeIdentity(row: EpicSweepWorktreeRow): string {
 }
 
 export function isBulkScopeRow(row: EpicSweepWorktreeRow): boolean {
-  if (row.disabled) return false;
-  return row.note !== "in-use";
+  return !row.disabled;
 }
 
 export function isElevatedRow(row: EpicSweepWorktreeRow): boolean {
@@ -104,12 +103,8 @@ export function unprovenRowHint(row: EpicSweepWorktreeRow): string {
 export function selectAllCountCopy(input: {
   readonly selected: number;
   readonly total: number;
-  readonly inUse: number;
 }): string {
-  const base = `${String(input.selected)} of ${String(input.total)} selected`;
-  if (input.inUse === 0) return base;
-  const unit = input.inUse === 1 ? "worktree" : "worktrees";
-  return `${base} · ${String(input.inUse)} in-use ${unit} require individual selection`;
+  return `${String(input.selected)} of ${String(input.total)} selected`;
 }
 
 export function safeSummaryCopy(

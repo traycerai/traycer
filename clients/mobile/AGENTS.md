@@ -30,9 +30,11 @@ lifecycle, authn, cloud UI, or the dev-slot allocator.
 - Native HTTP (CapacitorHttp) keeps auth requests out of WKWebView CORS — and
   replaces the transport User-Agent, so anything identifying the device must be
   self-reported in a request body, not read from headers.
-- Signs in as `"desktop"` client kind (deployed authn rejects `"mobile"`) —
-  `DEVICE_FLOW_CLIENT_ID` in `src/mobile-runner-host.ts`; flip when authn
-  accepts it.
+- Signs in as the `"mobile"` client kind (`DEVICE_FLOW_CLIENT_ID` in
+  `src/mobile-runner-host.ts`), which labels the session, keys the approval
+  page's copy, and gates push-token registration. Requires an authn deployment
+  that accepts `"mobile"` — a production app release must trail the production
+  authn deploy (release checklist carries the probe).
 - Push tokens bind to the login session (`/api/v3/user/push-tokens`); sign-out
   unregisters via `.../remove` — plain sign-out is local-only and revokes
   nothing server-side.
