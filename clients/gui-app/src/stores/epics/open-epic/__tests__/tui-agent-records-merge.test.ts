@@ -463,6 +463,69 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     expect(applied.docResident).toBe(false);
   });
 
+  it("LISTS a replica whose cloud row never named a harness", () => {
+    // The protocol arm makes `harnessId` nullable on purpose - a cloud row
+    // written before `runSettingsSummary` carried the harness has none - and
+    // says such a row renders without a harness mark. Dropping it here made
+    // the agent vanish from the roster on every other machine, which is the
+    // one outcome the contract rules out: the host stores and serves it
+    // correctly, and only the projection was losing it.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: {
+        origin: "cloud",
+        tuiAgentId: "tui-legacy",
+        ownerUserId: USER,
+        hostId: "host-elsewhere",
+        harnessId: null,
+        parentId: null,
+        title: "A legacy remote agent",
+        isTitleEditedByUser: false,
+        createdAt: 1,
+        updatedAt: 2,
+        archived: false,
+        revision: 1,
+      },
+    });
+
+    const applied = handle.store.getState().tuiAgentRecords.byId["tui-legacy"];
+    expect(applied).toBeDefined();
+    expect(applied.harnessId).toBeNull();
+  });
+
+  it("still DROPS a replica naming a harness this build cannot dispatch", () => {
+    // A different case, and it keeps its old answer: the row named something
+    // (a newer host's vendor), so a tile for it would promise a session this
+    // build cannot open. Absent beats a row that errors on click.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: {
+        origin: "cloud",
+        tuiAgentId: "tui-future",
+        ownerUserId: USER,
+        hostId: "host-elsewhere",
+        harnessId: "some-future-vendor",
+        parentId: null,
+        title: "An agent this build cannot run",
+        isTitleEditedByUser: false,
+        createdAt: 1,
+        updatedAt: 2,
+        archived: false,
+        revision: 1,
+      },
+    });
+
+    expect(
+      handle.store.getState().tuiAgentRecords.byId["tui-future"],
+    ).toBeUndefined();
+  });
+
   it("applies a CROSS-HOST replica, which has no docResident to stamp", () => {
     // The second producer: the serving host's record inbox, replicating an
     // agent bound to another of the user's machines. The narrow arm carries no

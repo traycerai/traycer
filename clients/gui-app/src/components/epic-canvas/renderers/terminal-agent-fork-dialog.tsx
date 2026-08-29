@@ -14,6 +14,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -169,8 +170,25 @@ function resolveDialogAdmission(input: {
  */
 export type TerminalAgentForkIntent = "fork" | "continue";
 
+/**
+ * A terminal agent that CAN be forked, narrowed at the type level.
+ *
+ * A projection's `harnessId` is nullable because a cross-host replica whose
+ * cloud row predates `runSettingsSummary` cannot say what it runs. Such a row
+ * belongs in the roster (the protocol contract says so) but has no dispatchable
+ * harness - and forking needs one for the provider lookup, the create call, the
+ * settings seed and the analytics event alike.
+ *
+ * Narrowed HERE, once, rather than null-checked at each of those four: the
+ * toolbar that builds a target is the party that knows, and every consumer
+ * downstream then reads a harness that is present by type.
+ */
+export type ForkableTuiAgent = TuiAgentProjection & {
+  readonly harnessId: TuiHarnessId;
+};
+
 export interface TerminalAgentForkDialogTarget {
-  readonly sourceAgent: TuiAgentProjection;
+  readonly sourceAgent: ForkableTuiAgent;
   readonly workspaceSeed: ForkWorkspaceSeed;
   readonly intent: TerminalAgentForkIntent;
 }
@@ -852,7 +870,7 @@ function terminalForkButtonLabel(intent: TerminalAgentForkIntent): string {
   return intent === "continue" ? "Continue" : "Fork";
 }
 
-function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
+function terminalForkSettingsSeed(agent: ForkableTuiAgent): ChatRunSettings {
   return {
     harnessId: agent.harnessId,
     model: agent.model ?? "",
@@ -878,7 +896,7 @@ function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
  * "no change" - it never independently re-derives that comparison.
  */
 function terminalForkDefaultTitle(input: {
-  readonly sourceAgent: TuiAgentProjection;
+  readonly sourceAgent: ForkableTuiAgent;
   readonly profileLabel: string | null;
 }): string {
   const sourceTitle = displayTitle(input.sourceAgent.title, "agent");

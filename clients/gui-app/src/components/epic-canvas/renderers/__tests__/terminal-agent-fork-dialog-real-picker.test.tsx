@@ -4,6 +4,7 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ForkableTuiAgent } from "../terminal-agent-fork-dialog";
 
 // Real Radix DropdownMenu opens on pointerdown; swap only the low-level
 // primitive so the REAL ProfileDropdown / HarnessModelPicker admission wiring
@@ -363,7 +364,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
@@ -581,7 +581,7 @@ describe("<TerminalAgentForkDialog /> real HarnessModelPicker rows", () => {
 
 function renderDialog(input: {
   readonly intent: "fork" | "continue";
-  readonly sourceAgent: TuiAgentProjection;
+  readonly sourceAgent: ForkableTuiAgent;
 }): void {
   render(
     <TooltipProvider delayDuration={0}>
@@ -618,7 +618,7 @@ function titleInputValue(): string {
   return input.value;
 }
 
-function sourceAgent(): TuiAgentProjection {
+function sourceAgent(): ForkableTuiAgent {
   return {
     id: "source-agent",
     // An ordinary registry-backed agent - this suite exercises the fork

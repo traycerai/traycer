@@ -281,6 +281,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner
+        reason="host-unreachable"
         hostLabel={reachability.hostLabel}
         ownerKind="agent"
         unavailability={reachability.unavailability}
@@ -345,6 +346,16 @@ function TuiAgentTileLive(
   const instanceId = props.node.instanceId;
   const agent = useEpicTerminalAgent(sessionId);
   const hostEntry = useHostDirectoryEntry(hostId);
+  // Read off the directory entry this component already holds rather than
+  // opening a second reachability subscription per tile: the outer component
+  // owns that verdict, and all this arm needs is a name to put in the banner.
+  const hostLabel =
+    hostEntry !== null && hostEntry.label.length > 0 ? hostEntry.label : hostId;
+  const closeTile = useCloseCanvasTileWithNestedFocus(
+    props.viewTabId,
+    props.tileId,
+    instanceId,
+  );
   const hostClient = useHostClientFor(hostEntry);
   const prepareLaunch = useAgentStartTerminalSession(hostClient);
   const killTerminal = useTerminalKillFor(
@@ -364,6 +375,18 @@ function TuiAgentTileLive(
   const preparePayload =
     useCallback(async (): Promise<TerminalCreatePayload | null> => {
       if (agent === null) return null;
+      // Unreachable while `adoptOnly` holds the create effect shut, and kept
+      // as the second half of that gate rather than trusting one flag: this is
+      // the function that would hand a null resume id to the owner host's
+      // prepare-launch and get a NEW provider session minted under this
+      // agent's id. A replica may never start one.
+      if (agent.origin === "cloud") return null;
+      // A harness this build cannot name is a harness it cannot launch. Only a
+      // cross-host replica can reach `null` here, and the line above has
+      // already refused those - this states the requirement rather than
+      // relying on that ordering.
+      const launchHarnessId = agent.harnessId;
+      if (launchHarnessId === null) return null;
       // PEEK, don't consume: a failed `terminal.create` (PTY never started, so
       // the fork command never ran) must be retryable against the SAME fork-
       // prepared args. The stash is cleared once `terminal.create` succeeds (see
@@ -379,7 +402,7 @@ function TuiAgentTileLive(
         };
       }
       const session = await prepareLaunchMutateAsync({
-        harnessId: agent.harnessId,
+        harnessId: launchHarnessId,
         epicId,
         model: agent.model,
         reasoningEffort: agent.reasoningEffort,
@@ -439,6 +462,25 @@ function TuiAgentTileLive(
     [prepareLaunchReset],
   );
 
+  // A CROSS-HOST REPLICA is ADOPT-ONLY, and this is the boundary decision 2
+  // rests on rather than a UI preference.
+  //
+  // The row came from this host's record inbox: it describes an agent living
+  // on ANOTHER of the user's machines, and it carries no `harnessSessionId`,
+  // because that never leaves the machine running the provider CLI. So there
+  // is nothing here to resume FROM. Sending the projected `null` through the
+  // ordinary prepare/create path does not fail safe - the host's
+  // prepare-launch resolver reads a null resume id as "new session" and mints
+  // a fresh provider session under the existing agent id. On a reachable
+  // owner host whose PTY was merely idle-reaped, that silently replaces the
+  // agent's conversation, and if the owner is still driving it, it is a
+  // SECOND driver on one CLI session.
+  //
+  // `adoptOnly` is the existing gate for exactly this shape (a session
+  // something else owns creating): it shuts the create effect for good while
+  // still arming the measure-grid wait, so the tile can attach when the owner
+  // host does report a running PTY.
+  const isCloudReplica = agent?.origin === "cloud";
   const bootstrap = useTerminalTileBootstrap({
     hostId,
     scope: { kind: "epic", epicId },
@@ -447,6 +489,7 @@ function TuiAgentTileLive(
     sessionKind: "terminal-agent",
     preparePayload,
     enabled: agent !== null && prepareLaunch.isIdle,
+    adoptOnly: isCloudReplica,
     resetPrepare,
   });
   const hostHasSession = bootstrap.hostHasSession;
@@ -529,9 +572,15 @@ function TuiAgentTileLive(
   // error toast, no tab close, same safety ceiling) and recreate under the
   // same id; `prepareLaunch` resumes the conversation transparently.
   const reviveAfterReap = useCallback((): void => {
+    // NOT for a cross-host replica. "Recreate under the same id" is precisely
+    // the reconstruction that is forbidden here: with no `harnessSessionId` to
+    // resume, `prepareLaunch` would mint a new provider session rather than
+    // resuming the conversation. The reaped tile falls to the unavailable
+    // banner instead, and the agent is restarted where it lives.
+    if (isCloudReplica) return;
     armRestartSuppression();
     retryTerminal();
-  }, [armRestartSuppression, retryTerminal]);
+  }, [armRestartSuppression, isCloudReplica, retryTerminal]);
   // The kill must target a LIVE session. If session presence is unknown
   // (`terminal.list` refetching → `hostHasSession === null`) or already gone at
   // commit time, do NOT silently drop the rebind (the bug where Update appeared
@@ -592,6 +641,28 @@ function TuiAgentTileLive(
   // GUI restarts; bootstrap also reports it for the freshly-launched PTY once
   // the list query refreshes.
   const isOwnerActive = hostHasSession === true;
+
+  // ADOPT-ONLY AND NOT RUNNING. The owner host is reachable (an unreachable
+  // one was answered by the banner above) and reports no PTY for this agent -
+  // idle-reaped, or simply never started. There is nothing to attach to and
+  // this client may not create one, so the honest end state is the banner,
+  // not a loading skeleton that would wait forever for a session no one is
+  // going to start.
+  //
+  // `hostHasSession === null` deliberately keeps waiting: that is the list
+  // still loading, which is not evidence of anything.
+  if (isCloudReplica && hostHasSession === false) {
+    return (
+      <TerminalDeadTileBanner
+        reason="not-running-remotely"
+        hostLabel={hostLabel}
+        ownerKind="agent"
+        unavailability={null}
+        onClose={closeTile}
+        testId={`terminal-agent-tile-${props.tileId}`}
+      />
+    );
+  }
 
   if (agent === null) {
     // Same stable skeleton the reachability-check, pre-launch, and xterm
@@ -929,10 +1000,17 @@ function TerminalAgentPreLaunchToolbar(
     },
     [onWorkspaceBindingCommitted],
   );
+  // The harness narrowing the dialog's target type asks for. A projection can
+  // carry `null` (a cross-host replica whose cloud row predates
+  // `runSettingsSummary`), and such an agent has nothing to fork WITH - no
+  // provider to look up, no harness to create under. `forkDisabled` already
+  // covers it in practice, since a null harness only ever occurs on a replica
+  // and a replica has no `harnessSessionId` either; this is what states it.
+  const forkSourceHarnessId = props.agent.harnessId;
   const forkTarget =
-    forkDialogIntent !== null && !forkDisabled
+    forkDialogIntent !== null && !forkDisabled && forkSourceHarnessId !== null
       ? {
-          sourceAgent: props.agent,
+          sourceAgent: { ...props.agent, harnessId: forkSourceHarnessId },
           workspaceSeed: forkWorkspaceSeed,
           intent: forkDialogIntent,
         }
@@ -970,92 +1048,103 @@ function TerminalAgentPreLaunchToolbar(
           onForkOnHost: null,
         }}
       />
-      <DropdownMenu>
-        <ButtonGroup aria-label="Fork actions" className="shrink-0">
-          <TooltipWrapper
-            label={
-              forkDisabled
-                ? "Fork is available after the terminal agent session and workspace binding are ready."
-                : "Fork terminal agent"
-            }
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            {/* The span keeps the disabled button hoverable for its readiness
-                tooltip. Its button still owns the visible first segment. */}
-            <span className="inline-flex">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 rounded-r-none! px-2 text-ui-xs text-muted-foreground hover:text-foreground"
-                disabled={forkDisabled}
-                onClick={() => openForkDialog("fork")}
-              >
-                <GitFork aria-hidden className="size-3.5" />
-                Fork
-              </Button>
-            </span>
-          </TooltipWrapper>
-          <DropdownMenuTrigger asChild>
+      {/* NO FORK AFFORDANCE AT ALL for a cross-host replica - not a disabled
+          one. Decision 2 is that a replica is never clonable, and the absence
+          is the honest rendering of a structural fact: forking needs the
+          source agent's `harnessSessionId`, which never leaves the machine
+          running the provider CLI, so there is nothing here to fork FROM and
+          no readiness that would ever arrive.
+
+          A disabled button with "available after the session and binding are
+          ready" says the opposite - it promises the capability is coming. */}
+      {props.agent.origin === "cloud" ? null : (
+        <DropdownMenu>
+          <ButtonGroup aria-label="Fork actions" className="shrink-0">
             <TooltipWrapper
-              label="More fork options"
+              label={
+                forkDisabled
+                  ? "Fork is available after the terminal agent session and workspace binding are ready."
+                  : "Fork terminal agent"
+              }
               side="top"
-              sideOffset={6}
-              align="end"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <Button
-                type="button"
-                variant="outline"
-                size="icon-sm"
-                className="text-muted-foreground hover:text-foreground"
-                disabled={forkDisabled}
-                aria-label="More fork options"
-              >
-                <ChevronDown aria-hidden className="size-3" />
-              </Button>
+              {/* The span keeps the disabled button hoverable for its readiness
+                tooltip. Its button still owns the visible first segment. */}
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 rounded-r-none! px-2 text-ui-xs text-muted-foreground hover:text-foreground"
+                  disabled={forkDisabled}
+                  onClick={() => openForkDialog("fork")}
+                >
+                  <GitFork aria-hidden className="size-3.5" />
+                  Fork
+                </Button>
+              </span>
             </TooltipWrapper>
-          </DropdownMenuTrigger>
-        </ButtonGroup>
-        <DropdownMenuContent align="start" className="w-max max-w-[90vw]">
-          <TooltipWrapper
-            label={continueUnderProfileDisabledReason}
-            side="right"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <span className="flex w-full">
-              <DropdownMenuItem
-                disabled={forkDisabled || !continueUnderProfileSupported}
-                aria-label={
-                  continueUnderProfileDisabledReason === undefined
-                    ? undefined
-                    : `Continue under another profile…, ${continueUnderProfileDisabledReason}`
-                }
-                className={cn(
-                  continueUnderProfileDisabledReason !== undefined &&
-                    "flex-col items-start gap-0.5",
-                )}
-                onSelect={() => openForkDialog("continue")}
+            <DropdownMenuTrigger asChild>
+              <TooltipWrapper
+                label="More fork options"
+                side="top"
+                sideOffset={6}
+                align="end"
               >
-                <span className="w-full whitespace-nowrap">
-                  Continue under another profile…
-                </span>
-                {/* Radix's roving-tabindex skips this item entirely while
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  className="text-muted-foreground hover:text-foreground"
+                  disabled={forkDisabled}
+                  aria-label="More fork options"
+                >
+                  <ChevronDown aria-hidden className="size-3" />
+                </Button>
+              </TooltipWrapper>
+            </DropdownMenuTrigger>
+          </ButtonGroup>
+          <DropdownMenuContent align="start" className="w-max max-w-[90vw]">
+            <TooltipWrapper
+              label={continueUnderProfileDisabledReason}
+              side="right"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <span className="flex w-full">
+                <DropdownMenuItem
+                  disabled={forkDisabled || !continueUnderProfileSupported}
+                  aria-label={
+                    continueUnderProfileDisabledReason === undefined
+                      ? undefined
+                      : `Continue under another profile…, ${continueUnderProfileDisabledReason}`
+                  }
+                  className={cn(
+                    continueUnderProfileDisabledReason !== undefined &&
+                      "flex-col items-start gap-0.5",
+                  )}
+                  onSelect={() => openForkDialog("continue")}
+                >
+                  <span className="w-full whitespace-nowrap">
+                    Continue under another profile…
+                  </span>
+                  {/* Radix's roving-tabindex skips this item entirely while
                     disabled, so its aria-label (and the hover-only tooltip
                     above) never reach keyboard/AT users - a static second
                     line needs no focus/hover to be perceivable. */}
-                {continueUnderProfileDisabledReason !== undefined ? (
-                  <span className="text-left text-[11px] leading-tight text-muted-foreground">
-                    {continueUnderProfileDisabledReason}
-                  </span>
-                ) : null}
-              </DropdownMenuItem>
-            </span>
-          </TooltipWrapper>
-        </DropdownMenuContent>
-      </DropdownMenu>
+                  {continueUnderProfileDisabledReason !== undefined ? (
+                    <span className="text-left text-[11px] leading-tight text-muted-foreground">
+                      {continueUnderProfileDisabledReason}
+                    </span>
+                  ) : null}
+                </DropdownMenuItem>
+              </span>
+            </TooltipWrapper>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       {/* Right-aligned status-bar group: the worktree-creation notice sits
           beside the agent controls. The notice's expanded detail opens as a
           downward Popover overlay, so it never reflows the terminal below. */}

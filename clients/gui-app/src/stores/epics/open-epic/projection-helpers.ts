@@ -925,13 +925,32 @@ export function tuiAgentProjectionFromRecord(
  * doc map's frozen copy, and it IS addressable through the registry
  * affordances - on its OWN host, which is where every mutation aimed at it has
  * to go regardless.
+ *
+ * ## A row whose cloud record never named a harness is LISTED, not dropped
+ *
+ * The protocol arm makes `harnessId` nullable on purpose - a cloud row written
+ * before `runSettingsSummary` carried the harness has none - and says such a
+ * row renders without a harness mark. Returning `null` here instead made the
+ * agent vanish from the roster on every other machine, which is the one
+ * outcome the contract rules out: the host stores and serves it correctly, and
+ * only this projection was losing it.
+ *
+ * So the projection carries `harnessId: null` through, and the consumers that
+ * genuinely need one refuse individually - it cannot be launched, forked or
+ * mentioned, because nothing can dispatch a harness nobody named. What it CAN
+ * do is appear in the tree, which is the whole of what phase 2 promises for an
+ * agent on another machine.
+ *
+ * A harness this build cannot NARROW is still dropped, and that is a different
+ * case: the row named something (a newer vendor), and a tile that could not
+ * dispatch it would be a row promising a session this build cannot open.
  */
 function cloudReplicaProjection(
   record: Extract<TuiAgentRecordSummaryV12, { origin: "cloud" }>,
 ): TuiAgentProjection | null {
   const harnessId =
     record.harnessId === null ? null : narrowTuiHarnessId(record.harnessId);
-  if (harnessId === null) return null;
+  if (harnessId === null && record.harnessId !== null) return null;
   return {
     id: record.tuiAgentId,
     docResident: false,

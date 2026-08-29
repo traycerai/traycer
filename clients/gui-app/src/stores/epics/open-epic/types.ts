@@ -161,7 +161,7 @@ export interface TuiAgentProjection {
    * property, one driver per provider CLI session, by construction.
    */
   readonly origin: TuiAgentProjectionOrigin;
-  readonly harnessId: TuiHarnessId;
+  readonly harnessId: TuiHarnessId | null;
   readonly title: string;
   readonly parentId: string | null;
   readonly createdAt: number;
