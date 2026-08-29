@@ -187,7 +187,6 @@ vi.mock("../../app/lifecycle", () => ({
   configureAppUserModelId: () => undefined,
   configureV8CodeCache: () => undefined,
   configureV8HeapSize: () => undefined,
-  configureWebRtcIpPolicy: () => undefined,
   installPowerMonitorListeners: () => undefined,
   trimUnusedChromiumFeatures: () => undefined,
 }));

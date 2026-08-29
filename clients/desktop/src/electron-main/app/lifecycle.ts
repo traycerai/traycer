@@ -39,27 +39,6 @@ export function trimUnusedChromiumFeatures(): void {
 }
 
 /**
- * The browser tile's video plane answers a peer connection from a headless
- * Chrome that is, for a local host, on this very machine (`127.0.0.1`).
- * Chromium's default policy hides local IPs behind `.local` mDNS names the
- * peer cannot resolve, which costs that pairing its only path - there is no
- * TURN, and the fallback is the slower JPEG plane. The host end sets the same
- * policy on its capture helper (`BROWSER_CAPTURE_IP_HANDLING_POLICY_FLAG`).
- *
- * Set per `webContents`, NOT as `--webrtc-ip-handling-policy`: that switch is
- * read by `chrome/browser`, which Electron does not ship - Electron surfaces
- * the preference through this method instead (electron/electron#8777), so the
- * raw switch would be a silent no-op and every tile would quietly stay on
- * JPEG. Registered on `web-contents-created` so it covers every window and
- * `WebContentsView` without a per-call-site opt-in.
- */
-export function configureWebRtcIpPolicy(): void {
-  app.on("web-contents-created", (_event, contents) => {
-    contents.setWebRTCIPHandlingPolicy("default_public_and_private_interfaces");
-  });
-}
-
-/**
  * Raises V8's old-space ceiling for the renderer + main heap. Traycer's
  * renderer holds long-lived agent transcripts, document snapshots, and
  * cached host state - the default ~2GB cap is close enough for some

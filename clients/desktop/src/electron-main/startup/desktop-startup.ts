@@ -118,7 +118,6 @@ import {
   configureAppUserModelId,
   configureV8CodeCache,
   configureV8HeapSize,
-  configureWebRtcIpPolicy,
   installPowerMonitorListeners,
   trimUnusedChromiumFeatures,
 } from "../app/lifecycle";
@@ -350,7 +349,13 @@ async function timed(
 export function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
-  configureWebRtcIpPolicy();
+  // No `setWebRTCIPHandlingPolicy` call, deliberately: Electron's default is
+  // Chromium's `default` (gather on ALL interfaces), while the explicit
+  // `default_public_and_private_interfaces` we used to set narrows gathering to
+  // the default-route interface and drops the VPN path to a remote host. Our
+  // own candidates stay mDNS-obfuscated and need no grant here; the host's
+  // capture helper is the end that offers real IPs. Full write-up:
+  // `traycer-host` `BROWSER_CAPTURE_HELPER_PERMISSIONS`.
   applyHardwareAccelerationPreference();
   suppressWslKernelCoreDumps();
   // `initCrashReporter()` must run before `registerAppScheme()`. When a
