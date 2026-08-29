@@ -41,6 +41,20 @@ describe("settings tab kind - host section", () => {
     expect(settingsSectionPath("devices")).toBe("/settings/devices");
   });
 
+  it("routes app-wide notifications to their application settings page", () => {
+    expect(settingsSectionFromPath("/settings/app-notifications")).toBe(
+      "app-notifications",
+    );
+    expect(settingsSectionPath("app-notifications")).toBe(
+      "/settings/app-notifications",
+    );
+    expect(
+      settingsTabDescriptor.routeOptions(
+        settingsTabIntent("app-notifications"),
+      ),
+    ).toEqual({ to: "/settings/app-notifications" });
+  });
+
   it("settingsTabDescriptor.routeOptions for the host intent navigates to /settings/host", () => {
     const intent = settingsTabIntent("host");
     const options = settingsTabDescriptor.routeOptions(intent);

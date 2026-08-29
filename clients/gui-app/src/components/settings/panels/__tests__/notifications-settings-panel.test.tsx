@@ -18,10 +18,6 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type {
-  IPushPermissionHost,
-  PushPermissionState,
-} from "@traycer-clients/shared/platform/runner-host";
 import {
   NotificationsSettingsPanel,
   NotificationsSettingsPanelForClient,
@@ -29,8 +25,6 @@ import {
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
-import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 const hostScopeMocks: {
   client: HostClient<HostRpcRegistry> | null;
   hostId: string | null;
@@ -64,29 +58,13 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-/**
- * The panel now carries one row that is NOT host-scoped - the phone's own OS
- * push permission - so every render needs an `IRunnerHost` above it. `null` is
- * the desktop / dev-web shape, where that row renders nothing at all, which is
- * why the whole existing suite reads exactly as it did before.
- */
-const runnerHostMocks: { pushPermission: IPushPermissionHost | null } = {
-  pushPermission: null,
-};
-
 function Providers(props: {
   readonly queryClient: QueryClient;
   readonly children: ReactNode;
 }): ReactNode {
   return (
     <QueryClientProvider client={props.queryClient}>
-      <RunnerHostProvider
-        runnerHost={createFakeRunnerHost({
-          pushPermission: runnerHostMocks.pushPermission,
-        })}
-      >
-        {props.children}
-      </RunnerHostProvider>
+      {props.children}
     </QueryClientProvider>
   );
 }
@@ -130,10 +108,21 @@ afterEach(() => {
   hostScopeMocks.hostId = "host-a";
   hostScopeMocks.client = null;
   hostScopeMocks.status = null;
-  runnerHostMocks.pushPermission = null;
 });
 
 describe("<NotificationsSettingsPanel /> severity policy", () => {
+  it("keeps app-local notification sound controls out of the host panel", async () => {
+    renderNotificationsSettings(undefined);
+
+    expect(
+      screen.queryByRole("combobox", { name: "Needs action sound" }),
+    ).toBeNull();
+    expect(screen.queryByTestId("push-permission-section")).toBeNull();
+    await screen.findByRole("switch", {
+      name: "Needs action In-app notifications",
+    });
+  });
+
   it("renders three single-channel severity rows, not a channel matrix", async () => {
     renderNotificationsSettings(undefined);
 
@@ -1043,64 +1032,4 @@ function credentialConfiguredAfterWrite(
 ): boolean {
   if (write.kind === "leaveUnchanged") return previous;
   return write.kind === "set";
-}
-
-/**
- * The phone's own OS push permission is the one thing on this screen that
- * belongs to no host: it sits above the host-scoped groups and OUTSIDE the
- * gate, because a phone with no reachable host still needs to see - and
- * repair - whether the OS lets Traycer buzz it at all.
- */
-describe("<NotificationsSettingsPanel /> this-phone push row", () => {
-  it("renders above the severity group and stays live while the gate withholds the host body", async () => {
-    runnerHostMocks.pushPermission = fakePushPermission("denied");
-    hostScopeMocks.status = "connecting";
-    hostScopeMocks.client = null;
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    });
-
-    render(
-      <Providers queryClient={queryClient}>
-        <NotificationsSettingsPanel />
-      </Providers>,
-    );
-
-    // The gate is withholding the host-scoped body...
-    expect(screen.getByTestId("host-scope-connecting")).toBeTruthy();
-    // ...while the phone's row is neither inside it nor concealed by it, and
-    // its action is genuinely usable rather than prerendered-and-hidden.
-    const section = await screen.findByTestId("push-permission-section");
-    expect(isConcealed(section)).toBe(false);
-    const action = await screen.findByTestId("push-permission-action");
-    expect(action.textContent).toContain("Open Settings");
-    expect(action.hasAttribute("disabled")).toBe(false);
-
-    const policy = screen.getByTestId("notifications-severity-policy");
-    expect(
-      (section.compareDocumentPosition(policy) &
-        Node.DOCUMENT_POSITION_FOLLOWING) !==
-        0,
-    ).toBe(true);
-  });
-
-  it("leaves the panel untouched on a shell with no OS push", async () => {
-    renderNotificationsSettings(undefined);
-
-    await screen.findByTestId("notifications-severity-policy");
-    expect(screen.queryByTestId("push-permission-section")).toBeNull();
-    expect(screen.queryByText("This phone")).toBeNull();
-  });
-});
-
-function fakePushPermission(state: PushPermissionState): IPushPermissionHost {
-  return {
-    get: () => Promise.resolve(state),
-    request: () => Promise.resolve(state),
-    openSettings: () => Promise.resolve(),
-    onChange: () => ({ dispose: () => undefined }),
-  };
 }
