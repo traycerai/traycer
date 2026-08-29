@@ -640,6 +640,38 @@ describe("renderer local admission — cross-seam (real AuthService × real useA
     // absence is a real suppression and not an artifact of dead wiring.
     expect(ledger.hostsRequests).toBe(0);
 
+    // The DOM assertions below need the tree actually MOUNTED, and the settle
+    // above does not give them that. Those are two different clocks: the
+    // `waitFor` above reads STORE state, while these read the DOM, and
+    // `HostRuntimeProvider` holds `fallback` over its children until the
+    // runtime is up. On a slow runner the store reaches `unverified` while the
+    // tree is still `loading runtime…`.
+    //
+    // Both assertions are wrong in that window, and wrong in OPPOSITE
+    // directions, which is why this gate sits above both rather than beside
+    // the one that was failing:
+    //
+    //   - `queryByText("Welcome to Traycer")` is an ABSENCE check, so an
+    //     unmounted tree satisfies it VACUOUSLY - it passes while proving
+    //     nothing, and would have gone on passing forever.
+    //   - `getByTestId("cloud-control-slot")` THROWS on an element that is
+    //     merely not mounted yet, failing for the one reason it is not about.
+    //
+    // The gate waits on the slot EXISTING; the emptiness check stays separate
+    // below, because folding them into one `waitFor` on `childElementCount
+    // === 0` would be satisfied at the instant the bell has not rendered its
+    // contents either - the vacuous version of this control.
+    await vi.waitFor(
+      () => {
+        // Plain null checks, not jest-dom: this repo does not register those
+        // matchers, so `toBeInTheDocument()` would throw here rather than
+        // assert.
+        expect(screen.queryByTestId("runtime-fallback")).toBeNull();
+        expect(screen.queryByTestId("cloud-control-slot")).not.toBeNull();
+      },
+      { timeout: 5000, interval: 50 },
+    );
+
     // DISCRIMINATING ASSERTION (admission gate #1, root-landing-page.tsx):
     // the real AuthLandingPage never rendered. An absence check alone would
     // be vacuous (shape #2), so it is paired below with real interactive

@@ -1292,10 +1292,24 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // The host plane is a separate origin store whose liveness is the
         // NOTIFICATION host's, not the relay's - the same gate mark-all uses,
         // and deliberately not `client !== null`, which survives a disconnect
-        // that has already taken the rows' host away. It runs in mixed mode
-        // too: the rows it clears are that host's `home: local` partition,
-        // which the cloud does not hold and `cloudClearAll` therefore cannot
-        // reach.
+        // that has already taken the rows' host away.
+        //
+        // KNOWN GAP in mixed mode, and stated here because the wire does not
+        // say it: `host.notifications.clearAll` is still `@1.0`, whose request
+        // is `{ beforeUpdatedAt }` and nothing else. There is no `home`
+        // selector, so this clears the host's WHOLE origin store, not its
+        // `home: "local"` partition. Every sibling in this class was
+        // partitioned - `list@2.2`, `markAllRead@1.1`, `indicatorState@1.1` -
+        // and clear-all was missed.
+        //
+        // The consequence is narrow but real: a cloud-home occurrence absent
+        // from the observed relay snapshot (one arriving while the relay lags)
+        // is cleared by this call even though the version-bounded
+        // `cloudClearAll` below deliberately excludes it. Closing it needs a
+        // partitioned clear-all minor negotiated end to end, not a change
+        // here; dropping the host leg in mixed mode instead would leave the
+        // local partition uncleared and break the same promise in the other
+        // direction. Tracked on #889.
         if (client !== null && notificationHostId !== null) {
           clearHostAll.mutate({ beforeUpdatedAt: Date.now() });
         }
