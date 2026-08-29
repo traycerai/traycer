@@ -21,6 +21,7 @@ import {
   type BridgeReply,
   type RuntimeWorkerCallHandlers,
 } from "../bridge-endpoint";
+import { mintRequestFixture } from "../test-support/mint-request-fixture";
 import { stubMainCallHandlers } from "../test-support/stub-main-call-handlers";
 import { stubRuntimeWorkerCallHandlers } from "../test-support/stub-runtime-worker-call-handlers";
 import { NO_TRANSFER, takeBytesForTransfer } from "../transferable-bytes";
@@ -478,7 +479,7 @@ describe("worker->main calls", () => {
     );
 
     const pending = worker.call("main/mint-credential", {
-      mint: { hostId: "host-1", reason: "absent" },
+      mint: mintRequestFixture({}),
     });
     await pair.flush();
     worker.dispose();

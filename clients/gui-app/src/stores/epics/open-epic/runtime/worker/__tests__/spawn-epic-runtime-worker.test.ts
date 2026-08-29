@@ -13,6 +13,7 @@ import {
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import { createWorkerBridgeEndpoint } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import { stubRuntimeWorkerCallHandlers } from "@traycer-clients/shared/replica-runtime/worker/test-support/stub-runtime-worker-call-handlers";
+import { mintRequestFixture } from "@traycer-clients/shared/replica-runtime/worker/test-support/mint-request-fixture";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { HostCredentialMintFlow } from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
@@ -384,7 +385,7 @@ describe("spawnEpicRuntimeWorker — the two worker->main calls", () => {
     const { pair, handle, workerEndpoint } = setupCalls({ mint });
 
     const answered = workerEndpoint.call("main/mint-credential", {
-      mint: { hostId: "host-1", reason: "needs-reauth" },
+      mint: mintRequestFixture({ reason: "needs-reauth" }),
     });
     await pair.flush();
 
@@ -395,10 +396,9 @@ describe("spawnEpicRuntimeWorker — the two worker->main calls", () => {
     // The request crosses intact: the flow is single-flighted PER HOST, so a
     // spawner that dropped or rewrote `hostId` would join the wrong host's
     // attempt - or start a second one for a host that already has one.
-    expect(mint).toHaveBeenCalledWith({
-      hostId: "host-1",
-      reason: "needs-reauth",
-    });
+    expect(mint).toHaveBeenCalledWith(
+      mintRequestFixture({ reason: "needs-reauth" }),
+    );
     handle.dispose();
     workerEndpoint.dispose();
   });

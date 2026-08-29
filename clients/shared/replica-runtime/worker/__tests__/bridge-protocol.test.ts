@@ -9,6 +9,7 @@
  * something the compiler already proves is a pin that can never fail.
  */
 import { describe, expect, it } from "vitest";
+import { mintRequestFixture } from "../test-support/mint-request-fixture";
 import {
   buildMainCall,
   MAIN_CALL_KINDS,
@@ -48,7 +49,7 @@ describe("MAIN_CALL_KINDS", () => {
         kind === "main/auth-revalidate"
           ? buildMainCall(kind, {})
           : buildMainCall(kind, {
-              mint: { hostId: "host-1", reason: "absent" },
+              mint: mintRequestFixture({}),
             });
       expect(built.kind).toBe(kind);
     }
