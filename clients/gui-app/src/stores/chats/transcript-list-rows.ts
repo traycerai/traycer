@@ -5,8 +5,9 @@ import {
   assistantRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
-  queueSteerRowId,
+  projectTranscriptRows,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 
 /**
@@ -219,6 +220,34 @@ function liveRecordRowIds(window: TranscriptWindow): ReadonlySet<string> {
   return rowIds;
 }
 
+function transientLiveSteerRowIds(
+  window: TranscriptWindow,
+): ReadonlySet<string> {
+  const transientTurnKeys = new Set<string>();
+  for (const message of window.liveMessages) {
+    if (
+      message.role === "assistant" &&
+      isTransientLiveAssistantMessageId(message.messageId)
+    ) {
+      transientTurnKeys.add(assistantTurnKey(message));
+    }
+  }
+  return new Set(
+    projectTranscriptRows({
+      messages: window.liveMessages,
+      events: window.liveEvents,
+      activeTurnId: null,
+      chatId: "",
+    })
+      .filter(
+        (row) =>
+          row.source.kind === "steer" &&
+          transientTurnKeys.has(row.source.turnKey),
+      )
+      .map((row) => row.rowId),
+  );
+}
+
 function isExplicitlyPendingOrStreaming(model: ChatMessageModel): boolean {
   return model.statusLabel === "Pending" || model.statusLabel === "Streaming";
 }
@@ -356,21 +385,15 @@ export function transcriptListRows(input: {
     const liveRowIds = liveRecordRowIds(window);
     const retainedSpanRowIds = spanRowIds(window.spans);
     const skeletonRowIds = skeletonOrdinalByRowId(window.skeleton);
-    const hasTransientLiveAssistant = window.liveMessages.some(
-      (message) =>
-        message.role === "assistant" &&
-        isTransientLiveAssistantMessageId(message.messageId),
-    );
-    const steerRowIdPrefix = queueSteerRowId("");
+    const liveTransientSteerRowIds = transientLiveSteerRowIds(window);
     const unplacedRendered = rendered.filter(
       (model) =>
         !retainedSpanRowIds.has(model.id) &&
         !skeletonRowIds.has(model.id) &&
         (isExplicitlyPendingOrStreaming(model) ||
           liveRowIds.has(model.id) ||
-          (hasTransientLiveAssistant &&
-            model.persistentMessageId === null &&
-            model.id.startsWith(steerRowIdPrefix)) ||
+          (model.persistentMessageId === null &&
+            liveTransientSteerRowIds.has(model.id)) ||
           (model.persistentMessageId !== null &&
             liveRowIds.has(model.persistentMessageId))),
     );

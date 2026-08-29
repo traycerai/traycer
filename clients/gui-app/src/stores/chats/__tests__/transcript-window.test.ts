@@ -2412,6 +2412,100 @@ describe("what an overlap keeps", () => {
     ).toEqual(["user-before", "user-after", transientId]);
   });
 
+  it("retains a globally indexed setup card when a partial assistant splits the range", () => {
+    const turnId = "turn-after-setup";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const setupRowId = "setup-card:chat-1:1:100";
+    const setup: ChatEvent = {
+      eventId: "setup-second-window",
+      type: "setup.running",
+      timestamp: 100,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 2 },
+      {
+        messages: [assistantMessage(transientId, turnId, 2)],
+        events: [],
+      },
+    );
+
+    const partial = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [setupRowId, assistantRowId(turnId)],
+        incompleteRowIds: [assistantRowId(turnId)],
+        messages: [assistantMessage("assistant-partial", turnId, 1)],
+        events: [setup],
+      }),
+    );
+
+    expect(partial.spans.map((held) => held.rowIds)).toEqual([[setupRowId]]);
+    expect(partial.spans[0].events.map((event) => event.eventId)).toEqual([
+      setup.eventId,
+    ]);
+  });
+
+  it("withholds an incomplete steer row that shares the live assistant turn", () => {
+    const turnId = "turn-partial-steer";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const steerBlock = {
+      blockId: "steer-block",
+      status: "completed" as const,
+      timestamp: 1,
+      type: "steer" as const,
+      queueItemId: "queue-partial",
+      messageId: "missing-user",
+      content: { type: "doc" as const },
+      mode: "safe_point" as const,
+      sender: null,
+    };
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      {
+        messages: [
+          {
+            ...assistantMessage(transientId, turnId, 2),
+            blocks: [steerBlock],
+          },
+        ],
+        events: [],
+      },
+    );
+
+    const partial = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["steer:queue-partial"],
+        incompleteRowIds: ["steer:queue-partial"],
+        messages: [
+          {
+            ...assistantMessage("assistant-partial", turnId, 1),
+            blocks: [steerBlock],
+          },
+        ],
+      }),
+    );
+
+    expect(partial.spans).toEqual([]);
+    expect(partial.liveMessages.map((message) => message.messageId)).toEqual([
+      transientId,
+    ]);
+  });
+
   it("retires a stand-in when a complete authoritative row rewrites block status", () => {
     const turnId = "turn-authoritative-status";
     const transientId = transientLiveAssistantMessageId(turnId);

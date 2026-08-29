@@ -532,6 +532,8 @@ function servedAssistantTurnKeys(
 function conflictingIncompleteAssistantRowIds(
   incompleteRowIds: readonly string[] | undefined,
   liveMessages: readonly Message[],
+  servedMessages: readonly Message[],
+  servedEvents: readonly ChatEvent[],
 ): ReadonlySet<string> {
   if (incompleteRowIds === undefined || incompleteRowIds.length === 0) {
     return new Set();
@@ -547,7 +549,21 @@ function conflictingIncompleteAssistantRowIds(
   }
   return new Set(
     incompleteRowIds.filter((rowId) => {
-      const turnKey = assistantRowTurnKey(rowId);
+      const directTurnKey = assistantRowTurnKey(rowId);
+      const projected =
+        directTurnKey === null
+          ? projectTranscriptRows({
+              messages: servedMessages,
+              events: servedEvents,
+              activeTurnId: null,
+              chatId: "",
+            }).find((row) => row.rowId === rowId)
+          : undefined;
+      const turnKey =
+        directTurnKey ??
+        (projected !== undefined && "turnKey" in projected.source
+          ? projected.source.turnKey
+          : null);
       return turnKey !== null && liveTurnKeys.has(turnKey);
     }),
   );
@@ -579,13 +595,27 @@ function recordsForRowIds(
   const chatId = setupRowId?.match(/^setup-card:(.*):\d+:\d+$/)?.[1] ?? "";
   const messageIds = new Set<string>();
   const eventIds = new Set<string>();
+  const requestedSetupCreatedAt = new Set(
+    [...rowIds]
+      .filter((rowId) => rowId.startsWith("setup-card:"))
+      .map((rowId) => rowId.slice(rowId.lastIndexOf(":") + 1)),
+  );
   for (const row of projectTranscriptRows({
     messages,
     events,
     activeTurnId: null,
     chatId,
   })) {
-    if (!rowIds.has(row.rowId)) continue;
+    const setupCreatedAt =
+      row.source.kind === "setup-card"
+        ? row.rowId.slice(row.rowId.lastIndexOf(":") + 1)
+        : null;
+    if (
+      !rowIds.has(row.rowId) &&
+      (setupCreatedAt === null || !requestedSetupCreatedAt.has(setupCreatedAt))
+    ) {
+      continue;
+    }
     const recordIds = rowRecordIds(row.source);
     for (const id of recordIds.messageIds) messageIds.add(id);
     for (const id of recordIds.eventIds) eventIds.add(id);
@@ -1370,6 +1400,8 @@ function seatSnapshotTailSpan(input: {
   const conflictingRowIds = conflictingIncompleteAssistantRowIds(
     tail.incompleteRowIds,
     base.liveMessages,
+    tail.messages,
+    tail.events,
   );
   if (conflictingRowIds.size > 0) {
     return seatNonConflictingTailRuns(
@@ -2222,6 +2254,8 @@ export function applyRangeResponse(
   const conflictingRowIds = conflictingIncompleteAssistantRowIds(
     response.incompleteRowIds,
     window.liveMessages,
+    response.messages,
+    response.events,
   );
   if (conflictingRowIds.size > 0) {
     const conflictingTurnKeys = new Set(
