@@ -332,7 +332,10 @@ import type {
   WorktreeBinding,
   WorktreeFolderIntent,
 } from "@traycer/protocol/host/worktree-schemas";
-import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import {
+  readStagedWorktreeIntent,
+  useWorktreeIntentStagingStore,
+} from "@/stores/worktree/worktree-intent-staging-store";
 import {
   getFocusedComposerControls,
   resetFocusedComposerControlsForTests,
@@ -3565,6 +3568,66 @@ describe("<ChatTile />", () => {
     fireEvent.click(getButtonContainingText("/implementation-validation all"));
 
     expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(chatHarness.sent).toHaveLength(1);
+    expect(chatHarness.sent[0]?.kind).toBe("send");
+  });
+
+  it("refuses a confirmed next-step send when a blocking approval arrived under the dialog", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: null,
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+
+    fireEvent.click(getButtonContainingText("/implementation-validation all"));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    act(() => {
+      chatHarness.callbacks().onApprovalRequested({
+        kind: "approvalRequested",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        approval: approvalState("approval-under-dialog", "tool"),
+      });
+    });
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(screen.getByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(
+      readStagedWorktreeIntent({
+        surface: "owner",
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        ownerKind: "chat",
+        ownerId: CHAT_ARTIFACT.id,
+      }),
+    ).not.toBeNull();
+
+    act(() => {
+      chatHarness.callbacks().onApprovalResolved({
+        kind: "approvalResolved",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        approvalId: "approval-under-dialog",
+        decision: { approved: true },
+        resolvedAt: 3,
+      });
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
     expect(chatHarness.sent).toHaveLength(1);
     expect(chatHarness.sent[0]?.kind).toBe("send");
   });

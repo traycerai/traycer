@@ -1275,14 +1275,25 @@ function teardownSendRefusalReason(
 
 /**
  * A send held by the rebind-consent dialog: the input to re-dispatch on
- * confirm, and the PATH-SPECIFIC dispatch that must run it — a confirmed
+ * confirm, the PATH-SPECIFIC dispatch that must run it — a confirmed
  * compaction still needs its lock and queue promotion, not the composer's
- * title bookkeeping.
+ * title bookkeeping — and the path's LIVE eligibility recheck. The values a
+ * path examined at click time may be a whole open dialog older by the time
+ * the user confirms (a blocking approval can arrive, the turn can start
+ * stopping), so `refusal` reads current state and returns the sentence to
+ * surface instead of dispatching, or `null` when the send is still
+ * eligible. Never a silent no-op: an ineligible confirm states why.
  */
 type GatedChatSend = {
   readonly submit: ChatComposerSubmitInput;
   readonly dispatch: (input: ChatComposerSubmitInput) => boolean;
+  readonly refusal: () => string | null;
 };
+
+// The composer submit's own eligibility (access + sign-in) is re-checked
+// live by the dialog's confirm handler itself, so its slot carries the
+// always-eligible refusal. Module scope for a stable identity.
+const NO_LIVE_SEND_REFUSAL = (): string | null => null;
 
 // eslint-disable-next-line complexity
 function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
@@ -2184,10 +2195,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // reopens one of two holes: a phantom disclosure on a no-op draft, or a
   // staged rebind committing silently.
   const submitThroughRebindGate = useCallback(
-    (
-      submit: ChatComposerSubmitInput,
-      dispatch: (input: ChatComposerSubmitInput) => boolean,
-    ): boolean => {
+    (send: GatedChatSend): boolean => {
+      const { submit, dispatch } = send;
       const stagedKey: WorktreeStagingKey = {
         surface: "owner",
         hostId: activeHostId,
@@ -2224,7 +2233,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       };
       if (snapshot.holders.length > 0) {
         pendingSubmitRef.current = {
-          input: { submit, dispatch },
+          input: send,
           capture,
           ownerId: node.id,
         };
@@ -2276,7 +2285,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return true;
       }
-      return submitThroughRebindGate(input, dispatchUserSend);
+      return submitThroughRebindGate({
+        submit: input,
+        dispatch: dispatchUserSend,
+        refusal: NO_LIVE_SEND_REFUSAL,
+      });
     },
     [
       activeEditingQueueItemId,
@@ -2295,6 +2308,41 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       state.pendingApprovals,
       state.pendingFileEditApprovals.length,
     );
+  // `canSendNextStep`, re-derived from LIVE store state for the consent
+  // dialog's deferred dispatch. The render-scope boolean above is what the
+  // click checked, and it can be a whole open dialog stale by confirm time —
+  // reading the stores imperatively is the point, not a shortcut.
+  const nextStepSendRefusal = useCallback((): string | null => {
+    const live = handle.store.getState();
+    if (
+      !chatTileCanAct(
+        live.connectionStatus,
+        live.access?.canAct === true,
+        useAuthStore.getState().profile !== null,
+      )
+    ) {
+      return "You don't have permission to send.";
+    }
+    const liveStopPending = Object.values(live.pendingActions).some(
+      (action) => action.action === "stop",
+    );
+    if (
+      liveStopPending ||
+      resolvedTurnStatus(live, composerTurnStatus(live.runStatus)) ===
+        "stopping"
+    ) {
+      return "The agent is stopping — send again once it settles.";
+    }
+    if (
+      composerHasBlockingApprovals(
+        live.pendingApprovals,
+        live.pendingFileEditApprovals.length,
+      )
+    ) {
+      return "Resolve the pending approval before sending.";
+    }
+    return null;
+  }, [handle.store]);
   const sendNextStep = useCallback(
     (option: TraycerNextStepOption): boolean => {
       if (!canSendNextStep) return false;
@@ -2303,8 +2351,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         plainTextPromptContent(option.prompt),
         slashCatalog,
       );
-      return submitThroughRebindGate(
-        {
+      return submitThroughRebindGate({
+        submit: {
           content,
           contentText: option.prompt,
           attachments: [],
@@ -2312,12 +2360,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
         },
-        dispatchUserSend,
-      );
+        dispatch: dispatchUserSend,
+        refusal: nextStepSendRefusal,
+      });
     },
     [
       canSendNextStep,
       dispatchUserSend,
+      nextStepSendRefusal,
       nextStepSettings,
       profile,
       slashCatalog,
@@ -2412,8 +2462,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         plainTextPromptContent(`/${commandName}`),
         slashCatalog,
       );
-      submitThroughRebindGate(
-        {
+      submitThroughRebindGate({
+        submit: {
           content,
           contentText: `/${commandName}`,
           attachments: [],
@@ -2423,13 +2473,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
         },
-        dispatchCompactSend,
-      );
+        dispatch: dispatchCompactSend,
+        refusal: nextStepSendRefusal,
+      });
     },
     [
       canSendNextStep,
       dispatchCompactSend,
       handle.chatId,
+      nextStepSendRefusal,
       nextStepSettings,
       profile,
       slashCatalog,
@@ -2450,8 +2502,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       plainTextPromptContent("Implement the plan above."),
       slashCatalog,
     );
-    return submitThroughRebindGate(
-      {
+    return submitThroughRebindGate({
+      submit: {
         content,
         contentText: "Implement the plan above.",
         attachments: [],
@@ -2459,11 +2511,13 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         deliveryPolicy: "auto",
         restore: { content, browserAnnotations: [] },
       },
-      dispatchUserSend,
-    );
+      dispatch: dispatchUserSend,
+      refusal: nextStepSendRefusal,
+    });
   }, [
     canAct,
     dispatchUserSend,
+    nextStepSendRefusal,
     nextStepSettings,
     profile,
     slashCatalog,
@@ -2882,6 +2936,17 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         }
         if (profile === null) {
           toast("Sign in to send this message.");
+          return;
+        }
+        // The armed path's OWN eligibility, re-read from live state: a
+        // blocking approval or a stopping turn can arrive while the dialog
+        // sits open, and the click-time check cannot see it. Peeked before
+        // taking the armed submit so a refusal keeps the dialog and its
+        // armed send (and the staged draft — consent was for a send that
+        // did not happen), matching the access refusals above.
+        const armedRefusal = pendingSubmitRef.current?.input.refusal() ?? null;
+        if (armedRefusal !== null) {
+          toast(armedRefusal);
           return;
         }
         const armed = takeArmedTeardownSubmit(pendingSubmitRef);
