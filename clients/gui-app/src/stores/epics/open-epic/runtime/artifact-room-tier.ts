@@ -780,9 +780,22 @@ export function createArtifactRoomTier(
     let released = false;
     return {
       resourceId: artifactRoomId,
-      isReleased: () => released,
+      /**
+       * Released individually, OR by the registry going terminal.
+       *
+       * Consulting `tierDisposed` rather than having `dispose()` walk a list of
+       * live handles: the contract is that every held lease reads as released
+       * the moment the registry is disposed, and a handle that answers from the
+       * registry's own terminal state cannot be missed by bookkeeping. There is
+       * no set of outstanding handles to keep in step, so there is nothing to
+       * forget to add to it.
+       */
+      isReleased: () => released || tierDisposed,
       release(): void {
-        if (released) return;
+        // A release after dispose is a no-op, not a decrement. The demand map
+        // was cleared wholesale, so decrementing would re-enter a key for a
+        // dead registry and arm a cooldown against timers that are gone.
+        if (released || tierDisposed) return;
         released = true;
         const remaining = (leases.get(artifactRoomId) ?? 1) - 1;
         if (remaining > 0) {
@@ -1067,6 +1080,21 @@ export function createArtifactRoomTier(
       // editor holding a release closure for a lease nobody is counting.
     },
 
+    /**
+     * Terminal, in the registry's full sense: every cooldown cancelled, every
+     * resource dropped INCLUDING leased ones, every later acquisition refused,
+     * and every outstanding handle reading as released from this moment.
+     *
+     * `tierDisposed` is set FIRST so the last three of those hold for anything
+     * that runs during the teardown below, and the demand map is cleared
+     * because a disposed registry reporting demand is what a memory accountant
+     * and a worker lifecycle would both read as a live holder.
+     *
+     * Deliberately unlike {@link ArtifactRoomTier.destroyAll}, which leaves
+     * leases alone on purpose: that one runs on a replica swap, where mounted
+     * editors survive and re-materialise from the next snapshot. This one is
+     * the end of the registry.
+     */
     dispose(): void {
       tierDisposed = true;
       for (const id of Array.from(replicas.keys())) {
@@ -1078,6 +1106,7 @@ export function createArtifactRoomTier(
       cooldownTimers.clear();
       cold.clear();
       touchSeq.clear();
+      leases.clear();
     },
   };
 }

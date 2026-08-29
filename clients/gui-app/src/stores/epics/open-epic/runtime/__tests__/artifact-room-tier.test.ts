@@ -40,7 +40,6 @@ import {
   createArtifactRoomTier,
   type ArtifactRoomReplicaEntry,
   type ArtifactRoomTier,
-  type ArtifactRoomTierSources,
 } from "../artifact-room-tier";
 import type { EpicSessionFacts } from "../session-facts";
 import { encodeDocStateVectorBase64 } from "../dirty-watermark";
@@ -145,9 +144,12 @@ interface TestHarness {
   readonly sent: EpicOutboundRequest[];
 }
 
-function createHarness(
-  overrides?: Partial<ArtifactRoomTierSources>,
-): TestHarness {
+// No override parameter. It was an unused `overrides?: Partial<...>` - both an
+// ESLint-banned optional parameter and dead surface, since no call site ever
+// passed one. A test that needs a different source builds the tier directly;
+// re-adding a spread-over-defaults hole would let a future override silently
+// replace a source this harness is asserting through.
+function createHarness(): TestHarness {
   const environment = createFakeEnvironment();
   const session = createFakeSession();
   const sent: EpicOutboundRequest[] = [];
@@ -157,7 +159,6 @@ function createHarness(
     send: (request) => sent.push(request),
     onDivergenceChanged: () => undefined,
     isDisposed: () => false,
-    ...overrides,
   });
   return { tier, environment, session, sent };
 }
@@ -485,5 +486,53 @@ describe("cold awareness frames", () => {
     );
 
     leaseOf(leaseGrant).release();
+  });
+});
+
+// ─── 6. dispose() is terminal for DEMAND, not just for resources ────────────
+
+describe("dispose() — the registry's terminal contract", () => {
+  it("releases every outstanding lease, clears demand, and refuses later acquisition", () => {
+    const { tier } = createHarness();
+
+    // Both lease-bearing arms, because the contract is about every HELD lease
+    // and the two arms reach it by different routes: one has a live resource,
+    // one is demand on a room with no bytes yet.
+    const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("seeded body");
+    const seededGrant = tier.acquireSync("room-granted");
+    tier.applySnapshot("room-granted", bytes, hostStateVectorBase64);
+    const grantedAgain = tier.acquireSync("room-granted");
+    expect(grantedAgain.kind).toBe("granted");
+    const awaitingGrant = tier.acquireSync("room-awaiting");
+    expect(awaitingGrant.kind).toBe("awaiting-seed");
+
+    expect(leaseOf(seededGrant).isReleased()).toBe(false);
+    expect(leaseOf(awaitingGrant).isReleased()).toBe(false);
+    expect(tier.leaseCount("room-granted")).toBe(2);
+    expect(tier.leaseCount("room-awaiting")).toBe(1);
+
+    tier.dispose();
+
+    // Every held lease reads as released IMMEDIATELY - no polling, no
+    // re-acquire, no walk of a handle list that could have missed one.
+    expect(leaseOf(seededGrant).isReleased()).toBe(true);
+    expect(leaseOf(grantedAgain).isReleased()).toBe(true);
+    expect(leaseOf(awaitingGrant).isReleased()).toBe(true);
+
+    // Demand is gone. A disposed registry still reporting a holder is what a
+    // memory accountant and a worker lifecycle would both read as live.
+    expect(tier.leaseCount("room-granted")).toBe(0);
+    expect(tier.leaseCount("room-awaiting")).toBe(0);
+    expect(tier.materializedIds()).toEqual([]);
+
+    // Releasing after dispose is a no-op, not a decrement: the map was cleared
+    // wholesale, so a decrement would re-enter a key for a dead registry.
+    leaseOf(seededGrant).release();
+    leaseOf(awaitingGrant).release();
+    expect(tier.leaseCount("room-granted")).toBe(0);
+
+    // And nothing new may be acquired - the one arm that registers no demand.
+    expect(tier.acquireSync("room-granted").kind).toBe("unavailable");
+    expect(tier.acquireSync("room-fresh").kind).toBe("unavailable");
   });
 });
