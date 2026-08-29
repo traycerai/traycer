@@ -392,11 +392,16 @@ export function createArtifactRoomTier(
     budget.settleCold(artifactRoomId, bytes);
   }
 
-  function unchargeHot(artifactRoomId: string): number {
-    const charged = lastHotBytes.get(artifactRoomId) ?? 0;
+  function hotHolderBytes(artifactRoomId: string): number {
+    const settled = lastHotBytes.get(artifactRoomId) ?? 0;
+    const entry = replicas.get(artifactRoomId);
+    const provisional = entry === undefined ? 0 : entry.hotBytesSinceSettle;
+    return settled + provisional;
+  }
+
+  function unchargeHot(artifactRoomId: string): void {
     lastHotBytes.delete(artifactRoomId);
     if (budget !== null) budget.release(artifactRoomId);
-    return charged;
   }
 
   function clearPendingRoomUpdates(entry: ArtifactRoomReplicaEntry): void {
@@ -977,7 +982,10 @@ export function createArtifactRoomTier(
           }
         }
         if (victim === null) break;
-        const charged = lastHotBytes.get(victim) ?? 0;
+        // Settled + provisional: `accountant.release` drops the whole
+        // HolderCharge, and `hotBytesSinceSettle` is lockstep with
+        // `chargeProvisional`. Read BEFORE `coolReplica` destroys the entry.
+        const charged = hotHolderBytes(victim);
         cancelCooldown(victim);
         if (!coolReplica(victim)) break;
         reclaimed += charged;
@@ -986,7 +994,7 @@ export function createArtifactRoomTier(
       let leasedBytes = 0;
       for (const id of replicas.keys()) {
         if (!isPinned(id)) continue;
-        leasedBytes += lastHotBytes.get(id) ?? 0;
+        leasedBytes += hotHolderBytes(id);
       }
       return {
         reclaimedBytes: reclaimed,
@@ -1077,6 +1085,12 @@ export function createArtifactRoomTier(
       if (!hadPrior) {
         notifyHot(artifactRoomId, Y.encodeStateAsUpdate(entry.doc).byteLength);
         notifyCold(artifactRoomId, 0);
+      } else {
+        // Merge arm: a leased room surviving reconnect absorbs the host's
+        // whole re-snapshot — the largest single growth event a room sees.
+        // Without this, `hotBytesSinceSettle` never moves and the 256 KiB
+        // threshold cannot trip.
+        noteHotGrowth(artifactRoomId, snapshotBytes.byteLength);
       }
       return hadPrior ? "merged" : "seeded";
     },

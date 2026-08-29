@@ -31,6 +31,7 @@ import {
   createGenerationGuard,
   guardHandler,
   type GenerationGuard,
+  type RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { TRANSCRIPT_RANGE_MAX_BYTES } from "@traycer/protocol/persistence/chat-transcript/read-range";
@@ -111,7 +112,6 @@ import {
   createLegacyChatTranscriptAdapter,
   type LegacyChatTranscriptSnapshotEvent,
 } from "@/stores/chats/legacy-chat-transcript-adapter";
-import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
@@ -1134,6 +1134,11 @@ export interface ChatSessionStoreOptions {
   readonly epicId: string;
   readonly chatId: string;
   readonly userId: string | null;
+  /**
+   * Injected so this factory never touches `window`. Production passes
+   * `createRendererRuntimeEnvironment()`; tests pass a fake.
+   */
+  readonly environment: RuntimeEnvironment;
   readonly streamClientFactory: ChatStreamClientFactory;
   /**
    * Decides when buffered `blockDelta` batches are folded into the store. A
@@ -1827,7 +1832,7 @@ export function createChatSessionStoreWithNotificationDependencies(
   notificationDependencies: ChatSessionNotificationDependencies,
 ): ChatSessionStoreHandle {
   const notificationUserId = options.userId;
-  const memory = ensureProcessMemoryRuntime(createRendererRuntimeEnvironment());
+  const memory = ensureProcessMemoryRuntime(options.environment);
   const holderId = chatHolderId(options.hostId, options.epicId, options.chatId);
   let recencyStamp = 0;
   let disposed = false;
@@ -2181,8 +2186,12 @@ export function createChatSessionStoreWithNotificationDependencies(
           ? merged
           : { ...merged, pendingActions, acceptedActions };
       });
+      // A streaming turn is under-read for its duration: block deltas defer
+      // measurement, and this flush bypasses `publishWindowedTranscript`.
+      // `evictChatWindowForAccountant` settles before deciding. Recency is
+      // the only budget fact this path can honestly stamp without
+      // serializing the growing row.
       recencyStamp = memory.stampChatRecency();
-      memory.chatWindows.chargeProvisional(memory.accountant, holderId, 0);
     };
 
     const lease = options.streamFlushCoordinator.register({
@@ -3670,7 +3679,7 @@ export function createChatSessionStoreWithNotificationDependencies(
 
     const legacyTranscriptAdapter = createLegacyChatTranscriptAdapter();
     legacyTranscriptAdapter.attach({
-      environment: createRendererRuntimeEnvironment(),
+      environment: options.environment,
       emit: applyLegacyTranscriptEvent,
       // Pre-windowed chat has no cursor and therefore no resume outcome.
       reportResume: () => {},

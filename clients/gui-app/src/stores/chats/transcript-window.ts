@@ -448,20 +448,24 @@ export function appendLiveRecords(
   // prune never runs and the row-less events would still accumulate unbounded.
   // This is the append the cap actually has to hold.
   const appendedEvents = [...window.liveEvents, ...events];
+  const overflow = appendedEvents.length - MAX_LIVE_EVENTS;
+  const trimmed = overflow > 0 ? appendedEvents.slice(0, overflow) : [];
   const liveEvents =
-    appendedEvents.length > MAX_LIVE_EVENTS
-      ? appendedEvents.slice(appendedEvents.length - MAX_LIVE_EVENTS)
-      : appendedEvents;
+    overflow > 0 ? appendedEvents.slice(overflow) : appendedEvents;
   const liveMessages = [...window.liveMessages, ...messages];
   return {
     ...window,
     liveMessages,
     liveEvents,
-    // Delta of the NEW records only. Re-measuring the whole live set here
-    // would stringify every retained event on each append — quadratic in the
-    // 512-cap, and the settle path already remeasures live when the figure
-    // is read.
-    hydratedBytes: window.hydratedBytes + recordsByteLength(messages, events),
+    // Delta of the NEW records minus any events the 512-cap just dropped.
+    // Re-measuring the whole live set here would stringify every retained
+    // event on each append — quadratic in the cap. This path does not
+    // populate `unsettledByteMessageIds`, so `settleWindowBytes` will not
+    // remeasure it; the trim's bytes have to leave here.
+    hydratedBytes:
+      window.hydratedBytes +
+      recordsByteLength(messages, events) -
+      recordsByteLength([], trimmed),
     clock: window.clock + 1,
   };
 }

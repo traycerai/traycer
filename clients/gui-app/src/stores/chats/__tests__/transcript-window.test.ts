@@ -24,6 +24,7 @@ import {
   settleWindowBytes,
   streamWindowMessage,
   touchTranscriptRange,
+  transcriptWindowChargedBytes,
   transcriptHydrationGaps,
   unhydratedRowCount,
   updateWindowMessage,
@@ -1266,7 +1267,7 @@ describe("records the index has not placed yet", () => {
     }
 
     expect(window.liveEvents).toHaveLength(MAX_LIVE_EVENTS);
-    expect(window.hydratedBytes).toBeGreaterThan(0);
+    expect(window.hydratedBytes).toBe(transcriptWindowChargedBytes(window));
     // The NEWEST are kept: those are the ones with any chance of being live-
     // relevant, and an older one that genuinely belongs to a row is re-served
     // by that row's hydration.

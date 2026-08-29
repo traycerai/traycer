@@ -35,6 +35,7 @@ import {
   legacyTranscriptResidencyBytes,
   type ChatWholeSetSlices,
 } from "@/stores/replica-memory/chat-window-budget";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
  * The windowed (`chat.subscribe@1.8`) -> legacy (`chat.subscribe@1.0-1.7`)
@@ -164,6 +165,7 @@ function createConsumerHarness(): ConsumerHarness {
   let chatStreamClient: ChatStreamClient | null = null;
 
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-1",
     epicId: EPIC_ID,
     chatId: CHAT_ID,

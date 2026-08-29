@@ -53,11 +53,7 @@ export interface EpicReplicaBudgetBook {
     holderId: BudgetHolderId,
     bytes: number,
   ): void;
-  release(
-    accountant: MemoryAccountant,
-    bookKey: string,
-    holderIds: readonly BudgetHolderId[],
-  ): void;
+  release(accountant: MemoryAccountant, bookKey: string): void;
   evict(overBytes: number): EvictionOutcome;
   projectionRowCounts(): EpicReplicaProjectionCounts;
 }
@@ -70,12 +66,34 @@ export function epicReplicaBookKey(
   return `${hostId}:${epicId}:${runtimeToken}`;
 }
 
+/**
+ * Fixed holder kinds charged against one epic replica. Settle builders
+ * and `release` both derive ids from this list so a new kind cannot be
+ * added on one side only.
+ */
+const EPIC_REPLICA_ROOT_KIND = "root";
+const EPIC_REPLICA_COMMAND_OVERLAY_KIND = "command-overlay";
+const EPIC_REPLICA_FIXED_HOLDER_KINDS = [
+  EPIC_REPLICA_ROOT_KIND,
+  EPIC_REPLICA_COMMAND_OVERLAY_KIND,
+] as const;
+
+function epicFixedHolderId(
+  bookKey: string,
+  kind: (typeof EPIC_REPLICA_FIXED_HOLDER_KINDS)[number],
+): BudgetHolderId {
+  return `${bookKey}:${kind}`;
+}
+
 export function epicRootHolderId(
   hostId: string,
   epicId: string,
   runtimeToken: string,
 ): BudgetHolderId {
-  return `${hostId}:${epicId}:${runtimeToken}:root`;
+  return epicFixedHolderId(
+    epicReplicaBookKey(hostId, epicId, runtimeToken),
+    EPIC_REPLICA_ROOT_KIND,
+  );
 }
 
 export function epicCommandOverlayHolderId(
@@ -83,7 +101,10 @@ export function epicCommandOverlayHolderId(
   epicId: string,
   runtimeToken: string,
 ): BudgetHolderId {
-  return `${hostId}:${epicId}:${runtimeToken}:command-overlay`;
+  return epicFixedHolderId(
+    epicReplicaBookKey(hostId, epicId, runtimeToken),
+    EPIC_REPLICA_COMMAND_OVERLAY_KIND,
+  );
 }
 
 export function epicColdRoomHolderId(
@@ -144,13 +165,12 @@ export function createEpicReplicaBudgetBook(): EpicReplicaBudgetBook {
       accountant.settle(BUDGET_PLANE_IDS.epicReplicas, holderId, bytes);
     },
 
-    release(
-      accountant: MemoryAccountant,
-      bookKey: string,
-      holderIds: readonly BudgetHolderId[],
-    ): void {
-      for (const holderId of holderIds) {
-        accountant.release(BUDGET_PLANE_IDS.epicReplicas, holderId);
+    release(accountant: MemoryAccountant, bookKey: string): void {
+      for (const kind of EPIC_REPLICA_FIXED_HOLDER_KINDS) {
+        accountant.release(
+          BUDGET_PLANE_IDS.epicReplicas,
+          epicFixedHolderId(bookKey, kind),
+        );
       }
       const coldRooms = coldRoomsByKey.get(bookKey);
       if (coldRooms !== undefined) {

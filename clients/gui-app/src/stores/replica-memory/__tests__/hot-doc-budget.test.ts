@@ -451,36 +451,78 @@ describe("hot-doc byte budget with a real tier", () => {
     expect(rounds).toBeGreaterThan(1);
   });
 
-  it("demote reports the bytes actually uncharged, not a fresh encode", () => {
+  it("demote of a quiet room reports the settled charge", () => {
     const harness = createBudgetedHarness(10_000_000);
-    seedUnpinned(harness.tier, "room-stale", "seed");
-    const holderId = hotDocHolderId(
-      harness.hostId,
-      harness.epicId,
-      harness.runtimeToken,
-      "room-stale",
-    );
+    seedUnpinned(harness.tier, "room-quiet", "seed");
     const chargedAtHot =
       harness.accountant
         .snapshot()
         .planes.find((plane) => plane.planeId === BUDGET_PLANE_IDS.hotDocs)
         ?.settledBytes ?? 0;
     expect(chargedAtHot).toBeGreaterThan(0);
+    const outcome = harness.tier.demoteColdestUnpinned(1_000_000);
+    expect(outcome.reclaimedBytes).toBe(chargedAtHot);
+  });
 
+  it("demote reports settled plus provisional when the room has grown", () => {
+    const harness = createBudgetedHarness(10_000_000);
+    seedUnpinned(harness.tier, "room-stale", "seed");
     const extra = makeSnapshotBytes("y".repeat(80));
     harness.tier.applyUpdate(
       "room-stale",
       extra.bytes,
       extra.hostStateVectorBase64,
     );
+    const usage = harness.accountant
+      .snapshot()
+      .planes.find((plane) => plane.planeId === BUDGET_PLANE_IDS.hotDocs);
+    if (usage === undefined) {
+      throw new Error("expected hot-docs plane");
+    }
+    expect(usage.provisionalBytes).toBeGreaterThan(0);
     const outcome = harness.tier.demoteColdestUnpinned(1_000_000);
-    expect(outcome.reclaimedBytes).toBe(chargedAtHot);
+    expect(outcome.reclaimedBytes).toBe(
+      usage.settledBytes + usage.provisionalBytes,
+    );
     expect(
       harness.accountant
         .snapshot()
         .planes.find((plane) => plane.planeId === BUDGET_PLANE_IDS.hotDocs)
         ?.holderCount ?? -1,
     ).toBe(0);
-    expect(holderId.length).toBeGreaterThan(0);
+  });
+
+  it("a reconnect snapshot on a leased room charges the merge growth", () => {
+    const harness = createBudgetedHarness(10_000_000);
+    const seed = makeSnapshotBytes("seed");
+    expect(
+      harness.tier.applySnapshot(
+        "room-leased",
+        seed.bytes,
+        seed.hostStateVectorBase64,
+      ),
+    ).toBe("filed-cold");
+    const grant = harness.tier.acquireSync("room-leased");
+    expect(harness.tier.peek("room-leased")).not.toBeNull();
+    harness.settle.mockClear();
+    harness.chargeProvisional.mockClear();
+    const before = harness.accountant.snapshot().totalChargedBytes;
+
+    const reconnect = makeSnapshotBytes("x".repeat(80_000));
+    expect(
+      harness.tier.applySnapshot(
+        "room-leased",
+        reconnect.bytes,
+        reconnect.hostStateVectorBase64,
+      ),
+    ).toBe("merged");
+    expect(
+      harness.settle.mock.calls.length +
+        harness.chargeProvisional.mock.calls.length,
+    ).toBeGreaterThan(0);
+    expect(harness.accountant.snapshot().totalChargedBytes).toBeGreaterThan(
+      before,
+    );
+    leaseOf(grant).release();
   });
 });

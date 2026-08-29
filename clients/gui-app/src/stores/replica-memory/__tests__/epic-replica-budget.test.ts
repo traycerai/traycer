@@ -164,15 +164,52 @@ describe("createEpicReplicaBudgetBook", () => {
       200,
     );
     book.detach(loserKey);
-    book.release(accountant, loserKey, [
-      epicRootHolderId("host-a", "epic-1", "token-a"),
-      epicCommandOverlayHolderId("host-a", "epic-1", "token-a"),
-    ]);
+    book.release(accountant, loserKey);
     const usage = accountant
       .snapshot()
       .planes.find((plane) => plane.planeId === BUDGET_PLANE_IDS.epicReplicas);
     expect(usage?.settledBytes).toBe(200);
     expect(usage?.holderCount).toBe(1);
     expect(book.projectionRowCounts().artifacts).toBe(1);
+  });
+
+  it("release derives root and overlay holders from the book key", () => {
+    const accountant = createMemoryAccountant({
+      environment: fakeEnvironment(),
+      observedCeilingBytes: 10_000,
+    });
+    accountant.register({
+      planeId: BUDGET_PLANE_IDS.epicReplicas,
+      softLimitBytes: 10_000,
+      nearThresholdRatio: 0.8,
+      evict: () => ({ reclaimedBytes: 0, protectedBytesByKind: [] }),
+    });
+    const book = createEpicReplicaBudgetBook();
+    const key = epicReplicaBookKey("h", "e", "t");
+    book.settleRoot(accountant, epicRootHolderId("h", "e", "t"), 80);
+    book.settleCommandOverlay(
+      accountant,
+      epicCommandOverlayHolderId("h", "e", "t"),
+      20,
+    );
+    book.settleColdRoom(
+      accountant,
+      key,
+      epicColdRoomHolderId("h", "e", "t", "room-1"),
+      15,
+    );
+    expect(
+      accountant
+        .snapshot()
+        .planes.find((plane) => plane.planeId === BUDGET_PLANE_IDS.epicReplicas)
+        ?.holderCount,
+    ).toBe(3);
+    book.release(accountant, key);
+    expect(
+      accountant
+        .snapshot()
+        .planes.find((plane) => plane.planeId === BUDGET_PLANE_IDS.epicReplicas)
+        ?.holderCount,
+    ).toBe(0);
   });
 });
