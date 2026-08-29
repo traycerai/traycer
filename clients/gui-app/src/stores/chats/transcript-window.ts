@@ -1199,10 +1199,14 @@ function reconcileSnapshotProvisionalMessages(
   );
   const liveMessages = window.liveMessages.filter((message) => {
     if (!provisionalIds.has(message.messageId)) return true;
-    if (message.role === "user") {
-      return skeletonRowIds.has(message.messageId);
+    switch (message.role) {
+      case "user":
+        // The shared row projection keys a durable user row directly by its
+        // message id (`row-projection.ts`), so these identity spaces coincide.
+        return skeletonRowIds.has(message.messageId);
+      case "assistant":
+        return skeletonAssistantTurnKeys.has(assistantTurnKey(message));
     }
-    return skeletonAssistantTurnKeys.has(assistantTurnKey(message));
   });
   return {
     ...window,

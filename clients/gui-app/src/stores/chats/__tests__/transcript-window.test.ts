@@ -2198,6 +2198,37 @@ describe("what an overlap keeps", () => {
     expect(confirmed.liveMessages).toEqual([]);
   });
 
+  it("retains a provisional user named by the completed rebuild", () => {
+    const messageId = "accepted-in-rebuild";
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage(messageId, 1)],
+      events: [],
+    });
+    const rebased = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(rebased, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry(messageId, 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+
+    expect(confirmed.liveMessages.map((message) => message.messageId)).toEqual([
+      messageId,
+    ]);
+  });
+
   it("keeps a frozen assistant across an ambiguous same-epoch empty rebuild", () => {
     const turnId = "turn-restart-deleted";
     const indexed = applySkeletonChunk(

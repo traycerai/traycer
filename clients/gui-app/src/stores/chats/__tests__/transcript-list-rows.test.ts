@@ -238,6 +238,8 @@ describe("transcriptListRows", () => {
         invalidated: true,
         liveEvents: [
           setupEvent("setup-live-1"),
+          // This boundary splits the same-timestamp setup events into two
+          // projected setup-card windows, which is the cardinality under test.
           setupEvent("setup-boundary", "worktree.missing"),
           setupEvent("setup-live-2"),
         ],
