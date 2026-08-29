@@ -11,11 +11,17 @@ import type {
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   assistantRowTurnKey,
+  isTurnDecoratingEvent,
+  projectTranscriptRows,
   queueSteerRowId,
+  type TranscriptRowDescriptor,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { rowRecordIds } from "@traycer/protocol/persistence/chat-transcript/read-range";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
+import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
+import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 
 /**
  * # The client half of the windowed transcript
@@ -249,12 +255,29 @@ export interface TranscriptWindow {
    * this field says.
    *
    * Superseded rather than merged: once the same record id arrives inside a
-   * span, the authoritative copy wins and this one is pruned. Cleared outright
-   * on a rebase, because a coordinate space the client has left says nothing
-   * about what is real.
+   * span, the authoritative copy wins and this one is pruned. A transient
+   * frozen assistant and an accepted user may cross a rebase provisionally,
+   * because neither is bound to an ordinal and either interactive frame can
+   * overtake the bulk snapshot. Other live records clear.
    */
   readonly liveMessages: readonly Message[];
   readonly liveEvents: readonly ChatEvent[];
+  /**
+   * Live messages carried across the latest snapshot boundary.
+   *
+   * A bulk snapshot can be overtaken by the interactive record frame, so the
+   * replacement skeleton may not use absence to retire these immediately.
+   * Once that skeleton completes, the NEXT snapshot is later authority: it
+   * may retire only these recorded ids while preserving messages appended
+   * after the boundary.
+   */
+  readonly snapshotProvisionalMessageIds: readonly string[];
+  /** Row-producing live events carried across the latest snapshot boundary. */
+  readonly snapshotProvisionalEventIds: readonly string[];
+  /** Rows the current authority declared incomplete; do not hot-loop them. */
+  readonly unavailableRowIds: readonly string[];
+  /** Ordinals paired with unavailable row ids, including pre-skeleton serves. */
+  readonly unavailableRowOrdinals: readonly number[];
   readonly hydratedBytes: number;
   /**
    * MESSAGE ids whose latest rewrite is not yet reflected in
@@ -380,6 +403,10 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     spans: [],
     liveMessages: [],
     liveEvents: [],
+    snapshotProvisionalMessageIds: [],
+    snapshotProvisionalEventIds: [],
+    unavailableRowIds: [],
+    unavailableRowOrdinals: [],
     hydratedBytes: 0,
     unsettledByteMessageIds: [],
     invalidated: false,
@@ -453,6 +480,10 @@ export function appendLiveRecords(
  */
 function pruneSupersededLiveRecords(
   window: TranscriptWindow,
+  freshlyServedAssistantTurns: ReadonlyMap<
+    string,
+    Extract<Message, { role: "assistant" }>
+  >,
 ): TranscriptWindow {
   if (window.liveMessages.length === 0 && window.liveEvents.length === 0) {
     return window;
@@ -460,12 +491,27 @@ function pruneSupersededLiveRecords(
   const spanMessages = new Set<string>();
   const spanEvents = new Set<string>();
   for (const span of window.spans) {
-    for (const message of span.messages) spanMessages.add(message.messageId);
+    for (const message of span.messages) {
+      spanMessages.add(message.messageId);
+    }
     for (const event of span.events) spanEvents.add(event.eventId);
   }
-  const liveMessages = window.liveMessages.filter(
-    (message) => !spanMessages.has(message.messageId),
-  );
+  const liveMessages = window.liveMessages.filter((message) => {
+    if (spanMessages.has(message.messageId)) return false;
+    if (
+      message.role !== "assistant" ||
+      !isTransientLiveAssistantMessageId(message.messageId)
+    ) {
+      return true;
+    }
+    const served = freshlyServedAssistantTurns.get(assistantTurnKey(message));
+    return (
+      served === undefined ||
+      served.timestamp < message.timestamp ||
+      (served.timestamp === message.timestamp &&
+        !assistantRenderBodyEqual(served, message))
+    );
+  });
   const supersededEvents = window.liveEvents.filter(
     (event) => !spanEvents.has(event.eventId),
   );
@@ -495,6 +541,265 @@ function pruneSupersededLiveRecords(
     return window;
   }
   return { ...window, liveMessages, liveEvents };
+}
+
+function assistantRenderBodyEqual(
+  left: Extract<Message, { role: "assistant" }>,
+  right: Extract<Message, { role: "assistant" }>,
+): boolean {
+  return (
+    stableJsonStringify([
+      left.blocks,
+      left.usage,
+      left.imageResolutions,
+      left.reasoningEffort,
+      left.serviceTier,
+    ]) ===
+    stableJsonStringify([
+      right.blocks,
+      right.usage,
+      right.imageResolutions,
+      right.reasoningEffort,
+      right.serviceTier,
+    ])
+  );
+}
+
+/** Canonical JSON encoding for structural comparisons across record sources. */
+function stableJsonStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, nested: unknown) => {
+    if (
+      nested === null ||
+      Array.isArray(nested) ||
+      typeof nested !== "object"
+    ) {
+      return nested;
+    }
+    return Object.fromEntries(
+      Object.entries(nested).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    );
+  });
+}
+
+function servedAssistantTurns(
+  rowIds: readonly string[],
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): ReadonlyMap<string, Extract<Message, { role: "assistant" }>> {
+  const assistantMessages = new Map<
+    string,
+    Extract<Message, { role: "assistant" }>
+  >();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    const turnKey = assistantTurnKey(message);
+    const current = assistantMessages.get(turnKey);
+    if (current === undefined) {
+      assistantMessages.set(turnKey, message);
+      continue;
+    }
+    let startedAt = current.startedAt;
+    if (
+      startedAt === null ||
+      (message.startedAt !== null && message.startedAt < startedAt)
+    ) {
+      startedAt = message.startedAt;
+    }
+    assistantMessages.set(turnKey, {
+      ...current,
+      messageId: message.messageId,
+      blocks: [...current.blocks, ...message.blocks],
+      startedAt,
+      timestamp: Math.max(current.timestamp, message.timestamp),
+      usage: message.usage ?? current.usage,
+      reasoningEffort: current.reasoningEffort ?? message.reasoningEffort,
+      serviceTier: current.serviceTier ?? message.serviceTier,
+      imageResolutions: [
+        ...current.imageResolutions,
+        ...message.imageResolutions,
+      ],
+    });
+  }
+  const turns = new Map<string, Extract<Message, { role: "assistant" }>>();
+  for (const turnKey of assistantTurnKeysForServedRows(
+    rowIds,
+    messages,
+    events,
+  )) {
+    const message = assistantMessages.get(turnKey);
+    if (message !== undefined) turns.set(turnKey, message);
+  }
+  return turns;
+}
+
+function assistantTurnKeysForServedRows(
+  rowIds: readonly string[],
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): ReadonlySet<string> {
+  const turnKeys = new Set<string>();
+  const projectedRows = new Map(
+    projectTranscriptRows({
+      messages,
+      events,
+      activeTurnId: null,
+      chatId: "",
+    }).map((row) => [row.rowId, row]),
+  );
+  const messageById = new Map(
+    messages.map((message) => [message.messageId, message]),
+  );
+  for (const rowId of rowIds) {
+    const turnKey = assistantRowTurnKey(rowId);
+    if (turnKey !== null) {
+      turnKeys.add(turnKey);
+      continue;
+    }
+    const projected = projectedRows.get(rowId);
+    if (projected === undefined) continue;
+    for (const messageId of rowRecordIds(projected.source).messageIds) {
+      const message = messageById.get(messageId);
+      if (message?.role !== "assistant") continue;
+      turnKeys.add(assistantTurnKey(message));
+    }
+  }
+  return turnKeys;
+}
+
+function incompleteRowIdsToWithhold(
+  incompleteRowIds: readonly string[] | undefined,
+): ReadonlySet<string> {
+  return new Set(incompleteRowIds ?? []);
+}
+
+function withUnavailableRows(
+  window: TranscriptWindow,
+  rowIds: readonly string[],
+  fromOrdinal: number,
+  unavailableRowIds: ReadonlySet<string>,
+): TranscriptWindow {
+  const unavailableByOrdinal = new Map<number, string>();
+  for (
+    let index = 0;
+    index < window.unavailableRowOrdinals.length;
+    index += 1
+  ) {
+    unavailableByOrdinal.set(
+      window.unavailableRowOrdinals[index],
+      window.unavailableRowIds[index],
+    );
+  }
+  for (let index = 0; index < rowIds.length; index += 1) {
+    if (!unavailableRowIds.has(rowIds[index])) continue;
+    unavailableByOrdinal.set(fromOrdinal + index, rowIds[index]);
+  }
+  const unavailableRows = [...unavailableByOrdinal.entries()];
+  return {
+    ...window,
+    unavailableRowIds: unavailableRows.map(([, rowId]) => rowId),
+    unavailableRowOrdinals: unavailableRows.map(([ordinal]) => ordinal),
+  };
+}
+
+function withoutUnavailableRows(
+  window: TranscriptWindow,
+  rowIds: readonly string[],
+  fromOrdinal: number,
+): TranscriptWindow {
+  if (window.unavailableRowIds.length === 0) return window;
+  const completed = new Set(rowIds);
+  const completedOrdinals = new Set(
+    rowIds.map((_rowId, index) => fromOrdinal + index),
+  );
+  const keptIndexes = window.unavailableRowOrdinals.flatMap((ordinal, index) =>
+    completedOrdinals.has(ordinal) ||
+    completed.has(window.unavailableRowIds[index])
+      ? []
+      : [index],
+  );
+  const unavailableRowIds = keptIndexes.map(
+    (index) => window.unavailableRowIds[index],
+  );
+  const unavailableRowOrdinals = keptIndexes.map(
+    (index) => window.unavailableRowOrdinals[index],
+  );
+  return unavailableRowIds.length === window.unavailableRowIds.length &&
+    unavailableRowOrdinals.length === window.unavailableRowOrdinals.length
+    ? window
+    : { ...window, unavailableRowIds, unavailableRowOrdinals };
+}
+
+function completeServedRowIds(
+  rowIds: readonly string[],
+  incompleteRowIds: readonly string[] | undefined,
+): readonly string[] {
+  // Field absence is an already-deployed 1.8 host: retain its pre-change
+  // behavior rather than keeping a transient duplicate forever.
+  if (incompleteRowIds === undefined) return rowIds;
+  if (incompleteRowIds.length === 0) return rowIds;
+  const incomplete = new Set(incompleteRowIds);
+  return rowIds.filter((rowId) => !incomplete.has(rowId));
+}
+
+function recordsForRowIds(
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+  rowIds: ReadonlySet<string>,
+  setupRowOffset: number,
+): {
+  readonly messages: Message[];
+  readonly events: ChatEvent[];
+} {
+  const setupRowIds = [...rowIds].filter((rowId) =>
+    rowId.startsWith("setup-card:"),
+  );
+  const chatId =
+    (setupRowIds.at(0) ?? "").match(/^setup-card:(.*):\d+:\d+$/)?.[1] ?? "";
+  const messageIds = new Set<string>();
+  const eventIds = new Set<string>();
+  const projectedRows = projectTranscriptRows({
+    messages,
+    events,
+    activeTurnId: null,
+    chatId,
+  });
+  const projectedSetupRows = projectedRows.filter(
+    (row) => row.source.kind === "setup-card",
+  );
+  const fallbackSetupRows = new Set(
+    projectedSetupRows.slice(
+      setupRowOffset,
+      setupRowOffset + setupRowIds.length,
+    ),
+  );
+  for (const row of projectedRows) {
+    if (
+      row.source.kind === "setup-card"
+        ? !fallbackSetupRows.has(row)
+        : !rowIds.has(row.rowId)
+    ) {
+      continue;
+    }
+    const recordIds = rowRecordIds(row.source);
+    for (const id of recordIds.messageIds) messageIds.add(id);
+    for (const id of recordIds.eventIds) eventIds.add(id);
+  }
+  return {
+    messages: messages.filter((message) => messageIds.has(message.messageId)),
+    events: events.filter((event) => eventIds.has(event.eventId)),
+  };
+}
+
+function declaredCompleteTailRowIds(
+  tail: ChatTranscriptWindow,
+): readonly string[] {
+  // A legacy tail with no declared identities is seated positionally from the
+  // retained skeleton. During a rebuild that skeleton may be stale, so those
+  // fallback ids cannot prove which row the fresh records completed.
+  if (tail.rowIds === undefined) return [];
+  return completeServedRowIds(tail.rowIds, tail.incompleteRowIds);
 }
 
 /**
@@ -971,6 +1276,184 @@ function classifySnapshotRevision(
   return indexRevision > window.indexRevision ? "gap" : "current";
 }
 
+function provisionalLiveMessagesForSnapshot(input: {
+  readonly window: TranscriptWindow;
+  readonly missedDeltas: boolean;
+  readonly rebased: boolean;
+  readonly rebuilding: boolean;
+}): readonly Message[] {
+  return input.window.liveMessages.filter(
+    (message) =>
+      (message.role === "assistant" &&
+        isTransientLiveAssistantMessageId(message.messageId)) ||
+      ((input.rebased ||
+        input.missedDeltas ||
+        input.window.invalidated ||
+        input.rebuilding) &&
+        message.role === "user"),
+  );
+}
+
+function provisionalLiveEventsForSnapshot(input: {
+  readonly window: TranscriptWindow;
+  readonly missedDeltas: boolean;
+  readonly rebased: boolean;
+  readonly rebuilding: boolean;
+}): readonly ChatEvent[] {
+  return input.rebased ||
+    input.missedDeltas ||
+    input.window.invalidated ||
+    input.rebuilding
+    ? input.window.liveEvents
+    : [];
+}
+
+function namedLiveEventIds(
+  window: TranscriptWindow,
+  skeletonRowIds: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const projectedRows = projectTranscriptRows({
+    messages: window.liveMessages,
+    events: window.liveEvents,
+    activeTurnId: null,
+    chatId: "",
+  });
+  const named = setupEventIdsNamedBySkeleton(projectedRows, skeletonRowIds);
+  const namedAssistantTurnKeys = new Set(
+    [...skeletonRowIds]
+      .map(assistantRowTurnKey)
+      .filter((turnKey): turnKey is string => turnKey !== null),
+  );
+  // A decorating event can survive a rebase after the old span carrying its
+  // assistant dependency is discarded. Its turn key still provides the exact
+  // link to the replacement skeleton row, so do not require local projection
+  // to reconstruct an association the skeleton already names.
+  for (const event of window.liveEvents) {
+    if (
+      isTurnDecoratingEvent(event) &&
+      typeof event.turnId === "string" &&
+      namedAssistantTurnKeys.has(event.turnId)
+    ) {
+      named.add(event.eventId);
+    }
+  }
+  for (const row of projectedRows) {
+    if (row.source.kind === "setup-card") continue;
+    if (!skeletonRowIds.has(row.rowId)) continue;
+    for (const eventId of rowRecordIds(row.source).eventIds) {
+      named.add(eventId);
+    }
+  }
+  return named;
+}
+
+function setupEventIdsNamedBySkeleton(
+  projectedRows: readonly TranscriptRowDescriptor[],
+  skeletonRowIds: ReadonlySet<string>,
+): Set<string> {
+  const setupCountByCreatedAt = new Map<string, number>();
+  for (const rowId of skeletonRowIds) {
+    if (!rowId.startsWith("setup-card:")) continue;
+    const createdAt = rowId.slice(rowId.lastIndexOf(":") + 1);
+    setupCountByCreatedAt.set(
+      createdAt,
+      (setupCountByCreatedAt.get(createdAt) ?? 0) + 1,
+    );
+  }
+  const named = new Set<string>();
+  const setupRowsByCreatedAt = new Map<string, TranscriptRowDescriptor[]>();
+  for (const row of projectedRows) {
+    if (row.source.kind !== "setup-card") continue;
+    const createdAt = String(row.createdAt);
+    const rows = setupRowsByCreatedAt.get(createdAt) ?? [];
+    rows.push(row);
+    setupRowsByCreatedAt.set(createdAt, rows);
+  }
+  for (const [createdAt, rows] of setupRowsByCreatedAt) {
+    const count = setupCountByCreatedAt.get(createdAt) ?? 0;
+    if (count === 0) continue;
+    for (const row of rows.slice(-count)) {
+      if (row.source.kind !== "setup-card") continue;
+      for (const eventId of rowRecordIds(row.source).eventIds) {
+        named.add(eventId);
+      }
+    }
+  }
+  return named;
+}
+
+function rowProducingEventIds(
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const row of projectTranscriptRows({
+    messages,
+    events,
+    activeTurnId: null,
+    chatId: "",
+  })) {
+    for (const eventId of rowRecordIds(row.source).eventIds) ids.add(eventId);
+  }
+  return ids;
+}
+
+function reconcileSnapshotProvisionalRecords(
+  window: TranscriptWindow,
+): TranscriptWindow {
+  if (
+    !window.skeletonComplete ||
+    (window.snapshotProvisionalMessageIds.length === 0 &&
+      window.snapshotProvisionalEventIds.length === 0)
+  ) {
+    return window;
+  }
+  const provisionalIds = new Set(window.snapshotProvisionalMessageIds);
+  const skeletonRowIds = new Set(
+    window.skeleton.flatMap((entry) =>
+      entry === undefined ? [] : [entry.rowId],
+    ),
+  );
+  const skeletonAssistantTurnKeys = new Set(
+    [...skeletonRowIds]
+      .map(assistantRowTurnKey)
+      .filter((turnKey): turnKey is string => turnKey !== null),
+  );
+  const liveMessages = window.liveMessages.filter((message) => {
+    if (!provisionalIds.has(message.messageId)) return true;
+    switch (message.role) {
+      case "user":
+        // The shared row projection keys a durable user row directly by its
+        // message id (`row-projection.ts`), so these identity spaces coincide.
+        return skeletonRowIds.has(message.messageId);
+      case "assistant":
+        return skeletonAssistantTurnKeys.has(assistantTurnKey(message));
+    }
+  });
+  const provisionalEventIds = new Set(window.snapshotProvisionalEventIds);
+  const namedEventIds = namedLiveEventIds(window, skeletonRowIds);
+  const liveEvents = window.liveEvents.filter(
+    (event) =>
+      !provisionalEventIds.has(event.eventId) ||
+      namedEventIds.has(event.eventId),
+  );
+  return {
+    ...window,
+    liveMessages,
+    liveEvents,
+    snapshotProvisionalMessageIds: [],
+    snapshotProvisionalEventIds: [],
+  };
+}
+
+function selectSnapshotLiveRecords<T>(
+  current: readonly T[],
+  provisional: readonly T[],
+  replace: boolean,
+): readonly T[] {
+  return replace ? provisional : current;
+}
+
 /**
  * Seat a windowed snapshot.
  *
@@ -1103,11 +1586,42 @@ export function applyWindowedSnapshot(
     rebased,
   );
   if (verdict === "straggler") return window;
+  const reconciledWindow = reconcileSnapshotProvisionalRecords(window);
   const missedDeltas = verdict === "gap";
+  const provisionalLiveMessages = provisionalLiveMessagesForSnapshot({
+    window: reconciledWindow,
+    missedDeltas,
+    rebased,
+    rebuilding: input.indexRevision === null,
+  });
+  const provisionalLiveEvents = provisionalLiveEventsForSnapshot({
+    window: reconciledWindow,
+    missedDeltas,
+    rebased,
+    rebuilding: input.indexRevision === null,
+  });
+  const replaceLiveRecords = reconciledWindow.invalidated;
+  // Snapshots travel on the bulk lane and can be overtaken by interactive live
+  // records even when they announce a new epoch. Their later skeleton may
+  // prove where a record belongs, but absence from it cannot prove that a live
+  // record already held by this client was deleted.
   const base: TranscriptWindow =
     rebased || missedDeltas
       ? {
           ...emptyTranscriptWindow(),
+          // A settling turn is frozen into an unplaced live record before the
+          // host assigns its durable row an ordinal. That stand-in is not tied
+          // to the old coordinate space, so carry it across a rebase. This is
+          // load-bearing when the new tail row exceeds the inline snapshot
+          // budget: without it the transcript is empty until loadRange returns.
+          // Accepted users are equally ordinal-less and arrive on the same
+          // interactive lane, so a bulk snapshot cannot use an epoch change to
+          // distinguish deletion from an acceptance that overtook it.
+          // The transient assistant retires when a freshly served span carries
+          // the same turn (see pruneSupersededLiveRecords), despite its
+          // intentionally different id.
+          liveMessages: provisionalLiveMessages,
+          liveEvents: provisionalLiveEvents,
           epoch: input.epoch,
           rowCount: input.rowCount,
           indexRevision: input.indexRevision ?? 0,
@@ -1118,7 +1632,17 @@ export function applyWindowedSnapshot(
           clock,
         }
       : {
-          ...window,
+          ...reconciledWindow,
+          liveMessages: selectSnapshotLiveRecords(
+            reconciledWindow.liveMessages,
+            provisionalLiveMessages,
+            replaceLiveRecords,
+          ),
+          liveEvents: selectSnapshotLiveRecords(
+            reconciledWindow.liveEvents,
+            provisionalLiveEvents,
+            replaceLiveRecords,
+          ),
           rowCount: input.rowCount,
           // A restreaming snapshot (`null`) leaves the held revision alone: the
           // skeleton chunks that follow do not carry one, so overwriting it here
@@ -1160,17 +1684,56 @@ export function applyWindowedSnapshot(
           // the completion watchdog is what recovers a stream that never comes.
           skeletonComplete:
             input.indexRevision !== null &&
-            window.skeletonComplete &&
-            coversEveryOrdinal(window.skeleton, input.rowCount),
+            reconciledWindow.skeletonComplete &&
+            coversEveryOrdinal(reconciledWindow.skeleton, input.rowCount),
           skeletonStreamCoveredThrough:
             input.indexRevision === null
               ? 0
-              : window.skeletonStreamCoveredThrough,
+              : reconciledWindow.skeletonStreamCoveredThrough,
           invalidated: false,
           clock,
         };
+  const heldRecords = hydratedRecords(reconciledWindow);
+  const provisionalRowProducingEventIds = rowProducingEventIds(
+    heldRecords.messages,
+    heldRecords.events,
+  );
+  const snapshotProvisionalMessageIds = new Set([
+    ...reconciledWindow.snapshotProvisionalMessageIds,
+    ...provisionalLiveMessages.map((message) => message.messageId),
+  ]);
+  const snapshotProvisionalEventIds = new Set([
+    ...reconciledWindow.snapshotProvisionalEventIds,
+    ...provisionalLiveEvents
+      .filter((event) => provisionalRowProducingEventIds.has(event.eventId))
+      .map((event) => event.eventId),
+  ]);
+  const heldProvisionalMessageIds = new Set(
+    base.liveMessages.map((message) => message.messageId),
+  );
+  const heldProvisionalEventIds = new Set(
+    base.liveEvents.map((event) => event.eventId),
+  );
+  const snapshotBase = {
+    ...base,
+    snapshotProvisionalMessageIds: [...snapshotProvisionalMessageIds].filter(
+      (messageId) => heldProvisionalMessageIds.has(messageId),
+    ),
+    snapshotProvisionalEventIds: [...snapshotProvisionalEventIds].filter(
+      (eventId) => heldProvisionalEventIds.has(eventId),
+    ),
+    unavailableRowIds: [],
+    unavailableRowOrdinals: [],
+  };
 
-  const tailRowIds = tailRowIdsFor(base, input);
+  // `rowCount` is authoritative even when a same-epoch `null` revision merely
+  // announces a replacement skeleton stream. A fresh host/view cache can
+  // restart at the same numeric epoch, so neither `rebased` nor `missedDeltas`
+  // necessarily fires. Bound the retained coordinate data now: otherwise old
+  // ordinals beyond the new end make final-skeleton completeness impossible,
+  // and a deleted transient can survive every rebuild.
+  const boundedBase = boundWindowToRowCount(snapshotBase, input.rowCount);
+  const tailRowIds = tailRowIdsFor(boundedBase, input);
   if (tailRowIds === null) {
     // Two different "no tail" answers, and only one of them is inert.
     //
@@ -1185,35 +1748,172 @@ export function applyWindowedSnapshot(
     // row for as long as the session lives. Drop what overlaps the omitted
     // region so the planner sees the gap and fetches the authoritative body.
     return input.rowCount - input.tail.fromOrdinal > 0
-      ? dropSpansOverlappingFrom(base, input.tail.fromOrdinal)
-      : base;
+      ? dropSpansOverlappingFrom(boundedBase, input.tail.fromOrdinal)
+      : boundedBase;
   }
   // Keyed by row id exactly as a range's is, so a tail seated on the
   // positional ids `tailRowIdsFor` falls back to simply misses every lookup
   // rather than seating context under the wrong row.
   const tailRowContext = input.tail.rowContext ?? {};
-  const tailContextBytes = contextByteLength(tailRowContext);
-  const tailSpan: HydratedSpan = {
-    fromOrdinal: input.tail.fromOrdinal,
+  return seatSnapshotTailSpan({
+    base: boundedBase,
+    tail: input.tail,
     rowIds: tailRowIds,
     rowContext: tailRowContext,
-    messages: input.tail.messages,
-    events: input.tail.events,
-    bytes:
-      recordsByteLength(input.tail.messages, input.tail.events) +
-      tailContextBytes,
-    contextBytes: tailContextBytes,
+    clock,
+  });
+}
+
+function seatSnapshotTailSpan(input: {
+  readonly base: TranscriptWindow;
+  readonly tail: ChatTranscriptWindow;
+  readonly rowIds: readonly string[];
+  readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
+  readonly clock: number;
+}): TranscriptWindow {
+  const { base, tail, rowIds, rowContext, clock } = input;
+  const conflictingRowIds = incompleteRowIdsToWithhold(tail.incompleteRowIds);
+  if (conflictingRowIds.size > 0) {
+    return seatNonConflictingTailRuns(
+      {
+        ...input,
+        base: dropSpansOverlappingFrom(base, tail.fromOrdinal),
+      },
+      conflictingRowIds,
+    );
+  }
+  const completeBase = withoutUnavailableRows(
+    base,
+    declaredCompleteTailRowIds(tail),
+    tail.fromOrdinal,
+  );
+  const contextBytes = contextByteLength(rowContext);
+  const tailSpan: HydratedSpan = {
+    fromOrdinal: tail.fromOrdinal,
+    rowIds,
+    rowContext,
+    messages: tail.messages,
+    events: tail.events,
+    bytes: recordsByteLength(tail.messages, tail.events) + contextBytes,
+    contextBytes,
     touchedAt: clock,
-    // A snapshot's tail is the host's current answer for those rows, so it is a
-    // serve and outranks any older span still holding a copy of the same turn.
     servedAt: clock,
   };
-  const spans = insertSpan(base.spans, tailSpan);
-  return pruneSupersededLiveRecords({
-    ...base,
+  const spans = insertSpan(completeBase.spans, tailSpan);
+  return pruneSupersededLiveRecords(
+    { ...completeBase, spans, hydratedBytes: totalBytes(spans) },
+    servedAssistantTurns(
+      declaredCompleteTailRowIds(tail),
+      tail.messages,
+      tail.events,
+    ),
+  );
+}
+
+function seatNonConflictingTailRuns(
+  input: {
+    readonly base: TranscriptWindow;
+    readonly tail: ChatTranscriptWindow;
+    readonly rowIds: readonly string[];
+    readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
+    readonly clock: number;
+  },
+  conflictingRowIds: ReadonlySet<string>,
+): TranscriptWindow {
+  const conflictingTurnKeys = new Set(
+    [...conflictingRowIds]
+      .map(assistantRowTurnKey)
+      .filter((turnKey): turnKey is string => turnKey !== null),
+  );
+  const messages = input.tail.messages.filter(
+    (message) =>
+      message.role !== "assistant" ||
+      !conflictingTurnKeys.has(assistantTurnKey(message)),
+  );
+  const events = input.tail.events.filter(
+    (event) =>
+      !("turnId" in event) ||
+      typeof event.turnId !== "string" ||
+      !conflictingTurnKeys.has(event.turnId),
+  );
+  let next = input.base;
+  let runStart = -1;
+  let setupRowsBeforeRun = 0;
+  for (let index = 0; index <= input.rowIds.length; index += 1) {
+    const atEnd = index === input.rowIds.length;
+    if (!atEnd && !conflictingRowIds.has(input.rowIds[index])) {
+      if (runStart < 0) runStart = index;
+      continue;
+    }
+    if (runStart >= 0) {
+      const rowIds = input.rowIds.slice(runStart, index);
+      const rowIdSet = new Set(rowIds);
+      const records = recordsForRowIds(
+        messages,
+        events,
+        rowIdSet,
+        setupRowsBeforeRun,
+      );
+      const rowContext = Object.fromEntries(
+        Object.entries(input.rowContext).filter(([id]) => rowIdSet.has(id)),
+      );
+      next = seatSnapshotTailSpan({
+        base: next,
+        tail: {
+          ...input.tail,
+          fromOrdinal: input.tail.fromOrdinal + runStart,
+          rowIds,
+          incompleteRowIds: input.tail.incompleteRowIds?.filter((id) =>
+            rowIdSet.has(id),
+          ),
+          messages: records.messages,
+          events: records.events,
+          rowContext,
+        },
+        rowIds,
+        rowContext,
+        clock: input.clock,
+      });
+      setupRowsBeforeRun += rowIds.filter((rowId) =>
+        rowId.startsWith("setup-card:"),
+      ).length;
+      runStart = -1;
+    }
+    if (!atEnd && input.rowIds[index].startsWith("setup-card:")) {
+      setupRowsBeforeRun += 1;
+    }
+  }
+  return withUnavailableRows(
+    next,
+    input.rowIds,
+    input.tail.fromOrdinal,
+    conflictingRowIds,
+  );
+}
+
+/** Apply a snapshot's authoritative row-space boundary to retained state. */
+function boundWindowToRowCount(
+  window: TranscriptWindow,
+  rowCount: number,
+): TranscriptWindow {
+  const skeleton = window.skeleton.slice(0, rowCount);
+  const spans = window.spans.filter((span) => spanEnd(span) <= rowCount);
+  const changed =
+    skeleton.length !== window.skeleton.length ||
+    spans.length !== window.spans.length;
+  if (!changed) return window;
+  return {
+    ...window,
+    skeleton,
     spans,
     hydratedBytes: totalBytes(spans),
-  });
+    skeletonStreamCoveredThrough: Math.min(
+      window.skeletonStreamCoveredThrough,
+      rowCount,
+    ),
+    skeletonComplete:
+      window.skeletonComplete && coversEveryOrdinal(skeleton, rowCount),
+  };
 }
 
 /**
@@ -1332,11 +2032,42 @@ export function applySkeletonChunk(
     invalidated: window.invalidated || lost,
     clock: window.clock + 1,
   };
-  return reconcileSpansWithSkeleton(
+  const unavailableReconciled = reconcileUnavailableRowsWithSkeleton(
     next,
     chunk.fromOrdinal,
     chunk.fromOrdinal + chunk.entries.length,
   );
+  return reconcileSpansWithSkeleton(
+    unavailableReconciled,
+    chunk.fromOrdinal,
+    chunk.fromOrdinal + chunk.entries.length,
+  );
+}
+
+function reconcileUnavailableRowsWithSkeleton(
+  window: TranscriptWindow,
+  fromOrdinal: number,
+  toOrdinal: number,
+): TranscriptWindow {
+  const keptIndexes = window.unavailableRowOrdinals.flatMap(
+    (ordinal, index) => {
+      if (ordinal < fromOrdinal || ordinal >= toOrdinal) return [index];
+      return window.skeleton[ordinal]?.rowId === window.unavailableRowIds[index]
+        ? [index]
+        : [];
+    },
+  );
+  if (keptIndexes.length === window.unavailableRowOrdinals.length)
+    return window;
+  return {
+    ...window,
+    unavailableRowIds: keptIndexes.map(
+      (index) => window.unavailableRowIds[index],
+    ),
+    unavailableRowOrdinals: keptIndexes.map(
+      (index) => window.unavailableRowOrdinals[index],
+    ),
+  };
 }
 
 /**
@@ -1385,6 +2116,10 @@ function reconcileSpansWithSkeleton(
 ): TranscriptWindow {
   let changed = false;
   const kept: HydratedSpan[] = [];
+  const adoptedAssistantTurns = new Map<
+    string,
+    Extract<Message, { role: "assistant" }>
+  >();
   for (const span of window.spans) {
     const disjoint =
       spanEnd(span) <= fromOrdinal || span.fromOrdinal >= toOrdinal;
@@ -1397,11 +2132,23 @@ function reconcileSpansWithSkeleton(
       continue;
     }
     const adopted = adoptSkeletonRowIds(window, span);
-    if (adopted !== span) changed = true;
+    if (adopted !== span) {
+      changed = true;
+      for (const [turnKey, message] of servedAssistantTurns(
+        adopted.rowIds,
+        adopted.messages,
+        adopted.events,
+      )) {
+        adoptedAssistantTurns.set(turnKey, message);
+      }
+    }
     kept.push(adopted);
   }
   if (!changed) return window;
-  return { ...window, spans: kept, hydratedBytes: totalBytes(kept) };
+  return pruneSupersededLiveRecords(
+    { ...window, spans: kept, hydratedBytes: totalBytes(kept) },
+    adoptedAssistantTurns,
+  );
 }
 
 /**
@@ -1568,11 +2315,25 @@ function voidedTranscriptWindow(
     readonly indexRevision: number;
   },
 ): TranscriptWindow {
+  const liveMessages = window.liveMessages.filter(
+    (message) =>
+      input.rowCount > 0 &&
+      ((message.role === "user" && input.epoch === window.epoch) ||
+        (message.role === "assistant" &&
+          isTransientLiveAssistantMessageId(message.messageId))),
+  );
   return {
     ...emptyTranscriptWindow(),
     epoch: input.epoch,
     rowCount: input.rowCount,
     indexRevision: input.indexRevision,
+    // `reindexed` is the middle frame of the held-subscriber completion
+    // handoff: the rebasing snapshot has already frozen the assistant, while
+    // the replacement skeleton/range have not arrived yet. The stand-in owns
+    // no ordinal, so retain it across this void just as the snapshot rebase
+    // does. A zero-row authority drops it immediately; otherwise the complete
+    // replacement skeleton or durable range retires it.
+    liveMessages,
     invalidated: true,
     clock: window.clock + 1,
   };
@@ -1768,6 +2529,8 @@ export function applyIndexChange(
     // compared against, whether it was adopted under the boundary or earned by
     // being the immediate successor.
     indexRevisionRebuilding: false,
+    unavailableRowIds: [],
+    unavailableRowOrdinals: [],
     // Whether the client holds a COMPLETE index once this frame is folded in,
     // re-derived from the two conditions {@link applySkeletonChunk} uses - and
     // deliberately NOT gated on the completeness this window arrived with.
@@ -1919,7 +2682,83 @@ export function applyRangeResponse(
   if (skeletonContradicts(window, response.fromOrdinal, response.rowIds)) {
     return window.invalidated ? window : { ...window, invalidated: true };
   }
-  const clock = window.clock + 1;
+  const conflictingRowIds = incompleteRowIdsToWithhold(
+    response.incompleteRowIds,
+  );
+  if (conflictingRowIds.size > 0) {
+    const conflictingTurnKeys = new Set(
+      [...conflictingRowIds]
+        .map(assistantRowTurnKey)
+        .filter((turnKey): turnKey is string => turnKey !== null),
+    );
+    const messages = response.messages.filter(
+      (message) =>
+        message.role !== "assistant" ||
+        !conflictingTurnKeys.has(assistantTurnKey(message)),
+    );
+    const events = response.events.filter(
+      (event) =>
+        !("turnId" in event) ||
+        typeof event.turnId !== "string" ||
+        !conflictingTurnKeys.has(event.turnId),
+    );
+    let next = window;
+    let runStart = -1;
+    let setupRowsBeforeRun = 0;
+    for (let index = 0; index <= response.rowIds.length; index += 1) {
+      const atEnd = index === response.rowIds.length;
+      if (!atEnd && !conflictingRowIds.has(response.rowIds[index])) {
+        if (runStart < 0) runStart = index;
+        continue;
+      }
+      if (runStart >= 0) {
+        const rowIds = response.rowIds.slice(runStart, index);
+        const rowIdSet = new Set(rowIds);
+        const records = recordsForRowIds(
+          messages,
+          events,
+          rowIdSet,
+          setupRowsBeforeRun,
+        );
+        next = applyRangeResponse(next, {
+          ...response,
+          fromOrdinal: response.fromOrdinal + runStart,
+          rowIds,
+          messages: records.messages,
+          events: records.events,
+          incompleteRowIds: response.incompleteRowIds?.filter((id) =>
+            rowIdSet.has(id),
+          ),
+          rowContext: Object.fromEntries(
+            Object.entries(response.rowContext).filter(([id]) =>
+              rowIdSet.has(id),
+            ),
+          ),
+          reachedStart: response.reachedStart && runStart === 0,
+          reachedEnd: response.reachedEnd && index === response.rowIds.length,
+        });
+        setupRowsBeforeRun += rowIds.filter((rowId) =>
+          rowId.startsWith("setup-card:"),
+        ).length;
+        runStart = -1;
+      }
+      if (!atEnd && response.rowIds[index].startsWith("setup-card:")) {
+        setupRowsBeforeRun += 1;
+      }
+    }
+    return withUnavailableRows(
+      next,
+      response.rowIds,
+      response.fromOrdinal,
+      conflictingRowIds,
+    );
+  }
+  const completeWindow = withoutUnavailableRows(
+    window,
+    completeServedRowIds(response.rowIds, response.incompleteRowIds),
+    response.fromOrdinal,
+  );
+  const clock = completeWindow.clock + 1;
   const contextBytes = contextByteLength(response.rowContext);
   const span: HydratedSpan = {
     fromOrdinal: response.fromOrdinal,
@@ -1932,13 +2771,20 @@ export function applyRangeResponse(
     touchedAt: clock,
     servedAt: clock,
   };
-  const spans = insertSpan(window.spans, span);
-  return pruneSupersededLiveRecords({
-    ...window,
-    spans,
-    hydratedBytes: totalBytes(spans),
-    clock,
-  });
+  const spans = insertSpan(completeWindow.spans, span);
+  return pruneSupersededLiveRecords(
+    {
+      ...completeWindow,
+      spans,
+      hydratedBytes: totalBytes(spans),
+      clock,
+    },
+    servedAssistantTurns(
+      completeServedRowIds(response.rowIds, response.incompleteRowIds),
+      response.messages,
+      response.events,
+    ),
+  );
 }
 
 /**
@@ -2233,7 +3079,7 @@ export function touchTranscriptRange(
  * Clamped to `rowCount`, so a caller that asks past the end of the transcript
  * gets no gap rather than a request the host would answer with nothing.
  */
-export function transcriptHydrationGaps(
+function allTranscriptHydrationGaps(
   window: TranscriptWindow,
   range: OrdinalRange,
 ): readonly OrdinalRange[] {
@@ -2256,6 +3102,43 @@ export function transcriptHydrationGaps(
   return gaps;
 }
 
+export function transcriptHydrationGaps(
+  window: TranscriptWindow,
+  range: OrdinalRange,
+): readonly OrdinalRange[] {
+  const gaps = allTranscriptHydrationGaps(window, range);
+  if (
+    window.unavailableRowIds.length === 0 &&
+    window.unavailableRowOrdinals.length === 0
+  ) {
+    return gaps;
+  }
+  const unavailable = new Set(window.unavailableRowIds);
+  const unavailableOrdinals = new Set(window.unavailableRowOrdinals);
+  const retryable: OrdinalRange[] = [];
+  for (const gap of gaps) {
+    let runStart: number | null = null;
+    for (let ordinal = gap.fromOrdinal; ordinal < gap.toOrdinal; ordinal += 1) {
+      const rowId = window.skeleton[ordinal]?.rowId;
+      if (
+        unavailableOrdinals.has(ordinal) ||
+        (rowId !== undefined && unavailable.has(rowId))
+      ) {
+        if (runStart !== null) {
+          retryable.push({ fromOrdinal: runStart, toOrdinal: ordinal });
+          runStart = null;
+        }
+        continue;
+      }
+      runStart ??= ordinal;
+    }
+    if (runStart !== null) {
+      retryable.push({ fromOrdinal: runStart, toOrdinal: gap.toOrdinal });
+    }
+  }
+  return retryable;
+}
+
 /**
  * How many rows no client-side scan can see.
  *
@@ -2273,7 +3156,7 @@ export function transcriptHydrationGaps(
  * `rowCount` is 0 and where the full transcript is materialized anyway.
  */
 export function unhydratedRowCount(window: TranscriptWindow): number {
-  return transcriptHydrationGaps(window, {
+  return allTranscriptHydrationGaps(window, {
     fromOrdinal: 0,
     toOrdinal: window.rowCount,
   }).reduce((total, gap) => total + (gap.toOrdinal - gap.fromOrdinal), 0);
