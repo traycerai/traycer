@@ -82,13 +82,20 @@
  * in full, including why the second one is not simply "higher revision wins".
  *
  * The guard is not decoration even though this lane is the only PUSH source for
- * these rows: two of the three populations have a cold-read path that races it
- * (`epic.listCommentThreads` for threads, `agent.roles.list` for claims), and
- * an optimistic local write is a third racer for all of them.
+ * these rows. EVERY population has a cold-read path that races it -
+ * `epic.listCommentThreads` for threads, `agent.roles.list` for claims,
+ * `epic.getWorkspaceContext`'s `epicLight` for the epic TITLE - and an
+ * optimistic local write is a further racer for all of them.
  *
- * Role claims are the one population revisioned as a SET rather than per row,
- * because a claim is created and destroyed but never updated - see
- * {@link epicStateRoleClaimsProjectionSchema}.
+ * Three of the four populations are revisioned per row. The two exceptions are
+ * revisioned as ONE ENTITY, and for the same underlying reason - the thing that
+ * changes is not a row:
+ *
+ * - **Role claims**, as a SET, because a claim is created and destroyed but
+ *   never updated ({@link epicStateRoleClaimsProjectionSchema}).
+ * - **Epic meta**, as a RECORD, because `title` and `updatedAt` are two fields
+ *   of one thing the host commits together
+ *   ({@link epicStateMetaProjectionSchema}).
  *
  * ## Seed-first, with the trust labelled
  *
@@ -114,8 +121,6 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { getRecordSchema } from "@traycer/protocol/framework/index";
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
   epicLaneCursorSchema,
   epicLaneEpochFrameFields,
@@ -232,11 +237,67 @@ export const epicMetaSchema = z.object({
 });
 export type EpicMeta = z.infer<typeof epicMetaSchema>;
 
-const permissionRoleSchema = getRecordSchema(
-  commonRecordRegistry,
-  "permission-role",
-  "latest",
-);
+/**
+ * Epic metadata as a REVISIONED ROW, which is how it travels on both frames.
+ *
+ * ## Why meta needs a revision at all
+ *
+ * It is a row like any other on this lane, and it has the same racing cold-read
+ * problem the other populations do: `epic.getWorkspaceContext` serves
+ * `epicLight`, which carries the epic TITLE. So a slow workspace-context answer
+ * can land after a newer title push, and without a per-entity fence the client
+ * has no way to reject it - the exact "a slow answer can never regress a newer
+ * push" case the guard exists for. The host already mints the number
+ * (`journal.recordEntity(epicMetaEntityKey(), ...)`); it simply was not on the
+ * wire.
+ *
+ * ## Why ONE revision for the whole record, not one per field
+ *
+ * Meta is revisioned as a single ENTITY, on the same reasoning that makes
+ * `roleClaims` a revisioned SET: `title` and `updatedAt` are not independently
+ * reconcilable rows, they are two fields of one thing the host commits
+ * together. A per-field revision would invite a consumer to accept a newer
+ * `title` beside an older `updatedAt` and materialize a meta record that never
+ * existed on the host.
+ *
+ * ## Why a WRAPPER rather than `revision` inline on the record
+ *
+ * The other rows (artifacts, tombstones) carry `revision` inline, and meta
+ * deliberately does not - because of the DELTA, where meta travels as a
+ * PARTIAL. A partial's key set means "the fields this commit changed", so a
+ * `revision` sitting inside it is a key that is present on every patch while
+ * not being a patched field. A consumer spreading the patch over its held
+ * record would write `revision` into the meta itself.
+ *
+ * The wrapper makes that separation structural instead of conventional, so
+ * there is no rule for a later reader to know. It is also why the inline form
+ * cannot simply be `.partial()`d: applying `.partial()` to a revision-extended
+ * record makes `revision` OPTIONAL, silently deleting the guard on the one
+ * frame that most needs it.
+ */
+export const epicStateMetaProjectionSchema = z.object({
+  ...epicLaneRowRevisionFields,
+  meta: epicMetaSchema,
+});
+export type EpicStateMetaProjection = z.infer<
+  typeof epicStateMetaProjectionSchema
+>;
+
+/**
+ * The delta counterpart: the meta fields this commit changed, at the revision
+ * the whole record reached.
+ *
+ * `meta` is PARTIAL - `title` and `updatedAt` move independently and a
+ * whole-object push would force the host to restate a title it did not re-read.
+ * `revision` is REQUIRED and describes the record, not the patch: it is the
+ * entity's revision AFTER this commit, so a consumer applies the patch only
+ * when it strictly exceeds the revision it holds.
+ */
+export const epicStateMetaPatchSchema = z.object({
+  ...epicLaneRowRevisionFields,
+  meta: epicMetaSchema.partial(),
+});
+export type EpicStateMetaPatch = z.infer<typeof epicStateMetaPatchSchema>;
 
 /**
  * The role-claims projection carried on this lane: a whole SET, revisioned as a
@@ -437,7 +498,7 @@ const epicStateSubscribeSnapshotFrameSchemaV10 = z.object({
    * question is authorization, not freshness.
    */
   reconciledWithCloud: z.boolean(),
-  epicMeta: epicMetaSchema,
+  epicMeta: epicStateMetaProjectionSchema,
   artifactRecords: z.array(epicArtifactRecordSchema),
   /**
    * Tombstones ride the SNAPSHOT, unlike removed comment threads below, and
@@ -511,12 +572,13 @@ const epicStateSubscribeDeltaFrameSchemaV10 = z.object({
   commentThreadUpserts: z.array(epicCommentThreadRecordSchema),
   commentThreadRemovals: z.array(epicCommentThreadRemovalSchema),
   /**
-   * The epic metadata fields this commit changed, or `null` when it changed
-   * none. PARTIAL rather than whole: `title` and `updatedAt` move
-   * independently and a whole-object push would force the host to restate a
-   * title it did not re-read.
+   * The epic metadata this commit changed, at the revision the record reached,
+   * or `null` when the commit changed no metadata. See
+   * {@link epicStateMetaPatchSchema} - the revision sits OUTSIDE the partial so
+   * it cannot be mistaken for a patched field, and so `.partial()` cannot make
+   * it optional.
    */
-  epicMeta: epicMetaSchema.partial().nullable(),
+  epicMeta: epicStateMetaPatchSchema.nullable(),
   /**
    * The complete visible role-claim set after this commit, or `null` when the
    * commit did not touch claims. Whole-set replacement, carrying the set's own

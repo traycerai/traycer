@@ -7,6 +7,8 @@ import {
   epicCommentThreadRecordSchema,
   epicCommentThreadRemovalSchema,
   epicDeletedArtifactRecordSchema,
+  epicStateMetaPatchSchema,
+  epicStateMetaProjectionSchema,
   epicStateRoleClaimsProjectionSchema,
   epicStateSnapshotBasisSchema,
   epicStateSubscribeClientFrameSchemaV10,
@@ -201,6 +203,11 @@ const commentThreadRemovalFixture = {
 const emptyRoleClaimsProjectionFixture = { revision: 0, claims: [] };
 
 const epicMetaFixture = { title: "An epic", updatedAt: 1 };
+const epicMetaSnapshotFixture = { revision: 0, meta: epicMetaFixture };
+const epicMetaPatchFixture = {
+  revision: 1,
+  meta: { title: "A renamed epic" },
+};
 
 describe("epic.state.subscribe@1.0", () => {
   describe("the open request's resume cursor is required-and-nullable", () => {
@@ -235,7 +242,7 @@ describe("epic.state.subscribe@1.0", () => {
       position: 0,
       basis: "cold",
       reconciledWithCloud: false,
-      epicMeta: epicMetaFixture,
+      epicMeta: epicMetaSnapshotFixture,
       artifactRecords: [specArtifactFixture],
       deletedArtifacts: [deletedSpecArtifactFixture],
       roleClaims: emptyRoleClaimsProjectionFixture,
@@ -297,7 +304,7 @@ describe("epic.state.subscribe@1.0", () => {
       ["artifactTombstones", [deletedSpecArtifactFixture]],
       ["commentThreadUpserts", [commentThreadFixture]],
       ["commentThreadRemovals", [commentThreadRemovalFixture]],
-      ["epicMeta", { title: "A renamed epic" }],
+      ["epicMeta", epicMetaPatchFixture],
       ["roleClaims", emptyRoleClaimsProjectionFixture],
     ] as const)("accepts a delta carrying only %s", (field, value) => {
       const delta = { ...emptyDelta, [field]: value };
@@ -317,7 +324,7 @@ describe("epic.state.subscribe@1.0", () => {
           position: 0,
           basis: "cold",
           reconciledWithCloud: false,
-          epicMeta: epicMetaFixture,
+          epicMeta: epicMetaSnapshotFixture,
           artifactRecords: [],
           deletedArtifacts: [],
           roleClaims: emptyRoleClaimsProjectionFixture,
@@ -457,6 +464,72 @@ describe("epic.state.subscribe@1.0", () => {
       expect(epicStateRoleClaimsProjectionSchema.safeParse([]).success).toBe(
         false,
       );
+    });
+  });
+
+  describe("epic meta is a revisioned RECORD - the same racing-cold-read problem epic.getWorkspaceContext's epicLight creates for the title", () => {
+    it("epicStateMetaProjectionSchema parses {revision, meta}", () => {
+      expect(
+        epicStateMetaProjectionSchema.safeParse(epicMetaSnapshotFixture)
+          .success,
+      ).toBe(true);
+    });
+
+    it("epicStateMetaProjectionSchema rejects the bare old {title, updatedAt} shape - the redefine is pinned", () => {
+      expect(
+        epicStateMetaProjectionSchema.safeParse(epicMetaFixture).success,
+      ).toBe(false);
+    });
+
+    it("snapshot.epicMeta without revision is rejected", () => {
+      const { revision: _revision, ...withoutRevision } =
+        epicMetaSnapshotFixture;
+      expect(
+        epicStateMetaProjectionSchema.safeParse(withoutRevision).success,
+      ).toBe(false);
+    });
+
+    it("epicStateMetaPatchSchema parses {revision, meta} where meta is a partial patch", () => {
+      expect(
+        epicStateMetaPatchSchema.safeParse(epicMetaPatchFixture).success,
+      ).toBe(true);
+    });
+
+    it("epicStateMetaPatchSchema accepts {revision, meta: {}} - an entity whose revision advanced without a wire field changing is legal", () => {
+      expect(
+        epicStateMetaPatchSchema.safeParse({ revision: 2, meta: {} }).success,
+      ).toBe(true);
+    });
+
+    it("epicStateMetaPatchSchema rejects the bare old {title, updatedAt} partial - the redefine is pinned", () => {
+      expect(
+        epicStateMetaPatchSchema.safeParse({ title: "A renamed epic" }).success,
+      ).toBe(false);
+    });
+
+    it("a delta meta patch without revision is rejected - .partial() on a revision-extended record would make revision OPTIONAL and silently delete the guard on the frame that most needs it, so the wrapper must never collapse back to an inline form", () => {
+      const { revision: _revision, ...withoutRevision } = epicMetaPatchFixture;
+      expect(epicStateMetaPatchSchema.safeParse(withoutRevision).success).toBe(
+        false,
+      );
+
+      const deltaWithUnrevisionedMeta = {
+        kind: "delta",
+        authorityEpoch: "epoch-1",
+        seq: 1,
+        artifactUpserts: [],
+        artifactTombstones: [],
+        commentThreadUpserts: [],
+        commentThreadRemovals: [],
+        epicMeta: withoutRevision,
+        roleClaims: null,
+        hasBinaryPayload: false,
+      };
+      expect(
+        epicStateSubscribeServerFrameSchemaV10.safeParse(
+          deltaWithUnrevisionedMeta,
+        ).success,
+      ).toBe(false);
     });
   });
 });
