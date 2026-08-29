@@ -125,6 +125,7 @@ function windowOf(input: {
     snapshotProvisionalMessageIds: [],
     snapshotProvisionalEventIds: [],
     unavailableRowIds: [],
+    unavailableRowOrdinals: [],
     hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
     unsettledByteMessageIds: [],
     invalidated: input.invalidated,

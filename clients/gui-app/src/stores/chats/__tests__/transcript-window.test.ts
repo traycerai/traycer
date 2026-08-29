@@ -862,6 +862,25 @@ describe("gaps and what to request next", () => {
     expect(unhydratedRowCount(window)).toBe(8);
   });
 
+  it("counts unavailable rows as unhydrated while suppressing their retries", () => {
+    const partial = applyRangeResponse(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-before-skeleton"],
+        incompleteRowIds: ["row-before-skeleton"],
+        messages: [userMessage("row-before-skeleton", 1)],
+      }),
+    );
+
+    expect(partial.unavailableRowOrdinals).toEqual([0]);
+    expect(
+      transcriptHydrationGaps(partial, { fromOrdinal: 0, toOrdinal: 1 }),
+    ).toEqual([]);
+    expect(unhydratedRowCount(partial)).toBe(1);
+  });
+
   it("counts nothing unhydrated on the legacy line's inert window", () => {
     // `rowCount` 0 with no spans is what the legacy line hands the renderer.
     // A caveat there would fire on every non-windowed chat in the app.
@@ -2356,6 +2375,41 @@ describe("what an overlap keeps", () => {
     expect(confirmed.liveMessages).toEqual([]);
   });
 
+  it("tracks retained users across a same-epoch null-revision rebuild", () => {
+    const messageId = "accepted-before-same-epoch-rebuild";
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 7,
+        indexRevisionRebuilding: false,
+      },
+      { messages: [userMessage(messageId, 1)], events: [] },
+    );
+    const rebuilding = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(rebuilding.snapshotProvisionalMessageIds).toContain(messageId);
+    const rebuilt = applySkeletonChunk(rebuilding, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("replacement-user", 0)],
+      isFinal: true,
+    });
+
+    const confirmed = applyWindowedSnapshot(rebuilt, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    expect(confirmed.liveMessages).toEqual([]);
+  });
+
   it("retains a provisional user named by the completed rebuild", () => {
     const messageId = "accepted-in-rebuild";
     const live = appendLiveRecords(emptyTranscriptWindow(), {
@@ -2577,6 +2631,44 @@ describe("what an overlap keeps", () => {
     expect(steerOnly.liveMessages.map((message) => message.messageId)).toEqual([
       transientId,
     ]);
+  });
+
+  it("retires a stand-in when a complete steer row serves its assistant turn", () => {
+    const turnId = "turn-complete-steer";
+    const steerRowId = queueSteerRowId("queue-complete");
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(
+      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+      { messages: [assistantMessage(transientId, turnId, 2)], events: [] },
+    );
+    const durable = {
+      ...assistantMessage("assistant-steer-durable", turnId, 3),
+      blocks: [
+        {
+          type: "steer" as const,
+          blockId: "steer-block",
+          status: "completed" as const,
+          timestamp: 3,
+          queueItemId: "queue-complete",
+          messageId: "missing-steered-user",
+          content: CONTENT,
+          mode: "safe_point" as const,
+          sender: null,
+        },
+      ],
+    };
+
+    const hydrated = applyRangeResponse(
+      live,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: [steerRowId],
+        messages: [durable],
+      }),
+    );
+
+    expect(hydrated.liveMessages).toEqual([]);
   });
 
   it("does not retire a newer completion stand-in from an older assistant serve", () => {

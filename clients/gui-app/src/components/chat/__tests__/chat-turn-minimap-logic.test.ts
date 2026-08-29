@@ -204,6 +204,7 @@ describe("chatTurnMinimapItems caching", () => {
       snapshotProvisionalMessageIds: [],
       snapshotProvisionalEventIds: [],
       unavailableRowIds: [],
+      unavailableRowOrdinals: [],
       hydratedBytes: 32,
       unsettledByteMessageIds: [],
       invalidated: false,
