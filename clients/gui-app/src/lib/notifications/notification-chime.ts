@@ -4,6 +4,7 @@ export const CORE_NOTIFICATION_CHIME_SOUNDS = [
   "ripple",
   "ember",
   "orbit",
+  "rift",
 ] as const;
 
 export const PLAYFUL_NOTIFICATION_CHIME_SOUNDS = [
@@ -33,6 +34,7 @@ export const NOTIFICATION_CHIME_LABELS: Readonly<
   ripple: "Ripple",
   ember: "Ember",
   orbit: "Orbit",
+  rift: "Rift",
   coin: "Coin",
   bloop: "Bloop",
   cuckoo: "Cuckoo",
@@ -49,6 +51,7 @@ export const NOTIFICATION_CHIME_DESCRIPTIONS: Readonly<
   ripple: "A playful water-drop glide with a quiet echo.",
   ember: "Warm, calm, and deliberately subtle.",
   orbit: "An attentive two-note call with gentle width.",
+  rift: "A restrained descending warning with a soft low resolve.",
   coin: "A tiny retro reward jingle.",
   bloop: "A comedic cartoon bubble bounce.",
   cuckoo: "A woody, two-note clock call.",
@@ -74,7 +77,7 @@ export type NotificationChimeSoundsByEvent = Readonly<
 export const DEFAULT_NOTIFICATION_CHIME_SOUNDS: NotificationChimeSoundsByEvent =
   {
     needs_action: "orbit",
-    failure: "beacon",
+    failure: "rift",
     done: "prism",
     info: "ember",
   };
@@ -233,6 +236,44 @@ const CHIME_VOICES: Readonly<
       gain: 0.35,
       startFrequency: 661,
       type: "sine",
+    },
+  ],
+  rift: [
+    {
+      attack: 0.005,
+      delay: 0,
+      duration: 0.16,
+      endFrequency: 659.25,
+      frequencyRampDuration: 0.16,
+      gain: 0.62,
+      startFrequency: 659.25,
+      type: "triangle",
+      decayStart: 0.005,
+      decayTimeConstant: 0.06,
+    },
+    {
+      attack: 0.005,
+      delay: 0.1,
+      duration: 0.2,
+      endFrequency: 622.25,
+      frequencyRampDuration: 0.2,
+      gain: 0.7,
+      startFrequency: 622.25,
+      type: "triangle",
+      decayStart: 0.005,
+      decayTimeConstant: 0.075,
+    },
+    {
+      attack: 0.008,
+      delay: 0.2,
+      duration: 0.19,
+      endFrequency: 440,
+      frequencyRampDuration: 0.19,
+      gain: 0.3,
+      startFrequency: 440,
+      type: "sine",
+      decayStart: 0.008,
+      decayTimeConstant: 0.08,
     },
   ],
   coin: [
@@ -441,6 +482,7 @@ const CHIME_VOICES: Readonly<
 };
 
 let notificationAudioContext: AudioContext | null = null;
+let primedAudioContext: AudioContext | null = null;
 
 function getNotificationAudioContext(): AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -456,11 +498,33 @@ function getNotificationAudioContext(): AudioContext | null {
   return notificationAudioContext;
 }
 
+function primeNotificationAudioRenderer(context: AudioContext): void {
+  if (context.state !== "running" || primedAudioContext === context) return;
+
+  const startsAt = context.currentTime;
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  gain.gain.setValueAtTime(0, startsAt);
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start(startsAt);
+  oscillator.stop(startsAt + 0.02);
+  oscillator.onended = () => gain.disconnect();
+  primedAudioContext = context;
+}
+
 export function prepareNotificationChimeAudio(): void {
   try {
     const context = getNotificationAudioContext();
-    if (context?.state !== "suspended") return;
-    void context.resume().catch(() => undefined);
+    if (context === null) return;
+    if (context.state === "suspended") {
+      void context
+        .resume()
+        .then(() => primeNotificationAudioRenderer(context))
+        .catch(() => undefined);
+      return;
+    }
+    primeNotificationAudioRenderer(context);
   } catch {
     // Audio setup can be rejected by autoplay or device restrictions.
   }
@@ -490,6 +554,7 @@ export function installNotificationChimeAudioWarmup(): () => void {
 export function disposeNotificationChimeAudio(): void {
   const context = notificationAudioContext;
   notificationAudioContext = null;
+  primedAudioContext = null;
   if (context === null || context.state === "closed") return;
   void context.close().catch(() => undefined);
 }
