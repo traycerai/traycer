@@ -716,12 +716,19 @@ const expansionActions = vi.hoisted(() => ({
 vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
   useEpicSidebarEffectiveExpanded: () => testState.expandedIds,
   useEpicSidebarExpansionStore: (selector: (state: unknown) => unknown) =>
+    // Block bodies, not concise ones: `vi.fn()` returns `any`, so an expression
+    // body would forward that `any` out of a function the store types as void.
+    // The fresh closure per call - the point of the wrappers - is unaffected.
     selector({
-      collapse: (tabId: string, panelId: string, id: string) =>
-        expansionActions.collapse(tabId, panelId, id),
-      collapseAll: () => expansionActions.collapseAll(),
-      expand: (tabId: string, panelId: string, id: string) =>
-        expansionActions.expand(tabId, panelId, id),
+      collapse: (tabId: string, panelId: string, id: string) => {
+        expansionActions.collapse(tabId, panelId, id);
+      },
+      collapseAll: () => {
+        expansionActions.collapseAll();
+      },
+      expand: (tabId: string, panelId: string, id: string) => {
+        expansionActions.expand(tabId, panelId, id);
+      },
     }),
 }));
 
