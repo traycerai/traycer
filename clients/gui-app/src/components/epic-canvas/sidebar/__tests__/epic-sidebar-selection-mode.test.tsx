@@ -700,14 +700,18 @@ vi.mock("@/stores/epics/canvas/store", () => ({
   useOpenTileContentIds: () => testState.openTileContentIds,
 }));
 
+// Stable across selector calls, so a test can assert which expansion action a
+// row asked for. A fresh `vi.fn()` per call would record nothing observable.
+const expansionActions = vi.hoisted(() => ({
+  collapse: vi.fn(),
+  collapseAll: vi.fn(),
+  expand: vi.fn(),
+}));
+
 vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
   useEpicSidebarEffectiveExpanded: () => testState.expandedIds,
   useEpicSidebarExpansionStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      collapse: vi.fn(),
-      collapseAll: vi.fn(),
-      expand: vi.fn(),
-    }),
+    selector(expansionActions),
 }));
 
 vi.mock("@/stores/epics/left-panel-store", () => ({
@@ -4958,5 +4962,103 @@ describe("chat tree on a mounting surface", () => {
     expect(
       desktop.container.querySelector('[class*="before:-inset-2"]'),
     ).toBeNull();
+  });
+});
+
+describe("chat tree expansion keys", () => {
+  beforeEach(() => {
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    const root = treeNode("chat-root", null, "Root chat", "chat");
+    const child = treeNode("chat-child", "chat-root", "Child chat", "chat");
+    const leaf = treeNode("chat-leaf", null, "Leaf chat", "chat");
+    testState.tree = {
+      rootIds: ["chat-root", "chat-leaf"],
+      childrenByParent: { "chat-root": ["chat-child"] },
+      nodeById: {
+        "chat-root": root,
+        "chat-child": child,
+        "chat-leaf": leaf,
+      },
+    };
+    testState.records = [root, child, leaf].map(recordFromNode);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+  });
+
+  function pressOnRoot(key: string): boolean {
+    return fireEvent.keyDown(
+      screen.getByTestId("epic-sidebar-item-chat-root"),
+      { key },
+    );
+  }
+
+  it("opens a collapsed branch on ArrowRight and closes it on ArrowLeft", () => {
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    // The whole point: the descendant is not mounted, and the chevron that
+    // would reveal it takes a pointer.
+    expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
+
+    // `false` is jsdom's "the handler called preventDefault" - the row claimed
+    // the key rather than leaving it to the browser.
+    expect(pressOnRoot("ArrowRight")).toBe(false);
+    expect(expansionActions.expand).toHaveBeenCalledWith(
+      TAB_ID,
+      "chats",
+      "chat-root",
+    );
+    expect(expansionActions.collapse).not.toHaveBeenCalled();
+
+    // The store is mocked, so re-render at the state the call asks for and
+    // drive the other direction from there.
+    testState.expandedIds = new Set(["chat-root"]);
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(screen.getByTestId("epic-sidebar-item-chat-child")).toBeTruthy();
+
+    expect(pressOnRoot("ArrowLeft")).toBe(false);
+    expect(expansionActions.collapse).toHaveBeenCalledWith(
+      TAB_ID,
+      "chats",
+      "chat-root",
+    );
+  });
+
+  it("is directional, not a toggle", () => {
+    // The discriminating case. A row that answered both keys with
+    // `toggleExpanded` would pass every assertion above and then close a
+    // branch the user pressed Right on - the one thing Right must never do.
+    testState.expandedIds = new Set(["chat-root"]);
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(pressOnRoot("ArrowRight")).toBe(true);
+    expect(expansionActions.collapse).not.toHaveBeenCalled();
+    expect(expansionActions.expand).not.toHaveBeenCalled();
+  });
+
+  it("leaves ArrowLeft on an already-closed branch to the browser", () => {
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(pressOnRoot("ArrowLeft")).toBe(true);
+    expect(expansionActions.collapse).not.toHaveBeenCalled();
+  });
+
+  it("does not claim the keys on a row with no branch to open", () => {
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    const leaf = screen.getByTestId("epic-sidebar-item-chat-leaf");
+
+    expect(fireEvent.keyDown(leaf, { key: "ArrowRight" })).toBe(true);
+    expect(fireEvent.keyDown(leaf, { key: "ArrowLeft" })).toBe(true);
+    expect(expansionActions.expand).not.toHaveBeenCalled();
+    expect(expansionActions.collapse).not.toHaveBeenCalled();
   });
 });
