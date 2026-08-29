@@ -136,6 +136,29 @@ export function createWorkspaceContextRefreshPolicy(
     return !disposed && !isDisposed();
   }
 
+  /**
+   * Hand the context to the consumer, keeping its failures out of the fetch's
+   * error channel.
+   *
+   * A throw here is logged and swallowed rather than rethrown: this runs in a
+   * detached promise continuation, so rethrowing would surface as an unhandled
+   * rejection with no stack back to the trigger, and would also skip the
+   * `finally` that clears the in-flight flag - wedging every later refresh.
+   */
+  function deliver(
+    context: EarlyMetaEpic,
+    cause: WorkspaceContextRefreshCause,
+  ): void {
+    try {
+      onContext(context, cause);
+    } catch {
+      environment.logger.warn(
+        "epic.getWorkspaceContext consumer threw on delivery",
+        { epicId, cause },
+      );
+    }
+  }
+
   function run(cause: WorkspaceContextRefreshCause): void {
     if (!alive()) return;
     if (inFlight) {
@@ -144,18 +167,31 @@ export function createWorkspaceContextRefreshPolicy(
     }
     inFlight = true;
     void fetch(epicId)
-      .then((context) => {
-        if (!alive()) return;
-        onContext(context, cause);
-      })
-      .catch((error: unknown) => {
-        if (!alive()) return;
-        environment.logger.warn("epic.getWorkspaceContext refresh failed", {
-          epicId,
-          cause,
-        });
-        onError(error, cause);
-      })
+      .then(
+        (context) => {
+          if (!alive()) return;
+          // Delivered in its OWN continuation, not inside the `then` whose
+          // rejection handler is `onError`.
+          //
+          // Chaining `.then(deliver).catch(onError)` reports a consumer's own
+          // exception as a fetch failure, and the two are different facts with
+          // different remedies: a failed READ is retried and may mean the host
+          // does not serve this method, while a failed DELIVERY means the read
+          // succeeded and the consumer is broken. Conflating them would make a
+          // renderer bug look like an unreachable host - and, worse, would let
+          // a consumer that throws every time masquerade as a permanently
+          // degraded connection.
+          deliver(context, cause);
+        },
+        (error: unknown) => {
+          if (!alive()) return;
+          environment.logger.warn("epic.getWorkspaceContext refresh failed", {
+            epicId,
+            cause,
+          });
+          onError(error, cause);
+        },
+      )
       .finally(() => {
         inFlight = false;
         const next = pendingCause;

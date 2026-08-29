@@ -281,13 +281,13 @@ function replacementReasons(log: readonly LogEntry[]): string[] {
 
 function createSources(
   streamClientFactory: EpicStatusStreamClientFactory,
-  isDisposed: () => boolean = () => false,
+  isDisposed: (() => boolean) | undefined,
 ): EpicStatusLaneAdapterSources {
   return {
     epicId: "epic-1",
     environment: createFakeRuntimeEnvironment(),
     streamClientFactory,
-    isDisposed,
+    isDisposed: isDisposed ?? (() => false),
   };
 }
 
@@ -296,7 +296,9 @@ function createSources(
 describe("createEpicStatusLaneAdapter - the false-clean dirty guard", () => {
   it("snapshot dirty:null emits NO aggregate-dirty event at all", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -310,7 +312,9 @@ describe("createEpicStatusLaneAdapter - the false-clean dirty guard", () => {
 
   it("a following dirtyChanged frame after a null-dirty snapshot emits aggregate-dirty", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -325,7 +329,9 @@ describe("createEpicStatusLaneAdapter - the false-clean dirty guard", () => {
 
   it("snapshot dirty:false DOES emit aggregate-dirty/dirty:false", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -343,7 +349,9 @@ describe("createEpicStatusLaneAdapter - the false-clean dirty guard", () => {
 describe("createEpicStatusLaneAdapter - snapshot emission order", () => {
   it("permission-changed, then cloud-sync-status, then dirty, then migration, then epic-deleted", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -378,7 +386,9 @@ describe("createEpicStatusLaneAdapter - snapshot emission order", () => {
 describe("createEpicStatusLaneAdapter - deletion projection", () => {
   it("deletion.state 'unknown' and 'none' each emit zero epic-deleted events", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -396,7 +406,9 @@ describe("createEpicStatusLaneAdapter - deletion projection", () => {
 
   it("deletion.state 'deleted' emits epic-deleted with both attribution fields verbatim, including both null", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -426,7 +438,9 @@ describe("createEpicStatusLaneAdapter - deletion projection", () => {
 
   it("epicDeleted transition frame emits epic-deleted verbatim", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -456,7 +470,9 @@ describe("createEpicStatusLaneAdapter - canWrite", () => {
     { role: null, canWrite: false },
   ])("role $role -> canWrite $canWrite", ({ role, canWrite }) => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -480,7 +496,9 @@ describe("createEpicStatusLaneAdapter - canWrite", () => {
 describe("createEpicStatusLaneAdapter - observedAuthorityEpoch", () => {
   it("is null before the first frame, then the epoch, and survives detach()", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host } = createRecordingHost();
 
     expect(adapter.observedAuthorityEpoch()).toBeNull();
@@ -501,7 +519,9 @@ describe("createEpicStatusLaneAdapter - observedAuthorityEpoch", () => {
 describe("createEpicStatusLaneAdapter - replacement signalling", () => {
   it("the first snapshot never requests a replacement", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -512,7 +532,9 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
 
   it("a second snapshot with a different epoch after a migration:running snapshot -> migration-completed", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -529,7 +551,9 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
 
   it("the same epoch change with no migration in flight -> authority-epoch-changed", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -541,7 +565,9 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
 
   it("migrationStarted then an epoch-changed snapshot -> migration-completed", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -555,7 +581,9 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
 
   it("migrationFailed then an epoch-changed snapshot -> authority-epoch-changed (a failed attempt is not in flight)", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -569,7 +597,9 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
 
   it("migrationNotAllowed then an epoch-changed snapshot -> authority-epoch-changed", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -587,7 +617,9 @@ describe("createEpicStatusLaneAdapter - replacement signalling", () => {
 describe("createEpicStatusLaneAdapter - security epoch fold", () => {
   it("the first observation never requests a replacement", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -598,7 +630,9 @@ describe("createEpicStatusLaneAdapter - security epoch fold", () => {
 
   it("a strictly higher securityEpoch under the same authority epoch requests security-epoch-changed exactly once", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -614,7 +648,9 @@ describe("createEpicStatusLaneAdapter - security epoch fold", () => {
 
   it("an equal or lower securityEpoch requests nothing", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -633,7 +669,9 @@ describe("createEpicStatusLaneAdapter - security epoch fold", () => {
 
   it("after an authority-epoch change the tracking resets, so the next security epoch does not fire a second request", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -656,7 +694,9 @@ describe("createEpicStatusLaneAdapter - security epoch fold", () => {
 describe("createEpicStatusLaneAdapter - migration mapping", () => {
   it("running/progress:null -> {status: 'started'}", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -675,7 +715,9 @@ describe("createEpicStatusLaneAdapter - migration mapping", () => {
 
   it("running/progress:{phase,chunksDone,chunksTotal} -> {status:'progress', stage, ...}", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -704,7 +746,9 @@ describe("createEpicStatusLaneAdapter - migration mapping", () => {
 
   it("failed -> {status:'failed', reason}", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -723,7 +767,9 @@ describe("createEpicStatusLaneAdapter - migration mapping", () => {
 
   it("notAllowed -> {status:'not-allowed'} with NO reason key", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -747,7 +793,9 @@ describe("createEpicStatusLaneAdapter - migration mapping", () => {
 describe("createEpicStatusLaneAdapter - resumeOffer", () => {
   it("is always null", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host } = createRecordingHost();
 
     expect(adapter.resumeOffer()).toBeNull();
@@ -763,7 +811,9 @@ describe("createEpicStatusLaneAdapter - resumeOffer", () => {
 describe("createEpicStatusLaneAdapter - generation guard", () => {
   it("a frame from a generation retired by detach() is dropped", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -779,7 +829,9 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
 
   it("a frame from a generation retired by closeTransport() is dropped, and openTransport() opens a fresh one", () => {
     const { factory, latest, handles } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -811,7 +863,9 @@ describe("createEpicStatusLaneAdapter - generation guard", () => {
 
   it("cloudSyncStatus transition decodes to cloud-sync-status with the environment clock reading", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStatusLaneAdapter(createSources(factory));
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 

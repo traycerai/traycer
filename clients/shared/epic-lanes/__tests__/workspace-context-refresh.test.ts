@@ -101,7 +101,7 @@ type ErrorLogEntry = {
 
 function createSources(
   fetch: (epicId: string) => Promise<EarlyMetaEpic>,
-  isDisposed: () => boolean = () => false,
+  isDisposed: (() => boolean) | undefined,
 ): {
   readonly sources: WorkspaceContextRefreshSources;
   readonly onContextCalls: readonly ContextLogEntry[];
@@ -115,7 +115,7 @@ function createSources(
     fetch,
     onContext: (context, cause) => onContextCalls.push({ context, cause }),
     onError: (error, cause) => onErrorCalls.push({ error, cause }),
-    isDisposed,
+    isDisposed: isDisposed ?? (() => false),
   };
   return { sources, onContextCalls, onErrorCalls };
 }
@@ -133,7 +133,7 @@ async function flush(): Promise<void> {
 describe("createWorkspaceContextRefreshPolicy - start()", () => {
   it("fetches exactly once; a second start() does not", () => {
     const { fetch, calls } = createFakeFetch();
-    const { sources } = createSources(fetch);
+    const { sources } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();
@@ -149,7 +149,7 @@ describe("createWorkspaceContextRefreshPolicy - start()", () => {
 describe("createWorkspaceContextRefreshPolicy - noteTransportStatus", () => {
   it("'open' with no prior non-open status does NOT refetch (start() already covered it)", () => {
     const { fetch, calls } = createFakeFetch();
-    const { sources } = createSources(fetch);
+    const { sources } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();
@@ -160,7 +160,7 @@ describe("createWorkspaceContextRefreshPolicy - noteTransportStatus", () => {
 
   it("a drop to reconnecting/closed then a return to open refetches exactly once with cause 'reconnect'", async () => {
     const { fetch, calls } = createFakeFetch();
-    const { sources } = createSources(fetch);
+    const { sources } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();
@@ -181,7 +181,7 @@ describe("createWorkspaceContextRefreshPolicy - noteTransportStatus", () => {
 describe("createWorkspaceContextRefreshPolicy - noteControlEvent", () => {
   it("refetches for permission-changed", async () => {
     const { fetch, calls } = createFakeFetch();
-    const { sources } = createSources(fetch);
+    const { sources } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();
@@ -201,7 +201,7 @@ describe("createWorkspaceContextRefreshPolicy - noteControlEvent", () => {
 
   it("refetches for migration", async () => {
     const { fetch, calls } = createFakeFetch();
-    const { sources } = createSources(fetch);
+    const { sources } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();
@@ -235,7 +235,7 @@ describe("createWorkspaceContextRefreshPolicy - noteControlEvent", () => {
     },
   ])("does NOT refetch for $event.kind", async ({ event }) => {
     const { fetch, calls } = createFakeFetch();
-    const { sources } = createSources(fetch);
+    const { sources } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();
@@ -253,7 +253,7 @@ describe("createWorkspaceContextRefreshPolicy - noteControlEvent", () => {
 describe("createWorkspaceContextRefreshPolicy - coalescing", () => {
   it("five triggers while a fetch is in flight produce exactly ONE trailing fetch, started after the last trigger", async () => {
     const { fetch, calls } = createFakeFetch();
-    const { sources } = createSources(fetch);
+    const { sources } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();
@@ -278,7 +278,7 @@ describe("createWorkspaceContextRefreshPolicy - coalescing", () => {
 
   it("the trailing fetch carries the cause of the LAST trigger (a reconnect landing mid-migration reports 'reconnect')", async () => {
     const { fetch, calls } = createFakeFetch();
-    const { sources, onContextCalls } = createSources(fetch);
+    const { sources, onContextCalls } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();
@@ -308,7 +308,7 @@ describe("createWorkspaceContextRefreshPolicy - coalescing", () => {
 describe("createWorkspaceContextRefreshPolicy - noteAuthorityEpochChanged", () => {
   it("refetches with cause 'authority-epoch-changed'", async () => {
     const { fetch, calls } = createFakeFetch();
-    const { sources, onContextCalls } = createSources(fetch);
+    const { sources, onContextCalls } = createSources(fetch, undefined);
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();
@@ -331,7 +331,10 @@ describe("createWorkspaceContextRefreshPolicy - noteAuthorityEpochChanged", () =
 describe("createWorkspaceContextRefreshPolicy - rejection is reported, never latched", () => {
   it("a rejected fetch calls onError (not onContext) and a later trigger still fetches", async () => {
     const { fetch, calls } = createFakeFetch();
-    const { sources, onContextCalls, onErrorCalls } = createSources(fetch);
+    const { sources, onContextCalls, onErrorCalls } = createSources(
+      fetch,
+      undefined,
+    );
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();
@@ -356,7 +359,10 @@ describe("createWorkspaceContextRefreshPolicy - rejection is reported, never lat
 describe("createWorkspaceContextRefreshPolicy - dispose()", () => {
   it("an in-flight answer after dispose() calls neither onContext nor onError, and later triggers fetch nothing", async () => {
     const { fetch, calls } = createFakeFetch();
-    const { sources, onContextCalls, onErrorCalls } = createSources(fetch);
+    const { sources, onContextCalls, onErrorCalls } = createSources(
+      fetch,
+      undefined,
+    );
     const policy = createWorkspaceContextRefreshPolicy(sources);
 
     policy.start();

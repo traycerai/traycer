@@ -240,16 +240,16 @@ function replacementReasons(log: readonly LogEntry[]): string[] {
 
 function createSources(
   streamClientFactory: ArtifactStreamClientFactory,
-  readDocSeed: () => ArtifactSubscribeSeedOffer | null = () => null,
-  isDisposed: () => boolean = () => false,
+  readDocSeed: (() => ArtifactSubscribeSeedOffer | null) | undefined,
+  isDisposed: (() => boolean) | undefined,
 ): ArtifactLaneAdapterSources {
   return {
     epicId: "epic-1",
     artifactId: ARTIFACT_ID,
     authorityEpoch: AUTHORITY_EPOCH,
     streamClientFactory,
-    readDocSeed,
-    isDisposed,
+    readDocSeed: readDocSeed ?? (() => null),
+    isDisposed: isDisposed ?? (() => false),
   };
 }
 
@@ -258,7 +258,9 @@ function createSources(
 describe("createArtifactLaneAdapter - doc-ready transitions", () => {
   it("the first doc frame emits doc-ready BEFORE doc-snapshot", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -272,7 +274,9 @@ describe("createArtifactLaneAdapter - doc-ready transitions", () => {
 
   it("a second doc frame with no intervening unavailable/disconnect does NOT re-emit doc-ready", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -286,7 +290,9 @@ describe("createArtifactLaneAdapter - doc-ready transitions", () => {
 
   it("a non-open connection status resets readiness, so the next doc frame re-emits doc-ready", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -305,7 +311,9 @@ describe("createArtifactLaneAdapter - doc-ready transitions", () => {
 describe("createArtifactLaneAdapter - seed mode", () => {
   it("seededFromOffer:true -> seed:'delta-against-offer'", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -325,7 +333,9 @@ describe("createArtifactLaneAdapter - seed mode", () => {
 
   it("the field ABSENT -> seed:'full'", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -351,7 +361,9 @@ describe("createArtifactLaneAdapter - unavailable mapping", () => {
   ])("$code -> $mapped, verbatim terminal", ({ code, mapped }) => {
     for (const terminal of [true, false]) {
       const { factory, latest } = createFakeStreamClientFactory();
-      const adapter = createArtifactLaneAdapter(createSources(factory));
+      const adapter = createArtifactLaneAdapter(
+        createSources(factory, undefined, undefined),
+      );
       const { host, log } = createRecordingHost();
       adapter.attach(host);
 
@@ -373,7 +385,9 @@ describe("createArtifactLaneAdapter - unavailable mapping", () => {
 
   it("bodyUnavailable covers both terminal:true and terminal:false - the @1 unavailable/retrying tri-state", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -400,7 +414,9 @@ describe("createArtifactLaneAdapter - unavailable mapping", () => {
 
   it("staleAuthorityEpoch emits doc-unavailable AND requestReplacement('authority-epoch-changed')", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -417,7 +433,9 @@ describe("createArtifactLaneAdapter - unavailable mapping", () => {
   it("artifactNotFound and bodyUnavailable emit NO requestReplacement", () => {
     for (const code of ["artifactNotFound", "bodyUnavailable"] as const) {
       const { factory, latest } = createFakeStreamClientFactory();
-      const adapter = createArtifactLaneAdapter(createSources(factory));
+      const adapter = createArtifactLaneAdapter(
+        createSources(factory, undefined, undefined),
+      );
       const { host, log } = createRecordingHost();
       adapter.attach(host);
 
@@ -435,7 +453,9 @@ describe("createArtifactLaneAdapter - unavailable mapping", () => {
 describe("createArtifactLaneAdapter - send routing", () => {
   it("after a terminal unavailable, send() answers dropped/lane-terminal", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host } = createRecordingHost();
     adapter.attach(host);
 
@@ -452,7 +472,9 @@ describe("createArtifactLaneAdapter - send routing", () => {
 
   it("send() before attach answers dropped/no-transport", () => {
     const { factory } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
 
     const outcome = adapter.send({
       kind: "awareness",
@@ -463,7 +485,9 @@ describe("createArtifactLaneAdapter - send routing", () => {
 
   it("send() after detach() answers dropped/no-transport", () => {
     const { factory } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host } = createRecordingHost();
     adapter.attach(host);
     adapter.detach("disposed");
@@ -477,7 +501,9 @@ describe("createArtifactLaneAdapter - send routing", () => {
 
   it("while attached, send() answers sent and routes to the exact client call", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host } = createRecordingHost();
     adapter.attach(host);
 
@@ -506,7 +532,7 @@ describe("createArtifactLaneAdapter - resumeOffer", () => {
   it("is null when readDocSeed() is null", () => {
     const { factory } = createFakeStreamClientFactory();
     const adapter = createArtifactLaneAdapter(
-      createSources(factory, () => null),
+      createSources(factory, () => null, undefined),
     );
 
     expect(adapter.resumeOffer()).toBeNull();
@@ -519,7 +545,7 @@ describe("createArtifactLaneAdapter - resumeOffer", () => {
     };
     const { factory } = createFakeStreamClientFactory();
     const adapter = createArtifactLaneAdapter(
-      createSources(factory, () => seed),
+      createSources(factory, () => seed, undefined),
     );
 
     expect(adapter.resumeOffer()).toEqual({
@@ -536,7 +562,9 @@ describe("createArtifactLaneAdapter - resumeOffer", () => {
 describe("createArtifactLaneAdapter - docAck and awareness decode", () => {
   it("docAck -> doc-coverage-ack with the guid and coverage vector verbatim", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -555,7 +583,9 @@ describe("createArtifactLaneAdapter - docAck and awareness decode", () => {
 
   it("awareness -> doc-awareness carrying the epoch and NO guid", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -577,7 +607,9 @@ describe("createArtifactLaneAdapter - docAck and awareness decode", () => {
 
   it("docUpdate decodes to doc-update with the exact guid and bytes", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -601,7 +633,9 @@ describe("createArtifactLaneAdapter - docAck and awareness decode", () => {
 describe("createArtifactLaneAdapter - generation guard", () => {
   it("a frame from a generation retired by detach() is dropped", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -614,7 +648,9 @@ describe("createArtifactLaneAdapter - generation guard", () => {
 
   it("descriptor.laneId is per-artifact", () => {
     const { factory } = createFakeStreamClientFactory();
-    const adapter = createArtifactLaneAdapter(createSources(factory));
+    const adapter = createArtifactLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     expect(adapter.descriptor.laneId).toBe(artifactLaneId(ARTIFACT_ID));
   });
 });

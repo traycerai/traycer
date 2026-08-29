@@ -327,14 +327,14 @@ function replacementReasons(log: readonly LogEntry[]): string[] {
 
 function createSources(
   streamClientFactory: EpicStateStreamClientFactory,
-  readAppliedCursor: () => LaneCursor | null = () => null,
-  isDisposed: () => boolean = () => false,
+  readAppliedCursor: (() => LaneCursor | null) | undefined,
+  isDisposed: (() => boolean) | undefined,
 ): EpicStateLaneAdapterSources {
   return {
     epicId: "epic-1",
     streamClientFactory,
-    readAppliedCursor,
-    isDisposed,
+    readAppliedCursor: readAppliedCursor ?? (() => null),
+    isDisposed: isDisposed ?? (() => false),
   };
 }
 
@@ -343,7 +343,9 @@ function createSources(
 describe("createEpicStateLaneAdapter - resume offer", () => {
   it("cold open: resumeOffer() is null and the wire resumeProvider answers null (not undefined)", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host } = createRecordingHost();
     adapter.attach(host);
 
@@ -361,7 +363,7 @@ describe("createEpicStateLaneAdapter - resume offer", () => {
     };
     const { factory, latest } = createFakeStreamClientFactory();
     const adapter = createEpicStateLaneAdapter(
-      createSources(factory, () => applied),
+      createSources(factory, () => applied, undefined),
     );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
@@ -438,7 +440,7 @@ describe("createEpicStateLaneAdapter - resume offer", () => {
     };
     const { factory, latest } = createFakeStreamClientFactory();
     const adapter = createEpicStateLaneAdapter(
-      createSources(factory, () => foreignCursor),
+      createSources(factory, () => foreignCursor, undefined),
     );
     const { host } = createRecordingHost();
     adapter.attach(host);
@@ -453,7 +455,9 @@ describe("createEpicStateLaneAdapter - resume offer", () => {
 describe("createEpicStateLaneAdapter - snapshot basis", () => {
   it("basis 'cold' -> reseeded/no-offer, and requestReplacement is never called", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -476,7 +480,9 @@ describe("createEpicStateLaneAdapter - snapshot basis", () => {
 
   it("basis 'resumeTooOld' -> requestReplacement('resume-too-old') exactly once", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -487,7 +493,9 @@ describe("createEpicStateLaneAdapter - snapshot basis", () => {
 
   it("basis 'authorityEpochChanged' -> requestReplacement('authority-epoch-changed') exactly once", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -504,7 +512,9 @@ describe("createEpicStateLaneAdapter - snapshot basis", () => {
 describe("createEpicStateLaneAdapter - resumed frame", () => {
   it("reports resumed/from, emits only the restated trust, and never requests replacement", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -546,7 +556,9 @@ describe("createEpicStateLaneAdapter - resumed frame", () => {
 describe("createEpicStateLaneAdapter - snapshot row decode", () => {
   it("decodes artifacts, tombstones, comment threads and role claims into the right row keys", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -579,7 +591,9 @@ describe("createEpicStateLaneAdapter - snapshot row decode", () => {
 
   it("carries the role-claims row even when claims is empty", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -610,7 +624,9 @@ describe("createEpicStateLaneAdapter - snapshot row decode", () => {
 describe("createEpicStateLaneAdapter - trust", () => {
   it("reconciledWithCloud true -> 'reconciled-with-cloud'; false -> 'seed-only'", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -642,7 +658,9 @@ describe("createEpicStateLaneAdapter - trust", () => {
 describe("createEpicStateLaneAdapter - cause", () => {
   it("first lead frame on an attachment is 'initial'; a later snapshot is 'reseed'; detach() resets it", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -682,7 +700,9 @@ describe("createEpicStateLaneAdapter - cause", () => {
 
   it("resumed also counts as the lead frame for cause tracking (a later snapshot is 'reseed')", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -712,7 +732,9 @@ describe("createEpicStateLaneAdapter - cause", () => {
 describe("createEpicStateLaneAdapter - delta decode", () => {
   it("tombstones a live artifact and upserts its tombstone atomically, in one changes array at one revision", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -756,7 +778,9 @@ describe("createEpicStateLaneAdapter - delta decode", () => {
 
   it("an epicMeta-only delta emits exactly one record-transaction whose changes is one upsert at EPIC_META_ROW_ID carrying epic-meta-patch", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -799,7 +823,9 @@ describe("createEpicStateLaneAdapter - delta decode", () => {
 
   it("the snapshot's meta row is whole ('epic-meta'); the delta's is a patch ('epic-meta-patch') - the distinction survives the adapter", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -847,7 +873,9 @@ describe("createEpicStateLaneAdapter - delta decode", () => {
 
   it("a snapshot's record-snapshot carries exactly one row at EPIC_META_ROW_ID whose revision and meta echo the frame verbatim", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -891,7 +919,9 @@ describe("createEpicStateLaneAdapter - delta decode", () => {
 describe("createEpicStateLaneAdapter - generation guard", () => {
   it("a frame from a generation retired by detach() is dropped", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -910,7 +940,9 @@ describe("createEpicStateLaneAdapter - generation guard", () => {
 
   it("a frame from a generation retired by closeTransport() is dropped", () => {
     const { factory, latest } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
@@ -924,7 +956,9 @@ describe("createEpicStateLaneAdapter - generation guard", () => {
 
   it("openTransport() after closeTransport() opens a fresh generation that decodes normally", () => {
     const { factory, latest, handles } = createFakeStreamClientFactory();
-    const adapter = createEpicStateLaneAdapter(createSources(factory));
+    const adapter = createEpicStateLaneAdapter(
+      createSources(factory, undefined, undefined),
+    );
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
