@@ -89,6 +89,105 @@ describe("ChatTranscriptPlaceholderRow", () => {
     const row = screen.getByTestId("chat-transcript-placeholder-row");
     expect(row.getAttribute("data-ordinal")).toBe("7");
     expect(row.getAttribute("aria-hidden")).toBe("true");
+    expect(row.className).toContain("max-w-3xl");
+    expect(row.style.height).toBe("120px");
+    expect(row.firstElementChild?.className).not.toContain("sticky");
+    expect(row.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(3);
+  });
+
+  it("does not inflate the smallest legal assistant estimate", () => {
+    render(
+      <ChatTranscriptPlaceholderRow
+        entry={entry({ role: "assistant", byteLength: 0 })}
+        ordinal={0}
+        heightMemory={null}
+      />,
+    );
+    const row = screen.getByTestId("chat-transcript-placeholder-row");
+    expect(row.style.height).toBe("44px");
+    expect(row.style.minHeight).toBe("");
+    expect(row.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(1);
+  });
+
+  it("keeps a user placeholder inside the chat column", () => {
+    render(
+      <ChatTranscriptPlaceholderRow
+        entry={entry({ role: "user", byteLength: 32 })}
+        ordinal={2}
+        heightMemory={null}
+      />,
+    );
+    const row = screen.getByTestId("chat-transcript-placeholder-row");
+    const loadingBody = screen.getByTestId(
+      "chat-transcript-placeholder-user-bubble",
+    );
+    expect(row.style.height).toBe("66px");
+    expect(row.className).toContain("max-w-3xl");
+    expect(loadingBody.className).toContain("max-w-full");
+    expect(loadingBody.className).toContain("w-2/3");
+    expect(loadingBody.className).toContain("ml-auto");
+    expect(loadingBody.className).toContain("overflow-hidden");
+  });
+
+  it.each([10, 20])(
+    "keeps tall user chrome bounded at a %ipx root font",
+    (fontSize) => {
+      const previousFontSize = document.documentElement.style.fontSize;
+      document.documentElement.style.fontSize = `${fontSize}px`;
+      try {
+        const heightMemory = {
+          observeSkeleton: () => undefined,
+          observeLayoutBasis: () => undefined,
+          recordMeasuredHeight: () => undefined,
+          placeholderHeight: () => 3_200,
+        };
+        render(
+          <ChatTranscriptPlaceholderRow
+            entry={entry({
+              role: "user",
+              byteLength: 2_048,
+              preview: "A tall remembered prompt",
+            })}
+            ordinal={13}
+            heightMemory={heightMemory}
+          />,
+        );
+
+        const row = screen.getByTestId("chat-transcript-placeholder-row");
+        const shell = row.firstElementChild;
+        const bubble = screen.getByTestId(
+          "chat-transcript-placeholder-user-bubble",
+        );
+        expect(shell?.className).toContain("h-full");
+        expect(shell?.className).toContain("justify-around");
+        expect(bubble.className).not.toContain("h-full");
+        expect(bubble.className).toContain("w-2/3");
+      } finally {
+        document.documentElement.style.fontSize = previousFontSize;
+      }
+    },
+  );
+
+  it("distributes a bounded loading treatment through a tall remembered row", () => {
+    const heightMemory = {
+      observeSkeleton: () => undefined,
+      observeLayoutBasis: () => undefined,
+      recordMeasuredHeight: () => undefined,
+      placeholderHeight: () => 3_200,
+    };
+    render(
+      <ChatTranscriptPlaceholderRow
+        entry={entry({ role: "assistant", byteLength: 2_048 })}
+        ordinal={12}
+        heightMemory={heightMemory}
+      />,
+    );
+    const row = screen.getByTestId("chat-transcript-placeholder-row");
+    expect(row.style.height).toBe("3200px");
+    expect(row.firstElementChild?.className).toContain("h-full");
+    expect(row.firstElementChild?.className).toContain("justify-around");
+    expect(row.firstElementChild?.className).not.toContain("sticky");
+    expect(row.querySelectorAll('[data-slot="skeleton"]')).toHaveLength(20);
   });
 
   it("shows a human user preview", () => {
@@ -104,6 +203,9 @@ describe("ChatTranscriptPlaceholderRow", () => {
       />,
     );
     expect(screen.getByText("A remembered question")).toBeTruthy();
+    expect(screen.getByText("A remembered question").className).toContain(
+      "line-clamp-1",
+    );
   });
 
   it("does not show text for an assistant entry", () => {

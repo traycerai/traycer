@@ -1,10 +1,17 @@
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 import {
+  hydratedRecords,
+  type TranscriptWindow,
+} from "@/stores/chats/transcript-window";
+import {
+  assistantRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
+  projectTranscriptRows,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
+import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 
 /**
  * # The list the transcript draws: hydrated rows and placeholders together
@@ -49,8 +56,10 @@ import {
  * and it disappears behind a placeholder for the length of that round trip.
  * This does not reopen the sparse-skeleton hazard above: a row with no skeleton
  * entry simply has no ordinal to be seated at and still falls through to the
- * live tail. Nor the steer-split hazard below: a projected row is not a live
- * record, so it is not eligible.
+ * live tail. Projected assistant rows are eligible only when their
+ * `persistentMessageId` names a live record; that includes split slices from
+ * the same delivered assistant record without treating projection alone as
+ * proof that a body is held.
  *
  * ## What lands after the last ordinal
  *
@@ -164,6 +173,29 @@ function skeletonOrdinalByRowId(
 }
 
 /**
+ * Every row identity backed by a hydrated span, keyed by the spans array.
+ *
+ * An invalidated transcript still re-renders on every streaming token while
+ * its retained spans change only when hydration/index state changes. Keep the
+ * O(window) membership fold off that token path, just like the skeleton map.
+ */
+const spanRowIdCache = new WeakMap<
+  TranscriptWindow["spans"],
+  ReadonlySet<string>
+>();
+
+function spanRowIds(spans: TranscriptWindow["spans"]): ReadonlySet<string> {
+  const cached = spanRowIdCache.get(spans);
+  if (cached !== undefined) return cached;
+  const rowIds = new Set<string>();
+  for (const span of spans) {
+    for (const rowId of span.rowIds) rowIds.add(rowId);
+  }
+  spanRowIdCache.set(spans, rowIds);
+  return rowIds;
+}
+
+/**
  * The row ids of the records this client holds LIVE - pushed whole by the host
  * and not yet superseded by a span.
  *
@@ -184,8 +216,87 @@ function liveRecordRowIds(window: TranscriptWindow): ReadonlySet<string> {
   for (const event of window.liveEvents) {
     rowIds.add(chatTranscriptEventRowId(event.eventId));
     rowIds.add(forkedChatLinkRowId(event.eventId));
+    if (event.type === "turn.stopped" && event.turnId !== null) {
+      rowIds.add(assistantRowId(event.turnId));
+    }
   }
   return rowIds;
+}
+
+function transientLiveSteerRowIds(
+  window: TranscriptWindow,
+): ReadonlySet<string> {
+  const transientTurnKeys = new Set<string>();
+  for (const message of window.liveMessages) {
+    if (
+      message.role === "assistant" &&
+      isTransientLiveAssistantMessageId(message.messageId)
+    ) {
+      transientTurnKeys.add(assistantTurnKey(message));
+    }
+  }
+  const records = hydratedRecords(window);
+  return new Set(
+    projectTranscriptRows({
+      messages: records.messages,
+      events: records.events,
+      activeTurnId: null,
+      chatId: "",
+    })
+      .filter(
+        (row) =>
+          row.source.kind === "steer" &&
+          transientTurnKeys.has(row.source.turnKey),
+      )
+      .map((row) => row.rowId),
+  );
+}
+
+function projectedLiveSetupRowIds(
+  window: TranscriptWindow,
+  rendered: readonly ChatMessageModel[],
+): ReadonlySet<string> {
+  if (!window.liveEvents.some((event) => event.type.startsWith("setup."))) {
+    return new Set();
+  }
+  const liveCountByCreatedAt = new Map<string, number>();
+  for (const createdAt of projectTranscriptRows({
+    messages: window.liveMessages,
+    events: window.liveEvents,
+    activeTurnId: null,
+    chatId: "",
+  })
+    .filter((row) => row.source.kind === "setup-card")
+    .map((row) => row.rowId.slice(row.rowId.lastIndexOf(":") + 1))) {
+    liveCountByCreatedAt.set(
+      createdAt,
+      (liveCountByCreatedAt.get(createdAt) ?? 0) + 1,
+    );
+  }
+  const renderedByCreatedAt = new Map<
+    string,
+    { id: string; index: number }[]
+  >();
+  for (const model of rendered) {
+    const match = model.id.match(/^setup-card:.*:(\d+):(\d+)$/);
+    if (match === null || !liveCountByCreatedAt.has(match[2])) continue;
+    const candidates = renderedByCreatedAt.get(match[2]) ?? [];
+    candidates.push({ id: model.id, index: Number(match[1]) });
+    renderedByCreatedAt.set(match[2], candidates);
+  }
+  const liveRowIds = new Set<string>();
+  for (const [createdAt, count] of liveCountByCreatedAt) {
+    const candidates = renderedByCreatedAt.get(createdAt) ?? [];
+    candidates.sort((left, right) => right.index - left.index);
+    for (const candidate of candidates.slice(0, count)) {
+      liveRowIds.add(candidate.id);
+    }
+  }
+  return liveRowIds;
+}
+
+function isExplicitlyPendingOrStreaming(model: ChatMessageModel): boolean {
+  return model.statusLabel === "Pending" || model.statusLabel === "Streaming";
 }
 
 /**
@@ -218,6 +329,33 @@ const placeholderRowsBySkeleton = new WeakMap<
   Map<number, TranscriptListRow>
 >();
 
+const MAX_INVALIDATED_PLACEHOLDER_SETS = 16;
+const invalidatedPlaceholdersByRowCount = new Map<
+  number,
+  readonly TranscriptListRow[]
+>();
+
+function invalidatedPlaceholderRows(
+  rowCount: number,
+): readonly TranscriptListRow[] {
+  const cached = invalidatedPlaceholdersByRowCount.get(rowCount);
+  if (cached !== undefined) return cached;
+  const rows = Array.from({ length: rowCount }, (_unused, ordinal) => ({
+    kind: "placeholder" as const,
+    key: unplacedRowKey(ordinal),
+    ordinal,
+    entry: null,
+  }));
+  invalidatedPlaceholdersByRowCount.set(rowCount, rows);
+  if (
+    invalidatedPlaceholdersByRowCount.size > MAX_INVALIDATED_PLACEHOLDER_SETS
+  ) {
+    const oldest = invalidatedPlaceholdersByRowCount.keys().next();
+    if (!oldest.done) invalidatedPlaceholdersByRowCount.delete(oldest.value);
+  }
+  return rows;
+}
+
 /**
  * Seat the live records the index has started naming, in place.
  *
@@ -239,7 +377,11 @@ function seatLiveRecords(input: {
   const liveRowIds = liveRecordRowIds(input.window);
   if (liveRowIds.size === 0) return;
   for (const model of input.rendered) {
-    if (!liveRowIds.has(model.id)) continue;
+    const backedByLiveRecord =
+      liveRowIds.has(model.id) ||
+      (model.persistentMessageId !== null &&
+        liveRowIds.has(model.persistentMessageId));
+    if (!backedByLiveRecord) continue;
     if (input.placedRowIds.has(model.id)) continue;
     const ordinal = input.skeletonOrdinals.get(model.id);
     if (ordinal === undefined || ordinal >= input.window.rowCount) continue;
@@ -267,17 +409,52 @@ export function transcriptListRows(input: {
   readonly rendered: readonly ChatMessageModel[];
 }): readonly TranscriptListRow[] {
   const { window, rendered } = input;
-  // The legacy line, and the void window. An invalidated index names ordinals
-  // in a coordinate space this client has left, so drawing placeholders from it
-  // would put rows in positions that no longer mean anything; the caller owes a
-  // `resnapshot` and this renders what it holds until that lands.
-  if (window === null || window.invalidated) {
+  // The legacy line has no ordinal space at all.
+  if (window === null) {
     return rendered.map((model) => ({
       kind: "hydrated",
       key: model.id,
       ordinal: null,
       model,
     }));
+  }
+
+  if (window.invalidated) {
+    // The index identities are void, but the frame that voided them still
+    // authoritatively announced how many rows exist in the replacement space.
+    // Keep the virtualized list mounted with identity-free placeholders so a
+    // known nonempty chat can never flash the brand-new-chat empty state or
+    // lose LegendList's measurements/scroll position during the resnapshot.
+    // Only genuinely unplaced rendered records remain after the ordinal
+    // space. Bodies already backed by a retained span are represented by the
+    // identity-free placeholders until the replacement index lands; appending
+    // them too would draw the same history twice on skeleton-loss paths.
+    const liveRowIds = liveRecordRowIds(window);
+    const retainedSpanRowIds = spanRowIds(window.spans);
+    const liveSetupRowIds = projectedLiveSetupRowIds(window, rendered);
+    let liveTransientSteerRowIds: ReadonlySet<string> | null = null;
+    const unplacedRendered = rendered.filter((model) => {
+      const liveBacked =
+        isExplicitlyPendingOrStreaming(model) ||
+        liveRowIds.has(model.id) ||
+        liveSetupRowIds.has(model.id) ||
+        (model.persistentMessageId === null &&
+          (liveTransientSteerRowIds ??= transientLiveSteerRowIds(window)).has(
+            model.id,
+          )) ||
+        (model.persistentMessageId !== null &&
+          liveRowIds.has(model.persistentMessageId));
+      return !retainedSpanRowIds.has(model.id) && liveBacked;
+    });
+    return [
+      ...invalidatedPlaceholderRows(window.rowCount),
+      ...unplacedRendered.map((model) => ({
+        kind: "hydrated" as const,
+        key: model.id,
+        ordinal: null,
+        model,
+      })),
+    ];
   }
 
   const modelsById = new Map(rendered.map((model) => [model.id, model]));
@@ -318,8 +495,9 @@ export function transcriptListRows(input: {
   // one copy of the body this client has. What the user sees is a message they
   // just sent turning into a skeleton placeholder until the range lands.
   //
-  // Restricted to models a LIVE RECORD backs, which is the whole discrimination
-  // this needs. A rendered model is not evidence that the client holds the row:
+  // Restricted to models a LIVE RECORD backs, directly by row id or through
+  // the projected model's persistent record id. A rendered model alone is not
+  // evidence that the client holds the row:
   // hydrating one row of a steer-split assistant turn pulls the turn's shared
   // records, and rendering those projects EVERY row of that turn - including
   // ones the host never served, whose bodies here would be this client's

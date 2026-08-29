@@ -160,6 +160,7 @@ describe("sliceTranscriptRange", () => {
     expect(result).toEqual({
       fromOrdinal: 0,
       rowIds: [],
+      incompleteRowIds: [],
       messages: [],
       events: [],
       rowContext: {},
@@ -230,6 +231,7 @@ describe("sliceTranscriptRange", () => {
     });
 
     expect(result.rowIds).toEqual(["m-1", "m-2"]);
+    expect(result.incompleteRowIds).toEqual([]);
     expect(result.reachedEnd).toBe(true);
   });
 
@@ -495,9 +497,11 @@ describe("the frame ceiling", () => {
 function tailBudgetFor(
   rows: ReadonlyArray<{ rowId: string; records: readonly Message[] }>,
 ): number {
-  return rows.reduce(
-    (total, row) => total + rowCost(row.rowId, row.records),
-    0,
+  const incompleteRowIdsFixedBytes =
+    Buffer.byteLength(JSON.stringify("incompleteRowIds"), "utf8") + 4;
+  return (
+    incompleteRowIdsFixedBytes +
+    rows.reduce((total, row) => total + rowCost(row.rowId, row.records), 0)
   );
 }
 
@@ -525,20 +529,19 @@ function tail(
  */
 describe("sliceTranscriptTail", () => {
   it("takes the last rows that fit, not the first", () => {
-    const result = tail(
-      THREE_ROWS,
-      THREE,
-      [],
-      tailBudgetFor([
-        { rowId: "m-1", records: [M1] },
-        { rowId: "m-2", records: [M2] },
-      ]),
-    );
+    const exactBudget = tailBudgetFor([
+      { rowId: "m-1", records: [M1] },
+      { rowId: "m-2", records: [M2] },
+    ]);
+    const result = tail(THREE_ROWS, THREE, [], exactBudget);
 
     expect(result.rowIds).toEqual(["m-1", "m-2"]);
     expect(result.fromOrdinal).toBe(1);
     expect(result.messages.map((message) => message.messageId)).toEqual([
       "m-1",
+      "m-2",
+    ]);
+    expect(tail(THREE_ROWS, THREE, [], exactBudget - 1).rowIds).toEqual([
       "m-2",
     ]);
   });
@@ -827,6 +830,7 @@ describe("a row's records are enumerated, not inferred", () => {
     );
 
     expect(slice.rowIds).toEqual(["assistant:t-1"]);
+    expect(slice.incompleteRowIds).toEqual([]);
     expect(slice.events.map((event) => event.eventId)).toEqual(["e-1"]);
     expect(slice.messages.map((message) => message.messageId)).toEqual(["m-1"]);
   });
@@ -854,6 +858,7 @@ describe("a row's records are enumerated, not inferred", () => {
     );
 
     expect(slice.rowIds).toEqual(["assistant:t-1"]);
+    expect(slice.incompleteRowIds).toEqual(["assistant:t-1"]);
     expect(slice.messages).toEqual([]);
   });
 });
