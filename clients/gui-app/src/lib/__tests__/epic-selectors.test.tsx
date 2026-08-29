@@ -12,6 +12,7 @@ import {
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
 import {
+  epicNodeRefForNodeId,
   useEpicArtifactRecords,
   useEpicChatHarnessId,
   useEpicAgentRoleClaims,
@@ -272,26 +273,38 @@ describe("useEpicChatHarnessId", () => {
 });
 
 describe("useEpicArtifactRecords", () => {
-  it("stamps chat and artifact records with the SESSION handle's host, not the app-wide addressable one", () => {
-    // During an A→B re-point the A-backed Epic stays rendered while the
-    // addressable host already answers B; every record stamped here is copied
-    // by its consumers (`AgentReferenceChip`, the route-focus opener) into a
-    // tile ref bound for life. The fallback is the handle's own host.
+  it("preserves a persisted chat owner and uses the SESSION host only as its legacy fallback", () => {
     const handle = createHandle("epic-records-host");
     handleHostIds.set(handle, "host-session");
     handle.store.setState({
       chats: {
-        allIds: ["chat-1"],
-        byId: { "chat-1": chat("chat-1", "claude") },
+        allIds: ["owned-chat", "legacy-chat"],
+        byId: {
+          "owned-chat": chat("owned-chat", "claude"),
+          "legacy-chat": {
+            ...chat("legacy-chat", "claude"),
+            hostId: null,
+          },
+        },
       },
     });
     const { result } = renderHook(() => useEpicArtifactRecords(), {
       wrapper: openEpicWrapper(handle),
     });
 
-    const record = result.current.find((row) => row.id === "chat-1");
-    expect(record).toBeDefined();
-    expect(record?.hostId).toBe("host-session");
+    expect(result.current.find((row) => row.id === "owned-chat")?.hostId).toBe(
+      "host-a",
+    );
+    expect(result.current.find((row) => row.id === "legacy-chat")?.hostId).toBe(
+      "host-session",
+    );
+    expect(
+      epicNodeRefForNodeId(
+        handle.store.getState(),
+        "owned-chat",
+        "host-session",
+      )?.hostId,
+    ).toBe("host-a");
   });
 });
 

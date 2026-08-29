@@ -51,16 +51,9 @@ function SwitcherChatIcon(props: {
   readonly nodeId: string;
 }) {
   const harnessId = useEpicChatHarnessId(props.nodeId);
-  // The row's OWN owner host, off the chat projection - the same source the
-  // desktop row reads. NOT the `hostId` on `useEpicArtifactRecords()`, which
-  // stamps chat rows with the app-wide ACTIVE host (`recordForChat`'s
-  // `fallbackHostId`; only TUI records carry a real owner). A retained epic tab
-  // bound to host A while the user switches the active host to B would hand
-  // this icon B, which misses the A-bound session handle and reads the
-  // indicator response's `byOriginHostId[B]` - so the ladder, the access
-  // snapshot, and the session's own run status all silently vanish while
-  // epic awareness can still look live. `null` (a legacy chat with no
-  // projected host) is a value `ChatProgressIcon` handles: no session to read,
+  // Read the owner directly from the projection so legacy chats remain null
+  // instead of inheriting the session-host fallback used by openable tree
+  // records. `null` is a value `ChatProgressIcon` handles: no session to read,
   // and the indicator falls back to the surface aggregate.
   const ownerHostId = useEpicNodeHostId(props.nodeId);
   return (
