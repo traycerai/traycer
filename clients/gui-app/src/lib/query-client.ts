@@ -4,10 +4,14 @@ import {
   QueryClient,
   type QueryKey,
 } from "@tanstack/react-query";
-import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   appLogger,
-  describeLogErrorSummary,
+  describeLogError,
+  type AppLogFields,
   type AppLogValue,
 } from "@/lib/logger";
 import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
@@ -38,7 +42,7 @@ export function createAppQueryClient(): QueryClient {
           failureCount: query.state.fetchFailureCount,
           fetchStatus: query.state.fetchStatus,
           status: query.state.status,
-          error: describeLogErrorSummary(error),
+          error: describeRequestError(error),
         });
       },
     }),
@@ -48,7 +52,7 @@ export function createAppQueryClient(): QueryClient {
           mutationKey: summarizeQueryKey(mutation.options.mutationKey ?? []),
           failureCount: mutation.state.failureCount,
           status: mutation.state.status,
-          error: describeLogErrorSummary(error),
+          error: describeRequestError(error),
         });
       },
     }),
@@ -89,6 +93,55 @@ export function createAppQueryClient(): QueryClient {
 }
 
 export const queryClient = createAppQueryClient();
+
+/**
+ * The app-wide catch-all for failed host RPCs, so this is the ONE log line most
+ * support reports carry about a failure.
+ *
+ * It used to record `describeLogErrorSummary`, which keeps the error's name and
+ * replaces its text with `messageLength` - a number. That reduced every report
+ * to `{ name: "HostRpcError", messageLength: 198, stack: null }`, which
+ * identifies nothing: two unrelated failures with equal-length messages are
+ * indistinguishable, and no failure can be diagnosed at all.
+ *
+ * Privacy, stated precisely. `redactLogText` (inside `describeLogError`) is a
+ * CREDENTIAL scrubber - Authorization/Bearer/Cookie/digest/AWS4/userinfo and
+ * sensitive query params, then a 1000-char truncation. It does NOT remove
+ * filesystem paths, submitted URLs, or other request-derived text, and a host
+ * RPC message can interpolate any of those. Do not cite it as though it made
+ * arbitrary text safe. What justifies the full message here is the destination
+ * and the existing convention, not the scrubber:
+ *
+ * - it lands in a LOCAL log file (`console.warn` -> the desktop shell's
+ *   `console-message` handler -> `traycer-desktop.log`); there is no telemetry
+ *   sink on this path;
+ * - the support bundle that log feeds already tails the HOST's own log
+ *   (`diagnostics.logs.tail`), which carries absolute paths by construction, so
+ *   summarizing here removes nothing from what a report actually ships;
+ * - full message + stack is already this renderer's default - `appLogger.error`
+ *   and every nested `Error` go through `describeLogError` unconditionally.
+ *
+ * A new sink for these logs (telemetry, auto-upload) invalidates the first two
+ * and this call site must be revisited with it.
+ *
+ * `describeLogErrorSummary` remains correct where the message can quote the
+ * USER - see `interview-draft-store`, whose `JSON.parse` failures echo a
+ * fragment of the person's own draft. Do not sweep that call site.
+ */
+function describeRequestError(error: unknown): AppLogFields {
+  const described = describeLogError(error);
+  if (!(error instanceof HostRpcError)) {
+    return described;
+  }
+  // Structured attribution the message text does not carry, and which was
+  // previously dropped entirely.
+  return {
+    ...described,
+    code: error.code,
+    method: error.method,
+    requestId: error.requestId,
+  };
+}
 
 function summarizeQueryKey(queryKey: QueryKey): AppLogValue {
   return queryKey.slice(0, 4).map((part) => {
