@@ -3,7 +3,6 @@ import {
   createMainBridgeEndpoint,
   type MainBridgeEndpoint,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
-import { stubMainCallHandlers } from "@traycer-clients/shared/replica-runtime/worker/test-support/stub-main-call-handlers";
 import {
   createFakeBridgePair,
   type FakeBridgePair,
@@ -29,7 +28,7 @@ interface HostFixture {
 function createFixture(): HostFixture {
   const pair = createFakeBridgePair("sync");
   const host = startEpicRuntimeWorkerHost(pair.worker);
-  const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
+  const main = createMainBridgeEndpoint(pair.main);
   return { pair, main, host };
 }
 
@@ -46,12 +45,7 @@ function bootstrap(protocolVersion: number): {
 } {
   return {
     kind: "bootstrap",
-    bootstrap: {
-      protocolVersion,
-      hostId: "host-1",
-      userId: "user-1",
-      windowLabel: "test-window",
-    },
+    bootstrap: { protocolVersion, windowLabel: "test-window" },
   };
 }
 
@@ -103,50 +97,6 @@ describe("startEpicRuntimeWorkerHost", () => {
     const events = workerEvents(pair);
     expect(events.filter((event) => event.kind === "fatal")).toHaveLength(1);
     expect(events.filter((event) => event.kind === "ready")).toHaveLength(0);
-    host.shutdown();
-    main.dispose();
-  });
-
-  it("holds a bearer push received before bootstrap and clears it on absent", async () => {
-    const { main, host } = createFixture();
-
-    main.emit(
-      {
-        kind: "bearer",
-        bearer: { state: "present", token: "token", userId: "user-1" },
-      },
-      [],
-    );
-    await expect(main.call("bearer/probe", {}, [])).resolves.toEqual({
-      state: "present",
-      userId: "user-1",
-    });
-
-    // The handshake arriving afterwards must not disturb what is held. The
-    // spawner sends bootstrap first in production, so a holder that reset on
-    // bootstrap would look fine there and lose the credential only in the
-    // ordering nobody exercises.
-    main.emit(
-      {
-        kind: "bootstrap",
-        bootstrap: {
-          protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION,
-          hostId: "host-1",
-          userId: "user-1",
-          windowLabel: "window-1",
-        },
-      },
-      [],
-    );
-    await expect(main.call("bearer/probe", {}, [])).resolves.toEqual({
-      state: "present",
-      userId: "user-1",
-    });
-
-    main.emit({ kind: "bearer", bearer: { state: "absent" } }, []);
-    await expect(main.call("bearer/probe", {}, [])).resolves.toEqual({
-      state: "absent",
-    });
     host.shutdown();
     main.dispose();
   });

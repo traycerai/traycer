@@ -8,37 +8,42 @@
  *     worker produces for the UI is an event (projections, patches, logs),
  *     because a projection is a broadcast to whoever is listening and has no
  *     reply.
- *   - CALLS travel BOTH ways, but not symmetrically in scale. The main thread
- *     asks the worker for anything the replica knows. The worker asks the main
- *     thread for exactly TWO things, and the count is the contract.
+ *   - CALLS travel ONE way: the main thread asks the worker for what the
+ *     replica knows. The worker asks the main thread for NOTHING, and that is
+ *     DERIVED rather than assumed - it was assumed once, and wrongly.
  *
- *     The original rule here said "nothing the worker needs is answerable only
- *     by the main thread". That was false, and the transport is where it broke:
- *     `StreamAuthRevalidator` revalidates through the SAME single-flight unary
- *     RPC uses (13 consumers share the instance), and the host-credential mint
- *     is an app-wide single-flight per hostId whose whole purpose is that
- *     concurrent mints cannot supersede one another and leave the host holding
- *     nothing. Those two must stay app-wide, so they are CALLED rather than
- *     copied - a second instance in each worker is the bug they exist to
- *     prevent.
+ *     Two worker->main calls lived here (`main/auth-revalidate`,
+ *     `main/mint-credential`) because the plan was to move the SOCKET into the
+ *     worker, which would have needed the app-wide single-flights the socket
+ *     depends on. That plan was withdrawn: `buildHostStreamClient`'s remote
+ *     branch reaches a module-scoped process-wide `RemoteSession` cache, so a
+ *     worker importing it opens a second Noise session and relay socket per
+ *     (hostId, userId) - and mobile is remote-only. The transport stays on
+ *     main and the worker holds an `IStreamClient` PROXY over this bridge
+ *     instead; see `stream-proxy-protocol.ts`.
  *
- *     Everything else the worker needs is a value, a push, or an event:
- *     `target`/`userId` ride the bootstrap, the bearer and the dialable
- *     endpoint are pushed on change, and recovery evidence travels outward as
- *     an event. A THIRD worker->main call must not appear without a paragraph
- *     like this one justifying it, and `MAIN_CALL_KINDS` pins the count.
+ *     Every member of that proxy is an event or a push, because every
+ *     worker->main member of `IStreamClient` / `IStreamSession` returns `void`
+ *     and the two returning a session return one the worker builds itself. The
+ *     count is therefore zero, and machinery for a direction with no members is
+ *     deleted rather than kept behind a pin asserting nothing travels on it.
+ *     A worker->main CALL must not reappear without a paragraph here naming the
+ *     synchronous main-thread-only fact that forced it.
  *
  * Payloads are structured-clone values only. Nothing here may carry a live
  * `Y.Doc`, an `Awareness`, a function, or a class instance - a `DataCloneError`
  * from `postMessage` surfaces at the boundary with no indication of which field
  * caused it.
  */
-import type { RevalidateOutcome } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type {
-  HostCredentialMintOutcome,
-  HostCredentialMintRequest,
-} from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
-import type { HostTransportEndpoint } from "@traycer-clients/shared/host-transport/host-messenger";
+  StreamProxyFrame,
+  StreamProxyManifest,
+  StreamProxyOpen,
+  StreamProxyParams,
+  StreamProxySessionVersion,
+  StreamProxyStatus,
+  StreamProxyStreamRef,
+} from "./stream-proxy-protocol";
 import type { SendOutcome } from "../adapter";
 import type { RuntimeLogFields } from "../runtime-environment";
 
@@ -76,24 +81,6 @@ export interface RuntimeWorkerBootstrap {
   readonly windowLabel: string;
 }
 
-/**
- * The bearer as the worker sees it.
- *
- * A discriminated union rather than `token: string | null`, so "signed out" is
- * a state a sender has to name. The synchronous `getBearerToken()` the
- * transport calls cannot cross a thread boundary, so the worker holds a
- * replica of the token and the main thread keeps it current; a nullable field
- * would let a caller push `null` meaning "unchanged" and leave the worker
- * dialing with a token nobody intended.
- */
-export type BearerPush =
-  | {
-      readonly state: "present";
-      readonly token: string;
-      readonly userId: string;
-    }
-  | { readonly state: "absent" };
-
 export interface RuntimeWorkerLogEntry {
   readonly level: "debug" | "warn" | "error";
   readonly message: string;
@@ -112,25 +99,25 @@ export interface RuntimeWorkerLogEntry {
 
 export type MainToWorkerEvent =
   | { readonly kind: "bootstrap"; readonly bootstrap: RuntimeWorkerBootstrap }
-  | { readonly kind: "bearer"; readonly bearer: BearerPush }
+  | { readonly kind: "stream/frame"; readonly frame: StreamProxyFrame }
   | {
       /**
-       * The dialable endpoint for this worker's host, as the directory sees it
-       * right now.
-       *
-       * A PUSH rather than a call, because `HostEndpointProvider` is read
-       * synchronously inside a dial: the worker holds the last value and
-       * answers from it. The main thread subscribes the directory and pushes
-       * on a genuine endpoint MOVE; the transport's own filtering for what
-       * counts as a move travels with the transport unchanged.
-       *
-       * `null` means "not dialable right now" - a host with no websocket URL,
-       * or a confirmed transport refusal - which is exactly what
-       * `dialableHostEndpoint` already answers, and what the transport already
-       * treats as "do not dial".
+       * The per-session negotiated version, pushed BEFORE the status transition
+       * it belongs to. A push and not a call because the worker's read
+       * (`getNegotiatedSchemaVersion`) is synchronous.
        */
-      readonly kind: "endpoint";
-      readonly endpoint: HostTransportEndpoint | null;
+      readonly kind: "stream/session-version";
+      readonly version: StreamProxySessionVersion;
+    }
+  | { readonly kind: "stream/status"; readonly status: StreamProxyStatus }
+  | {
+      /**
+       * Client-wide versions, per-method support, and the doc arm - one event
+       * because all three are read off the same negotiated manifest and move on
+       * the same edge.
+       */
+      readonly kind: "stream/manifest";
+      readonly manifest: StreamProxyManifest;
     }
   | { readonly kind: "shutdown" };
 
@@ -161,16 +148,16 @@ export type WorkerToMainEvent =
     }
   | {
       /**
-       * This worker's transport reached a host it had previously lost.
-       *
-       * Fire-and-forget evidence for the selection authority, which lives on
-       * the main thread. An EVENT and not a call because nothing is answered
-       * and nothing waits: the worker does not care what the authority does
-       * with it. Payload-free - the host is fixed at bootstrap, exactly as the
-       * main-thread `notifyRecoveredForNamedHost` captured it at open time.
+       * Open one subscription. The `streamId` is the WORKER's, which is what
+       * lets `subscribe` return a session synchronously with no reply.
        */
-      readonly kind: "host-recovered";
+      readonly kind: "stream/open";
+      readonly open: StreamProxyOpen;
     }
+  | { readonly kind: "stream/params"; readonly params: StreamProxyParams }
+  | { readonly kind: "stream/send"; readonly frame: StreamProxyFrame }
+  | { readonly kind: "stream/reconnect"; readonly stream: StreamProxyStreamRef }
+  | { readonly kind: "stream/close"; readonly stream: StreamProxyStreamRef }
   | {
       /**
        * The worker failed in a way it cannot continue from.
@@ -193,22 +180,6 @@ export type WorkerToMainEvent =
  * member without its response arm does not compile.
  */
 export interface RuntimeWorkerCallMap {
-  /**
-   * What bearer does the worker currently hold?
-   *
-   * The push is one-way and fire-and-forget, which means "the main thread sent
-   * it" and "the worker is dialing with it" are different facts. This is the
-   * second one, and it is the only way to observe it from outside - the
-   * transport reads the holder synchronously, deep inside a dial.
-   *
-   * Answers the identity, never the token: a bearer that crosses back to the
-   * main thread has been copied for no reason, and a diagnostic is the last
-   * place a credential should be reachable from.
-   */
-  readonly "bearer/probe": {
-    readonly request: Record<string, never>;
-    readonly response: BearerProbe;
-  };
   /**
    * Content-addressed attachment bytes out of the worker-held root replica.
    *
@@ -306,187 +277,6 @@ export interface RuntimeWorkerCallMap {
  */
 export type ArtifactBodySeedMode = "full" | "delta-against-offer";
 
-/**
- * The calls the WORKER may issue to the main thread. Exactly two, forever
- * unless the header's paragraph is extended.
- *
- * Both are app-wide single-flights that must not be copied per worker, and
- * both are on the recovery path rather than the hot path - a dial that lost
- * its credential, and a host that needs one minted. Neither is reached while
- * frames are flowing, which is what keeps this from re-creating the stall the
- * relocation removes.
- *
- * The response types are the CONTRACT's own (`RevalidateOutcome`,
- * `HostCredentialMintOutcome`), imported rather than restated: a copy here
- * would drift from the thing that actually produces them.
- */
-export interface MainCallMap {
-  /**
-   * Revalidate the credential after the host refused an open frame.
-   *
-   * Answered on the main thread by THE existing `StreamAuthRevalidator` - the
-   * same single-flight unary RPC shares. A worker holding its own would mint
-   * a refresh per open epic on one expiry.
-   */
-  readonly "main/auth-revalidate": {
-    readonly request: Record<string, never>;
-    readonly response: { readonly outcome: RevalidateOutcome };
-  };
-  /**
-   * Mint a device credential for a connected host that reports it has none.
-   *
-   * Answered by THE existing app-wide flow, single-flighted per hostId. The
-   * outcome carries tokens, which is why it crosses at all: the transport that
-   * needs them is in the worker. It is the one payload on this bridge that is
-   * credential-bearing, and it travels only in answer to a call the worker
-   * made.
-   */
-  readonly "main/mint-credential": {
-    readonly request: { readonly mint: HostCredentialMintRequest };
-    readonly response: { readonly outcome: HostCredentialMintOutcome };
-  };
-}
-
-export type MainCallKind = keyof MainCallMap;
-
-export type MainCallRequest<K extends MainCallKind> = MainCallMap[K]["request"];
-export type MainCallResponse<K extends MainCallKind> =
-  MainCallMap[K]["response"];
-
-/**
- * The one place a worker->main call kind is written as a VALUE.
- *
- * A mapped type over {@link MainCallKind}, so the compiler checks it in both
- * directions: a member added to {@link MainCallMap} without a line here is a
- * missing property, and a line here naming a kind the map does not have is an
- * excess property on an object literal. Neither compiles.
- */
-const MAIN_CALL_KIND_COVERAGE: { readonly [K in MainCallKind]: true } = {
-  "main/auth-revalidate": true,
-  "main/mint-credential": true,
-};
-
-/**
- * The worker->main call kinds, enumerated as a value, DERIVED from the record
- * above rather than written a second time.
- *
- * A runtime list is what makes the count pinnable - the ruling is "two, and a
- * third needs its own paragraph", and a type alone cannot be asserted on. But a
- * hand-written array beside a coverage record is two lists and only one of them
- * is checked: TypeScript cannot verify that an array's ELEMENTS exhaust a union
- * (`readonly MainCallKind[]` is satisfied by `[]`), so a third member added to
- * the map and the record but not the array leaves the count pin green at two
- * while the union is three - the pin reporting the answer it was written to
- * catch.
- *
- * Deriving removes the second list. The predicate narrows rather than asserts:
- * every key `Object.keys` returns for this object is an own enumerable property
- * of a record whose type has exactly the union's keys, and the object is a
- * `const` literal that is never mutated, so the claim it makes is the one the
- * type already states.
- */
-export const MAIN_CALL_KINDS: readonly MainCallKind[] = Object.keys(
-  MAIN_CALL_KIND_COVERAGE,
-).filter((key): key is MainCallKind =>
-  Object.hasOwn(MAIN_CALL_KIND_COVERAGE, key),
-);
-
-export type MainCall = {
-  [K in MainCallKind]: {
-    readonly kind: K;
-    readonly request: MainCallRequest<K>;
-  };
-}[MainCallKind];
-
-const MAIN_CALL_BUILDERS: {
-  readonly [K in MainCallKind]: (request: MainCallRequest<K>) => MainCall;
-} = {
-  "main/auth-revalidate": (request) => ({
-    kind: "main/auth-revalidate",
-    request,
-  }),
-  "main/mint-credential": (request) => ({
-    kind: "main/mint-credential",
-    request,
-  }),
-};
-
-export function buildMainCall<K extends MainCallKind>(
-  kind: K,
-  request: MainCallRequest<K>,
-): MainCall {
-  return MAIN_CALL_BUILDERS[kind](request);
-}
-
-/**
- * Response parsers for the worker->main direction, for the same reason the
- * other direction has them: the pending table is keyed by call id and cannot
- * carry each entry's response type.
- */
-export const MAIN_CALL_RESPONSE_PARSERS: {
-  readonly [K in MainCallKind]: (value: unknown) => MainCallResponse<K> | null;
-} = {
-  "main/auth-revalidate": (value) => {
-    if (!isRecord(value)) return null;
-    const outcome = value.outcome;
-    // The contract's three, spelled out. Writing them by hand is the point: a
-    // member added upstream fails this parser rather than silently arriving as
-    // an outcome the transport does not handle.
-    return outcome === "rotated" ||
-      outcome === "rejected" ||
-      outcome === "network-error"
-      ? { outcome }
-      : null;
-  },
-  "main/mint-credential": (value) => {
-    if (!isRecord(value)) return null;
-    const parsed = parseMintOutcome(value.outcome);
-    return parsed === null ? null : { outcome: parsed };
-  },
-};
-
-/**
- * Narrows a mint outcome without asserting.
- *
- * Three arms, each rebuilt field by field. Verbose next to a cast, and the
- * verbosity is what makes it a check: the `provisioned` arm carries a token
- * and a refresh token, and a payload that merely *claimed* to be provisioned
- * while missing them would otherwise reach the transport as a credential it
- * cannot use.
- */
-function parseMintOutcome(value: unknown): HostCredentialMintOutcome | null {
-  if (!isRecord(value)) return null;
-  if (value.kind === "unavailable") return { kind: "unavailable" };
-  if (value.kind === "pending-elsewhere") {
-    return typeof value.retryAfterMs === "number"
-      ? { kind: "pending-elsewhere", retryAfterMs: value.retryAfterMs }
-      : null;
-  }
-  if (value.kind !== "provisioned") return null;
-  const { token, refreshToken, familyId, provisionedAt, expiresIn } = value;
-  if (
-    typeof token !== "string" ||
-    typeof refreshToken !== "string" ||
-    typeof familyId !== "string" ||
-    typeof provisionedAt !== "string" ||
-    typeof expiresIn !== "number"
-  ) {
-    return null;
-  }
-  return {
-    kind: "provisioned",
-    token,
-    refreshToken,
-    familyId,
-    provisionedAt,
-    expiresIn,
-  };
-}
-
-export type BearerProbe =
-  | { readonly state: "present"; readonly userId: string }
-  | { readonly state: "absent" };
-
 export type RuntimeWorkerCallKind = keyof RuntimeWorkerCallMap;
 
 export type RuntimeWorkerCallRequest<K extends RuntimeWorkerCallKind> =
@@ -517,8 +307,8 @@ export type RuntimeWorkerCallByKind = {
  * A call as it travels: the kind and its request, in one clonable value.
  *
  * Distributed over the map's keys so `kind` and `request` stay correlated
- * inside the union - a frame naming `"attachment/read"` cannot carry the
- * bearer probe's request.
+ * inside the union - a frame naming `"attachment/read"` cannot carry
+ * `body/demote`'s request.
  */
 export type RuntimeWorkerCall = RuntimeWorkerCallByKind[RuntimeWorkerCallKind];
 
@@ -540,7 +330,6 @@ const CALL_BUILDERS: {
     request: RuntimeWorkerCallRequest<K>,
   ) => RuntimeWorkerCallByKind[K];
 } = {
-  "bearer/probe": (request) => ({ kind: "bearer/probe", request }),
   "attachment/read": (request) => ({ kind: "attachment/read", request }),
   "body/materialize": (request) => ({ kind: "body/materialize", request }),
   "body/demote": (request) => ({ kind: "body/demote", request }),
@@ -578,12 +367,6 @@ export type MainToWorkerFrame =
       readonly frame: "call";
       readonly callId: number;
       readonly call: RuntimeWorkerCall;
-    }
-  | {
-      /** The main thread ANSWERING a worker->main call. */
-      readonly frame: "main-result";
-      readonly callId: number;
-      readonly result: BridgeCallResult<MainCallResponse<MainCallKind>>;
     };
 
 export type WorkerToMainFrame =
@@ -594,17 +377,6 @@ export type WorkerToMainFrame =
       readonly result: BridgeCallResult<
         RuntimeWorkerCallResponse<RuntimeWorkerCallKind>
       >;
-    }
-  | {
-      /**
-       * The worker ASKING the main thread. Exactly two kinds - see
-       * {@link MainCallMap}. Its own frame tag rather than reusing `"call"`,
-       * so a reader of either union never has to work out which direction a
-       * `call` frame was travelling.
-       */
-      readonly frame: "main-call";
-      readonly callId: number;
-      readonly call: MainCall;
     };
 
 /**
@@ -623,9 +395,6 @@ export function isMainToWorkerFrame(
 ): value is MainToWorkerFrame {
   if (!isRecord(value)) return false;
   if (value.frame === "event") return isRecord(value.event);
-  if (value.frame === "main-result") {
-    return typeof value.callId === "number" && isRecord(value.result);
-  }
   return (
     value.frame === "call" &&
     typeof value.callId === "number" &&
@@ -639,13 +408,6 @@ export function isWorkerToMainFrame(
 ): value is WorkerToMainFrame {
   if (!isRecord(value)) return false;
   if (value.frame === "event") return isRecord(value.event);
-  if (value.frame === "main-call") {
-    return (
-      typeof value.callId === "number" &&
-      isRecord(value.call) &&
-      typeof value.call.kind === "string"
-    );
-  }
   return (
     value.frame === "result" &&
     typeof value.callId === "number" &&
@@ -673,14 +435,6 @@ export const CALL_RESPONSE_PARSERS: {
     value: unknown,
   ) => RuntimeWorkerCallResponse<K> | null;
 } = {
-  "bearer/probe": (value) => {
-    if (!isRecord(value)) return null;
-    if (value.state === "absent") return { state: "absent" };
-    if (value.state === "present" && typeof value.userId === "string") {
-      return { state: "present", userId: value.userId };
-    }
-    return null;
-  },
   "attachment/read": (value) => {
     if (!isRecord(value)) return null;
     if (value.bytes === null) return { bytes: null };

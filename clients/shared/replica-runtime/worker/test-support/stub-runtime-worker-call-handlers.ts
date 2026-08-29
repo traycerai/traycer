@@ -2,8 +2,7 @@
  * The worker's answers before a composition root is installed - nothing
  * available, and a demote REFUSED - for suites whose subject is something else.
  *
- * The same collapse as {@link stubMainCallHandlers} on the other direction, and
- * it moved here from `bridge-endpoint.test.ts` when a second suite needed to
+ * It moved here from `bridge-endpoint.test.ts` when a second suite needed to
  * stand up a real worker endpoint. A copy in each suite is how two "identical"
  * fixtures come to disagree about what a no-core worker answers, which then
  * reads as a behavioural difference between the things under test.
@@ -20,8 +19,6 @@ export function stubRuntimeWorkerCallHandlers(
   overrides: Partial<RuntimeWorkerCallHandlers>,
 ): RuntimeWorkerCallHandlers {
   const base: RuntimeWorkerCallHandlers = {
-    "bearer/probe": () =>
-      Promise.resolve({ value: { state: "absent" }, transfer: NO_TRANSFER }),
     "attachment/read": () =>
       Promise.resolve({ value: { bytes: null }, transfer: NO_TRANSFER }),
     "body/materialize": () =>

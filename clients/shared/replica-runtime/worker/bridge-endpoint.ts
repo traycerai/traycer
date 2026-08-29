@@ -3,16 +3,13 @@
  *
  * `postMessage` gives us an untyped pipe with no relationship between a
  * message and its reply. These endpoints turn it into the two things the
- * runtime actually needs: a typed event stream in both directions, and
- * request/response calls with real promise semantics - many of them from the
- * main thread into the worker, and exactly two the other way (see
- * `MainCallMap`, which owns why those two exist and why there is not a third).
+ * runtime actually needs: a typed event stream in both directions, and a
+ * request/response call from the main thread into the worker with real promise
+ * semantics.
  *
- * Both directions run the SAME correlation table and the same call-issuing
- * helper. That is not tidiness: the ordering that makes a synchronous reply
- * land (register the pending entry, then post) and the disposal that aborts
- * rather than hangs are the two things a second hand-written copy gets wrong,
- * and the second copy is the one nobody writes a pin for.
+ * Calls run ONE way. The worker asks the main thread for nothing - see
+ * `bridge-protocol.ts`'s header for why that is derived rather than assumed,
+ * and what would have to be true for a worker->main call to reappear.
  *
  * The endpoints own the correlation and the failure modes around it, because
  * those are the ones nobody writes correctly by hand on the second occasion: a
@@ -27,17 +24,11 @@
  * worker that answered nothing is not idempotent by assumption).
  */
 import {
-  buildMainCall,
   buildRuntimeWorkerCall,
   CALL_RESPONSE_PARSERS,
   isMainToWorkerFrame,
   isWorkerToMainFrame,
-  MAIN_CALL_RESPONSE_PARSERS,
   type BridgeCallResult,
-  type MainCall,
-  type MainCallKind,
-  type MainCallRequest,
-  type MainCallResponse,
   type MainToWorkerEvent,
   type MainToWorkerFrame,
   type RuntimeWorkerCall,
@@ -47,7 +38,6 @@ import {
   type WorkerToMainEvent,
   type WorkerToMainFrame,
 } from "./bridge-protocol";
-import { NO_TRANSFER } from "./transferable-bytes";
 
 /**
  * The pipe, reduced to what a `Worker`, a `MessagePort` and a worker's own
@@ -88,27 +78,6 @@ export type RuntimeWorkerCallHandlers = {
 };
 
 /**
- * The main thread's side of the two worker->main calls.
- *
- * Answers a plain response rather than a {@link BridgeReply}, and the asymmetry
- * with {@link RuntimeWorkerCallHandlers} is deliberate. Bytes travel ONE way on
- * this bridge - the replica lives in the worker, so it is the worker that hands
- * over buffers - and both main-thread answers are small scalar records. Giving
- * these handlers a transfer list would make every one of them write
- * `transfer: NO_TRANSFER` to say something that is true by construction. A
- * third main call that genuinely carried bytes would change this signature, and
- * it would arrive with the justifying paragraph `MainCallMap` already demands.
- */
-export type MainCallHandlers = {
-  readonly [K in MainCallKind]: (
-    request: MainCallRequest<K>,
-  ) => Promise<MainCallResponse<K>>;
-};
-
-/** Either direction's call kind, for errors that can be raised by both. */
-export type BridgeCallKind = RuntimeWorkerCallKind | MainCallKind;
-
-/**
  * A rejection that crossed the boundary.
  *
  * Carries the original error's `name` so a caller can still tell one failure
@@ -135,20 +104,14 @@ export class BridgeDisposedError extends Error {
 /**
  * Raised when a reply does not match the shape its call declares.
  *
- * Names the RESPONDER as well as the kind, because both directions can raise
- * it now and "the runtime worker answered badly" is a different investigation
- * from "the main thread did". The kind is kept as a field rather than only
- * being formatted into the message, so a caller can branch on it without
- * parsing prose.
+ * The kind is kept as a field rather than only being formatted into the
+ * message, so a caller can branch on it without parsing prose.
  */
 export class BridgeResponseMismatchError extends Error {
-  readonly kind: BridgeCallKind;
+  readonly kind: RuntimeWorkerCallKind;
 
-  constructor(
-    responder: "runtime worker" | "main thread",
-    kind: BridgeCallKind,
-  ) {
-    super(`The ${responder} answered '${kind}' with a foreign payload`);
+  constructor(kind: RuntimeWorkerCallKind) {
+    super(`The runtime worker answered '${kind}' with a foreign payload`);
     this.name = "BridgeResponseMismatchError";
     this.kind = kind;
   }
@@ -177,23 +140,6 @@ export interface RuntimeWorkerPort {
   ): Promise<RuntimeWorkerCallResponse<K>>;
 }
 
-/**
- * The ask half of the OTHER direction, and the only half the relocated
- * composition root is handed.
- *
- * Narrower than {@link WorkerBridgeEndpoint} for the same reason
- * {@link RuntimeWorkerPort} is narrower than {@link MainBridgeEndpoint}: the
- * event stream has one owner, and the modules that need to ask the main thread
- * something (the transport's auth recovery, its credential mint) have no
- * business emitting a projection or subscribing to a bootstrap.
- */
-export interface MainThreadPort {
-  call<K extends MainCallKind>(
-    kind: K,
-    request: MainCallRequest<K>,
-  ): Promise<MainCallResponse<K>>;
-}
-
 export interface MainBridgeEndpoint extends RuntimeWorkerPort {
   emit(event: MainToWorkerEvent, transfer: readonly ArrayBuffer[]): void;
   onEvent(listener: (event: WorkerToMainEvent) => void): () => void;
@@ -201,19 +147,10 @@ export interface MainBridgeEndpoint extends RuntimeWorkerPort {
   dispose(): void;
 }
 
-export interface WorkerBridgeEndpoint extends MainThreadPort {
+export interface WorkerBridgeEndpoint {
   emit(event: WorkerToMainEvent, transfer: readonly ArrayBuffer[]): void;
   onEvent(listener: (event: MainToWorkerEvent) => void): () => void;
-  /**
-   * Idempotent. Stops listening and REJECTS every worker->main call still
-   * outstanding; in-flight main->worker handlers are left to settle, because
-   * their answers post through a disposed transport and are dropped there.
-   *
-   * The rejection half is not symmetry for its own sake. A worker torn down
-   * mid-mint would otherwise leave the transport awaiting a credential forever,
-   * inside a worker that is about to be terminated - the hung-promise case with
-   * no log line, one thread over.
-   */
+  /** Idempotent. Stops listening; in-flight handlers are left to settle. */
   dispose(): void;
 }
 
@@ -236,21 +173,16 @@ interface PendingCall<TResponse> {
 }
 
 /**
- * The correlation table, shared by both directions.
+ * The correlation table.
  *
- * One implementation rather than two, because the parts that are easy to get
- * wrong are identical on both sides and were already written once: a reply for
- * an id that is no longer pending must be DROPPED (there is no promise left to
- * settle, and throwing inside a message listener is an unhandled error with no
- * owner), and a disposal must ABORT rather than leave promises hanging.
+ * A reply for an id that is no longer pending must be DROPPED - there is no
+ * promise left to settle, and throwing inside a message listener is an
+ * unhandled error with no owner - and a disposal must ABORT rather than leave
+ * promises hanging.
  *
- * The two directions keep SEPARATE tables with separate counters, both starting
- * at 1. That is not a collision: a main->worker call travels as `call`/`result`
- * and a worker->main call as `main-call`/`main-result`, so each side routes a
- * reply into exactly one table by frame tag before the id is ever read. Sharing
- * one counter would be the coupled alternative - and it would make each side's
- * ids depend on the other side's traffic, which is worse to reason about, not
- * better.
+ * Factored out rather than inlined because the ordering that makes a
+ * synchronous reply land (register, THEN post) and the disposal that aborts
+ * rather than hangs are the two things a hand-written copy gets wrong.
  */
 interface PendingCallTable<TResponse> {
   nextId(): number;
@@ -296,8 +228,7 @@ function createPendingCallTable<TResponse>(): PendingCallTable<TResponse> {
  * than stylistic: a synchronous transport - the in-process pair the suites
  * drive, and a same-tick `MessagePort` delivery - can deliver the reply inside
  * `post`, and a table written afterwards would find no entry and drop it as
- * stale. Having one copy of that ordering is the point of this helper; the
- * second copy is where it gets written the other way round.
+ * stale.
  */
 function issueCall<TUnion, TResponse>(args: {
   readonly table: PendingCallTable<TUnion>;
@@ -330,7 +261,6 @@ function issueCall<TUnion, TResponse>(args: {
 
 export function createMainBridgeEndpoint(
   transport: BridgeTransport,
-  handlers: MainCallHandlers,
 ): MainBridgeEndpoint {
   const listeners = new Set<(event: WorkerToMainEvent) => void>();
   const table =
@@ -350,13 +280,6 @@ export function createMainBridgeEndpoint(
       for (const listener of [...listeners]) listener(message.event);
       return;
     }
-    if (message.frame === "main-call") {
-      const { callId } = message;
-      void serveMainCall(handlers, message.call).then((result) => {
-        post({ frame: "main-result", callId, result }, NO_TRANSFER);
-      });
-      return;
-    }
     table.settle(message.callId, message.result);
   });
 
@@ -374,7 +297,7 @@ export function createMainBridgeEndpoint(
       return issueCall({
         table,
         parse,
-        mismatch: () => new BridgeResponseMismatchError("runtime worker", kind),
+        mismatch: () => new BridgeResponseMismatchError(kind),
         post: (callId) => {
           post(
             {
@@ -411,7 +334,6 @@ export function createWorkerBridgeEndpoint(
   handlers: RuntimeWorkerCallHandlers,
 ): WorkerBridgeEndpoint {
   const listeners = new Set<(event: MainToWorkerEvent) => void>();
-  const table = createPendingCallTable<MainCallResponse<MainCallKind>>();
   let disposed = false;
 
   function post(
@@ -428,10 +350,6 @@ export function createWorkerBridgeEndpoint(
       for (const listener of [...listeners]) listener(message.event);
       return;
     }
-    if (message.frame === "main-result") {
-      table.settle(message.callId, message.result);
-      return;
-    }
     const { callId } = message;
     void serve(handlers, message.call).then((reply) => {
       post({ frame: "result", callId, result: reply.result }, reply.transfer);
@@ -441,24 +359,6 @@ export function createWorkerBridgeEndpoint(
   return {
     emit(event, transfer): void {
       post({ frame: "event", event }, transfer);
-    },
-    call<K extends MainCallKind>(
-      kind: K,
-      request: MainCallRequest<K>,
-    ): Promise<MainCallResponse<K>> {
-      if (disposed) return Promise.reject(new BridgeDisposedError());
-      const parse = MAIN_CALL_RESPONSE_PARSERS[kind];
-      return issueCall({
-        table,
-        parse,
-        mismatch: () => new BridgeResponseMismatchError("main thread", kind),
-        post: (callId) => {
-          post(
-            { frame: "main-call", callId, call: buildMainCall(kind, request) },
-            NO_TRANSFER,
-          );
-        },
-      });
     },
     onEvent(listener): () => void {
       listeners.add(listener);
@@ -471,56 +371,7 @@ export function createWorkerBridgeEndpoint(
       disposed = true;
       unsubscribe();
       listeners.clear();
-      table.abortAll(new BridgeDisposedError());
     },
-  };
-}
-
-/**
- * Runs one worker->main call against the main-side handler map, and never
- * rejects - for the same reason {@link serve} does not: a rejection here is a
- * lost call, and the worker's promise would hang with nothing to settle it,
- * inside a transport that is waiting on a credential.
- *
- * The `switch` is again what correlates a request with its handler; indexing
- * the map by a union-typed key collapses the two handlers into one signature
- * whose parameter is the INTERSECTION of both request shapes, which neither
- * request satisfies. The `never` arm makes a third `MainCallMap` member fail to
- * compile here as well as at its coverage record.
- */
-async function serveMainCall(
-  handlers: MainCallHandlers,
-  call: MainCall,
-): Promise<BridgeCallResult<MainCallResponse<MainCallKind>>> {
-  try {
-    switch (call.kind) {
-      case "main/auth-revalidate": {
-        const value = await handlers["main/auth-revalidate"](call.request);
-        return { outcome: "ok", value };
-      }
-      case "main/mint-credential": {
-        const value = await handlers["main/mint-credential"](call.request);
-        return { outcome: "ok", value };
-      }
-      default:
-        return unservedMainCall(call);
-    }
-  } catch (cause: unknown) {
-    return {
-      outcome: "error",
-      name: cause instanceof Error ? cause.name : "Error",
-      message: describe(cause),
-    };
-  }
-}
-
-function unservedMainCall(
-  call: never,
-): BridgeCallResult<MainCallResponse<MainCallKind>> {
-  return {
-    outcome: "error",
-    name: "BridgeUnknownCallError",
-    message: `The main thread has no handler for ${JSON.stringify(call)}`,
   };
 }
 
@@ -550,13 +401,6 @@ async function serve(
 ): Promise<ServedReply> {
   try {
     switch (call.kind) {
-      case "bearer/probe": {
-        const reply = await handlers["bearer/probe"](call.request);
-        return {
-          result: { outcome: "ok", value: reply.value },
-          transfer: reply.transfer,
-        };
-      }
       case "attachment/read": {
         const reply = await handlers["attachment/read"](call.request);
         return {

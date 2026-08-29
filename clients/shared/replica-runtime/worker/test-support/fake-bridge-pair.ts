@@ -139,7 +139,7 @@ export function createFakeBridgePair(
       // That wait is a MACROTASK, and counting microtasks instead is what this
       // originally did - two `await Promise.resolve()` per round. It was enough
       // for the one-directional case and silently too shallow for a round trip:
-      // a `main-call` answered by an async handler inside an async `serve`
+      // a call answered by an async handler inside an async `serve`
       // needs about five ticks before its reply is posted, so the second round
       // found an empty queue, declared the pipe settled, and returned while the
       // reply was still two ticks away. The test that noticed did not report a

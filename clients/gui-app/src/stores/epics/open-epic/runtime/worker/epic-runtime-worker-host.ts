@@ -4,29 +4,26 @@
  * Everything except the two lines that reach for the ambient worker scope,
  * which live in `epic-runtime-worker-entry.ts`. The split is what makes this
  * testable: the suites drive THIS against a real bridge endpoint over a fake
- * port pair, so the frames, the correlation, the bearer holder and the
+ * port pair, so the frames, the correlation, the stream proxy and the
  * lifecycle are all the production ones - only the pipe is a stand-in.
  *
  * The composition root itself (stream clients, lane and legacy adapters, root
  * replica, projection kernel, cold tier, durable store) is not here yet. It
  * arrives through {@link EpicRuntimeWorkerHost.installCore}, which is the one
  * named seam that phase adds. Until something installs a core, the host is a
- * fully working bridge over an empty runtime: it holds the bearer and the
- * dialable endpoint, it records the bootstrap's facts, it forwards logs, and it
- * answers the reads it can answer - `{ bytes: null }` for an attachment, which
- * is the honest "not available from here" every surviving caller already
- * handles, and not a throw.
+ * fully working bridge over an empty runtime: it records the bootstrap's facts,
+ * it forwards logs, and it answers the reads it can answer - `{ bytes: null }`
+ * for an attachment, which is the honest "not available from here" every
+ * surviving caller already handles, and not a throw.
  *
- * The three things a core needs from OUTSIDE the worker are all reachable here
- * before it exists: the two holders (read synchronously, deep inside a dial),
- * `bootstrapFacts()` (the host and user it serves), and `mainThread` - the ask
- * half of the worker->main direction, which is how the relocated transport
- * reaches the two app-wide single-flights that must not be copied per worker.
+ * The two things a core needs from OUTSIDE the worker are reachable here before
+ * it exists: `bootstrapFacts()` (the host and user it serves), and `streams` -
+ * the `IStreamClient` proxy the four typed wrappers are constructed over. The
+ * socket behind it never leaves the main thread.
  */
 import {
   createWorkerBridgeEndpoint,
   type BridgeTransport,
-  type MainThreadPort,
   type RuntimeWorkerCallHandlers,
   type WorkerBridgeEndpoint,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
@@ -42,13 +39,9 @@ import {
   takeBytesForTransfer,
 } from "@traycer-clients/shared/replica-runtime/worker/transferable-bytes";
 import {
-  createWorkerBearerHolder,
-  type WorkerBearerHolder,
-} from "@traycer-clients/shared/replica-runtime/worker/worker-bearer-holder";
-import {
-  createWorkerEndpointHolder,
-  type WorkerEndpointHolder,
-} from "@traycer-clients/shared/replica-runtime/worker/worker-endpoint-holder";
+  createWorkerStreamClient,
+  type WorkerStreamClientHandle,
+} from "@traycer-clients/shared/replica-runtime/worker/worker-stream-client";
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
 import type { RuntimeEnvironment } from "@traycer-clients/shared/replica-runtime/runtime-environment";
 import { createWorkerRuntimeEnvironment } from "../worker-runtime-environment";
@@ -118,14 +111,13 @@ export interface EpicRuntimeWorkerHost {
    * before a core is installed, because building the core needs it.
    */
   readonly environment: RuntimeEnvironment;
-  readonly bearer: WorkerBearerHolder;
-  readonly endpoint: WorkerEndpointHolder;
   /**
-   * The ask half of the worker->main direction, for the relocated transport's
-   * auth recovery and credential mint. `call` only - the core has no business
-   * emitting a projection or subscribing to a bootstrap.
+   * The stream client the relocated composition root is built on: a PROXY whose
+   * frames cross the bridge while the real socket, its process-wide session
+   * cache, its wake and endpoint re-dial wiring and its credential recovery all
+   * stay on the main thread. See `stream-proxy-protocol.ts` for why.
    */
-  readonly mainThread: MainThreadPort;
+  readonly streams: WorkerStreamClientHandle;
   /**
    * What the main thread told this worker about the surface it serves, or
    * `null` before the bootstrap arrives.
@@ -135,12 +127,6 @@ export interface EpicRuntimeWorkerHost {
    * wire. The core builder is what waits for them.
    */
   bootstrapFacts(): RuntimeWorkerBootstrap | null;
-  /**
-   * Reports that this worker's transport reached a host it had lost. Travels
-   * outward as a fire-and-forget event; the selection authority that acts on it
-   * is a main-thread concern.
-   */
-  reportHostRecovered(): void;
   /**
    * Installs the relocated composition root. Called once, by the phase that
    * moves it; a second call replaces the core and disposes the previous one.
@@ -153,15 +139,11 @@ export interface EpicRuntimeWorkerHost {
 export function startEpicRuntimeWorkerHost(
   transport: BridgeTransport,
 ): EpicRuntimeWorkerHost {
-  const bearer = createWorkerBearerHolder();
-  const endpointHolder = createWorkerEndpointHolder();
   let core: EpicRuntimeWorkerCore | null = null;
   let bootstrap: RuntimeWorkerBootstrap | null = null;
   let stopped = false;
 
   const handlers: RuntimeWorkerCallHandlers = {
-    "bearer/probe": () =>
-      Promise.resolve({ value: bearer.probe(), transfer: NO_TRANSFER }),
     "attachment/read": async (request) => {
       const held =
         core === null ? null : await core.readAttachmentBytes(request.hash);
@@ -248,6 +230,12 @@ export function startEpicRuntimeWorkerHost(
   const emitLog = (entry: RuntimeWorkerLogEntry): void => {
     bridge.emit({ kind: "log", entry }, NO_TRANSFER);
   };
+  // After the bridge for the same reason the log sink is: its emit closes over
+  // a `const`, so a frame produced while the core is being built cannot vanish
+  // into a slot that is still null.
+  const streams = createWorkerStreamClient((event, transfer) => {
+    bridge.emit(event, transfer);
+  });
   const environment = createWorkerRuntimeEnvironment(emitLog);
 
   const onEvent = (event: MainToWorkerEvent): void => {
@@ -283,22 +271,6 @@ export function startEpicRuntimeWorkerHost(
           { kind: "ready", protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION },
           NO_TRANSFER,
         );
-        return;
-      }
-      case "endpoint": {
-        // Held whether or not the handshake has completed, for the bearer
-        // push's reason: an address dropped because a handshake had not
-        // finished would be failing closed for a reason that is not about
-        // addresses at all, and the main thread does not re-push on `ready`.
-        endpointHolder.apply(event.endpoint);
-        return;
-      }
-      case "bearer": {
-        // Applied whether or not `bootstrap` has been seen. The spawner sends
-        // bootstrap first and the pipe preserves order, but a holder that
-        // dropped a credential because a handshake had not completed would be
-        // failing closed for a reason that is not about credentials at all.
-        bearer.apply(event.bearer);
         return;
       }
       case "shutdown": {
@@ -341,18 +313,17 @@ export function startEpicRuntimeWorkerHost(
     const disposing = core;
     core = null;
     disposing?.dispose();
+    // Before the bridge: the closes have to reach main, and a disposed bridge
+    // drops what is posted through it. A session left open on the other side is
+    // a live subscription carrying frames nothing reads.
+    streams.disposeAll();
     bridge.dispose();
   }
 
   return {
     environment,
-    bearer,
-    endpoint: endpointHolder,
-    mainThread: bridge,
+    streams,
     bootstrapFacts: () => bootstrap,
-    reportHostRecovered(): void {
-      bridge.emit({ kind: "host-recovered" }, NO_TRANSFER);
-    },
     installCore(next): void {
       const previous = core;
       core = next;

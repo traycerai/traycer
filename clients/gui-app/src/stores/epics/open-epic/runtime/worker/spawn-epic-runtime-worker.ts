@@ -4,37 +4,35 @@
  *
  * Four jobs, in order, because each depends on the previous one:
  *
- *  1. construct the worker, put a typed endpoint over it, and give that
- *     endpoint the main side of the two worker->main calls;
- *  2. hand it the bootstrap it validates its protocol against;
- *  3. start the pumps, so the worker holds a credential AND an address before
- *     anything it owns tries to dial;
- *  4. relay what comes back - logs, a fatal, projections, and the one piece of
- *     evidence the main thread owns the decision about (host recovery).
+ *  1. construct the worker and put a typed endpoint over it;
+ *  2. build the stream proxy host over the session's REAL stream client, so
+ *     the worker's `IStreamClient` has something behind it;
+ *  3. hand it the bootstrap it validates its protocol against;
+ *  4. relay what comes back - logs, a fatal, projections, and the proxy's own
+ *     traffic.
  *
- * Order (3)-after-(2) is not load-bearing (the worker applies a push whether or
- * not it has seen the bootstrap), but order (3)-before-any-work is: a worker
- * that opened a transport before its first push would fail its first dial and
- * enter backoff for no reason.
- *
- * The two call handlers in (1) are built from instances the CALLER holds. That
- * is the whole content of the ruling behind them - both are app-wide
- * single-flights, and an app-wide single-flight that gets constructed per
- * worker is not one. See `MainCallMap` for why exactly two.
+ * The socket is NOT among those jobs, and that is the design rather than an
+ * omission: the durable transport stays exactly where it is, because
+ * `buildHostStreamClient`'s remote branch reaches a module-scoped process-wide
+ * `RemoteSession` cache and a worker copy of it is a second Noise session and
+ * relay socket per (hostId, userId). What moves is the four typed wrappers and
+ * their decode - see `stream-proxy-protocol.ts`.
  *
  * The worker constructor is INJECTED rather than called here. That is what
  * lets the suites drive a real endpoint over a fake worker; it is also what
  * keeps `new Worker(...)` out of every module a test imports, since jsdom has
  * no `Worker` at all.
  */
-import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
-import type { HostCredentialMintFlow } from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
-import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
+import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   createMainBridgeEndpoint,
-  type MainCallHandlers,
   type RuntimeWorkerPort,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
+import {
+  createStreamProxyHost,
+  type StreamProxyHost,
+} from "@traycer-clients/shared/replica-runtime/worker/stream-proxy-host";
 import {
   createRuntimeProjectionOrdering,
   type RuntimeProjectionHandlers,
@@ -49,11 +47,6 @@ import {
   type WorkerToMainEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import { NO_TRANSFER } from "@traycer-clients/shared/replica-runtime/worker/transferable-bytes";
-import {
-  startBearerPump,
-  type BearerPumpHostClient,
-} from "./epic-runtime-bearer-pump";
-import { startEndpointPump } from "./epic-runtime-endpoint-pump";
 
 /** The part of `Worker` this module uses. */
 export interface RuntimeWorkerLike extends BridgeMessageTargetLike {
@@ -74,51 +67,16 @@ export interface RuntimeWorkerLogRelay {
 
 export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
   readonly createWorker: () => RuntimeWorkerLike;
-  readonly hostClient: BearerPumpHostClient;
-  readonly relay: RuntimeWorkerLogRelay;
-  /** The host this worker's transport dials, for its whole life. */
-  readonly hostId: string;
-  /** The signed-in user the session is bound to. Also fixed for life. */
-  readonly userId: string;
   /**
-   * THE app-wide stream auth revalidator - the instance the caller already
-   * holds, never a fresh one.
+   * The session's REAL stream client, which stays on this thread.
    *
-   * This is passed rather than constructed, and the distinction is the entire
-   * reason `main/auth-revalidate` exists as a call instead of as code the
-   * worker runs. `revalidateForReconnect` is single-flighted with the same
-   * shared refresh unary RPC uses across 13 consumers; a worker that built its
-   * own would mint one refresh per open epic on a single expiry, which is the
-   * thundering herd the single-flight was written to stop.
+   * The worker gets a proxy over it, never the thing itself: the durable
+   * transport underneath reaches a module-scoped process-wide `RemoteSession`
+   * cache, so a second copy in a worker is a second Noise session and relay
+   * socket per (hostId, userId).
    */
-  readonly auth: StreamAuthRevalidator;
-  /**
-   * THE app-wide host-credential mint flow - `appHostCredentialMintFlow`.
-   *
-   * Single-flight PER HOST across the whole app, and the server supersedes
-   * older credentials on every mint, so two concurrent mints revoke each
-   * other's rows and settle as 409s - leaving the host with nothing. Its
-   * single-flight state (the attempt map, the adoption claim, the escalation
-   * ladder) lives in MODULE scope, which means a worker that imported the
-   * module would get a second copy of all of it rather than a second reference
-   * to one. That is why this crosses as a call and why nothing under the worker
-   * tree may import the provisioning module.
-   */
-  readonly mint: HostCredentialMintFlow;
-  /** The live dialable-endpoint read, pushed into the worker on change. */
-  readonly endpoint: HostEndpointProvider;
-  /** Subscribes to host-directory changes; fires on ANY change. */
-  readonly subscribeEndpointChange: (onChange: () => void) => () => void;
-  /**
-   * Called when the worker's own transport evidences THIS host recovering.
-   *
-   * Routed to `HostClient.notifyHostAvailabilityRecovered(hostId)` by the
-   * caller, exactly as the main-thread durable transport does today. An event
-   * rather than a call because nothing is answered and nothing waits: the
-   * selection authority lives on the main thread and the worker does not care
-   * what it decides.
-   */
-  readonly onHostRecovered: () => void;
+  readonly streams: IStreamClient<HostStreamRpcRegistry>;
+  /** Identifies this renderer window in the worker's log lines. */
   /**
    * What to do with published projection slices.
    *
@@ -130,7 +88,6 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
    * `accept` is the caller's, because the slice's shape is the store's.
    */
   readonly projection: RuntimeProjectionHandlers<TProjection>;
-  /** Identifies this renderer window in the worker's log lines. */
   readonly windowLabel: string;
 }
 
@@ -161,22 +118,14 @@ export function spawnEpicRuntimeWorker<TProjection>(
   options: SpawnEpicRuntimeWorkerOptions<TProjection>,
 ): EpicRuntimeWorkerHandle {
   const worker = options.createWorker();
-  // Built from the instances the CALLER holds, and from nothing else. There is
-  // no construction in this map on purpose: a `createStreamAuthRevalidator(...)`
-  // or an import of the mint module here would compile, pass every behavioural
-  // test, and quietly give each worker its own single-flight - which is the one
-  // failure both of these calls exist to prevent.
-  const mainCallHandlers: MainCallHandlers = {
-    "main/auth-revalidate": async () => ({
-      outcome: await options.auth.revalidateForReconnect(),
-    }),
-    "main/mint-credential": async (request) => ({
-      outcome: await options.mint(request.mint),
-    }),
-  };
-  const bridge = createMainBridgeEndpoint(
-    createMessageTargetTransport(worker),
-    mainCallHandlers,
+  const bridge = createMainBridgeEndpoint(createMessageTargetTransport(worker));
+  // The proxy host owns the REAL sessions the worker opens. It is the object
+  // this side detaches, not the socket.
+  const proxy: StreamProxyHost = createStreamProxyHost(
+    options.streams,
+    (event, transfer) => {
+      bridge.emit(event, transfer);
+    },
   );
 
   let settleReady: (() => void) | null = null;
@@ -206,8 +155,15 @@ export function spawnEpicRuntimeWorker<TProjection>(
       case "projection":
         projections.deliver(event.revision, event.value);
         return;
-      case "host-recovered":
-        options.onHostRecovered();
+      case "stream/open":
+      case "stream/params":
+      case "stream/send":
+      case "stream/reconnect":
+      case "stream/close":
+        // Every unknown id is dropped inside the host, silently and on purpose:
+        // a frame can be in flight when a session closes, and a throw here is
+        // an unhandled error in a `message` listener with no route back.
+        proxy.handle(event);
         return;
       case "fatal":
         options.relay.fatal(event.message, event.stack);
@@ -226,44 +182,11 @@ export function spawnEpicRuntimeWorker<TProjection>(
       kind: "bootstrap",
       bootstrap: {
         protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION,
-        hostId: options.hostId,
-        userId: options.userId,
         windowLabel: options.windowLabel,
       },
     },
     NO_TRANSFER,
   );
-
-  const stopEndpointPump = startEndpointPump({
-    endpoint: options.endpoint,
-    subscribeEndpointChange: options.subscribeEndpointChange,
-    push: (endpoint) => {
-      bridge.emit({ kind: "endpoint", endpoint }, NO_TRANSFER);
-    },
-    onReadFailure: (cause) => {
-      options.relay.log({
-        level: "error",
-        message: "[epic-runtime-worker] endpoint read failed; pushed null",
-        fields: { windowLabel: options.windowLabel },
-        error: cause instanceof Error ? cause.message : String(cause),
-      });
-    },
-  });
-
-  const stopPump = startBearerPump({
-    hostClient: options.hostClient,
-    push: (bearer) => {
-      bridge.emit({ kind: "bearer", bearer }, NO_TRANSFER);
-    },
-    onReadFailure: (cause) => {
-      options.relay.log({
-        level: "error",
-        message: "[epic-runtime-worker] bearer read failed; pushed absent",
-        fields: { windowLabel: options.windowLabel },
-        error: cause instanceof Error ? cause.message : String(cause),
-      });
-    },
-  });
 
   let disposed = false;
   return {
@@ -272,17 +195,16 @@ export function spawnEpicRuntimeWorker<TProjection>(
     dispose(): void {
       if (disposed) return;
       disposed = true;
-      // Pumps first: a push landing after the endpoint is disposed is dropped
-      // silently, and a credential quietly going nowhere is the wrong last
-      // thing to happen on this bridge.
-      stopPump();
-      stopEndpointPump();
       unsubscribeEvents();
       // Ask before killing. `shutdown` lets the worker dispose its own core -
       // a durable store mid-write, a transport mid-close - whereas
       // `terminate()` stops it between two machine instructions.
       bridge.emit({ kind: "shutdown" }, NO_TRANSFER);
       bridge.dispose();
+      // Every real session this worker opened, closed here. A worker that was
+      // terminated mid-life never sends its own closes, and a session left
+      // subscribed is a socket carrying frames nothing reads.
+      proxy.dispose();
       // Nothing waits on the shutdown being observed: a worker that stopped
       // answering is exactly the case `terminate()` is for, and holding the
       // window open on it would make disposal depend on the health of the
