@@ -301,11 +301,13 @@ describe("SwitcherBrowsersList", () => {
     // collapse them.
     openTab.mockImplementation(() => new Promise(() => undefined));
     renderList(() => undefined);
-    const add = screen.getByRole("button", { name: "Add browser" });
+    const add = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Add browser",
+    });
 
     await user.click(add);
     await waitFor(() => {
-      expect(add.hasAttribute("disabled")).toBe(true);
+      expect(add.disabled).toBe(true);
     });
     await user.click(add);
 
