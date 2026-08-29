@@ -2615,6 +2615,69 @@ describe("stale spans", () => {
     expect(touchTranscriptRange(atTail, null)).toBe(atTail);
   });
 
+  it("keeps a held copy whose image resolved after the serve was sliced", () => {
+    // `image_resolution.updated` rewrites `imageResolutions` and the runtime
+    // accumulator advances `blocksVersion` only for BLOCK changes, so a range
+    // sliced before the image update TIES on version. A tie reads as "not
+    // ahead", which hands the row back to the older served copy - and the
+    // resolved image regresses permanently, because the row stays hydrated and
+    // leaves no gap for the planner.
+    const settled = {
+      ...assistantMessage("a-img", "t-img", 5),
+      blocksVersion: 3,
+    };
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settled],
+      }),
+      null,
+    );
+    // The image resolves locally. Same `blocksVersion` - that is the point.
+    const resolved = updateWindowMessage(seeded, "a-img", (message) =>
+      message.role !== "assistant"
+        ? message
+        : {
+            ...message,
+            imageResolutions: [
+              {
+                source: "https://example.test/a.png",
+                canonicalSource: "https://example.test/a.png",
+                width: 10,
+                height: 10,
+                state: "resolved" as const,
+                attachmentHash: "a".repeat(64),
+                mediaType: "image/png" as const,
+              },
+            ],
+          },
+    );
+    expect(resolved.held).toBe(true);
+
+    const delayed = applyRangeResponse(
+      resolved.window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settled],
+      }),
+      null,
+    );
+
+    const rendered = hydratedRecords(delayed).messages.find(
+      (message) => message.messageId === "a-img",
+    );
+    expect(
+      rendered !== undefined && rendered.role === "assistant"
+        ? rendered.imageResolutions.length
+        : -1,
+    ).toBe(1);
+  });
+
   it("protects every carry drawing the viewport, not just the first admitted", () => {
     // The soft budget exemption was positional: `carried.length > 0` spared
     // whichever contributing span sorted first and dropped the rest. A reader

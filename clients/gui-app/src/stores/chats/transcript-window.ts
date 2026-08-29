@@ -2874,7 +2874,19 @@ function boundedStaleSpans(
       rowId === "" || !coveredRowIds.has(rowId) || ownerOf.get(rowId) === span;
     // Coverage BEFORE the budget, so "the warmest contributing span" is the
     // one admitted below rather than whichever duplicate sorted first.
-    if (!span.rowIds.some(uncovered)) continue;
+    //
+    // A carry DRAWING the viewport contributes whatever the coverage test
+    // says, because visibility protects against both ways a span is dropped
+    // here and not only the budget one below. That matters for an UNNAMED row,
+    // where ownership and seating can disagree: `staleRowOwners` names the
+    // freshest serve, but `seatStaleRows` falls back to each carry's OWN old
+    // ordinal, so the owner can be unable to seat (its hole already filled)
+    // while an older duplicate at a different ordinal still draws. Rejecting
+    // that older span on ownership discards the only copy on screen.
+    // `staleSpanVisibleIn` already draws the distinction the right way - it
+    // applies ownership on the named branch and not the unnamed one - so
+    // deferring to it here is what keeps the two functions telling one story.
+    if (!span.rowIds.some(uncovered) && !drawsViewport(span)) continue;
     // EVERY carry drawing the viewport is exempt, not just the first one
     // admitted. `carried.length > 0` alone made the exemption positional: a
     // reader whose viewport crosses two carries had the second dropped, and
@@ -3570,10 +3582,51 @@ function preferFresherHeldMessages(
  */
 function heldCopyIsAheadOfServed(held: Message, served: Message): boolean {
   if (held.role !== "assistant" || served.role !== "assistant") return false;
+  // Behind on BLOCKS disqualifies it whatever the images say: substituting
+  // would trade block content the host has for image state the client has, and
+  // the two are not exchangeable.
+  if (heldCopyIsBehindServed(held, served)) return false;
   const heldVersion = held.blocksVersion;
   const servedVersion = served.blocksVersion;
-  if (heldVersion === undefined || servedVersion === undefined) return false;
-  return heldVersion > servedVersion;
+  if (
+    heldVersion !== undefined &&
+    servedVersion !== undefined &&
+    heldVersion > servedVersion
+  ) {
+    return true;
+  }
+  // `blocksVersion` alone cannot answer this. `image_resolution.updated`
+  // rewrites `imageResolutions` and the runtime accumulator advances that
+  // counter only for BLOCK changes, so a range sliced before the image update
+  // ties on version - and a tie reads as "not ahead", which hands the row back
+  // to the older served copy and regresses the resolved image permanently,
+  // since the row stays hydrated and leaves no gap.
+  return heldKnowsUnservedImages(held, served);
+}
+
+/**
+ * Does the held copy carry an image resolution the served one has not heard of?
+ *
+ * Keyed on `canonicalSource` because that is the entry's stable identity, and
+ * an entry appears only once its outcome is known - resolved, blocked,
+ * oversized, not-found. So a source the served copy does not list is one the
+ * client resolved after the host sliced its answer, which is exactly the
+ * freshness `blocksVersion` cannot express.
+ *
+ * Presence, not state: comparing states would have to assume resolution is
+ * one-way, and the schema does not say so.
+ */
+function heldKnowsUnservedImages(
+  held: Extract<Message, { role: "assistant" }>,
+  served: Extract<Message, { role: "assistant" }>,
+): boolean {
+  if (held.imageResolutions.length === 0) return false;
+  const servedSources = new Set(
+    served.imageResolutions.map((entry) => entry.canonicalSource),
+  );
+  return held.imageResolutions.some(
+    (entry) => !servedSources.has(entry.canonicalSource),
+  );
 }
 
 /**
