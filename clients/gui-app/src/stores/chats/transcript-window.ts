@@ -539,12 +539,12 @@ function servedAssistantTurnKeys(
   return keys;
 }
 
-function incompleteServeConflictsWithLiveAssistant(
+function conflictingIncompleteAssistantRowIds(
   incompleteRowIds: readonly string[] | undefined,
   liveMessages: readonly Message[],
-): boolean {
+): ReadonlySet<string> {
   if (incompleteRowIds === undefined || incompleteRowIds.length === 0) {
-    return false;
+    return new Set();
   }
   const liveTurnKeys = new Set<string>();
   for (const message of liveMessages) {
@@ -555,10 +555,12 @@ function incompleteServeConflictsWithLiveAssistant(
       liveTurnKeys.add(assistantTurnKey(message));
     }
   }
-  return incompleteRowIds.some((rowId) => {
-    const turnKey = assistantRowTurnKey(rowId);
-    return turnKey !== null && liveTurnKeys.has(turnKey);
-  });
+  return new Set(
+    incompleteRowIds.filter((rowId) => {
+      const turnKey = assistantRowTurnKey(rowId);
+      return turnKey !== null && liveTurnKeys.has(turnKey);
+    }),
+  );
 }
 
 function completeServedRowIds(
@@ -1082,13 +1084,6 @@ function replacementSkeletonBaseline<T>(
   return indexRevision === null ? fresh : held;
 }
 
-function authoritativeSkeletonBaseline(
-  rebased: boolean,
-  messages: readonly Message[],
-): readonly Message[] {
-  return rebased ? messages : [];
-}
-
 /**
  * Seat a windowed snapshot.
  *
@@ -1232,10 +1227,11 @@ export function applyWindowedSnapshot(
   // cohort. Same-epoch snapshots can be generated before an interactive live
   // record and arrive after it on the bulk lane, so their skeleton absence
   // cannot safely retire any record already held by the client.
-  const skeletonBaselineMessages = authoritativeSkeletonBaseline(
-    rebased,
-    provisionalLiveMessages,
-  );
+  // Snapshots travel on the bulk lane and can be overtaken by interactive live
+  // records even when they announce a new epoch. Their later skeleton may
+  // prove where a record belongs, but absence from it cannot prove that a live
+  // record already held by this client was deleted.
+  const skeletonBaselineMessages: readonly Message[] = [];
   const skeletonBaselineTransientAssistantMessageIds = skeletonBaselineMessages
     .filter(
       (message) =>
@@ -1390,13 +1386,12 @@ function seatSnapshotTailSpan(input: {
   readonly clock: number;
 }): TranscriptWindow {
   const { base, tail, rowIds, rowContext, clock } = input;
-  if (
-    incompleteServeConflictsWithLiveAssistant(
-      tail.incompleteRowIds,
-      base.liveMessages,
-    )
-  ) {
-    return base;
+  const conflictingRowIds = conflictingIncompleteAssistantRowIds(
+    tail.incompleteRowIds,
+    base.liveMessages,
+  );
+  if (conflictingRowIds.size > 0) {
+    return seatNonConflictingTailRuns(input, conflictingRowIds);
   }
   const contextBytes = contextByteLength(rowContext);
   const tailSpan: HydratedSpan = {
@@ -1415,6 +1410,69 @@ function seatSnapshotTailSpan(input: {
     { ...base, spans, hydratedBytes: totalBytes(spans) },
     servedAssistantTurnKeys(declaredCompleteTailRowIds(tail), tail.messages),
   );
+}
+
+function seatNonConflictingTailRuns(
+  input: {
+    readonly base: TranscriptWindow;
+    readonly tail: ChatTranscriptWindow;
+    readonly rowIds: readonly string[];
+    readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
+    readonly clock: number;
+  },
+  conflictingRowIds: ReadonlySet<string>,
+): TranscriptWindow {
+  const conflictingTurnKeys = new Set(
+    [...conflictingRowIds]
+      .map(assistantRowTurnKey)
+      .filter((turnKey): turnKey is string => turnKey !== null),
+  );
+  const messages = input.tail.messages.filter(
+    (message) =>
+      message.role !== "assistant" ||
+      !conflictingTurnKeys.has(assistantTurnKey(message)),
+  );
+  const events = input.tail.events.filter(
+    (event) =>
+      !("turnId" in event) ||
+      typeof event.turnId !== "string" ||
+      !conflictingTurnKeys.has(event.turnId),
+  );
+  let next = input.base;
+  let runStart = -1;
+  for (let index = 0; index <= input.rowIds.length; index += 1) {
+    const atEnd = index === input.rowIds.length;
+    if (!atEnd && !conflictingRowIds.has(input.rowIds[index])) {
+      if (runStart < 0) runStart = index;
+      continue;
+    }
+    if (runStart < 0) continue;
+    const rowIds = input.rowIds.slice(runStart, index);
+    const rowIdSet = new Set(rowIds);
+    next = seatSnapshotTailSpan({
+      base: next,
+      tail: {
+        ...input.tail,
+        fromOrdinal: input.tail.fromOrdinal + runStart,
+        rowIds,
+        incompleteRowIds: input.tail.incompleteRowIds?.filter((id) =>
+          rowIdSet.has(id),
+        ),
+        messages,
+        events,
+        rowContext: Object.fromEntries(
+          Object.entries(input.rowContext).filter(([id]) => rowIdSet.has(id)),
+        ),
+      },
+      rowIds,
+      rowContext: Object.fromEntries(
+        Object.entries(input.rowContext).filter(([id]) => rowIdSet.has(id)),
+      ),
+      clock: input.clock,
+    });
+    runStart = -1;
+  }
+  return next;
 }
 
 /** Apply a snapshot's authoritative row-space boundary to retained state. */
@@ -2232,13 +2290,58 @@ export function applyRangeResponse(
   if (skeletonContradicts(window, response.fromOrdinal, response.rowIds)) {
     return window.invalidated ? window : { ...window, invalidated: true };
   }
-  if (
-    incompleteServeConflictsWithLiveAssistant(
-      response.incompleteRowIds,
-      window.liveMessages,
-    )
-  ) {
-    return window;
+  const conflictingRowIds = conflictingIncompleteAssistantRowIds(
+    response.incompleteRowIds,
+    window.liveMessages,
+  );
+  if (conflictingRowIds.size > 0) {
+    const conflictingTurnKeys = new Set(
+      [...conflictingRowIds]
+        .map(assistantRowTurnKey)
+        .filter((turnKey): turnKey is string => turnKey !== null),
+    );
+    const messages = response.messages.filter(
+      (message) =>
+        message.role !== "assistant" ||
+        !conflictingTurnKeys.has(assistantTurnKey(message)),
+    );
+    const events = response.events.filter(
+      (event) =>
+        !("turnId" in event) ||
+        typeof event.turnId !== "string" ||
+        !conflictingTurnKeys.has(event.turnId),
+    );
+    let next = window;
+    let runStart = -1;
+    for (let index = 0; index <= response.rowIds.length; index += 1) {
+      const atEnd = index === response.rowIds.length;
+      if (!atEnd && !conflictingRowIds.has(response.rowIds[index])) {
+        if (runStart < 0) runStart = index;
+        continue;
+      }
+      if (runStart < 0) continue;
+      const rowIds = response.rowIds.slice(runStart, index);
+      const rowIdSet = new Set(rowIds);
+      next = applyRangeResponse(next, {
+        ...response,
+        fromOrdinal: response.fromOrdinal + runStart,
+        rowIds,
+        messages,
+        events,
+        incompleteRowIds: response.incompleteRowIds?.filter((id) =>
+          rowIdSet.has(id),
+        ),
+        rowContext: Object.fromEntries(
+          Object.entries(response.rowContext).filter(([id]) =>
+            rowIdSet.has(id),
+          ),
+        ),
+        reachedStart: response.reachedStart && runStart === 0,
+        reachedEnd: response.reachedEnd && index === response.rowIds.length,
+      });
+      runStart = -1;
+    }
+    return next;
   }
   const clock = window.clock + 1;
   const contextBytes = contextByteLength(response.rowContext);

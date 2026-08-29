@@ -2283,16 +2283,28 @@ describe("what an overlap keeps", () => {
     };
     const secondBlock = { ...firstBlock, blockId: "block-2", text: "second" };
     const transientId = transientLiveAssistantMessageId(turnId);
-    const live = appendLiveRecords(
-      { ...emptyTranscriptWindow(), epoch: 1, rowCount: 1 },
+    const live = applySkeletonChunk(
+      appendLiveRecords(
+        { ...emptyTranscriptWindow(), epoch: 1, rowCount: 3 },
+        {
+          messages: [
+            {
+              ...assistantMessage(transientId, turnId, 2),
+              blocks: [firstBlock, secondBlock],
+            },
+          ],
+          events: [],
+        },
+      ),
       {
-        messages: [
-          {
-            ...assistantMessage(transientId, turnId, 2),
-            blocks: [firstBlock, secondBlock],
-          },
+        epoch: 1,
+        fromOrdinal: 0,
+        entries: [
+          skeletonEntry("user-before", 0),
+          skeletonEntry(assistantRowId(turnId), 1),
+          skeletonEntry("user-after", 2),
         ],
-        events: [],
+        isFinal: true,
       },
     );
 
@@ -2301,13 +2313,15 @@ describe("what an overlap keeps", () => {
       rangeResponse({
         epoch: 1,
         fromOrdinal: 0,
-        rowIds: [assistantRowId(turnId)],
+        rowIds: ["user-before", assistantRowId(turnId), "user-after"],
         incompleteRowIds: [assistantRowId(turnId)],
         messages: [
+          userMessage("user-before", 0),
           {
             ...assistantMessage("assistant-first", turnId, 1),
             blocks: [firstBlock],
           },
+          userMessage("user-after", 3),
         ],
       }),
     );
@@ -2315,7 +2329,47 @@ describe("what an overlap keeps", () => {
     expect(partial.liveMessages.map((message) => message.messageId)).toEqual([
       transientId,
     ]);
-    expect(partial.spans).toEqual([]);
+    expect(partial.spans.map((span) => span.rowIds)).toEqual([
+      ["user-before"],
+      ["user-after"],
+    ]);
+    expect(
+      hydratedRecords(partial).messages.map((message) => message.messageId),
+    ).toEqual(["user-before", "user-after", transientId]);
+  });
+
+  it("seats complete tail siblings around an incomplete live assistant", () => {
+    const turnId = "turn-partial-tail";
+    const transientId = transientLiveAssistantMessageId(turnId);
+    const live = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [assistantMessage(transientId, turnId, 2)],
+      events: [],
+    });
+
+    const snapshot = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 3,
+      indexRevision: null,
+      tail: {
+        fromOrdinal: 0,
+        rowIds: ["user-before", assistantRowId(turnId), "user-after"],
+        incompleteRowIds: [assistantRowId(turnId)],
+        messages: [
+          userMessage("user-before", 0),
+          assistantMessage("assistant-partial", turnId, 1),
+          userMessage("user-after", 3),
+        ],
+        events: [],
+      },
+    });
+
+    expect(snapshot.spans.map((span) => span.rowIds)).toEqual([
+      ["user-before"],
+      ["user-after"],
+    ]);
+    expect(
+      hydratedRecords(snapshot).messages.map((message) => message.messageId),
+    ).toEqual(["user-before", "user-after", transientId]);
   });
 
   it("retires a stand-in when a complete authoritative row rewrites block status", () => {
@@ -2472,7 +2526,7 @@ describe("what an overlap keeps", () => {
     ]);
   });
 
-  it("retires a frozen assistant once the complete replacement skeleton omits its turn", () => {
+  it("keeps a newer frozen assistant when a delayed rebasing skeleton omits its turn", () => {
     const turnId = "turn-rewritten-away";
     const live = appendLiveRecords(emptyTranscriptWindow(), {
       messages: [
@@ -2496,8 +2550,8 @@ describe("what an overlap keeps", () => {
     });
 
     expect(indexed.skeletonComplete).toBe(true);
-    expect(indexed.liveMessages).toEqual([]);
-    expect(hydratedRecords(indexed).messages).toEqual([]);
+    expect(indexed.liveMessages).toHaveLength(1);
+    expect(hydratedRecords(indexed).messages).toHaveLength(1);
   });
 
   it("leaves a transcript with no tail rows alone", () => {
