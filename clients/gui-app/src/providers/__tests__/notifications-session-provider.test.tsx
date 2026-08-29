@@ -173,7 +173,7 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
       return streamState.client?.getMethodSchemaVersion(method) ?? null;
     }
     return method === "host.notifications.cloudFeed.subscribe"
-      ? { major: 1, minor: 1 }
+      ? { major: 1, minor: 2 }
       : { major: 1, minor: 2 };
   },
   useStreamMethodSupportFor: (
@@ -191,7 +191,7 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
       return client?.getMethodSchemaVersion(method) ?? null;
     }
     return method === "host.notifications.cloudFeed.subscribe"
-      ? { major: 1, minor: 1 }
+      ? { major: 1, minor: 2 }
       : { major: 1, minor: 2 };
   },
 }));
@@ -1217,10 +1217,12 @@ describe("<NotificationsSessionProvider />", () => {
 
     const completeClient = new MockWsStreamClient();
     vi.spyOn(completeClient, "getMethodSupport").mockReturnValue("supported");
+    // Cloud feed at `@1.2`, not `@1.1`: `partitionSnapshot` was re-minted to
+    // `@1.2`, so `@1.1` is a whole-origin feed and stays out of mixed mode.
     vi.spyOn(completeClient, "getMethodSchemaVersion").mockImplementation(
       (method: string) =>
         method === "host.notifications.cloudFeed.subscribe"
-          ? { major: 1, minor: 1 }
+          ? { major: 1, minor: 2 }
           : { major: 1, minor: 2 },
     );
     act(() => {

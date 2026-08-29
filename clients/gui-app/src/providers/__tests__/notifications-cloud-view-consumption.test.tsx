@@ -76,7 +76,7 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSupport: () => feedSupport.value,
   useStreamMethodSchemaVersion: (method: string) =>
     method === "host.notifications.cloudFeed.subscribe"
-      ? { major: 1, minor: 1 }
+      ? { major: 1, minor: 2 }
       : { major: 1, minor: 2 },
   // The provider negotiates the feed mode against the client it opened the
   // streams on, so it reads the `For` variants; the harness answers the same
@@ -84,7 +84,7 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSupportFor: () => feedSupport.value,
   useStreamMethodSchemaVersionFor: (_client: unknown, method: string) =>
     method === "host.notifications.cloudFeed.subscribe"
-      ? { major: 1, minor: 1 }
+      ? { major: 1, minor: 2 }
       : { major: 1, minor: 2 },
 }));
 

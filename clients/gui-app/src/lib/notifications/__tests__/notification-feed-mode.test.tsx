@@ -11,7 +11,7 @@ const cloudFeedSupport = vi.hoisted<{ value: StreamMethodSupport | null }>(
   () => ({ value: null }),
 );
 const feedVersions = vi.hoisted(() => ({
-  cloud: { major: 1, minor: 1 },
+  cloud: { major: 1, minor: 2 },
   local: { major: 1, minor: 2 },
 }));
 
@@ -83,7 +83,7 @@ describe("useNotificationFeedMode", () => {
   afterEach(() => {
     useAuthStore.setState({ subscriptionStatus: null });
     cloudFeedSupport.value = null;
-    feedVersions.cloud = { major: 1, minor: 1 };
+    feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 2 };
     unaryVersions.list = { major: 2, minor: 2 };
     unaryVersions.markAllRead = { major: 1, minor: 1 };
@@ -118,8 +118,11 @@ describe("useNotificationFeedMode", () => {
   it("stays local until both partitioned feed schema versions negotiate", () => {
     cloudFeedSupport.value = "supported";
 
-    // Cloud method present but still whole-relay (pre-1.1) — mixed mode would
+    // Cloud method present but still whole-relay (pre-1.2) — mixed mode would
     // double-count origin replicas, so local remains the single safe view.
+    // The local half is held at its floor so only the cloud minor can move the
+    // answer; a case short on BOTH would pass for either reason and prove
+    // neither.
     feedVersions.cloud = { major: 1, minor: 0 };
     feedVersions.local = { major: 1, minor: 2 };
     expect(
@@ -127,8 +130,8 @@ describe("useNotificationFeedMode", () => {
         .current,
     ).toBe("local");
 
-    // Local feed present but pre-partition (pre-1.2).
-    feedVersions.cloud = { major: 1, minor: 1 };
+    // Local feed present but pre-partition (pre-1.2), cloud at its floor.
+    feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 1 };
     expect(
       renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
@@ -136,8 +139,39 @@ describe("useNotificationFeedMode", () => {
     ).toBe("local");
 
     // Both projection minors present → mixed (named "cloud" feed mode).
-    feedVersions.cloud = { major: 1, minor: 1 };
+    feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 2 };
+    expect(
+      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+        .current,
+    ).toBe("cloud");
+  });
+
+  /**
+   * The boundary the cloud feed's re-mint CREATED, and the one case the minor
+   * floors above cannot express on their own.
+   *
+   * `partitionSnapshot` was authored as `@1.1` and re-minted to `@1.2` when
+   * mainline shipped its own `@1.1` (the widened `entry` union). So `@1.1` is a
+   * real, negotiable, whole-origin feed rather than a gap in the line — and it
+   * is the dangerous one, because its whole-origin `snapshot` still PARSES
+   * against the `@1.2` frame union and `cloud-notifications-store` applies it
+   * through the same `applySnapshot` case as a partition. Admitting it would
+   * put every local-homed row in both lanes with no parse error to catch it.
+   *
+   * Held one minor apart across the boundary with all three other floors met,
+   * so the cloud minor is the only thing that moves the answer.
+   */
+  it("withholds mixed mode from a whole-origin @1.1 cloud feed, and admits @1.2", () => {
+    cloudFeedSupport.value = "supported";
+
+    feedVersions.cloud = { major: 1, minor: 1 };
+    expect(
+      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+        .current,
+    ).toBe("local");
+
+    feedVersions.cloud = { major: 1, minor: 2 };
     expect(
       renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
         .current,

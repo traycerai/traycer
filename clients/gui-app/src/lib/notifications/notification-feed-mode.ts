@@ -109,8 +109,21 @@ export function useNotificationFeedModeFor(
     partitionHostIds,
     "host.notifications.markAllRead",
   );
+  /**
+   * `>= 2`, NOT `>= 1`: the cloud feed's `partitionSnapshot` arm lives on
+   * `@1.2`. It was authored as `@1.1` and re-minted when mainline shipped its
+   * own `@1.1` (the widened `entry` union), so `@1.1` is a whole-origin feed.
+   *
+   * The floor cannot be relaxed to "parses successfully", because a `@1.1`
+   * peer's whole-origin `snapshot` DOES parse against the `@1.2` frame union -
+   * that arm is still in it - and `cloud-notifications-store` applies it
+   * through the same `applySnapshot` case as `partitionSnapshot`. So admitting
+   * `@1.1` here puts every local-homed row in BOTH lanes and double-counts it
+   * in the summary. The host is already correct on its side and serves such a
+   * peer the whole relay feed; this is the half that decides whether to ask.
+   */
   const hasCloudProjection =
-    cloudFeedVersion?.major === 1 && cloudFeedVersion.minor >= 1;
+    cloudFeedVersion?.major === 1 && cloudFeedVersion.minor >= 2;
   const hasLocalProjection =
     localFeedVersion?.major === 1 && localFeedVersion.minor >= 2;
   const hasPartitionedList =
