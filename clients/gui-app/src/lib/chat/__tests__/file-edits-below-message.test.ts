@@ -9,9 +9,16 @@ import type {
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
+  editSubmitNeedsRevertPrompt,
   hasUndoableFileEditsFromMessage,
+  revertPromptArtifactCount,
+  resolveRevertScope,
   scopedArtifactCountFromMessage,
 } from "@/lib/chat/file-edits-below-message";
+import {
+  applyWindowedSnapshot,
+  emptyTranscriptWindow,
+} from "@/stores/chats/transcript-window";
 
 const CONTENT: JsonContent = {
   type: "doc",
@@ -143,5 +150,147 @@ describe("scopedArtifactCountFromMessage", () => {
     ];
     // Only the artifact with an actual change is counted.
     expect(scopedArtifactCountFromMessage(messages, events, "u1")).toBe(1);
+  });
+});
+
+describe("resolveRevertScope", () => {
+  const messages = [userMessage("u1"), userMessage("u2")];
+  const events = [
+    checkpointEvent(
+      "u2",
+      manifest("turn-2", [
+        {
+          ...entry({
+            filePath: "/repo/artifacts/a/index.md",
+            beforeHash: "x",
+            afterHash: "y",
+          }),
+          artifact: { artifactId: "a1", kind: "spec", title: "Real" },
+        },
+      ]),
+    ),
+  ];
+
+  /**
+   * The legacy line hands over no window, and `messages`/`events` there are the
+   * whole transcript - so the scope is always known and the two scans answer
+   * exactly as they always have.
+   */
+  it("answers from the records when there is no window", () => {
+    expect(
+      resolveRevertScope({
+        messages,
+        events,
+        transcriptWindow: null,
+        fromMessageId: "u1",
+      }),
+    ).toEqual({ known: true, hasUndoableFileEdits: true, artifactCount: 1 });
+  });
+
+  it("answers from the records when the window holds everything below", () => {
+    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 2,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages, events },
+    });
+    expect(
+      resolveRevertScope({
+        messages,
+        events,
+        transcriptWindow: window,
+        fromMessageId: "u1",
+      }),
+    ).toEqual({ known: true, hasUndoableFileEdits: true, artifactCount: 1 });
+  });
+
+  /**
+   * The regression this exists for. `u1` is rendered - the user is editing it -
+   * but the rows below it are not hydrated, so `messages`/`events` carry
+   * neither the later turn nor its checkpoint. Both scans would report a clean
+   * history: no prompt, and no artifact opt-out for an artifact the host is
+   * about to revert.
+   */
+  it("refuses to answer when the rows below the edit point are cold", () => {
+    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 40,
+      indexRevision: null,
+      tail: {
+        fromOrdinal: 38,
+        messages: [userMessage("u38"), userMessage("u39")],
+        events: [],
+      },
+    });
+    expect(
+      resolveRevertScope({
+        messages: [userMessage("u1")],
+        events: [],
+        transcriptWindow: window,
+        fromMessageId: "u1",
+      }),
+    ).toEqual({ known: false });
+  });
+});
+
+describe("editSubmitNeedsRevertPrompt", () => {
+  it("prompts when there are undoable edits below the message", () => {
+    expect(
+      editSubmitNeedsRevertPrompt({
+        known: true,
+        hasUndoableFileEdits: true,
+        artifactCount: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("submits straight through when the history below is known clean", () => {
+    expect(
+      editSubmitNeedsRevertPrompt({
+        known: true,
+        hasUndoableFileEdits: false,
+        artifactCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  /**
+   * Skipping the prompt is not neutral - it submits `revertFileChanges: false`,
+   * choosing "Don't revert" for the user over edits they never saw. An unknown
+   * scope therefore asks.
+   */
+  it("prompts rather than deciding for the user on an unknown scope", () => {
+    expect(editSubmitNeedsRevertPrompt({ known: false })).toBe(true);
+  });
+});
+
+describe("revertPromptArtifactCount", () => {
+  it("shows a known count", () => {
+    expect(
+      revertPromptArtifactCount({
+        known: true,
+        hasUndoableFileEdits: true,
+        artifactCount: 3,
+      }),
+    ).toBe(3);
+  });
+
+  it("shows a known ZERO as zero, which hides the opt-out", () => {
+    expect(
+      revertPromptArtifactCount({
+        known: true,
+        hasUndoableFileEdits: true,
+        artifactCount: 0,
+      }),
+    ).toBe(0);
+  });
+
+  /**
+   * The collapse this exists to prevent. `0` would hide an opt-out that
+   * defaults to CHECKED, so artifacts would be reverted with nothing on screen
+   * having offered the choice.
+   */
+  it("does not collapse an unknown count to zero", () => {
+    expect(revertPromptArtifactCount({ known: false })).toBeNull();
   });
 });

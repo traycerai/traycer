@@ -331,6 +331,8 @@ function createHandle(): ChatSessionStoreHandle {
     streamClientFactory: () => ({
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => true,
+      requestTranscriptRange: () => undefined,
+      requestResnapshot: () => undefined,
       close: () => undefined,
     }),
   });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  chatFindCoverageMessage,
   createChatFindAdapter,
   type ChatFindAdapter,
   type ChatFindReconcileTarget,
@@ -37,6 +38,34 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("chat find coverage message", () => {
+  it("says nothing when the scan saw the whole transcript", () => {
+    expect(chatFindCoverageMessage(0)).toBeNull();
+  });
+
+  it("agrees in number with the row it is describing", () => {
+    expect(chatFindCoverageMessage(1)).toBe(
+      "Partial results: 1 older message is not loaded.",
+    );
+    expect(chatFindCoverageMessage(2)).toBe(
+      "Partial results: 2 older messages are not loaded.",
+    );
+  });
+
+  it("groups a long chat's digits", () => {
+    // These counts run to five figures on the chats this feature exists for.
+    //
+    // The expectation is DERIVED, not the `en-US` literal it used to be:
+    // `chatFindCoverageMessage` calls `toLocaleString()` with no locale
+    // deliberately - the grouping a reader sees should be the reader's - and
+    // Vitest pins no locale, so a runtime defaulting to `de-DE` ("12.400") or
+    // `hi-IN` ("12,400" only by coincidence) failed a correct implementation.
+    expect(chatFindCoverageMessage(12_400)).toContain(
+      `${(12_400).toLocaleString()} older messages`,
+    );
+  });
+});
+
 describe("chat find adapter", () => {
   it("counts projection matches and reports pending when the row is not mounted", () => {
     const revealMatch = vi.fn();
@@ -69,6 +98,82 @@ describe("chat find adapter", () => {
         unitId: "unit-1",
       }),
     );
+  });
+
+  it("qualifies a ZERO-match answer that only scanned part of a windowed transcript", () => {
+    const { adapter, setRows, setCoverageMessage } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-a",
+      revealMatch: vi.fn(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+    setRows([testRow("row-1", "unit-1", "alpha")]);
+    setCoverageMessage("Partial results: 412 older messages are not loaded.");
+
+    void adapter.search({ requestId: 1, query: "zeta", matchCase: false });
+
+    // The reading this exists to prevent: "0 results" over a subset, which is
+    // indistinguishable from "not in this chat" without the caveat.
+    expect(adapter.getSnapshot()).toMatchObject({
+      status: "ready",
+      total: 0,
+      coverageMessage: "Partial results: 412 older messages are not loaded.",
+    });
+  });
+
+  it("carries the caveat onto a found match and drops it once the window completes", () => {
+    const { adapter, setRows, setCoverageMessage } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-a",
+      revealMatch: vi.fn(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+    setRows([testRow("row-1", "unit-1", "alpha beta")]);
+    setCoverageMessage("Partial results: 1 older message is not loaded.");
+
+    void adapter.search({ requestId: 1, query: "alpha", matchCase: false });
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 1,
+      coverageMessage: "Partial results: 1 older message is not loaded.",
+    });
+
+    // Hydration completes and the renderer's supplier starts answering null.
+    // The caveat has to be re-read with the rows, not remembered.
+    setCoverageMessage(null);
+    setRows([testRow("row-1", "unit-1", "alpha beta")]);
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 1,
+      coverageMessage: null,
+    });
+  });
+
+  it("reads no coverage while the bar is closed", () => {
+    const { adapter, setRows, getCoverageCalls } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-a",
+      revealMatch: vi.fn(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+
+    // Same closed-bar fast path the rows supplier is on: streaming must not
+    // pay for a caveat nothing is displaying.
+    setRows([testRow("row-1", "unit-1", "alpha")]);
+    expect(getCoverageCalls()).toBe(0);
+
+    void adapter.search({ requestId: 1, query: "alpha", matchCase: false });
+    expect(getCoverageCalls()).toBe(1);
+
+    adapter.clear();
+    setRows([testRow("row-1", "unit-1", "alpha")]);
+    expect(getCoverageCalls()).toBe(1);
+    expect(adapter.getSnapshot().coverageMessage).toBeNull();
   });
 
   it("scrolls to an offscreen match and paints after the row mounts", () => {
@@ -722,6 +827,11 @@ interface ChatFindTestAdapter {
   // Number of times the adapter has pulled rows from the supplier - used to
   // prove a closed find session does no projection work.
   readonly getRowsCalls: () => number;
+  // Stand in for a windowed transcript that only partly hydrated. Mirrors the
+  // renderer, which recomputes the caveat from the CURRENT window every time
+  // the adapter asks.
+  readonly setCoverageMessage: (next: string | null) => void;
+  readonly getCoverageCalls: () => number;
 }
 
 function createChatFindTestAdapter(
@@ -729,11 +839,17 @@ function createChatFindTestAdapter(
 ): ChatFindTestAdapter {
   let rows: ReadonlyArray<ChatFindRow> = [];
   let getRowsCalls = 0;
+  let coverageMessage: string | null = null;
+  let getCoverageCalls = 0;
   const adapter = createChatFindAdapter({
     tileInstanceId: callbacks.tileInstanceId,
     getRows: () => {
       getRowsCalls += 1;
       return rows;
+    },
+    getCoverageMessage: () => {
+      getCoverageCalls += 1;
+      return coverageMessage;
     },
     revealMatch: callbacks.revealMatch,
     reconcileMatch: callbacks.reconcileMatch,
@@ -748,6 +864,10 @@ function createChatFindTestAdapter(
       adapter.notifyRowsChanged();
     },
     getRowsCalls: () => getRowsCalls,
+    setCoverageMessage: (next) => {
+      coverageMessage = next;
+    },
+    getCoverageCalls: () => getCoverageCalls,
   };
 }
 

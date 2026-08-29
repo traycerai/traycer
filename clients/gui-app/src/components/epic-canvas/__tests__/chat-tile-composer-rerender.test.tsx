@@ -211,6 +211,8 @@ function restoreContext(): ChatRestoreContextValue {
     restoreActionPending: false,
     restoreCheckpoint: () => null,
     accumulatedFileChanges: [],
+    undeliveredChangeCount: 0,
+    accumulatedSetComplete: true,
     revertFileChanges: () => null,
   };
 }

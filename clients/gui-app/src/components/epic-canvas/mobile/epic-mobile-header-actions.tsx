@@ -3,7 +3,10 @@ import { SquareStack } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
+import {
+  epicTabRightActionsKey,
+  useMobileHeaderStore,
+} from "@/stores/layout/mobile-header-store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 import { useRegisteredEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
@@ -214,30 +217,37 @@ export function MobileEpicHeaderTitle(props: {
 }
 
 /**
- * Fills / clears the mobile-header right-actions slot for the FOCUSED epic
- * surface. Mounted once (by that surface, from its tab-focus flag), self-gated
- * on `useIsMobileViewport()`. The slot stores a `ReactNode` element: this is
- * safe because the element is a self-contained component keyed only on the
- * stable tab id - it re-reads volatile state from its own hooks each header
- * render, so nothing goes stale. A render-fn slot would be isomorphic (a fn
- * returning the same element) but a larger store change; a baked-in control
- * that closed over epic-session handlers WOULD go stale, which is exactly what
- * this shape avoids.
+ * Registers this epic tab's header actions (the tab switcher trigger) while
+ * the pane is mounted - focused or merely retained - self-gated on
+ * `useIsMobileViewport()`. Whether they appear is the header's resolution from
+ * the presented surface, not this binder's concern; registering while retained
+ * is what lets a focus switch onto this tab resolve its trigger in the same
+ * commit. The registry stores a `ReactNode` element: this is safe
+ * because the element is a self-contained component keyed only on the stable
+ * tab id - it re-reads volatile state from its own hooks each header render,
+ * so nothing goes stale. A render-fn entry would be isomorphic (a fn returning
+ * the same element) but a larger store change; a baked-in control that closed
+ * over epic-session handlers WOULD go stale, which is exactly what this shape
+ * avoids.
  */
 export function MobileEpicHeaderActionsBinder(props: {
   readonly tabId: string;
 }) {
   const { tabId } = props;
   const isMobile = useIsMobileViewport();
-  const setRightActions = useMobileHeaderStore((s) => s.setRightActions);
-  const clearRightActions = useMobileHeaderStore((s) => s.clearRightActions);
-  const owner = `epic-tab:${tabId}`;
+  const registerRightActions = useMobileHeaderStore(
+    (s) => s.registerRightActions,
+  );
+  const unregisterRightActions = useMobileHeaderStore(
+    (s) => s.unregisterRightActions,
+  );
 
   useEffect(() => {
     if (!isMobile) return;
-    setRightActions(owner, <EpicMobileSwitcherTrigger tabId={tabId} />);
-    return () => clearRightActions(owner);
-  }, [clearRightActions, isMobile, owner, setRightActions, tabId]);
+    const key = epicTabRightActionsKey(tabId);
+    registerRightActions(key, <EpicMobileSwitcherTrigger tabId={tabId} />);
+    return () => unregisterRightActions(key);
+  }, [isMobile, registerRightActions, tabId, unregisterRightActions]);
 
   return null;
 }

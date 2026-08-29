@@ -1,9 +1,9 @@
 import { Bot } from "lucide-react";
 import { useCallback } from "react";
-import { v4 as uuidv4 } from "uuid";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { useEpicAgentOpenRef } from "@/hooks/epic/use-epic-agent-open-ref";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   useEpicAgentRoleClaimsByAgentId,
@@ -139,15 +139,15 @@ function AgentReferenceButton(props: {
   const chatHarnessId = useEpicChatHarnessId(props.agent.id);
   const tuiHarnessId = useMaybeEpicTuiAgentHarnessId(props.agent.id);
   const harnessId = chatHarnessId ?? tuiHarnessId;
+  const buildOpenRef = useEpicAgentOpenRef({
+    epicId: props.epicId,
+    nodeId: props.agent.id,
+    name: props.agent.name,
+    type: props.agent.type,
+  });
   const openAgent = useCallback(() => {
-    tileNavigation.openTileInEpic(props.epicId, {
-      id: props.agent.id,
-      instanceId: uuidv4(),
-      type: props.agent.type,
-      name: props.agent.name,
-      hostId: props.agent.hostId,
-    });
-  }, [props.agent, props.epicId, tileNavigation]);
+    tileNavigation.openTileInEpic(props.epicId, buildOpenRef());
+  }, [props.epicId, buildOpenRef, tileNavigation]);
 
   return (
     <button

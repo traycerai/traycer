@@ -9,7 +9,7 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
-import type { AccumulatedFileChange } from "@/lib/chat/accumulated-file-changes-from-messages";
+import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -256,7 +256,7 @@ describe("<ChatLowerDock />", () => {
 interface DockInput {
   readonly queue: ChatSessionState["queue"];
   readonly todo: PinnedTodoSnapshot | null;
-  readonly changes: ReadonlyArray<AccumulatedFileChange>;
+  readonly changes: ReadonlyArray<AccumulatedChangeRow>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly heldManagedCommandCount: number;
   readonly selfAgent: AgentRow | null;
@@ -324,7 +324,7 @@ function agentRow(id: string, title: string, active: boolean): AgentRow {
 }
 
 function baseRestore(
-  changes: ReadonlyArray<AccumulatedFileChange>,
+  changes: ReadonlyArray<AccumulatedChangeRow>,
 ): ChatRestoreContextValue {
   return {
     accessRole: "owner",
@@ -336,6 +336,8 @@ function baseRestore(
     restoreActionPending: false,
     restoreCheckpoint: vi.fn().mockReturnValue(null),
     accumulatedFileChanges: changes,
+    undeliveredChangeCount: 0,
+    accumulatedSetComplete: true,
     revertFileChanges: vi.fn().mockReturnValue(null),
   };
 }
@@ -397,15 +399,17 @@ function todoItem(text: string): SegmentTodoItem {
   };
 }
 
-function fileChange(): AccumulatedFileChange {
+function fileChange(): AccumulatedChangeRow {
   return {
     filePath: "/repo/src/app.ts",
     operation: "edit",
     diffSource: "snapshot",
-    beforeContent: "old\n",
-    afterContent: "new\n",
     reason: "snapshot",
     undoable: true,
-    streamingCounts: null,
+    artifact: null,
+    counts: { additions: 1, deletions: 1 },
+    hasContents: true,
+    digest: null,
+    liveDiff: null,
   };
 }

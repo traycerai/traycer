@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
 import type { ChatTimelineFollowLatch } from "@/components/chat/chat-timeline-follow-latch";
+import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
@@ -255,7 +256,7 @@ function renderTimeline(
       }}
     >
       <ChatTimeline
-        messages={messages}
+        rows={transcriptListRows({ window: null, rendered: messages })}
         taskTitle="follow-latch integration"
         backgroundToolBlockIds={new Set()}
         getMessageActions={() => null}

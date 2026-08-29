@@ -394,6 +394,21 @@ export interface SnapshotSegmentDiffTilePayload {
   readonly chatId: string;
   readonly sourceBlockIds: SnapshotSourceBlockIds;
   readonly filePath: string;
+  /**
+   * The endpoints the source blocks had when the tile was opened - the FALLBACK
+   * for when re-reading those blocks from the chat session no longer finds
+   * them, which on a windowed transcript is the ordinary state of any row old
+   * enough to have been evicted.
+   *
+   * Not part of the tile's identity (that stays `chatId` + `sourceBlockIds`),
+   * so two opens of the same edit still dedupe to one tile whatever their
+   * captured endpoints say.
+   *
+   * `null` for a tile persisted before this field existed. Those degrade
+   * exactly as every segment tile did: block lookup or nothing.
+   */
+  readonly beforeHash: string | null;
+  readonly afterHash: string | null;
 }
 
 export interface SnapshotCumulativeDiffTilePayload {
