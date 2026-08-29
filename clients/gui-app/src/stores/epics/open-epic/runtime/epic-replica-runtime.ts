@@ -84,7 +84,11 @@ import {
 } from "./epic-runtime-projection";
 import type { EpicRuntimeDelivery } from "./projection-delivery";
 import { deliverInto } from "./projection-delivery";
-import { createArtifactRoomTier } from "./artifact-room-tier";
+import {
+  createArtifactRoomTier,
+  type ArtifactRoomColdSettlement,
+  type ArtifactRoomColdState,
+} from "./artifact-room-tier";
 import { createEpicRecordsReplica, LOCAL_ORIGIN } from "./epic-records-replica";
 import { createEpicRoomsReplica } from "./epic-rooms-replica";
 import { createEpicControlReplica } from "./epic-control-replica";
@@ -318,6 +322,24 @@ export interface EpicReplicaRuntime {
    * availability alone would strand the lease on the stale doc.
    */
   getArtifactBodyDocKey(artifactId: string): string | null;
+  /**
+   * The cold bytes for a body doc, or `null` when the tier does not hold it.
+   *
+   * The runtime's face on the tier's own arithmetic. `null` is NOT empty
+   * bytes: a zero-length update applies cleanly and yields an empty document.
+   */
+  encodeArtifactBodyColdState(docKey: string): ArtifactRoomColdState | null;
+  /**
+   * Take a body doc's encoded state back. Refuses a moved identity rather than
+   * splicing two histories - see `ArtifactRoomColdSettlement`.
+   */
+  settleArtifactBodyColdState(
+    docKey: string,
+    update: Uint8Array,
+    expectedDocGuid: string,
+  ): ArtifactRoomColdSettlement;
+  /** A local body edit on its way to the lane. The lane's own verdict. */
+  sendArtifactBodyUpdate(docKey: string, update: Uint8Array): SendOutcome;
   acquireArtifactBodyLease(artifactId: string): () => void;
   hasAttachmentBytes(hash: string): boolean;
   readAttachmentBytes(
@@ -1297,6 +1319,20 @@ export function createEpicReplicaRuntime(
     // tier by artifact id instead, because `artifact.subscribe` serves one body
     // per doc - that arm returns the artifact id here unchanged.
     getArtifactBodyDocKey: (artifactId) => artifactBodyDocKey(artifactId),
+
+    encodeArtifactBodyColdState: (docKey) => tier.encodeColdState(docKey),
+    settleArtifactBodyColdState: (docKey, update, expectedDocGuid) =>
+      tier.settleColdState(docKey, update, expectedDocGuid),
+    sendArtifactBodyUpdate: (docKey, update) => {
+      // The lane arm is the only one that serves bodies per-doc; on `@1` the
+      // body rides the room and there is no lane to send to. `dropped` rather
+      // than a silent no-op, because the caller's edit went nowhere and the
+      // reason is what makes that legible.
+      if (installedArm !== "lanes" || laneArm === null) {
+        return { kind: "dropped", reason: "no body lane on the @1 arm" };
+      }
+      return laneArm.bodies.sendUpdate(docKey, update);
+    },
 
     acquireArtifactBodyLease(artifactId): () => void {
       const docKey = artifactBodyDocKey(artifactId);
