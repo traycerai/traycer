@@ -3287,19 +3287,25 @@ export function createChatSessionStoreWithNotificationDependencies(
           range.fromOrdinal === visibleTranscriptRange.fromOrdinal &&
           range.toOrdinal === visibleTranscriptRange.toOrdinal);
       visibleTranscriptRange = range;
-      // A `null` report only CLEARS the standing obligation - there is nothing
-      // to fetch for "no placed row visible". Off the windowed line the value
-      // is recorded (the line can be negotiated by a later reconnect) but no
-      // request could mean anything yet.
-      if (unchanged || range === null || !windowedLine || disposed) return;
+      // Off the windowed line the value is recorded (the line can be
+      // negotiated by a later reconnect) but nothing here could mean anything
+      // yet.
+      if (unchanged || !windowedLine || disposed) return;
       // Warm the LRU for what the reader is looking at BEFORE planning. An
       // already-hydrated visible span plans no fetch, so this report is the
       // only event that ever re-touches it - without it, returning to old
       // scrollback leaves it "coldest" for the next eviction even while it is
       // on screen.
+      //
+      // A `null` report reaches this too, and must: it warms nothing, but the
+      // window RETAINS the range to protect the carry the reader is on, and a
+      // retained one would go on exempting spans they have scrolled away from.
       const window = get().transcriptWindow;
       const touched = touchTranscriptRange(window, range);
       if (touched !== window) set({ transcriptWindow: touched });
+      // What `null` does only CLEAR is the standing obligation - there is
+      // nothing to fetch for "no placed row visible".
+      if (range === null) return;
       requestPlannedHydration();
     };
 

@@ -4105,8 +4105,19 @@ function dedupeByFreshestSpan<T>(
  */
 export function touchTranscriptRange(
   window: TranscriptWindow,
-  range: OrdinalRange,
+  range: OrdinalRange | null,
 ): TranscriptWindow {
+  // `null` is "no placed row is visible" - the reader is on the unplaced live
+  // tail. It warms nothing, but it must still CLEAR the stored range: a
+  // retained one goes on exempting carries the reader has scrolled away from,
+  // and an exemption is exactly what the budget cannot argue with. This is the
+  // one entry point for "the viewport moved", so the clear belongs here rather
+  // than beside the caller's early return.
+  if (range === null) {
+    return window.visibleOrdinals === null
+      ? window
+      : { ...window, visibleOrdinals: null };
+  }
   const overlaps = (span: HydratedSpan): boolean =>
     span.fromOrdinal < range.toOrdinal && spanEnd(span) > range.fromOrdinal;
   const staleVisible = staleSpanVisibleIn(window, window.staleSpans, range);

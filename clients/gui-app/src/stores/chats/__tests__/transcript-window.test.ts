@@ -2584,6 +2584,37 @@ describe("stale spans", () => {
     ).toBe(2);
   });
 
+  it("clears the retained viewport when the reader reports no placed row", () => {
+    // The retained range is a protection, so a stale one keeps exempting carry
+    // the reader has scrolled away from - and an exemption is the one thing the
+    // budget cannot argue with. `null` is the report the reader sends on
+    // reaching the unplaced live tail; it warms nothing, but it has to clear.
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [userMessage("m-5", 5)],
+      }),
+      null,
+    );
+    const watching = touchTranscriptRange(seeded, {
+      fromOrdinal: 5,
+      toOrdinal: 6,
+    });
+    expect(watching.visibleOrdinals).toEqual({ fromOrdinal: 5, toOrdinal: 6 });
+
+    const atTail = touchTranscriptRange(watching, null);
+
+    expect(atTail.visibleOrdinals).toBeNull();
+    // Clearing warms nothing and must not churn the clock.
+    expect(atTail.clock).toBe(watching.clock);
+    expect(atTail.spans).toBe(watching.spans);
+    // Idempotent, so a resting tail viewport does not churn the store.
+    expect(touchTranscriptRange(atTail, null)).toBe(atTail);
+  });
+
   it("protects every carry drawing the viewport, not just the first admitted", () => {
     // The soft budget exemption was positional: `carried.length > 0` spared
     // whichever contributing span sorted first and dropped the rest. A reader
