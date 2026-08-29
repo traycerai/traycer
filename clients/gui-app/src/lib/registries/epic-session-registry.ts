@@ -3,6 +3,7 @@ import {
   type RuntimeWorkerLike,
 } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 import { createContext } from "react";
+import { getEpicRuntimeWorkerFactoryOverride } from "./epic-runtime-worker-factory-slot";
 import {
   DEFAULT_MAX_LIVE_EPICS,
   OpenEpicSessionRegistry,
@@ -139,16 +140,8 @@ export function getEpicStreamClientFactoryOverride(): EpicStreamClientFactory | 
  * `new Worker(new URL(...))` - a form Vite must see literally, and which jsdom
  * cannot execute.
  */
-let runtimeWorkerFactoryOverride: (() => RuntimeWorkerLike) | null = null;
-
-export function __setEpicRuntimeWorkerFactoryForTests(
-  factory: (() => RuntimeWorkerLike) | null,
-): void {
-  runtimeWorkerFactoryOverride = factory;
-}
-
 export function getEpicRuntimeWorkerFactory(): () => RuntimeWorkerLike {
-  return runtimeWorkerFactoryOverride ?? createEpicRuntimeWorker;
+  return getEpicRuntimeWorkerFactoryOverride() ?? createEpicRuntimeWorker;
 }
 
 export function __getOpenEpicRegistryForTests(): OpenEpicSessionRegistry {

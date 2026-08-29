@@ -1,5 +1,42 @@
 import { configure } from "@testing-library/react";
 import { vi } from "vitest";
+import { createFakeBridgePair } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
+import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
+import { startEpicRuntimeWorkerHost } from "@/stores/epics/open-epic/runtime/worker/epic-runtime-worker-host";
+import { __setEpicRuntimeWorkerFactoryForTests } from "@/lib/registries/epic-runtime-worker-factory-slot";
+
+// ── The epic runtime worker, for every jsdom suite ──────────────────────────
+//
+// ONE place, not a `beforeEach` in thirty files. jsdom has no `Worker`, and the
+// production factory is the only site that calls
+// `new Worker(new URL(...), { type: "module" })` - the literal form Vite must
+// see and jsdom cannot execute. Installing the in-process factory here means a
+// suite that mounts a session gets the REAL worker host, over a fake bridge
+// pair, on this thread, with no per-file wiring.
+//
+// The single opt-out is `__setEpicRuntimeWorkerFactoryForTests(null)` in a
+// suite that knows why - which today means only a suite deliberately reaching
+// for a real `Worker`, and no jsdom suite may do that.
+//
+// Constructed LAZILY, per call: each spawn gets its own pair and its own host,
+// because a shared pair would let two sessions' frames interleave on one
+// transport and a shared host would have `installCore` dispose the first
+// session's core when the second arrived (`epic-runtime-worker-host.ts:141`).
+//
+// Inert until the flip. Nothing spawns a runtime worker in production yet, and
+// the worker entry does not compose or `installCore`, so a host started here
+// answers "not held" to everything. That is the honest current state: this
+// seam exists and is wired; it does not yet carry a runtime.
+__setEpicRuntimeWorkerFactoryForTests(() => {
+  const pair = createFakeBridgePair("sync");
+  const host = startEpicRuntimeWorkerHost(pair.worker);
+  return {
+    ...createFakeWorkerTarget(pair),
+    terminate: () => {
+      host.shutdown();
+    },
+  };
+});
 
 // CI stability net. A stray late async error - an `unhandledRejection` or
 // `uncaughtException` from a timer, socket, or microtask that fires AFTER a

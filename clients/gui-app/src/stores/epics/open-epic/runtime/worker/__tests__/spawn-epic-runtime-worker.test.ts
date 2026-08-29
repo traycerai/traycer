@@ -1,12 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  BridgeMessageEventLike,
-  BridgeMessageTargetLike,
-} from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 import {
   createFakeBridgePair,
   type FakeBridgePair,
 } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
+import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
 import {
   isMainToWorkerFrame,
   type MainToWorkerEvent,
@@ -76,39 +73,13 @@ interface SpawnFixture {
   readonly host: EpicRuntimeWorkerHost | null;
 }
 
-/** The `Worker`-shaped adapter over the fake pair's main side. */
-function attachWorkerTarget(pair: FakeBridgePair): BridgeMessageTargetLike {
-  const workerListeners = new Set<(event: BridgeMessageEventLike) => void>();
-  pair.main.subscribe((message) => {
-    const event: BridgeMessageEventLike = { data: message };
-    for (const listener of [...workerListeners]) listener(event);
-  });
-  return {
-    postMessage(message, transfer): void {
-      const buffers = transfer.filter(
-        (value): value is ArrayBuffer => value instanceof ArrayBuffer,
-      );
-      pair.main.post(message, buffers);
-    },
-    addEventListener(
-      _type: "message",
-      listener: (event: BridgeMessageEventLike) => void,
-    ): void {
-      workerListeners.add(listener);
-    },
-    removeEventListener(
-      _type: "message",
-      listener: (event: BridgeMessageEventLike) => void,
-    ): void {
-      workerListeners.delete(listener);
-    },
-  };
-}
-
 function createFixture(withHost: boolean): SpawnFixture {
   const pair = createFakeBridgePair("sync");
   const terminate = vi.fn();
-  const worker: RuntimeWorkerLike = { ...attachWorkerTarget(pair), terminate };
+  const worker: RuntimeWorkerLike = {
+    ...createFakeWorkerTarget(pair),
+    terminate,
+  };
   const host = withHost ? startEpicRuntimeWorkerHost(pair.worker) : null;
   return { pair, worker, terminate, host };
 }
@@ -351,7 +322,7 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
   function setupProjection() {
     const pair = createFakeBridgePair("sync");
     const worker: RuntimeWorkerLike = {
-      ...attachWorkerTarget(pair),
+      ...createFakeWorkerTarget(pair),
       terminate: () => {},
     };
 
