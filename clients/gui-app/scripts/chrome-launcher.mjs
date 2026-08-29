@@ -1,12 +1,16 @@
-// The one headless-Chrome launcher every browser regression in `scripts/` uses.
+// The shared headless-Chrome launcher for the browser regression drivers:
+// all four CI-gated scripts (see `run-tests.ts`) plus `toast-over-modal-
+// hittest.mjs`. The two manual instruments (`window-host-modal-alignment-
+// browser.mjs`, `host-boot-family-gallery-browser.mjs`) still carry their own
+// standalone launchers.
 //
-// Each of those drivers used to carry its own copy of "find Chrome, spawn it,
-// wait for DevTools", and the copies drifted: only one of them honoured
-// `CHROME_BIN`, only one retried a cold start, and the rest killed the browser
-// PID alone and left its renderers and crashpad handlers behind. The hardening
-// below was written for `diff-edit-browser-regression.mjs` (OSS #1552) after a
-// CI runner had to reap exactly that orphan pile; it lives here so a fix lands
-// once instead of four times.
+// Each driver used to carry its own copy of "find Chrome, spawn it, wait for
+// DevTools", and the copies drifted: only one of them honoured `CHROME_BIN`,
+// only one retried a cold start, and the rest killed the browser PID alone
+// and left its renderers and crashpad handlers behind. The hardening below
+// was written for `diff-edit-browser-regression.mjs` (OSS #1552) after a CI
+// runner had to reap exactly that orphan pile; it lives here so a fix lands
+// once instead of five times.
 //
 // Consumers own everything downstream of the DevTools endpoint (CDP client,
 // fixtures, assertions) - this module owns only the process.
