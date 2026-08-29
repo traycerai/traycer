@@ -38,6 +38,8 @@ import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-r
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
+import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
@@ -214,6 +216,16 @@ export function useEpicSyncPillState(): EpicSyncPillState {
       hasConnectedOnce: s.hasConnectedOnce,
     }),
   );
+}
+
+/**
+ * The outstanding write commands themselves, for the surface that ACTS on them.
+ *
+ * The pill reads the same rows folded into counts; this is the list behind it.
+ * Identity is the runtime's, so an unchanged queue re-renders nobody.
+ */
+export function useEpicWriteCommands(): readonly CommandRecord<EpicWriteCommandIntent>[] {
+  return useEpicStore((s) => s.writeCommands);
 }
 
 /**

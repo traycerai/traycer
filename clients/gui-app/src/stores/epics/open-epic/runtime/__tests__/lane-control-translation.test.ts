@@ -64,6 +64,12 @@ describe("permission role: the seam widened it, so the translation narrows it ba
       null,
     ]) {
       const event = permissionChanged(role);
+      // Narrowed on the way IN as well as out: `canWrite` lives on the
+      // permission member alone, and reading it off the union would be reading
+      // a field four of the five arms do not have.
+      if (event.kind !== "permission-changed") {
+        throw new Error("the builder returns a permission event");
+      }
       const translated = legacyControlEventOf(event);
       if (translated.kind !== "permission-changed") {
         throw new Error("expected a permission-changed event");

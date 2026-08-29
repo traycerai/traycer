@@ -18,6 +18,10 @@ import {
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import { EpicStreamClient } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import { EpicStateStreamClient } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import { EpicStatusStreamClient } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -473,86 +477,165 @@ export function EpicSessionProvider(
     const handleSessionAuthError = (): void => {
       onAuthError();
     };
-    // The session OWNS its transport: the factory opens it (socket + auth +
-    // wake) and the returned handle's `close()` tears it all down on dispose.
-    // The registry only closes the handle when it DISPOSES the session, so the
-    // socket survives across the MRU warm window and a revived session is never
-    // handed a dead transport; the durable transport's live endpoint + wake
-    // re-dial heal a host restart under a stable `hostId` on their own. Tests
-    // drive the stream through the override seam and never open a real socket.
-    const streamClientFactory: EpicStreamClientFactory = (
-      factoryEpicId,
-      callbacks,
-      seedOfferProvider,
-    ) => {
-      const override = getEpicStreamClientFactoryOverride();
-      if (override !== null) {
-        return override(factoryEpicId, callbacks, seedOfferProvider);
-      }
-      // `targetHostId` is non-null here: the acquire effect gates on it above,
-      // and it is a `const`, so that narrowing flows into this factory closure.
-      // Removing the gate would surface a compile error at this call (which
-      // requires a concrete `hostId`), not a runtime throw - the type system is
-      // the invariant.
-      const result = openOwnedDurableStreamClient(
-        openTransport,
-        targetHostId,
-        (ws) =>
-          new EpicStreamClient({
-            wsStreamClient: ws,
-            epicId: factoryEpicId,
-            callbacks,
-            seedOfferProvider,
-          }),
-      );
-      return {
-        applyUpdate: (updateBytes) => result.client.applyUpdate(updateBytes),
-        awareness: (awarenessBytes) => result.client.awareness(awarenessBytes),
-        applyArtifactRoomUpdate: (artifactRoomId, updateBytes) =>
-          result.client.applyArtifactRoomUpdate(artifactRoomId, updateBytes),
-        artifactRoomAwareness: (artifactRoomId, awarenessBytes) =>
-          result.client.artifactRoomAwareness(artifactRoomId, awarenessBytes),
-        retryMigration: () => result.client.retryMigration(),
-        close: result.close,
-      };
-    };
     const createHandle = (): OpenEpicStoreHandle => {
       // Before the store exists, because `persist` reads its key at creation:
       // the bucket used to be named by the email, and re-keying without this
       // would silently reset every install's focus state on upgrade.
       if (sessionUserId !== null) adoptLegacyOpenEpicKey(sessionUserId);
+      // ── The session's ONE transport ──────────────────────────────────────
+      //
+      // The session OWNS its transport, and now literally rather than by there
+      // happening to be a single client. Every stream client this session
+      // builds - the `@1` arm, the records lane, the control lane, and the
+      // per-artifact body lanes - rides THIS transport's `wsStreamClient`,
+      // because `WsStreamClient` multiplexes methods over one socket and
+      // `openTransport` is not pooled. Opening one transport per client would
+      // give an epic two sockets on the lane arm and one more per open tile,
+      // which is worse than the `@1` monolith on exactly the axis the lane
+      // cutover exists to improve.
+      //
+      // It is opened HERE, before any client, because adapter selection reads
+      // this connection's negotiated method support off it and has to do so
+      // before deciding what to open. The registry only closes the handle when
+      // it DISPOSES the session, so the socket survives the MRU warm window;
+      // the durable transport's live endpoint + wake re-dial heal a host
+      // restart under a stable `hostId` on their own, and one reconnect now
+      // resumes every client riding it rather than one client each. A revived
+      // session is a NEW handle and therefore a new transport - this one is
+      // never handed on.
+      //
+      // ## The override seam decides whether a transport is opened AT ALL
+      //
+      // A session whose stream is driven by `__setEpicStreamClientFactoryForTests`
+      // has no socket and no lanes: the override IS "a test is supplying this
+      // session's stream". Reading it once here, rather than only per factory
+      // call, is what keeps `openTransport` uncalled on that path - the
+      // provider suite asserts exactly that, by stubbing the opener with a
+      // throw. Selection reads method support off the transport BEFORE deciding
+      // what to open, so a lazily-opened transport would be opened by the read
+      // and the assertion would fire anyway; the honest shape is to decide up
+      // front and give an overridden session no lane selection.
+      const streamIsOverridden = getEpicStreamClientFactoryOverride() !== null;
+      const transport = streamIsOverridden ? null : openTransport(targetHostId);
+      const wsStreamClient = transport?.wsStreamClient ?? null;
+      let transportClosed = false;
+      const closeSessionTransport = (): void => {
+        if (transportClosed || transport === null) return;
+        transportClosed = true;
+        transport.close();
+      };
+      const streamClientFactory: EpicStreamClientFactory = (
+        factoryEpicId,
+        callbacks,
+        seedOfferProvider,
+      ) => {
+        const override = getEpicStreamClientFactoryOverride();
+        if (override !== null) {
+          return override(factoryEpicId, callbacks, seedOfferProvider);
+        }
+        if (wsStreamClient === null) {
+          // Unreachable: `streamIsOverridden` was true, so the branch above
+          // returned. Stated as a throw rather than a non-null assertion so a
+          // future path that clears the override mid-session fails loudly here
+          // instead of dialling a transport this session never opened.
+          throw new Error(
+            "[epic-session] stream factory reached with no session transport",
+          );
+        }
+        const client = new EpicStreamClient({
+          wsStreamClient,
+          epicId: factoryEpicId,
+          callbacks,
+          seedOfferProvider,
+        });
+        return {
+          applyUpdate: (updateBytes) => client.applyUpdate(updateBytes),
+          awareness: (awarenessBytes) => client.awareness(awarenessBytes),
+          applyArtifactRoomUpdate: (artifactRoomId, updateBytes) =>
+            client.applyArtifactRoomUpdate(artifactRoomId, updateBytes),
+          artifactRoomAwareness: (artifactRoomId, awarenessBytes) =>
+            client.artifactRoomAwareness(artifactRoomId, awarenessBytes),
+          retryMigration: () => client.retryMigration(),
+          // CLIENT ONLY. The transport belongs to the session, and a client
+          // `close()` is also what `requestFreshSnapshot` calls between
+          // discarding the replica and re-subscribing - closing the socket
+          // there would turn a local reseed into a reconnect.
+          close: () => {
+            client.close();
+          },
+        };
+      };
+      // Everything the lane arm needs, off the same transport. `getMethodSupport`
+      // answers `"unknown"` forever over the relay's `RemoteStreamClient` - that
+      // is not special-cased here, because the status-lane open is the probe
+      // that settles it either way.
+      const laneSelection: EpicLaneSelectionSources | null =
+        wsStreamClient === null
+          ? null
+          : {
+              support: (method) =>
+                wsStreamClient.getMethodSupport(
+                  method as keyof HostStreamRpcRegistry & string,
+                ),
+              subscribeSupport: (listener) =>
+                wsStreamClient.subscribeMethodSupport(listener),
+              stateStreamClientFactory: (
+                laneEpicId,
+                callbacks,
+                resumeProvider,
+              ) =>
+                new EpicStateStreamClient({
+                  wsStreamClient,
+                  epicId: laneEpicId,
+                  callbacks,
+                  resumeProvider,
+                }),
+              statusStreamClientFactory: (laneEpicId, callbacks) =>
+                new EpicStatusStreamClient({
+                  wsStreamClient,
+                  epicId: laneEpicId,
+                  callbacks,
+                }),
+            };
       const created = createOpenEpicStore({
         epicId,
         streamClientFactory,
         userId: sessionUserId,
         onAuthError: handleSessionAuthError,
         commandRequester: resolvedSessionHostClient,
-        // Explicit `null`: this composition has no lane stream clients YET, so
-        // the session takes the `@1` arm - today's behaviour, unchanged.
-        //
-        // Not a placeholder to be forgotten. Building them needs the session to
-        // own ONE durable transport that every client rides (the state lane,
-        // the status lane, and §6's per-artifact body lanes), because
-        // `openTransport` is not pooled and a client-per-transport shape would
-        // give an epic two sockets on the lane arm and N more with tiles open -
-        // worse than the `@1` monolith on exactly the axis this cutover is for.
-        // `WsStreamClient` already multiplexes methods over one socket, so one
-        // transport serves them all, and its `wsStreamClient` is also the
-        // method-support source selection reads before deciding anything.
-        //
-        // That is a change to this file's documented transport lifetime (the
-        // factory opens it today, so ownership is true only because there is
-        // one client), so it lands as its own change with its own pins rather
-        // than riding this one.
-        laneSelection: null,
+        laneSelection,
       });
       // Construction-honest stamp, written exactly once: `streamClientFactory`
       // above captures this run's `targetHostId` into the transport it opens,
       // so the stamp IS the handle's transport binding. Nothing re-stamps a
       // live handle - a label that can drift from the binding routes RPCs and
       // capability answers to a host that does not own the stream (F1).
-      handleHostIds.set(created, targetHostId);
-      return created;
+      // The transport outlives every client on it, so the two lifetimes that
+      // end the session have to close it: dispose (the registry evicting) and
+      // detachTransport (a retained-dirty buffer that must stop dialling a host
+      // this window has left). Composed here rather than inside the store
+      // because the transport is the PROVIDER's to own - the store knows about
+      // clients, not sockets - and idempotently, so either path may run first
+      // or both may run.
+      const handle: OpenEpicStoreHandle = {
+        ...created,
+        dispose: () => {
+          created.dispose();
+          closeSessionTransport();
+        },
+        detachTransport: () => {
+          created.detachTransport();
+          closeSessionTransport();
+        },
+      };
+      // Stamped on the handle that ESCAPES, not on the inner store object:
+      // `handleHostIds` is keyed by identity, and stamping `created` while
+      // returning a wrapper leaves every lookup answering "no construction host
+      // stamp" - which is a thrown invariant, not a silent miss, because the
+      // stamp is what routes RPCs and capability answers to the host that owns
+      // the stream (F1).
+      handleHostIds.set(handle, targetHostId);
+      return handle;
     };
     let current = sessionRef.current;
     // R-1: see `readOwnerIdentityVerdict` for the invariant this enforces.
