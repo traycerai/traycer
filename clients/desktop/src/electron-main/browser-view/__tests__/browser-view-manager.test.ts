@@ -1844,6 +1844,12 @@ describe("BrowserViewManager native tab lifecycle", () => {
       { x: -300, y: -200, width: 300, height: 200 },
     ]);
     expect(view.visible).toBe(true);
+
+    // The capture loop re-arms a real 200ms timer forever; left running it
+    // outlives this test and, once a later test installs fake timers, hops
+    // into the fake queue and spins `runAllTimersAsync` into the 10000-timer
+    // abort. Stop it before handing the worker to the next test.
+    harness.manager.pip.stop();
   });
 
   it("holds and releases the compositor lease for an unbound PiP tab", async () => {
