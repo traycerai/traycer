@@ -251,4 +251,52 @@ describe("BrowserScreencastStreamClient", () => {
     expect(sockets[0].textSent).toHaveLength(sentBeforeFrames + 1);
     stream.close();
   });
+
+  it("delivers the WebRTC video-plane frames and still drops unknown kinds", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const received: BrowserScreencastServerFrame[] = [];
+    const stream = new BrowserScreencastStreamClient({
+      wsStreamClient: client,
+      epicId: "epic-1",
+      sessionId: "browser-session-1",
+      tabId: "browser-tab-1",
+      maxWidth: 1280,
+      maxHeight: 720,
+      quality: 80,
+      format: "jpeg",
+      role: "tile",
+      callbacks: {
+        onServerFrame: (frame) => {
+          received.push(frame);
+        },
+        onConnectionStatus: () => undefined,
+      },
+    });
+
+    completeHandshake(sockets[0]);
+    sockets[0].fireText({
+      kind: "sdpOffer",
+      hasBinaryPayload: false,
+      negotiationId: 1,
+      sdp: "v=0\r\n",
+    });
+    sockets[0].fireText({
+      kind: "captureMode",
+      hasBinaryPayload: false,
+      mode: "video",
+    });
+    // A future frame kind this client build has never heard of - must drop,
+    // not crash the connection.
+    sockets[0].fireText({
+      kind: "aFutureVideoPlaneFrame",
+      hasBinaryPayload: false,
+    });
+
+    expect(received.map((frame) => frame.kind)).toEqual([
+      "sdpOffer",
+      "captureMode",
+    ]);
+    stream.close();
+  });
 });

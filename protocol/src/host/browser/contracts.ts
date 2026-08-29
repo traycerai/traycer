@@ -597,6 +597,36 @@ export const browserNavStateSchema = z
   .strict();
 export type BrowserNavState = z.infer<typeof browserNavStateSchema>;
 
+/**
+ * WebRTC video-plane signaling, ridden on `browser.screencast@1.0` as new
+ * frame kinds (webrtc-display-plane spec, decision 1 + 12: no third stream
+ * method, no minor bump - the contract is pre-release).
+ *
+ * The host's capture helper page is the offerer: it owns the
+ * `RTCPeerConnection` and only creates it once `getDisplayMedia` has a live
+ * track, so it - not the client - knows when negotiation can start. The
+ * client is therefore always the answerer. `negotiationId` correlates one
+ * offer/answer/candidate round; a fallback-and-retry (decision 5) starts a
+ * new one, so late candidates from an abandoned round are ignored rather
+ * than mis-applied to the next attempt.
+ */
+const browserScreencastIceCandidateFields = {
+  negotiationId: z.number().int().nonnegative(),
+  candidate: z.string(),
+  sdpMid: z.string().nullable(),
+  sdpMLineIndex: z.number().int().nonnegative().nullable(),
+} as const;
+
+const browserScreencastAgentCursorTypeSchema = z.enum(["move", "down", "up"]);
+export type BrowserScreencastAgentCursorType = z.infer<
+  typeof browserScreencastAgentCursorTypeSchema
+>;
+
+const browserScreencastCaptureModeSchema = z.enum(["jpeg", "video"]);
+export type BrowserScreencastCaptureMode = z.infer<
+  typeof browserScreencastCaptureModeSchema
+>;
+
 export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -692,6 +722,42 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
       kind: z.literal("unsupportedInteraction"),
       ...textFrameFields,
       feature: browserScreencastUnsupportedFeatureSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("sdpOffer"),
+      ...textFrameFields,
+      negotiationId: z.number().int().nonnegative(),
+      sdp: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("iceCandidate"),
+      ...textFrameFields,
+      ...browserScreencastIceCandidateFields,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("agentCursor"),
+      ...textFrameFields,
+      type: browserScreencastAgentCursorTypeSchema,
+      // Normalized [0,1] to the viewport-epoch geometry, unclamped;
+      // epoch minted by the host (ticket 06).
+      epoch: z.number().int().nonnegative(),
+      normalizedX: z.number(),
+      normalizedY: z.number(),
+      // Agent identity/context shown alongside the cursor overlay.
+      label: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("captureMode"),
+      ...textFrameFields,
+      mode: browserScreencastCaptureModeSchema,
     })
     .strict(),
 ]);
@@ -845,6 +911,51 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       generation: z.number().int().nonnegative(),
       accept: z.boolean(),
       promptText: z.string().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("sdpAnswer"),
+      ...textFrameFields,
+      negotiationId: z.number().int().nonnegative(),
+      sdp: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("iceCandidate"),
+      ...textFrameFields,
+      ...browserScreencastIceCandidateFields,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("videoPlaneState"),
+      ...textFrameFields,
+      // Lets the host ignore a "failed" from a negotiation round it already
+      // abandoned (a retry started a new, higher negotiationId).
+      negotiationId: z.number().int().nonnegative(),
+      // "live" = first decoded video frame; "failed" = track death/timeout.
+      state: z.enum(["live", "failed"]),
+      reason: z.string().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("videoStats"),
+      ...textFrameFields,
+      // Receive-side WebRTC getStats + client-observed timing; the trace log
+      // consumes this raw (semantics beyond the shape are ticket 11's scope).
+      negotiationId: z.number().int().nonnegative(),
+      framesDecoded: z.number().int().nonnegative(),
+      framesDropped: z.number().int().nonnegative(),
+      packetsLost: z.number().int().nonnegative(),
+      jitterMs: z.number().nonnegative(),
+      roundTripTimeMs: z.number().nonnegative(),
+      glassToGlassMs: z.number().nonnegative().nullable(),
+      // getStats() candidate-pair `candidateType` of the active receive
+      // path (only observable receiver-side) - the "ICE path taken" metric.
+      iceCandidatePairType: z.string(),
     })
     .strict(),
 ]);

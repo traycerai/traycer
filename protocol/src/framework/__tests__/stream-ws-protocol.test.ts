@@ -7,6 +7,7 @@ import {
   clientStreamHostCredentialProvisionFrameSchema,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
+  STREAM_CAPABILITY_BROWSER_WEBRTC,
 } from "@traycer/protocol/framework/stream-ws-protocol";
 
 /**
@@ -162,6 +163,24 @@ describe("stream-ws-protocol cross-version compatibility", () => {
     expect(STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION).toBe(
       "hostCredentialProvision",
     );
+  });
+
+  it("pins the wire value of the browserWebrtc capability tag", () => {
+    expect(STREAM_CAPABILITY_BROWSER_WEBRTC).toBe("browserWebrtc");
+  });
+
+  it("surfaces browserWebrtc in openAck.capabilities when a host advertises it", () => {
+    const parsed = hostStreamOpenAckFrameSchema.safeParse({
+      kind: "openAck",
+      manifest,
+      capabilities: [STREAM_CAPABILITY_BROWSER_WEBRTC],
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.capabilities).toContain(
+        STREAM_CAPABILITY_BROWSER_WEBRTC,
+      );
+    }
   });
 
   describe("clientStreamHostCredentialProvisionFrame (client -> host)", () => {
