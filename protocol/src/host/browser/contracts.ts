@@ -143,6 +143,12 @@ export type BrowserSessionsOpenRequest = z.infer<
  * form; a producer holding CDP's `{topLevelSite, hasCrossSiteAncestor}` object
  * must flatten it before it reaches this schema, and Electron's cookies API has
  * no partition key at all, so its producers send `null`.
+ *
+ * It defaults rather than being required: a peer built before CHIPS identity
+ * existed omits the field entirely, and requiring it would fail the whole frame
+ * parse. Frame drops are silent on both sides, so a required field here turned
+ * a version skew into an inert "+ Add browser" button. Absent means
+ * unpartitioned - the same thing those producers meant by sending `null`.
  */
 export const browserStorageCookieSchema = z.object({
   name: z.string(),
@@ -153,7 +159,7 @@ export const browserStorageCookieSchema = z.object({
   httpOnly: z.boolean(),
   secure: z.boolean(),
   sameSite: z.enum(["Strict", "Lax", "None"]),
-  partitionKey: z.string().nullable(),
+  partitionKey: z.string().nullable().default(null),
 });
 export type BrowserStorageCookie = z.infer<typeof browserStorageCookieSchema>;
 

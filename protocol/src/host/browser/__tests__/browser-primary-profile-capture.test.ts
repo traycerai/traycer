@@ -140,18 +140,25 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
     );
   });
 
-  it("requires an explicit partitionKey, so a producer cannot omit the decision", () => {
+  it("reads a cookie from a peer built before partitionKey as unpartitioned", () => {
+    // A required field here silently dropped every frame a pre-CHIPS peer sent
+    // - and every frame this side sent back to one - which read as an inert
+    // "+ Add browser" button rather than as a version skew.
     const { partitionKey: _partitionKey, ...withoutPartitionKey } =
       CAPTURED_RESPONSE.storageState.cookies[0];
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        ...CAPTURED_RESPONSE,
-        storageState: {
-          ...CAPTURED_RESPONSE.storageState,
-          cookies: [withoutPartitionKey],
-        },
-      }).success,
-    ).toBe(false);
+    const parsed = browserSessionsClientFrameSchema.safeParse({
+      ...CAPTURED_RESPONSE,
+      storageState: {
+        ...CAPTURED_RESPONSE.storageState,
+        cookies: [withoutPartitionKey],
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    if (parsed.data.kind !== "primaryProfileCaptured") {
+      throw new Error("expected a primaryProfileCaptured frame");
+    }
+    expect(parsed.data.storageState?.cookies[0]?.partitionKey).toBe(null);
   });
 
   it("rejects CDP's object partitionKey, which a producer must flatten first", () => {
