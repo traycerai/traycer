@@ -549,7 +549,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    const individualStops = screen.getByTestId("sweep-review-stops").textContent;
+    const individualStops =
+      screen.getByTestId("sweep-review-stops").textContent;
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     const individualRequest = testState.lastVariables;
 
