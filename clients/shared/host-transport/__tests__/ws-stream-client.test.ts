@@ -161,6 +161,60 @@ function makeFactory(): {
   return { factory, sockets };
 }
 
+/**
+ * Bound and cadence for {@link pollUntil}. The budget is far longer than any
+ * backoff rung these suites configure, so it only ever expires on a genuine
+ * hang - it is a failure message, not a timing assumption.
+ */
+const POLL_BUDGET_MS = 2_000;
+const POLL_STEP_MS = 5;
+
+/**
+ * Waits for something to HAPPEN, instead of betting it happened inside a fixed
+ * sleep.
+ *
+ * `await wait(30)` followed by `expect(sockets).toHaveLength(1)` — or worse,
+ * `sockets[0].socket.fireOpen()` — is the shape behind this file's known
+ * intermittent failures: the sleep loses the race against a backoff redial and
+ * the test either indexes a socket that does not exist yet or reads a count
+ * that has not caught up. These suites run on REAL timers, so that race is
+ * decided by machine load, and every test added to the file makes it likelier.
+ *
+ * Every POSITIVE claim ("a dial happened", "the park installed its listener")
+ * goes through this. NEGATIVE claims ("nothing dialed", "never closed") keep
+ * their fixed `wait`, because there the elapsed time IS the assertion and
+ * polling would weaken it.
+ */
+async function pollUntil(
+  label: string,
+  predicate: () => boolean,
+): Promise<void> {
+  const deadline = Date.now() + POLL_BUDGET_MS;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_STEP_MS));
+  }
+  throw new Error(`timed out after ${POLL_BUDGET_MS}ms waiting for ${label}`);
+}
+
+/**
+ * The socket for dial number `index`, once it exists.
+ *
+ * Indexed rather than "the most recent", which is the other half of the same
+ * hazard: a loop that grabs `sockets[sockets.length - 1]` before the next dial
+ * has landed silently re-drives the PREVIOUS socket, so the test appears to run
+ * its cycles while actually running one of them twice.
+ */
+async function nthSocket(
+  sockets: RecordedSocket[],
+  index: number,
+): Promise<StubStreamWebSocket> {
+  await pollUntil(`dial #${index}`, () => sockets.length > index);
+  return sockets[index].socket;
+}
+
 function makeClient(options: {
   readonly factory: IStreamWebSocketFactory;
   readonly authToken: string | null;
@@ -3688,6 +3742,21 @@ describe("WsStreamClient host credential provisioning", () => {
     state: "missing" | "active" | "needs-reauth" | null | "omit",
   ): void {
     socket.fireOpen();
+    ackProvisionHandshake(socket, state);
+  }
+
+  /**
+   * The half of the handshake that READS what `fireOpen` produced.
+   *
+   * Split out so a caller that cannot assume the open frame is already on the
+   * wire can poll between the two halves. `socket.textSent[0]` is undefined
+   * until the client has responded to the open event, and parsing that
+   * undefined is the exact shape of this file's long-standing flake.
+   */
+  function ackProvisionHandshake(
+    socket: StubStreamWebSocket,
+    state: "missing" | "active" | "needs-reauth" | null | "omit",
+  ): void {
     const openRaw = socket.textSent[0];
     const openParsed = JSON.parse(openRaw) as {
       readonly manifest: Record<string, { major: number; minor: number }>;
@@ -3879,13 +3948,28 @@ describe("WsStreamClient host credential provisioning", () => {
     expect(mint).toHaveBeenCalledTimes(1);
 
     for (let i = 0; i < 4; i += 1) {
-      sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
-      await wait(30);
-      const latest = sockets[sockets.length - 1].socket;
-      completeProvisionHandshake(latest, "missing");
+      // Wait for the REDIAL, do not bet on it landing inside 30ms. The old
+      // fixed wait could return while `sockets` still ended at the socket just
+      // closed, replaying the handshake against a dead socket - a silent no-op
+      // that made this loop run fewer cycles than it claims - or reach a fresh
+      // socket that had not sent its open frame yet, which is the
+      // `JSON.parse(undefined)` this test failed on.
+      const closedIndex = sockets.length - 1;
+      sockets[closedIndex].socket.fireClose(1000, "drop", false);
+      const latest = await nthSocket(sockets, closedIndex + 1);
+      latest.fireOpen();
+      await pollUntil(
+        `dial #${closedIndex + 1} to send its open frame`,
+        () => latest.textSent.length > 0,
+      );
+      ackProvisionHandshake(latest, "missing");
       await flush();
     }
 
+    // Deliberately NOT polled. "Minted exactly once" is a claim about the whole
+    // window that just elapsed, so waiting for it to become true would be
+    // waiting for the bug; the four cycles above are what give the window its
+    // length.
     expect(mint).toHaveBeenCalledTimes(1);
     session.close();
   });
@@ -5121,62 +5205,6 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
  * and fixing the clock recovered nothing because terminal sessions never
  * re-dial.
  */
-/**
- * Bound and cadence for {@link pollUntil}. The budget is far longer than any
- * backoff rung these suites configure, so it only ever expires on a genuine
- * hang - it is a failure message, not a timing assumption.
- */
-const CLOCK_POLL_BUDGET_MS = 2_000;
-const CLOCK_POLL_STEP_MS = 5;
-
-/**
- * Waits for something to HAPPEN, instead of betting it happened inside a fixed
- * sleep.
- *
- * `await wait(30)` followed by `expect(sockets).toHaveLength(1)` — or worse,
- * `sockets[0].socket.fireOpen()` — is the shape behind this file's known
- * intermittent failures: the sleep loses the race against a backoff redial and
- * the test either indexes a socket that does not exist yet or reads a count
- * that has not caught up. These suites run on REAL timers, so that race is
- * decided by machine load, and every test added to the file makes it likelier.
- *
- * Every POSITIVE claim ("a dial happened", "the park installed its listener")
- * goes through this. NEGATIVE claims ("nothing dialed", "never closed") keep
- * their fixed `wait`, because there the elapsed time IS the assertion and
- * polling would weaken it.
- */
-async function pollUntil(
-  label: string,
-  predicate: () => boolean,
-): Promise<void> {
-  const deadline = Date.now() + CLOCK_POLL_BUDGET_MS;
-  while (Date.now() < deadline) {
-    if (predicate()) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, CLOCK_POLL_STEP_MS));
-  }
-  throw new Error(
-    `timed out after ${CLOCK_POLL_BUDGET_MS}ms waiting for ${label}`,
-  );
-}
-
-/**
- * The socket for dial number `index`, once it exists.
- *
- * Indexed rather than "the most recent", which is the other half of the same
- * hazard: a loop that grabs `sockets[sockets.length - 1]` before the next dial
- * has landed silently re-drives the PREVIOUS socket, so the test appears to run
- * its cycles while actually running one of them twice.
- */
-async function nthSocket(
-  sockets: RecordedSocket[],
-  index: number,
-): Promise<StubStreamWebSocket> {
-  await pollUntil(`dial #${index}`, () => sockets.length > index);
-  return sockets[index].socket;
-}
-
 describe("WsStreamClient clock-skew park", () => {
   beforeEach(() => {
     vi.useRealTimers();
