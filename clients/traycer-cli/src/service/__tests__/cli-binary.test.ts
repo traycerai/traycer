@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import type { PathLike } from "node:fs";
-import { lstat, stat } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1034,25 +1034,46 @@ describe("resolveServiceCliInvocation", () => {
   // `allowSelfInvocation`.
   it("stages a copy of process.execPath at the well-known slot and returns empty args when packaged, even with allowSelfInvocation false", async () => {
     seaState.current = true;
-    const { wellKnownCliBinaryPath } =
-      await import("../../store/well-known-cli");
-    const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
-    const { resolveServiceCliInvocation } = await import("../cli-binary");
-
-    const result = await resolveServiceCliInvocation({
-      environment: ENVIRONMENT,
-      override: null,
-      allowSelfInvocation: false,
+    // Staging copies `process.execPath`'s BYTES, and under vitest that used
+    // to be the real ~100MB Node binary: on a loaded CI runner pushing it
+    // through the copy+rename staging pipeline blew the 5s test timeout.
+    // The contract is "a copy of whatever execPath names lands in the
+    // slot", not "100MB copies in 5s" - point execPath at a small stand-in,
+    // exactly as the refresh test below does, which also upgrades the
+    // size-only comparison to full byte equality.
+    const fakeExecPath = join(workHome, "fake-packaged-binary");
+    // Raw non-UTF-8 bytes: a text fixture round-trips through a utf8 decode
+    // and would miss corruption that only shows on binary content.
+    const packagedBytes = Buffer.from([0x00, 0xff, 0x80, 0x7f, 0x01, 0xfe]);
+    writeFileSync(fakeExecPath, packagedBytes);
+    const originalExecPath = process.execPath;
+    Object.defineProperty(process, "execPath", {
+      value: fakeExecPath,
+      configurable: true,
     });
+    try {
+      const { wellKnownCliBinaryPath } =
+        await import("../../store/well-known-cli");
+      const wellKnownPath = wellKnownCliBinaryPath(ENVIRONMENT);
+      const { resolveServiceCliInvocation } = await import("../cli-binary");
 
-    expect(result).toEqual({ command: wellKnownPath, args: [] });
-    const slotStat = await lstat(wellKnownPath);
-    expect(slotStat.isSymbolicLink()).toBe(false);
-    expect(slotStat.isFile()).toBe(true);
-    // process.execPath is the ~100MB running binary - compare sizes rather
-    // than reading and diffing the whole file.
-    const execStat = await stat(process.execPath);
-    expect(slotStat.size).toBe(execStat.size);
+      const result = await resolveServiceCliInvocation({
+        environment: ENVIRONMENT,
+        override: null,
+        allowSelfInvocation: false,
+      });
+
+      expect(result).toEqual({ command: wellKnownPath, args: [] });
+      const slotStat = await lstat(wellKnownPath);
+      expect(slotStat.isSymbolicLink()).toBe(false);
+      expect(slotStat.isFile()).toBe(true);
+      expect(readFileSync(wellKnownPath)).toEqual(packagedBytes);
+    } finally {
+      Object.defineProperty(process, "execPath", {
+        value: originalExecPath,
+        configurable: true,
+      });
+    }
   });
 
   // winget's portable installer replaces process.execPath's bytes in place

@@ -1417,6 +1417,7 @@ function assistantMessageWithUsage(
     usage,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }

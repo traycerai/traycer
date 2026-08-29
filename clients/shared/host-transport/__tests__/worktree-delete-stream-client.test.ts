@@ -97,6 +97,7 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: false,
+      expectedHoldersRevision: undefined,
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
@@ -121,6 +122,7 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: true,
+      expectedHoldersRevision: undefined,
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
@@ -146,6 +148,7 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: false,
+      expectedHoldersRevision: undefined,
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
@@ -161,7 +164,12 @@ describe("WorktreeDeleteStreamClient", () => {
       holders: HOLDERS,
       hasBinaryPayload: false,
     });
-    expect(onFailed).toHaveBeenCalledWith("Worktree is in use", HOLDERS);
+    expect(onFailed).toHaveBeenCalledWith(
+      "Worktree is in use",
+      HOLDERS,
+      undefined,
+      undefined,
+    );
     client.close();
   });
 
@@ -174,6 +182,7 @@ describe("WorktreeDeleteStreamClient", () => {
       worktreePath: "/wt/a",
       scripts: null,
       stopOwners: false,
+      expectedHoldersRevision: undefined,
       callbacks: {
         onStarted: () => {},
         onPhase: () => {},
@@ -188,7 +197,95 @@ describe("WorktreeDeleteStreamClient", () => {
       reason: "Worktree is in use",
       hasBinaryPayload: false,
     });
-    expect(onFailed).toHaveBeenCalledWith("Worktree is in use", undefined);
+    expect(onFailed).toHaveBeenCalledWith(
+      "Worktree is in use",
+      undefined,
+      undefined,
+      undefined,
+    );
+    client.close();
+  });
+
+  it("sends expectedHoldersRevision on the 1.2 open request and forwards HOLDERS_CHANGED", () => {
+    const session = new StubSession();
+    const wsStreamClient = makeWsStreamClient(session);
+    const onFailed = vi.fn();
+    const client = new WorktreeDeleteStreamClient({
+      wsStreamClient,
+      worktreePath: "/wt/a",
+      scripts: null,
+      stopOwners: true,
+      expectedHoldersRevision:
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      callbacks: {
+        onStarted: () => {},
+        onPhase: () => {},
+        onOutput: () => {},
+        onComplete: () => {},
+        onFailed,
+        onConnectionStatus: () => {},
+      },
+    });
+    expect(wsStreamClient.subscribe).toHaveBeenCalledWith(
+      "worktree.deleteByPath",
+      {
+        worktreePath: "/wt/a",
+        scripts: null,
+        stopOwners: true,
+        expectedHoldersRevision:
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+    );
+    session.emitFrame({
+      kind: "failed",
+      reason: "Holders changed",
+      holders: HOLDERS,
+      holdersRevision:
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      code: "WORKTREE_HOLDERS_CHANGED",
+      hasBinaryPayload: false,
+    });
+    expect(onFailed).toHaveBeenCalledWith(
+      "Holders changed",
+      HOLDERS,
+      "WORKTREE_HOLDERS_CHANGED",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    client.close();
+  });
+
+  it("delivers a 1.2 failed frame with an unknown code instead of dropping it", () => {
+    const session = new StubSession();
+    const wsStreamClient = makeWsStreamClient(session);
+    const onFailed = vi.fn();
+    const client = new WorktreeDeleteStreamClient({
+      wsStreamClient,
+      worktreePath: "/wt/a",
+      scripts: null,
+      stopOwners: false,
+      expectedHoldersRevision: undefined,
+      callbacks: {
+        onStarted: () => {},
+        onPhase: () => {},
+        onOutput: () => {},
+        onComplete: () => {},
+        onFailed,
+        onConnectionStatus: () => {},
+      },
+    });
+    session.emitFrame({
+      kind: "failed",
+      reason: "Worktree is in use",
+      code: "SOME_FUTURE_CODE",
+      holders: HOLDERS,
+      hasBinaryPayload: false,
+    });
+    expect(onFailed).toHaveBeenCalledWith(
+      "Worktree is in use",
+      HOLDERS,
+      undefined,
+      undefined,
+    );
     client.close();
   });
 });
