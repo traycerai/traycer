@@ -55,9 +55,12 @@ describe("<AppNotificationsSettingsPanel />", () => {
     expect(screen.getByRole("combobox", { name: "Info sound" })).toBeTruthy();
     expect(
       screen.getByText(
-        "Sharing, comments, access changes, and other informational notifications. Warm, calm, and deliberately subtle.",
+        "Sharing, comments, access changes, and other informational notifications.",
       ),
     ).toBeTruthy();
+    expect(
+      screen.queryByText("Warm, calm, and deliberately subtle."),
+    ).toBeNull();
     expect(screen.queryByTestId("notifications-severity-policy")).toBeNull();
   });
 

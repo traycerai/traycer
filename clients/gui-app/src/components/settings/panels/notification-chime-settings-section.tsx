@@ -13,7 +13,6 @@ import {
 import {
   CORE_NOTIFICATION_CHIME_SOUNDS,
   isNotificationChimeSound,
-  NOTIFICATION_CHIME_DESCRIPTIONS,
   type NotificationChimeEventType,
   NOTIFICATION_CHIME_LABELS,
   type NotificationChimeSound,
@@ -67,7 +66,7 @@ export function NotificationChimeSettingsSection() {
         <SettingsRow
           key={row.eventType}
           label={row.label}
-          description={`${row.description} ${NOTIFICATION_CHIME_DESCRIPTIONS[sounds[row.eventType]]}`}
+          description={row.description}
           control={
             <NotificationChimeSelect
               label={row.label}
