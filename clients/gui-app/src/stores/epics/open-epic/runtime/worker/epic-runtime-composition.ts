@@ -42,6 +42,7 @@ import {
 import type { EpicStreamClientFactory } from "../legacy-epic-stream-adapter";
 import type { EpicRuntimeDelivery } from "../projection-delivery";
 import type { EpicWriteCommandSender } from "../epic-write-command";
+import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port";
 
 /**
  * The four factories, as one value.
@@ -168,6 +169,17 @@ export interface EpicRuntimeCompositionOptions {
   readonly onAuthError: (() => void) | null;
   readonly writeCommandSender: EpicWriteCommandSender;
   readonly commandIdFactory: CommandIdFactory;
+  /**
+   * Where the composed runtime reports its bytes.
+   *
+   * Explicit and with NO default, for the same reason the four factories are:
+   * a default here would be a value import of the process accountant from a
+   * module the worker composes, which is precisely the singleton fork 4e
+   * exists to close. Today both arms are handed the main-side,
+   * process-backed port; at the flip this one becomes the worker's pushing
+   * implementation and main keeps the books.
+   */
+  readonly accounting: EpicRuntimeAccountingPort;
 }
 
 export function createEpicRuntimeComposition(
@@ -179,6 +191,7 @@ export function createEpicRuntimeComposition(
     environment: options.environment,
     streamClientFactory: options.factories.streamClientFactory,
     delivery: options.delivery,
+    accounting: options.accounting,
     getCurrentUserId: options.getCurrentUserId,
     getDocArm: options.getDocArm,
     onAuthError: options.onAuthError,

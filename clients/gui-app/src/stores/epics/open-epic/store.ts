@@ -70,6 +70,7 @@ import {
   type EpicReplicaRuntime,
 } from "./runtime/epic-replica-runtime";
 import { createRendererRuntimeEnvironment } from "./runtime/runtime-environment";
+import { createProcessBackedAccountingPort } from "./runtime/process-backed-accounting-port";
 import {
   createBatchingDelivery,
   type EpicRuntimeDelivery,
@@ -869,12 +870,24 @@ export function createOpenEpicStore(
     });
   });
 
+  const runtimeHostId =
+    options.commandRequester?.getActiveHostId() ?? "unbound";
+  const runtimeEnvironment = createRendererRuntimeEnvironment();
   const runtime = createEpicReplicaRuntime({
     epicId,
-    hostId: options.commandRequester?.getActiveHostId() ?? "unbound",
-    environment: createRendererRuntimeEnvironment(),
+    hostId: runtimeHostId,
+    environment: runtimeEnvironment,
     streamClientFactory: options.streamClientFactory,
     delivery,
+    // Built HERE, on main, and handed in — the runtime no longer reaches the
+    // process accountant itself. Both arms construct this same port, so both
+    // draw their runtime token from the one process-wide sequence; two
+    // sequences would collide on `bookKey` in the merge window.
+    accounting: createProcessBackedAccountingPort({
+      hostId: runtimeHostId,
+      epicId,
+      environment: runtimeEnvironment,
+    }),
     // The projector hides chats owned by a different signed-in user. The owner
     // id is the canonical `profile.userId`, read LIVE rather than off the
     // store's `userId` option: that option is the same canonical id today (it

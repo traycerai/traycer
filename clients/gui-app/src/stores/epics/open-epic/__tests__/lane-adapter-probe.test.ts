@@ -47,6 +47,7 @@ import type { EpicStreamClientFactory } from "../runtime/legacy-epic-stream-adap
 import type { EpicMethodSupportReader } from "../runtime/epic-adapter-selection";
 import type { EpicWriteCommandIntent } from "../runtime/epic-write-command";
 import { createRendererRuntimeEnvironment } from "../runtime/runtime-environment";
+import { createRecordingAccountingPort } from "../runtime/__tests__/accounting-port-fixture";
 import { createBatchingDelivery } from "../runtime/projection-delivery";
 import { DOC_IS_THE_ONLY_RECORD_SOURCE } from "../projection-helpers";
 
@@ -138,13 +139,7 @@ function createCountingArtifactFactory(): CountingArtifactFactory {
   let opens = 0;
   let closes = 0;
   const live = new Map<string, ArtifactStreamCallbacks>();
-  const factory: ArtifactStreamClientFactory = (
-    _epicId,
-    artifactId,
-    _authorityEpoch,
-    callbacks,
-    _seedOfferProvider,
-  ) => {
+  const factory: ArtifactStreamClientFactory = ({ artifactId, callbacks }) => {
     opens += 1;
     live.set(artifactId, callbacks);
     return {
@@ -411,6 +406,7 @@ function buildRuntimeRig(mode: SupportMode): RuntimeRig {
     environment: createRendererRuntimeEnvironment(),
     streamClientFactory: legacy.factory,
     delivery: createBatchingDelivery(() => {}),
+    accounting: createRecordingAccountingPort(),
     getCurrentUserId: () => null,
     getDocArm: () => DOC_IS_THE_ONLY_RECORD_SOURCE,
     onAuthError: null,

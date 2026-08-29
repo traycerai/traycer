@@ -48,22 +48,12 @@ import type {
   SendOutcome,
 } from "@traycer-clients/shared/replica-runtime";
 import {
-  BUDGET_PLANE_IDS,
   createCommandQueue,
   createTransactionalProjectionSink,
 } from "@traycer-clients/shared/replica-runtime";
-import { ensureProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 import { jsonByteLength } from "@/stores/replica-memory/json-bytes";
-import {
-  hotDocHolderId,
-  type HotDocBudgetSink,
-} from "@/stores/replica-memory/hot-doc-budget";
-import {
-  epicColdRoomHolderId,
-  epicCommandOverlayHolderId,
-  epicReplicaBookKey,
-  epicRootHolderId,
-} from "@/stores/replica-memory/epic-replica-budget";
+import type { HotDocBudgetSink } from "@/stores/replica-memory/hot-doc-budget";
+import type { EpicRuntimeAccountingPort } from "./epic-runtime-accounting-port";
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
 import type { EpicDocRecordArms } from "../projection-helpers";
 import type { EpicArtifactRoomAvailability } from "../types";
@@ -132,6 +122,17 @@ export interface EpicReplicaRuntimeOptions {
    * runtime is in a worker.
    */
   readonly delivery: EpicRuntimeDelivery;
+  /**
+   * Where this runtime's bytes are reported.
+   *
+   * Supplied, never reached for. T5's accountant is a module-scoped singleton
+   * whose app-wideness comes from MODULE IDENTITY, so a worker that imported
+   * it would silently keep a second copy of the books — invisible in-process,
+   * where there is only ever one. Taking the port as an option is what moves
+   * that import onto main's graph and off this file's; the worker-graph
+   * ratchet is what keeps it there.
+   */
+  readonly accounting: EpicRuntimeAccountingPort;
   /**
    * The signed-in user's id, read live. The runtime never imports the auth
    * store; identity arrives from the UI side of the seam.
@@ -366,6 +367,7 @@ export function createEpicReplicaRuntime(
     environment,
     streamClientFactory,
     delivery,
+    accounting,
     getCurrentUserId,
     getDocArm,
     onAuthError,
@@ -404,9 +406,6 @@ export function createEpicReplicaRuntime(
    */
   let replacementSettledForReason: ReplicaReplacementReason | null = null;
   const isDisposed = (): boolean => disposed;
-  const memory = ensureProcessMemoryRuntime(environment);
-  const runtimeToken = memory.nextRuntimeToken();
-  const bookKey = epicReplicaBookKey(hostId, epicId, runtimeToken);
   /**
    * Last snapshot's wire bytes, not a live encode of the resident doc.
    * Honest while `@1` is the wire: the floor is measured-not-evicted, and
@@ -414,36 +413,13 @@ export function createEpicReplicaRuntime(
    */
   let rootSettledBytes = 0;
   const budgetSink: HotDocBudgetSink = {
-    settle(artifactRoomId, bytes) {
-      memory.hotDocs.settle(
-        memory.accountant,
-        hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
-        bytes,
-      );
-      memory.accountant.reconcile(BUDGET_PLANE_IDS.hotDocs);
-    },
-    settleCold(artifactRoomId, bytes) {
-      memory.epicReplicas.settleColdRoom(
-        memory.accountant,
-        bookKey,
-        epicColdRoomHolderId(hostId, epicId, runtimeToken, artifactRoomId),
-        bytes,
-      );
-      memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
-    },
-    chargeProvisional(artifactRoomId, bytes) {
-      memory.hotDocs.chargeProvisional(
-        memory.accountant,
-        hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
-        bytes,
-      );
-    },
-    release(artifactRoomId) {
-      memory.hotDocs.release(
-        memory.accountant,
-        hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
-      );
-    },
+    settle: (artifactRoomId, bytes) =>
+      accounting.settleHotDocBytes(artifactRoomId, bytes),
+    settleCold: (artifactRoomId, bytes) =>
+      accounting.settleColdRoomBytes(artifactRoomId, bytes),
+    chargeProvisional: (artifactRoomId, bytes) =>
+      accounting.chargeHotDocProvisional(artifactRoomId, bytes),
+    release: (artifactRoomId) => accounting.releaseHotDoc(artifactRoomId),
   };
 
   // Explicit type arguments on every sink, and typed constants rather than
@@ -681,23 +657,17 @@ export function createEpicReplicaRuntime(
   function publishWriteCommands(): void {
     const writeCommands = commandQueue.list();
     recordsSink.publish({ ...recordsSink.read(), writeCommands });
-    memory.epicReplicas.settleCommandOverlay(
-      memory.accountant,
-      epicCommandOverlayHolderId(hostId, epicId, runtimeToken),
+    accounting.settleCommandOverlayBytes(
       jsonByteLength(commandQueue.pending()),
     );
   }
 
   const unsubscribeCommandQueue = commandQueue.subscribe(publishWriteCommands);
 
-  memory.hotDocs.attach({
-    key: bookKey,
-    materializedIds: () => tier.materializedIds(),
+  accounting.registerBooks({
+    materializedRoomIds: () => tier.materializedIds(),
     demoteColdestUnpinned: (overBytes) => tier.demoteColdestUnpinned(overBytes),
-  });
-  memory.epicReplicas.attach({
-    key: bookKey,
-    measure: () => rootSettledBytes,
+    measureRootBytes: () => rootSettledBytes,
     projectionCounts: () => {
       const projection = records.sink.read();
       return {
@@ -729,12 +699,7 @@ export function createEpicReplicaRuntime(
   function applyRootSnapshot(meta: SnapshotMetaEpic, update: Uint8Array): void {
     const divergence = records.ingestSnapshot(meta, update);
     rootSettledBytes = update.byteLength;
-    memory.epicReplicas.settleRoot(
-      memory.accountant,
-      epicRootHolderId(hostId, epicId, runtimeToken),
-      update.byteLength,
-    );
-    memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
+    accounting.settleRootBytes(update.byteLength);
     control.adoptSnapshotRole(meta.permissionRole);
     records.publishSnapshotLanded(meta, divergence);
     // The mapping half of the availability fan-out. A `@1` room reports `ready`
@@ -1427,17 +1392,11 @@ export function createEpicReplicaRuntime(
       unsubscribeCommandQueue();
       commandQueue.dispose();
       attemptedHostByCommandId.clear();
-      memory.epicReplicas.settleCommandOverlay(
-        memory.accountant,
-        epicCommandOverlayHolderId(hostId, epicId, runtimeToken),
-        0,
-      );
+      accounting.settleCommandOverlayBytes(0);
       records.dispose();
       control.dispose();
       rooms.dispose();
-      memory.hotDocs.detach(bookKey);
-      memory.epicReplicas.detach(bookKey);
-      memory.epicReplicas.release(memory.accountant, bookKey);
+      accounting.unregisterBooks();
     },
 
     isDisposed,

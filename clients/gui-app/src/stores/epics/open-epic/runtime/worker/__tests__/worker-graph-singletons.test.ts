@@ -58,6 +58,17 @@ const CLIENTS_DIR = path.join(
 const ENTRY = path.join(WORKER_DIR, "epic-runtime-worker-entry.ts");
 
 /**
+ * The second entry, and the one 4e actually moved.
+ *
+ * The worker entry above does not import the composition root yet, so its
+ * graph is small. `epic-replica-runtime.ts` is the module that WILL be in the
+ * worker, and before 4e it value-imported `process-memory-accountant`
+ * directly. Walking it is what makes this pin load-bearing TODAY rather than
+ * only on the commit that wires the composition.
+ */
+const RUNTIME_ENTRY = path.join(WORKER_DIR, "..", "epic-replica-runtime.ts");
+
+/**
  * Known process-scoped modules, each with the chain that reaches it.
  *
  * Emptied by 4e, which inverts the runtime's accounting dependency so
@@ -170,10 +181,10 @@ interface GraphWalk {
   readonly resolvedAliasCount: number;
 }
 
-function walk(): GraphWalk {
+function walk(entry: string): GraphWalk {
   const parent = new Map<string, string>();
-  const seen = new Set<string>([ENTRY]);
-  const queue: string[] = [ENTRY];
+  const seen = new Set<string>([entry]);
+  const queue: string[] = [entry];
   let resolvedAliasCount = 0;
   while (queue.length > 0) {
     const file = queue.shift();
@@ -209,6 +220,64 @@ function walk(): GraphWalk {
   return { stateful, resolvedAliasCount };
 }
 
+/**
+ * The runtime entry's allowlist. SEPARATE from {@link ALLOWED}, which covers
+ * the worker entry and is empty.
+ *
+ * One entry, and it is not 4e's to remove. `epic-write-command.ts:7` imports
+ * `StaleHostBindingAuthorityError` for a single `error instanceof` in
+ * `classifyEpicWriteCommandFailure` - and importing that error CLASS pulls its
+ * whole module, which pulls the process-wide `RemoteSession` cache. The
+ * write-command ruling puts classification on MAIN, so the worker never runs
+ * the classifier and this chain disappears with that change rather than
+ * needing one of its own. Until it lands, the chain is real and is recorded
+ * here rather than hidden by scoping the pin to miss it.
+ *
+ * **Same T14 gate as the worker allowlist: this must be EMPTY before the OSS**
+ * **PR opens.** A green suite with an entry in it means a singleton shipped
+ * with permission.
+ */
+const RUNTIME_ALLOWED: ReadonlyMap<string, string> = new Map([
+  [
+    "shared/host-transport/remote/active-remote-sessions.ts",
+    "epic-write-command.ts -> host-binding-authority-registry.ts (one `instanceof`)",
+  ],
+]);
+
+describe("the epic replica runtime's value-import graph", () => {
+  it("no longer reaches the process memory accountant - 4e's inversion, pinned", () => {
+    // Before 4e this walk found `process-memory-accountant` one hop out, via
+    // `ensureProcessMemoryRuntime(environment)` in the runtime's constructor.
+    // The accountant is now supplied as `options.accounting`, so the module
+    // that moves into the worker no longer names the singleton at all and the
+    // import lives on main, in `process-backed-accounting-port.ts`.
+    const found = walk(RUNTIME_ENTRY).stateful;
+    const detail = [...found.keys()]
+      .filter((file) => !RUNTIME_ALLOWED.has(file))
+      .map((file) => `${file}\n      via ${found.get(file) ?? "?"}`)
+      .join("\n\n");
+    expect(detail).toBe("");
+  });
+
+  it("keeps ITS allowlist honest - the recorded chain must still exist", () => {
+    // Same anti-rot check as the worker entry's. An entry naming a chain the
+    // graph no longer has is permission granted to nothing, and it would wave
+    // through the next singleton to appear under that name. When the
+    // write-command ruling lands, this test is what tells you to delete the
+    // entry rather than leaving it as cover.
+    const found = walk(RUNTIME_ENTRY).stateful;
+    for (const file of RUNTIME_ALLOWED.keys()) {
+      expect(found.has(file)).toBe(true);
+    }
+  });
+
+  it("resolves its own anchor, so the walk above is not vacuous", () => {
+    expect(walk(RUNTIME_ENTRY).resolvedAliasCount).toBeGreaterThanOrEqual(
+      MIN_RESOLVED_ALIAS_IMPORTS,
+    );
+  });
+});
+
 describe("the worker entry's value-import graph", () => {
   // The pin's own liveness, asserted BEFORE anything it concludes.
   //
@@ -230,13 +299,13 @@ describe("the worker entry's value-import graph", () => {
     // A floor, not the current count: the graph legitimately grows, and a
     // pin that must be edited on every unrelated import gets edited without
     // being read.
-    expect(walk().resolvedAliasCount).toBeGreaterThanOrEqual(
+    expect(walk(ENTRY).resolvedAliasCount).toBeGreaterThanOrEqual(
       MIN_RESOLVED_ALIAS_IMPORTS,
     );
   });
 
   it("reaches no process-scoped module outside the ratchet's allowlist", () => {
-    const found = walk().stateful;
+    const found = walk(ENTRY).stateful;
     const unexpected = [...found.keys()].filter(
       (file) => !ALLOWED.has(file) && !PER_THREAD_OK.includes(file),
     );
@@ -254,7 +323,7 @@ describe("the worker entry's value-import graph", () => {
     // to nothing, and the next singleton to appear under that name would be
     // waved through. With an empty allowlist this holds vacuously and starts
     // meaning something the moment an entry is added.
-    const found = walk().stateful;
+    const found = walk(ENTRY).stateful;
     for (const file of ALLOWED.keys()) {
       expect(found.has(file)).toBe(true);
     }
