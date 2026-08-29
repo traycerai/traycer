@@ -612,6 +612,66 @@ describe("BrowserPeekTile input capture", () => {
     expect(second.getAttribute("src")).toBe("data:image/jpeg;base64,BAUG");
   });
 
+  it("latches the presented sequence only at paint, not at frame arrival", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    const stream = liveStream();
+    act(() => {
+      emitStarted(stream);
+      emitJpegFrame(stream, 7, JPEG_SEQ_7);
+    });
+    armPeekTile(stream);
+    const button = overlayButton();
+
+    // The frame has arrived (and been acked) but not yet painted, so the
+    // presented sequence has not latched - a pointer send has nothing to
+    // carry as `castSequence` and is dropped.
+    fireEvent.pointerDown(
+      button,
+      pointerEventInit({
+        clientX: 400,
+        clientY: 300,
+        button: 0,
+        buttons: 1,
+        detail: 0,
+      }),
+    );
+    fireEvent.pointerUp(
+      button,
+      pointerEventInit({
+        clientX: 400,
+        clientY: 300,
+        button: 0,
+        buttons: 0,
+        detail: 0,
+      }),
+    );
+    expect(framesOfKind(stream, "pointer")).toEqual([]);
+
+    loadScreencastImage();
+
+    fireEvent.pointerDown(
+      button,
+      pointerEventInit({
+        clientX: 400,
+        clientY: 300,
+        button: 0,
+        buttons: 1,
+        detail: 0,
+      }),
+    );
+
+    expect(framesOfKind(stream, "pointer")).toEqual([
+      expect.objectContaining({ type: "down", castSequence: 7 }),
+    ]);
+  });
+
   it("sends clickCount 1 on armed down/up and 0 on move/wheel", async () => {
     const frames = installAnimationFrameQueue();
     render(
@@ -670,6 +730,9 @@ describe("BrowserPeekTile input capture", () => {
         cancelable: true,
       }),
     );
+    // Wheel coalesces per animation frame; flush it like the move above.
+    frames.runNextFrame();
+    await Promise.resolve();
 
     expect(framesOfKind(stream, "pointer")).toEqual([
       expect.objectContaining({
@@ -909,6 +972,20 @@ describe("BrowserPeekTile input capture", () => {
       }),
     );
     await Promise.resolve();
+    // Neither the pending move nor the coalesced wheel has flushed yet - the
+    // wheel schedules its own animation frame rather than sending inline.
+    expect(framesOfKind(stream, "pointer").map((frame) => frame.type)).toEqual([
+      "move",
+      "down",
+      "move",
+      "up",
+    ]);
+    expect(frames.pendingCount()).toBe(2);
+
+    frames.runNextFrame();
+    await Promise.resolve();
+    frames.runNextFrame();
+    await Promise.resolve();
 
     expect(framesOfKind(stream, "pointer").map((frame) => frame.type)).toEqual([
       "move",
@@ -922,6 +999,7 @@ describe("BrowserPeekTile input capture", () => {
   });
 
   it("normalizes armed wheel deltas and drops wheels outside the image", () => {
+    const frames = installAnimationFrameQueue();
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -954,6 +1032,9 @@ describe("BrowserPeekTile input capture", () => {
         cancelable: true,
       }),
     );
+    // Coalesces to one send per animation frame - flush before the next
+    // wheel tick so each normalized delta lands in its own frame.
+    frames.runNextFrame();
     button.dispatchEvent(
       new WheelEvent("wheel", {
         deltaX: 1,
@@ -965,6 +1046,7 @@ describe("BrowserPeekTile input capture", () => {
         cancelable: true,
       }),
     );
+    frames.runNextFrame();
     button.dispatchEvent(
       new WheelEvent("wheel", {
         deltaX: 0,
@@ -992,6 +1074,136 @@ describe("BrowserPeekTile input capture", () => {
         clickCount: 0,
         seq: 1,
       }),
+    ]);
+    expect(frames.pendingCount()).toBe(0);
+  });
+
+  it("coalesces same-direction wheel deltas within an animation frame", () => {
+    const frames = installAnimationFrameQueue();
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    const stream = liveStream();
+    presentLiveFrame(stream, 7, JPEG_SEQ_7);
+    armPeekTile(stream);
+    const button = overlayButton();
+
+    const dispatchWheel = (deltaY: number): void => {
+      button.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaX: 0,
+          deltaY,
+          deltaMode: 0,
+          clientX: 400,
+          clientY: 300,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+
+    dispatchWheel(10);
+    dispatchWheel(6);
+    dispatchWheel(4);
+    expect(framesOfKind(stream, "pointer")).toEqual([]);
+    expect(frames.pendingCount()).toBe(1);
+
+    frames.runNextFrame();
+
+    expect(framesOfKind(stream, "pointer")).toEqual([
+      expect.objectContaining({ type: "wheel", deltaX: 0, deltaY: 20 }),
+    ]);
+  });
+
+  it("flushes the coalesced wheel immediately when scroll direction reverses", () => {
+    installAnimationFrameQueue();
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    const stream = liveStream();
+    presentLiveFrame(stream, 7, JPEG_SEQ_7);
+    armPeekTile(stream);
+    const button = overlayButton();
+
+    const dispatchWheel = (deltaY: number): void => {
+      button.dispatchEvent(
+        new WheelEvent("wheel", {
+          deltaX: 0,
+          deltaY,
+          deltaMode: 0,
+          clientX: 400,
+          clientY: 300,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+
+    dispatchWheel(10);
+    dispatchWheel(6);
+    expect(framesOfKind(stream, "pointer")).toEqual([]);
+
+    // Direction reversal flushes the accumulated downward scroll without
+    // waiting for the next animation frame.
+    dispatchWheel(-8);
+
+    expect(framesOfKind(stream, "pointer")).toEqual([
+      expect.objectContaining({ type: "wheel", deltaX: 0, deltaY: 16 }),
+    ]);
+  });
+
+  it("flushes a pending wheel before a pointerdown in the same frame, in order", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    const stream = liveStream();
+    presentLiveFrame(stream, 7, JPEG_SEQ_7);
+    armPeekTile(stream);
+    const button = overlayButton();
+
+    // Wheel is coalesced (still pending in its rAF) when the click lands -
+    // it must go out first, so the click isn't read against a stale scroll
+    // position on the wire.
+    button.dispatchEvent(
+      new WheelEvent("wheel", {
+        deltaX: 0,
+        deltaY: 10,
+        deltaMode: 0,
+        clientX: 400,
+        clientY: 300,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    fireEvent.pointerDown(
+      button,
+      pointerEventInit({
+        clientX: 400,
+        clientY: 300,
+        button: 0,
+        buttons: 1,
+        detail: 0,
+      }),
+    );
+
+    expect(framesOfKind(stream, "pointer").map((frame) => frame.type)).toEqual([
+      "wheel",
+      "down",
     ]);
   });
 

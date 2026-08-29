@@ -243,7 +243,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
               alt="Browser screencast"
               className="h-full w-full object-contain"
               draggable={false}
-              onLoad={() => session.notePainted(image.sequence)}
+              onLoad={() => session.notePresented(image.sequence)}
             />
           )}
           {status.overlay === null ? null : (

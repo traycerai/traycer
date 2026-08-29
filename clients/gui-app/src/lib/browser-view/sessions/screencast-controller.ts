@@ -85,9 +85,10 @@ export interface ScreencastController {
   readonly setActiveDialog: (dialog: ScreencastDialog | null) => void;
   /** Drops the dialog and composition the previous transport incarnation left. */
   readonly resetInputContext: () => void;
+  /** Latches the sequence the browser has actually painted (`<img onLoad>`); pointer frames carry this for host-side hit-test correlation. */
   readonly notePresentedSequence: (sequence: number | null) => void;
-  /** Presented sequence + freshness clock + the paint ack the host gates on. */
-  readonly notePainted: (sequence: number) => void;
+  /** Frame arrived over the wire: freshness clock + the ack the host gates the next capture on. Fires before paint - a tile acks on arrival, same as PiP. */
+  readonly noteFrameArrived: (sequence: number) => void;
   /** Allocates the next arm epoch without sending; the caller emits the frame. */
   readonly startArmEpoch: () => number;
   readonly arm: () => void;
@@ -150,6 +151,8 @@ export function createScreencastController(options: {
   let suppressPointerId: number | null = null;
   let pendingMove: ScreencastPointerInput | null = null;
   let moveRaf: number | null = null;
+  let pendingWheel: ScreencastPointerInput | null = null;
+  let wheelRaf: number | null = null;
   let pointerClickCount: PointerClickCount | null = null;
   let pendingNav: ScreencastNavInput[] = [];
   const acceptedPointerDowns = new Map<
@@ -222,6 +225,7 @@ export function createScreencastController(options: {
   };
 
   const sendDiscretePointer = (frame: ScreencastPointerInput): void => {
+    flushPendingWheel();
     flushPendingMove();
     sendInput(frame);
     if (frame.type === "down") {
@@ -229,6 +233,65 @@ export function createScreencastController(options: {
       return;
     }
     if (frame.type === "up") acceptedPointerDowns.delete(frame.button);
+  };
+
+  const wheelDirectionReversed = (
+    previous: ScreencastPointerInput,
+    next: ScreencastPointerInput,
+  ): boolean => {
+    const previousX = Math.sign(previous.deltaX);
+    const previousY = Math.sign(previous.deltaY);
+    const nextX = Math.sign(next.deltaX);
+    const nextY = Math.sign(next.deltaY);
+    return (
+      (previousX !== 0 && nextX !== 0 && previousX !== nextX) ||
+      (previousY !== 0 && nextY !== 0 && previousY !== nextY)
+    );
+  };
+
+  const cancelPendingWheel = (): void => {
+    pendingWheel = null;
+    if (wheelRaf === null) return;
+    window.cancelAnimationFrame(wheelRaf);
+    wheelRaf = null;
+  };
+
+  // sendInput directly, not sendDiscretePointer - sendDiscretePointer calls
+  // flushPendingWheel first, and this IS that flush.
+  const flushPendingWheel = (): void => {
+    const pending = pendingWheel;
+    pendingWheel = null;
+    if (wheelRaf !== null) {
+      window.cancelAnimationFrame(wheelRaf);
+      wheelRaf = null;
+    }
+    if (pending === null) return;
+    flushPendingMove();
+    sendInput(pending);
+  };
+
+  // Budget: keys + wheel + clicks share the host's 120/s control window
+  // (`BROWSER_CONTROL_MAX_FRAMES_PER_WINDOW`, browser-screencast-control.ts).
+  // Coalescing every wheel tick into at most one send per animation frame
+  // caps wheel at ~60/s, leaving headroom under 120/s for keyboard bursts
+  // and clicks sharing the same budget.
+  const scheduleWheel = (frame: ScreencastPointerInput): void => {
+    if (pendingWheel !== null && wheelDirectionReversed(pendingWheel, frame)) {
+      flushPendingWheel();
+    }
+    pendingWheel =
+      pendingWheel === null
+        ? frame
+        : {
+            ...frame,
+            deltaX: pendingWheel.deltaX + frame.deltaX,
+            deltaY: pendingWheel.deltaY + frame.deltaY,
+          };
+    if (wheelRaf !== null) return;
+    wheelRaf = window.requestAnimationFrame(() => {
+      wheelRaf = null;
+      flushPendingWheel();
+    });
   };
 
   const resetTransientInput = (): void => {
@@ -240,6 +303,7 @@ export function createScreencastController(options: {
     acceptedPointerDowns.clear();
     pointerClickCount = null;
     cancelPendingMove();
+    cancelPendingWheel();
     releaseCapturedPointer();
   };
 
@@ -480,6 +544,7 @@ export function createScreencastController(options: {
     suppressPointerId = null;
     acceptedPointerDowns.clear();
     cancelPendingMove();
+    cancelPendingWheel();
     releaseCapturedPointer();
   };
 
@@ -553,8 +618,7 @@ export function createScreencastController(options: {
     notePresentedSequence: (sequence) => {
       presentedSequence = sequence;
     },
-    notePainted: (sequence) => {
-      presentedSequence = sequence;
+    noteFrameArrived: (sequence) => {
       lastFrameAt = Date.now();
       sendFrame({ kind: "ack", hasBinaryPayload: false, sequence });
     },
@@ -649,7 +713,7 @@ export function createScreencastController(options: {
         ),
       });
       if (frame === null) return;
-      sendDiscretePointer(frame);
+      scheduleWheel(frame);
     },
     overlayHandlers: {
       onFocus: () => {

@@ -177,7 +177,7 @@ describe("BrowserPeekTile", () => {
     );
   });
 
-  it("renders JPEG frames and acks only after the image is presented", () => {
+  it("renders JPEG frames and acks on arrival, before the image is presented", () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -218,22 +218,26 @@ describe("BrowserPeekTile", () => {
       );
     });
 
-    expect(screen.getByAltText("Browser screencast").getAttribute("src")).toBe(
-      "data:image/jpeg;base64,AQID",
-    );
-    expect(stream.sentFrames).not.toContainEqual({
-      kind: "ack",
-      hasBinaryPayload: false,
-      sequence: 7,
-    });
-
-    fireEvent.load(screen.getByAltText("Browser screencast"));
-
+    // Ack fires the moment the frame arrives over the wire - the host gates
+    // its next capture on it, and waiting for paint would outrun the host.
     expect(stream.sentFrames).toContainEqual({
       kind: "ack",
       hasBinaryPayload: false,
       sequence: 7,
     });
+    expect(screen.getByAltText("Browser screencast").getAttribute("src")).toBe(
+      "data:image/jpeg;base64,AQID",
+    );
+
+    const ackCountBeforePaint = stream.sentFrames.filter(
+      (frame) => frame.kind === "ack",
+    ).length;
+    fireEvent.load(screen.getByAltText("Browser screencast"));
+
+    // Paint does not ack again - it only latches the presented sequence.
+    expect(
+      stream.sentFrames.filter((frame) => frame.kind === "ack"),
+    ).toHaveLength(ackCountBeforePaint);
   });
 
   it("renders a terminal screencast frame", () => {

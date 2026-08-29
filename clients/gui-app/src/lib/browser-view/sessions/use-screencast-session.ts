@@ -84,11 +84,13 @@ export interface ScreencastSession {
   readonly releaseForwardedPageKeys: () => void;
   readonly respondToDialog: ScreencastController["respondToDialog"];
   /**
-   * The tile acks a frame only once the browser has painted it - the host
-   * gates the next capture on that ack, so acking on arrival would outrun the
-   * viewer. Also latches the presented sequence that pointer frames carry.
+   * The browser has painted a frame (`<img onLoad>`): latches the presented
+   * sequence that pointer frames carry for host-side hit-test correlation,
+   * and marks the tile lifecycle live. The ack the host gates its next
+   * capture on has already gone out at frame arrival - see
+   * `noteFrameArrived` in the transport effect below.
    */
-  readonly notePainted: (sequence: number) => void;
+  readonly notePresented: (sequence: number) => void;
   readonly onFocusExit: (relatedTarget: EventTarget | null) => void;
   readonly overlayHandlers: ScreencastOverlayHandlers;
   readonly imeHandlers: ScreencastImeHandlers;
@@ -288,6 +290,12 @@ export function useScreencastSession(
       ) {
         controller.notePresentedSequence(null);
       }
+      // Ack at arrival, not paint - the host gates its next capture on the
+      // ack, and a tile that waited for paint would outrun what the host is
+      // willing to send. Same split PiP already uses (pip-headless-stream.ts).
+      if (frame.kind === "frame") {
+        controller.noteFrameArrived(frame.sequence);
+      }
       handleScreencastFrame({
         frame,
         binaryPayload,
@@ -442,9 +450,9 @@ export function useScreencastSession(
     };
   }, [armedEpoch, controller]);
 
-  const notePainted = useCallback(
+  const notePresented = useCallback(
     (sequence: number) => {
-      controller.notePainted(sequence);
+      controller.notePresentedSequence(sequence);
       setLifecycle("live");
       setDetails(null);
     },
@@ -465,7 +473,7 @@ export function useScreencastSession(
     requestNav: controller.requestNav,
     releaseForwardedPageKeys: controller.releaseForwardedPageKeys,
     respondToDialog: controller.respondToDialog,
-    notePainted,
+    notePresented,
     onFocusExit: controller.onFocusExit,
     overlayHandlers: controller.overlayHandlers,
     imeHandlers: controller.imeHandlers,
