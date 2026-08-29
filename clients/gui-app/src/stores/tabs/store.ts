@@ -5,6 +5,7 @@ import {
   type StateStorage,
 } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { isTabsLocalRestoreEnabled } from "@/stores/tabs/tabs-local-restore-policy";
 import {
   isRegisteredTabKind,
   tabSurfaceDescriptor,
@@ -122,7 +123,13 @@ let tabsLocalPersistenceEnabled = true;
 let pendingLegacySourceActiveSelection = false;
 
 const tabsStorage: StateStorage = {
-  getItem: (name) => window.localStorage.getItem(name),
+  // The read is gated too, not just the write. A shell whose contexts come
+  // from its surroundings must not restore ANOTHER context's arrangement into
+  // a freshly opened one - the address it was opened at is the only input -
+  // and this read happens while the store is being created, so the policy it
+  // consults has to be settleable before this module is reached.
+  getItem: (name) =>
+    isTabsLocalRestoreEnabled() ? window.localStorage.getItem(name) : null,
   setItem: (name, value) => {
     if (!tabsLocalPersistenceEnabled) return;
     window.localStorage.setItem(name, value);

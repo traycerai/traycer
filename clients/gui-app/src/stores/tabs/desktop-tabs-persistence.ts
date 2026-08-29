@@ -5,6 +5,7 @@ import type {
   DesktopPerWindowStateUpdateAcknowledgement,
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
+import { suppressTabsLocalRestore } from "@/stores/tabs/tabs-local-restore-policy";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   createLayoutItem,
@@ -101,6 +102,16 @@ export function configureBrowserTabsPersistence(): void {
 export function configureSingleContextTabs(): void {
   setTabSplitCompatibility(false);
   setTabsLocalPersistenceEnabled(false);
+  // Both halves. Stopping the write alone leaves whatever a previous build
+  // wrote sitting there to be read back, and the read is the half a person
+  // actually sees: a freshly opened context showing another one's active
+  // surface behind chrome that is no longer drawn.
+  //
+  // This call is a backstop, not the mechanism. The store reads its layout
+  // while being created, so a shell that must not restore says so from its
+  // entry before the store's module is reached; by the time this runs the
+  // first read is already behind us.
+  suppressTabsLocalRestore();
 }
 
 /** Only a successfully negotiated desktop authority disables the local writer. */

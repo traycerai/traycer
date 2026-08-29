@@ -138,7 +138,12 @@ describe("app header tab layer, per shell", () => {
     // free space rather than a gap the layout still pays for.
     expect(spacerClasses(desktop.runnerHost)).toContain("basis-[clamp(");
     const webSpacer = spacerClasses(webapp.runnerHost);
+    // The whole class set the freed layout rests on, not a sample of it.
+    // `flex-1` alone still collapses under a long-content sibling without
+    // `min-w-0`, so asserting one and not the other leaves the layout free to
+    // break while the test stays green.
     expect(webSpacer).toContain("flex-1");
+    expect(webSpacer).toContain("min-w-0");
     expect(webSpacer).not.toContain("basis-[clamp(");
   });
 
