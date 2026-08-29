@@ -74,6 +74,10 @@ import {
 import { projectShareableTeams } from "@/hooks/epic/use-epic-shareable-teams";
 import { onWakeReconnect } from "@/lib/host/wake-reconnect";
 import { appLogger, describeLogError } from "@/lib/logger";
+import {
+  recordAuthServerTime,
+  recordRotatedBearer,
+} from "@/lib/clock/app-server-clock";
 import { AuthTokenStore } from "./auth-token-store";
 
 // Legacy encrypted-localStorage token slots (the pre-§3 desktop store). Two
@@ -2168,6 +2172,12 @@ export class AuthService {
   // the refresh scheduler. The single point every same-user adoption goes through
   // (locked-rotate outcomes and the §4 reconcile worker).
   private rotateLiveBearer(userId: string, bearerToken: string): void {
+    // The second server-time input, and the only one that needs no response
+    // headers: this token was minted seconds ago by authn's correct clock, so
+    // its `iat` IS server time. Every same-user adoption funnels through here,
+    // which is what makes "freshly issued" true of the argument - a token
+    // rehydrated from the credentials file never reaches this method.
+    recordRotatedBearer(bearerToken);
     // COMMIT BEFORE EMIT (see `applySignedIn`): `rotateCurrentBearer` notifies
     // its rotation listeners synchronously. The profile is unchanged - a
     // rotation is the same account with a new token - and passing the live one
@@ -3238,9 +3248,21 @@ export class AuthService {
    * Access-only (§3): validates the bearer without spending. A stale/expired
    * token returns `rejected`; the refresh spend is owned exclusively by the
    * locked `rotate` path, never here.
+   *
+   * Also the renderer's SERVER-TIME TAP. Every outcome that came back from a
+   * real response carries the authn `Date` header, and this is the one funnel
+   * all of them pass through - startup rehydration, the reactive 401
+   * revalidation, device-flow finalization. The reactive path is the one that
+   * matters most: it is exactly the call the stream makes when it believes its
+   * bearer expired, so on a machine with a wrong clock the very first cycle of
+   * what used to be the terminal loop lands a sample.
    */
-  private validateToken(token: string): Promise<ValidationOutcome> {
-    return this.runnerHost.validateAuthTokenIdentity(token);
+  private async validateToken(token: string): Promise<ValidationOutcome> {
+    const outcome = await this.runnerHost.validateAuthTokenIdentity(token);
+    if (outcome.kind !== "network-error") {
+      recordAuthServerTime(outcome.serverTime);
+    }
+    return outcome;
   }
 
   /**

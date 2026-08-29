@@ -50,6 +50,10 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "../../auth/bearer-revalidator";
+import type {
+  ServerClockSkewSignal,
+  ServerClockState,
+} from "../../clock/server-time-offset-tracker";
 import {
   NO_TRANSPORT_EVIDENCE,
   type TransportEvidenceReporter,
@@ -172,6 +176,7 @@ function makeClient(options: {
     endpoint: () => mockLocalHostEntry,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
@@ -216,6 +221,7 @@ function makeRotatableClient(
     endpoint: () => mockLocalHostEntry,
     bearer: () => ctx.credentials,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
@@ -250,6 +256,7 @@ function makeClientWithEvidence(options: {
     endpoint: options.endpoint,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: options.evidence,
@@ -620,6 +627,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -716,6 +724,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1560,6 +1569,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1617,6 +1627,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1675,6 +1686,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1806,6 +1818,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1866,6 +1879,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1917,6 +1931,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1954,6 +1969,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2004,6 +2020,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2047,6 +2064,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2104,6 +2122,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2156,6 +2175,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2205,6 +2225,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2282,6 +2303,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2321,6 +2343,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2366,6 +2389,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2476,6 +2500,7 @@ describe("WsStreamClient", () => {
       endpoint: () => entry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2513,6 +2538,7 @@ describe("WsStreamClient", () => {
       endpoint: () => entry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2713,6 +2739,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       // actually rotates it), which is what lets the no-progress bound trip.
       bearer: () => makeRequestContext("expired").credentials,
       auth,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -3289,6 +3316,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => ctx.credentials,
       auth,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -3605,6 +3633,7 @@ describe("WsStreamClient host credential provisioning", () => {
       endpoint: options.endpoint,
       bearer: () => ctx.credentials,
       auth: null,
+      clock: null,
       hostCredentialMint: options.mint,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -3639,6 +3668,7 @@ describe("WsStreamClient host credential provisioning", () => {
       endpoint: options.endpoint,
       bearer: () => ctx.credentials,
       auth: null,
+      clock: null,
       hostCredentialMint: options.mint,
       onHostCredentialState: options.onState,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -5075,6 +5105,394 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     stub.fireText({ kind: "pong", hasBinaryPayload: false });
     expect(recovered).toHaveBeenCalledTimes(1);
+
+    session.close();
+  });
+});
+
+/**
+ * Clock-skew park (Clock-skew detection and self-healing recovery, §2).
+ *
+ * The incident these cover: a machine boots with its wall clock 7h ahead, so
+ * every 15-minute bearer reads as long expired against `Date.now()` while authn
+ * (correct clock) keeps answering "valid". Before parking, that combination
+ * walked every session to `goTerminal` with a diagnosis naming the credential,
+ * and fixing the clock recovered nothing because terminal sessions never
+ * re-dial.
+ */
+describe("WsStreamClient clock-skew park", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const UNAUTHORIZED_FATAL = {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "bearer expired",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  } as const;
+
+  function wait(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * A hand-driven `ServerClockSkewSignal`. Nothing here samples anything - the
+   * transport's contract is with the VERDICT and the recovery edge, and keeping
+   * the double dumb is what makes these tests statements about the transport
+   * rather than about the tracker (which has its own suite).
+   */
+  function makeClockSignal(initial: "ok" | "skewed" | "unknown"): {
+    readonly signal: ServerClockSkewSignal;
+    readonly recover: () => void;
+    readonly recoverySubscribers: () => number;
+  } {
+    let state: ServerClockState =
+      initial === "skewed"
+        ? { verdict: "skewed", offsetMs: -7 * 3_600_000 }
+        : { verdict: initial, offsetMs: initial === "ok" ? 0 : null };
+    const recoveryListeners = new Set<() => void>();
+    return {
+      recoverySubscribers: () => recoveryListeners.size,
+      recover: () => {
+        state = { verdict: "ok", offsetMs: 0 };
+        for (const listener of [...recoveryListeners]) {
+          listener();
+        }
+      },
+      signal: {
+        currentState: () => state,
+        isSkewed: () => state.verdict === "skewed",
+        subscribe: () => () => undefined,
+        subscribeToRecovery: (listener) => {
+          recoveryListeners.add(listener);
+          return () => {
+            recoveryListeners.delete(listener);
+          };
+        },
+      },
+    };
+  }
+
+  /** A decodable JWT whose `exp` is in the past by local-clock arithmetic. */
+  function expiredJwt(): string {
+    const encode = (value: object): string =>
+      btoa(JSON.stringify(value))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+    const expSeconds = Math.floor(Date.now() / 1000) - 3_600;
+    return `${encode({ alg: "none" })}.${encode({ exp: expSeconds })}.sig`;
+  }
+
+  function makeClockClient(options: {
+    readonly factory: IStreamWebSocketFactory;
+    readonly auth: StreamAuthRevalidator;
+    readonly clock: ServerClockSkewSignal | null;
+    // A PROVIDER, not a fixed string, because the incident's last act needs the
+    // bearer to stop reading as expired at the same moment the verdict clears -
+    // which is what physically happens when the clock is corrected.
+    readonly bearer: () => string;
+  }): WsStreamClient<typeof hostStreamRpcRegistry> {
+    const contexts = new Map<string, RequestContext>();
+    const contextFor = (token: string): RequestContext => {
+      const existing = contexts.get(token);
+      if (existing !== undefined) {
+        return existing;
+      }
+      const created = makeRequestContext(token);
+      contexts.set(token, created);
+      return created;
+    };
+    return new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      // Never rotated by these tests' revalidators, which is what makes every
+      // cycle a NO-PROGRESS one - the exact shape of the incident.
+      bearer: () => contextFor(options.bearer()).credentials,
+      auth: options.auth,
+      clock: options.clock,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: options.factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 50,
+    });
+  }
+
+  function makeRevalidator(outcome: RevalidateOutcome): {
+    readonly auth: StreamAuthRevalidator;
+    readonly calls: { count: number };
+  } {
+    const calls = { count: 0 };
+    return {
+      calls,
+      auth: {
+        revalidateForReconnect: async (): Promise<RevalidateOutcome> => {
+          calls.count += 1;
+          return outcome;
+        },
+      },
+    };
+  }
+
+  it("parks at the pre-dial expiry gate instead of revalidating a token the clock only makes LOOK expired", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => expiredJwt(),
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    await wait(60);
+    // No socket, no authn round trip, no terminal close - and a live
+    // subscription is the only thing holding the session.
+    expect(sockets).toHaveLength(0);
+    expect(revalidator.calls.count).toBe(0);
+    expect(statuses).not.toContain("closed");
+    expect(clock.recoverySubscribers()).toBe(1);
+
+    session.close();
+  });
+
+  it("re-dials a session parked on the UNAUTHORIZED path once the clock is corrected", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      // No `exp` claim at all, so the pre-dial gate never fires and the park
+      // under test is unambiguously the revalidate-outcome one.
+      bearer: () => "plain-bearer",
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    await wait(30);
+    expect(sockets).toHaveLength(1);
+
+    sockets[0].socket.fireOpen();
+    sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
+    await wait(80);
+    expect(sockets).toHaveLength(1);
+    expect(clock.recoverySubscribers()).toBe(1);
+
+    clock.recover();
+    await wait(60);
+    expect(sockets).toHaveLength(2);
+    // The park released its handle on the way back out.
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("keeps today's behaviour at the pre-dial gate when the tracker says the clock is fine", async () => {
+    const { factory } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("ok");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => expiredJwt(),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+
+    await wait(60);
+    expect(revalidator.calls.count).toBeGreaterThan(0);
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("parks rather than counting toward the no-progress terminal bound, however long it sits", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => "plain-bearer",
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    await wait(30);
+    sockets[0].socket.fireOpen();
+    sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
+
+    // Far longer than the three backoff rungs the bound would have burned. A
+    // session that counted this cycle would be closed by now; a parked one has
+    // not dialed once more.
+    await wait(250);
+    expect(sockets).toHaveLength(1);
+    expect(statuses).not.toContain("closed");
+
+    session.close();
+  });
+
+  it("still reaches the terminal bound for a HOST CONFIG MISMATCH, which looks identical on the wire", async () => {
+    // The whole reason parking keys on the tracker's verdict and not on the
+    // rejection shape: "authn validates it, the host rejects it" is also what a
+    // misconfigured host produces, and retrying that forever helps nobody.
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("ok");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => "plain-bearer",
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const closeReasons: Array<StreamCloseReason | null> = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status, reason) => {
+      statuses.push(status);
+      closeReasons.push(reason);
+    });
+
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      await wait(40);
+      const socket = sockets[sockets.length - 1].socket;
+      socket.fireOpen();
+      socket.fireText(UNAUTHORIZED_FATAL);
+      await wait(40);
+    }
+
+    expect(statuses).toContain("closed");
+    const fatalClose = closeReasons.find((r) => r?.kind === "fatalError");
+    expect(fatalClose?.kind).toBe("fatalError");
+
+    session.close();
+  });
+
+  it("leaves the transient network-error outcome untouched under skew", async () => {
+    // A wake-time blip is not evidence about the clock, and the streak-reset +
+    // backoff behaviour it drives must be exactly what it was.
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("network-error");
+    const clock = makeClockSignal("skewed");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => "plain-bearer",
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    await wait(30);
+    sockets[0].socket.fireOpen();
+    sockets[0].socket.fireText(UNAUTHORIZED_FATAL);
+
+    await wait(100);
+    // Re-dialed on the ordinary backoff; never parked, never closed.
+    expect(sockets.length).toBeGreaterThan(1);
+    expect(statuses).not.toContain("closed");
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("releases the recovery subscription on close, so a later clock fix cannot revive a dead session", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => expiredJwt(),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+
+    await wait(60);
+    expect(clock.recoverySubscribers()).toBe(1);
+    session.close();
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    clock.recover();
+    await wait(60);
+    expect(sockets).toHaveLength(0);
+  });
+
+  it("degrades to the pre-existing behaviour with no tracker wired", async () => {
+    const { factory } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: null,
+      bearer: () => expiredJwt(),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+
+    await wait(60);
+    expect(revalidator.calls.count).toBeGreaterThan(0);
+
+    session.close();
+  });
+
+  it("simulates the incident end to end: skewed clock + valid credential never goes terminal, and reconnects once the clock is fixed", async () => {
+    const { factory, sockets } = makeFactory();
+    // authn is reachable and keeps saying the credential is current - exactly
+    // what made the old loop make no progress.
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed");
+    // The bearer and the verdict move TOGETHER because physically they are one
+    // fact: the token only ever "expired" because it was being compared against
+    // a clock that was 7h ahead, so correcting the clock is what makes the same
+    // token read as live again. `expiredJwt()` stands in for that comparison,
+    // since the suite's own `Date.now()` cannot be skewed.
+    const bearer = { current: expiredJwt() };
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => bearer.current,
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    // Phase 1 - wrong clock. Parked at the pre-dial gate: nothing dialed,
+    // nothing closed, and authn is not being hammered. On the old build this
+    // window was three revalidate/redial cycles ending in `goTerminal`.
+    await wait(200);
+    expect(sockets).toHaveLength(0);
+    expect(statuses).not.toContain("closed");
+    expect(revalidator.calls.count).toBe(0);
+
+    // Phase 2 - the user fixes the clock. The recovery edge alone brings the
+    // session back: no reload, no manual intervention, and the host-side rooms
+    // unlatch off the reconnect that follows.
+    bearer.current = "live-bearer";
+    clock.recover();
+    await wait(60);
+    expect(sockets.length).toBeGreaterThanOrEqual(1);
+    expect(statuses).not.toContain("closed");
 
     session.close();
   });
