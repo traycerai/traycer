@@ -788,13 +788,29 @@ export const listTasksCompletenessSchema =
   });
 export type ListTasksCompleteness = z.infer<typeof listTasksCompletenessSchema>;
 
-// Latest listTasks response: `@1.6` adds the negotiated local-first
-// `pending` completeness value. Both keys stay optional so an older HOST on
-// this line simply omits them; absence remains "this host cannot say", never
-// "complete".
+// `epic.listTasks@1.5` row alias - FROZEN, and NOT a redundant second name for
+// the live row.
+//
+// The bare `listTaskLightSchema` is a MOVING TARGET by this file's own
+// convention: the unsuffixed name always means the latest row, so the minor
+// that adds the next row key REBINDS it, and every site that named it by
+// identifier adopts the new shape without anyone editing that site. The two
+// values are the same object today; the alias is what keeps them from
+// diverging silently tomorrow.
+//
+// That is not hypothetical here - it is how `taskContextResolutionSchema`
+// below picked up `home` and `preservation` at an ALREADY-RELEASED `@1.2`,
+// with nobody touching a getTaskContexts schema, and the released-baseline
+// gate reported it as a BREAKING structural change at a shipped version.
+export const listTaskLightSchemaPre16 = listTaskLightSchema;
+export type ListTaskLightPre16 = z.infer<typeof listTaskLightSchemaPre16>;
+
+// `epic.listTasks@1.5` response: `@1.4`'s rows plus the preservation marker and
+// the pre-local-first `completeness` statement. FROZEN - `@1.6` widens
+// `completeness.cloudPage`.
 export const listTasksResponseSchemaPre16 = listTasksResponseSchemaPre15.extend(
   {
-    tasks: z.array(listTaskLightSchema),
+    tasks: z.array(listTaskLightSchemaPre16),
     completeness: listTasksCompletenessSchemaPre16.optional(),
   },
 );
@@ -802,6 +818,11 @@ export type ListTasksResponsePre16 = z.infer<
   typeof listTasksResponseSchemaPre16
 >;
 
+// Latest listTasks response: `@1.6` adds the negotiated local-first
+// `pending` completeness value. Both keys stay optional so an older HOST on
+// this line simply omits them; absence remains "this host cannot say", never
+// "complete". The `tasks` redeclaration below carries the LIVE row and is the
+// one place on this line that should.
 export const listTasksResponseSchema = listTasksResponseSchemaPre16.extend({
   tasks: z.array(listTaskLightSchema),
   completeness: listTasksCompletenessSchema.optional(),

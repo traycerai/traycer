@@ -27,10 +27,12 @@ const feedVersions = vi.hoisted(() => ({
 interface UnaryVersions {
   list: SchemaVersion | false | null;
   markAllRead: SchemaVersion | false | null;
+  indicatorState: SchemaVersion | false | null;
 }
 const unaryVersions = vi.hoisted((): UnaryVersions => ({
   list: { major: 2, minor: 2 },
   markAllRead: { major: 1, minor: 1 },
+  indicatorState: { major: 1, minor: 1 },
 }));
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
@@ -66,13 +68,20 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", async () => {
     ): ReadonlyMap<string, SchemaVersion | false | null> => {
       useState(0);
       const versions = new Map<string, SchemaVersion | false | null>();
+      // Every gated method answers from its OWN slot, and an unrecognized one
+      // answers `null` rather than borrowing a neighbour's. A two-way branch
+      // here would hand a newly added floor whichever version happened to sit
+      // on the fallback arm, so the floor would read as met before its fixture
+      // existed - the gate's own regression test passing on a value nobody
+      // wrote for it.
+      const slots = new Map<string, SchemaVersion | false | null>([
+        ["host.notifications.list", unaryVersions.list],
+        ["host.notifications.markAllRead", unaryVersions.markAllRead],
+        ["host.notifications.indicatorState", unaryVersions.indicatorState],
+      ]);
+      const answer = slots.get(method) ?? null;
       for (const hostId of hostIds) {
-        versions.set(
-          hostId,
-          method === "host.notifications.list"
-            ? unaryVersions.list
-            : unaryVersions.markAllRead,
-        );
+        versions.set(hostId, answer);
       }
       return versions;
     },
@@ -87,6 +96,7 @@ describe("useNotificationFeedMode", () => {
     feedVersions.local = { major: 1, minor: 2 };
     unaryVersions.list = { major: 2, minor: 2 };
     unaryVersions.markAllRead = { major: 1, minor: 1 };
+    unaryVersions.indicatorState = { major: 1, minor: 1 };
   });
 
   it("selects cloud for a free-tier user when the host confirms support", () => {
@@ -172,6 +182,40 @@ describe("useNotificationFeedMode", () => {
     ).toBe("local");
 
     feedVersions.cloud = { major: 1, minor: 2 };
+    expect(
+      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+        .current,
+    ).toBe("cloud");
+  });
+
+  /**
+   * The QUIETEST of the three partition selectors, and the reason it is gated
+   * here rather than left to the wire.
+   *
+   * `list@2.2` refuses its own downgrade outright
+   * (`hostNotificationsListDowngradeV22ToV10`), so a peer below that floor
+   * fails loudly. `home` is merely an OPTIONAL field on the `@1.1` indicator
+   * request, so an `@1.0` peer drops it and answers plausibly — whole-origin
+   * flags, indistinguishable in shape from an exact local partition.
+   *
+   * Mixed mode then ORs them into the cloud projection, and that per-flag OR is
+   * licensed ONLY by the two partitions being disjoint. Against a whole-origin
+   * answer they are not, so stale cloud-home read/action state keeps tabs and
+   * sidebar rows lit with nothing anywhere to catch it.
+   *
+   * Every other floor is held met, so the indicator minor is the only thing
+   * that can move the answer.
+   */
+  it("withholds mixed mode until indicatorState@1.1 carries the home selector", () => {
+    cloudFeedSupport.value = "supported";
+
+    unaryVersions.indicatorState = { major: 1, minor: 0 };
+    expect(
+      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+        .current,
+    ).toBe("local");
+
+    unaryVersions.indicatorState = { major: 1, minor: 1 };
     expect(
       renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
         .current,

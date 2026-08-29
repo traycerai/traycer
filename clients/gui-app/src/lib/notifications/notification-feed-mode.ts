@@ -42,6 +42,25 @@ function meetsNegotiatedFloor(
 }
 
 /**
+ * The same floor, resolved for ONE host out of a per-host manifest map.
+ *
+ * `hostId === null` is `false` for the reason the map lookup is: with no host
+ * there is no manifest to have negotiated anything, and mixed mode is unsafe
+ * under an unknown just as under a refusal. Folded into one helper because
+ * three call sites repeating `hostId !== null &&` is three chances to write the
+ * fourth one without it.
+ */
+function meetsHostFloor(
+  versions: ReadonlyMap<string, NegotiatedMethodVersion>,
+  hostId: string | null,
+  major: number,
+  minor: number,
+): boolean {
+  if (hostId === null) return false;
+  return meetsNegotiatedFloor(versions.get(hostId) ?? null, major, minor);
+}
+
+/**
  * The negotiated feed mode for the host the notification streams are OPEN on.
  *
  * Read from context rather than recomputed per call site. The capability read
@@ -66,16 +85,28 @@ export function useNotificationFeedMode(): NotificationFeedMode {
  * origin summaries; selecting both there would double-count replicas. In that
  * case local remains the single safe view until the host upgrades.
  *
- * FOUR methods are consulted, across BOTH transports, because RPC versions are
- * negotiated per method and the two stream minors do not imply the two unary
+ * FIVE methods are consulted, across BOTH transports, because RPC versions are
+ * negotiated per method and the two stream minors do not imply the three unary
  * ones. Mixed mode is not only a subscription choice: it makes
  * `useMergedNotificationsActions` send `home: "local"` as a partition selector
- * on `host.notifications.list` and `host.notifications.markAllRead`. A host
- * below `list@2.2` / `markAllRead@1.1` parses those requests against its
- * frozen schema and STRIPS that selector, so pagination merges whole-origin
- * cloud replicas into the cloud lane and mark-all reaches cloud-home rows the
- * user never saw. Selecting mixed mode on the stream minors alone is what
+ * on `host.notifications.list` and `host.notifications.markAllRead`, and
+ * `useNotificationIndicators` send it on `host.notifications.indicatorState`.
+ * A host below `list@2.2` / `markAllRead@1.1` / `indicatorState@1.1` parses
+ * those requests against its frozen schema and STRIPS that selector, so
+ * pagination merges whole-origin cloud replicas into the cloud lane, mark-all
+ * reaches cloud-home rows the user never saw, and the indicator flags answer
+ * for the whole origin. Selecting mixed mode on the stream minors alone is what
  * makes an unsupported selector look accepted.
+ *
+ * `indicatorState` is the quietest of the three and the reason this floor is
+ * checked HERE rather than left to the wire. `list@2.2` refuses its own
+ * downgrade (`hostNotificationsListDowngradeV22ToV10`), so a peer below it
+ * fails loudly; `home` is merely an OPTIONAL field on the `@1.1` indicator
+ * request, so an `@1.0` peer drops it and answers plausibly. Mixed mode then
+ * ORs those whole-origin flags into the cloud projection as though they were an
+ * exact local partition - and per-flag OR is licensed ONLY by the two
+ * partitions being disjoint (see `useNotificationIndicators`). Stale cloud-home
+ * read/action state keeps tabs and sidebar rows lit, with nothing to catch it.
  *
  * `hostId` names the host whose unary manifest to read and must be the SAME
  * host `client` is bound to - passing the app-wide host here would gate a
@@ -109,6 +140,10 @@ export function useNotificationFeedModeFor(
     partitionHostIds,
     "host.notifications.markAllRead",
   );
+  const indicatorStateVersions = useHostNegotiatedMethodVersions(
+    partitionHostIds,
+    "host.notifications.indicatorState",
+  );
   /**
    * `>= 2`, NOT `>= 1`: the cloud feed's `partitionSnapshot` arm lives on
    * `@1.2`. It was authored as `@1.1` and re-minted when mainline shipped its
@@ -126,17 +161,25 @@ export function useNotificationFeedModeFor(
     cloudFeedVersion?.major === 1 && cloudFeedVersion.minor >= 2;
   const hasLocalProjection =
     localFeedVersion?.major === 1 && localFeedVersion.minor >= 2;
-  const hasPartitionedList =
-    hostId !== null &&
-    meetsNegotiatedFloor(listVersions.get(hostId) ?? null, 2, 2);
-  const hasPartitionedMarkAllRead =
-    hostId !== null &&
-    meetsNegotiatedFloor(markAllReadVersions.get(hostId) ?? null, 1, 1);
+  const hasPartitionedList = meetsHostFloor(listVersions, hostId, 2, 2);
+  const hasPartitionedMarkAllRead = meetsHostFloor(
+    markAllReadVersions,
+    hostId,
+    1,
+    1,
+  );
+  const hasPartitionedIndicatorState = meetsHostFloor(
+    indicatorStateVersions,
+    hostId,
+    1,
+    1,
+  );
   return cloudFeedSupport === "supported" &&
     hasCloudProjection &&
     hasLocalProjection &&
     hasPartitionedList &&
-    hasPartitionedMarkAllRead
+    hasPartitionedMarkAllRead &&
+    hasPartitionedIndicatorState
     ? "cloud"
     : "local";
 }
