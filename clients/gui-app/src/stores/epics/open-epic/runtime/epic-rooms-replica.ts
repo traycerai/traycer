@@ -47,6 +47,21 @@ export interface EpicRoomsReplicaSources {
    */
   readonly publishDivergence: () => void;
   readonly isDisposed: () => boolean;
+  /**
+   * Every artifact whose body lives in `artifactRoomId`, read LIVE off the
+   * records plane's own artifacts slice.
+   *
+   * REQUIRED, no default. A composition that omitted it would publish an empty
+   * availability map for every artifact - which renders as "no body is ever
+   * ready" and would pass any test that did not open a tile. Same rule as
+   * `getDocArm` and `laneSelection`: wrong-by-omission in a direction nobody
+   * notices.
+   *
+   * One-to-MANY by nature: a room hosts one body fragment per artifact assigned
+   * to it. Reads the runtime's OWN projection rather than any main-thread
+   * registry, so this replica stays relocatable to a worker.
+   */
+  readonly artifactIdsForRoom: (artifactRoomId: string) => readonly string[];
 }
 
 export interface EpicRoomsReplica extends Replica<
@@ -79,8 +94,24 @@ export interface EpicRoomsReplica extends Replica<
    * `"unavailable"` only when nothing was registered at all.
    */
   acquireLease(artifactRoomId: string): LeaseGrant<ArtifactRoomReplicaEntry>;
-  /** Availability as last published, for the runtime's synchronous readers. */
-  availabilityOf(artifactRoomId: string): EpicArtifactRoomAvailability;
+  /**
+   * Availability of one ARTIFACT's body, for the runtime's synchronous readers.
+   *
+   * By artifact rather than by room, because that is the question every caller
+   * actually has and the only one the lane arm can answer - `artifact.subscribe`
+   * has no rooms.
+   */
+  availabilityOfArtifact(artifactId: string): EpicArtifactRoomAvailability;
+  /**
+   * Re-derive and publish the artifact-keyed slice without any room frame.
+   *
+   * The other half of "a retained room frame appears the moment the mapping
+   * exists": the records plane calls this when the artifacts slice moves - the
+   * snapshot that first states `artifactRoomId`, or a later upsert naming an
+   * already-`ready` room - because a room-keyed value that was correct all
+   * along only becomes VISIBLE when its artifacts do.
+   */
+  republishAvailability(): void;
   /**
    * Drop every room's state on a viewer downgrade.
    *
@@ -95,30 +126,93 @@ export interface EpicRoomsReplica extends Replica<
 export function createEpicRoomsReplica(
   sources: EpicRoomsReplicaSources,
 ): EpicRoomsReplica {
-  const { environment, session, tier, sink, publishDivergence, isDisposed } =
-    sources;
+  const {
+    environment,
+    session,
+    tier,
+    sink,
+    publishDivergence,
+    isDisposed,
+    artifactIdsForRoom,
+  } = sources;
 
   const bindingEpoch = createMonotonicSequence();
+  /**
+   * Availability as the WIRE states it: one entry per artifact room the host has
+   * reported on, kept room-keyed because that is this arm's addressing.
+   *
+   * Held here rather than read back out of the projection - which is what this
+   * replica used to do - because the projection is now keyed by ARTIFACT and a
+   * room the mapping does not cover yet contributes nothing to it. Reading the
+   * published slice back would therefore forget exactly the frames this map
+   * exists to retain: a `@1` room reports `ready` independently of any snapshot,
+   * so a room frame legitimately arrives before the snapshot naming its
+   * artifacts, and nothing re-delivers it.
+   *
+   * Bounded by the wire: one entry per room the host has ever named, overwritten
+   * in place when it transitions. A retained entry for a room no artifact ever
+   * claims simply never reaches the projection.
+   */
+  const availabilityByRoom = new Map<string, EpicArtifactRoomAvailability>();
   let bindingBumpScheduled = false;
   let observedAtMs: number | null = null;
 
-  function publishAvailability(
-    stateByArtifactRoomId: Record<string, EpicArtifactRoomAvailability>,
-  ): void {
+  /**
+   * Derive the artifact-keyed slice from the room-keyed truth and publish it.
+   *
+   * The fan-out is one-to-MANY: an artifact room hosts a body fragment per
+   * artifact assigned to it, so one room's availability is every one of those
+   * artifacts' availability. A room with no artifacts yet contributes nothing
+   * and costs nothing.
+   */
+  function deriveAvailability(): Record<string, EpicArtifactRoomAvailability> {
+    const stateByArtifactId: Record<string, EpicArtifactRoomAvailability> = {};
+    for (const [artifactRoomId, availability] of availabilityByRoom) {
+      for (const artifactId of artifactIdsForRoom(artifactRoomId)) {
+        stateByArtifactId[artifactId] = availability;
+      }
+    }
+    return stateByArtifactId;
+  }
+
+  function availabilityUnchanged(
+    next: Record<string, EpicArtifactRoomAvailability>,
+  ): boolean {
+    const held = sink.read().artifactRooms.stateByArtifactId;
+    const nextKeys = Object.keys(next);
+    if (nextKeys.length !== Object.keys(held).length) return false;
+    return nextKeys.every(
+      (artifactId) => held[artifactId] === next[artifactId],
+    );
+  }
+
+  function publishAvailability(): void {
+    const stateByArtifactId = deriveAvailability();
+    // GATED, unlike the room-keyed publish it replaces, and it has to be: the
+    // records plane calls `republishAvailability` whenever its artifacts slice
+    // may have moved, which is every root frame. Publishing an identical map
+    // there would wake every subscriber in the epic on every update. The
+    // room-keyed version could not have this gate - it published a value it had
+    // just changed by construction.
+    if (availabilityUnchanged(stateByArtifactId)) return;
     sink.publish({
-      artifactRooms: { stateByArtifactRoomId },
+      artifactRooms: { stateByArtifactId },
       bindingEpoch: bindingEpoch.current(),
     });
   }
 
-  function withAvailability(
-    artifactRoomId: string,
-    availability: EpicArtifactRoomAvailability,
-  ): Record<string, EpicArtifactRoomAvailability> {
-    return {
-      ...sink.read().artifactRooms.stateByArtifactRoomId,
-      [artifactRoomId]: availability,
-    };
+  /**
+   * Publish unconditionally - for the paths that also moved `bindingEpoch`.
+   *
+   * A binding invalidation is not visible in the availability map (a room going
+   * `unavailable` and coming back `ready` can leave the same value), so the
+   * gate above would swallow the very signal an editor is waiting on.
+   */
+  function publishAvailabilityUngated(): void {
+    sink.publish({
+      artifactRooms: { stateByArtifactId: deriveAvailability() },
+      bindingEpoch: bindingEpoch.current(),
+    });
   }
 
   function invalidateBindings(): void {
@@ -127,6 +221,7 @@ export function createEpicRoomsReplica(
 
   function resetInternal(): void {
     tier.destroyAll();
+    availabilityByRoom.clear();
     observedAtMs = null;
     invalidateBindings();
     sink.publish({
@@ -148,14 +243,18 @@ export function createEpicRoomsReplica(
     if (outcome === "filed-cold") {
       // Nothing materialised, so nothing is bound and nothing local can have
       // diverged. Availability alone.
-      publishAvailability(withAvailability(event.artifactRoomId, "ready"));
+      availabilityByRoom.set(event.artifactRoomId, "ready");
+      publishAvailability();
       return;
     }
     // A newly materialized doc is a new fragment identity, so the editor has to
     // rebind. For an already-bound replica the binding is deliberately left
     // alone: the editor stays mounted and user typing is uninterrupted.
     if (outcome === "seeded") invalidateBindings();
-    publishAvailability(withAvailability(event.artifactRoomId, "ready"));
+    availabilityByRoom.set(event.artifactRoomId, "ready");
+    // Ungated: `seeded` bumped the binding epoch, and a re-seed can leave the
+    // availability map identical while the fragment identity behind it changed.
+    publishAvailabilityUngated();
     publishDivergence();
     // The snapshot may have been what cleared this replica's last local
     // divergence, so re-test the linger arm here: without it a room whose
@@ -168,8 +267,7 @@ export function createEpicRoomsReplica(
     artifactRoomId: string,
     availability: EpicArtifactRoomAvailability,
   ): void {
-    const current =
-      sink.read().artifactRooms.stateByArtifactRoomId[artifactRoomId];
+    const current = availabilityByRoom.get(artifactRoomId);
     if (availability !== "ready") {
       // Unconditional, even when availability is unchanged: the local replica
       // is invalid the moment the host says the room is not ready, and the next
@@ -182,7 +280,11 @@ export function createEpicRoomsReplica(
     // selectors would have skipped.
     if (current === availability) return;
     if (availability !== "ready") invalidateBindings();
-    publishAvailability(withAvailability(artifactRoomId, availability));
+    availabilityByRoom.set(artifactRoomId, availability);
+    // Ungated for the same reason: a room leaving `ready` invalidates bindings,
+    // and if no artifact names it yet the derived map is unchanged - but the
+    // epoch bump still has to reach the consumer.
+    publishAvailabilityUngated();
     publishDivergence();
   }
 
@@ -267,13 +369,16 @@ export function createEpicRoomsReplica(
 
     acquireLease: (artifactRoomId) => tier.acquireSync(artifactRoomId),
 
-    availabilityOf: (artifactRoomId) =>
-      sink.read().artifactRooms.stateByArtifactRoomId[artifactRoomId] ??
-      "unavailable",
+    republishAvailability: () => {
+      if (isDisposed()) return;
+      publishAvailability();
+    },
+
+    availabilityOfArtifact: (artifactId) =>
+      sink.read().artifactRooms.stateByArtifactId[artifactId] ?? "unavailable",
 
     dropAllOnViewerDowngrade(): boolean {
-      const hadRoomState =
-        Object.keys(sink.read().artifactRooms.stateByArtifactRoomId).length > 0;
+      const hadRoomState = availabilityByRoom.size > 0;
       tier.clearAllPending();
       tier.destroyAll();
       if (!hadRoomState) return false;

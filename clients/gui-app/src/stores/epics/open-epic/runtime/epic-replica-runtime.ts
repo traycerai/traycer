@@ -416,6 +416,18 @@ export function createEpicReplicaRuntime(
     sink: roomsSink,
     publishDivergence: () => records.publishDivergence(),
     isDisposed,
+    // Read off the records plane's PUBLISHED artifacts slice, not the root doc:
+    // it is the runtime's own projection, so this stays worker-relocatable, and
+    // it is the same value the tree and every consumer already agree on. The
+    // lane arm's artifacts carry `artifactRoomId: null` (the wire omits it), so
+    // this yields nothing there - correct, because that arm addresses bodies by
+    // artifact id and publishes availability directly.
+    artifactIdsForRoom: (artifactRoomId) => {
+      const artifacts = records.sink.read().artifacts;
+      return artifacts.allIds.filter(
+        (id) => artifacts.byId[id].artifactRoomId === artifactRoomId,
+      );
+    },
   });
 
   const records = createEpicRecordsReplica({
@@ -576,6 +588,12 @@ export function createEpicReplicaRuntime(
     memory.accountant.reconcile(BUDGET_PLANE_IDS.epicReplicas);
     control.adoptSnapshotRole(meta.permissionRole);
     records.publishSnapshotLanded(meta, divergence);
+    // The mapping half of the availability fan-out. A `@1` room reports `ready`
+    // independently of any snapshot, so a room frame can arrive BEFORE the
+    // artifacts that live in it exist - the room-keyed value was retained and
+    // becomes visible only now, when the artifacts naming that room appear.
+    // Gated inside, so a snapshot that moved no artifact costs no publish.
+    rooms.republishAvailability();
     control.noteSnapshotLanded(meta.permissionRole);
     if (!control.facts.isWritableRole()) {
       // Fail closed: a viewer (or a client whose role the snapshot revoked)
@@ -760,6 +778,10 @@ export function createEpicReplicaRuntime(
             return;
           }
           records.apply(runtimeEvent.event);
+          // A later root update can create an artifact naming a room already
+          // reported `ready`, which is the same "mapping arrived second" case
+          // as the snapshot above.
+          rooms.republishAvailability();
           return;
         case "rooms":
           rooms.apply(runtimeEvent.event);
@@ -951,18 +973,22 @@ export function createEpicReplicaRuntime(
      * Materialization belongs to `acquireArtifactBodyLease`.
      */
     getArtifactFragment(artifactId): Y.XmlFragment | null {
+      if (rooms.availabilityOfArtifact(artifactId) !== "ready") return null;
+      // The ROOM is still how the `@1` arm finds the bytes - a room id is a
+      // legacy-arm-private fact now, and this is one of the two places it is
+      // still read. The lane arm replaces this lookup rather than translating
+      // it: `artifact.subscribe` serves a body addressed by artifact id.
       const artifactRoomId = records.readArtifactRoomId(artifactId);
       if (artifactRoomId === null) return null;
-      if (rooms.availabilityOf(artifactRoomId) !== "ready") return null;
       const entry = tier.peek(artifactRoomId);
       if (entry === null) return null;
       return entry.doc.getXmlFragment(artifactBodyFragmentName(artifactId));
     },
 
     getArtifactBodyAwareness(artifactId): Awareness | null {
+      if (rooms.availabilityOfArtifact(artifactId) !== "ready") return null;
       const artifactRoomId = records.readArtifactRoomId(artifactId);
       if (artifactRoomId === null) return null;
-      if (rooms.availabilityOf(artifactRoomId) !== "ready") return null;
       // Pure, for the same reason as `getArtifactFragment`.
       const entry = tier.peek(artifactRoomId);
       if (entry === null) return null;
@@ -970,9 +996,8 @@ export function createEpicReplicaRuntime(
     },
 
     getArtifactBodyAvailability(artifactId): EpicArtifactRoomAvailability {
-      const artifactRoomId = records.readArtifactRoomId(artifactId);
-      if (artifactRoomId === null) return "unavailable";
-      return rooms.availabilityOf(artifactRoomId);
+      // No room lookup at all: availability is keyed by artifact on both arms.
+      return rooms.availabilityOfArtifact(artifactId);
     },
 
     getArtifactRoomId: (artifactId) => records.readArtifactRoomId(artifactId),

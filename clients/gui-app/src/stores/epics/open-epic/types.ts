@@ -276,15 +276,35 @@ export interface EpicHeader {
 }
 
 /**
- * Per-artifact-room availability mirrored from the host's artifact-room manager via
- * `epic.subscribe@1.0` `artifactRoomState` frames. The GUI uses this to render
- * affected artifact bodies as unavailable/retrying without losing root
- * metadata. ArtifactRooms not present in this record are implicitly `unavailable`.
+ * Whether an artifact's BODY is being served. Mirrored from the host's
+ * artifact-room manager on `epic.subscribe@1.0`, and from `artifact.subscribe`'s
+ * ready/unavailable pair on the lane arm. An artifact not present in this record
+ * is implicitly `unavailable`.
  */
 export type EpicArtifactRoomAvailability = "ready" | "unavailable" | "retrying";
 
+/**
+ * Availability keyed by ARTIFACT id, on both arms.
+ *
+ * It used to be keyed by artifact-ROOM id, which is the `@1` wire's own
+ * addressing and nothing else's: a room hosts MANY artifact bodies (one
+ * `artifactBodyFragmentName(artifactId)` fragment each), and `artifact.subscribe`
+ * has no rooms at all - it addresses a body by artifact id under an authority
+ * epoch. Publishing the wire's key forced every consumer to hold the
+ * artifact→room mapping just to ask whether a body was renderable, and gave the
+ * lane arm nothing to publish.
+ *
+ * The fan-out happens at PUBLISH, not at decode, and that placement is
+ * load-bearing: a `@1` room reports `ready` INDEPENDENTLY of any snapshot (the
+ * state `LeaseGrant`'s `"awaiting-seed"` arm exists for), so a room frame can
+ * legitimately arrive before the snapshot that says which artifacts live in it.
+ * Translating at the adapter would find no artifacts and drop the frame, and
+ * nothing re-delivers it - the host emits availability on transition, not on
+ * demand. Keeping the room-keyed value internally and deriving this map on every
+ * publish means such a frame is simply retained until the mapping exists.
+ */
 export interface ArtifactRoomsSlice {
-  readonly stateByArtifactRoomId: Readonly<
+  readonly stateByArtifactId: Readonly<
     Record<string, EpicArtifactRoomAvailability>
   >;
 }
@@ -326,7 +346,7 @@ export interface EpicProjectedSlices {
 export const EMPTY_ARRAY: readonly string[] = Object.freeze([]);
 
 export const EMPTY_ARTIFACT_ROOMS_SLICE: ArtifactRoomsSlice = Object.freeze({
-  stateByArtifactRoomId: Object.freeze(
+  stateByArtifactId: Object.freeze(
     {} as Record<string, EpicArtifactRoomAvailability>,
   ),
 });

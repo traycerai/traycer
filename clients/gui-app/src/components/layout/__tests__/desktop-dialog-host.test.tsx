@@ -463,7 +463,9 @@ function createDirtyEpicHandle(
     // Empty is this field's TRUE value on a legacy connection - the `@1` wire
     // carries no comment records at all - so the poll remains the source there.
     commentThreads: EMPTY_COMMENT_THREADS_SLICE,
-    artifactRooms: { stateByArtifactRoomId: {} },
+    // Keyed by ARTIFACT id since the cutover - a room hosts many bodies, and
+    // `artifact.subscribe` has no rooms at all.
+    artifactRooms: { stateByArtifactId: {} },
     artifactRoomDirtyByArtifactRoomId: {},
     rootDirty: false,
     hasDirtySnapshotForOpenCycle: true,

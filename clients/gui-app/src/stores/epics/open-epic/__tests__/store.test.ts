@@ -973,6 +973,58 @@ describe("createOpenEpicStore", () => {
     return opened.store.getState().getArtifactBodyAwareness(artifactId);
   }
 
+  it("a room reported READY before the snapshot reaches its artifacts when they arrive, with no second room frame", () => {
+    // The ordering the publish-time fan-out exists for. A `@1` room reports its
+    // state INDEPENDENTLY of any snapshot - that is what `LeaseGrant`'s
+    // `"awaiting-seed"` arm is about - so a room frame legitimately lands before
+    // the snapshot that says which artifacts live in it. The host emits
+    // availability on TRANSITION, not on demand, so a client that dropped that
+    // frame would never be told again.
+    //
+    // Ablation: derive the artifact-keyed map only when a ROOM frame arrives
+    // (drop `republishAvailability` from the snapshot path) and this test is the
+    // one that fails - the artifact stays `unavailable` forever with a room the
+    // host has already called ready.
+    const { factory, handle } = fakeFactory();
+    const opened = createOpenEpicStore({
+      epicId: "epic-artifact-rooms",
+      streamClientFactory: factory,
+      userId: null,
+      onAuthError: null,
+      laneSelection: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null);
+
+    // ROOM FIRST. Nothing names it yet, so nothing is publishable.
+    handle().callbacks.onArtifactRoomState("artifact-room-0", "ready");
+    expect(opened.store.getState().artifactRooms.stateByArtifactId).toEqual({});
+
+    // SNAPSHOT SECOND, naming two artifacts in that one room - and one in a
+    // room the host has said nothing about.
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    seedRootArtifactWithArtifactRoom(donor, "art-2", "artifact-room-0");
+    seedRootArtifactWithArtifactRoom(donor, "art-3", "artifact-room-silent");
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+
+    // No further room frame. The retained value fans out one-to-MANY over every
+    // artifact that named the room.
+    const state = opened.store.getState();
+    expect(state.artifactRooms.stateByArtifactId["art-1"]).toBe("ready");
+    expect(state.artifactRooms.stateByArtifactId["art-2"]).toBe("ready");
+    expect(state.getArtifactBodyAvailability("art-1")).toBe("ready");
+    expect(state.getArtifactBodyAvailability("art-2")).toBe("ready");
+    // An artifact whose room the host has never mentioned stays unavailable -
+    // absence is not readiness.
+    expect(state.artifactRooms.stateByArtifactId["art-3"]).toBeUndefined();
+    expect(state.getArtifactBodyAvailability("art-3")).toBe("unavailable");
+
+    opened.dispose();
+  });
+
   it("resolves an artifact body fragment from the artifact-room doc seeded by onArtifactRoomSnapshot", () => {
     const { factory, handle } = fakeFactory();
     const opened = createOpenEpicStore({
@@ -1011,9 +1063,10 @@ describe("createOpenEpicStore", () => {
     );
 
     const state = opened.store.getState();
-    expect(state.artifactRooms.stateByArtifactRoomId["artifact-room-0"]).toBe(
-      "ready",
-    );
+    // Keyed by ARTIFACT, not by room: `art-1` lives in `artifact-room-0`, and
+    // the room id is a legacy-arm-private fact that no longer reaches the
+    // projection.
+    expect(state.artifactRooms.stateByArtifactId["art-1"]).toBe("ready");
     expect(state.getArtifactBodyAvailability("art-1")).toBe("ready");
     const fragment = leasedFragment(opened, "art-1");
     expect(fragment).not.toBeNull();
@@ -2174,16 +2227,16 @@ describe("createOpenEpicStore", () => {
 
     expect(opened.store.getState().epic.title).toBe(titleBefore);
     expect(opened.store.getState().tree).toBe(treeBefore);
-    expect(
-      opened.store.getState().artifactRooms.stateByArtifactRoomId[
-        "artifact-room-x"
-      ],
-    ).toBe("unavailable");
-    expect(
-      opened.store.getState().artifactRooms.stateByArtifactRoomId[
-        "artifact-room-y"
-      ],
-    ).toBe("retrying");
+    // RETAINED, NOT LEAKED. This snapshot carries a title and no artifacts, so
+    // nothing names either room - and the published slice is keyed by artifact,
+    // so it stays empty. The room-keyed values are held internally against the
+    // snapshot that may yet name them (a `@1` room reports its state
+    // independently of any snapshot, so frames in this order are ordinary), but
+    // a room no artifact ever claims must never reach a consumer.
+    expect(opened.store.getState().artifactRooms.stateByArtifactId).toEqual({});
+    expect(opened.store.getState().getArtifactBodyAvailability("art-1")).toBe(
+      "unavailable",
+    );
 
     opened.dispose();
   });

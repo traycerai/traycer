@@ -23,6 +23,15 @@ import {
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
@@ -105,19 +114,6 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   }),
 }));
 
-vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
-  useEpicRenameArtifact: () => ({
-    mutateAsync: makeMutateAsync(
-      (variables: { readonly artifactId: string; readonly title: string }) => {
-        mocks.artifactCalls.push({
-          artifactId: variables.artifactId,
-          title: variables.title,
-        });
-      },
-    ),
-  }),
-}));
-
 import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
 
 const EPIC_ID = "epic-1";
@@ -155,6 +151,57 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
+/**
+ * A real `HostRequester` wired to an in-memory `MockHostMessenger`, in place
+ * of the `mutateAsync` control the retired `use-epic-node-mutations` mock
+ * used to hand tests. `epic.renameArtifact` is the one handler these suites
+ * drive - `pendingSettles` and `artifactCalls` are the SAME hoisted queues
+ * the chat/tui-agent mocks still push into, so a test that mixes tile types
+ * sees one call-order queue regardless of which path produced each entry.
+ */
+function buildCommandRequester(): HostRequester<HostRpcRegistry> {
+  const entry: HostDirectoryEntry = {
+    hostId: HOST_ID,
+    label: HOST_ID,
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:0",
+    version: "1.5.0",
+    transportDialability: "dialable",
+  };
+  const handlers: MockHandlerMap<HostRpcRegistry> = {
+    "epic.renameArtifact": (params) => {
+      mocks.artifactCalls.push({
+        artifactId: params.artifactId,
+        title: params.title,
+      });
+      return new Promise((resolve, reject) => {
+        mocks.pendingSettles.push(() => {
+          if (mocks.settleAs === "success") {
+            resolve({ updated: true });
+          } else {
+            reject(new Error("mock mutation failure"));
+          }
+        });
+      });
+    },
+  };
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (candidateHostId) =>
+      candidateHostId === entry.hostId ? entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${entry.hostId}`,
+      handlers,
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return spine.createRequester(entry);
+}
+
 function newSession(): OpenEpicStoreHandle {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
@@ -175,8 +222,18 @@ function newSession(): OpenEpicStoreHandle {
     onAuthError: null,
     // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
     laneSelection: null,
+    // Explicit, not omitted: the write-command gate refuses a send with no
+    // requester, and an omitted (optional) field would silently reproduce
+    // that as "no host" rather than exercising the real queue send path.
+    commandRequester: buildCommandRequester(),
   });
   if (captured.value === null) throw new Error("factory not invoked");
+  // Transport must reach "open" BEFORE the root snapshot lands: the control
+  // replica clears `hasFreshRootSnapshotForOpenCycle` on every transport-status
+  // transition, including into "open" - so opening AFTER the snapshot would
+  // wipe the freshness the snapshot just set, and every enqueued write command
+  // would stall in "queued" behind `EpicWriteCommandTransportUnavailableError`.
+  captured.value.onConnectionStatus("open", null);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   return handle;
 }
@@ -698,19 +755,6 @@ describe("useRenameCanvasTab", () => {
     const handle = newSession();
     mocks.handle.current = handle;
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    // A typed pass-through capture rather than reading
-    // `spy.mock.results[0].value`, which the lint config flags as an unsafe
-    // `any` read: the hook does not expose its request id, and the stamp is
-    // what the tombstone assertion below needs.
-    const stampedRequestIds: Array<string | null> = [];
-    const realBeginRenameMutation = handle.store.getState().beginRenameMutation;
-    const beginRenameMutationSpy = vi
-      .spyOn(handle.store.getState(), "beginRenameMutation")
-      .mockImplementation((nodeId, nextTitle) => {
-        const stamped = realBeginRenameMutation(nodeId, nextTitle);
-        stampedRequestIds.push(stamped);
-        return stamped;
-      });
     const renameArtifactInTabSpy = vi.spyOn(
       useEpicCanvasStore.getState(),
       "renameArtifactInTab",
@@ -722,10 +766,23 @@ describe("useRenameCanvasTab", () => {
     act(() => {
       result.current(artifactTile(id), "B");
     });
-    const requestId = stampedRequestIds[0] ?? null;
-    if (requestId === null) {
-      throw new Error("expected a request id");
+    // The artifact path stamps through `stampWriteCommand` (the queue's
+    // `onEnqueued` hook), not the exported `beginRenameMutation` the
+    // chat/terminal-agent paths call - so the stamp's request id is the
+    // QUEUE's own `commandId`, read off the pending write-command record
+    // rather than captured from a `beginRenameMutation` spy.
+    const pendingCommand = handle.store
+      .getState()
+      .writeCommands.find(
+        (command) =>
+          command.state === "pending" &&
+          command.intent.kind === "rename-artifact" &&
+          command.intent.artifactId === id,
+      );
+    if (pendingCommand === undefined) {
+      throw new Error("expected a pending rename-artifact write command");
     }
+    const requestId = pendingCommand.commandId;
 
     // The authoritative row echoes "B" - our own target - BEFORE the RPC
     // promise settles. The chain has no landed member yet, so the row
@@ -753,14 +810,15 @@ describe("useRenameCanvasTab", () => {
     // (`isLatestPendingRename`), a dead chain answered "not latest" here and
     // the persisted-tab write - the only one a successful rename ever gets -
     // was skipped. The tombstone (`isLatestRenameStamp`) survives the sweep,
-    // so the write goes through.
+    // so the write goes through - even though the artifact hook path never
+    // reads `isLatestRenameStamp` itself, because there is only ONE command
+    // in this chain and the queue's own resolution is what carries the write.
     await act(async () => {
       mocks.pendingSettles[0]?.();
       await flushMicrotasks();
     });
     expect(renameArtifactInTabSpy).toHaveBeenCalledWith(VIEW_TAB_ID, id, "B");
 
-    beginRenameMutationSpy.mockRestore();
     renameArtifactInTabSpy.mockRestore();
     unmount();
   });

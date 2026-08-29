@@ -23,7 +23,6 @@ import { EpicStatusStreamClient } from "@traycer-clients/shared/host-transport/e
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
-import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useAuthService } from "@/lib/host";

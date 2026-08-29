@@ -23,6 +23,15 @@ import {
   type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 
@@ -101,19 +110,6 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   }),
 }));
 
-vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
-  useEpicRenameArtifact: () => ({
-    mutateAsync: makeMutateAsync(
-      (variables: { readonly artifactId: string; readonly title: string }) => {
-        mocks.artifactCalls.push({
-          artifactId: variables.artifactId,
-          title: variables.title,
-        });
-      },
-    ),
-  }),
-}));
-
 vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
   useTerminalRenameFor: () => ({
     mutate: (variables: {
@@ -132,6 +128,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
 import { useSwitcherRename } from "@/components/epic-canvas/mobile/use-switcher-rename";
 
 const EPIC_ID = "epic-1";
+const HOST_ID = "host-1";
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -164,6 +161,57 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
+/**
+ * A real `HostRequester` wired to an in-memory `MockHostMessenger`, in place
+ * of the `mutateAsync` control the retired `use-epic-node-mutations` mock
+ * used to hand tests. `epic.renameArtifact` is the one handler these suites
+ * drive - `pendingSettles` and `artifactCalls` are the SAME hoisted queues
+ * the chat/tui-agent mocks still push into, so a test that mixes tile types
+ * sees one call-order queue regardless of which path produced each entry.
+ */
+function buildCommandRequester(): HostRequester<HostRpcRegistry> {
+  const entry: HostDirectoryEntry = {
+    hostId: HOST_ID,
+    label: HOST_ID,
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:0",
+    version: "1.5.0",
+    transportDialability: "dialable",
+  };
+  const handlers: MockHandlerMap<HostRpcRegistry> = {
+    "epic.renameArtifact": (params) => {
+      mocks.artifactCalls.push({
+        artifactId: params.artifactId,
+        title: params.title,
+      });
+      return new Promise((resolve, reject) => {
+        mocks.pendingSettles.push(() => {
+          if (mocks.settleAs === "success") {
+            resolve({ updated: true });
+          } else {
+            reject(new Error("mock mutation failure"));
+          }
+        });
+      });
+    },
+  };
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (candidateHostId) =>
+      candidateHostId === entry.hostId ? entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${entry.hostId}`,
+      handlers,
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return spine.createRequester(entry);
+}
+
 function newSession(): OpenEpicStoreHandle {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
@@ -184,8 +232,15 @@ function newSession(): OpenEpicStoreHandle {
     onAuthError: null,
     // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
     laneSelection: null,
+    // Explicit, not omitted: the write-command gate refuses a send with no
+    // requester, and an omitted (optional) field would silently reproduce
+    // that as "no host" rather than exercising the real queue send path.
+    commandRequester: buildCommandRequester(),
   });
   if (captured.value === null) throw new Error("factory not invoked");
+  // Transport must reach "open" BEFORE the root snapshot lands - see the
+  // matching comment in `use-rename-canvas-tab.test.tsx`.
+  captured.value.onConnectionStatus("open", null);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   return handle;
 }
