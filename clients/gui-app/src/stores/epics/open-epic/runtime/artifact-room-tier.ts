@@ -39,6 +39,7 @@
  * and only wraps it, so the two cannot drift. The worker relocation deletes the
  * sync one and makes its caller async.
  */
+import type { ArtifactBodySeedMode } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import * as Y from "yjs";
 import {
   Awareness,
@@ -265,6 +266,39 @@ export interface ArtifactRoomDocSeed {
   readonly stateVectorBase64: string;
 }
 
+/**
+ * A body's cold state, encoded for transfer.
+ *
+ * NOT `ArtifactRoomDocSeed`. A seed offer is a state VECTOR - what this client
+ * already has, offered so the host can answer with a delta. This is the
+ * encoded DOCUMENT. Reusing the seed here would hand a negotiation artefact to
+ * a consumer that needs bytes it can rebuild a doc from.
+ *
+ * `docGuid` rides along so a later settle can tell it is talking about the
+ * same document: a body deleted and recreated under one artifact id arrives
+ * with a new guid and a history sharing no ancestor, and merging the two is
+ * unrecoverable rather than lossy.
+ */
+export interface ArtifactRoomColdState {
+  readonly update: Uint8Array;
+  readonly seedMode: ArtifactBodySeedMode;
+  readonly hostStateVector: string | null;
+  readonly docGuid: string;
+}
+
+/**
+ * What a settle answers. A typed ARM, never a throw: the caller is a demote
+ * whose whole purpose is to decide whether the main thread may drop a live
+ * document, and a throw at that seam either drops bytes nothing stored or
+ * strands a doc forever.
+ */
+export type ArtifactRoomColdSettlement =
+  | { readonly accepted: true; readonly settledBytes: number }
+  | {
+      readonly accepted: false;
+      readonly reason: "not-held" | "newer-generation";
+    };
+
 export interface ArtifactRoomSnapshotInput {
   readonly artifactRoomId: string;
   readonly snapshotBytes: Uint8Array;
@@ -368,6 +402,27 @@ export interface ArtifactRoomTier {
    * and cannot corrupt anything, which is the right side to err on.
    */
   readDocSeedOffer(artifactRoomId: string): ArtifactRoomDocSeed | null;
+  /**
+   * The whole encoded document for a held body, or `null` when the tier does
+   * not hold it.
+   *
+   * `null` is NOT "empty bytes" and a consumer that conflates them is the
+   * defect: a zero-length update applies cleanly and produces an empty
+   * document, so a caller that treated not-held as empty would silently
+   * replace a body with nothing.
+   */
+  encodeColdState(artifactRoomId: string): ArtifactRoomColdState | null;
+  /**
+   * Take an encoded document back and store it.
+   *
+   * `expectedDocGuid` is what the caller encoded against. A tier whose guid has
+   * moved refuses with `newer-generation` rather than merging two histories.
+   */
+  settleColdState(
+    artifactRoomId: string,
+    update: Uint8Array,
+    expectedDocGuid: string,
+  ): ArtifactRoomColdSettlement;
   applySnapshot(input: ArtifactRoomSnapshotInput): RoomSnapshotOutcome;
   /**
    * Remote bytes for one body.
@@ -1152,6 +1207,47 @@ export function createArtifactRoomTier(
         if (entry.pendingUpdates.length > 0) return true;
       }
       return false;
+    },
+
+    encodeColdState(artifactRoomId) {
+      const entry = replicas.get(artifactRoomId);
+      if (entry === undefined) return null;
+      const docGuid = docGuidByRoom.get(artifactRoomId);
+      // No stated identity means no transferable state, for the same reason a
+      // seed offer needs one: bytes whose document cannot be identified cannot
+      // be safely settled back.
+      if (docGuid === undefined) return null;
+      return {
+        update: Y.encodeStateAsUpdate(entry.doc),
+        // Always `"full"` here. `"delta-against-offer"` describes bytes encoded
+        // AGAINST an offer, and this path encodes the whole document - naming
+        // it delta would tell the receiver to merge into a replica it may not
+        // have.
+        seedMode: "full",
+        hostStateVector: entry.latestHostStateVectorBase64,
+        docGuid,
+      };
+    },
+
+    settleColdState(artifactRoomId, update, expectedDocGuid) {
+      const entry = replicas.get(artifactRoomId);
+      if (entry === undefined) return { accepted: false, reason: "not-held" };
+      const docGuid = docGuidByRoom.get(artifactRoomId);
+      if (docGuid === undefined || docGuid !== expectedDocGuid) {
+        // The body was replaced while these bytes were in flight. Their
+        // history shares no ancestor with what is held now, so applying them
+        // would splice two documents into one that no later frame can undo.
+        return { accepted: false, reason: "newer-generation" };
+      }
+      Y.applyUpdate(entry.doc, update);
+      // Measured from what is STORED, never from the input. A demote's caller
+      // uses this to decide it may drop a live document, and the input's length
+      // says nothing about what survived the merge - an update carrying only
+      // operations the replica already had stores nothing new.
+      return {
+        accepted: true,
+        settledBytes: Y.encodeStateAsUpdate(entry.doc).byteLength,
+      };
     },
 
     readDocSeedOffer(artifactRoomId) {
