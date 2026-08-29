@@ -20,6 +20,7 @@ import {
 import { EpicStreamClient } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { EpicStateStreamClient } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import { EpicStatusStreamClient } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import { ArtifactStreamClient } from "@traycer-clients/shared/host-transport/artifact-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
@@ -594,6 +595,26 @@ export function EpicSessionProvider(
                   wsStreamClient,
                   epicId: laneEpicId,
                   callbacks,
+                }),
+              // One client per BODY, all on the same `wsStreamClient` as the
+              // other two lanes. `artifact.subscribe` is a method on the
+              // session's one durable socket, so a canvas with twelve open
+              // tiles multiplexes twelve subscriptions - it does not dial
+              // twelve times.
+              artifactStreamClientFactory: (
+                laneEpicId,
+                artifactId,
+                authorityEpoch,
+                callbacks,
+                seedOfferProvider,
+              ) =>
+                new ArtifactStreamClient({
+                  wsStreamClient,
+                  epicId: laneEpicId,
+                  artifactId,
+                  authorityEpoch,
+                  callbacks,
+                  seedOfferProvider,
                 }),
             };
       const created = createOpenEpicStore({

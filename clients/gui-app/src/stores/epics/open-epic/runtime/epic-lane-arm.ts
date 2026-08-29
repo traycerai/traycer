@@ -43,6 +43,7 @@ import type {
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
 import type {
+  ArtifactStreamClientFactory,
   EpicStateLaneAdapter,
   EpicStateLaneEvent,
   EpicStateStreamClientFactory,
@@ -53,7 +54,13 @@ import {
   createEpicStateLaneAdapter,
   createEpicStatusLaneAdapter,
 } from "@traycer-clients/shared/epic-lanes";
-import type { EpicControlEvent } from "./epic-runtime-events";
+import type { ArtifactSubscribeSeedOffer } from "@traycer/protocol/host/epic/artifact-subscribe";
+import type { EpicControlEvent, EpicRoomEvent } from "./epic-runtime-events";
+import {
+  createEpicArtifactBodyLanes,
+  type EpicArtifactBodyLanes,
+} from "./epic-artifact-body-lanes";
+import { isMethodIncompatibleClose } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { legacyControlEventOf } from "./lane-control-translation";
 import {
   createEpicLaneStateReplica,
@@ -77,7 +84,36 @@ export interface EpicLaneArmSources {
    * two lanes reporting ONE epoch change is two true statements.
    */
   readonly onReplacementRequested: (reason: ReplicaReplacementReason) => void;
+  readonly artifactStreamClientFactory: ArtifactStreamClientFactory;
+  /** What this client holds for one body. Wired to the artifact-body tier. */
+  readonly readDocSeed: (
+    artifactId: string,
+  ) => ArtifactSubscribeSeedOffer | null;
+  /** One decoded body frame, in the rooms plane's vocabulary. */
+  readonly onRoomEvent: (event: EpicRoomEvent) => void;
+  /**
+   * What the capability probe learned, reported EXACTLY once per arm.
+   *
+   * This is the selection input, and it is deliberately not a manifest read.
+   * A remote peer's `getMethodSupport` answers `"unknown"` forever - the mux
+   * resolves an incompatible method as a fatal on the subscribe attempt rather
+   * than as a queryable pre-check - so a runtime that waits for support to
+   * resolve never installs an arm on a relay connection and the epic never
+   * renders. The subscribe's own outcome is the only evidence that exists on
+   * both transports.
+   */
+  readonly onProbeOutcome: (outcome: EpicLaneProbeOutcome) => void;
 }
+
+/**
+ * What opening the status lane proved about this connection.
+ *
+ * Two members, both positive statements about an observed event - a frame
+ * arrived, or the mux refused the method. There is deliberately no "pending"
+ * member: not-yet-answered is the absence of a call, not a value, so nothing
+ * downstream can branch on a probe result that has not happened.
+ */
+export type EpicLaneProbeOutcome = "succeeded" | "unsupported";
 
 export interface EpicLaneArm {
   /**
@@ -122,6 +158,11 @@ export interface EpicLaneArm {
   /** The records lane's populations, as last recomputed. */
   stateSlices(): EpicLaneStateSlices;
   /**
+   * The per-body lanes. Exposed rather than folded in, because the demand on
+   * them is the UI's (a mounted tile's lease), not this arm's.
+   */
+  readonly bodies: EpicArtifactBodyLanes;
+  /**
    * Discard the lanes' replica state, carrying the cause. Sockets are the
    * caller's business.
    *
@@ -144,6 +185,10 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     onStateSlices,
     onControlEvent,
     onReplacementRequested,
+    artifactStreamClientFactory,
+    readDocSeed,
+    onRoomEvent,
+    onProbeOutcome,
   } = sources;
 
   const stateReplica: EpicLaneStateReplica = createEpicLaneStateReplica({
@@ -199,16 +244,62 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     });
   }
 
+  const bodies: EpicArtifactBodyLanes = createEpicArtifactBodyLanes({
+    epicId,
+    environment,
+    streamClientFactory: artifactStreamClientFactory,
+    // Obligation 3: bodies attach under the STATUS adapter's epoch, which it
+    // keeps across `detach()` - the epoch is a fact about the host's replica,
+    // not about a socket.
+    readAuthorityEpoch: () => statusAdapter.observedAuthorityEpoch(),
+    readDocSeed,
+    isDisposed,
+    onRoomEvent,
+    onReplacementRequested,
+  });
+
+  /**
+   * Whether this arm has already answered the capability question. One answer
+   * per arm: the outcome installs an adapter, and a second report would ask the
+   * runtime to re-decide something it has already acted on.
+   */
+  let probeAnswered = false;
+
+  function answerProbe(outcome: EpicLaneProbeOutcome): void {
+    if (probeAnswered) return;
+    probeAnswered = true;
+    onProbeOutcome(outcome);
+  }
+
   function attachStatus(): void {
     statusAdapter.attach({
       environment,
       emit: (event: ControlEvent) => {
+        // ANY control frame proves the subscribe is being served, which is the
+        // whole capability question. Read off the frame rather than off the
+        // manifest because the manifest is exactly what a remote peer never
+        // resolves - see `answerProbe`'s callers and
+        // `isMethodIncompatibleClose`.
+        answerProbe("succeeded");
         onControlEvent(legacyControlEventOf(event));
+        // The status snapshot is the frame that first names an epoch, and a
+        // later one arrives whenever the authority reissues it. Reconciling
+        // here rather than detecting the change means a body that mounted
+        // before any epoch existed opens by itself, and one built under a
+        // superseded epoch is rebuilt - both without the UI asking twice.
+        bodies.syncToAuthorityEpoch();
       },
       // The control lane has no cursor at `@1.0`, so it has no resume outcome
       // to report - its whole state is one snapshot frame.
       reportResume: () => {},
       reportStatus: (status) => {
+        // The ONLY capability evidence a remote session produces: the mux
+        // resolves an incompatible method as a fatal on the subscribe attempt,
+        // never as a queryable pre-check. A client that waits for
+        // `getMethodSupport` to move waits forever.
+        if (isMethodIncompatibleClose(status.closeReason)) {
+          answerProbe("unsupported");
+        }
         onControlEvent({
           kind: "transport-status",
           status: status.connection,
@@ -267,17 +358,24 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
         stateAdapter.detach(reason);
         stateAttached = false;
       }
+      // Sockets down, DEMAND kept: a transport-only detach and a replacement
+      // are both followed by a reopen that must restore the same bodies.
+      bodies.detachAll(reason);
     },
 
     closeTransport(): void {
       if (statusAttached) statusAdapter.closeTransport();
       if (stateAttached) stateAdapter.closeTransport();
+      bodies.closeTransport();
     },
 
     openTransport(): void {
       if (statusAttached) statusAdapter.openTransport();
       if (stateAttached) stateAdapter.openTransport();
+      bodies.openTransport();
     },
+
+    bodies,
 
     observedAuthorityEpoch: () => statusAdapter.observedAuthorityEpoch(),
     appliedCursor: () => stateReplica.appliedCursor(),

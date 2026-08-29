@@ -117,7 +117,35 @@ export interface ArtifactLaneAdapterSources {
 }
 
 export interface ArtifactLaneAdapter
-  extends LaneAdapter<DocReplicaEvent>, LaneRequester<ArtifactLaneRequest> {}
+  extends LaneAdapter<DocReplicaEvent>, LaneRequester<ArtifactLaneRequest> {
+  /**
+   * Close the socket and retire the current generation, keeping the host
+   * binding so a later {@link openTransport} resumes decoding into the same
+   * consumer.
+   *
+   * The same retained-handle pair the state and status lanes carry, and it is
+   * needed here for the same reason: a window that detaches its transport
+   * (a retained-dirty buffer that must stop dialling a host the window has
+   * left) has to stop every lane it holds, and a body lane is one of them. An
+   * adapter without this pair can only be torn down by `detach`, which drops
+   * the host binding - so every reopen would have to rebuild the adapter, and
+   * a body rebuilt that way would attach under a FRESHLY READ epoch rather
+   * than the one it was serving.
+   *
+   * Split from {@link openTransport} rather than offered as one `reconnect`
+   * because the reseed path closes BEFORE it discards local state and opens
+   * AFTER: the re-subscribe reads `readDocSeed`, and an offer taken before the
+   * discard would name a replica this client has just thrown away.
+   */
+  closeTransport(): void;
+  /**
+   * Reopen under the epoch this adapter was BUILT with - never a re-read one.
+   * `authorityEpoch` is fixed for the adapter's life (it is baked into the
+   * open request), so a reopen that picked up a newer epoch would silently
+   * change which generation this body belongs to.
+   */
+  openTransport(): void;
+}
 
 /**
  * The wire's closed reason code, in the seam's vocabulary.
@@ -331,6 +359,21 @@ export function createArtifactLaneAdapter(
       host = null;
       ready = false;
       closeStreamClient();
+    },
+
+    closeTransport(): void {
+      guard.next();
+      // `ready` is cleared for the same reason `detach` clears it: the body is
+      // no longer being served, so the next `doc` frame is a RECOVERY
+      // transition and has to re-announce readiness. Leaving it set would make
+      // the reattach silent, and a consumer that tore its editor binding down
+      // on the close would never be told it may rebind.
+      ready = false;
+      closeStreamClient();
+    },
+
+    openTransport(): void {
+      openStreamClient();
     },
 
     send(request: ArtifactLaneRequest): SendOutcome {

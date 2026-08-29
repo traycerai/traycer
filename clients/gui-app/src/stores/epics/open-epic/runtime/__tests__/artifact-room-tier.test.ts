@@ -791,3 +791,69 @@ describe("applySnapshot — doc identity (seed/docGuid) and null-vector watermar
     leaseOf(leaseGrant).release();
   });
 });
+
+// ─── 8. applyCoverage retires local divergence on the body lane ───────────
+
+describe("applyCoverage — the body lane's own retirement path for local divergence", () => {
+  it("clears divergence only when the coverage vector actually covers the local edit, not merely on any call", () => {
+    const { tier, session } = createHarness();
+    trackTierDisposal(tier);
+    const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("seed content");
+
+    const leaseGrant = tier.acquireSync("room-coverage");
+    tier.applySnapshot({
+      artifactRoomId: "room-coverage",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+    const entry = requireHotEntry(tier, "room-coverage");
+
+    // Captured BEFORE the local edit below, for the non-covering half at the
+    // end of this test — it names a point in the doc's history that does not
+    // yet include the edit's own clock advance.
+    const preEditVector = encodeDocStateVectorBase64(entry.doc);
+
+    // The same writable-role gate the file's other local-divergence pin uses
+    // ("local divergence ... keeps the room hot" above): "owner" is required
+    // for the doc-update handler to mark the replica dirty. `canSendBodyWrites`
+    // is left at the harness's default `true` (NOT the `false` the null-vector
+    // pin uses) so the edit is SENT rather than queued: `applyCoverage` only
+    // ever retires the dirty WATERMARK, never a queued `pendingUpdates` entry
+    // (that queue drains solely on a reconnect reconcile, via `applySnapshot` -
+    // see `clearPendingRoomUpdates`). A queued edit would make this pin
+    // unwritable, since `hasDivergence()` would then stay `true` regardless of
+    // what vector `applyCoverage` was given.
+    session.state.permissionRole = "owner";
+    entry.doc.getMap("body").set("local-edit", "1");
+
+    expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
+    expect(tier.hasDivergence()).toBe(true);
+
+    // A vector captured BEFORE the edit does not cover it — divergence must
+    // survive. This half runs FIRST, while the watermark is still set: once
+    // divergence is retired there is nothing left to test a non-covering
+    // vector against (an absent watermark reads as trivially "covered"), so
+    // running this after the covering half below would make it vacuous — a
+    // tier that clears the watermark unconditionally on any `applyCoverage`
+    // call would still pass.
+    tier.applyCoverage("room-coverage", preEditVector);
+    expect(tier.hasDivergence()).toBe(true);
+    expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
+
+    // The doc's own CURRENT state vector covers everything written so far,
+    // including the local edit — the body lane's `room-coverage` event is the
+    // authority stating how much of what this client pushed it now holds.
+    // Taken from the replica's own current full state, so the comparison is
+    // trivially exact by construction, matching the covering-vector pattern
+    // the null-vector pin above already uses for the `@1` `room-update` path.
+    const coveringVector = encodeDocStateVectorBase64(entry.doc);
+    tier.applyCoverage("room-coverage", coveringVector);
+
+    expect(entry.dirtyWatermarkStateVectorBase64).toBeNull();
+    expect(tier.hasDivergence()).toBe(false);
+
+    leaseOf(leaseGrant).release();
+  });
+});

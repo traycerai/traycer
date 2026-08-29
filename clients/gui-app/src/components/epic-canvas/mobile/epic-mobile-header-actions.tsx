@@ -78,33 +78,27 @@ export function MobileEpicHeaderTitle(props: {
       // because this renders outside the epic session tree, exactly as the
       // permission-role read above does.
       const handle = getOpenEpicRegistry().peek(epicId);
-      // HOST-SCOPED where a live session exists, exactly as the wide
-      // viewport's tab strip resolves `epicRenameClient(tab.hostId)`: the
-      // overlay above was stamped on the SESSION's store, so the RPC must go
-      // to the session's host - an app-wide client pointed elsewhere during
-      // a host switch would ack a rename the session can never echo, leaving
-      // the landed stamp masking the real title until expiry (and renaming
-      // the wrong host's copy).
+      // HOST-SCOPED where a live session exists - but by CONSTRUCTION now,
+      // not by a comparison here.
       //
-      // Falling back to the app-wide mutation is safe only where it cannot be
-      // a request SWAP, and `epicRenameClient` draws that line by HOST ID
-      // rather than by client availability: it hands back the app-wide client
-      // when the tab names no host OR names the active one, and refuses
-      // (`null`) only for a host it does name and cannot resolve. "Rename the
-      // epic on host B" and "rename it on whichever machine this window
-      // happens to be pointed at" are only different requests when B is a
-      // different machine. Same three cases here, in the same order:
+      // This used to compare the session's host against the app-wide client's
+      // and refuse the rename when they differed (the swap Codex reported: an
+      // app-wide ack marking a session-stamped overlay as landed for a rename
+      // its host never saw). That check is gone, and its absence is not an
+      // oversight - the crossing it guarded cannot occur any more.
       //
-      //   - no handle: no stamp to strand, and all this surface had before
-      //     sessions carried a host;
-      //   - a handle naming NO host: the session never announced one, which
-      //     is the cold-restore shape - this control reads a restored epic's
-      //     title with the epic surface, and so the provider that stamps
-      //     identity, unmounted - so there is no second host to swap TO;
-      //   - a handle naming a DIFFERENT host: the swap Codex reported. The
-      //     overlay is stamped on that session's store, so an app-wide ack
-      //     would mark it landed for a rename its host never saw, against
-      //     another host's copy. Refuse and drop the stamp, as the strip does.
+      // A registered session's write commands are sent by its OWN queue, whose
+      // `commandRequester` is `useHostClientForHostId(session.hostId)`, bound
+      // when `epic-session-provider` constructs the store. So a rename issued
+      // against a live handle reaches that session's host and can never reach
+      // the app-wide client. The app-wide mutation below is reachable only for
+      // `handle === null`, where there is no session to mismatch with and no
+      // overlay to strand.
+      //
+      // Restoring the comparison would add a test that can only ever answer
+      // one way. What replaces it is a positive property, pinned by test: a
+      // registered session's rename is dispatched on the session's requester
+      // and never on the app-wide one.
       if (handle !== null) {
         const sessionClient = getEpicSessionHandleHostClient(handle);
         const hostId = sessionClient?.getActiveHostId() ?? null;

@@ -69,7 +69,10 @@ import type { EpicDocRecordArms } from "../projection-helpers";
 import type { EpicArtifactRoomAvailability } from "../types";
 import type { PendingChatCreation } from "../pending-chat-creations";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import type { EpicRuntimeEvent } from "./epic-runtime-events";
+import type {
+  EpicOutboundRequest,
+  EpicRuntimeEvent,
+} from "./epic-runtime-events";
 import type {
   EpicControlProjection,
   EpicRecordsProjection,
@@ -91,13 +94,19 @@ import {
   type EpicStreamClientFactory,
 } from "./legacy-epic-stream-adapter";
 import type {
+  ArtifactStreamClientFactory,
   EpicStateStreamClientFactory,
   EpicStatusStreamClientFactory,
 } from "@traycer-clients/shared/epic-lanes";
-import { createEpicLaneArm, type EpicLaneArm } from "./epic-lane-arm";
+import {
+  createEpicLaneArm,
+  type EpicLaneArm,
+  type EpicLaneProbeOutcome,
+} from "./epic-lane-arm";
 import {
   readEpicAdapterVerdict,
   type EpicAdapterArm,
+  type EpicAdapterVerdict,
   type EpicMethodSupportReader,
 } from "./epic-adapter-selection";
 import { planEpicAdapterTransition } from "./epic-adapter-lifecycle";
@@ -155,7 +164,7 @@ export interface EpicReplicaRuntimeOptions {
   readonly laneSelection: EpicLaneSelectionSources | null;
 }
 
-/** What a lane-capable composition supplies. All three, or none. */
+/** What a lane-capable composition supplies. All of it, or none. */
 export interface EpicLaneSelectionSources {
   /**
    * This connection's negotiated support for the three lane methods, read LIVE.
@@ -169,6 +178,12 @@ export interface EpicLaneSelectionSources {
   readonly subscribeSupport: (listener: () => void) => () => void;
   readonly stateStreamClientFactory: EpicStateStreamClientFactory;
   readonly statusStreamClientFactory: EpicStatusStreamClientFactory;
+  /**
+   * One body lane per artifact whose body is being shown. Over the SAME
+   * session transport as the other two - the session owns one durable socket
+   * and every lane is a method on it, so a per-tile body does not dial.
+   */
+  readonly artifactStreamClientFactory: ArtifactStreamClientFactory;
 }
 
 export interface EpicReplicaRuntime {
@@ -323,6 +338,22 @@ export function createEpicReplicaRuntime(
    * the method shadows the binding inside its own body.
    */
   let replicaGenerationCounter = 0;
+  /**
+   * The authority reason this replica was last rebuilt for, while that rebuild
+   * is still untouched by any inbound frame.
+   *
+   * This is what makes {@link replaceForAuthority} idempotent per event rather
+   * than per call. One epoch change is legitimately reported more than once -
+   * the state and status lanes both see it, and a body lane reports a stale
+   * epoch through both its translated `doc-unavailable` and the adapter's own
+   * `requestReplacement` - and every one of those is a true statement about
+   * the SAME event.
+   *
+   * Cleared by the first frame applied afterwards, which is what keeps this a
+   * coalescer and not a latch: once the fresh cycle has delivered anything, a
+   * later report of the same reason is a NEW event and must rebuild again.
+   */
+  let replacementSettledForReason: ReplicaReplacementReason | null = null;
   const isDisposed = (): boolean => disposed;
   const memory = ensureProcessMemoryRuntime(environment);
   const runtimeToken = memory.nextRuntimeToken();
@@ -413,11 +444,50 @@ export function createEpicReplicaRuntime(
     isDisposed,
   });
 
+  /**
+   * One outbound request, routed to the arm that is actually installed.
+   *
+   * Only the two BODY kinds are rerouted, and they are addressed by the tier's
+   * doc key - the artifact id on the lane arm (see `artifactBodyDocKey`) - so
+   * choosing the destination is the whole translation.
+   *
+   * The remaining three keep going to the `@1` adapter, which is where they
+   * belong and where they can still be sent from: `retry-migration` serves a
+   * modal that is a `@1` concept, and the root doc is not a write path on the
+   * lane arm at all - that arm's records are typed rows and its writes go
+   * through the command queue. If a root frame were ever produced there it
+   * would reach a detached adapter and be dropped rather than misrouted, which
+   * is the safe direction but not a guarantee this function makes.
+   */
+  function sendOutbound(request: EpicOutboundRequest): void {
+    if (installedArm !== "lanes" || laneArm === null) {
+      adapter.send(request);
+      return;
+    }
+    switch (request.kind) {
+      case "room-update":
+        laneArm.bodies.sendUpdate(request.artifactRoomId, request.update);
+        return;
+      case "room-awareness":
+        laneArm.bodies.sendAwareness(request.artifactRoomId, request.frame);
+        return;
+      case "root-update":
+      case "root-awareness":
+      case "retry-migration":
+        adapter.send(request);
+        return;
+    }
+  }
+
   const tier = createArtifactRoomTier({
     environment,
     session: control.facts,
+    // Body writes go out on the arm that is installed. On `@1` they ride the
+    // one epic stream; on the lane arm each body has its own subscription and
+    // its own `docGuid` write guard, so sending them down the legacy adapter
+    // would post them to a socket that arm never opened.
     send: (request) => {
-      adapter.send(request);
+      sendOutbound(request);
     },
     // The GATED form: these fire on every keystroke-level room edit and every
     // inbound room frame, and the closure gated them for that reason.
@@ -433,16 +503,29 @@ export function createEpicReplicaRuntime(
     sink: roomsSink,
     publishDivergence: () => records.publishDivergence(),
     isDisposed,
-    // Read off the records plane's PUBLISHED artifacts slice, not the root doc:
-    // it is the runtime's own projection, so this stays worker-relocatable, and
-    // it is the same value the tree and every consumer already agree on. The
-    // lane arm's artifacts carry `artifactRoomId: null` (the wire omits it), so
-    // this yields nothing there - correct, because that arm addresses bodies by
-    // artifact id and publishes availability directly.
-    artifactIdsForRoom: (artifactRoomId) => {
+    // Which artifacts a body-doc key covers, per arm.
+    //
+    // On the LANE arm the key IS the artifact - `artifact.subscribe` serves one
+    // body per doc - so the fan-out is the identity. It must not fall through
+    // to the mapping below: that arm's artifacts carry `artifactRoomId: null`
+    // (the wire omits the field), so the filter would match nothing, and since
+    // `deriveAvailability` fans out through here for EVERY key, an empty answer
+    // would publish an empty availability map - every body reading as never
+    // ready, on the arm that is meant to be indistinguishable from `@1`.
+    //
+    // Answering before the artifact appears in the slice is deliberate and is
+    // the same retention `@1` gets: the value is published, and a consumer
+    // looking up its own id finds it the moment that id exists.
+    //
+    // On the `@1` arm a room hosts MANY bodies, so the mapping is real. Read
+    // off the records plane's PUBLISHED artifacts slice rather than the root
+    // doc: it is the runtime's own projection, so this stays
+    // worker-relocatable, and it is the value every consumer already agrees on.
+    artifactIdsForRoom: (artifactBodyDocKeyValue) => {
+      if (installedArm === "lanes") return [artifactBodyDocKeyValue];
       const artifacts = records.sink.read().artifacts;
       return artifacts.allIds.filter(
-        (id) => artifacts.byId[id].artifactRoomId === artifactRoomId,
+        (id) => artifacts.byId[id].artifactRoomId === artifactBodyDocKeyValue,
       );
     },
   });
@@ -454,7 +537,7 @@ export function createEpicReplicaRuntime(
     getCurrentUserId,
     getDocArm,
     send: (request) => {
-      adapter.send(request);
+      sendOutbound(request);
     },
     hasRoomDivergence: () => tier.hasDivergence(),
     isDisposed,
@@ -661,17 +744,34 @@ export function createEpicReplicaRuntime(
           getCurrentUserId,
           isDisposed,
           onStateSlices: (slices) => {
+            noteInboundFrameApplied();
             delivery.batch(() => {
               records.applyLaneState(slices);
             });
           },
           onControlEvent: (event) => {
+            noteInboundFrameApplied();
             delivery.batch(() => {
               control.apply(event);
             });
           },
           onReplacementRequested: (reason) => {
             replaceForAuthority(reason);
+          },
+          artifactStreamClientFactory:
+            laneSelection.artifactStreamClientFactory,
+          // The tier IS the seed authority: a body it does not hold offers
+          // nothing, so the host answers with a full seed rather than a delta
+          // against state this client threw away.
+          readDocSeed: (artifactId) => tier.readDocSeedOffer(artifactId),
+          onRoomEvent: (event) => {
+            noteInboundFrameApplied();
+            delivery.batch(() => {
+              rooms.apply(event);
+            });
+          },
+          onProbeOutcome: (outcome) => {
+            applyProbeOutcome(outcome);
           },
         });
 
@@ -758,10 +858,29 @@ export function createEpicReplicaRuntime(
    */
   function replaceForAuthority(reason: ReplicaReplacementReason): void {
     if (disposed) return;
+    // The coalescing this function's contract promises, made real. It used to
+    // be asserted and not implemented: `resetAllPlanes` is idempotent, but
+    // `replicaGenerationCounter += 1` is not, so two reports of ONE epoch
+    // change bumped the generation twice and asked every consumer to rebuild
+    // twice.
+    //
+    // Reachable from more than one place by design - the state and status
+    // lanes both report an epoch change, and a body lane reports a stale epoch
+    // through BOTH its translated `doc-unavailable` and the adapter's own
+    // `requestReplacement`. All of those are true statements about the same
+    // event, which is exactly what has to collapse to one rebuild.
+    if (replacementSettledForReason === reason) return;
     delivery.batch(() => {
       resetAllPlanes({ origin: "authority", reason });
       replicaGenerationCounter += 1;
     });
+    // Stamped AFTER the batch, not before, and that ordering is the whole
+    // trick: emptying the planes republishes them, and a republication runs
+    // the same `noteInboundFrameApplied` hook a real frame does. Stamping
+    // first therefore let the replacement clear its OWN guard, and the second
+    // report of one epoch change rebuilt again - which is the exact double
+    // bump this coalescer exists to stop.
+    replacementSettledForReason = reason;
   }
 
   /**
@@ -783,18 +902,23 @@ export function createEpicReplicaRuntime(
    * on that connection permanently. So this case probes rather than waits -
    * see {@link EpicLaneArm.probe}.
    */
-  function applySelection(): void {
-    if (disposed) return;
-    const verdict =
-      laneSelection === null
-        ? "legacy"
-        : readEpicAdapterVerdict(laneSelection.support);
-    if (installedArm === null && verdict === "undecided") {
-      // Idempotent: the arm opens one status stream however often this is
-      // called, and every reconnect's support reset lands here again.
-      laneArm?.probe();
-      return;
-    }
+  /**
+   * The key the body tier holds one artifact's live doc under, per arm.
+   *
+   * `@1` addresses a body by the ROOM that hosts it - one room, many bodies -
+   * and reads the mapping off the records plane. `artifact.subscribe` has no
+   * rooms at all: it serves one body per doc, addressed by artifact id under an
+   * authority epoch, so on that arm the artifact IS the key.
+   *
+   * Both arms answer `null` for a body this client cannot address yet, which is
+   * what every caller already branches on.
+   */
+  function artifactBodyDocKey(artifactId: string): string | null {
+    if (installedArm === "lanes") return artifactId;
+    return records.readArtifactRoomId(artifactId);
+  }
+
+  function executeTransition(verdict: EpicAdapterVerdict): void {
     const transition = planEpicAdapterTransition(installedArm, verdict);
     if (transition.steps.length === 0) {
       installedArm = transition.installed;
@@ -821,7 +945,54 @@ export function createEpicReplicaRuntime(
     installedArm = transition.installed;
   }
 
+  function applySelection(): void {
+    if (disposed) return;
+    const verdict =
+      laneSelection === null
+        ? "legacy"
+        : readEpicAdapterVerdict(laneSelection.support);
+    if (installedArm === null && verdict === "undecided") {
+      // Idempotent: the arm opens one status stream however often this is
+      // called, and every reconnect's support reset lands here again.
+      laneArm?.probe();
+      return;
+    }
+    executeTransition(verdict);
+  }
+
+  /**
+   * The probe answered. Install on THAT, without consulting the manifest.
+   *
+   * This is the half that makes the probe a probe rather than a hopeful open.
+   * Reading support here would reintroduce the stall it exists to prevent: a
+   * remote peer's `getMethodSupport` stays `"unknown"` forever, because the mux
+   * resolves an incompatible method as a fatal on the subscribe attempt and
+   * never as a queryable pre-check. The subscribe's own outcome is the only
+   * evidence both transports produce, so it is the only thing that can decide.
+   *
+   * Ignored once an arm is installed: a manifest that resolved first has
+   * already settled this, and the probe's stream was adopted by that install.
+   */
+  function applyProbeOutcome(outcome: EpicLaneProbeOutcome): void {
+    if (disposed) return;
+    if (installedArm !== null) return;
+    executeTransition(outcome === "succeeded" ? "lanes" : "legacy");
+  }
+
+  /**
+   * A frame reached the replicas, so any rebuild that was standing is spent.
+   *
+   * Called from every inbound path - the `@1` router and each of the lane
+   * arm's three callbacks - because a coalescer that is never cleared is a
+   * latch, and a latch here would swallow the SECOND genuine epoch change of a
+   * session.
+   */
+  function noteInboundFrameApplied(): void {
+    replacementSettledForReason = null;
+  }
+
   function routeEvent(runtimeEvent: EpicRuntimeEvent): void {
+    noteInboundFrameApplied();
     delivery.batch(() => {
       switch (runtimeEvent.plane) {
         case "root":
@@ -1033,19 +1204,19 @@ export function createEpicReplicaRuntime(
       // legacy-arm-private fact now, and this is one of the two places it is
       // still read. The lane arm replaces this lookup rather than translating
       // it: `artifact.subscribe` serves a body addressed by artifact id.
-      const artifactRoomId = records.readArtifactRoomId(artifactId);
-      if (artifactRoomId === null) return null;
-      const entry = tier.peek(artifactRoomId);
+      const docKey = artifactBodyDocKey(artifactId);
+      if (docKey === null) return null;
+      const entry = tier.peek(docKey);
       if (entry === null) return null;
       return entry.doc.getXmlFragment(artifactBodyFragmentName(artifactId));
     },
 
     getArtifactBodyAwareness(artifactId): Awareness | null {
       if (rooms.availabilityOfArtifact(artifactId) !== "ready") return null;
-      const artifactRoomId = records.readArtifactRoomId(artifactId);
-      if (artifactRoomId === null) return null;
+      const docKey = artifactBodyDocKey(artifactId);
+      if (docKey === null) return null;
       // Pure, for the same reason as `getArtifactFragment`.
-      const entry = tier.peek(artifactRoomId);
+      const entry = tier.peek(docKey);
       if (entry === null) return null;
       return entry.awareness;
     },
@@ -1058,14 +1229,18 @@ export function createEpicReplicaRuntime(
     // On the `@1` arm the body doc is the artifact's ROOM. The lane arm keys the
     // tier by artifact id instead, because `artifact.subscribe` serves one body
     // per doc - that arm returns the artifact id here unchanged.
-    getArtifactBodyDocKey: (artifactId) =>
-      records.readArtifactRoomId(artifactId),
+    getArtifactBodyDocKey: (artifactId) => artifactBodyDocKey(artifactId),
 
     acquireArtifactBodyLease(artifactId): () => void {
-      const artifactRoomId = records.readArtifactRoomId(artifactId);
-      if (artifactRoomId === null || disposed) return () => {};
-      const hadReplica = tier.peek(artifactRoomId) !== null;
-      const grant = rooms.acquireLease(artifactRoomId);
+      const docKey = artifactBodyDocKey(artifactId);
+      if (docKey === null || disposed) return () => {};
+      // Demand on the BODY LANE, taken before the tier lease. On the lane arm
+      // a body is not served until something asks for it - unlike `@1`, where
+      // every room arrives whether or not a tile is open - so the lease is
+      // also the subscribe. Idempotent, and a no-op on the legacy arm.
+      if (installedArm === "lanes") laneArm?.bodies.ensureAttached(artifactId);
+      const hadReplica = tier.peek(docKey) !== null;
+      const grant = rooms.acquireLease(docKey);
       if (grant.kind === "unavailable") {
         // The one arm that registered no demand, so there is nothing to
         // release. Reached only for a disposed tier.
