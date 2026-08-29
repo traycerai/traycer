@@ -4,10 +4,15 @@ import {
   QueryClient,
   type QueryKey,
 } from "@tanstack/react-query";
-import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   appLogger,
+  describeLogError,
   describeLogErrorSummary,
+  type AppLogFields,
   type AppLogValue,
 } from "@/lib/logger";
 import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
@@ -38,7 +43,7 @@ export function createAppQueryClient(): QueryClient {
           failureCount: query.state.fetchFailureCount,
           fetchStatus: query.state.fetchStatus,
           status: query.state.status,
-          error: describeLogErrorSummary(error),
+          error: describeRequestError(error),
         });
       },
     }),
@@ -48,7 +53,7 @@ export function createAppQueryClient(): QueryClient {
           mutationKey: summarizeQueryKey(mutation.options.mutationKey ?? []),
           failureCount: mutation.state.failureCount,
           status: mutation.state.status,
-          error: describeLogErrorSummary(error),
+          error: describeRequestError(error),
         });
       },
     }),
@@ -89,6 +94,56 @@ export function createAppQueryClient(): QueryClient {
 }
 
 export const queryClient = createAppQueryClient();
+
+/**
+ * The app-wide catch-all for failed host RPCs, so this is the ONE log line most
+ * support reports carry about a failure.
+ *
+ * It used to record `describeLogErrorSummary` for EVERY error, which keeps the
+ * name and replaces the text with `messageLength` - a number. That reduced every
+ * report to `{ name: "HostRpcError", messageLength: 198, stack: null }`, which
+ * identifies nothing: two unrelated failures with equal-length messages are
+ * indistinguishable, and no failure can be diagnosed at all.
+ *
+ * The split is by error TYPE, because the two kinds have different AUTHORS:
+ *
+ * - `HostRpcError` is host-authored diagnostic text and the thing support
+ *   reports actually need. Logged in full, plus the structured `code` /
+ *   `method` / `requestId` the message does not carry and which were dropped
+ *   entirely.
+ * - Everything else reaching these callbacks is app-authored and can quote the
+ *   USER. `use-epic-export-artifacts-mutation` throws
+ *   `"<artifact.title>" is still loading.`, and SIX hooks feeding this cache
+ *   deliberately call `appLogger.errorSummary` in their own `onError`
+ *   (export-artifacts, send-queued-invites, open-saved-file, mermaid-png-
+ *   download, usage-image-export, git-file-diffs-batched). A global full log
+ *   fires BEFORE theirs and would defeat every one of those decisions, so this
+ *   branch keeps the summary.
+ *
+ * On the host branch specifically: `redactLogText` (inside `describeLogError`)
+ * is a CREDENTIAL scrubber - it removes no filesystem path, URL, or other
+ * request-derived text, so do not cite it as though it made arbitrary text
+ * safe. What justifies the full message is the destination: it lands in a LOCAL
+ * log file (`console.warn` -> the desktop shell's `console-message` handler ->
+ * `traycer-desktop.log`) with no telemetry sink, and the support bundle that
+ * log feeds already tails the HOST's own log verbatim (`diagnostics.logs.tail`),
+ * which carries absolute paths by construction. A new sink for these logs
+ * (telemetry, auto-upload) invalidates that, and this call site must be
+ * revisited with it.
+ */
+function describeRequestError(error: unknown): AppLogFields {
+  if (!(error instanceof HostRpcError)) {
+    return describeLogErrorSummary(error);
+  }
+  // Structured attribution the message text does not carry, and which was
+  // previously dropped entirely.
+  return {
+    ...describeLogError(error),
+    code: error.code,
+    method: error.method,
+    requestId: error.requestId,
+  };
+}
 
 function summarizeQueryKey(queryKey: QueryKey): AppLogValue {
   return queryKey.slice(0, 4).map((part) => {
