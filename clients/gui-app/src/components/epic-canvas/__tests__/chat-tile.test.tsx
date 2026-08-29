@@ -117,6 +117,12 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => MOCK_HOST_CLIENT,
 }));
 
+// The plan card's modal reads the resolved theme; this tree mounts no
+// ThemeProvider. Same stub as plan-segment's own suite.
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark", themePreset: "neutral" }),
+}));
+
 // The tile subscribes to the command catalog itself, because its next-step /
 // compact / implement-plan sends bypass the composer and its picker store. The
 // mocked host client above never resolves a request, so without this the
@@ -706,6 +712,61 @@ function nextStepsAssistantMessage(): Message {
     ],
     timestamp: 2,
     turnId: "turn-next-steps",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  };
+}
+
+function planAssistantMessage(): Message {
+  return {
+    role: "assistant",
+    messageId: "plan-msg",
+    startedAt: 1,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "plan",
+        blockId: "plan:block-1",
+        status: "completed",
+        timestamp: 2,
+        planStatus: "ready",
+        planId: "plan-1",
+        harnessId: "codex",
+        source: {
+          harnessId: "codex",
+          sessionId: "session-1",
+          turnId: "turn-plan",
+          kind: "structured",
+        },
+        title: "Renderer plan",
+        summary: "Preview-only plan body",
+        markdownPreview: "## Preview-only plan body",
+        fullContentRef: null,
+        approvalId: null,
+        supersededByPlanId: null,
+        metadata: null,
+        steps: [
+          {
+            id: "step-1",
+            text: "Wire it",
+            status: "pending",
+            activeForm: null,
+          },
+        ],
+        actions: [],
+      },
+    ],
+    timestamp: 2,
+    turnId: "turn-plan",
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
@@ -3630,6 +3691,61 @@ describe("<ChatTile />", () => {
 
     expect(chatHarness.sent).toHaveLength(1);
     expect(chatHarness.sent[0]?.kind).toBe("send");
+  });
+
+  it("holds an implement-plan click to the next-step send rule under a blocking approval", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), planAssistantMessage()],
+        activeTurn: runningActiveTurn(),
+        managedCommands: [runningShellOnProject()],
+      });
+      chatHarness.callbacks().onApprovalRequested({
+        kind: "approvalRequested",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        approval: approvalState("approval-1", "tool"),
+      });
+    });
+
+    // One send rule at every point: the Implement button disables exactly like
+    // a next-step chip, a click stays refused with or without a staged rebind
+    // (identical to the no-draft immediate path), and nothing is sent.
+    const implementButton = screen.getByRole("button", { name: "Implement" });
+    if (!(implementButton instanceof HTMLButtonElement)) {
+      throw new Error("expected implement button");
+    }
+    expect(implementButton.disabled).toBe(true);
+    fireEvent.click(implementButton);
+    expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
+
+    act(() => {
+      chatHarness.callbacks().onApprovalResolved({
+        kind: "approvalResolved",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        approvalId: "approval-1",
+        decision: { approved: true },
+        resolvedAt: 3,
+      });
+    });
+
+    // Rule flips back with the approval: the click now reaches the rebind
+    // gate, which discloses the staged rebind instead of sending silently.
+    expect(implementButton.disabled).toBe(false);
+    fireEvent.click(implementButton);
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
   });
 
   it("re-discloses the next send while the draft stays staged after a deferral", async () => {

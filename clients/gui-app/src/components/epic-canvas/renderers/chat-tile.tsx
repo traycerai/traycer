@@ -2495,8 +2495,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     }),
     [canSendNextStep, sendNextStep],
   );
+  // Implement-plan is a submit like any next-step, so it takes the SAME
+  // eligibility rule at every point: the button (`canSend` below), this click
+  // gate, and the consent dialog's deferred confirm (`nextStepSendRefusal`).
+  // A bare `canAct` here once let a click send over a blocking file-edit/tool
+  // approval that the composer and every next-step correctly refuse - and
+  // worse, made the deferred confirm refuse a send the immediate path
+  // allowed: one click, two behaviors.
   const sendImplementPlanMessage = useCallback((): boolean => {
-    if (!canAct) return false;
+    if (!canSendNextStep) return false;
     if (userMessageSenderForProfile(profile) === null) return false;
     const content = buildSubmittedChatJSONContent(
       plainTextPromptContent("Implement the plan above."),
@@ -2515,7 +2522,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       refusal: nextStepSendRefusal,
     });
   }, [
-    canAct,
+    canSendNextStep,
     dispatchUserSend,
     nextStepSendRefusal,
     nextStepSettings,
@@ -2527,13 +2534,13 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => ({
       epicId: currentEpicId,
       chatId: node.id,
-      canAct,
+      canSend: canSendNextStep,
       pending: approvalDecisionPending,
       onImplement: sendImplementPlanMessage,
     }),
     [
       approvalDecisionPending,
-      canAct,
+      canSendNextStep,
       currentEpicId,
       node.id,
       sendImplementPlanMessage,

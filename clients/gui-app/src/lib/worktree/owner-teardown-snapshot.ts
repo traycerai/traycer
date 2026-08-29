@@ -103,6 +103,24 @@ export function runDirectoryOfFolderIntent(
 }
 
 /**
+ * The committed binding's run directory per workspace folder — the shared
+ * "previous" side of both draft predicates below. `worktreeDraftCommitsRebind`
+ * GATES the send disclosure and `droppedRunDirectoriesFromDraft` SCOPES it,
+ * so the two must read the binding identically; building the map here makes
+ * an edit to one an edit to both.
+ */
+function bindingRunDirectoriesByWorkspace(
+  binding: WorktreeBinding | null,
+): ReadonlyMap<string, string> {
+  return new Map(
+    (binding?.entries ?? []).map((entry) => [
+      entry.workspacePath,
+      runDirectoryOfBindingEntry(entry),
+    ]),
+  );
+}
+
+/**
  * Run directories the draft would leave: each staged folder whose next run
  * directory differs from the live binding, plus each pending-removed folder's
  * current run directory. Staged intent is a sparse overlay (changed folders
@@ -114,12 +132,7 @@ export function droppedRunDirectoriesFromDraft(input: {
   readonly draft: WorktreeIntent | null;
   readonly removedWorkspacePaths: readonly string[];
 }): readonly string[] {
-  const previousByWorkspace = new Map(
-    (input.binding?.entries ?? []).map((entry) => [
-      entry.workspacePath,
-      runDirectoryOfBindingEntry(entry),
-    ]),
-  );
+  const previousByWorkspace = bindingRunDirectoriesByWorkspace(input.binding);
   const dropped: string[] = [];
   const seen = new Set<string>();
   const pushDropped = (path: string): void => {
@@ -160,12 +173,7 @@ export function worktreeDraftCommitsRebind(input: {
   readonly draft: WorktreeIntent | null;
   readonly removedWorkspacePaths: readonly string[];
 }): boolean {
-  const previousByWorkspace = new Map(
-    (input.binding?.entries ?? []).map((entry) => [
-      entry.workspacePath,
-      runDirectoryOfBindingEntry(entry),
-    ]),
-  );
+  const previousByWorkspace = bindingRunDirectoriesByWorkspace(input.binding);
   if (
     input.removedWorkspacePaths.some((path) => previousByWorkspace.has(path))
   ) {
