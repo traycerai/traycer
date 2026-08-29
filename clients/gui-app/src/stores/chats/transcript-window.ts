@@ -1038,6 +1038,21 @@ function replacementSkeletonBaseline<T>(
   return indexRevision === null ? fresh : held;
 }
 
+function replacementBaselineLiveMessages(input: {
+  readonly window: TranscriptWindow;
+  readonly provisionalLiveMessages: readonly Message[];
+  readonly indexRevision: number | null;
+  readonly rebased: boolean;
+  readonly missedDeltas: boolean;
+}): readonly Message[] {
+  return input.indexRevision === null &&
+    !input.rebased &&
+    !input.missedDeltas &&
+    !input.window.invalidated
+    ? input.window.liveMessages
+    : input.provisionalLiveMessages;
+}
+
 /**
  * Seat a windowed snapshot.
  *
@@ -1177,6 +1192,13 @@ export function applyWindowedSnapshot(
     missedDeltas,
     rebased,
   });
+  const replacementBaselineMessages = replacementBaselineLiveMessages({
+    window,
+    provisionalLiveMessages,
+    indexRevision: input.indexRevision,
+    rebased,
+    missedDeltas,
+  });
   const skeletonBaselineTransientAssistantMessageIds = provisionalLiveMessages
     .filter(
       (message) =>
@@ -1184,7 +1206,7 @@ export function applyWindowedSnapshot(
         isTransientLiveAssistantMessageId(message.messageId),
     )
     .map((message) => message.messageId);
-  const skeletonBaselineProvisionalUserMessageIds = provisionalLiveMessages
+  const skeletonBaselineProvisionalUserMessageIds = replacementBaselineMessages
     .filter((message) => message.role === "user")
     .map((message) => message.messageId);
   const base: TranscriptWindow =

@@ -1875,6 +1875,33 @@ describe("what an overlap keeps", () => {
     expect(rebuilt.liveMessages).toEqual([]);
   });
 
+  it("retires a retained user omitted by a non-invalidated null rebuild", () => {
+    const live = appendLiveRecords(
+      {
+        ...emptyTranscriptWindow(),
+        epoch: 1,
+        rowCount: 1,
+        indexRevision: 1,
+        indexRevisionRebuilding: false,
+      },
+      { messages: [userMessage("accepted-user-removed", 1)], events: [] },
+    );
+    const replacement = applyWindowedSnapshot(live, {
+      epoch: 1,
+      rowCount: 1,
+      indexRevision: null,
+      tail: { fromOrdinal: 1, messages: [], events: [] },
+    });
+    const rebuilt = applySkeletonChunk(replacement, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: [skeletonEntry("different-user", 0)],
+      isFinal: true,
+    });
+
+    expect(rebuilt.liveMessages).toEqual([]);
+  });
+
   it("keeps a just-accepted user record through an index void", () => {
     const live = appendLiveRecords(
       {
