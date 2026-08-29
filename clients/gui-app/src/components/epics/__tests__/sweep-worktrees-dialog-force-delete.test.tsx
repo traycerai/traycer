@@ -1772,4 +1772,89 @@ describe("SweepWorktreesDialog ergonomics", () => {
     expect(backOnA.hasAttribute("disabled")).toBe(false);
     expect(screen.queryByTestId("sweep-worktrees-row-outcome")).toBeNull();
   });
+
+  it("sweeps on the Review click when pre-review refresh makes the selection safe", async () => {
+    testState.rows = [
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/busy",
+          branch: "feat-busy",
+          inUse: true,
+        }),
+        tier: "in-use",
+        defaultChecked: false,
+        disabled: false,
+        note: "in-use",
+        holders: HOLDERS,
+        holdersStatus: "ready",
+        holdersRevision: REV_A,
+      },
+    ];
+    testState.refresh.mockImplementation(() => {
+      testState.rows = [
+        {
+          entry: worktreeEntry({
+            worktreePath: "/wt/busy",
+            branch: "feat-busy",
+            inUse: false,
+          }),
+          tier: "merged",
+          defaultChecked: true,
+          disabled: false,
+          note: null,
+          holders: [],
+          holdersStatus: "none",
+        },
+      ];
+      return Promise.resolve(testState.rows);
+    });
+    renderDialog();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review consequences" }),
+    );
+    await waitFor(() => {
+      expect(testState.mutate).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByText("Review this sweep")).toBeNull();
+    expect(testState.lastVariables.worktrees).toEqual([
+      {
+        worktreePath: "/wt/busy",
+        stopOwners: false,
+        expectedHoldersRevision: undefined,
+      },
+    ]);
+  });
+
+  it("opens review when pre-review refresh leaves the selection elevated", async () => {
+    testState.rows = [
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/busy",
+          branch: "feat-busy",
+          inUse: true,
+        }),
+        tier: "in-use",
+        defaultChecked: false,
+        disabled: false,
+        note: "in-use",
+        holders: HOLDERS,
+        holdersStatus: "ready",
+        holdersRevision: REV_A,
+      },
+    ];
+    renderDialog();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review consequences" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Review this sweep")).toBeTruthy();
+    });
+    expect(testState.mutate).not.toHaveBeenCalled();
+  });
 });

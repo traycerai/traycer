@@ -515,7 +515,11 @@ function startSweepPrimary(input: {
         }
         return true;
       });
-      if (selected.length === 0 || selectionIsSafeOnly(selected)) return;
+      if (selected.length === 0) return;
+      if (selectionIsSafeOnly(selected)) {
+        input.kickoff(selected);
+        return;
+      }
       input.setReviewSnapshot(
         captureReviewSnapshot(
           selected,
