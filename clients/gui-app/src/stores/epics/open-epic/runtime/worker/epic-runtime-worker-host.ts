@@ -128,6 +128,11 @@ export interface EpicRuntimeWorkerHost {
    */
   bootstrapFacts(): RuntimeWorkerBootstrap | null;
   /**
+   * The signed-in user, replicated from main. Its own push, because its
+   * producer is `useAuthStore` and not the transport.
+   */
+  currentUserId(): string | null;
+  /**
    * Installs the relocated composition root. Called once, by the phase that
    * moves it; a second call replaces the core and disposes the previous one.
    */
@@ -141,6 +146,10 @@ export function startEpicRuntimeWorkerHost(
 ): EpicRuntimeWorkerHost {
   let core: EpicRuntimeWorkerCore | null = null;
   let bootstrap: RuntimeWorkerBootstrap | null = null;
+  // `null` is a real state - nobody signed in - and it is also what this reads
+  // before the first push. Both mean the same thing to the projector, which
+  // hides chats owned by a different user and shows none while unknown.
+  let currentUserId: string | null = null;
   let stopped = false;
 
   const handlers: RuntimeWorkerCallHandlers = {
@@ -310,6 +319,10 @@ export function startEpicRuntimeWorkerHost(
         streams.deliverManifest(event.manifest);
         return;
       }
+      case "current-user": {
+        currentUserId = event.userId;
+        return;
+      }
       case "shutdown": {
         shutdown();
         return;
@@ -361,6 +374,7 @@ export function startEpicRuntimeWorkerHost(
     environment,
     streams,
     bootstrapFacts: () => bootstrap,
+    currentUserId: () => currentUserId,
     installCore(next): void {
       const previous = core;
       core = next;

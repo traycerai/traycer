@@ -459,29 +459,31 @@ export function createWorkerBridgeEndpoint(
 }
 
 /**
- * Runs one worker->main call against the main-side handler map, and never
- * rejects - for the same reason {@link serve} does not: a rejection here is a
- * lost call, and the worker's promise would hang with nothing to settle it,
- * inside a transport that is waiting on a credential.
- *
- * The `switch` is again what correlates a request with its handler; indexing
- * the map by a union-typed key keeps the request correlated with its
- * handler. The `never` arm makes a second `MainCallMap` member fail to
- * compile here as well as at its coverage record.
+ * Runs the worker->main call against the main-side handler, and never rejects -
+ * for the same reason {@link serve} does not: a rejection here is a lost call,
+ * and the worker's promise would hang with nothing to settle it, inside a
+ * command queue that is waiting on the verdict.
  */
 async function serveMainCall(
   handlers: MainCallHandlers,
   call: MainCall,
 ): Promise<BridgeCallResult<MainCallResponse<MainCallKind>>> {
   try {
-    switch (call.kind) {
-      case "main/write-command": {
-        const value = await handlers["main/write-command"](call.request);
-        return { outcome: "ok", value };
-      }
-      default:
-        return unservedMainCall(call);
-    }
+    // Indexed, not switched, and ONLY because `MainCallMap` has exactly one
+    // member. A `switch` with a `default: assertNever(call)` does not compile
+    // here: `MainCall` over a single key is not a UNION, so TypeScript has no
+    // member to exhaust and leaves `call` fully typed in the default arm
+    // instead of narrowing it to `never`. Writing that switch is what produced
+    // this file's only compile red.
+    //
+    // Indexing is also the forcing function a grep rule would only ask for. A
+    // SECOND member makes `call.kind` a union, `handlers[call.kind]` a union of
+    // function types, and the call below requires the INTERSECTION of their
+    // parameters - which no request satisfies. So adding one fails to compile
+    // on this exact line, and whoever adds it writes the per-member dispatch
+    // then, when the union it needs actually exists.
+    const value = await handlers[call.kind](call.request);
+    return { outcome: "ok", value };
   } catch (cause: unknown) {
     return {
       outcome: "error",
@@ -489,16 +491,6 @@ async function serveMainCall(
       message: describe(cause),
     };
   }
-}
-
-function unservedMainCall(
-  call: never,
-): BridgeCallResult<MainCallResponse<MainCallKind>> {
-  return {
-    outcome: "error",
-    name: "BridgeUnknownCallError",
-    message: `The main thread has no handler for ${JSON.stringify(call)}`,
-  };
 }
 
 interface ServedReply {
