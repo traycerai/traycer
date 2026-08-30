@@ -148,19 +148,45 @@ function useChatsById(): Readonly<Record<string, ChatProjection>> {
  *
  * Returns a plain string union, so an unchanged verdict is `Object.is`-equal
  * and re-renders nobody.
+ *
+ * That sentence has been here since this hook shipped and was FALSE as wired:
+ * the verdict was derived AFTER the subscription, off `useChatsById()` - the
+ * whole `chats.byId` map - so every row calling this re-rendered whenever any
+ * chat record moved, whatever verdict it then computed. Measured on the field's
+ * shape (40 chat rows, 12 bursted): 40 of 40 re-rendered per burst, and it
+ * survived the row-level narrowing in `d1cb1b3a` untouched because the
+ * subscription is two modules away from the row that pays for it.
+ *
+ * The derivation is inside `getSnapshot` now, so what this row subscribes to IS
+ * its answer. `getSnapshot` must stay pure and must keep returning a primitive:
+ * `useSyncExternalStore` compares snapshots with `Object.is` and would loop on
+ * a freshly-allocated object.
  */
 export function useChatWriteRoute(
   isChatRow: boolean,
   nodeId: string,
 ): ChatWriteRoute {
   const sessionHostId = useEpicSessionHostId();
-  const chatsById = useChatsById();
-  return resolveChatWriteRoute({
-    chatsById,
-    isChatRow,
-    nodeId,
-    sessionHostId,
-  });
+  const handle = useMaybeOpenEpicHandle();
+  const subscribe = useCallback(
+    (onStoreChange: () => void): (() => void) =>
+      handle === null ? () => {} : handle.store.subscribe(onStoreChange),
+    [handle],
+  );
+  const getSnapshot = useCallback(
+    (): ChatWriteRoute =>
+      resolveChatWriteRoute({
+        chatsById:
+          handle === null
+            ? EMPTY_CHATS_BY_ID
+            : handle.store.getState().chats.byId,
+        isChatRow,
+        nodeId,
+        sessionHostId,
+      }),
+    [handle, isChatRow, nodeId, sessionHostId],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot);
 }
 
 /**

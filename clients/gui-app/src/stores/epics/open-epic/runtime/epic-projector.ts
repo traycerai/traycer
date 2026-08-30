@@ -514,6 +514,28 @@ function pathOfEvent(event: Y.YEvent<Y.AbstractType<unknown>>): string[] {
 /**
  * Keys on an artifact entry whose change forces a tree rebuild because the
  * tree slice depends on them (parent/child grouping, sort key, label).
+ *
+ * ## `updatedAt` is absent here, and that means different things per PATH
+ *
+ * All three key sets below omit `updatedAt`, so on THIS path - the incremental
+ * doc-arm reconcile - a write that only stamps a timestamp never sets
+ * `structuralTreeDirty`, the tree is not rebuilt, and every node keeps whatever
+ * `updatedAt` it had at its last structural change. The tree's copy is a
+ * lagging one; `useEpicNodeUpdatedAt` exists because of it.
+ *
+ * On any FULL projection it is the opposite. `projectTreeSlice` builds each
+ * node with `updatedAt` taken straight from the record, so a timestamp bump
+ * does re-mint that node - and, because the default order is recency, can
+ * REORDER siblings and roots. Every full pass has this property: the lane arm
+ * (which reaches `projectFull()` from the records replica on its update paths),
+ * a snapshot ingest, and the pending-overlay fallback on the doc arm.
+ *
+ * So "does a body write move the tree?" has no single answer, and the two
+ * arms disagree. A doc-arm test reaches tree churn only through a STRUCTURAL
+ * key; the lane arm reaches it with a bare timestamp. Coverage written against
+ * one door proves nothing about the other, which has already cost this epic two
+ * rounds of a perf gate (finding 12): the fixes were right and the harness was
+ * entering through the door the field does not use.
  */
 const ARTIFACT_TREE_KEYS: ReadonlySet<string> = new Set([
   "parentId",

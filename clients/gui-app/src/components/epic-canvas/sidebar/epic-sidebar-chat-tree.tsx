@@ -40,7 +40,7 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import {
-  computeDescendantCounts,
+  computeDescendantCountsFromTree,
   formatCascadeSummary,
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -74,7 +74,10 @@ import {
   type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
-import type { TreeSlice } from "@/stores/epics/open-epic/types";
+import type {
+  EpicTreeNodeType,
+  TreeSlice,
+} from "@/stores/epics/open-epic/types";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import { ProfileBadgedHarnessIcon } from "@/components/providers/profile-badged-harness-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -135,7 +138,6 @@ import {
   useEpicAgentRoleClaims,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
-  useEpicArtifactRecords,
   useEpicChatIds,
   useEpicConnectionStatus,
   useEpicNodeArchived,
@@ -146,7 +148,6 @@ import {
   useEpicNodeOwnerKind,
   useEpicPermissionRole,
   useEpicTreeIndex,
-  useEpicTreeNode,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
 import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
@@ -1364,6 +1365,38 @@ interface ChatNodeProps {
   onToggleSelection: (id: string) => void;
 }
 
+/**
+ * The parts of a chat row's tree node that the row RENDERS.
+ *
+ * Same narrowing as the artifact row, and in the same class for the same
+ * reason - which is an ARM behaviour, not a code shape. `CHAT_TREE_KEYS` omits
+ * `updatedAt`, so on the doc arm's incremental path a chat's activity never
+ * rebuilds the tree and the whole-node read costs nothing. On every FULL
+ * projection - which is what the lane arm runs on its record-update paths -
+ * `projectTreeSlice` takes each node's `updatedAt` from the record, so activity
+ * DOES re-mint this node, and reading the whole thing re-renders the row (and
+ * its unmemoized chrome) for a field it does not display.
+ *
+ * The displayed last-activity time is NOT this: it comes from
+ * `useEpicNodeUpdatedAt`, a per-node scalar off the records projection, and it
+ * re-renders the row exactly when the time it shows changes. That is correct
+ * and stays.
+ */
+interface ChatRowNodeFacts {
+  readonly type: EpicTreeNodeType;
+  readonly title: string;
+}
+
+function useChatRowNode(nodeId: string): ChatRowNodeFacts | null {
+  return useEpicStore(
+    useShallow((state: OpenEpicState): ChatRowNodeFacts | null => {
+      if (!Object.hasOwn(state.tree.nodeById, nodeId)) return null;
+      const node = state.tree.nodeById[nodeId];
+      return { type: node.type, title: node.title };
+    }),
+  );
+}
+
 const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const {
     epicId,
@@ -1380,7 +1413,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     onToggleSelection,
   } = props;
   const { expandedIds, toggleExpanded } = expansion;
-  const node = useEpicTreeNode(nodeId);
+  const node = useChatRowNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
   const navigateNested = useEpicNestedFocusNavigation();
   // Non-null only where this tree is mounted on a surface that cannot express
@@ -1410,7 +1443,29 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  const liveRecords = useEpicArtifactRecords();
+  // The cascade-delete summary, subscribed to its ANSWER rather than to the
+  // record list it is computed from.
+  //
+  // `useEpicArtifactRecords()` hands back an array whose identity moves whenever
+  // ANY record in the epic changes - a body write, a chat token, a timestamp
+  // stamp - so every one of these rows re-rendered on every one of those, for a
+  // count that almost never moves. Measured on the field's shape (40 rows, 12
+  // bursted): 40 of 40 re-rendered per burst, bystanders included. `memo` is no
+  // defence, because this is the row's OWN subscription rather than a prop.
+  //
+  // The tree walk is the same counts by a different route: `childrenByParent`
+  // and `nodeById` are the normalised structure this sidebar already renders, so
+  // it agrees with what the user sees. `useShallow` is required rather than
+  // decorative - the selector returns a fresh object per call, and without it
+  // `useSyncExternalStore` sees a change on every notification and loops.
+  //
+  // The artifact row was moved to exactly this in `d1cb1b3a`; this row is the
+  // same defect in the second copy of it.
+  const cascadeCounts = useEpicStore(
+    useShallow((state: OpenEpicState) =>
+      computeDescendantCountsFromTree(state.tree, nodeId),
+    ),
+  );
 
   const expanded = expandedIds.has(nodeId);
   const hasChildren = childIds.length > 0;
@@ -1760,7 +1815,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  const cascadeCounts = computeDescendantCounts(liveRecords, nodeId);
   const cascadeSummary = formatCascadeSummary(cascadeCounts);
   const rowClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (selectionMode || event.ctrlKey || event.metaKey) {
