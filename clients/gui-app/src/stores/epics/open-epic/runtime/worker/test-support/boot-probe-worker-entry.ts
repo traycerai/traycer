@@ -32,7 +32,10 @@ import {
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 
 import { startEpicRuntimeWorkerHost } from "../epic-runtime-worker-host";
-import { installEpicRuntimeCore } from "../install-epic-runtime-core";
+import {
+  buildProxiedRuntimeFactories,
+  installEpicRuntimeCore,
+} from "../install-epic-runtime-core";
 
 /**
  * The narrowing the shipped entry gets from `resolveWorkerScopeTransport`,
@@ -62,4 +65,5 @@ if (!isMessageTargetLike(scope)) {
 // stopped being what ships the moment the entry grew this line.
 installEpicRuntimeCore(
   startEpicRuntimeWorkerHost(createMessageTargetTransport(scope)),
+  buildProxiedRuntimeFactories,
 );

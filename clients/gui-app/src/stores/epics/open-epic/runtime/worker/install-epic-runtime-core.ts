@@ -23,6 +23,7 @@ import {
 import {
   buildProxiedStreamFactories,
   createEpicRuntimeComposition,
+  type EpicRuntimeStreamFactories,
 } from "./epic-runtime-composition";
 import { createEpicRuntimeWorkerCore } from "./epic-runtime-core";
 import { buildEpicRuntimeCorePorts } from "./epic-runtime-core-ports";
@@ -41,9 +42,16 @@ const DOC_ARM_BEFORE_MANIFEST: EpicDocRecordArms = {
   tuiAgents: true,
 };
 
-export function installEpicRuntimeCore(host: EpicRuntimeWorkerHost): void {
-  host.onBootstrap((facts) => {
-    const factories = buildProxiedStreamFactories({
+/**
+ * Builds the four typed stream clients over the worker's proxied client.
+ *
+ * Production's builder, named so it can be PASSED rather than assumed - see
+ * {@link installEpicRuntimeCore}'s second parameter.
+ */
+export function buildProxiedRuntimeFactories(
+  host: EpicRuntimeWorkerHost,
+): EpicRuntimeStreamFactories {
+  return buildProxiedStreamFactories({
       streams: host.streams.client,
       support: (method) => {
         const manifest = host.streams.manifest();
@@ -57,8 +65,32 @@ export function installEpicRuntimeCore(host: EpicRuntimeWorkerHost): void {
         // claim, and this is an absence.
         return entry === undefined ? "unknown" : entry.support;
       },
-      subscribeSupport: (listener) => host.streams.subscribeManifest(listener),
-    });
+    subscribeSupport: (listener) => host.streams.subscribeManifest(listener),
+  });
+}
+
+/**
+ * @param buildFactories How to construct the four typed stream clients.
+ *
+ * EXPLICIT, and this is the seam `epic-runtime-composition.ts` already
+ * documents: "The factories are an option rather than something this module
+ * derives, and that is one seam with two users rather than a testing
+ * convenience: the production bootstrap passes the proxy-built ones, and a
+ * caller that supplies its own stream (the provider's override seam, and
+ * `store.test.ts`'s fake) passes those." The composition took them all along;
+ * this root simply did not pass through what its callee already accepted.
+ *
+ * A PARAMETER rather than a module-scoped override slot, deliberately: this
+ * module is on the worker entry's value graph, where a module-scoped `let` is
+ * process state and the graph ratchet says so - correctly, since it cannot
+ * know the slot is only written by a test.
+ */
+export function installEpicRuntimeCore(
+  host: EpicRuntimeWorkerHost,
+  buildFactories: (host: EpicRuntimeWorkerHost) => EpicRuntimeStreamFactories,
+): void {
+  host.onBootstrap((facts) => {
+    const factories = buildFactories(host);
 
     const runtime = createEpicRuntimeComposition({
       epicId: facts.epicId,
