@@ -47,6 +47,11 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
+      - name: Require temporary crash telemetry cleanup before main promotion
+        if: matrix.lane == 'static' && github.event_name == 'pull_request'
+        env:
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: node scripts/release-train-promotion-guard.cjs
       - name: Cache Nx
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
