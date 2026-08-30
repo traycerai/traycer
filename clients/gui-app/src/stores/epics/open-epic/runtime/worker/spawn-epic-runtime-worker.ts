@@ -200,6 +200,21 @@ export interface EpicRuntimeWorkerHandle {
    * gestures and record pushes.
    */
   awarenessOut(docKey: string, frame: Uint8Array, localClientId: number): void;
+  /**
+   * Tell the worker who is signed in.
+   *
+   * The worker's projector folds on `getCurrentUserId()`, which is fed by this
+   * event and by nothing else - and until now NOTHING EMITTED IT. The protocol
+   * declared the event and the worker host handled it; the producer was simply
+   * never written, so the fold ran with a null user for the whole session and
+   * a null user is the fail-OPEN direction: foreign chats and terminal agents
+   * are not hidden, and same-account role claims do not project.
+   *
+   * Pushed rather than answered on demand, because the worker needs it before
+   * its first projection and identity arrives on main's own schedule (the auth
+   * profile hydrates after the session is constructed).
+   */
+  currentUser(userId: string | null): void;
   detach(): void;
   /**
    * Re-binds the worker to a NEW transport after a detach - a fresh proxy host,
@@ -362,6 +377,10 @@ export function spawnEpicRuntimeWorker<TProjection>(
   return {
     port: bridge,
     ready,
+    currentUser(userId): void {
+      if (disposed) return;
+      bridge.emit({ kind: "current-user", userId }, NO_TRANSFER);
+    },
     awarenessOut(docKey, frame, localClientId): void {
       if (disposed) return;
       const encoded = takeBytesForTransfer(frame);

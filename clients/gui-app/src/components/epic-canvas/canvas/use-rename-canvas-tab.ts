@@ -46,7 +46,12 @@ export function useRenameCanvasTab(
   const renameArtifact = useEpicRenameArtifact(true);
 
   return useCallback(
-    (tab, rawTitle) => {
+    // ASYNC because the replica moved: the doc write's verdict and the
+    // rename-stamp check are both round trips now. The declared callback still
+    // returns `void` and callers still fire-and-forget it - a function
+    // returning `Promise<void>` is assignable to one returning `void`, and
+    // nothing here awaited it before.
+    async (tab, rawTitle) => {
       const trimmed = rawTitle.trim();
       // No same-title suppression: the optimistic local update can already be
       // ahead of a failed RPC, and resubmitting the visible title is the
@@ -67,7 +72,12 @@ export function useRenameCanvasTab(
       if (tab.type === "terminal-agent") {
         const agents = epicHandle.store.getState().tuiAgents.byId;
         if (!Object.hasOwn(agents, id) || agents[id].docResident) {
-          if (epicHandle.store.getState().renameArtifact(id, trimmed)) {
+          // AWAITED: the replica is on the worker thread now, so the doc
+          // write's verdict is a round trip rather than a return value. Still
+          // "synchronous authority" in the sense that matters - there is no
+          // stamp to retire and the snapshot follows the write's own success -
+          // just no longer synchronous in time.
+          if (await epicHandle.store.getState().renameArtifact(id, trimmed)) {
             renameArtifactInTab(viewTabId, id, trimmed);
           }
           return;
@@ -143,7 +153,12 @@ export function useRenameCanvasTab(
       // every registry-backed row, which post chats-off-YJS is most of the
       // agent family - so a tab rename of one of those had no local feedback
       // at all and merely looked slow.
-      const requestId = epicHandle.store
+      // AWAITED: the overlay stamp is minted by the worker's queue now, so the
+      // id comes back over the bridge. Everything below reads `requestId`, so
+      // it has to be the value rather than the promise - a `Promise<string>`
+      // here is truthy, which would make the `!== null` guards pass and hand a
+      // promise to `retirePendingMutation` as if it were an id.
+      const requestId = await epicHandle.store
         .getState()
         .beginRenameMutation(id, trimmed);
       // Retire rides the `mutateAsync` PROMISE, never a per-call `onSettled`:
@@ -160,12 +175,14 @@ export function useRenameCanvasTab(
       // until the record refetch actually delivers the new title - the ack
       // is proof the host has it - so a successful rename never snaps back
       // to the stale row while the refetch is in flight.
-      const retire = (outcome: "landed" | "failed"): void => {
+      const retire = async (outcome: "landed" | "failed"): Promise<void> => {
         if (requestId === null) return;
-        epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+        await epicHandle.store
+          .getState()
+          .retirePendingMutation(requestId, outcome);
       };
-      const landed = (): void => {
-        retire("landed");
+      const landed = async (): Promise<void> => {
+        await retire("landed");
         // The tab snapshot only on settlement: it is a persisted fallback, not
         // live feedback (the overlay above is), and it has no rollback path -
         // written before the RPC, a terminal failure would leave the rejected
@@ -180,14 +197,16 @@ export function useRenameCanvasTab(
         // echo swept its chain before the ack still writes.
         if (
           requestId !== null &&
-          !epicHandle.store.getState().isLatestRenameStamp(id, requestId)
+          !(await epicHandle.store
+            .getState()
+            .isLatestRenameStamp(id, requestId))
         ) {
           return;
         }
         renameArtifactInTab(viewTabId, id, trimmed);
       };
-      const failed = (): void => {
-        retire("failed");
+      const failed = async (): Promise<void> => {
+        await retire("failed");
       };
       if (tab.type === "chat") {
         void renameChat

@@ -201,8 +201,8 @@ export function openStoreForTest(
       awarenessOut: (docKey, frame, localClientId) => {
         worker.awarenessOut(docKey, frame, localClientId);
       },
-      releaseBody: (docKey) => {
-        worker.releaseBody(docKey);
+      currentUser: (nextUserId) => {
+        worker.currentUser(nextUserId);
       },
       detach: () => {
         worker.detach();

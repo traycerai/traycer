@@ -28,6 +28,7 @@
  */
 import type { EpicAdapterArm } from "./runtime/epic-adapter-selection";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
+import { replaceEqualDeep } from "@tanstack/react-query";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
@@ -129,6 +130,8 @@ export interface EpicRuntimeBinding {
    * `spawn-epic-runtime-worker`'s member of the same name.
    */
   awarenessOut(docKey: string, frame: Uint8Array, localClientId: number): void;
+  /** Tell the worker who is signed in. See the spawner's member. */
+  currentUser(userId: string | null): void;
   /** Ends the transport while the replica lives on. */
   detach(): void;
   /** Ends the worker. */
@@ -1006,12 +1009,54 @@ export function createOpenEpicStore(
       );
     }
     const { bindingEpoch, ...projected } = patch;
+    // ── Re-stabilise nested identity, at the grain the projector owns it ──
+    //
+    // The worker's projector re-allocates ONLY what changed - a rename mints a
+    // fresh slot and every sibling keeps its reference - and selectors skip
+    // work on exactly that discipline. `structuredClone` erases it one level
+    // below the wire's key-grain diff: a slice whose reference moved arrives
+    // with EVERY nested slot re-minted, changed or not. `replaceEqualDeep`
+    // (TanStack's default structural sharing, already the precedent in
+    // `worktrees-enrichment-batcher.ts`) restores it: a deep-equal subtree
+    // keeps the object already in state, a changed one stays fresh - so
+    // `===` again means "unchanged", clone or no clone.
+    //
+    // Per delivered key only - the wire diff already omits keys whose
+    // reference never moved, so this walks what actually crossed.
+    const current = api.getState();
+    for (const key of Object.keys(projected) as ReadonlyArray<
+      keyof typeof projected
+    >) {
+      stabilizeProjectionKey(current, projected, key);
+    }
     api.setState(
       bindingEpoch === undefined
         ? projected
         : { ...projected, bindingVersion: bindingEpoch },
     );
     dropBodiesWhoseRoomIsGone();
+  }
+
+  /**
+   * One key of the incoming patch, reconciled against what the store holds.
+   *
+   * A single-key generic rather than an inline loop body because TypeScript
+   * cannot correlate `projected[key]` reads and writes across a union of
+   * keys; pinning `K` makes the read, the reconcile and the write agree.
+   * `undefined` never means "publish undefined" here - projection fields use
+   * `null` per the repo's no-optionals rule - so it only ever means the key
+   * was absent and there is nothing to stabilise.
+   */
+  function stabilizeProjectionKey<
+    K extends keyof Omit<EpicRuntimeProjection, "bindingEpoch">,
+  >(
+    current: OpenEpicState,
+    projected: Partial<Omit<EpicRuntimeProjection, "bindingEpoch">>,
+    key: K,
+  ): void {
+    const incoming = projected[key];
+    if (incoming === undefined) return;
+    projected[key] = replaceEqualDeep(current[key], incoming);
   }
 
   /**
@@ -1501,6 +1546,12 @@ export function createOpenEpicStore(
     ),
   );
 
+  // The worker's projector folds on this and has no other source for it, so
+  // it is pushed at construction rather than waited for: a session built
+  // before the auth profile hydrates would otherwise project its first frames
+  // for a null user, which is the fail-OPEN direction - foreign rows visible.
+  runtime.currentUser(userId);
+
   unsubscribeAuthUserId = useAuthStore.subscribe((state, prevState) => {
     const nextUserId = state.profile?.userId ?? null;
     const prevUserId = prevState.profile?.userId ?? null;
@@ -1513,6 +1564,11 @@ export function createOpenEpicStore(
     // field, so the sink holds the value its own change gate compares against.
     // Writing it here would leave the two disagreeing, and the gate would then
     // refuse to restore the flag the store had cleared.
+    // FIRST, before every command below: `republish-records-for-current-user`
+    // re-derives the record slices for "the current user", and the worker's
+    // answer to that question is whatever this last pushed. Pushing after
+    // would rebuild them for the identity being replaced.
+    runtime.currentUser(nextUserId);
     runtime.command({
       kind: "mark-chat-records-not-authoritative",
       payload: {},
