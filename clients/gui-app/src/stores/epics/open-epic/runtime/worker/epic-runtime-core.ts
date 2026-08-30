@@ -164,13 +164,15 @@ export function createEpicRuntimeWorkerCore(
       });
       return answer;
     },
-    async applyMutation(mutation) {
+    applyMutation(mutation) {
       // Gated on `serving` like every other member, and the no-core answers
       // are the host's - this arm exists for the window between `dispose()`
       // and the host noticing, where a mutation must not reach a replica that
-      // is tearing down.
-      if (!serving) return inertMutationResult(mutation);
-      return ports.mutations.apply(mutation);
+      // is tearing down. The port is synchronous by design (the overlay is the
+      // projector's fold input); `Promise.resolve` is the lift to the shape
+      // the host awaits, not a deferral.
+      if (!serving) return Promise.resolve(inertMutationResult(mutation));
+      return Promise.resolve(ports.mutations.apply(mutation));
     },
     async updateBody(input) {
       if (!serving) {
