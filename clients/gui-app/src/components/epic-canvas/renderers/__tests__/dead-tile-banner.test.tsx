@@ -41,6 +41,7 @@ describe("<TerminalDeadTileBanner />", () => {
   it("tells a raw Terminal owner the session is permanently gone", () => {
     render(
       <TerminalDeadTileBanner
+        reason="host-unreachable"
         hostLabel="mac-mini"
         ownerKind="terminal"
         unavailability="offline"
@@ -57,6 +58,7 @@ describe("<TerminalDeadTileBanner />", () => {
   it("tells a Terminal-interface Agent owner the Agent survives its Host", () => {
     render(
       <TerminalDeadTileBanner
+        reason="host-unreachable"
         hostLabel="mac-mini"
         ownerKind="agent"
         unavailability="offline"
@@ -77,6 +79,7 @@ describe("<TerminalDeadTileBanner />", () => {
   it("keeps the close action available on both variants", () => {
     render(
       <TerminalDeadTileBanner
+        reason="host-unreachable"
         hostLabel="h"
         ownerKind="agent"
         unavailability="offline"

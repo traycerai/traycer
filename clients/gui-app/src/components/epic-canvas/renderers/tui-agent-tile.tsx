@@ -83,10 +83,12 @@ import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
+import { mayRestartAfterWorkspaceBindingChange } from "./tui-agent-workspace-restart";
 import {
   buildForkWorkspaceSeed,
   buildForkWorkspaceSeedFromWorkspaceFolders,
 } from "@/lib/worktree/fork-workspace-seed";
+import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import {
   pendingForkTerminalAgentStagingKey,
   useWorktreeIntentStagingStore,
@@ -95,6 +97,7 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import {
   TerminalAgentForkDialog,
+  type TerminalAgentForkDialogTarget,
   type TerminalAgentForkIntent,
 } from "./terminal-agent-fork-dialog";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
@@ -233,6 +236,25 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     // expiring rather than proof the agent's session ended. The tile stops
     // waiting; the persisted notification still needs directory evidence.
     if (reachability.basis !== "directory") return;
+    // REMOTE-UNADDRESSABLE: another of the user's machines, not reachable from
+    // this one. The banner is right and the notification is not.
+    //
+    // "Terminal closed" is a claim that a session on the reader's own machine
+    // ended, and it is written into a durable feed. Here it would be a claim
+    // about a machine this client cannot observe at all - and the reader
+    // closed nothing; someone shut a laptop. The agent and its transcript are
+    // exactly what the banner says they are: kept, on their own host, waiting
+    // for it to come back.
+    //
+    // The gate matters now because the TUI roster's phase 2 put every agent on
+    // every other machine the user owns into this tree. Before it, opening a
+    // remote-bound agent tile was rare enough that this fired seldom; after
+    // it, peeking at a sleeping laptop's agents would write one persisted
+    // "permanently closed" entry per tile. Deliberately narrow to `remote`:
+    // a host the directory cannot classify keeps today's behaviour, because
+    // inferring "someone else's machine" from "not in the directory" is the
+    // kind of guess this whole chain of gates exists to refuse.
+    if (reachability.hostKind === "remote") return;
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
       hostId,
@@ -251,6 +273,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     reachability.hostLabel,
     reachability.unavailability,
     reachability.basis,
+    reachability.hostKind,
     epicId,
     hostId,
     props.node.id,
@@ -261,6 +284,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner
+        reason="host-unreachable"
         hostLabel={reachability.hostLabel}
         ownerKind="agent"
         unavailability={reachability.unavailability}
@@ -325,6 +349,16 @@ function TuiAgentTileLive(
   const instanceId = props.node.instanceId;
   const agent = useEpicTerminalAgent(sessionId);
   const hostEntry = useHostDirectoryEntry(hostId);
+  // Read off the directory entry this component already holds rather than
+  // opening a second reachability subscription per tile: the outer component
+  // owns that verdict, and all this arm needs is a name to put in the banner.
+  const hostLabel =
+    hostEntry !== null && hostEntry.label.length > 0 ? hostEntry.label : hostId;
+  const closeTile = useCloseCanvasTileWithNestedFocus(
+    props.viewTabId,
+    props.tileId,
+    instanceId,
+  );
   const hostClient = useHostClientFor(hostEntry);
   const prepareLaunch = useAgentStartTerminalSession(hostClient);
   const killTerminal = useTerminalKillFor(
@@ -344,6 +378,18 @@ function TuiAgentTileLive(
   const preparePayload =
     useCallback(async (): Promise<TerminalCreatePayload | null> => {
       if (agent === null) return null;
+      // Unreachable while `adoptOnly` holds the create effect shut, and kept
+      // as the second half of that gate rather than trusting one flag: this is
+      // the function that would hand a null resume id to the owner host's
+      // prepare-launch and get a NEW provider session minted under this
+      // agent's id. A replica may never start one.
+      if (agent.origin === "cloud") return null;
+      // A harness this build cannot name is a harness it cannot launch. Only a
+      // cross-host replica can reach `null` here, and the line above has
+      // already refused those - this states the requirement rather than
+      // relying on that ordering.
+      const launchHarnessId = agent.harnessId;
+      if (launchHarnessId === null) return null;
       // PEEK, don't consume: a failed `terminal.create` (PTY never started, so
       // the fork command never ran) must be retryable against the SAME fork-
       // prepared args. The stash is cleared once `terminal.create` succeeds (see
@@ -359,7 +405,7 @@ function TuiAgentTileLive(
         };
       }
       const session = await prepareLaunchMutateAsync({
-        harnessId: agent.harnessId,
+        harnessId: launchHarnessId,
         epicId,
         model: agent.model,
         reasoningEffort: agent.reasoningEffort,
@@ -419,6 +465,25 @@ function TuiAgentTileLive(
     [prepareLaunchReset],
   );
 
+  // A CROSS-HOST REPLICA is ADOPT-ONLY, and this is the boundary decision 2
+  // rests on rather than a UI preference.
+  //
+  // The row came from this host's record inbox: it describes an agent living
+  // on ANOTHER of the user's machines, and it carries no `harnessSessionId`,
+  // because that never leaves the machine running the provider CLI. So there
+  // is nothing here to resume FROM. Sending the projected `null` through the
+  // ordinary prepare/create path does not fail safe - the host's
+  // prepare-launch resolver reads a null resume id as "new session" and mints
+  // a fresh provider session under the existing agent id. On a reachable
+  // owner host whose PTY was merely idle-reaped, that silently replaces the
+  // agent's conversation, and if the owner is still driving it, it is a
+  // SECOND driver on one CLI session.
+  //
+  // `adoptOnly` is the existing gate for exactly this shape (a session
+  // something else owns creating): it shuts the create effect for good while
+  // still arming the measure-grid wait, so the tile can attach when the owner
+  // host does report a running PTY.
+  const isCloudReplica = agent?.origin === "cloud";
   const bootstrap = useTerminalTileBootstrap({
     hostId,
     scope: { kind: "epic", epicId },
@@ -427,6 +492,7 @@ function TuiAgentTileLive(
     sessionKind: "terminal-agent",
     preparePayload,
     enabled: agent !== null && prepareLaunch.isIdle,
+    adoptOnly: isCloudReplica,
     resetPrepare,
   });
   const hostHasSession = bootstrap.hostHasSession;
@@ -509,9 +575,24 @@ function TuiAgentTileLive(
   // error toast, no tab close, same safety ceiling) and recreate under the
   // same id; `prepareLaunch` resumes the conversation transparently.
   const reviveAfterReap = useCallback((): void => {
+    // NOT for a cross-host replica. "Recreate under the same id" is precisely
+    // the reconstruction that is forbidden here: with no `harnessSessionId` to
+    // resume, `prepareLaunch` would mint a new provider session rather than
+    // resuming the conversation. The reaped tile falls to the unavailable
+    // banner instead, and the agent is restarted where it lives.
+    //
+    // DEFENSIVE, and stated as such after a review asked why no test can make
+    // it fail: `adoptOnly` above already shuts the create effect permanently,
+    // and `bootstrap.retry` only clears the dispatch latch and refetches the
+    // session list - it never creates on its own. So removing this line does
+    // not currently let a replica be recreated. What it saves is an
+    // ARM-RESTART-SUPPRESSION that has nothing to suppress, and it keeps the
+    // refusal readable at the call site instead of resting entirely on a flag
+    // handed to a hook three files away.
+    if (isCloudReplica) return;
     armRestartSuppression();
     retryTerminal();
-  }, [armRestartSuppression, retryTerminal]);
+  }, [armRestartSuppression, isCloudReplica, retryTerminal]);
   // The kill must target a LIVE session. If session presence is unknown
   // (`terminal.list` refetching → `hostHasSession === null`) or already gone at
   // commit time, do NOT silently drop the rebind (the bug where Update appeared
@@ -519,15 +600,45 @@ function TuiAgentTileLive(
   // effect below act once presence settles.
   const pendingRestartRef = useRef(false);
   const restartAfterWorkspaceBindingChange = useCallback((): void => {
+    // A CLOUD REPLICA never restarts anything. The kill below targets the PTY
+    // by session id, and that PTY lives on the OWNER's machine - so a rebind
+    // committed here would kill a terminal running somewhere else and then
+    // try to recreate it locally. The host refuses the rebind itself
+    // (TARGET_NOT_LOCAL), but the kill is dispatched client-side first and
+    // would land regardless.
+    //
+    // The toolbar does not offer workspace mutation for a replica at all, so
+    // in the shipped UI nothing calls this. It is guarded anyway because the
+    // affordance's absence is a rendering decision and this is the mutation:
+    // the two should not be able to drift apart. `pendingRestartRef` is set
+    // only below this line, so the deferred path cannot arm either.
+    if (!mayRestartAfterWorkspaceBindingChange(agent?.origin ?? null)) return;
     if (hostHasSession === true) {
       performRestartKill();
       return;
     }
     pendingRestartRef.current = true;
     retryTerminal();
-  }, [hostHasSession, performRestartKill, retryTerminal]);
+  }, [agent?.origin, hostHasSession, performRestartKill, retryTerminal]);
   useEffect(() => {
     if (!pendingRestartRef.current) return;
+    // REVALIDATED HERE, not just where the intent was armed. The arm and the
+    // fire are separated by a round trip (`terminal.list` settling), and the
+    // projection can be replaced in between - so an intent recorded while this
+    // row was local must not fire against a row that is now a replica, whose
+    // PTY belongs to another machine.
+    //
+    // Today the ref can only be armed for a non-cloud row and a live
+    // registry row does not become a replica (the list union suppresses a
+    // cloud copy of an id this host holds), so this is unreachable in the
+    // shipped app. It is here because the invariant belongs at the point of
+    // EXECUTION: the arming guard protects the decision, this one protects the
+    // act, and only the second one is still true if a later edit moves the
+    // arming.
+    if (!mayRestartAfterWorkspaceBindingChange(agent?.origin ?? null)) {
+      pendingRestartRef.current = false;
+      return;
+    }
     if (hostHasSession === true) {
       // Session confirmed live → kill + recreate against the new binding.
       pendingRestartRef.current = false;
@@ -538,7 +649,7 @@ function TuiAgentTileLive(
       pendingRestartRef.current = false;
     }
     // `null`: list still settling, keep waiting.
-  }, [hostHasSession, performRestartKill]);
+  }, [agent?.origin, hostHasSession, performRestartKill]);
   // Lift the suppression once the recreated PTY is back (`hostHasSession`
   // cycles false → true), or the relaunch errored (the body then renders the
   // inline error, not the live host). Ref assignments only - no setState - so a
@@ -572,6 +683,28 @@ function TuiAgentTileLive(
   // GUI restarts; bootstrap also reports it for the freshly-launched PTY once
   // the list query refreshes.
   const isOwnerActive = hostHasSession === true;
+
+  // ADOPT-ONLY AND NOT RUNNING. The owner host is reachable (an unreachable
+  // one was answered by the banner above) and reports no PTY for this agent -
+  // idle-reaped, or simply never started. There is nothing to attach to and
+  // this client may not create one, so the honest end state is the banner,
+  // not a loading skeleton that would wait forever for a session no one is
+  // going to start.
+  //
+  // `hostHasSession === null` deliberately keeps waiting: that is the list
+  // still loading, which is not evidence of anything.
+  if (isCloudReplica && hostHasSession === false) {
+    return (
+      <TerminalDeadTileBanner
+        reason="not-running-remotely"
+        hostLabel={hostLabel}
+        ownerKind="agent"
+        unavailability={null}
+        onClose={closeTile}
+        testId={`terminal-agent-tile-${props.tileId}`}
+      />
+    );
+  }
 
   if (agent === null) {
     // Same stable skeleton the reachability-check, pre-launch, and xterm
@@ -777,6 +910,43 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
   );
 }
 
+/**
+ * The dialog's target, or `null` when this agent cannot be a fork source.
+ *
+ * Two narrowings `ForkableTuiAgent` asks for, done together at the one site
+ * that builds a target - so the dialog's own type carries the rule and no
+ * consumer re-derives it.
+ *
+ * A projection's harness can be `null` (a cross-host replica whose cloud row
+ * predates `runSettingsSummary`), and such an agent has nothing to fork WITH:
+ * no provider to look up, no harness to create under.
+ *
+ * The ORIGIN is the other half, and it is not implied by the first. A replica
+ * whose row DOES carry a harness passes the harness test, and a target built
+ * from it opens a dialog that can never submit - the fork needs a
+ * `harnessSessionId` that structurally cannot cross to this machine.
+ *
+ * Module-level rather than inline in the toolbar because the toolbar sits at
+ * the complexity ceiling, and because a narrowing is the kind of thing worth
+ * reading in one piece.
+ */
+function buildForkTarget(input: {
+  readonly agent: TuiAgentProjection;
+  readonly intent: TerminalAgentForkIntent | null;
+  readonly forkDisabled: boolean;
+  readonly workspaceSeed: ForkWorkspaceSeed;
+}): TerminalAgentForkDialogTarget | null {
+  const harnessId = input.agent.harnessId;
+  const origin = input.agent.origin;
+  if (input.intent === null || input.forkDisabled) return null;
+  if (harnessId === null || origin === "cloud") return null;
+  return {
+    sourceAgent: { ...input.agent, harnessId, origin },
+    workspaceSeed: input.workspaceSeed,
+    intent: input.intent,
+  };
+}
+
 interface TerminalAgentPreLaunchToolbarProps {
   readonly hostId: string;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
@@ -909,133 +1079,156 @@ function TerminalAgentPreLaunchToolbar(
     },
     [onWorkspaceBindingCommitted],
   );
-  const forkTarget =
-    forkDialogIntent !== null && !forkDisabled
-      ? {
-          sourceAgent: props.agent,
-          workspaceSeed: forkWorkspaceSeed,
-          intent: forkDialogIntent,
-        }
-      : null;
+  const forkTarget = buildForkTarget({
+    agent: props.agent,
+    intent: forkDialogIntent,
+    forkDisabled,
+    workspaceSeed: forkWorkspaceSeed,
+  });
   return (
     <div
       className="flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-canvas-border/70 px-3 py-1.5"
       data-testid="terminal-agent-pre-launch-toolbar"
+      role="toolbar"
+      aria-label="Terminal agent controls"
     >
-      <HostWorkspaceSelector
-        disabled={false}
-        surface={{
-          kind: "terminal-agent",
-          hostId: props.hostId,
-          epicId: props.epicId,
-          tabId: props.viewTabId,
-          ownerId: props.agent.id,
-          binding,
-          isOwnerActive: props.isOwnerActive,
-          // Terminal agents have no background-work-outlives-the-turn concept
-          // distinct from PTY output (unlike chat), so there's no narrower
-          // signal to distinguish - this field is unread for this surface kind
-          // (the notice text is fixed regardless), kept equal for consistency.
-          hasActiveTurn: props.isOwnerActive,
-          ownerLabel: props.agent.title,
-          // Surfaced on the chip as a per-folder "missing on disk" indicator.
-          // The host-computed signal on `worktree.getBinding` — the actual
-          // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this
-          // gives the user a proactive, owner-scoped visual matching chat.
-          missingWorktreePaths: bindingQuery.data?.missingWorktreePaths ?? [],
-          bindingResolved: bindingQuery.isSuccess,
-          onBindingCommitted: handleWorkspaceBindingCommitted,
-          // Terminal agents cannot fork — the host section is `locked`, so
-          // the switch gesture this handles is unreachable here anyway.
-          onForkOnHost: null,
-        }}
-      />
-      <DropdownMenu>
-        <ButtonGroup aria-label="Fork actions" className="shrink-0">
-          <TooltipWrapper
-            label={
-              forkDisabled
-                ? "Fork is available after the terminal agent session and workspace binding are ready."
-                : "Fork terminal agent"
-            }
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            {/* The span keeps the disabled button hoverable for its readiness
-                tooltip. Its button still owns the visible first segment. */}
-            <span className="inline-flex">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 rounded-r-none! px-2 text-ui-xs text-muted-foreground hover:text-foreground"
-                disabled={forkDisabled}
-                onClick={() => openForkDialog("fork")}
-              >
-                <GitFork aria-hidden className="size-3.5" />
-                Fork
-              </Button>
-            </span>
-          </TooltipWrapper>
-          <DropdownMenuTrigger asChild>
+      {/* NO WORKSPACE AFFORDANCE for a cross-host replica, on the same
+          reasoning as the fork block below - absent, not disabled.
+
+          A rebind is a MUTATION, and decision 3 makes a replica read-only.
+          The chip would also be lying before it was clicked: the binding it
+          renders is read with `worktree.getBinding` against THIS host for an
+          agent bound to another one, so there is nothing here to show and
+          nothing here to change. Committing one killed the remote PTY
+          client-side before the host's `TARGET_NOT_LOCAL` refusal could be
+          seen; `mayRestartAfterWorkspaceBindingChange` is the other half. */}
+      {props.agent.origin === "cloud" ? null : (
+        <HostWorkspaceSelector
+          disabled={false}
+          surface={{
+            kind: "terminal-agent",
+            hostId: props.hostId,
+            epicId: props.epicId,
+            tabId: props.viewTabId,
+            ownerId: props.agent.id,
+            binding,
+            isOwnerActive: props.isOwnerActive,
+            // Terminal agents have no background-work-outlives-the-turn concept
+            // distinct from PTY output (unlike chat), so there's no narrower
+            // signal to distinguish - this field is unread for this surface kind
+            // (the notice text is fixed regardless), kept equal for consistency.
+            hasActiveTurn: props.isOwnerActive,
+            ownerLabel: props.agent.title,
+            // Surfaced on the chip as a per-folder "missing on disk" indicator.
+            // The host-computed signal on `worktree.getBinding` — the actual
+            // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this
+            // gives the user a proactive, owner-scoped visual matching chat.
+            missingWorktreePaths: bindingQuery.data?.missingWorktreePaths ?? [],
+            bindingResolved: bindingQuery.isSuccess,
+            onBindingCommitted: handleWorkspaceBindingCommitted,
+            // Terminal agents cannot fork — the host section is `locked`, so
+            // the switch gesture this handles is unreachable here anyway.
+            onForkOnHost: null,
+          }}
+        />
+      )}
+      {/* NO FORK AFFORDANCE AT ALL for a cross-host replica - not a disabled
+          one. Decision 2 is that a replica is never clonable, and the absence
+          is the honest rendering of a structural fact: forking needs the
+          source agent's `harnessSessionId`, which never leaves the machine
+          running the provider CLI, so there is nothing here to fork FROM and
+          no readiness that would ever arrive.
+
+          A disabled button with "available after the session and binding are
+          ready" says the opposite - it promises the capability is coming. */}
+      {props.agent.origin === "cloud" ? null : (
+        <DropdownMenu>
+          <ButtonGroup aria-label="Fork actions" className="shrink-0">
             <TooltipWrapper
-              label="More fork options"
+              label={
+                forkDisabled
+                  ? "Fork is available after the terminal agent session and workspace binding are ready."
+                  : "Fork terminal agent"
+              }
               side="top"
-              sideOffset={6}
-              align="end"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <Button
-                type="button"
-                variant="outline"
-                size="icon-sm"
-                className="text-muted-foreground hover:text-foreground"
-                disabled={forkDisabled}
-                aria-label="More fork options"
-              >
-                <ChevronDown aria-hidden className="size-3" />
-              </Button>
+              {/* The span keeps the disabled button hoverable for its readiness
+                tooltip. Its button still owns the visible first segment. */}
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 rounded-r-none! px-2 text-ui-xs text-muted-foreground hover:text-foreground"
+                  disabled={forkDisabled}
+                  onClick={() => openForkDialog("fork")}
+                >
+                  <GitFork aria-hidden className="size-3.5" />
+                  Fork
+                </Button>
+              </span>
             </TooltipWrapper>
-          </DropdownMenuTrigger>
-        </ButtonGroup>
-        <DropdownMenuContent align="start" className="w-max max-w-[90vw]">
-          <TooltipWrapper
-            label={continueUnderProfileDisabledReason}
-            side="right"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <span className="flex w-full">
-              <DropdownMenuItem
-                disabled={forkDisabled || !continueUnderProfileSupported}
-                aria-label={
-                  continueUnderProfileDisabledReason === undefined
-                    ? undefined
-                    : `Continue under another profile…, ${continueUnderProfileDisabledReason}`
-                }
-                className={cn(
-                  continueUnderProfileDisabledReason !== undefined &&
-                    "flex-col items-start gap-0.5",
-                )}
-                onSelect={() => openForkDialog("continue")}
+            <DropdownMenuTrigger asChild>
+              <TooltipWrapper
+                label="More fork options"
+                side="top"
+                sideOffset={6}
+                align="end"
               >
-                <span className="w-full whitespace-nowrap">
-                  Continue under another profile…
-                </span>
-                {/* Radix's roving-tabindex skips this item entirely while
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  className="text-muted-foreground hover:text-foreground"
+                  disabled={forkDisabled}
+                  aria-label="More fork options"
+                >
+                  <ChevronDown aria-hidden className="size-3" />
+                </Button>
+              </TooltipWrapper>
+            </DropdownMenuTrigger>
+          </ButtonGroup>
+          <DropdownMenuContent align="start" className="w-max max-w-[90vw]">
+            <TooltipWrapper
+              label={continueUnderProfileDisabledReason}
+              side="right"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <span className="flex w-full">
+                <DropdownMenuItem
+                  disabled={forkDisabled || !continueUnderProfileSupported}
+                  aria-label={
+                    continueUnderProfileDisabledReason === undefined
+                      ? undefined
+                      : `Continue under another profile…, ${continueUnderProfileDisabledReason}`
+                  }
+                  className={cn(
+                    continueUnderProfileDisabledReason !== undefined &&
+                      "flex-col items-start gap-0.5",
+                  )}
+                  onSelect={() => openForkDialog("continue")}
+                >
+                  <span className="w-full whitespace-nowrap">
+                    Continue under another profile…
+                  </span>
+                  {/* Radix's roving-tabindex skips this item entirely while
                     disabled, so its aria-label (and the hover-only tooltip
                     above) never reach keyboard/AT users - a static second
                     line needs no focus/hover to be perceivable. */}
-                {continueUnderProfileDisabledReason !== undefined ? (
-                  <span className="text-left text-[11px] leading-tight text-muted-foreground">
-                    {continueUnderProfileDisabledReason}
-                  </span>
-                ) : null}
-              </DropdownMenuItem>
-            </span>
-          </TooltipWrapper>
-        </DropdownMenuContent>
-      </DropdownMenu>
+                  {continueUnderProfileDisabledReason !== undefined ? (
+                    <span className="text-left text-[11px] leading-tight text-muted-foreground">
+                      {continueUnderProfileDisabledReason}
+                    </span>
+                  ) : null}
+                </DropdownMenuItem>
+              </span>
+            </TooltipWrapper>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       {/* Right-aligned status-bar group: the worktree-creation notice sits
           beside the agent controls. The notice's expanded detail opens as a
           downward Popover overlay, so it never reflows the terminal below. */}

@@ -12,12 +12,12 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ForkableTuiAgent } from "../terminal-agent-fork-dialog";
 
 /**
  * D4 (durability audit), end-to-end: "Fork dialog seeded from a chat whose
@@ -175,12 +175,13 @@ const TARGET_HOST_CLIENT = buildHostClient("target-host");
 // `hostClient` prop in any test below.
 const DECOY_ACTIVE_HOST_CLIENT = buildHostClient("decoy-active-host");
 
-function sourceAgentWithProfile(profileId: string | null): TuiAgentProjection {
+function sourceAgentWithProfile(profileId: string | null): ForkableTuiAgent {
   return {
     id: "source-agent",
     // An ordinary registry-backed agent - this suite exercises profile
     // durability, not doc residency.
     docResident: false,
+    origin: "registry",
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",

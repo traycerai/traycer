@@ -37,6 +37,7 @@ const CLAIM: RoleClaim = {
 function renderHover(overrides: {
   readonly hostId: string | null;
   readonly ownerKind: "chat" | "terminal-agent" | null;
+  readonly ownerHostUnreachable: boolean;
   readonly roleClaims: readonly RoleClaim[];
   readonly side: "top" | "right" | "bottom" | "left";
 }) {
@@ -48,6 +49,7 @@ function renderHover(overrides: {
         nodeId="agent-1"
         nodeName="Reviewer"
         hostId={overrides.hostId}
+        ownerHostUnreachable={overrides.ownerHostUnreachable}
         ownerKind={overrides.ownerKind}
         roleClaims={overrides.roleClaims}
         side={overrides.side}
@@ -70,6 +72,7 @@ describe("AgentHoverTooltip", () => {
   it("prefers owner metadata, carrying role claims as supplemental content", () => {
     renderHover({
       hostId: "host-a",
+      ownerHostUnreachable: false,
       ownerKind: "chat",
       roleClaims: [CLAIM],
       side: "top",
@@ -85,9 +88,49 @@ describe("AgentHoverTooltip", () => {
     expect(screen.getByRole("button", { name: "Reviewer" })).toBeDefined();
   });
 
+  it("degrades to the role tooltip when the owner host is unreachable", async () => {
+    // Outcome 1's content is a live RPC chain against the row's OWN binding
+    // host, and branch and worktree path are filesystem facts of that machine
+    // - so there is nothing to replicate that would let the card render
+    // truthfully while the host is gone. Falling back shows what is still
+    // true. Same inputs as the test above apart from this one flag, so the
+    // flag is what proves to be the gate.
+    renderHover({
+      hostId: "host-a",
+      ownerHostUnreachable: true,
+      ownerKind: "chat",
+      roleClaims: [CLAIM],
+      side: "top",
+    });
+
+    expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+
+    const content = await screen.findByTestId("agent-role-hover-content");
+    expect(content.textContent).toContain("Edge owner");
+  });
+
+  it("still shows the NAME on hover for an unreachable owner with no roles", async () => {
+    // Never a bare trigger: sidebar rows and graph nodes truncate, so the
+    // tooltip is the only place a long agent name is readable - and an offline
+    // machine does not make its agent's name less true.
+    renderHover({
+      hostId: "host-a",
+      ownerHostUnreachable: true,
+      ownerKind: "chat",
+      roleClaims: [],
+      side: "top",
+    });
+
+    const trigger = screen.getByRole("button", { name: "Reviewer" });
+    await userEvent.hover(trigger);
+    expect(await screen.findAllByText("Reviewer")).not.toHaveLength(0);
+  });
+
   it("falls back to a role-only tooltip when there is no owner metadata", async () => {
     renderHover({
       hostId: null,
+      ownerHostUnreachable: false,
       ownerKind: null,
       roleClaims: [CLAIM],
       side: "top",
@@ -109,6 +152,7 @@ describe("AgentHoverTooltip", () => {
   it("renders the bare trigger when there is nothing to show", async () => {
     renderHover({
       hostId: null,
+      ownerHostUnreachable: false,
       ownerKind: null,
       roleClaims: [],
       side: "top",
@@ -134,6 +178,7 @@ describe("AgentHoverTooltip", () => {
           nodeId="agent-1"
           nodeName="Reviewer"
           hostId={null}
+          ownerHostUnreachable={false}
           ownerKind={null}
           roleClaims={[CLAIM]}
           side="top"
@@ -150,6 +195,7 @@ describe("AgentHoverTooltip", () => {
   it("keeps the sidebar metadata hover on the right", () => {
     renderHover({
       hostId: "host-a",
+      ownerHostUnreachable: false,
       ownerKind: "chat",
       roleClaims: [CLAIM],
       side: "right",
