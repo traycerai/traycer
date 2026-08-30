@@ -3,7 +3,6 @@ import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   formatStopHeading,
   formatTeardownActors,
@@ -27,7 +26,7 @@ export function SweepWorktreesReview(props: {
   readonly taskTitles: ReadonlyMap<string, string>;
   readonly typedValue: string;
   readonly inventoryChanged: boolean;
-  readonly submitting: boolean;
+  readonly activeSweepCount: number;
   readonly onTypedValueChange: (value: string) => void;
   readonly onBack: () => void;
   readonly onCancel: () => void;
@@ -225,23 +224,16 @@ export function SweepWorktreesReview(props: {
             onClick={props.onCancel}
             data-testid="sweep-worktrees-cancel"
           >
-            Cancel
+            {props.activeSweepCount > 0 ? "Close" : "Cancel"}
           </Button>
           <Button
             type="button"
             variant="destructive"
             size="sm"
-            disabled={!typedOk || props.submitting}
+            disabled={!typedOk}
             onClick={props.onConfirm}
             data-testid="sweep-worktrees-confirm"
           >
-            {props.submitting ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
             {confirmLabel}
           </Button>
         </div>
