@@ -82,6 +82,7 @@ function createWorkerSide(
         docGuid: `guid-${call.request.artifactId}`,
         seedMode: "full",
         hostStateVector: null,
+        awarenessFrames: [],
       });
       return;
     }
@@ -111,13 +112,18 @@ function createWorkerSide(
 function createDocs(): MainThreadBodyDocs & {
   readonly installed: string[];
   readonly dropped: string[];
+  readonly presence: string[];
 } {
   const live = new Set<string>();
   const installed: string[] = [];
   const dropped: string[] = [];
+  // Recorded so the materialize's presence hand-off is observable: the frames
+  // ride the RESPONSE, so "did they arrive" is a fact about this object.
+  const presence: string[] = [];
   return {
     installed,
     dropped,
+    presence,
     install(input): void {
       live.add(input.docKey);
       installed.push(input.docKey);
@@ -128,6 +134,9 @@ function createDocs(): MainThreadBodyDocs & {
     drop(docKey): void {
       live.delete(docKey);
       dropped.push(docKey);
+    },
+    applyRemoteAwareness(docKey, frame): void {
+      presence.push(`${docKey}:${String(frame.length)}`);
     },
     has(docKey): boolean {
       return live.has(docKey);
@@ -240,6 +249,7 @@ describe("acquire / materialize", () => {
               docGuid: null,
               seedMode: "full",
               hostStateVector: null,
+              awarenessFrames: [],
             },
           },
         },
@@ -800,6 +810,7 @@ describe("the forward-only release", () => {
           docGuid: null,
           seedMode: "full",
           hostStateVector: null,
+          awarenessFrames: [],
         });
         return;
       }

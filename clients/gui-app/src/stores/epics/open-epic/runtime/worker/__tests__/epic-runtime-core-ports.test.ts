@@ -59,6 +59,7 @@ function createSource(
     applyBodyAwareness: () => {},
     observeBodyAwareness: () => () => {},
     isBodyPinned: () => false,
+    encodeBodyPeerAwareness: () => [],
     settleColdState: () => ({ accepted: false, reason: "not-held" as const }),
     sendBodyUpdate: () => ({ kind: "sent" }),
     renameArtifact: () => false,

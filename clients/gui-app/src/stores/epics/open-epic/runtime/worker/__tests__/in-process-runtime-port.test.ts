@@ -28,6 +28,7 @@ function source(
       reason: "not-held" as const,
       settledBytes: 0,
     }),
+    encodeBodyPeerAwareness: () => [],
     releaseBody: () => ({ released: true, reason: null }),
     sendBodyUpdate: (): SendOutcome => ({
       kind: "dropped",

@@ -62,6 +62,8 @@ export interface InProcessRuntimeSource {
    * in tier state and this is the only channel they have - there is no settle
    * here to be refused.
    */
+  /** This body's known remote peers, to ride the materialize response. */
+  encodeBodyPeerAwareness(docKey: string): readonly Uint8Array[];
   releaseBody(docKey: string): {
     readonly released: boolean;
     readonly reason: "not-held" | "newer-generation" | "pinned" | null;
@@ -91,6 +93,8 @@ const BODY_NOT_HELD: RuntimeWorkerCallResponse<"body/materialize"> = {
   docGuid: null,
   seedMode: "full",
   hostStateVector: null,
+  // Nothing held, so nobody to be present in it.
+  awarenessFrames: [],
 };
 
 export function createInProcessRuntimePort(
@@ -133,6 +137,7 @@ export function createInProcessRuntimePort(
         docGuid: cold.docGuid,
         seedMode: cold.seedMode,
         hostStateVector: cold.hostStateVector,
+        awarenessFrames: source.encodeBodyPeerAwareness(docKey),
       };
     },
     "body/release": (request) => source.releaseBody(request.docKey),

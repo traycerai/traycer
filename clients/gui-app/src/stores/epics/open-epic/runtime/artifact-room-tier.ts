@@ -556,6 +556,17 @@ export interface ArtifactRoomTier {
    */
   isRoomPinnedByTierState(artifactRoomId: string): boolean;
   /**
+   * This room's currently-known REMOTE peers, encoded for a fresh observer.
+   *
+   * Handed to main WITH the materialize rather than pushed on observer attach,
+   * and that is an ordering fact rather than a preference: the observer
+   * attaches inside the materialize handler, so a push from there reaches main
+   * before `install` has created the `Awareness` to apply it to, and is
+   * dropped. Carried in the response, main installs the doc and applies
+   * presence in the same step.
+   */
+  encodeRoomPeerAwareness(artifactRoomId: string): readonly Uint8Array[];
+  /**
    * Observe this room's presence; returns the detach.
    *
    * The return leg of the relocation: remote peers land in this room's
@@ -1671,6 +1682,10 @@ export function createArtifactRoomTier(
       // never come.
       scheduleCooldown(artifactRoomId);
     },
+    encodeRoomPeerAwareness(artifactRoomId): readonly Uint8Array[] {
+      const entry = replicas.get(artifactRoomId);
+      return entry === undefined ? [] : encodePeerAwareness(entry);
+    },
     isRoomPinnedByTierState(artifactRoomId): boolean {
       const entry = replicas.get(artifactRoomId);
       // Not materialized: nothing to pin. A room with no replica cannot be
@@ -1751,20 +1766,11 @@ export function createArtifactRoomTier(
         onFrame(encodeAwarenessUpdate(entry.awareness, touched));
       };
       entry.awareness.on("update", handler);
-      // INITIAL STATE, before any delta.
-      //
-      // `Awareness` notifies on CHANGE, so an observer attached to a room that
-      // already has peers in it hears nothing until one of them next moves.
-      // Main's copy is freshly constructed on every materialize, so without
-      // this a re-materialized room shows an EMPTY presence channel - no
-      // carets, no collaborator list - until each peer's next heartbeat
-      // (`outdatedTimeout / 2`, so up to ~15s of looking alone in a room that
-      // is not empty).
-      //
-      // `encodePeerAwareness` and not a hand-rolled encode: it already
-      // excludes both of our own identities, which is exactly the filter this
-      // needs, and duplicating that exclusion is how the two drift.
-      for (const frame of encodePeerAwareness(entry)) onFrame(frame);
+      // NO initial push from here. It belongs with the materialize RESPONSE
+      // instead - see `encodeRoomPeerAwareness`. Pushing on attach looks
+      // equivalent and is not: this observer attaches inside the materialize
+      // handler, so the frame would reach main before `install` created the
+      // `Awareness` to receive it, and be dropped as an unknown docKey.
       return () => {
         entry.awareness.off("update", handler);
       };

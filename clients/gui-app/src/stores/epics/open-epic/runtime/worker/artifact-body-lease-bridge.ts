@@ -62,6 +62,14 @@ export interface MainThreadBodyDocs {
    */
   drop(docKey: string): void;
   has(docKey: string): boolean;
+  /**
+   * A remote presence frame for a body this side holds.
+   *
+   * On this interface because presence arrives WITH the materialize - see the
+   * call site - so the object that installs the doc is the one that must
+   * apply it, in the same step.
+   */
+  applyRemoteAwareness(docKey: string, frame: Uint8Array): void;
 }
 
 /**
@@ -416,6 +424,15 @@ export function createArtifactBodyLeaseBridge(options: {
         seedMode: answer.seedMode,
         hostStateVector: answer.hostStateVector,
       });
+      // Presence, in the same step as the install and never before it. These
+      // frames rode the response precisely because a push could not: the
+      // worker attaches its observer inside the materialize handler, so a
+      // pushed frame would arrive for a docKey main had not installed yet and
+      // be dropped. Without this a re-materialized room shows an empty
+      // presence channel until each peer's next heartbeat.
+      for (const frame of answer.awarenessFrames) {
+        options.docs.applyRemoteAwareness(docKey, frame);
+      }
       entries.set(docKey, {
         leases: 1,
         generation: 1,

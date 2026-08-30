@@ -63,6 +63,7 @@ export function stubRuntimeWorkerCallHandlers(
           docGuid: null,
           seedMode: "full",
           hostStateVector: null,
+          awarenessFrames: [],
         },
         transfer: NO_TRANSFER,
       }),

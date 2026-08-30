@@ -389,6 +389,8 @@ export interface EpicReplicaRuntime {
    * excluded, because the caller asking is the one releasing.
    */
   isArtifactBodyPinned(docKey: string): boolean;
+  /** This body's known remote peers, to ride the materialize. See the tier. */
+  encodeArtifactBodyPeerAwareness(docKey: string): readonly Uint8Array[];
   /**
    * Observe a materialized body's presence; returns the detach.
    *
@@ -1372,6 +1374,8 @@ export function createEpicReplicaRuntime(
       };
     },
     isArtifactBodyPinned: (docKey) => tier.isRoomPinnedByTierState(docKey),
+    encodeArtifactBodyPeerAwareness: (docKey) =>
+      tier.encodeRoomPeerAwareness(docKey),
     sendArtifactBodyAwareness: (docKey, frame, localClientId) => {
       tier.relayLocalAwareness(docKey, frame, localClientId);
     },

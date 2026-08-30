@@ -183,6 +183,8 @@ export interface ArtifactBodyMaterialization {
   readonly docGuid: string | null;
   readonly seedMode: ArtifactBodySeedMode;
   readonly hostStateVector: string | null;
+  /** The room's known remote peers. See the protocol field for the ordering. */
+  readonly awarenessFrames: readonly Uint8Array[];
 }
 
 export interface EpicRuntimeWorkerHost {
@@ -332,6 +334,8 @@ export function startEpicRuntimeWorkerHost(
             docGuid: null,
             seedMode: "full",
             hostStateVector: null,
+            // Nothing held, so nobody to be present in it.
+            awarenessFrames: [],
           },
           transfer: NO_TRANSFER,
         };
@@ -344,6 +348,7 @@ export function startEpicRuntimeWorkerHost(
           docGuid: held.docGuid,
           seedMode: held.seedMode,
           hostStateVector: held.hostStateVector,
+          awarenessFrames: held.awarenessFrames,
         },
         transfer: prepared.transfer,
       };

@@ -907,6 +907,23 @@ export interface RuntimeWorkerCallMap {
        * ruled that a null watermark is a state with its own meaning.
        */
       readonly hostStateVector: string | null;
+      /**
+       * The room's currently-known REMOTE peers, for main's fresh `Awareness`.
+       *
+       * Rides the RESPONSE rather than arriving as a `body/awareness-in` push,
+       * and that is an ordering fact rather than a preference. `Awareness`
+       * notifies on change, so an observer attached to a room that already has
+       * peers hears nothing until one of them next moves - up to a heartbeat
+       * of looking alone in a room that is not empty. But the observer is
+       * attached INSIDE this handler, so a push from there would reach main
+       * before `install` created the `Awareness` to receive it and be dropped
+       * as an unknown docKey. Carried here, main installs the doc and applies
+       * presence in the same step.
+       *
+       * Empty on the not-held arm, and empty for a room with no peers - both
+       * are "nothing to replay" and neither is an error.
+       */
+      readonly awarenessFrames: readonly Uint8Array[];
     };
   };
   /**
@@ -1511,7 +1528,14 @@ export const CALL_RESPONSE_PARSERS: {
   },
   "body/materialize": (value) => {
     if (!isRecord(value)) return null;
-    const { docKey, update, docGuid, seedMode, hostStateVector } = value;
+    const {
+      docKey,
+      update,
+      docGuid,
+      seedMode,
+      hostStateVector,
+      awarenessFrames,
+    } = value;
     if (docKey !== null && typeof docKey !== "string") return null;
     if (update !== null && !isUint8Array(update)) return null;
     if (docGuid !== null && typeof docGuid !== "string") return null;
@@ -1519,7 +1543,22 @@ export const CALL_RESPONSE_PARSERS: {
     if (hostStateVector !== null && typeof hostStateVector !== "string") {
       return null;
     }
-    return { docKey, update, docGuid, seedMode, hostStateVector };
+    // Narrowed element-wise: a frame array whose members are not bytes would
+    // reach `applyAwarenessUpdate` and throw inside a decoder, far from here.
+    if (!Array.isArray(awarenessFrames)) return null;
+    const frames: Uint8Array[] = [];
+    for (const frame of awarenessFrames) {
+      if (!isUint8Array(frame)) return null;
+      frames.push(frame);
+    }
+    return {
+      docKey,
+      update,
+      docGuid,
+      seedMode,
+      hostStateVector,
+      awarenessFrames: frames,
+    };
   },
   "body/release": (value) => {
     if (!isRecord(value)) return null;

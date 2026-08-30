@@ -78,6 +78,8 @@ export interface EpicRuntimeCorePortSource {
   ): void;
   /** Tier-state pins for one body - divergence or presence, never the lease. */
   isBodyPinned(docKey: string): boolean;
+  /** This body's known remote peers, to ride the materialize response. */
+  encodeBodyPeerAwareness(docKey: string): readonly Uint8Array[];
   /**
    * Observe a materialized room's presence. Returns the detach.
    *
@@ -345,6 +347,7 @@ export function buildEpicRuntimeCorePorts(
               docGuid: null,
               seedMode: "full" as const,
               hostStateVector: null,
+              awarenessFrames: source.encodeBodyPeerAwareness(docKey),
             });
           }
         }
@@ -373,6 +376,9 @@ export function buildEpicRuntimeCorePorts(
           docGuid: cold.docGuid,
           seedMode: cold.seedMode,
           hostStateVector: cold.hostStateVector,
+          // The room's peers ride the response, so main installs the doc and
+          // applies presence in one step - see the protocol's field.
+          awarenessFrames: source.encodeBodyPeerAwareness(docKey),
         });
       },
       settle: (input) => {

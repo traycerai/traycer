@@ -153,6 +153,8 @@ export function installEpicRuntimeCore(
             observeBodyAwareness: (docKey, onFrame) =>
               runtime.observeArtifactBodyAwareness(docKey, onFrame),
             isBodyPinned: (docKey) => runtime.isArtifactBodyPinned(docKey),
+            encodeBodyPeerAwareness: (docKey) =>
+              runtime.encodeArtifactBodyPeerAwareness(docKey),
             settleColdState: (docKey, update, expectedDocGuid) =>
               runtime.settleArtifactBodyColdState(
                 docKey,
