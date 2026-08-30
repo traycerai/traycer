@@ -46,6 +46,7 @@ function createPorts(): EpicRuntimeCorePorts & {
     // The shared fail-closed answer, so this fixture does not become a fifth
     // hand-written switch over the mutation union.
     mutations: { apply: (mutation) => inertMutationResult(mutation) },
+    commands: { apply: () => {} },
     bodies: {
       materialize: (artifactId) =>
         Promise.resolve({

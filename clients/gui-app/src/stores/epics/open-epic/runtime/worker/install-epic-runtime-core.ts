@@ -125,6 +125,31 @@ export function installEpicRuntimeCore(host: EpicRuntimeWorkerHost): void {
             runtime.retirePendingMutation(requestId, outcome),
           isLatestRenameStamp: (nodeId, requestId) =>
             runtime.isLatestRenameStamp(nodeId, requestId),
+          applyChatRecords: (records, issuedAtSeq) =>
+            runtime.applyChatRecords(records, issuedAtSeq),
+          applyChatRecordDelta: (delta) => runtime.applyChatRecordDelta(delta),
+          applyTuiAgentRecords: (records, issuedAtSeq) =>
+            runtime.applyTuiAgentRecords(records, issuedAtSeq),
+          applyTuiAgentRecordDelta: (delta) =>
+            runtime.applyTuiAgentRecordDelta(delta),
+          markChatRecordListAuthoritative: () =>
+            runtime.markChatRecordListAuthoritative(),
+          markChatRecordListNotAuthoritative: () =>
+            runtime.markChatRecordListNotAuthoritative(),
+          beginPendingChatCreation: (pending) =>
+            runtime.beginPendingChatCreation(pending),
+          clearPendingChatCreation: (chatId) =>
+            runtime.clearPendingChatCreation(chatId),
+          republishRecordsForCurrentUser: () =>
+            runtime.republishRecordsForCurrentUser(),
+          reprojectForViewerChange: () => runtime.reprojectForViewerChange(),
+          discardUnsyncedEdits: () => runtime.discardUnsyncedEdits(),
+          requestFreshSnapshot: () => runtime.requestFreshSnapshot(),
+          retryMigration: () => runtime.retryMigration(),
+          retryWriteCommand: (commandId) =>
+            runtime.retryWriteCommand(commandId),
+          discardWriteCommand: (commandId) =>
+            runtime.discardWriteCommand(commandId),
           detachTransport: () => {
             runtime.detachTransport();
           },

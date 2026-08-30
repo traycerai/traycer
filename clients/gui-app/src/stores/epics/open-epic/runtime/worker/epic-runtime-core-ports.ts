@@ -12,7 +12,15 @@
  * member reach across this seam without anyone noticing the seam had moved.
  */
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type {
+  ChatRecordDelta,
+  TuiAgentRecordDelta,
+} from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { ArtifactRoomColdState } from "../artifact-room-tier";
+import type { PendingChatCreation } from "../../pending-chat-creations";
+import type { RuntimeCommand } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import type { EpicRuntimeCorePorts } from "./epic-runtime-core";
 
 export interface EpicRuntimeCorePortSource {
@@ -51,8 +59,56 @@ export interface EpicRuntimeCorePortSource {
     outcome: "landed" | "failed",
   ): boolean;
   isLatestRenameStamp(nodeId: string, requestId: string): boolean;
+  applyChatRecords(
+    records: readonly ChatRecordSummaryV11[],
+    issuedAtSeq: number | null,
+  ): void;
+  applyChatRecordDelta(delta: ChatRecordDelta): void;
+  applyTuiAgentRecords(
+    records: readonly TuiAgentRecordSummaryV11[],
+    issuedAtSeq: number | null,
+  ): void;
+  applyTuiAgentRecordDelta(delta: TuiAgentRecordDelta): void;
+  markChatRecordListAuthoritative(): void;
+  markChatRecordListNotAuthoritative(): void;
+  beginPendingChatCreation(pending: PendingChatCreation): void;
+  clearPendingChatCreation(chatId: string): void;
+  republishRecordsForCurrentUser(): void;
+  reprojectForViewerChange(): void;
+  discardUnsyncedEdits(): void;
+  requestFreshSnapshot(): void;
+  retryMigration(): void;
+  retryWriteCommand(commandId: string): void;
+  discardWriteCommand(commandId: string): void;
   detachTransport(): void;
   dispose(): void;
+}
+
+/**
+ * The narrowing for `begin-pending-chat-creation`'s payload.
+ *
+ * It crosses as `unknown` because `PendingChatCreation` belongs to gui-app and
+ * a copy in the protocol would rot against it. Built as a literal so a field
+ * added to that type fails to compile HERE, which a cast would have discarded.
+ * A payload that is not a record is DROPPED rather than defaulted: a pending
+ * creation with an invented id would put a row on screen that no create will
+ * ever resolve.
+ */
+function readPendingChatCreation(value: unknown): PendingChatCreation | null {
+  if (typeof value !== "object" || value === null) return null;
+  const chatId: unknown = Reflect.get(value, "chatId");
+  const hostId: unknown = Reflect.get(value, "hostId");
+  const title: unknown = Reflect.get(value, "title");
+  const parentChatId: unknown = Reflect.get(value, "parentChatId");
+  const ownerUserId: unknown = Reflect.get(value, "ownerUserId");
+  if (typeof chatId !== "string" || typeof hostId !== "string") return null;
+  if (typeof title !== "string") return null;
+  if (parentChatId !== null && typeof parentChatId !== "string") return null;
+  // `null` is a REPRESENTED state here - the caller had no signed-in user, and
+  // the registry drops that registration itself. Anything else is a foreign
+  // payload rather than an absent one.
+  if (ownerUserId !== null && typeof ownerUserId !== "string") return null;
+  return { chatId, hostId, parentChatId, title, ownerUserId };
 }
 
 export function buildEpicRuntimeCorePorts(
@@ -206,6 +262,32 @@ export function buildEpicRuntimeCorePorts(
         }
       },
     },
+    commands: {
+      /**
+       * One branch per kind, exhaustive, no default - so a command added to
+       * the vocabulary without a branch here fails to compile rather than
+       * being silently dropped at runtime. That is the whole exhaustiveness
+       * guarantee for a direction with no responses.
+       */
+      apply: (command) => {
+        // Dispatched by FAMILY, not one 15-arm switch. The families are real
+        // groupings - record-plane ingest, payload-free control gestures, and
+        // the ones carrying an argument - and splitting on them is also what
+        // keeps each function readable. Exhaustiveness survives the split:
+        // anything the two predicates do not claim lands in
+        // `applyArgumentCommand`, whose `assertNever` makes an unhandled kind
+        // a COMPILE error rather than a silent drop.
+        if (isRecordPlaneCommand(command)) {
+          applyRecordPlaneCommand(source, command);
+          return;
+        }
+        if (isControlCommand(command)) {
+          applyControlCommand(source, command);
+          return;
+        }
+        applyArgumentCommand(source, command);
+      },
+    },
     // The core's documented shutdown order, mapped onto the runtime's two
     // teardown members: the core stops serving, then the transport closes,
     // then the durable store. `dispose()` owns the store, so it goes last.
@@ -220,4 +302,163 @@ export function buildEpicRuntimeCorePorts(
       },
     },
   };
+}
+
+/** Record-plane ingest: rows and their authority, from main's chat registry. */
+type RecordPlaneCommand = Extract<
+  RuntimeCommand,
+  {
+    kind:
+      | "apply-chat-records"
+      | "apply-chat-record-delta"
+      | "apply-tui-agent-records"
+      | "apply-tui-agent-record-delta"
+      | "mark-chat-records-authoritative"
+      | "mark-chat-records-not-authoritative";
+  }
+>;
+
+/** Payload-free control gestures. */
+type ControlCommand = Extract<
+  RuntimeCommand,
+  {
+    kind:
+      | "republish-records-for-current-user"
+      | "reproject-for-viewer-change"
+      | "discard-unsynced-edits"
+      | "request-fresh-snapshot"
+      | "retry-migration";
+  }
+>;
+
+/** Whatever the two families above do not claim. */
+type ArgumentCommand = Exclude<
+  RuntimeCommand,
+  RecordPlaneCommand | ControlCommand
+>;
+
+/**
+ * Switches rather than module-scoped `Set`s, and that is not a style choice.
+ *
+ * A `const KINDS = new Set([...])` at module scope is process state, and the
+ * worker-graph ratchet reads it as exactly that - correctly, since it cannot
+ * know the set is never mutated. This module is on the worker entry's value
+ * graph, whose allowlist is empty and stays empty, so the membership test has
+ * to be stateless.
+ */
+function isRecordPlaneCommand(
+  command: RuntimeCommand,
+): command is RecordPlaneCommand {
+  switch (command.kind) {
+    case "apply-chat-records":
+    case "apply-chat-record-delta":
+    case "apply-tui-agent-records":
+    case "apply-tui-agent-record-delta":
+    case "mark-chat-records-authoritative":
+    case "mark-chat-records-not-authoritative":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function isControlCommand(command: RuntimeCommand): command is ControlCommand {
+  switch (command.kind) {
+    case "republish-records-for-current-user":
+    case "reproject-for-viewer-change":
+    case "discard-unsynced-edits":
+    case "request-fresh-snapshot":
+    case "retry-migration":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function applyRecordPlaneCommand(
+  source: EpicRuntimeCorePortSource,
+  command: RecordPlaneCommand,
+): void {
+  switch (command.kind) {
+    case "apply-chat-records":
+      source.applyChatRecords(
+        command.payload.records,
+        command.payload.issuedAtSeq,
+      );
+      return;
+    case "apply-chat-record-delta":
+      source.applyChatRecordDelta(command.payload.delta);
+      return;
+    case "apply-tui-agent-records":
+      source.applyTuiAgentRecords(
+        command.payload.records,
+        command.payload.issuedAtSeq,
+      );
+      return;
+    case "apply-tui-agent-record-delta":
+      source.applyTuiAgentRecordDelta(command.payload.delta);
+      return;
+    case "mark-chat-records-authoritative":
+      source.markChatRecordListAuthoritative();
+      return;
+    case "mark-chat-records-not-authoritative":
+      source.markChatRecordListNotAuthoritative();
+      return;
+  }
+}
+
+function applyControlCommand(
+  source: EpicRuntimeCorePortSource,
+  command: ControlCommand,
+): void {
+  switch (command.kind) {
+    case "republish-records-for-current-user":
+      source.republishRecordsForCurrentUser();
+      return;
+    case "reproject-for-viewer-change":
+      source.reprojectForViewerChange();
+      return;
+    case "discard-unsynced-edits":
+      source.discardUnsyncedEdits();
+      return;
+    case "request-fresh-snapshot":
+      source.requestFreshSnapshot();
+      return;
+    case "retry-migration":
+      source.retryMigration();
+      return;
+  }
+}
+
+function applyArgumentCommand(
+  source: EpicRuntimeCorePortSource,
+  command: ArgumentCommand,
+): void {
+  switch (command.kind) {
+    case "begin-pending-chat-creation": {
+      const pending = readPendingChatCreation(command.payload.pending);
+      // DROPPED rather than defaulted: a pending creation with an invented id
+      // puts a row on screen that no create will ever resolve.
+      if (pending !== null) source.beginPendingChatCreation(pending);
+      return;
+    }
+    case "clear-pending-chat-creation":
+      source.clearPendingChatCreation(command.payload.chatId);
+      return;
+    case "retry-write-command":
+      source.retryWriteCommand(command.payload.commandId);
+      return;
+    case "discard-write-command":
+      source.discardWriteCommand(command.payload.commandId);
+      return;
+    default:
+      // The exhaustiveness guarantee for the whole vocabulary: a kind added to
+      // `RuntimeCommandMap` and to neither family above lands here, and
+      // `command` is then not `never`, which does not compile.
+      return assertNever(command);
+  }
+}
+
+function assertNever(command: never): never {
+  throw new Error(`Unhandled runtime command ${JSON.stringify(command)}`);
 }

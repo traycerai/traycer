@@ -78,6 +78,7 @@ function stubCore(
         outcome: { kind: "dropped", reason: "no lane in this fixture" },
       }),
     applyMutation: (mutation) => Promise.resolve(inertMutationResult(mutation)),
+    applyCommand: () => {},
     dispose: () => {},
   };
   return { ...base, ...overrides };

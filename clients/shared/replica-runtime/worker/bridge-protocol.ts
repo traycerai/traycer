@@ -48,6 +48,12 @@ import type { CommandResolution, CommandSendFailure } from "../command-overlay";
 import type { SendOutcome } from "../adapter";
 import type { RuntimeLogFields } from "../runtime-environment";
 import type { ProtectedBytes } from "../memory-accountant";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type {
+  ChatRecordDelta,
+  TuiAgentRecordDelta,
+} from "../../host-transport/chat-records-stream-client";
 
 /**
  * Bumped when a frame's shape changes incompatibly.
@@ -56,6 +62,12 @@ import type { ProtectedBytes } from "../memory-accountant";
  * it is a stale chunk surviving a dev HMR reload, which otherwise presents as
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
+ *
+ * **7** since `runtime/command`: the fifteen fire-and-forget members the store
+ * used to call directly on the runtime. A v6 worker hits its own `assertNever`
+ * on the first one, which is loud - but only because the event union is
+ * exhaustively switched; the version is what stops a v6 worker being adopted
+ * at all.
  *
  * **6** since `mutation/apply`: the main thread asks the replica to perform
  * metadata mutations and to stamp its optimistic overlay. A v5 worker has no
@@ -90,7 +102,7 @@ import type { ProtectedBytes } from "../memory-accountant";
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 6;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 7;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -246,6 +258,16 @@ export type MainToWorkerEvent =
     }
   | {
       /**
+       * One fire-and-forget command for the relocated runtime.
+       *
+       * See {@link RuntimeCommandMap} for why this is one kind rather than
+       * fifteen, and for the FIFO-ordering invariant that makes it safe.
+       */
+      readonly kind: "runtime/command";
+      readonly command: RuntimeCommand;
+    }
+  | {
+      /**
        * Free `overBytes` from the hot-doc tier, which lives in the worker.
        *
        * The one INBOUND half of the accounting seam, and the only one of
@@ -343,6 +365,103 @@ export type WorkerToMainEvent =
       readonly settlement: RuntimeAccountingSettlement;
       readonly snapshot: RuntimeAccountingSnapshot;
     };
+
+/**
+ * The fire-and-forget commands the main thread issues to the relocated runtime.
+ *
+ * ONE inbound event kind carries all of them, the same collapse `mutation/apply`
+ * makes for calls: +1 top-level kind instead of +15. There is no response map
+ * because there are no responses - every member of this vocabulary is a
+ * runtime member that already returned `void`, and the projection stream is
+ * the feedback plane. The handler table alone carries exhaustiveness: a kind
+ * added here without a handler fails to compile.
+ *
+ * **These are fire-and-forget, but they are NOT unordered, and that is the
+ * invariant to protect.** A record apply racing an edit would reorder a user's
+ * view of their own data - the record plane and the doc plane both feed one
+ * projector, and the projector's output is what the UI reads. What preserves
+ * the order is that they all ride ONE `postMessage` channel, which is FIFO
+ * per channel. A second channel added "for the hot path" would silently break
+ * this, and nothing in the types would say so; if one is ever added, these
+ * commands must stay together on whichever channel also carries the frames
+ * they interleave with.
+ *
+ * **Membership is checked per member, at mint time, not by bucket.** Five
+ * runtime members that LOOK like they belong here do not:
+ * `start` (the worker's own composition root calls `runtime.start()` after
+ * `installCore`), `dispose` (`shutdown`), `detachTransport` (the spawner's
+ * `detach()`, which reports every session closed and lets the adapters run
+ * their own close handling), and `applyLocalUpdate` / `sendAwareness`, which
+ * have ZERO production callers on either side of the boundary - minting them
+ * would be dead wire with a test-only reader.
+ */
+export interface RuntimeCommandMap {
+  "apply-chat-records": {
+    readonly records: readonly ChatRecordSummaryV11[];
+    readonly issuedAtSeq: number | null;
+  };
+  "apply-chat-record-delta": { readonly delta: ChatRecordDelta };
+  "apply-tui-agent-records": {
+    readonly records: readonly TuiAgentRecordSummaryV11[];
+    readonly issuedAtSeq: number | null;
+  };
+  "apply-tui-agent-record-delta": { readonly delta: TuiAgentRecordDelta };
+  "mark-chat-records-authoritative": Record<string, never>;
+  "mark-chat-records-not-authoritative": Record<string, never>;
+  /**
+   * `pending` is `unknown` for the same reason `projectionCounts` and the
+   * manifest's `docArm` are: `PendingChatCreation` belongs to gui-app, and a
+   * copy of it here would rot against the original. The composition root
+   * narrows it.
+   */
+  "begin-pending-chat-creation": { readonly pending: unknown };
+  "clear-pending-chat-creation": { readonly chatId: string };
+  "republish-records-for-current-user": Record<string, never>;
+  "reproject-for-viewer-change": Record<string, never>;
+  "discard-unsynced-edits": Record<string, never>;
+  "request-fresh-snapshot": Record<string, never>;
+  "retry-migration": Record<string, never>;
+  "retry-write-command": { readonly commandId: string };
+  "discard-write-command": { readonly commandId: string };
+}
+
+export type RuntimeCommandKind = keyof RuntimeCommandMap;
+export type RuntimeCommandPayload<K extends RuntimeCommandKind> =
+  RuntimeCommandMap[K];
+
+/** One command, discriminated - what rides `runtime/command`. */
+export type RuntimeCommand = {
+  [K in RuntimeCommandKind]: {
+    readonly kind: K;
+    readonly payload: RuntimeCommandPayload<K>;
+  };
+}[RuntimeCommandKind];
+
+const RUNTIME_COMMAND_COVERAGE: {
+  readonly [K in RuntimeCommandKind]: true;
+} = {
+  "apply-chat-records": true,
+  "apply-chat-record-delta": true,
+  "apply-tui-agent-records": true,
+  "apply-tui-agent-record-delta": true,
+  "mark-chat-records-authoritative": true,
+  "mark-chat-records-not-authoritative": true,
+  "begin-pending-chat-creation": true,
+  "clear-pending-chat-creation": true,
+  "republish-records-for-current-user": true,
+  "reproject-for-viewer-change": true,
+  "discard-unsynced-edits": true,
+  "request-fresh-snapshot": true,
+  "retry-migration": true,
+  "retry-write-command": true,
+  "discard-write-command": true,
+};
+
+export const RUNTIME_COMMAND_KINDS: readonly RuntimeCommandKind[] = Object.keys(
+  RUNTIME_COMMAND_COVERAGE,
+).filter((key): key is RuntimeCommandKind =>
+  Object.hasOwn(RUNTIME_COMMAND_COVERAGE, key),
+);
 
 /**
  * The metadata mutations the main thread asks the worker to perform.
@@ -512,6 +631,7 @@ const MAIN_TO_WORKER_EVENT_COVERAGE: {
   "stream/status": true,
   "stream/manifest": true,
   "accounting/demote": true,
+  "runtime/command": true,
   shutdown: true,
 };
 

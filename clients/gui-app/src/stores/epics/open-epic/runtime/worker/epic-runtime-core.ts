@@ -33,6 +33,7 @@ import {
   inertMutationResult,
   type EpicMutation,
   type EpicMutationResult,
+  type RuntimeCommand,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import type {
   ArtifactBodyMaterialization,
@@ -99,6 +100,10 @@ export interface EpicRuntimeCorePorts {
    */
   readonly mutations: {
     apply(mutation: EpicMutation): EpicMutationResult;
+  };
+  /** The fire-and-forget commands, applied in arrival order. */
+  readonly commands: {
+    apply(command: RuntimeCommand): void;
   };
   /** The one durable transport this session owns (T12's ruling, worker-side). */
   readonly transport: { close(): void };
@@ -173,6 +178,13 @@ export function createEpicRuntimeWorkerCore(
       // the host awaits, not a deferral.
       if (!serving) return Promise.resolve(inertMutationResult(mutation));
       return Promise.resolve(ports.mutations.apply(mutation));
+    },
+    applyCommand(command): void {
+      // Dropped after teardown like every other member. A command applied to a
+      // replica that is closing would race the durable store's close, and the
+      // command's own effect is a projection nobody is listening for.
+      if (!serving) return;
+      ports.commands.apply(command);
     },
     async updateBody(input) {
       if (!serving) {

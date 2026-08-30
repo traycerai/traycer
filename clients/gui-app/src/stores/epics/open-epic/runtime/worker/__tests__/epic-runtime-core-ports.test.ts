@@ -47,6 +47,21 @@ function createSource(
     beginReparentMutation: () => null,
     retirePendingMutation: () => false,
     isLatestRenameStamp: () => false,
+    applyChatRecords: () => {},
+    applyChatRecordDelta: () => {},
+    applyTuiAgentRecords: () => {},
+    applyTuiAgentRecordDelta: () => {},
+    markChatRecordListAuthoritative: () => {},
+    markChatRecordListNotAuthoritative: () => {},
+    beginPendingChatCreation: () => {},
+    clearPendingChatCreation: () => {},
+    republishRecordsForCurrentUser: () => {},
+    reprojectForViewerChange: () => {},
+    discardUnsyncedEdits: () => {},
+    requestFreshSnapshot: () => {},
+    retryMigration: () => {},
+    retryWriteCommand: () => {},
+    discardWriteCommand: () => {},
     detachTransport: () => {},
     dispose: () => {},
     ...overrides,
@@ -177,5 +192,136 @@ describe("bodies.settle", () => {
         update: new Uint8Array(),
       }),
     ).resolves.toEqual({ accepted: false, settledBytes: 0 });
+  });
+});
+
+describe("commands.apply", () => {
+  it("routes every command kind to its own source member", () => {
+    // By name AND by argument, over the WHOLE vocabulary. A dispatch pin that
+    // spot-checked three kinds would stay green with two branches swapped,
+    // and a swapped branch here is silent: the projection still moves, just
+    // from the wrong input.
+    const calls: string[] = [];
+    const record =
+      (member: string) =>
+      (...args: unknown[]): void => {
+        calls.push(
+          `${member}(${args.map((a) => JSON.stringify(a)).join(",")})`,
+        );
+      };
+    const ports = buildEpicRuntimeCorePorts(
+      createSource({
+        applyChatRecords: record("applyChatRecords"),
+        applyChatRecordDelta: record("applyChatRecordDelta"),
+        applyTuiAgentRecords: record("applyTuiAgentRecords"),
+        applyTuiAgentRecordDelta: record("applyTuiAgentRecordDelta"),
+        markChatRecordListAuthoritative: record("markAuthoritative"),
+        markChatRecordListNotAuthoritative: record("markNotAuthoritative"),
+        beginPendingChatCreation: record("beginPendingChatCreation"),
+        clearPendingChatCreation: record("clearPendingChatCreation"),
+        republishRecordsForCurrentUser: record("republish"),
+        reprojectForViewerChange: record("reproject"),
+        discardUnsyncedEdits: record("discardUnsyncedEdits"),
+        requestFreshSnapshot: record("requestFreshSnapshot"),
+        retryMigration: record("retryMigration"),
+        retryWriteCommand: record("retryWriteCommand"),
+        discardWriteCommand: record("discardWriteCommand"),
+      }),
+    );
+
+    ports.commands.apply({
+      kind: "apply-chat-records",
+      payload: { records: [], issuedAtSeq: 7 },
+    });
+    ports.commands.apply({
+      kind: "mark-chat-records-authoritative",
+      payload: {},
+    });
+    ports.commands.apply({
+      kind: "mark-chat-records-not-authoritative",
+      payload: {},
+    });
+    ports.commands.apply({
+      kind: "clear-pending-chat-creation",
+      payload: { chatId: "chat-1" },
+    });
+    ports.commands.apply({
+      kind: "republish-records-for-current-user",
+      payload: {},
+    });
+    ports.commands.apply({ kind: "reproject-for-viewer-change", payload: {} });
+    ports.commands.apply({ kind: "discard-unsynced-edits", payload: {} });
+    ports.commands.apply({ kind: "request-fresh-snapshot", payload: {} });
+    ports.commands.apply({ kind: "retry-migration", payload: {} });
+    ports.commands.apply({
+      kind: "retry-write-command",
+      payload: { commandId: "cmd-1" },
+    });
+    ports.commands.apply({
+      kind: "discard-write-command",
+      payload: { commandId: "cmd-2" },
+    });
+
+    expect(calls).toEqual([
+      "applyChatRecords([],7)",
+      "markAuthoritative()",
+      "markNotAuthoritative()",
+      'clearPendingChatCreation("chat-1")',
+      "republish()",
+      "reproject()",
+      "discardUnsyncedEdits()",
+      "requestFreshSnapshot()",
+      "retryMigration()",
+      'retryWriteCommand("cmd-1")',
+      'discardWriteCommand("cmd-2")',
+    ]);
+  });
+
+  it("drops a pending-chat-creation whose payload is not one", () => {
+    // A pending creation with an invented id would put a row on screen that no
+    // create will ever resolve, so a foreign payload is DROPPED rather than
+    // defaulted into existence.
+    const begun: unknown[] = [];
+    const ports = buildEpicRuntimeCorePorts(
+      createSource({
+        beginPendingChatCreation: (pending) => begun.push(pending),
+      }),
+    );
+
+    ports.commands.apply({
+      kind: "begin-pending-chat-creation",
+      payload: { pending: { chatId: "chat-1" } },
+    });
+    ports.commands.apply({
+      kind: "begin-pending-chat-creation",
+      payload: { pending: null },
+    });
+
+    expect(begun).toEqual([]);
+  });
+
+  it("passes a complete pending-chat-creation through", () => {
+    // The other direction, so the drop pin above cannot be satisfied by a
+    // narrowing that rejects everything.
+    const begun: unknown[] = [];
+    const ports = buildEpicRuntimeCorePorts(
+      createSource({
+        beginPendingChatCreation: (pending) => begun.push(pending),
+      }),
+    );
+    const pending = {
+      chatId: "chat-1",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: "user-1",
+    };
+
+    ports.commands.apply({
+      kind: "begin-pending-chat-creation",
+      payload: { pending },
+    });
+
+    expect(begun).toEqual([pending]);
   });
 });

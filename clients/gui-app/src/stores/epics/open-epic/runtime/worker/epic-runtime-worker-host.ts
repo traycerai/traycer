@@ -34,6 +34,7 @@ import {
   type ArtifactBodySeedMode,
   type EpicMutation,
   type EpicMutationResult,
+  type RuntimeCommand,
   type MainToWorkerEvent,
   type RuntimeWorkerBootstrap,
   type RuntimeWorkerLogEntry,
@@ -116,6 +117,11 @@ export interface EpicRuntimeWorkerCore {
    * `name` - which is how the caller still tells a cycle from a missing node.
    */
   applyMutation(mutation: EpicMutation): Promise<EpicMutationResult>;
+  /**
+   * One fire-and-forget command. `void` on both sides of the boundary: the
+   * caller already expected `void`, and the projection stream is the feedback.
+   */
+  applyCommand(command: RuntimeCommand): void;
   dispose(): void;
 }
 
@@ -412,6 +418,15 @@ export function startEpicRuntimeWorkerHost(
       }
       case "current-user": {
         currentUserId = event.userId;
+        return;
+      }
+      case "runtime/command": {
+        // Dropped when no core is installed, and that is the honest answer
+        // rather than a queue: these commands are driven by main-side state
+        // that will re-drive them (an auth change, a record push, a user
+        // gesture), and a queue replayed after `installCore` would apply a
+        // viewer's records to a session that has since changed viewer.
+        core?.applyCommand(event.command);
         return;
       }
       case "accounting/demote": {
