@@ -75,6 +75,8 @@ function createPorts(): EpicRuntimeCorePorts & {
       },
       sendUpdate: () => Promise.resolve({ kind: "sent" }),
       applyAwareness: () => {},
+      release: () => {},
+      heldDocKeys: () => [],
     },
     transport: {
       close: () => {

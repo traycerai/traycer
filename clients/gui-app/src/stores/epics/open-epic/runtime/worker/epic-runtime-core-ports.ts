@@ -394,6 +394,27 @@ export function buildEpicRuntimeCorePorts(
             : { accepted: false, settledBytes: 0 },
         );
       },
+      heldDocKeys: () => [...heldLeases.keys()],
+      release: (docKey) => {
+        // The FORWARD-ONLY lifecycle's terminator, and the twin of the
+        // `settlement.accepted` branch above rather than a second way into it.
+        //
+        // It deliberately touches NOTHING that path touches beyond these two
+        // maps: no settlement is recorded, no bytes are read, no generation is
+        // compared. A body has exactly one of the two lifecycles - identity-
+        // named bodies settle their bytes back, forward-only bodies release
+        // their hold - decided by whether its seed stated an identity, and the
+        // two must not learn about each other.
+        //
+        // IDEMPOTENT: `Map.get` on an absent key is `undefined` and both
+        // deletes are no-ops, so a release that races a re-acquire or arrives
+        // twice after a reconnect costs nothing. That is load-bearing rather
+        // than defensive - this is a fire-and-forget event, so the sender has
+        // no answer to deduplicate on.
+        detachBodyObserver(docKey);
+        heldLeases.get(docKey)?.();
+        heldLeases.delete(docKey);
+      },
       applyAwareness: (docKey, frame, localClientId) => {
         source.applyBodyAwareness(docKey, frame, localClientId);
       },

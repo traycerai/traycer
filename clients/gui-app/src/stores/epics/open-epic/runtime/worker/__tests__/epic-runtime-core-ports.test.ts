@@ -22,10 +22,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { EpicRuntimeCorePortSource } from "../epic-runtime-core-ports";
-import {
-  buildEpicRuntimeCorePorts,
-  type EpicRuntimeCorePorts,
-} from "../epic-runtime-core-ports";
+import { buildEpicRuntimeCorePorts } from "../epic-runtime-core-ports";
+import type { EpicRuntimeCorePorts } from "../epic-runtime-core";
 
 /**
  * Ports with a no-op return leg.

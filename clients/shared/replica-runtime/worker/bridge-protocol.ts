@@ -64,9 +64,11 @@ import type {
  * handshake turns that into one loud error at startup.
  *
  * **11** since the body plane's RETURN leg: `body/doc-in`,
- * `body/awareness-out` and `body/awareness-in`. A v10 worker pushes no
- * collaborator edits and no presence, so an epic looks alive and edits
- * one-way - the failure a version check exists to make loud.
+ * `body/awareness-out`, `body/awareness-in` and `body/release`. A v10 worker
+ * pushes no collaborator edits and no presence, so an epic looks alive and
+ * edits one-way - the failure a version check exists to make loud - and it
+ * has no handler for a forward-only release, so every `@1` body it ever
+ * materializes is held for the life of the session on both sides.
  *
  * **10** since `attachment/await` / `attachment/cancel`: the WAITING half of
  * the attachment class, which `attachment/read` alone could not serve without
@@ -285,6 +287,29 @@ export type MainToWorkerEvent =
        * data. An unknown `docKey` is dropped silently at the far end for the
        * same reason - there is no answer a sender could act on.
        */
+      /**
+       * Let go of a FORWARD-ONLY body. No bytes, no identity, no answer.
+       *
+       * The counterpart to `body/demote`, and deliberately a different shape
+       * rather than a flag on it. `body/demote` NAMES an identity and settles
+       * bytes back; a forward-only body has neither, and routing it through
+       * that call would be refused on the identity it cannot supply - which is
+       * exactly why it was skipped, and why its memory then leaked.
+       *
+       * A body has exactly ONE of the two lifecycles, decided by whether its
+       * seed stated an identity: identity-named bodies settle, forward-only
+       * bodies release. Neither handler may touch the other's state.
+       *
+       * An EVENT because there is no answer to act on: main has already
+       * dropped its copy by the time this is posted, and `postMessage` FIFO
+       * puts it ahead of any re-acquire for the same key. Idempotent at the
+       * far end - a release for a key already released is a no-op, which is
+       * what makes a resend after a reconnect safe.
+       */
+      readonly kind: "body/release";
+      readonly docKey: string;
+    }
+  | {
       readonly kind: "body/awareness-out";
       readonly docKey: string;
       readonly frame: Uint8Array;
@@ -699,6 +724,7 @@ const MAIN_TO_WORKER_EVENT_COVERAGE: {
   "stream/manifest": true,
   "accounting/demote": true,
   "runtime/command": true,
+  "body/release": true,
   "body/awareness-out": true,
   shutdown: true,
 };

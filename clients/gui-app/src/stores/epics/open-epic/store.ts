@@ -124,6 +124,12 @@ export interface EpicRuntimeBinding {
    * `spawn-epic-runtime-worker`'s member of the same name.
    */
   awarenessOut(docKey: string, frame: Uint8Array, localClientId: number): void;
+  /**
+   * Let go of a forward-only body. See `spawn-epic-runtime-worker`'s member:
+   * settle returns bytes, this returns memory, and a body has exactly one of
+   * the two lifecycles.
+   */
+  releaseBody(docKey: string): void;
   /** Ends the transport while the replica lives on. */
   detach(): void;
   /** Ends the worker. */
@@ -998,6 +1004,9 @@ export function createOpenEpicStore(
     bridge: runtime.port,
     docs: bodyDocs,
     budget: createHotBodyBudgetAdapter(options.accounting),
+    releaseForwardOnly: (docKey) => {
+      runtime.releaseBody(docKey);
+    },
   });
 
   const store = create<OpenEpicState>()(

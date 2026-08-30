@@ -133,6 +133,12 @@ export interface EpicRuntimeWorkerCore {
     localClientId: number,
   ): void;
   /**
+   * Let go of a forward-only body. Settles nothing; see `body/release`.
+   */
+  releaseBody(docKey: string): void;
+  /** The retained body holds. The lifetime leak's only honest observable. */
+  heldBodyDocKeysForTests(): readonly string[];
+  /**
    * Enqueue one write command. The QUEUE mints the id and may refuse from its
    * own state, which is why this is a call and not a push.
    */
@@ -505,6 +511,13 @@ export function startEpicRuntimeWorkerHost(
       }
       case "current-user": {
         currentUserId = event.userId;
+        return;
+      }
+      case "body/release": {
+        // Dropped without a core, and safely: no core means no retained hold
+        // to release. The hold is created BY a materialize this same core
+        // answered, so a release arriving without one names nothing.
+        core?.releaseBody(event.docKey);
         return;
       }
       case "body/awareness-out": {

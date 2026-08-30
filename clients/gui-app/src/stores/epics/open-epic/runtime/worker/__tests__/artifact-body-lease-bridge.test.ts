@@ -135,12 +135,18 @@ function setup() {
   const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
   const docs = createDocs();
   const budget = createBudget();
+  // Recorded, not a no-op: the forward-only release is fire-and-forget, so the
+  // ONLY observable that it happened at all is that it was posted.
+  const releasedForwardOnly: string[] = [];
   const leases = createArtifactBodyLeaseBridge({
     bridge: main,
     docs,
     budget,
+    releaseForwardOnly: (docKey) => {
+      releasedForwardOnly.push(docKey);
+    },
   });
-  return { pair, worker, main, docs, budget, leases };
+  return { pair, worker, main, docs, budget, leases, releasedForwardOnly };
 }
 
 describe("acquire / materialize", () => {
@@ -181,6 +187,7 @@ describe("acquire / materialize", () => {
       bridge: createMainBridgeEndpoint(pair.main, stubMainCallHandlers({})),
       docs,
       budget: createBudget(),
+      releaseForwardOnly: () => {},
     });
 
     const grant = await leases.acquire("artifact-missing");
@@ -297,6 +304,7 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
       bridge: createMainBridgeEndpoint(nextPair.main, stubMainCallHandlers({})),
       docs,
       budget: createBudget(),
+      releaseForwardOnly: () => {},
     });
     // The re-send is driven from the state the ORIGINAL bridge holds, so this
     // asserts the observable half: the doc survived with its bytes intact and
@@ -433,6 +441,7 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
       bridge: main,
       docs,
       budget,
+      releaseForwardOnly: () => {},
     });
 
     const first = await leases.acquire("artifact-1");

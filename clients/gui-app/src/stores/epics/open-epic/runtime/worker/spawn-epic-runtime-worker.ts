@@ -200,6 +200,15 @@ export interface EpicRuntimeWorkerHandle {
    * gestures and record pushes.
    */
   awarenessOut(docKey: string, frame: Uint8Array, localClientId: number): void;
+  /**
+   * Let go of a FORWARD-ONLY body: the worker releases its retained hold.
+   *
+   * An event, like {@link awarenessOut} and for the same reason - there is no
+   * answer to act on, main has already dropped its copy - with one addition
+   * that matters: `postMessage` FIFO puts this ahead of any re-acquire for the
+   * same key, so a release can never overtake the materialize that replaces it.
+   */
+  releaseBody(docKey: string): void;
   detach(): void;
   /**
    * Re-binds the worker to a NEW transport after a detach - a fresh proxy host,
@@ -362,6 +371,10 @@ export function spawnEpicRuntimeWorker<TProjection>(
   return {
     port: bridge,
     ready,
+    releaseBody(docKey): void {
+      if (disposed) return;
+      bridge.emit({ kind: "body/release", docKey }, NO_TRANSFER);
+    },
     awarenessOut(docKey, frame, localClientId): void {
       if (disposed) return;
       const encoded = takeBytesForTransfer(frame);

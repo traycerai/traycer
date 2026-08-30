@@ -92,6 +92,26 @@ export interface EpicRuntimeCorePorts {
       readonly update: Uint8Array;
     }): Promise<{ readonly accepted: boolean; readonly settledBytes: number }>;
     /**
+     * Let go of a FORWARD-ONLY body: release its retained lease and detach its
+     * observers, settling nothing.
+     *
+     * The other half of the demote contract, not a variant of it. `settle`
+     * returns BYTES and needs the identity to name what it is returning them
+     * to; this returns MEMORY and needs no identity at all. Reading the
+     * identity rule as governing both is what leaked every `@1` body.
+     */
+    release(docKey: string): void;
+    /**
+     * The docKeys whose runtime lease this port still holds.
+     *
+     * The retained-hold map IS the contract here - it is what `materialize`
+     * fills and what `settle`/`release` must empty - so reading it is reading
+     * the invariant, not inspecting an implementation detail. Exposed because
+     * a lifetime leak has no other honest observable: the tier, the projection
+     * and the tile all look correct while a hold outlives its body.
+     */
+    heldDocKeys(): readonly string[];
+    /**
      * Relay a local presence frame to the arm's presence mechanism, under the
      * main-side `Awareness.clientID` it speaks for.
      */
@@ -237,6 +257,16 @@ export function createEpicRuntimeWorkerCore(
     applyBodyAwareness(docKey, frame, localClientId): void {
       if (!serving) return;
       ports.bodies.applyAwareness(docKey, frame, localClientId);
+    },
+    releaseBody(docKey): void {
+      // Dropped after teardown like every other member: `dispose` already
+      // released every hold, so a release arriving afterwards has nothing to
+      // do and must not resurrect bookkeeping the shutdown just finished.
+      if (!serving) return;
+      ports.bodies.release(docKey);
+    },
+    heldBodyDocKeysForTests(): readonly string[] {
+      return ports.bodies.heldDocKeys();
     },
     applyCommand(command): void {
       // Dropped after teardown like every other member. A command applied to a

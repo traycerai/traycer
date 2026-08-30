@@ -141,20 +141,54 @@ export function createArtifactBodyLeaseBridge(options: {
   readonly bridge: RuntimeWorkerPort;
   readonly docs: MainThreadBodyDocs;
   readonly budget: HotBodyBudget;
+  /**
+   * Tell the worker to let go of a forward-only body.
+   *
+   * A typed function rather than the raw port, so this module keeps calling
+   * only what it is allowed to: the port here is `call`-only by design, and
+   * this leg is an EVENT with no answer.
+   */
+  readonly releaseForwardOnly: (docKey: string) => void;
 }): ArtifactBodyLeaseBridge {
   const entries = new Map<string, BodyEntry>();
 
   function postDemote(docKey: string, generation: number): void {
     const entry = entries.get(docKey);
-    // FORWARD-ONLY bodies are never posted. `body/demote` names an identity
+    // FORWARD-ONLY bodies are never DEMOTED. `body/demote` names an identity
     // and the tier decides its refusal on one, so an entry with no guid has
     // nothing to settle back TO - `settleColdState` would answer
-    // `newer-generation` for it. This is that existing refusal moved to where
-    // it is cheap, not a new rule: the round trip it saves would always have
+    // `newer-generation` for it. Skipping the call is that existing refusal
+    // moved to where it is cheap; the round trip it saves would always have
     // ended in a no.
+    //
+    // It does NOT mean nothing happens. See the branch below: they release
+    // instead, which is a different operation rather than a weaker demote.
     if (entry === undefined) return;
     const docGuid = entry.docGuid;
-    if (docGuid === null) return;
+    if (docGuid === null) {
+      // FORWARD-ONLY: it does not SETTLE, and for a long time this line read
+      // that as "nothing happens", which leaked every `@1` body on both sides
+      // - main's live `Y.Doc` and the worker's retained hold, for the life of
+      // the session.
+      //
+      // Settling returns BYTES and needs an identity to name what it is
+      // returning them to. Releasing returns MEMORY and needs no identity at
+      // all. A body has exactly one of the two lifecycles, decided by whether
+      // its seed stated an identity; this is the other one, not a degenerate
+      // case of the demote above.
+      //
+      // No ack to wait for, so the entry is retired here rather than in a
+      // handler: there is no answer that could refuse, and nothing is at risk
+      // because no bytes are being handed over. The worker's release is
+      // idempotent for exactly the resend case the demote path needs an ack
+      // for.
+      entry.demotingGeneration = null;
+      entries.delete(docKey);
+      options.releaseForwardOnly(docKey);
+      options.budget.settleCold(docKey, 0);
+      options.docs.drop(docKey);
+      return;
+    }
     const encoded = takeBytesForTransfer(options.docs.encode(docKey));
     void options.bridge
       .call(

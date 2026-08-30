@@ -700,6 +700,9 @@ export function EpicSessionProvider(
           awarenessOut: (docKey, frame, localClientId) => {
             runtimeWorker.awarenessOut(docKey, frame, localClientId);
           },
+          releaseBody: (docKey) => {
+            runtimeWorker.releaseBody(docKey);
+          },
           detach: () => {
             runtimeWorker.detach();
           },

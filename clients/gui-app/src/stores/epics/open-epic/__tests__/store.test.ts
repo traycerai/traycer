@@ -1348,6 +1348,9 @@ describe("createOpenEpicStore", () => {
     fragmentDoc.transact(() => {
       fragmentDoc.getMap("touch").set("k", "v");
     });
+    // The edit is on MAIN's doc; the lane that sends it is in the worker. The
+    // outbound frame is a `body/update` round trip away, not the next line.
+    await settle(opened);
 
     expect(handle().artifactRoomApplied.length).toBeGreaterThan(0);
     expect(handle().artifactRoomApplied[0].artifactRoomId).toBe(

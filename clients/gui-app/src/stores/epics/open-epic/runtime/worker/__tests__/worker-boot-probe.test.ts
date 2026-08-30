@@ -21,6 +21,10 @@
  */
 import "@vitest/web-worker";
 import { describe, expect, it } from "vitest";
+// The CONSTANT, never a literal. This handshake broke silently at the v11
+// bump and stayed broken because nothing ran it: a hardcoded version turns a
+// negotiation pin into a countdown to the next bump.
+import { RUNTIME_BRIDGE_PROTOCOL_VERSION } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 
 const BOOT_TIMEOUT_MS = 10_000;
 
@@ -54,9 +58,7 @@ function framesUntil(worker: Worker, kind: string): Promise<WorkerFrame[]> {
           `no ${kind} frame within ${String(BOOT_TIMEOUT_MS)}ms; saw ${
             seen.length === 0
               ? "nothing"
-              : seen
-                .map((frame) => describeFrame(frame))
-                .join(", ")
+              : seen.map((frame) => describeFrame(frame)).join(", ")
           }`,
         ),
       );
@@ -120,7 +122,7 @@ describe("the runtime worker host in a worker realm", () => {
       // the handshake is what makes this a test of the version negotiation
       // rather than of module loading, and a worker that loads but disagrees
       // on the version answers `fatal` here instead.
-      worker.postMessage(bootstrapFrame(10));
+      worker.postMessage(bootstrapFrame(RUNTIME_BRIDGE_PROTOCOL_VERSION));
       const received = await frames;
 
       // Asserted as the whole frame rather than by reaching into it: the shape
@@ -128,7 +130,10 @@ describe("the runtime worker host in a worker realm", () => {
       // `protocolVersion` out would still pass if the envelope changed.
       expect(received.at(-1)).toEqual({
         frame: "event",
-        event: { kind: "ready", protocolVersion: 10 },
+        event: {
+          kind: "ready",
+          protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION,
+        },
       });
     } finally {
       worker.terminate();
@@ -145,7 +150,7 @@ describe("the runtime worker host in a worker realm", () => {
 
     try {
       const frames = framesUntil(worker, "ready");
-      worker.postMessage(bootstrapFrame(10));
+      worker.postMessage(bootstrapFrame(RUNTIME_BRIDGE_PROTOCOL_VERSION));
       const kinds = (await frames).map((frame) => frame.event.kind);
 
       expect(kinds).toContain("accounting/books");
