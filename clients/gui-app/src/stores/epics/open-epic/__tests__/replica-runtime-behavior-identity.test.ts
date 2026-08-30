@@ -45,11 +45,11 @@ import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-reco
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -147,7 +147,7 @@ function seedRootArtifact(targetDoc: Y.Doc, artifactId: string): void {
  * hot for the assertions that follow.
  */
 function leasedFragmentDoc(
-  opened: OpenEpicStoreHandle,
+  opened: OpenedStoreForTest,
   artifactId: string,
 ): Y.Doc {
   opened.store.getState().acquireArtifactBodyLease(artifactId);
@@ -263,7 +263,7 @@ function sequencingFactory(): {
 }
 
 describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequences", () => {
-  let handle: OpenEpicStoreHandle | null = null;
+  let handle: OpenedStoreForTest | null = null;
 
   afterEach(() => {
     handle?.dispose();
@@ -275,13 +275,21 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
 
   it("a viewer-role snapshot tears down every artifact room and republishes divergence", () => {
     const { factory, handle: streamHandle } = fakeFactory();
-    handle = createOpenEpicStore({
+    handle = openStoreForTest({
       epicId: "epic-viewer-teardown",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
     const opened = handle;
 
@@ -331,12 +339,21 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
 
   it("requestFreshSnapshot closes the socket before coverage is cleared and reopens after, so the reattach offer is null", () => {
     const { factory, handle: streamHandle, sequence } = sequencingFactory();
-    handle = createOpenEpicStore({
+    handle = openStoreForTest({
       epicId: "epic-close-before-open",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
     const opened = handle;
 
@@ -369,12 +386,21 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
 
   it("detachTransport publishes hostTransportStatus:closed but freezes the divergence projection - a later local edit does not resume queueing", () => {
     const { factory, handle: streamHandle } = fakeFactory();
-    handle = createOpenEpicStore({
+    handle = openStoreForTest({
       epicId: "epic-detach-freeze",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
     const opened = handle;
 
@@ -423,12 +449,21 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
   it("a user switch on a DETACHED handle does not blank the projected slices", () => {
     signedInAs("user-a");
     const { factory, handle: streamHandle } = fakeFactory();
-    handle = createOpenEpicStore({
+    handle = openStoreForTest({
       epicId: "epic-detach-user-switch",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
     const opened = handle;
 
@@ -487,12 +522,21 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
   it("chatRecordListAuthoritative round-trips through the sink across a user switch", () => {
     signedInAs("user-a");
     const { factory, handle: streamHandle } = fakeFactory();
-    handle = createOpenEpicStore({
+    handle = openStoreForTest({
       epicId: "epic-authoritative-roundtrip",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
     const opened = handle;
 

@@ -2,10 +2,11 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import "@/index.css";
 
 /**
@@ -73,24 +74,40 @@ interface ProbeWindowGlobals {
 
 function seedRetainedBuffer(): void {
   const registry = __getOpenEpicRegistryForTests();
-  const outgoing = createOpenEpicStore({
+  const outgoing = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this fixture - the legacy @1 arm, which is
-    // what this test drives.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   outgoing.doc.getMap("epic").set("title", "Rewrite the onboarding");
   outgoing.store.setState({ isDirty: true, unsyncedQueueSize: 3 });
   registry.acquireMounted(EPIC_ID, () => outgoing);
-  const incoming = createOpenEpicStore({
+  const incoming = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
-    laneSelection: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   // The re-point. The outgoing handle is dirty, so the registry retains it with
   // its transport detached - which is what makes its row un-syncable for ever.

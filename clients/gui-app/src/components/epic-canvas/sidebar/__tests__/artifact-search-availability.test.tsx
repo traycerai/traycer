@@ -16,11 +16,11 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 
@@ -34,7 +34,7 @@ const inertStreamFactory: EpicStreamClientFactory = () => ({
   close: () => {},
 });
 
-let opened: OpenEpicStoreHandle | null = null;
+let opened: OpenedStoreForTest | null = null;
 
 afterEach(() => {
   cleanup();
@@ -42,14 +42,22 @@ afterEach(() => {
   opened = null;
 });
 
-function openStore(): OpenEpicStoreHandle {
-  const handle = createOpenEpicStore({
+function openStore(): OpenedStoreForTest {
+  const handle = openStoreForTest({
     epicId: "epic-availability",
-    streamClientFactory: inertStreamFactory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: inertStreamFactory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   // A writable role, the way the host's meta/permission frames would set it:
   // the gate also withholds search from viewers (and from a not-yet-known

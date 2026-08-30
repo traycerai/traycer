@@ -3,11 +3,11 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
@@ -36,7 +36,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 
 const mocks = vi.hoisted(() => ({
-  handle: { current: null as OpenEpicStoreHandle | null },
+  handle: { current: null as OpenedStoreForTest | null },
 }));
 
 const mutateSpies = vi.hoisted(() => ({
@@ -159,7 +159,7 @@ function makeMeta(): SnapshotMetaEpic {
 /** A live session for "epic-1" - no nodes seeded, since these tests only
  * assert on the RPC call args, and `useSwitcherRename` fires the RPC
  * regardless of whether `beginRenameMutation` finds a row to overlay. */
-function newSession(): OpenEpicStoreHandle {
+function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -172,13 +172,21 @@ function newSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: "epic-1",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));

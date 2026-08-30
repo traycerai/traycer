@@ -22,11 +22,11 @@ import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-reco
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -107,7 +107,7 @@ function record(
 }
 
 interface Session {
-  readonly handle: OpenEpicStoreHandle;
+  readonly handle: OpenedStoreForTest;
   readonly callbacks: EpicStreamCallbacks;
   /** Applies a doc mutation the way the host's replicated update would. */
   readonly mutateDoc: (mutate: (chats: Y.Map<unknown>) => void) => void;
@@ -126,13 +126,21 @@ function newSession(seedDoc: (doc: Y.Doc) => void): Session {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: "epic-test",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   const seed = new Y.Doc();

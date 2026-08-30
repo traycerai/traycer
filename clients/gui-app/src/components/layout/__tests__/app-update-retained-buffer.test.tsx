@@ -16,10 +16,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type {
   DesktopAppUpdateCheckIntent,
   DesktopAppUpdateChannelChange,
@@ -214,24 +215,41 @@ function seedRetainedBuffer(liveDirty: boolean): {
   readonly liveIsDirty: () => boolean;
 } {
   const registry = __getOpenEpicRegistryForTests();
-  const outgoing = createOpenEpicStore({
+  const outgoing = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   outgoing.doc.getMap("epic").set("title", "Rewrite the onboarding");
   outgoing.store.setState({ isDirty: true, unsyncedQueueSize: 3 });
   registry.acquireMounted(EPIC_ID, () => outgoing);
 
-  const incoming = createOpenEpicStore({
+  const incoming = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
-    laneSelection: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   registry.replaceMounted(EPIC_ID, outgoing, incoming, {
     hostStamp: "host-a",
@@ -544,12 +562,21 @@ describe("app update install vs a retained unsynced buffer", () => {
     // drains, which is the world the user removed the confirmation for. If this
     // ever starts prompting, the scope has widened into their decision.
     const registry = __getOpenEpicRegistryForTests();
-    const handle = createOpenEpicStore({
+    const handle = openStoreForTest({
       epicId: "epic-syncable",
-      streamClientFactory: noopStreamClientFactory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: noopStreamClientFactory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
     handle.doc.getMap("epic").set("title", "Syncable");
     handle.store.setState({ isDirty: true, unsyncedQueueSize: 2 });

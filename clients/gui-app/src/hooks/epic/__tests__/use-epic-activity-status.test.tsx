@@ -21,10 +21,11 @@ import {
 } from "@/lib/registries/chat-session-registry";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   publishAgentActivity,
   resetAgentActivity,
@@ -55,13 +56,21 @@ function registerEmptySession(): void {
  */
 function registerSessionHoldingAgents(agentIds: readonly string[]): void {
   const handle = __getOpenEpicRegistryForTests().acquire(EPIC_ID, () =>
-    createOpenEpicStore({
+    openStoreForTest({
       epicId: EPIC_ID,
       userId: null,
-      streamClientFactory: noopStreamClientFactory,
-      onAuthError: null,
-      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: noopStreamClientFactory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     }),
   );
   handle.store.setState({ chats: { allIds: [...agentIds], byId: {} } });

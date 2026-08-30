@@ -26,11 +26,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ManagedCommandOutputTile } from "@/components/epic-canvas/renderers/managed-command-output-tile";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
@@ -126,7 +126,7 @@ interface OutputWire {
 }
 
 let wire: OutputWire | null = null;
-let epicHandle: OpenEpicStoreHandle | null = null;
+let epicHandle: OpenedStoreForTest | null = null;
 let restoreLayoutGeometry: () => void;
 // Counts every stream open, mount and Retry alike - a Retry test's proof that
 // it opened a NEW stream rather than resuming the failed one.
@@ -286,14 +286,21 @@ function emitDeleted(): void {
 }
 
 function renderTile(): void {
-  epicHandle = createOpenEpicStore({
+  epicHandle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: noopEpicStreamClientFactory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what
-    // these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: noopEpicStreamClientFactory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   const node = makeManagedCommandOutputTileRef({
     commandId: COMMAND_ID,

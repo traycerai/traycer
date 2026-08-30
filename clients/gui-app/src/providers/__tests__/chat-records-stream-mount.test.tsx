@@ -30,11 +30,11 @@ import {
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   getOpenEpicRegistry,
   handleHostIds,
@@ -189,15 +189,23 @@ const noopStreamFactory: EpicStreamClientFactory = () => ({
  * `epic-session-provider.tsx` does for every handle it creates. A helper that
  * defaulted it would hide the one input the routing gate reads.
  */
-function openEpic(epicId: string, hostId: string | null): OpenEpicStoreHandle {
+function openEpic(epicId: string, hostId: string | null): OpenedStoreForTest {
   const handle = getOpenEpicRegistry().acquire(epicId, (id) =>
-    createOpenEpicStore({
+    openStoreForTest({
       epicId: id,
-      streamClientFactory: noopStreamFactory,
       userId: null,
-      onAuthError: null,
-      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: noopStreamFactory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     }),
   );
   handleHostIds.set(handle, hostId);

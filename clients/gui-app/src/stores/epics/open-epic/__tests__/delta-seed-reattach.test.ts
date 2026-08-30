@@ -3,10 +3,11 @@ import * as Y from "yjs";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicSubscribeClientSeedOffer } from "@traycer/protocol/host/epic/subscribe";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
  * `epic.subscribe@1.3` delta-seeded reattach - gui-app store side.
@@ -110,13 +111,21 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
 
   it("merges a delta into hostCoverageDoc instead of rebuilding - coverage keeps content from BOTH cycles", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
 
     // Cycle 1: a full snapshot seeding content X.
@@ -170,12 +179,21 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
 
   it("the seed offer is null before any snapshot has landed (cold open sends no offer)", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
 
     expect(handle().seedOfferProvider()).toBeNull();
@@ -185,12 +203,21 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
 
   it("after a full snapshot carrying a roomId, the offer is non-null and carries that exact roomId", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
 
     const hostDoc = new Y.Doc();
@@ -209,12 +236,21 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
 
   it("a snapshot whose meta.roomId is absent (a pre-@1.2 host) leaves the offer null", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
 
     const hostDoc = new Y.Doc();
@@ -231,12 +267,21 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc merge safet
 
   it("after a replica reset (requestFreshSnapshot), the offer returns to null", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
 
     const hostDoc = new Y.Doc();
@@ -262,12 +307,21 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
 
   it("18) a delta whose basis doc was replaced mid-flight (permission-loss race) is NOT merged, and the offer goes null", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
 
     const originDoc = new Y.Doc();
@@ -313,12 +367,21 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
 
   it("19) the control for 18 - no intervening replacement, the delta DOES merge", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
 
     const originDoc = new Y.Doc();
@@ -364,12 +427,21 @@ describe("epic.subscribe@1.3 delta-seeded reattach - hostCoverageDoc doc-identit
 
   it("20) coverage advancing via an ordinary update while an offer is outstanding is NOT treated as staleness - the later delta still merges", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
 
     const originDoc = new Y.Doc();

@@ -9,11 +9,11 @@ import {
   type MockInstance,
 } from "vitest";
 import type { ReactElement } from "react";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import {
   useEpicDeleteArtifact,
@@ -55,17 +55,19 @@ function TestHarness(props: { readonly renderKey: number }): ReactElement {
 }
 
 describe("use-epic-node-mutations under React Compiler", () => {
-  let handle: OpenEpicStoreHandle;
+  let handle: OpenedStoreForTest;
   let consoleErrorSpy: MockInstance<typeof console.error>;
 
   beforeEach(() => {
     window.localStorage.clear();
-    handle = createOpenEpicStore({
+    handle = openStoreForTest({
       epicId: "epic-compiler-pin",
-      streamClientFactory: fakeFactory(),
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: fakeFactory(),
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });

@@ -5,11 +5,11 @@ import { nestedFocusBoundaryMock } from "@/__tests__/nested-focus-boundary-mock"
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { makeGitBundleDiffTile } from "@/lib/git/git-diff-tile";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { BundleFileSection } from "../git-bundle-file-section";
 import type { GitBundleDiffTileRef } from "../git-diff-tile-shared";
@@ -49,20 +49,28 @@ const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-let epicSessionHandle: OpenEpicStoreHandle;
+let epicSessionHandle: OpenedStoreForTest;
 
 describe("<BundleFileSection />", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     nestedFocusBoundaryMock.navigateNested.mockClear();
-    epicSessionHandle = createOpenEpicStore({
+    epicSessionHandle = openStoreForTest({
       epicId: "epic-1",
       userId: null,
-      streamClientFactory: fakeStreamClientFactory,
-      onAuthError: null,
-      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-      laneSelection: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: fakeStreamClientFactory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
   });
 

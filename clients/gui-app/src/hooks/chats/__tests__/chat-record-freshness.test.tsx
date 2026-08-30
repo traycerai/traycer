@@ -46,11 +46,11 @@ import {
   EpicSessionContext,
   EpicSessionHostClientContext,
 } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   invalidateEpicChatRecords,
@@ -87,7 +87,7 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => ({
 interface Fixture {
   readonly client: HostClient<HostRpcRegistry>;
   readonly queryClient: QueryClient;
-  readonly handle: OpenEpicStoreHandle;
+  readonly handle: OpenedStoreForTest;
   readonly listCalls: { value: number };
   readonly records: ChatRecordSummaryV11[];
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
@@ -152,7 +152,7 @@ function makeMeta(): SnapshotMetaEpic {
 }
 
 /** A real open-epic session with an empty doc `chats` map (the post-sweep steady state). */
-function newSession(): OpenEpicStoreHandle {
+function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -165,13 +165,21 @@ function newSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: factory,
     userId: VIEWER_ID,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("stream factory not invoked");
   const seed = new Y.Doc();

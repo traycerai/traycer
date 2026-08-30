@@ -9,11 +9,11 @@ import {
   useActiveEpicHostId,
   useActiveEpicProjection,
 } from "@/lib/commands/sources/open/use-active-epic-projection";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
  * Codex #1243 T-55 - the palette's opener sub-pages froze after a re-point.
@@ -55,14 +55,22 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 
 const EPIC = "epic-rebind";
 
-function buildHandle(hostId: string): OpenEpicStoreHandle {
-  const handle = createOpenEpicStore({
+function buildHandle(hostId: string): OpenedStoreForTest {
+  const handle = openStoreForTest({
     epicId: EPIC,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   handleHostIds.set(handle, hostId);
   return handle;
@@ -75,7 +83,7 @@ function buildHandle(hostId: string): OpenEpicStoreHandle {
  * `byId`, so seeding records would add a shape to keep in step with the real
  * projector for no assertion's benefit.
  */
-function setChatCount(handle: OpenEpicStoreHandle, count: number): void {
+function setChatCount(handle: OpenedStoreForTest, count: number): void {
   const allIds: string[] = [];
   for (let i = 0; i < count; i += 1) allIds.push(`chat-${i}`);
   handle.store.setState((state) => ({
