@@ -148,6 +148,75 @@ function newSession(): OpenedStoreForTest {
   return handle;
 }
 
+/**
+ * A session whose ROOT SNAPSHOT already carries doc content, for the tests that
+ * need `docTuiAgents` to be non-empty before any record answers.
+ *
+ * Separate from {@link newSession} rather than a parameter on it: every other
+ * test in this file asserts about the record TABLE and wants an empty doc, and
+ * threading a seeder through them all would put a doc-projection concern into
+ * eleven tests that have none.
+ */
+function newSessionSeeded(seedDoc: (doc: Y.Doc) => void): OpenedStoreForTest {
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const factory: EpicStreamClientFactory = (_id, callbacks) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  const handle = openStoreForTest({
+    epicId: "epic-test",
+    userId: null,
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    writeCommand: null,
+  });
+  if (captured.value === null) throw new Error("factory not invoked");
+  const seed = new Y.Doc();
+  seedDoc(seed);
+  captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(seed));
+  openHandles.push(handle);
+  return handle;
+}
+
+/**
+ * One doc-resident terminal agent, with every field
+ * `projectTerminalAgent` requires.
+ *
+ * `harnessId: "codex"` because the projection DROPS a row whose harness this
+ * build cannot dispatch (`narrowTuiHarnessId`) - a fixture naming `cursor` or
+ * an unknown vendor would produce an empty slice and the alias pins would then
+ * be asserting `EMPTY === EMPTY`, which holds for the wrong reason.
+ */
+function seedDocTerminalAgent(doc: Y.Doc, id: string, title: string): void {
+  const agent = new Y.Map<unknown>();
+  agent.set("id", id);
+  agent.set("harnessId", "codex");
+  agent.set("title", title);
+  agent.set("parentId", null);
+  agent.set("createdAt", 1);
+  agent.set("updatedAt", 1);
+  agent.set("hostId", "host-1");
+  agent.set("workspaceFolders", ["/repo"]);
+  agent.set("model", null);
+  agent.set("reasoningEffort", null);
+  agent.set("agentMode", "regular");
+  agent.set("harnessSessionId", null);
+  agent.set("terminalShellCommand", null);
+  agent.set("terminalShellArgs", null);
+  const agents = new Y.Map<unknown>();
+  agents.set(id, agent);
+  doc.getMap("epic").set("tuiAgents", agents);
+}
+
 function ids(handle: OpenedStoreForTest): readonly string[] {
   return handle.store.getState().tuiAgentRecords.allIds.slice().sort();
 }
@@ -525,5 +594,68 @@ describe("applyTuiAgentRecordDelta always reports registry provenance", () => {
     const after = handle.store.getState().tuiAgentRecords.byId["tui-1"];
     expect(after.docResident).toBe(false);
     expect(after.title).toBe("Adopted (registry)");
+  });
+});
+
+/**
+ * The `tuiAgents` / `docTuiAgents` alias - the TWIN of the one
+ * `chat-records-union.test.ts` pins, and the member of that pair that had no
+ * pin at all until this suite grew one.
+ *
+ * There are exactly two producer aliases of this shape in the projection:
+ * `unionChats` returns `docChats` itself when no record has answered, and
+ * `unionTerminalAgents` returns `docAgents` on the same condition
+ * (`projection-helpers.ts`). `chats === docChats` was pinned; `tuiAgents ===
+ * docTuiAgents` was not, and it was severed identically and silently by the
+ * store's per-key `replaceEqualDeep` pass - each key reconciled against its
+ * own previous value, so two deep-equal results and no `===`.
+ *
+ * Pinned here rather than left to the chats twin's coverage because "the other
+ * one is tested" is exactly the reasoning under which this one went unnoticed.
+ */
+describe("the doc slice is handed through by reference in doc-only mode", () => {
+  it("aliases `tuiAgents` to `docTuiAgents` while no record has answered", () => {
+    signedInAs(USER);
+    const handle = newSessionSeeded((doc) => {
+      seedDocTerminalAgent(doc, "doc-only", "Doc-only agent");
+    });
+
+    const state = handle.store.getState();
+    expect(state.tuiAgents.allIds).toEqual(["doc-only"]);
+    // The alias itself. A consumer reads `===` here as "no record layer".
+    expect(state.tuiAgents).toBe(state.docTuiAgents);
+  });
+
+  it("un-aliases the moment a record answers, even when the content is unchanged", () => {
+    // The other half, and the one that says the alias is a FACT about the
+    // record layer rather than about content: the record below projects to a
+    // row equal field-for-field to what the doc already held, and the slices
+    // must still come apart.
+    //
+    // NOTE ON ITS HISTORY, so the vacuous era is on record: the sibling
+    // assertion in `chat-records-union.test.ts` (`expect(chats).not.toBe(
+    // docChats)`) passed for the whole period the alias was severed, because
+    // nothing was ever aliased and a negative identity assertion cannot fail
+    // in that world. It became a REAL pin only once aliasing was restored, and
+    // so did this one. A `not.toBe` is only load-bearing beside a `toBe` that
+    // holds.
+    signedInAs(USER);
+    const handle = newSessionSeeded((doc) => {
+      seedDocTerminalAgent(doc, "both", "Same content");
+    });
+    const store = handle.store;
+    expect(store.getState().tuiAgents).toBe(store.getState().docTuiAgents);
+
+    store
+      .getState()
+      .applyTuiAgentRecords(
+        [row({ tuiAgentId: "both", title: "Same content", revision: 1 })],
+        null,
+      );
+
+    expect(store.getState().tuiAgents).not.toBe(
+      store.getState().docTuiAgents,
+    );
+    expect(store.getState().tuiAgents.byId.both.title).toBe("Same content");
   });
 });

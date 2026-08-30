@@ -1080,11 +1080,14 @@ export function createOpenEpicStore(
     // Per delivered key only - the wire diff already omits keys whose
     // reference never moved, so this walks what actually crossed.
     const current = api.getState();
+    // Read BEFORE the per-key pass, because that pass is what destroys them.
+    const aliasGroups = aliasGroupsOf(projected);
     for (const key of Object.keys(projected) as ReadonlyArray<
       keyof typeof projected
     >) {
       stabilizeProjectionKey(current, projected, key);
     }
+    restoreAliasGroups(projected, aliasGroups);
     api.setState(
       bindingEpoch === undefined
         ? projected
@@ -1113,6 +1116,67 @@ export function createOpenEpicStore(
     const incoming = projected[key];
     if (incoming === undefined) return;
     projected[key] = replaceEqualDeep(current[key], incoming);
+  }
+
+  /**
+   * Keys of one patch whose incoming values are the SAME OBJECT, grouped.
+   *
+   * The projector aliases deliberately: `unionChats` returns `docChats` itself
+   * when no record answered (`projection-helpers.ts`, `if
+   * (records.allIds.length === 0) return docChats;`), and `unionTerminalAgents`
+   * does the same with `docAgents`. "Doc-only mode hands the doc slice through
+   * by reference" is a contract a consumer reads with `===`, not a coincidence.
+   *
+   * {@link stabilizeProjectionKey} reconciles each key against ITS OWN previous
+   * value, independently - which is right per key and severs the alias across
+   * keys, because `replaceEqualDeep(current.chats, X)` and
+   * `replaceEqualDeep(current.docChats, X)` each return a value that shares
+   * structure with a DIFFERENT previous object. Two deep-equal results, no
+   * `===`.
+   *
+   * So the alias is captured here, before the pass, and restored after it. Only
+   * object identity is grouped: primitives and `null` are compared by value
+   * downstream, so "two keys hold the same number" is not an alias anyone can
+   * observe, and grouping them would force unrelated keys to move together.
+   */
+  function aliasGroupsOf(patch: object): readonly (readonly string[])[] {
+    const byValue = new Map<object, string[]>();
+    for (const key of Object.keys(patch)) {
+      const value: unknown = Reflect.get(patch, key);
+      if (value === null || typeof value !== "object") continue;
+      const held = byValue.get(value);
+      if (held === undefined) byValue.set(value, [key]);
+      else held.push(key);
+    }
+    return [...byValue.values()].filter((keys) => keys.length > 1);
+  }
+
+  /**
+   * Put every group back on one reference.
+   *
+   * The first member's stabilised value is the representative, and WHICH member
+   * wins does not matter: the group's members were `===` on the way in, so
+   * every stabilised result is deep-equal to every other. What matters is that
+   * they end `===` again.
+   *
+   * `Reflect` rather than indexed access because the keys are dynamic and the
+   * members of a group have different declared types even though their runtime
+   * values are one object - the same reason `deliverInto` reaches for it.
+   */
+  function restoreAliasGroups(
+    patch: object,
+    groups: readonly (readonly string[])[],
+  ): void {
+    for (const keys of groups) {
+      // No empty-group guard: `aliasGroupsOf` returns only groups of two or
+      // more, so destructuring types `first` as `string` and a `=== undefined`
+      // check is a condition with no overlap - which `no-unnecessary-condition`
+      // rejects. The bound lives at the producer, and this is the reader that
+      // depends on it.
+      const [first, ...rest] = keys;
+      const representative: unknown = Reflect.get(patch, first);
+      for (const key of rest) Reflect.set(patch, key, representative);
+    }
   }
 
   /**
