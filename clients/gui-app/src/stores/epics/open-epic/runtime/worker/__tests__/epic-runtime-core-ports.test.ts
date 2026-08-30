@@ -532,3 +532,60 @@ describe("bodies.materialize — forward-only vs not-held", () => {
     await expect(ports.bodies.materialize("art-1")).resolves.toBeNull();
   });
 });
+
+/**
+ * The return leg does not hand on the array it was GIVEN.
+ *
+ * Yjs delivers ONE freshly-encoded array to every `update` listener. On the
+ * `@1` arm two listen: the tier's outbound observer, which turns it into an
+ * `artifactRoomApplyUpdate` frame, and the body return leg. The return leg's
+ * bytes are eventually handed to `takeBytesForTransfer`, which transfers a
+ * full-span standalone buffer IN PLACE - so passing the shared array straight
+ * through detaches the one the tier's frame is still holding, and that frame
+ * decodes as `Unexpected end of array` wherever it is finally read.
+ *
+ * Pinned as IDENTITY rather than as a decode failure downstream: the property
+ * is "we are not the owner, so we copy", and identity is what states it. A
+ * behavioural pin would depend on which of the two observers happens to run
+ * first, and would go quiet the day they are reordered.
+ */
+describe("the body return leg's ownership of its bytes", () => {
+  it("copies the update rather than forwarding the array it was handed", async () => {
+    let emit: ((update: Uint8Array) => void) | null = null;
+    const forwarded: Uint8Array[] = [];
+    const ports = buildEpicRuntimeCorePorts(
+      createSource({
+        bodyDocKey: () => "doc-1",
+        encodeColdState: () => ({
+          update: Uint8Array.from([1, 2, 3]),
+          docGuid: "guid-1",
+          seedMode: "full",
+          hostStateVector: null,
+        }),
+        observeBodyDoc: (_docKey, onUpdate) => {
+          emit = onUpdate;
+          return () => {};
+        },
+      }),
+      {
+        onDocUpdate: (_docKey, update) => {
+          forwarded.push(update);
+        },
+        onAwareness: () => {},
+      },
+    );
+
+    await ports.bodies.materialize("artifact-1");
+    if (emit === null) throw new Error("observer never attached");
+
+    // The array Yjs would hand to BOTH listeners.
+    const shared = Uint8Array.from([9, 8, 7]);
+    emit(shared);
+
+    expect(forwarded).toHaveLength(1);
+    // Equal bytes...
+    expect(Array.from(forwarded[0] ?? [])).toEqual([9, 8, 7]);
+    // ...and NOT the same object, which is the whole claim.
+    expect(forwarded[0]).not.toBe(shared);
+  });
+});

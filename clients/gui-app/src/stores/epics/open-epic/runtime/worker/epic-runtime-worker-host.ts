@@ -312,9 +312,20 @@ export function startEpicRuntimeWorkerHost(
         core === null ? null : await core.readAttachmentBytes(request.hash);
       if (held === null)
         return { value: { bytes: null }, transfer: NO_TRANSFER };
-      // Transfer, never share - and never the raw view, which may be a window
-      // onto a buffer the replica is still using.
-      const prepared = takeBytesForTransfer(held);
+      // COPIED FIRST, because these bytes are the replica's, not ours.
+      //
+      // `readAttachmentBytes` returns the value held in the root doc's
+      // `attachments` map BY REFERENCE. `takeBytesForTransfer` transfers a
+      // full-span standalone buffer in place - a judgement about GEOMETRY,
+      // sound only for a buffer the caller owns - so handing it this array
+      // detaches the one still sitting in the `Y.Map`. The attachment reads as
+      // zero bytes from then on, for every later reader.
+      //
+      // The pre-existing comment here worried about the opposite case, "a
+      // window onto a buffer the replica is still using": a VIEW is the arm
+      // the helper already copies. A locally-pasted attachment is stored as a
+      // standalone full-span array, which is exactly the arm it transfers.
+      const prepared = takeBytesForTransfer(held.slice());
       return {
         value: { bytes: prepared.bytes },
         transfer: prepared.transfer,
@@ -385,7 +396,10 @@ export function startEpicRuntimeWorkerHost(
           : await core.awaitAttachmentBytes(request.awaitId, request.hash);
       if (bytes === null)
         return { value: { bytes: null }, transfer: NO_TRANSFER };
-      const encoded = takeBytesForTransfer(bytes);
+      // Same ownership rule as `attachment/read` above - the waiter resolves
+      // with the map's own value, so it is copied before it can be
+      // transferred out from under the replica.
+      const encoded = takeBytesForTransfer(bytes.slice());
       return { value: { bytes: encoded.bytes }, transfer: encoded.transfer };
     },
     "attachment/cancel": (request) => {

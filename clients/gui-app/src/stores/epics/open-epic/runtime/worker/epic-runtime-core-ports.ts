@@ -237,7 +237,22 @@ export function buildEpicRuntimeCorePorts(
   function attachBodyObserver(docKey: string): void {
     if (bodyObservers.has(docKey)) return;
     const detachDoc = source.observeBodyDoc(docKey, (update) => {
-      returnLeg.onDocUpdate(docKey, update);
+      // COPIED, because we do not own these bytes.
+      //
+      // Yjs delivers ONE freshly-encoded array to every `update` listener, and
+      // on the `@1` arm two listen: the tier's outbound observer, which turns
+      // it into an `artifactRoomApplyUpdate` frame, and this one. The return
+      // leg hands its array to `takeBytesForTransfer`, which transfers a
+      // full-span standalone buffer IN PLACE - a judgement about GEOMETRY that
+      // is a proxy for ownership, and correct only when the caller owns the
+      // bytes. Transferring this one detaches the array the tier's frame is
+      // still holding, and that frame decodes as `Unexpected end of array`
+      // wherever it is finally read.
+      //
+      // The copy belongs HERE and not inside `takeBytesForTransfer`: this is
+      // the point where non-ownership is known, and teaching the helper to
+      // copy always would tax every legitimate transfer to pay for this one.
+      returnLeg.onDocUpdate(docKey, update.slice());
     });
     const detachAwareness = source.observeBodyAwareness(docKey, (frame) => {
       returnLeg.onAwareness(docKey, frame);
