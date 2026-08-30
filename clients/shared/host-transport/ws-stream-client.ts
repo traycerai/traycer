@@ -61,6 +61,7 @@ import type {
 } from "./i-stream-session";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamClient } from "./i-stream-client";
+import { dialPriorityForMethod } from "./dial-priority";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -1677,7 +1678,14 @@ class StreamSession<
     }
 
     const dialUrl = toStreamDialUrl(selected.websocketUrl);
-    const socket = this.config.webSocketFactory.create(dialUrl);
+    const socket = this.config.webSocketFactory.create(
+      dialUrl,
+      // A session is bound to one subscription method for its whole life, so
+      // every redial it makes classifies the same way. See `dial-priority.ts`:
+      // the Epic's own lanes are `interactive`, the app-chrome subscriptions
+      // that flood boot are not.
+      dialPriorityForMethod(this.config.method),
+    );
     this.activeSocket = socket;
     this.openFrameToken = token;
     this.openFrameHostId = selected.hostId;

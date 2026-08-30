@@ -29,6 +29,7 @@ import {
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "./host-messenger";
+import { dialPriorityForMethod } from "./dial-priority";
 import type {
   IWebSocketFactory,
   WebSocketCloseEvent,
@@ -338,7 +339,14 @@ export class WsRpcClient<
     );
 
     const session = openSession({
-      socket: this.webSocketFactory.create(selected.websocketUrl),
+      socket: this.webSocketFactory.create(
+        selected.websocketUrl,
+        // Classified here because here is where the method is known: the
+        // factory sees a URL, and every unary call in this app dials its own
+        // socket, so this is the only frame that can tell a catalog prefetch
+        // apart from a call a user is waiting on. See `dial-priority.ts`.
+        dialPriorityForMethod(method),
+      ),
       dialTimeoutMs: this.dialTimeoutMs,
       hostAttestationWindowMs: this.hostAttestationWindowMs,
       requestId,

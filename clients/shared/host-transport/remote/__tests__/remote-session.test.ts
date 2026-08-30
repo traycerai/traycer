@@ -74,6 +74,7 @@ import {
   resetNegotiatedManifests,
 } from "../../negotiated-manifest-registry";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { DialPriority } from "../../dial-priority";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -6663,10 +6664,10 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     let firstDialTaken = false;
     const redialTimestamps: number[] = [];
     const succeedOnceThenFail: IStreamWebSocketFactory = {
-      create: (url: string): StreamWebSocketLike => {
+      create: (url: string, priority: DialPriority): StreamWebSocketLike => {
         if (!firstDialTaken) {
           firstDialTaken = true;
-          return relay.factory.create(url);
+          return relay.factory.create(url, priority);
         }
         redialTimestamps.push(Date.now());
         const socket = new FakeSocket(
@@ -6752,7 +6753,7 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     const lease = new MutableBearerLease("valid-token", "user-1");
     let failuresLeft = 1;
     const flakyFactory: IStreamWebSocketFactory = {
-      create: (url: string): StreamWebSocketLike => {
+      create: (url: string, priority: DialPriority): StreamWebSocketLike => {
         if (failuresLeft > 0) {
           failuresLeft -= 1;
           const socket = new FakeSocket(
@@ -6764,7 +6765,7 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
           });
           return socket;
         }
-        return relay.factory.create(url);
+        return relay.factory.create(url, priority);
       },
     };
     const session = new RemoteSession({
