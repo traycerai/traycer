@@ -19,6 +19,8 @@ import {
   chatTranscriptJumpKey,
   useChatTranscriptJumpStore,
 } from "@/stores/chats/chat-transcript-jump-store";
+import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 /**
  * The `hostSurface` destination family: a notification about a host-managed
@@ -38,6 +40,11 @@ describe("host surface notification routing", () => {
       tierFilters: EMPTY_WORKTREE_TIER_FILTERS,
     });
     useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
+    useWorktreeCleanupViewStore.setState({
+      view: "settings",
+      focusedRunId: null,
+    });
+    useSettingsHostScopeStore.setState({ scopedHostId: null });
   });
 
   it("opens Settings → Worktrees and remembers the section on the tab", () => {
@@ -167,7 +174,7 @@ describe("host surface notification routing", () => {
     });
   });
 
-  it("opens the parent surface for a view no panel consumes yet", () => {
+  it("opens the cleanup-history sub-view focused on the run, on that run's host", () => {
     const navigate = vi.fn();
     routeNotification(
       navigate,
@@ -175,6 +182,7 @@ describe("host surface notification routing", () => {
         kind: "hostSurface",
         surface: "worktreeSettings",
         view: "cleanupHistory",
+        hostId: "host-b",
         focus: { resourceId: "run-42" },
       },
       1_000,
@@ -183,6 +191,71 @@ describe("host surface notification routing", () => {
     expect(navigate).toHaveBeenCalledWith(
       expect.objectContaining({ to: "/settings/worktrees" }),
     );
+    expect(useWorktreeCleanupViewStore.getState()).toMatchObject({
+      view: "cleanupHistory",
+      focusedRunId: "run-42",
+    });
+    // History is host-local, so the destination is only well defined once
+    // Settings is administering the host the run happened on.
+    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-b");
+  });
+
+  it("still opens history when the run id cannot be resolved", () => {
+    routeNotification(
+      vi.fn(),
+      {
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        view: "cleanupHistory",
+        hostId: "host-b",
+        focus: undefined,
+      },
+      1_000,
+    );
+
+    // A focus hint is allowed to miss; the view it names is not a dead end.
+    expect(useWorktreeCleanupViewStore.getState()).toMatchObject({
+      view: "cleanupHistory",
+      focusedRunId: null,
+    });
+  });
+
+  /**
+   * The manual worktree-deletion row is UNCHANGED by the cleanup work: same
+   * payload shape, same destination, no host retarget, and the inventory - not
+   * the new sub-view - is what it lands on even when history is what the panel
+   * happened to be showing.
+   */
+  it("leaves a manual worktree-deletion row's behavior exactly as it was", () => {
+    useWorktreeCleanupViewStore.getState().openHistory("run-42");
+    useSettingsHostScopeStore.getState().setScopedHostId("host-a");
+    const navigate = vi.fn();
+
+    const payload = parseNotificationPayload({
+      kind: "hostSurface",
+      surface: "worktreeSettings",
+    });
+    expect(payload).toEqual({
+      kind: "hostSurface",
+      surface: "worktreeSettings",
+      focus: undefined,
+    });
+    if (payload === null) throw new Error("expected a host-surface payload");
+    routeNotification(navigate, payload, 1_000);
+
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "/settings/worktrees" }),
+    );
+    expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+      "/settings/worktrees",
+    );
+    // No `hostId` on the row means no retarget: the user keeps administering
+    // whichever host they were already on.
+    expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("host-a");
+    expect(useWorktreeCleanupViewStore.getState()).toMatchObject({
+      view: "settings",
+      focusedRunId: null,
+    });
   });
 
   it("does not park an unscoped transcript jump on the hostless fallback", () => {

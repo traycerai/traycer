@@ -1644,6 +1644,10 @@ function navigationPayloadFromKnown(
         kind: "hostSurface",
         surface: "worktreeSettings",
         view: "cleanupHistory",
+        // History is host-local, so the destination is only well defined with
+        // the host named: Settings administers one host at a time and the
+        // reader may well be looking at another one.
+        hostId: known.hostId,
         focus: { resourceId: known.runId },
       };
   }

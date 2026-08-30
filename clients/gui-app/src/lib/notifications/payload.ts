@@ -25,6 +25,8 @@ import {
   type ChatTranscriptJumpTarget,
   useChatTranscriptJumpStore,
 } from "@/stores/chats/chat-transcript-jump-store";
+import { selectWorktreeCleanupView } from "@/stores/settings/worktree-cleanup-view-store";
+import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 
 export type NotificationPayloadKind =
   | "session"
@@ -119,6 +121,18 @@ export interface HostSurfaceNotificationPayload {
    * only ever narrow a destination that already works without it.
    */
   readonly view?: "cleanupHistory" | undefined;
+  /**
+   * WHICH HOST owns the resource, when the surface is host-scoped and the row
+   * can name it. Settings administers one host at a time, so a row about host
+   * B's cleanup run has to carry B or the destination resolves against
+   * whichever host Settings last showed — the same failure
+   * `carryViewedHostIntoSettingsScope` exists to prevent for read-only
+   * surfaces with a Settings CTA.
+   *
+   * Absent on manual worktree-deletion rows, which is why their behavior is
+   * unchanged: they land on the list for the host already being administered.
+   */
+  readonly hostId?: string | undefined;
   readonly focus: { readonly resourceId: string } | undefined;
 }
 
@@ -287,10 +301,12 @@ function parseHostSurfacePayload(
   // unresolvable `focus` degrades to no focus. A native envelope can arrive
   // from a newer build naming views this one has never heard of.
   const view = value.view === "cleanupHistory" ? "cleanupHistory" : undefined;
+  const hostId = readString(value.hostId);
   return {
     kind: "hostSurface",
     surface: "worktreeSettings",
     view,
+    hostId: hostId === null ? undefined : hostId,
     focus: focus === null ? undefined : { resourceId: focus },
   };
 }
@@ -522,11 +538,22 @@ export function routeNotificationForHost(
  *
  * Worktree deletion passes no focus hint on purpose. The row it would point at
  * has just been deleted, so the only honest destination is the list.
+ *
+ * The two host-scoped hints are applied BEFORE navigating, so the panel reads
+ * them on its first render rather than flashing the wrong host or the wrong
+ * sub-view. Both are total: a row with neither (every manual deletion row)
+ * leaves the administered host alone and selects the inventory, which is the
+ * destination those rows have always had.
  */
 function routeHostSurfaceNotification(
   navigate: NotificationNavigate,
   payload: HostSurfaceNotificationPayload,
 ): void {
+  carryViewedHostIntoSettingsScope(payload.hostId ?? null);
+  selectWorktreeCleanupView(
+    payload.view === "cleanupHistory" ? "cleanupHistory" : "settings",
+    payload.focus?.resourceId ?? null,
+  );
   navigateToTabIntent(
     navigate,
     ensureSettingsTab({

@@ -792,6 +792,9 @@ describe("merged notifications feed", () => {
         kind: "hostSurface",
         surface: "worktreeSettings",
         view: "cleanupHistory",
+        // History is host-local, so the row names the host whose history is
+        // the destination - the reader may be administering another one.
+        hostId: "host-1",
         focus: { resourceId: "run-7" },
       },
     });
