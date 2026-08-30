@@ -2743,7 +2743,7 @@ describe("createOpenEpicStore", () => {
     expect(await pending).toBeNull();
   });
 
-  it("synchronously reports attachment bytes in the local root replica", () => {
+  it("synchronously reports attachment bytes in the local root replica", async () => {
     const hostDoc = new Y.Doc();
     hostDoc
       .getMap("attachments")
@@ -2763,6 +2763,12 @@ describe("createOpenEpicStore", () => {
       buildMeta("editor", hostDoc),
       Y.encodeStateAsUpdate(hostDoc),
     );
+    // The READ is still synchronous - that is what this pins - but the FACT it
+    // reads is now published by the worker. The snapshot has to reach the
+    // replica and its hash set has to come back before the answer means
+    // anything; asserting one microtask early asks a projection that has not
+    // landed.
+    await settle(opened);
 
     expect(opened.store.getState().hasAttachmentBytes("present-hash")).toBe(
       true,
