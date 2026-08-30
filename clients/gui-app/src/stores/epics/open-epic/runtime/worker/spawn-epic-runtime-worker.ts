@@ -371,6 +371,28 @@ export function spawnEpicRuntimeWorker<TProjection>(
   let disposed = false;
 
   function detach(): void {
+    // The WORKER first, before main's proxy goes away.
+    //
+    // Ending the transport is a fact the worker has to act on - it unbinds the
+    // projector, drops landed overlay entries, and publishes the
+    // transport-detached control state the UI renders. None of that happened
+    // while this function only tore down main's side, which is what left a
+    // detached session still reporting itself connected.
+    //
+    // Posted BEFORE the proxy is disposed, deliberately: closing the worker's
+    // sockets can emit frames back through the proxy, and the proxy's
+    // documented silent-drop tolerance ("a frame can be in flight when a
+    // session closes") is what covers whatever arrives after it goes. Reverse
+    // the order and those close reports have nowhere to land.
+    if (!disposed) {
+      bridge.emit(
+        {
+          kind: "runtime/command",
+          command: { kind: "detach-transport", payload: {} },
+        },
+        NO_TRANSFER,
+      );
+    }
     const detaching = proxy;
     proxy = null;
     // While the bridge is still LIVE and its events still routed. Every real

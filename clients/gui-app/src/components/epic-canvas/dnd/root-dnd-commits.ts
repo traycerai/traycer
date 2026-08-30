@@ -882,10 +882,14 @@ export async function commitSidebarReparentDrop(
       });
     } else {
       try {
-        // `void`: the doc write is a round trip now. The `try` around it
-        // still catches a SYNCHRONOUS throw from the call itself, which is
-        // what the illegal-move guard raises before any await.
-        void handle.store
+        // AWAITED, and that is load-bearing rather than tidiness. The member
+        // is async now, so the illegal-move guard's throw arrives as a
+        // REJECTION - a `void`ed call would sail past this `catch` and become
+        // an unhandled rejection, losing the log below and the early return
+        // that stops the tab snapshot being written for a move the doc
+        // refused. A comment here previously claimed the throw was still
+        // synchronous; an async function has no synchronous throw.
+        await handle.store
           .getState()
           .reparentArtifact(input.sourceNodeId, input.newParentId);
       } catch (error: unknown) {

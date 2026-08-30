@@ -248,6 +248,7 @@ describe("commands.apply", () => {
     const ports = buildPorts(
       createSource({
         applyChatRecords: record("applyChatRecords"),
+        detachTransport: record("detachTransport"),
         applyChatRecordDelta: record("applyChatRecordDelta"),
         applyTuiAgentRecords: record("applyTuiAgentRecords"),
         applyTuiAgentRecordDelta: record("applyTuiAgentRecordDelta"),
@@ -297,6 +298,7 @@ describe("commands.apply", () => {
       kind: "discard-write-command",
       payload: { commandId: "cmd-2" },
     });
+    ports.commands.apply({ kind: "detach-transport", payload: {} });
 
     expect(calls).toEqual([
       "applyChatRecords([],7)",
@@ -310,6 +312,7 @@ describe("commands.apply", () => {
       "retryMigration()",
       'retryWriteCommand("cmd-1")',
       'discardWriteCommand("cmd-2")',
+      "detachTransport()",
     ]);
   });
 

@@ -492,6 +492,24 @@ export interface RuntimeCommandMap {
   "retry-migration": Record<string, never>;
   "retry-write-command": { readonly commandId: string };
   "discard-write-command": { readonly commandId: string };
+  /**
+   * End the TRANSPORT while the replica lives on - the retained-dirty /
+   * window-repoint path.
+   *
+   * A COMMAND, and re-derived rather than assumed after `body/release` taught
+   * that "no answer needed" is worth checking: the worker's member is void and
+   * refusal-free (it guards on `disposed` / already-detached and returns
+   * silently), and everything main must learn flows back through the
+   * PROJECTION - `control.noteTransportDetached()` publishes the sync state
+   * the UI renders. A response would be a second, weaker copy of a channel
+   * that already exists.
+   *
+   * Ordering rides the pipe: commands apply in arrival order relative to
+   * calls, so a later `root/encode` - the window-repoint read - observes the
+   * detached, quiesced state. Idempotent at the far end, which is the worker's
+   * own latch rather than bookkeeping added for this.
+   */
+  "detach-transport": Record<string, never>;
 }
 
 export type RuntimeCommandKind = keyof RuntimeCommandMap;
@@ -524,6 +542,7 @@ const RUNTIME_COMMAND_COVERAGE: {
   "retry-migration": true,
   "retry-write-command": true,
   "discard-write-command": true,
+  "detach-transport": true,
 };
 
 export const RUNTIME_COMMAND_KINDS: readonly RuntimeCommandKind[] = Object.keys(

@@ -766,6 +766,13 @@ function applyArgumentCommand(
     case "discard-write-command":
       source.discardWriteCommand(command.payload.commandId);
       return;
+    case "detach-transport":
+      // Ends the transport while the replica lives on. The member is
+      // idempotent (`transportDetached` latches worker-side), which is what
+      // makes a duplicated command harmless rather than something this
+      // dispatch has to guard.
+      source.detachTransport();
+      return;
     default:
       // The exhaustiveness guarantee for the whole vocabulary: a kind added to
       // `RuntimeCommandMap` and to neither family above lands here, and
