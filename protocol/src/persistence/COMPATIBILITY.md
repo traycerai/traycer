@@ -281,14 +281,15 @@ the message anyway is just an unmodeled key: it rides the message's preserved
 `raw` and never reaches a schema that could reject it.
 
 **One non-harness leaf is reopened on the same reasoning.**
-`blocks[].text.providerNotice.noticeKind` is a plain string here. The kind
-roster grows whenever a harness gains a notice worth persisting, and the failure
-mode is the harness-id one verbatim: the block's `type` is `text` and therefore
-known, so the passthrough hands it to the known schema, which fails on the enum
-and takes the whole shard with it. Renderers read `tone` / `title` / `message` /
-`details` and none switches on the kind, so the enum bought type precision this
-record cannot afford. Adding a kind therefore needs nothing here — like adding a
-harness id.
+`blocks[].text.providerNotice.noticeKind` is a plain non-empty string here —
+the same `z.string().min(1)` the harness ids beside it take, so `""` is not a
+kind. The kind roster grows whenever a harness gains a notice worth persisting,
+and the failure mode is the harness-id one verbatim: the block's `type` is
+`text` and therefore known, so the passthrough hands it to the known schema,
+which fails on the enum and takes the whole shard with it. Renderers read
+`tone` / `title` / `message` / `details` and none switches on the kind, so the
+enum bought type precision this record cannot afford. Adding a kind therefore
+needs nothing here — like adding a harness id.
 
 **Logged decision — remaining nested unions stay closed.**
 `userMessagePayload.kind`, `toolInputDetail.kind` and the provider-notice
