@@ -32,8 +32,11 @@ import type {
   EpicStreamCallbacks,
   EpicStreamClient,
 } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
-import type { DeletedEpicArtifact } from "@traycer/protocol/persistence/epic/artifacts";
+import {
+  artifactBodyFragmentName,
+  buildDeletedEpicArtifact,
+  type EpicArtifact,
+} from "@traycer/protocol/persistence/epic/artifacts";
 import { createTypedMap } from "@traycer/protocol/utils/yjs-utils";
 import { resolveReparentNode } from "@/lib/reparent-rules";
 import {
@@ -76,6 +79,9 @@ import {
   getTerminalAgentEntry,
   getTerminalAgentsMap,
   readArtifactKind,
+  readMaybeBoolean,
+  readMaybeNullableString,
+  readMaybeNumber,
   readMaybeString,
 } from "./projection-helpers";
 import {
@@ -3584,25 +3590,37 @@ export function createOpenEpicStore(
           if (!(entry instanceof Y.Map)) return;
           const kind = readArtifactKind(entry);
           if (kind === null) return;
-          const deletedArtifactsMap = getDeletedArtifactsMap(doc);
-          if (deletedArtifactsMap === null) return;
+          let deletedArtifactsMap = getDeletedArtifactsMap(doc);
+          if (deletedArtifactsMap === null) {
+            deletedArtifactsMap = new Y.Map<unknown>();
+            getEpicMap(doc).set("deletedArtifacts", deletedArtifactsMap);
+          }
           const title = readMaybeString(entry, "title");
           const artifactRoomId = readMaybeString(entry, "artifactRoomId");
-          const deletedAt = new Date().toISOString();
           const base = {
             id: artifactId,
+            kind,
+            folderName: readMaybeString(entry, "folderName"),
             title,
-            artifactRoomId: artifactRoomId.length > 0 ? artifactRoomId : null,
-            deletedAt,
+            artifactRoomId,
+            createdAt: readMaybeNumber(entry, "createdAt"),
+            updatedAt: readMaybeNumber(entry, "updatedAt"),
+            createdManually: readMaybeBoolean(entry, "createdManually"),
+            parentId: readMaybeNullableString(entry, "parentId"),
           };
-          const tombstone: DeletedEpicArtifact =
+          const artifact: EpicArtifact =
             kind === "ticket" || kind === "story"
               ? {
-                  kind,
                   ...base,
+                  kind,
                   status: readTicketStatus(entry),
+                  assignee: readMaybeString(entry, "assignee"),
                 }
-              : { kind, ...base };
+              : { ...base, kind };
+          const tombstone = buildDeletedEpicArtifact(
+            artifact,
+            new Date().toISOString(),
+          );
           deletedArtifactsMap.set(artifactId, createTypedMap(tombstone));
         };
 

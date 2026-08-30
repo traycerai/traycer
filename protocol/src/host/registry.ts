@@ -421,6 +421,15 @@ import {
   epicSubscribeV20,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
+  epicArtifactVersionsListV10,
+  epicArtifactVersionsGetBlobV10,
+  epicArtifactVersionsRestoreV10,
+  epicDeletedArtifactsListV10,
+  epicDeletedArtifactsReviveV10,
+  epicArtifactVersionSettingsGetV10,
+  epicArtifactVersionSettingsSetEnabledV10,
+  epicArtifactVersionSettingsSetRetentionPolicyV10,
+  epicArtifactVersionSettingsClearHistoryV10,
 } from "@traycer/protocol/host/epic/contracts";
 import {
   epicListTuiAgentsUpgradeV10ToV11,
@@ -6400,6 +6409,123 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicSearchArtifactsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersions.list": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersions.getBlob": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionsGetBlobV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersions.restore": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionsRestoreV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.deletedArtifacts.list": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicDeletedArtifactsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.deletedArtifacts.revive": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicDeletedArtifactsReviveV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersionSettings.get": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionSettingsGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersionSettings.setEnabled": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionSettingsSetEnabledV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersionSettings.setRetentionPolicy": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionSettingsSetRetentionPolicyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.artifactVersionSettings.clearHistory": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactVersionSettingsClearHistoryV10,
           upgradeFromPreviousVersion: null,
         },
       },

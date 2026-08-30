@@ -1,7 +1,9 @@
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { epicMutationKeys } from "@/lib/query-keys";
 
 /**
  * EVERY MUTATION HERE ADDRESSES THE EPIC SESSION'S HOST, never the app-wide
@@ -60,17 +62,13 @@ export function useEpicCreateArtifact() {
  */
 export function useEpicDeleteArtifact() {
   const client = useEpicSessionHostClient();
-  return useHostMutation({
-    client,
+  return useHostScopedMutationForClient(client, {
     method: "epic.deleteArtifact",
-    mapVariables: (variables) => variables,
-    options: {
-      onSuccess: () => {
-        Analytics.getInstance().track(AnalyticsEvent.ArtifactDeleted, null);
-      },
-      onError: (error) => {
-        toastFromHostError(error, "Couldn't delete artifact.");
-      },
+    mutationKey: epicMutationKeys.deleteArtifact(),
+    errorMessage: "Couldn't delete artifact.",
+    invalidateMethods: ["epic.deletedArtifacts.list"],
+    onSuccess: () => {
+      Analytics.getInstance().track(AnalyticsEvent.ArtifactDeleted, null);
     },
   });
 }

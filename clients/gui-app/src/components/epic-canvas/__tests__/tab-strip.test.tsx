@@ -262,6 +262,7 @@ function renderTabStrip(input: {
 function renderTabStripForTab(
   tab: EpicCanvasTileRef,
   input: {
+    readonly inactive?: boolean;
     readonly onClose: (groupId: string, tabId: string) => void;
     readonly onMenuClose?: (groupId: string, tabId: string) => void;
     readonly onPromotePreview: (groupId: string) => void;
@@ -273,6 +274,25 @@ function renderTabStripForTab(
   browserSessions: readonly BrowserSessionInfo[],
 ) {
   seedActivePreviewTab(tab);
+  if (input.inactive === true) {
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    if (canvas === undefined) throw new Error("Expected seeded canvas");
+    if (canvas.root?.kind !== "pane") {
+      throw new Error("Expected a seeded root pane");
+    }
+    useEpicCanvasStore.setState({
+      canvasByTabId: {
+        [VIEW_TAB_ID]: {
+          ...canvas,
+          root: {
+            ...canvas.root,
+            activeTabId: null,
+            previewTabId: null,
+          },
+        },
+      },
+    });
+  }
   const queryClient = createQueryClient();
   const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
   render(
@@ -470,6 +490,27 @@ describe("<TabStrip />", () => {
     renderTabStripForTab(
       CHAT_TAB,
       {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: /Agent chat/ }));
+
+    expect(consumeNotificationEntity).toHaveBeenCalledWith({
+      originHostId: "host-B",
+      entity: { epicId: "epic-1", chatId: "chat-1" },
+    });
+  });
+
+  it("marks an inactive chat tab's notifications read when selecting it", () => {
+    renderTabStripForTab(
+      CHAT_TAB,
+      {
+        inactive: true,
         onClose: () => undefined,
         onPromotePreview: () => undefined,
         onOpenBlankTab: () => undefined,
