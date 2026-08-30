@@ -5,7 +5,18 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { StaleHostBindingAuthorityError } from "@traycer-clients/shared/host-client/host-binding-authority-error";
-import type { TicketStatus } from "@traycer/protocol/common/registry";
+import {
+  commonRecordRegistry,
+  type TicketStatus,
+} from "@traycer/protocol/common/registry";
+import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
+
+/** The registry's own vocabulary, never a copy of it. */
+const ticketStatusSchema = getRecordSchema(
+  commonRecordRegistry,
+  "ticket-status",
+  "latest",
+);
 
 export type EpicWriteCommandIntent =
   | {
@@ -33,6 +44,62 @@ export type EpicWriteCommandIntent =
       readonly title: string;
       readonly updatedAt: number;
     };
+
+/**
+ * The intent's wire form, narrowed.
+ *
+ * It crosses `command/enqueue` as `unknown` for the same reason
+ * `main/write-command`'s does - it is the caller's clonable form and the
+ * worker carries it opaquely - but the QUEUE is typed, so one side has to
+ * narrow. Here, beside the union, so a member added above is one arm away from
+ * the parser that has to accept it.
+ *
+ * `status` is validated with the REGISTRY's own schema rather than a list of
+ * literals copied out of it: `TicketStatus` is registry-derived, and a copied
+ * vocabulary rots against the registry the moment a status is added - silently,
+ * by refusing a status the rest of the app accepts.
+ *
+ * Unrecognised payloads answer `null`, and the caller turns that into a
+ * REFUSAL rather than an error. Enqueuing a malformed intent would mint an id
+ * for a command that can never be dispatched, which is the never-settles hang.
+ */
+export function readWriteCommandIntent(
+  value: unknown,
+): EpicWriteCommandIntent | null {
+  if (typeof value !== "object" || value === null) return null;
+  const kind: unknown = Reflect.get(value, "kind");
+  const artifactId: unknown = Reflect.get(value, "artifactId");
+  const title: unknown = Reflect.get(value, "title");
+  switch (kind) {
+    case "rename-artifact":
+      return typeof artifactId === "string" && typeof title === "string"
+        ? { kind, artifactId, title }
+        : null;
+    case "delete-artifact":
+      return typeof artifactId === "string" ? { kind, artifactId } : null;
+    case "reparent-artifact": {
+      const parentId: unknown = Reflect.get(value, "parentId");
+      if (typeof artifactId !== "string") return null;
+      if (parentId !== null && typeof parentId !== "string") return null;
+      return { kind, artifactId, parentId };
+    }
+    case "update-artifact-status": {
+      const artifactType: unknown = Reflect.get(value, "artifactType");
+      const status = ticketStatusSchema.safeParse(Reflect.get(value, "status"));
+      if (typeof artifactId !== "string" || !status.success) return null;
+      if (artifactType !== "ticket" && artifactType !== "story") return null;
+      return { kind, artifactId, artifactType, status: status.data };
+    }
+    case "update-epic-title": {
+      const updatedAt: unknown = Reflect.get(value, "updatedAt");
+      return typeof title === "string" && typeof updatedAt === "number"
+        ? { kind, title, updatedAt }
+        : null;
+    }
+    default:
+      return null;
+  }
+}
 
 export interface EpicWriteCommandSender {
   currentHostId(): string | null;

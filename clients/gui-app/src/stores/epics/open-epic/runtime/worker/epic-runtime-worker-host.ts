@@ -35,6 +35,7 @@ import {
   type EpicMutation,
   type EpicMutationResult,
   type RuntimeCommand,
+  type RuntimeWorkerCallResponse,
   type MainToWorkerEvent,
   type RuntimeWorkerBootstrap,
   type RuntimeWorkerLogEntry,
@@ -61,6 +62,9 @@ import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port"
  * that set is much smaller than the runtime's surface because everything else
  * the runtime does travels outward as events.
  */
+/** What the queue answered: a minted id, or an explicit refusal. */
+export type EnqueuedWriteCommand = RuntimeWorkerCallResponse<"command/enqueue">;
+
 export interface EpicRuntimeWorkerCore {
   /**
    * Content-addressed attachment bytes from the root replica, or `null` when
@@ -122,6 +126,11 @@ export interface EpicRuntimeWorkerCore {
    * caller already expected `void`, and the projection stream is the feedback.
    */
   applyCommand(command: RuntimeCommand): void;
+  /**
+   * Enqueue one write command. The QUEUE mints the id and may refuse from its
+   * own state, which is why this is a call and not a push.
+   */
+  enqueueWriteCommand(intent: unknown): Promise<EnqueuedWriteCommand>;
   dispose(): void;
 }
 
@@ -290,6 +299,16 @@ export function startEpicRuntimeWorkerHost(
         value: await core.updateBody(request),
         transfer: NO_TRANSFER,
       };
+    },
+    "command/enqueue": async (request) => {
+      // REFUSED without a core, never a minted id: an id handed back for a
+      // command nothing queued is a caller waiting on a record that will never
+      // arrive.
+      const answer =
+        core === null
+          ? ({ outcome: "refused" } as const)
+          : await core.enqueueWriteCommand(request.intent);
+      return { value: answer, transfer: NO_TRANSFER };
     },
     "mutation/apply": async (request) => {
       if (core === null) {

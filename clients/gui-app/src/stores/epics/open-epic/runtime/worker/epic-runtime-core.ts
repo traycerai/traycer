@@ -37,6 +37,7 @@ import {
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import type {
   ArtifactBodyMaterialization,
+  EnqueuedWriteCommand,
   EpicRuntimeWorkerCore,
 } from "./epic-runtime-worker-host";
 
@@ -104,6 +105,8 @@ export interface EpicRuntimeCorePorts {
   /** The fire-and-forget commands, applied in arrival order. */
   readonly commands: {
     apply(command: RuntimeCommand): void;
+    /** The queue mints the id and decides the refusal; both come back. */
+    enqueueWrite(intent: unknown): EnqueuedWriteCommand;
   };
   /** The one durable transport this session owns (T12's ruling, worker-side). */
   readonly transport: { close(): void };
@@ -178,6 +181,12 @@ export function createEpicRuntimeWorkerCore(
       // the host awaits, not a deferral.
       if (!serving) return Promise.resolve(inertMutationResult(mutation));
       return Promise.resolve(ports.mutations.apply(mutation));
+    },
+    enqueueWriteCommand(intent) {
+      // Refused while shutting down, for the same reason a demote is: the
+      // caller must not be handed an id for work this replica will not do.
+      if (!serving) return Promise.resolve({ outcome: "refused" as const });
+      return Promise.resolve(ports.commands.enqueueWrite(intent));
     },
     applyCommand(command): void {
       // Dropped after teardown like every other member. A command applied to a

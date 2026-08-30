@@ -29,6 +29,14 @@ export function stubRuntimeWorkerCallHandlers(
         value: inertMutationResult(request),
         transfer: NO_TRANSFER,
       }),
+    // FAIL-CLOSED: refused, never a minted id. A stub that answered
+    // `enqueued` would hand a caller an id to wait on for a command nothing
+    // queued, which is the never-settles hang this call kind exists to avoid.
+    "command/enqueue": () =>
+      Promise.resolve({
+        value: { outcome: "refused" as const },
+        transfer: NO_TRANSFER,
+      }),
     "attachment/read": () =>
       Promise.resolve({ value: { bytes: null }, transfer: NO_TRANSFER }),
     "body/materialize": () =>

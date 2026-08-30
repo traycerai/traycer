@@ -16,7 +16,10 @@
  */
 import type { EpicDocRecordArms } from "../../projection-helpers";
 import { createBatchingDelivery } from "../projection-delivery";
-import { RelayedWriteCommandFailureError } from "../epic-write-command";
+import {
+  readWriteCommandIntent,
+  RelayedWriteCommandFailureError,
+} from "../epic-write-command";
 import {
   buildProxiedStreamFactories,
   createEpicRuntimeComposition,
@@ -127,6 +130,9 @@ export function installEpicRuntimeCore(host: EpicRuntimeWorkerHost): void {
             runtime.retirePendingMutation(requestId, outcome),
           isLatestRenameStamp: (nodeId, requestId) =>
             runtime.isLatestRenameStamp(nodeId, requestId),
+          enqueueWriteCommand: (intent) =>
+            runtime.enqueueWriteCommand(intent)?.commandId ?? null,
+          readWriteCommandIntent: (intent) => readWriteCommandIntent(intent),
           applyChatRecords: (records, issuedAtSeq) =>
             runtime.applyChatRecords(records, issuedAtSeq),
           applyChatRecordDelta: (delta) => runtime.applyChatRecordDelta(delta),

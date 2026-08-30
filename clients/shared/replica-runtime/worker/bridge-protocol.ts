@@ -63,6 +63,11 @@ import type {
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
+ * **8** since `command/enqueue`: the write-command queue's enqueue crossed as a
+ * call, because the queue mints the id and refuses from its own state. A v7
+ * worker answers `unserved`, so every write is refused at the call site - loud
+ * rather than silent, but every write.
+ *
  * **7** since `runtime/command`: the fifteen fire-and-forget members the store
  * used to call directly on the runtime. A v6 worker hits its own `assertNever`
  * on the first one, which is loud - but only because the event union is
@@ -102,7 +107,7 @@ import type {
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 7;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 8;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -672,6 +677,37 @@ export const WORKER_TO_MAIN_EVENT_KINDS: readonly WorkerToMainEvent["kind"][] =
  */
 export interface RuntimeWorkerCallMap {
   /**
+   * Enqueue one epic write command on the runtime's queue.
+   *
+   * A CALL and not a `runtime/command` push, because the caller needs two
+   * answers the worker alone can give: the queue MINTS the id
+   * (`CommandQueue.enqueue` - "Mints an id, records the command as pending"),
+   * and it REFUSES from queue state the main thread does not hold. Pushing an
+   * intent and minting an id on main would hand back an id for a command the
+   * queue may have refused, and the caller's `waitForWriteCommand` would then
+   * watch the projection for a record that never arrives.
+   *
+   * Its own kind rather than a `mutation/apply` member: write commands ride the
+   * host-command queue, the metadata mutations ride the records doc. Two
+   * planes, two vocabularies.
+   *
+   * `intent` is `unknown` for the same reason `main/write-command`'s is - it is
+   * the caller's clonable wire form, and the worker carries it opaquely.
+   */
+  "command/enqueue": {
+    request: { readonly intent: unknown };
+    /**
+     * The refusal is its OWN arm, not a nullable id. A bare `string | null`
+     * makes "refused" and "something went wrong" the same value at the call
+     * site, and this is the one place where telling them apart decides whether
+     * the caller waits forever.
+     */
+    response:
+      | { readonly outcome: "enqueued"; readonly commandId: string }
+      | { readonly outcome: "refused" };
+  };
+
+  /**
    * One metadata mutation, applied by the replica.
    *
    * A single member carrying {@link EpicMutation} rather than eight members,
@@ -1007,6 +1043,7 @@ const RUNTIME_WORKER_CALL_COVERAGE: {
   "body/demote": true,
   "body/update": true,
   "mutation/apply": true,
+  "command/enqueue": true,
 };
 
 export const RUNTIME_WORKER_CALL_KINDS: readonly RuntimeWorkerCallKind[] =
@@ -1071,6 +1108,7 @@ const CALL_BUILDERS: {
   "body/demote": (request) => ({ kind: "body/demote", request }),
   "body/update": (request) => ({ kind: "body/update", request }),
   "mutation/apply": (request) => ({ kind: "mutation/apply", request }),
+  "command/enqueue": (request) => ({ kind: "command/enqueue", request }),
 };
 
 /** Builds the envelope for one call, with its kind and request correlated. */
@@ -1199,6 +1237,14 @@ export const CALL_RESPONSE_PARSERS: {
     value: unknown,
   ) => RuntimeWorkerCallResponse<K> | null;
 } = {
+  "command/enqueue": (value) => {
+    if (!isRecord(value)) return null;
+    if (value.outcome === "refused") return { outcome: "refused" };
+    if (value.outcome !== "enqueued") return null;
+    return typeof value.commandId === "string"
+      ? { outcome: "enqueued", commandId: value.commandId }
+      : null;
+  },
   "mutation/apply": (value) => {
     if (!isRecord(value)) return null;
     const { kind, value: answer } = value;

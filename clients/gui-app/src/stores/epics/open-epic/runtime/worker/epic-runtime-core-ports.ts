@@ -21,6 +21,7 @@ import type {
 import type { ArtifactRoomColdState } from "../artifact-room-tier";
 import type { PendingChatCreation } from "../../pending-chat-creations";
 import type { RuntimeCommand } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+import type { EpicWriteCommandIntent } from "../epic-write-command";
 import type { EpicRuntimeCorePorts } from "./epic-runtime-core";
 
 export interface EpicRuntimeCorePortSource {
@@ -69,6 +70,21 @@ export interface EpicRuntimeCorePortSource {
     outcome: "landed" | "failed",
   ): boolean;
   isLatestRenameStamp(nodeId: string, requestId: string): boolean;
+  /**
+   * Enqueue a write command. `null` is the queue's own REFUSAL - it minted no
+   * id and recorded nothing - and is not an error.
+   */
+  enqueueWriteCommand(intent: EpicWriteCommandIntent): string | null;
+  /**
+   * Narrow the wire form of an intent, or `null` if it is not one.
+   *
+   * The intent crosses as `unknown` exactly as `main/write-command`'s does -
+   * it is the caller's clonable wire form and the worker carries it opaquely -
+   * but the QUEUE is typed, so something has to narrow it. Refusing an
+   * unrecognised payload is the fail-closed answer: enqueuing a malformed
+   * intent would mint an id for a command that can never be dispatched.
+   */
+  readWriteCommandIntent(intent: unknown): EpicWriteCommandIntent | null;
   applyChatRecords(
     records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
@@ -310,6 +326,14 @@ export function buildEpicRuntimeCorePorts(
       },
     },
     commands: {
+      enqueueWrite: (intent) => {
+        const narrowed = source.readWriteCommandIntent(intent);
+        if (narrowed === null) return { outcome: "refused" };
+        const commandId = source.enqueueWriteCommand(narrowed);
+        return commandId === null
+          ? { outcome: "refused" }
+          : { outcome: "enqueued", commandId };
+      },
       /**
        * One branch per kind, exhaustive, no default - so a command added to
        * the vocabulary without a branch here fails to compile rather than

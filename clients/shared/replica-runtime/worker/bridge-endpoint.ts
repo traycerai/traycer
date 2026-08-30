@@ -547,6 +547,13 @@ async function serve(
           transfer: reply.transfer,
         };
       }
+      case "command/enqueue": {
+        const reply = await handlers["command/enqueue"](call.request);
+        return {
+          result: { outcome: "ok", value: reply.value },
+          transfer: reply.transfer,
+        };
+      }
       case "mutation/apply": {
         // A handler that THROWS is expected here and is not an anomaly:
         // `reparent-artifact` rejects an illegal move by throwing, and the

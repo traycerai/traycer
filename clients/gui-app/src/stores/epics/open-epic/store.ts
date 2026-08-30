@@ -975,13 +975,13 @@ export function createOpenEpicStore(
             runtime.sendAwareness(awarenessBytes);
           },
           discardUnsyncedEdits: () => {
-            runtime.discardUnsyncedEdits();
+            runtime.command({ kind: "discard-unsynced-edits", payload: {} });
           },
           requestFreshSnapshot: () => {
-            runtime.requestFreshSnapshot();
+            runtime.command({ kind: "request-fresh-snapshot", payload: {} });
           },
           retryMigration: () => {
-            runtime.retryMigration();
+            runtime.command({ kind: "retry-migration", payload: {} });
           },
           enqueueWriteCommand: (intent) =>
             runtime.enqueueWriteCommand(intent)?.commandId ?? null,
@@ -1006,37 +1006,58 @@ export function createOpenEpicStore(
             });
           },
           retryWriteCommand: (commandId) => {
-            runtime.retryWriteCommand(commandId);
+            runtime.command({ kind: "retry-write-command", payload: { commandId } });
           },
           discardWriteCommand: (commandId) => {
-            runtime.discardWriteCommand(commandId);
+            runtime.command({ kind: "discard-write-command", payload: { commandId } });
           },
 
           applyChatRecords: (records, issuedAtSeq) => {
-            runtime.applyChatRecords(records, issuedAtSeq);
+            runtime.command({
+              kind: "apply-chat-records",
+              payload: { records, issuedAtSeq },
+            });
           },
           peekChatIngestSeq: () => get().chatIngestSeq,
           markChatRecordListAuthoritative: () => {
-            runtime.markChatRecordListAuthoritative();
+            runtime.command({
+              kind: "mark-chat-records-authoritative",
+              payload: {},
+            });
           },
           applyChatRecordDelta: (delta) => {
-            runtime.applyChatRecordDelta(delta);
+            runtime.command({ kind: "apply-chat-record-delta", payload: { delta } });
           },
           applyTuiAgentRecords: (records, issuedAtSeq) => {
-            runtime.applyTuiAgentRecords(records, issuedAtSeq);
+            runtime.command({
+              kind: "apply-tui-agent-records",
+              payload: { records, issuedAtSeq },
+            });
           },
           peekTuiAgentIngestSeq: () => get().tuiAgentIngestSeq,
           applyTuiAgentRecordDelta: (delta) => {
-            runtime.applyTuiAgentRecordDelta(delta);
+            runtime.command({
+              kind: "apply-tui-agent-record-delta",
+              payload: { delta },
+            });
           },
           republishChatRecordsForCurrentUser: () => {
-            runtime.republishRecordsForCurrentUser();
+            runtime.command({
+      kind: "republish-records-for-current-user",
+      payload: {},
+    });
           },
           beginPendingChatCreation: (pending) => {
-            runtime.beginPendingChatCreation(pending);
+            runtime.command({
+              kind: "begin-pending-chat-creation",
+              payload: { pending },
+            });
           },
           clearPendingChatCreation: (chatId) => {
-            runtime.clearPendingChatCreation(chatId);
+            runtime.command({
+              kind: "clear-pending-chat-creation",
+              payload: { chatId },
+            });
           },
 
           detachTransport: () => {
@@ -1144,15 +1165,21 @@ export function createOpenEpicStore(
     // field, so the sink holds the value its own change gate compares against.
     // Writing it here would leave the two disagreeing, and the gate would then
     // refuse to restore the flag the store had cleared.
-    runtime.markChatRecordListNotAuthoritative();
+    runtime.command({
+      kind: "mark-chat-records-not-authoritative",
+      payload: {},
+    });
     // Re-derive the record slices from the RETAINED raw rows, then re-project.
     // The slices are built for one owner (a `byId` keyed on `chatId` can hold
     // no more), so a user switch has to rebuild them rather than merely
     // re-filter downstream - a re-projection alone would keep serving the
     // previous identity's selection. This is what makes the ingest-time owner
     // selection safe.
-    runtime.republishRecordsForCurrentUser();
-    runtime.reprojectForViewerChange();
+    runtime.command({
+      kind: "republish-records-for-current-user",
+      payload: {},
+    });
+    runtime.command({ kind: "reproject-for-viewer-change", payload: {} });
   });
 
   // Started last so the runtime's first projection lands after the store is
