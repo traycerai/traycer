@@ -50,6 +50,7 @@ export function mountController(): MountedController {
     const imeInputRef = useRef<HTMLInputElement | null>(null);
     const controllerRef = useRef<ScreencastController | null>(null);
     controllerRef.current ??= createScreencastController({
+      readControlPlaneRttMs: () => null,
       refs: {
         tileRef,
         viewportRef,

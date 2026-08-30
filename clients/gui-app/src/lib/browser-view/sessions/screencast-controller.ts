@@ -14,6 +14,10 @@ import type {
 } from "@traycer/protocol/host/browser/contracts";
 import { createScreencastArmBuffer } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
 import {
+  deriveViewerDeadlineMs,
+  VIEWER_CONTROL_PLANE_DEADLINES,
+} from "@/lib/browser-view/sessions/control-plane-deadlines";
+import {
   buildScreencastPointerFrame,
   correlationToken,
   inputModifiers,
@@ -174,8 +178,14 @@ export function createScreencastController(options: {
   readonly refs: ScreencastSessionRefs;
   readonly sendFrame: (frame: BrowserScreencastClientFrame) => void;
   readonly listeners: ScreencastControllerListeners;
+  /**
+   * The host's measured control-plane RTT for this subscription, or `null`
+   * before any `rttProbe` has landed. Only the arm buffer's timeout reads it
+   * (ticket 18), and only when a press is buffered.
+   */
+  readonly readControlPlaneRttMs: () => number | null;
 }): ScreencastController {
-  const { listeners, refs, sendFrame } = options;
+  const { listeners, readControlPlaneRttMs, refs, sendFrame } = options;
 
   let visible = false;
   let armEpochCounter = 0;
@@ -233,11 +243,18 @@ export function createScreencastController(options: {
       ? { castSequence: null, viewportEpoch }
       : { castSequence: presentedSequence, viewportEpoch: null };
 
-  const armBuffer = createScreencastArmBuffer<ScreencastPointerInput>(() => {
-    pointerClickCount = null;
-    if (capturedPointer === null) return;
-    suppressPointerId = capturedPointer.pointerId;
-  });
+  const armBuffer = createScreencastArmBuffer<ScreencastPointerInput>(
+    () => {
+      pointerClickCount = null;
+      if (capturedPointer === null) return;
+      suppressPointerId = capturedPointer.pointerId;
+    },
+    () =>
+      deriveViewerDeadlineMs(
+        VIEWER_CONTROL_PLANE_DEADLINES.armBuffer,
+        readControlPlaneRttMs(),
+      ),
+  );
 
   const sendInput = (frame: ScreencastInputFrame): void => {
     if (activeArmEpoch === null) return;

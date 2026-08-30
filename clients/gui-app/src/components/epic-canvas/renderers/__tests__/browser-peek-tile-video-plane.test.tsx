@@ -179,6 +179,7 @@ async function offer(negotiationId: number): Promise<void> {
         hasBinaryPayload: false,
         negotiationId,
         sdp: `offer-${negotiationId}`,
+        iceServers: [],
       },
       null,
     );

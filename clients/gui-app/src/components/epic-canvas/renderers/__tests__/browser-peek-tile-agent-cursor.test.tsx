@@ -190,7 +190,13 @@ function cursorMarker(): HTMLElement | null {
 async function switchToVideoPlane(): Promise<void> {
   await act(async () => {
     liveStream().emit(
-      { kind: "sdpOffer", hasBinaryPayload: false, negotiationId: 1, sdp: "o" },
+      {
+        kind: "sdpOffer",
+        hasBinaryPayload: false,
+        negotiationId: 1,
+        sdp: "o",
+        iceServers: [],
+      },
       null,
     );
     await Promise.resolve();

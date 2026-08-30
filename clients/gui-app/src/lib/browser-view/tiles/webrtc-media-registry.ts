@@ -60,18 +60,24 @@ export interface WebrtcSignalPort {
     readonly reason: string | null;
   }): void;
   sendVideoStats(
-    input: { readonly negotiationId: number } & WebrtcVideoStatsFields,
+    input: { readonly negotiationId: number } & WebrtcVideoStatsSample,
   ): void;
 }
 
 /** The `videoStats` wire frame's payload, minus the envelope. */
-export interface WebrtcVideoStatsFields {
+export interface WebrtcVideoStatsSample {
   readonly framesDecoded: number;
   readonly framesDropped: number;
   readonly packetsLost: number;
   readonly jitterMs: number;
   readonly roundTripTimeMs: number;
+  /** Ticket 17's rVFC-derived timings; see `video-frame-latency.ts`. */
   readonly glassToGlassMs: number | null;
+  readonly glassToGlassP95Ms: number | null;
+  readonly networkPlusJitterMs: number | null;
+  readonly decodeCompositeMs: number | null;
+  /** DataChannel-up / mux-down `ping` round trip; null until one completes. */
+  readonly dataChannelRttMs: number | null;
   readonly iceCandidatePairType: string;
 }
 
@@ -133,7 +139,21 @@ export interface MediaPeer {
   close(): void;
 }
 
-export type MediaPeerFactory = (handlers: MediaPeerHandlers) => MediaPeer;
+/**
+ * The ICE servers a round negotiates against, as the host delivered them on
+ * the offer (`sdpOffer.iceServers`). Empty means the host has no TURN
+ * configured, and the peer falls back to its built-in STUN literal.
+ */
+export type MediaIceServer = {
+  readonly urls: readonly string[];
+  readonly username: string | null;
+  readonly credential: string | null;
+};
+
+export type MediaPeerFactory = (
+  handlers: MediaPeerHandlers,
+  iceServers: readonly MediaIceServer[],
+) => MediaPeer;
 
 export type VideoPlanePhase = "idle" | "negotiating" | "streaming" | "failed";
 
@@ -164,6 +184,8 @@ export interface BrowserMediaEntry {
     readonly negotiationId: number;
     readonly sdp: string;
     readonly port: WebrtcSignalPort;
+    /** Delivered on the offer; empty when the host has no TURN configured. */
+    readonly iceServers: readonly MediaIceServer[];
   }): void;
   acceptRemoteCandidate(
     input: { readonly negotiationId: number } & WebrtcIceCandidate,
@@ -342,7 +364,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
       };
     },
 
-    acceptOffer: ({ negotiationId, sdp, port }) => {
+    acceptOffer: ({ negotiationId, sdp, port, iceServers }) => {
       if (round !== null && negotiationId <= round.negotiationId) return;
       if (
         round === null &&
@@ -354,32 +376,35 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
       closeChannels();
       round?.peer.close();
 
-      const peer = createPeer({
-        onLocalIceCandidate: (candidate) => {
-          if (round?.negotiationId !== negotiationId) return;
-          port.sendIceCandidate({ negotiationId, ...candidate });
+      const peer = createPeer(
+        {
+          onLocalIceCandidate: (candidate) => {
+            if (round?.negotiationId !== negotiationId) return;
+            port.sendIceCandidate({ negotiationId, ...candidate });
+          },
+          onStream: (stream) => {
+            if (round?.negotiationId !== negotiationId) return;
+            publish({ phase: "streaming", stream });
+          },
+          onDataChannel: (channel) => {
+            const label = inputChannelLabel(channel.label);
+            // A channel from a superseded round (or one nothing here reads) is
+            // dropped on arrival - same discipline as a stale offer.
+            if (label === null || round?.negotiationId !== negotiationId) {
+              channel.close();
+              return;
+            }
+            round.channels.set(label, channel);
+            channel.onStateChange = syncInputReady;
+            syncInputReady();
+          },
+          onFailure: (reason) => {
+            if (round?.negotiationId !== negotiationId) return;
+            fail(reason);
+          },
         },
-        onStream: (stream) => {
-          if (round?.negotiationId !== negotiationId) return;
-          publish({ phase: "streaming", stream });
-        },
-        onDataChannel: (channel) => {
-          const label = inputChannelLabel(channel.label);
-          // A channel from a superseded round (or one nothing here reads) is
-          // dropped on arrival - same discipline as a stale offer.
-          if (label === null || round?.negotiationId !== negotiationId) {
-            channel.close();
-            return;
-          }
-          round.channels.set(label, channel);
-          channel.onStateChange = syncInputReady;
-          syncInputReady();
-        },
-        onFailure: (reason) => {
-          if (round?.negotiationId !== negotiationId) return;
-          fail(reason);
-        },
-      });
+        iceServers,
+      );
       const started = {
         negotiationId,
         port,
@@ -476,9 +501,24 @@ function noop(): void {}
  * what keeps the registry above DOM-free: track-death detection, the
  * end-of-candidates sentinel and track stopping all live in this function.
  */
-export function createBrowserMediaPeer(handlers: MediaPeerHandlers): MediaPeer {
+export function createBrowserMediaPeer(
+  handlers: MediaPeerHandlers,
+  iceServers: readonly MediaIceServer[],
+): MediaPeer {
   const connection = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    // The host-delivered set (STUN + minted TURN) takes precedence; this
+    // literal is only the fallback for a host with no TURN configured - and
+    // for an older host that sends no `sdpOffer.iceServers` at all.
+    iceServers:
+      iceServers.length === 0
+        ? [{ urls: "stun:stun.l.google.com:19302" }]
+        : iceServers.map((server) => ({
+            urls: [...server.urls],
+            ...(server.username === null ? {} : { username: server.username }),
+            ...(server.credential === null
+              ? {}
+              : { credential: server.credential }),
+          })),
   });
   let stream: MediaStream | null = null;
 

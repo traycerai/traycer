@@ -617,6 +617,24 @@ const browserScreencastIceCandidateFields = {
   sdpMLineIndex: z.number().int().nonnegative().nullable(),
 } as const;
 
+/**
+ * One ICE server the client should configure its `RTCPeerConnection` with,
+ * mirroring the browser's `RTCIceServer`. The host mints these (short-TTL
+ * TURN credentials) and stamps them on the offer, so both ends of a round
+ * negotiate against the SAME set. Additive with a `[]` default: an older host
+ * sends nothing and the client keeps its STUN-only fallback.
+ */
+export const browserScreencastIceServerSchema = z
+  .object({
+    urls: z.array(z.string()),
+    username: z.string().nullable(),
+    credential: z.string().nullable(),
+  })
+  .strict();
+export type BrowserScreencastIceServer = z.infer<
+  typeof browserScreencastIceServerSchema
+>;
+
 const browserScreencastAgentCursorTypeSchema = z.enum(["move", "down", "up"]);
 export type BrowserScreencastAgentCursorType = z.infer<
   typeof browserScreencastAgentCursorTypeSchema
@@ -680,6 +698,36 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // Answer to a `ping` that arrived on a video-plane DataChannel (ticket
+      // 17's input-path latency probe). Deliberately NOT the `pong` above:
+      // that kind belongs to the stream transport's own heartbeat, which
+      // answers it host-side and swallows it client-side before any contract
+      // handler runs - so a `pong` reply to a DataChannel ping could never
+      // reach the sender. Carries no correlation id because the prober keeps
+      // one ping in flight at a time.
+      kind: z.literal("inputPong"),
+      ...textFrameFields,
+    })
+    .strict(),
+  z
+    .object({
+      // Control-plane RTT probe (ticket 18). Its own frame pair rather than
+      // the `ping`/`pong` above, which neither end can use for this: the
+      // stream transport answers a client `ping` before any resolver sees it
+      // and swallows `pong` before any client contract handler sees it, so on
+      // this contract nobody can both initiate a round trip and observe its
+      // reply. The viewer answers with `rttProbeAck` carrying the same
+      // `probeId`, and reads `controlPlaneRttMs` - the host's smoothed
+      // estimate at send time, null before the first completed probe - to size
+      // its own deadlines off the same measurement.
+      kind: z.literal("rttProbe"),
+      ...textFrameFields,
+      probeId: z.number().int().nonnegative(),
+      controlPlaneRttMs: z.number().nonnegative().nullable(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("armed"),
       ...textFrameFields,
       armEpoch: z.number().int().nonnegative(),
@@ -730,6 +778,7 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
       ...textFrameFields,
       negotiationId: z.number().int().nonnegative(),
       sdp: z.string(),
+      iceServers: z.array(browserScreencastIceServerSchema).default([]),
     })
     .strict(),
   z
@@ -971,16 +1020,40 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       packetsLost: z.number().int().nonnegative(),
       jitterMs: z.number().nonnegative(),
       roundTripTimeMs: z.number().nonnegative(),
-      // Reserved, and null on every frame today: capture-to-paint needs a
-      // host-stamped capture timestamp on the frame to diff against, which
-      // the display-plane epic does not add (the client's only candidate,
-      // `requestVideoFrameCallback` metadata, times decode - a fabricated
-      // number). The field stays on the wire so the eventual host stamp is an
-      // additive change on both ends rather than a schema break.
+      // True capture-to-paint, median over the sampling window: WebRTC's
+      // Absolute Capture Time extension puts the SENDER's capture instant on
+      // the frame, and `requestVideoFrameCallback` metadata surfaces it as
+      // `captureTime` in the receiver's own clock domain, so
+      // `expectedDisplayTime - captureTime` needs no host stamp of its own.
+      // Null whenever the extension was not negotiated (it is a default, not
+      // a guarantee) or the WebView has no per-frame callback at all.
       glassToGlassMs: z.number().nonnegative().nullable(),
+      // The same measurement's tail, and its two halves - `receiveTime` splits
+      // capture-to-paint into "how long the network held the frame" and "how
+      // long this client took to decode and composite it", which is the whole
+      // difference between a path problem and a client problem. Additive
+      // (ticket 17): `.default(null)` so an older client's frame still parses.
+      glassToGlassP95Ms: z.number().nonnegative().nullable().default(null),
+      networkPlusJitterMs: z.number().nonnegative().nullable().default(null),
+      decodeCompositeMs: z.number().nonnegative().nullable().default(null),
+      // Round trip of one `ping` sent on the `input-reliable` DataChannel: up
+      // the DataChannel, back over the mux as `pong`. Deliberately asymmetric -
+      // that IS the human input path's shape, and the uplink half is the leg
+      // ticket 18 derives its deadlines from. Null until a ping has completed.
+      dataChannelRttMs: z.number().nonnegative().nullable().default(null),
       // getStats() candidate-pair `candidateType` of the active receive
       // path (only observable receiver-side) - the "ICE path taken" metric.
       iceCandidatePairType: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // Reply to the host's `rttProbe`, sent as soon as the viewer sees it.
+      // Carries nothing of its own: the host times the round trip and the
+      // probe frame carries the result back.
+      kind: z.literal("rttProbeAck"),
+      ...textFrameFields,
+      probeId: z.number().int().nonnegative(),
     })
     .strict(),
 ]);

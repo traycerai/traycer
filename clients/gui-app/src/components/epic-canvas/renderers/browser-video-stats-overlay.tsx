@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ScreencastSession } from "@/lib/browser-view/sessions/use-screencast-session";
 import { STATS_SAMPLE_INTERVAL_MS } from "@/lib/browser-view/sessions/video-plane-session";
-import type { WebrtcVideoStatsSample } from "@/lib/browser-view/sessions/webrtc-video-stats";
+import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
  * Dev-only per-tile stats readout (ticket 11, webrtc-display-plane spec §5
@@ -47,11 +47,18 @@ export function BrowserVideoStatsOverlay(props: {
       <div>
         ice: {videoStats === null ? "-" : videoStats.iceCandidatePairType}
       </div>
+      <div>g2g: {formatMs(videoStats?.glassToGlassMs ?? null)}</div>
+      <div>dcRtt: {formatMs(videoStats?.dataChannelRttMs ?? null)}</div>
       <div>
         input→frame: {inputEcho === null ? "-" : `${inputEcho.toFixed(0)}ms`}
       </div>
     </div>
   );
+}
+
+/** `-` for a measurement this stream cannot produce; never a fabricated 0. */
+function formatMs(value: number | null): string {
+  return value === null ? "-" : `${value.toFixed(0)}ms`;
 }
 
 interface DecodedFpsState {
@@ -95,12 +102,21 @@ function nextFps(
 }
 
 /**
- * Approximate input->photon: timestamps a pointer down on the overlay button
- * and reads the delta at the next decoded video frame. Wired with plain
- * listeners on the session's existing refs rather than a controller change -
- * the ticket explicitly allows skipping a controller restructure here and
- * noting it for the acceptance pass (a real input->photon probe would need
- * the controller's dispatch seam, not just the DOM event).
+ * Input->photon, stopped honestly (ticket 17): the frame that answers a click
+ * is the first one CAPTURED after it, and the first frame merely *observed*
+ * after it was captured before the click ever reached the host - it was
+ * already in flight. Reading that one made every measurement a lower bound
+ * on the wrong quantity (a decode interval, not a round trip).
+ *
+ * So the clock stops on `metadata.captureTime > pointerdown`, in
+ * `performance.now()`'s domain - the same domain rVFC's timestamps live in,
+ * which `Date.now()` is not. A stream with no `captureTime` (the Absolute
+ * Capture Time extension absent) cannot answer this question at all, so the
+ * readout stays `-` rather than showing a number it cannot stand behind.
+ *
+ * Wired with plain listeners on the session's existing refs rather than a
+ * controller change - a true input->photon probe would need the controller's
+ * dispatch seam, not just the DOM event.
  */
 function useInputEchoProbe(session: ScreencastSession): number | null {
   const [delta, setDelta] = useState<number | null>(null);
@@ -116,15 +132,20 @@ function useInputEchoProbe(session: ScreencastSession): number | null {
     let pendingSince: number | null = null;
     let frameHandle: number | null = null;
 
-    const onFrame = (): void => {
-      if (pendingSince !== null) {
-        setDelta(Date.now() - pendingSince);
+    const onFrame: VideoFrameRequestCallback = (now, metadata) => {
+      const captureTime = metadata.captureTime;
+      if (
+        pendingSince !== null &&
+        captureTime !== undefined &&
+        captureTime > pendingSince
+      ) {
+        setDelta(now - pendingSince);
         pendingSince = null;
       }
       frameHandle = video.requestVideoFrameCallback(onFrame);
     };
     const onPointerDown = (): void => {
-      pendingSince = Date.now();
+      pendingSince = performance.now();
     };
 
     button.addEventListener("pointerdown", onPointerDown, { capture: true });

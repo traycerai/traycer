@@ -3,7 +3,9 @@ import {
   acquireBrowserMediaEntry,
   activeBrowserMediaKeyIds,
   type MediaDataChannel,
+  type MediaIceServer,
   type MediaPeer,
+  type MediaPeerFactory,
   type MediaPeerHandlers,
   type WebrtcIceCandidate,
   type WebrtcSignalPort,
@@ -15,23 +17,25 @@ interface FakePeer extends MediaPeer {
   readonly handlers: MediaPeerHandlers;
   readonly offers: string[];
   readonly remoteCandidates: WebrtcIceCandidate[];
+  readonly iceServers: readonly MediaIceServer[];
   closeCount: number;
 }
 
 interface PeerHarness {
   readonly peers: FakePeer[];
-  readonly createPeer: (handlers: MediaPeerHandlers) => MediaPeer;
+  readonly createPeer: MediaPeerFactory;
 }
 
 function peerHarness(): PeerHarness {
   const peers: FakePeer[] = [];
   return {
     peers,
-    createPeer: (handlers) => {
+    createPeer: (handlers, iceServers) => {
       const peer: FakePeer = {
         handlers,
         offers: [],
         remoteCandidates: [],
+        iceServers,
         closeCount: 0,
         answerOffer: (sdp) => {
           peer.offers.push(sdp);
@@ -156,7 +160,12 @@ describe("webrtc media registry", () => {
     });
     expect(pip.entry).toBe(tile.entry);
 
-    tile.entry.acceptOffer({ negotiationId: 1, sdp: "offer-1", port });
+    tile.entry.acceptOffer({
+      negotiationId: 1,
+      sdp: "offer-1",
+      port,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
     harness.peers[0]?.handlers.onStream(fakeStream("track"));
 
@@ -183,7 +192,12 @@ describe("webrtc media registry", () => {
       key,
       createPeer: harness.createPeer,
     });
-    before.entry.acceptOffer({ negotiationId: 7, sdp: "offer", port });
+    before.entry.acceptOffer({
+      negotiationId: 7,
+      sdp: "offer",
+      port,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
     harness.peers[0]?.handlers.onStream(fakeStream("live-track"));
 
@@ -243,7 +257,12 @@ describe("webrtc media registry", () => {
       createPeer: harness.createPeer,
     });
 
-    held.entry.acceptOffer({ negotiationId: 3, sdp: "offer-sdp", port });
+    held.entry.acceptOffer({
+      negotiationId: 3,
+      sdp: "offer-sdp",
+      port,
+      iceServers: [],
+    });
     // Arrives before the answer resolves: buffered, not dropped.
     held.entry.acceptRemoteCandidate({
       negotiationId: 3,
@@ -298,7 +317,12 @@ describe("webrtc media registry", () => {
       createPeer: harness.createPeer,
     });
 
-    held.entry.acceptOffer({ negotiationId: 4, sdp: "offer", port });
+    held.entry.acceptOffer({
+      negotiationId: 4,
+      sdp: "offer",
+      port,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
     harness.peers[0]?.handlers.onStream(fakeStream("t"));
     held.entry.reportFirstDecodedFrame();
@@ -336,14 +360,34 @@ describe("webrtc media registry", () => {
       createPeer: harness.createPeer,
     });
 
-    held.entry.acceptOffer({ negotiationId: 2, sdp: "first", port });
+    held.entry.acceptOffer({
+      negotiationId: 2,
+      sdp: "first",
+      port,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
 
-    held.entry.acceptOffer({ negotiationId: 2, sdp: "duplicate", port });
-    held.entry.acceptOffer({ negotiationId: 1, sdp: "older", port });
+    held.entry.acceptOffer({
+      negotiationId: 2,
+      sdp: "duplicate",
+      port,
+      iceServers: [],
+    });
+    held.entry.acceptOffer({
+      negotiationId: 1,
+      sdp: "older",
+      port,
+      iceServers: [],
+    });
     expect(harness.peers).toHaveLength(1);
 
-    held.entry.acceptOffer({ negotiationId: 5, sdp: "retry", port });
+    held.entry.acceptOffer({
+      negotiationId: 5,
+      sdp: "retry",
+      port,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
     expect(harness.peers).toHaveLength(2);
     expect(harness.peers[0]?.closeCount).toBe(1);
@@ -386,7 +430,12 @@ describe("webrtc media registry", () => {
       }),
     });
 
-    held.entry.acceptOffer({ negotiationId: 9, sdp: "offer", port });
+    held.entry.acceptOffer({
+      negotiationId: 9,
+      sdp: "offer",
+      port,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(port.answers).toEqual([]);
@@ -412,7 +461,12 @@ describe("webrtc media registry", () => {
       notifications += 1;
     });
 
-    held.entry.acceptOffer({ negotiationId: 1, sdp: "offer", port });
+    held.entry.acceptOffer({
+      negotiationId: 1,
+      sdp: "offer",
+      port,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
     harness.peers[0]?.handlers.onStream(fakeStream("t"));
     expect(notifications).toBe(2);
@@ -441,7 +495,12 @@ describe("webrtc media registry", () => {
       createPeer: harness.createPeer,
     });
 
-    held.entry.acceptOffer({ negotiationId: 4, sdp: "first", port: deadPort });
+    held.entry.acceptOffer({
+      negotiationId: 4,
+      sdp: "first",
+      port: deadPort,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
     harness.peers[0]?.handlers.onStream(fakeStream("s"));
     held.entry.reportFirstDecodedFrame();
@@ -453,7 +512,12 @@ describe("webrtc media registry", () => {
     // media survives the tile's remount, and the re-subscription's offer -
     // higher round, new port - is what re-establishes video.
     const livePort = recordingPort();
-    held.entry.acceptOffer({ negotiationId: 9, sdp: "second", port: livePort });
+    held.entry.acceptOffer({
+      negotiationId: 9,
+      sdp: "second",
+      port: livePort,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(harness.peers).toHaveLength(2);
@@ -492,7 +556,12 @@ describe("webrtc media registry", () => {
       createPeer: harness.createPeer,
     });
 
-    held.entry.acceptOffer({ negotiationId: 1, sdp: "offer", port });
+    held.entry.acceptOffer({
+      negotiationId: 1,
+      sdp: "offer",
+      port,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
     const handlers = harness.peers[0].handlers;
 
@@ -529,7 +598,12 @@ describe("webrtc media registry", () => {
       createPeer: harness.createPeer,
     });
 
-    held.entry.acceptOffer({ negotiationId: 1, sdp: "offer-1", port });
+    held.entry.acceptOffer({
+      negotiationId: 1,
+      sdp: "offer-1",
+      port,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
     const stale = harness.peers[0].handlers;
     const staleLossy = fakeChannel("input-lossy");
@@ -538,7 +612,12 @@ describe("webrtc media registry", () => {
     stale.onDataChannel(staleReliable);
     expect(held.entry.getSnapshot().inputReady).toBe(true);
 
-    held.entry.acceptOffer({ negotiationId: 2, sdp: "offer-2", port });
+    held.entry.acceptOffer({
+      negotiationId: 2,
+      sdp: "offer-2",
+      port,
+      iceServers: [],
+    });
     await vi.advanceTimersByTimeAsync(0);
     expect(staleLossy.closeCount).toBe(1);
     expect(staleReliable.closeCount).toBe(1);
@@ -581,5 +660,58 @@ describe("webrtc media registry", () => {
     b.release();
     await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
     expect(activeBrowserMediaKeyIds()).toEqual([]);
+  });
+
+  describe("delivered ICE servers", () => {
+    const TURN_SERVER: MediaIceServer = {
+      urls: ["turn:turn.example.com:3478?transport=udp"],
+      username: "turn-user-fixture",
+      credential: "turn-credential-fixture",
+    };
+
+    it("hands the delivered set to the peer factory verbatim", async () => {
+      const key = nextKey();
+      const harness = peerHarness();
+      const port = recordingPort();
+      const held = acquireBrowserMediaEntry({
+        key,
+        createPeer: harness.createPeer,
+      });
+
+      held.entry.acceptOffer({
+        negotiationId: 1,
+        sdp: "offer-1",
+        port,
+        iceServers: [TURN_SERVER],
+      });
+
+      expect(harness.peers[0]?.iceServers).toEqual([TURN_SERVER]);
+
+      held.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    });
+
+    it("still calls the factory with [] when the delivered set is empty", async () => {
+      const key = nextKey();
+      const harness = peerHarness();
+      const port = recordingPort();
+      const held = acquireBrowserMediaEntry({
+        key,
+        createPeer: harness.createPeer,
+      });
+
+      held.entry.acceptOffer({
+        negotiationId: 1,
+        sdp: "offer-1",
+        port,
+        iceServers: [],
+      });
+
+      expect(harness.peers).toHaveLength(1);
+      expect(harness.peers[0]?.iceServers).toEqual([]);
+
+      held.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    });
   });
 });

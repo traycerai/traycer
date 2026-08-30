@@ -44,7 +44,11 @@ import {
   type VideoPlaneSession,
   type VideoPlaneView,
 } from "@/lib/browser-view/sessions/video-plane-session";
-import type { WebrtcVideoStatsSample } from "@/lib/browser-view/sessions/webrtc-video-stats";
+import {
+  deriveViewerDeadlineMs,
+  VIEWER_CONTROL_PLANE_DEADLINES,
+} from "@/lib/browser-view/sessions/control-plane-deadlines";
+import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 import {
   acquireBrowserMediaEntry,
   createBrowserMediaPeer,
@@ -53,7 +57,6 @@ import {
 const DEFAULT_MAX_WIDTH = 1280;
 const DEFAULT_MAX_HEIGHT = 720;
 const DEFAULT_QUALITY = 70;
-const STALE_WITHOUT_FRAME_MS = 8_000;
 const VIEWPORT_DEBOUNCE_MS = 200;
 
 // Re-exported: the type now lives beside `ScreencastFrameSize`, which every
@@ -176,6 +179,18 @@ export function useScreencastSession(
   const { client, epicId, hostId, sessionId, tabId, visible } = options;
   const streamRef = useRef<BrowserScreencastStreamClient | null>(null);
   const videoPlaneRef = useRef<VideoPlaneSession | null>(null);
+  /**
+   * The host's smoothed control-plane RTT for this subscription, refreshed by
+   * every `rttProbe`, `null` until the first one lands (ticket 18). One value
+   * feeds all three viewer-side deadlines - the arm buffer inside the
+   * controller, the video plane's first-frame window, and staleness below -
+   * so they can never disagree about how slow this link is.
+   */
+  const controlPlaneRttRef = useRef<number | null>(null);
+  const readControlPlaneRttMs = useCallback(
+    () => controlPlaneRttRef.current,
+    [],
+  );
   // Latest-value refs so the video attach effect (keyed only on
   // `videoView.media`) can read the current "is video the painting plane"
   // state and the current callback at cleanup time without re-running - the
@@ -240,6 +255,7 @@ export function useScreencastSession(
       sendFrame: (frame) => {
         streamRef.current?.sendClientFrame(frame);
       },
+      readControlPlaneRttMs,
       listeners: {
         onLocalArmCleared: resetLocalArmState,
         onComposingChange: setComposing,
@@ -391,6 +407,7 @@ export function useScreencastSession(
       },
       onChange: setVideoView,
       onVideoStats: setVideoStats,
+      readControlPlaneRttMs,
     });
     videoPlaneRef.current = videoPlane;
 
@@ -460,6 +477,16 @@ export function useScreencastSession(
       } else if (frame.kind === "viewportEpoch") {
         viewportEpoch = frame.epoch;
         controller.noteViewportEpoch(frame.epoch);
+      } else if (frame.kind === "rttProbe") {
+        // Answered before anything else this frame could imply: the host is
+        // timing this reply, so any work in between would be measured as link
+        // latency. The estimate it carries is the PREVIOUS probe's result.
+        controlPlaneRttRef.current = frame.controlPlaneRttMs;
+        send({
+          kind: "rttProbeAck",
+          hasBinaryPayload: false,
+          probeId: frame.probeId,
+        });
       } else if (frame.kind === "captureMode") {
         captureMode = frame.mode;
         controller.setCaptureMode(frame.mode);
@@ -567,6 +594,7 @@ export function useScreencastSession(
     controller,
     epicId,
     hostId,
+    readControlPlaneRttMs,
     sessionId,
     setDetails,
     setFrameSize,
@@ -628,11 +656,15 @@ export function useScreencastSession(
       );
     };
     const noteFrame = (): void => {
-      videoPlaneRef.current?.noteVideoFrame();
+      videoPlaneRef.current?.noteVideoFrame(null);
     };
     let frameHandle: number | null = null;
-    const onDecodedFrame = (): void => {
-      noteFrame();
+    // The metadata argument is the whole glass-to-glass measurement (ticket
+    // 17): `captureTime`/`receiveTime`/`expectedDisplayTime` are the only
+    // client-side view of capture-to-paint there is, and discarding them was
+    // what left `glassToGlassMs` null on every sample.
+    const onDecodedFrame: VideoFrameRequestCallback = (_now, metadata) => {
+      videoPlaneRef.current?.noteVideoFrame(metadata);
       frameHandle = element.requestVideoFrameCallback(onDecodedFrame);
     };
     if (typeof element.requestVideoFrameCallback === "function") {
@@ -670,7 +702,11 @@ export function useScreencastSession(
       const videoFrameAt = videoPlaneRef.current?.lastVideoFrameAt() ?? null;
       const lastFrameAt = videoFrameAt ?? controller.lastFrameAt();
       if (lastFrameAt === null) return;
-      if (Date.now() - lastFrameAt < STALE_WITHOUT_FRAME_MS) return;
+      const staleAfterMs = deriveViewerDeadlineMs(
+        VIEWER_CONTROL_PLANE_DEADLINES.staleWithoutFrame,
+        controlPlaneRttRef.current,
+      );
+      if (Date.now() - lastFrameAt < staleAfterMs) return;
       // A track that connected, painted, then froze is the one failure no
       // deadline covers (the first-frame one is disarmed by then) and the
       // registry cannot see. Reporting it is what turns the host's JPEG pump

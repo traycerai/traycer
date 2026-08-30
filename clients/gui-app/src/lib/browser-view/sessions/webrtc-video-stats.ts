@@ -1,26 +1,29 @@
 /**
- * Maps a raw `RTCPeerConnection.getStats()` report to the wire's `videoStats`
- * shape (ticket 11). Pure and DOM-report-shaped only - no peer connection, no
- * timers - so it is testable against a fake `RTCStatsReport` built from a
- * plain `Map`.
+ * Maps a raw `RTCPeerConnection.getStats()` report to the getStats-derived half
+ * of the wire's `videoStats` shape (ticket 11). Pure and DOM-report-shaped only
+ * - no peer connection, no timers - so it is testable against a fake
+ * `RTCStatsReport` built from a plain `Map`.
  *
- * `glassToGlassMs` is deliberately not computed here: the only client-side
- * candidate (`requestVideoFrameCallback` metadata) times decode, not
- * capture-to-paint, so reporting it would be a fabricated number. The wire
- * field stays `null` until the host end can stamp a real capture timestamp
- * onto the frame for the client to diff against.
+ * The timing half of the payload does not come from `getStats()` at all:
+ * glass-to-glass and its two legs are read off `requestVideoFrameCallback`
+ * metadata (`video-frame-latency.ts`) and the DataChannel RTT off a `ping`, so
+ * both are the session's to add (`video-plane-session.ts`) rather than this
+ * mapper's to invent.
  */
-import type { WebrtcVideoStatsFields } from "@/lib/browser-view/tiles/webrtc-media-registry";
+import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
- * The `videoStats` wire payload minus `glassToGlassMs` - this module never
- * has an honest number for it (see above), so it is not this type's to
- * carry; the caller (`video-plane-session.ts`) adds `glassToGlassMs: null`
- * when it builds the wire frame.
+ * The subset `getStats()` alone can answer; see the module comment. The full
+ * payload is `WebrtcVideoStatsSample`, defined with the rest of the wire shape
+ * in `webrtc-media-registry.ts`.
  */
-export type WebrtcVideoStatsSample = Omit<
-  WebrtcVideoStatsFields,
-  "glassToGlassMs"
+export type WebrtcVideoStatsReportFields = Omit<
+  WebrtcVideoStatsSample,
+  | "glassToGlassMs"
+  | "glassToGlassP95Ms"
+  | "networkPlusJitterMs"
+  | "decodeCompositeMs"
+  | "dataChannelRttMs"
 >;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -138,7 +141,7 @@ function resolveSelectedPair(
 
 export function mapWebrtcVideoStats(
   report: RTCStatsReport,
-): WebrtcVideoStatsSample | null {
+): WebrtcVideoStatsReportFields | null {
   const { inboundRtp, selectedPair, localCandidatesById } =
     collectStats(report);
   if (inboundRtp === null) return null;

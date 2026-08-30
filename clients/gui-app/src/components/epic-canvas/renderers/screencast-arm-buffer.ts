@@ -1,4 +1,3 @@
-export const SCREENCAST_ARM_BUFFER_TIMEOUT_MS = 1_000;
 export const SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX = 4;
 
 export interface ScreencastArmGestureDown<T> {
@@ -44,8 +43,14 @@ interface PendingArmGesture<T> {
   readonly timeoutId: number;
 }
 
+/**
+ * `readTimeoutMs` is read when a press is stored, not captured once: the
+ * timeout is derived from the measured control-plane RTT (ticket 18), which
+ * arrives after the buffer is built and refines while the tile lives.
+ */
 export function createScreencastArmBuffer<T>(
   onDropped: () => void,
+  readTimeoutMs: () => number,
 ): ScreencastArmBuffer<T> {
   let pending: PendingArmGesture<T> | null = null;
 
@@ -67,7 +72,7 @@ export function createScreencastArmBuffer<T>(
       pending = {
         down,
         up: null,
-        timeoutId: window.setTimeout(drop, SCREENCAST_ARM_BUFFER_TIMEOUT_MS),
+        timeoutId: window.setTimeout(drop, readTimeoutMs()),
       };
     },
     storeMatchingUp: (up) => {

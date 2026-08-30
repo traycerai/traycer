@@ -108,6 +108,7 @@ async function tileNegotiate(
       negotiationId: 1,
       sdp: "offer-1",
       port: tile.recorder.port,
+      iceServers: [],
     });
     await Promise.resolve();
   });

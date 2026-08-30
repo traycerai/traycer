@@ -11,9 +11,8 @@ import {
   type MediaPeerHandlers,
   type WebrtcIceCandidate,
   type WebrtcSignalPort,
-  type WebrtcVideoStatsFields,
+  type WebrtcVideoStatsSample,
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
-import type { WebrtcVideoStatsSample } from "@/lib/browser-view/sessions/webrtc-video-stats";
 
 /**
  * The tile's plane machine driven against the REAL media registry (ticket 09),
@@ -80,7 +79,7 @@ interface PlaneState {
     state: "live" | "failed";
     reason: string | null;
   }[];
-  readonly statsFrames: ({ negotiationId: number } & WebrtcVideoStatsFields)[];
+  readonly statsFrames: ({ negotiationId: number } & WebrtcVideoStatsSample)[];
   readonly statsSamples: (WebrtcVideoStatsSample | null)[];
   readonly views: VideoPlaneView[];
   readonly peers: FakePeer[];
@@ -95,7 +94,12 @@ function fakeStream(id: string): MediaStream {
 
 let keyCounter = 0;
 
+/** The common case: a subscription with no measured control-plane RTT yet. */
 function setup(): PlaneState {
+  return setupWithRtt(() => null);
+}
+
+function setupWithRtt(readControlPlaneRttMs: () => number | null): PlaneState {
   const peers: FakePeer[] = [];
   const answers: PlaneState["answers"] = [];
   const states: PlaneState["states"] = [];
@@ -144,6 +148,7 @@ function setup(): PlaneState {
     port,
     onChange: (view) => views.push(view),
     onVideoStats: (sample) => statsSamples.push(sample),
+    readControlPlaneRttMs,
   });
   return { answers, states, statsFrames, statsSamples, views, peers, session };
 }
@@ -152,7 +157,13 @@ function offerFrame(
   negotiationId: number,
   sdp: string,
 ): BrowserScreencastServerFrame {
-  return { kind: "sdpOffer", hasBinaryPayload: false, negotiationId, sdp };
+  return {
+    kind: "sdpOffer",
+    hasBinaryPayload: false,
+    negotiationId,
+    sdp,
+    iceServers: [],
+  };
 }
 
 function iceFrame(
@@ -204,7 +215,7 @@ describe("video plane session", () => {
     expect(plane.states).toEqual([]);
     expect(plane.session.lastVideoFrameAt()).toBeNull();
 
-    plane.session.noteVideoFrame();
+    plane.session.noteVideoFrame(null);
 
     expect(plane.states).toEqual([
       { negotiationId: 3, state: "live", reason: null },
@@ -212,8 +223,8 @@ describe("video plane session", () => {
     expect(plane.views.at(-1)?.mode).toBe("video");
     expect(plane.session.lastVideoFrameAt()).not.toBeNull();
 
-    plane.session.noteVideoFrame();
-    plane.session.noteVideoFrame();
+    plane.session.noteVideoFrame(null);
+    plane.session.noteVideoFrame(null);
     expect(plane.states).toHaveLength(1);
   });
 
@@ -222,7 +233,7 @@ describe("video plane session", () => {
     plane.session.handleServerFrame(offerFrame(3, "offer-sdp"));
     await settle();
     plane.peers[0]?.handlers.onStream(fakeStream("track"));
-    plane.session.noteVideoFrame();
+    plane.session.noteVideoFrame(null);
 
     plane.peers[0]?.handlers.onFailure("track-ended");
 
@@ -259,7 +270,7 @@ describe("video plane session", () => {
     plane.session.handleServerFrame(offerFrame(1, "offer-sdp"));
     await settle();
     plane.peers[0]?.handlers.onStream(fakeStream("track"));
-    plane.session.noteVideoFrame();
+    plane.session.noteVideoFrame(null);
 
     vi.advanceTimersByTime(60_000);
 
@@ -319,7 +330,7 @@ describe("video plane session", () => {
     plane.session.handleServerFrame(offerFrame(3, "offer-sdp"));
     await settle();
     plane.peers[0]?.handlers.onStream(fakeStream("track"));
-    plane.session.noteVideoFrame();
+    plane.session.noteVideoFrame(null);
     const peer = plane.peers[0];
     peer.statsReport = fakeStatsReport({
       framesDecoded: 150,
@@ -343,7 +354,13 @@ describe("video plane session", () => {
       packetsLost: 0,
       jitterMs: 4,
       roundTripTimeMs: 42,
+      // No rVFC metadata was fed and the channels are not up, so ticket 17's
+      // timings have nothing to report - null, and not a fabricated zero.
       glassToGlassMs: null,
+      glassToGlassP95Ms: null,
+      networkPlusJitterMs: null,
+      decodeCompositeMs: null,
+      dataChannelRttMs: null,
       iceCandidatePairType: "relay",
     });
     expect(plane.statsSamples.at(-1)).toEqual({
@@ -352,6 +369,11 @@ describe("video plane session", () => {
       packetsLost: 0,
       jitterMs: 4,
       roundTripTimeMs: 42,
+      glassToGlassMs: null,
+      glassToGlassP95Ms: null,
+      networkPlusJitterMs: null,
+      decodeCompositeMs: null,
+      dataChannelRttMs: null,
       iceCandidatePairType: "relay",
     });
 
@@ -375,7 +397,7 @@ describe("video plane session", () => {
     plane.session.handleServerFrame(offerFrame(1, "offer-sdp"));
     await settle();
     plane.peers[0]?.handlers.onStream(fakeStream("track"));
-    plane.session.noteVideoFrame();
+    plane.session.noteVideoFrame(null);
     await settle();
     const sampledWhileLive = plane.statsFrames.length;
 
@@ -384,6 +406,49 @@ describe("video plane session", () => {
     await settle();
 
     expect(plane.statsFrames).toHaveLength(sampledWhileLive);
+  });
+
+  it("arms the first-frame deadline at 6x the measured rtt, not the 15s floor (ticket 18)", async () => {
+    // rtt clamps at 3000ms, so the deadline is 6 * 3000 = 18000ms, above the
+    // 15000ms floor a null rtt would use.
+    const plane = setupWithRtt(() => 3_000);
+    plane.session.handleServerFrame(offerFrame(1, "offer-sdp"));
+    await settle();
+    plane.peers[0]?.handlers.onStream(fakeStream("track"));
+
+    vi.advanceTimersByTime(15_000);
+    expect(plane.states).toEqual([]);
+
+    vi.advanceTimersByTime(2_999);
+    expect(plane.states).toEqual([]);
+
+    vi.advanceTimersByTime(1);
+    expect(plane.states).toEqual([
+      {
+        negotiationId: 1,
+        state: "failed",
+        reason: "no decoded video frame before deadline",
+      },
+    ]);
+  });
+
+  it("arms the first-frame deadline at exactly the 15000ms floor with no measured rtt", async () => {
+    const plane = setupWithRtt(() => null);
+    plane.session.handleServerFrame(offerFrame(1, "offer-sdp"));
+    await settle();
+    plane.peers[0]?.handlers.onStream(fakeStream("track"));
+
+    vi.advanceTimersByTime(14_999);
+    expect(plane.states).toEqual([]);
+
+    vi.advanceTimersByTime(1);
+    expect(plane.states).toEqual([
+      {
+        negotiationId: 1,
+        state: "failed",
+        reason: "no decoded video frame before deadline",
+      },
+    ]);
   });
 
   it("stops publishing and cancels its deadline once closed", async () => {

@@ -51,6 +51,50 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
     ).toBe(true);
   });
 
+  it("defaults sdpOffer.iceServers to [] for an older host that sends none", () => {
+    const parsed = browserScreencastServerFrameSchema.parse({
+      kind: "sdpOffer",
+      hasBinaryPayload: false,
+      negotiationId: 1,
+      sdp: "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n",
+    });
+    expect(parsed).toMatchObject({ iceServers: [] });
+  });
+
+  it("round-trips a sdpOffer carrying a TURN entry", () => {
+    const turnServer = {
+      urls: [
+        "turn:turn.example.com:3478?transport=udp",
+        "turns:turn.example.com:443?transport=tcp",
+      ],
+      username: "turn-user-fixture",
+      credential: "turn-credential-fixture",
+    };
+    const parsed = browserScreencastServerFrameSchema.parse({
+      kind: "sdpOffer",
+      hasBinaryPayload: false,
+      negotiationId: 1,
+      sdp: "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n",
+      iceServers: [turnServer],
+    });
+    expect(parsed).toMatchObject({ iceServers: [turnServer] });
+    expect(
+      parsesServer({
+        kind: "sdpOffer",
+        hasBinaryPayload: false,
+        negotiationId: 1,
+        sdp: "v=0\r\n",
+        iceServers: [
+          {
+            urls: ["stun:stun.example.com:19302"],
+            username: null,
+            credential: null,
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
   it("round-trips the client answer + trickle ICE", () => {
     expect(
       parsesClient({
@@ -180,6 +224,68 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
         iceCandidatePairType: "host",
       }),
     ).toBe(true);
+  });
+
+  it("defaults ticket 17's additive videoStats timings to null for an older client", () => {
+    const parsed = browserScreencastClientFrameSchema.parse({
+      kind: "videoStats",
+      hasBinaryPayload: false,
+      negotiationId: 1,
+      framesDecoded: 900,
+      framesDropped: 3,
+      packetsLost: 0,
+      jitterMs: 4.2,
+      roundTripTimeMs: 18,
+      glassToGlassMs: null,
+      iceCandidatePairType: "host",
+    });
+    expect(parsed).toMatchObject({
+      glassToGlassP95Ms: null,
+      networkPlusJitterMs: null,
+      decodeCompositeMs: null,
+      dataChannelRttMs: null,
+    });
+  });
+
+  it("carries the full ticket 17 timing set when a current client sends it", () => {
+    expect(
+      parsesClient({
+        kind: "videoStats",
+        hasBinaryPayload: false,
+        negotiationId: 1,
+        framesDecoded: 900,
+        framesDropped: 3,
+        packetsLost: 0,
+        jitterMs: 4.2,
+        roundTripTimeMs: 18,
+        glassToGlassMs: 62,
+        glassToGlassP95Ms: 141,
+        networkPlusJitterMs: 39,
+        decodeCompositeMs: 23,
+        dataChannelRttMs: 88,
+        iceCandidatePairType: "srflx",
+      }),
+    ).toBe(true);
+    // Nonnegative, like every other timing on this frame: a negative reading
+    // means the two endpoints were not on one clock, which is not a sample.
+    expect(
+      parsesClient({
+        kind: "videoStats",
+        hasBinaryPayload: false,
+        negotiationId: 1,
+        framesDecoded: 900,
+        framesDropped: 3,
+        packetsLost: 0,
+        jitterMs: 4.2,
+        roundTripTimeMs: 18,
+        glassToGlassMs: 62,
+        glassToGlassP95Ms: 141,
+        networkPlusJitterMs: -1,
+        decodeCompositeMs: 23,
+        dataChannelRttMs: 88,
+        iceCandidatePairType: "srflx",
+      }),
+    ).toBe(false);
   });
 
   it("rejects a videoStats frame sent the wrong direction (client-only stats)", () => {
