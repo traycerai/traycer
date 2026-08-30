@@ -6,10 +6,19 @@
  * it never waits - and pinning it through the whole install would need a host,
  * a bridge and a bootstrap to observe one promise settling.
  *
- * Named members rather than the runtime itself, the same discipline
- * `in-process-runtime-port.ts` uses: the runtime has 42 members and these
- * ports need eight. A parameter typed as the whole runtime would let a future
- * member reach across this seam without anyone noticing the seam had moved.
+ * Named members rather than the runtime itself: the runtime has 42 members and
+ * these ports need eight. A parameter typed as the whole runtime would let a
+ * future member reach across this seam without anyone noticing the seam had
+ * moved.
+ *
+ * This paragraph used to cite `in-process-runtime-port.ts` as the discipline's
+ * other practitioner. That module is retired, and the sentence was corrected in
+ * the SAME commit that deleted it rather than left to be found later - a
+ * deletion that leaves a name behind mints a stale-prose instance instead of
+ * merely inheriting one. `epicRuntimeCorePortSourceOf` in
+ * `install-epic-runtime-core.ts` is the mapping that fills these members now,
+ * and it is exported so the arm-equality pin uses production's rather than a
+ * copy.
  */
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
