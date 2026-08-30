@@ -699,8 +699,17 @@ export interface OpenEpicState {
    * Validated against the PROJECTED TREE, not the doc, so a record-backed
    * parent is a legal target: a doc-only terminal agent can be nested under a
    * registry-backed chat, which is what the sidebar has always displayed as
-   * possible. Throws `MissingNodeError`, `CrossFamilyParentError`, or
-   * `ReparentCycleError` when the PROJECTION rejects the move.
+   * possible. REJECTS when the PROJECTION rejects the move - and what a
+   * caller receives is a `BridgeCallError` whose `remoteName` is
+   * `MissingNodeError`, `CrossFamilyParentError` or `ReparentCycleError`, not
+   * an instance of those classes.
+   *
+   * That is the boundary, not a downgrade: an `Error` does not survive a
+   * structured clone, so the endpoint carries the error's own `name` across
+   * and `remoteName` is the discriminator that still tells a cycle from a
+   * missing node. This comment promised the classes themselves until the
+   * replica moved; a caller writing `instanceof` on that promise would have
+   * silently stopped matching.
    *
    * Returns `false` without throwing when the node has no doc entry to write:
    * that node is registry-backed and `epic.reparentChat` owns its pointer.

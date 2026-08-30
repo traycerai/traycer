@@ -20,11 +20,6 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import {
-  CrossFamilyParentError,
-  MissingNodeError,
-  ReparentCycleError,
-} from "@/lib/errors";
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -183,14 +178,14 @@ describe("reparentArtifact validates against the projected tree", () => {
     handle = null;
   });
 
-  it("accepts a registry-backed parent as a legal target (not missing-node)", () => {
+  it("accepts a registry-backed parent as a legal target (not missing-node)", async () => {
     handle = newSession();
     seedTerminalAgent(handle, "agent-1", "Agent");
     handle.store
       .getState()
       .applyChatRecords([chatRecord({ chatId: "chat-registry" })], null);
 
-    const mutated = handle.store
+    const mutated = await handle.store
       .getState()
       .reparentArtifact("agent-1", "chat-registry");
 
@@ -200,28 +195,28 @@ describe("reparentArtifact validates against the projected tree", () => {
     expect(after.tree.childrenByParent["chat-registry"]).toContain("agent-1");
   });
 
-  it("throws MissingNodeError for a node genuinely absent from the tree", () => {
+  it("throws MissingNodeError for a node genuinely absent from the tree", async () => {
     handle = newSession();
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
 
-    expect(() =>
+    await expect(
       handle?.store.getState().reparentArtifact("ghost-node", parent),
-    ).toThrow(MissingNodeError);
+    ).rejects.toMatchObject({ remoteName: "MissingNodeError" });
   });
 
-  it("throws CrossFamilyParentError nesting an artifact under a chat, projected", () => {
+  it("throws CrossFamilyParentError nesting an artifact under a chat, projected", async () => {
     handle = newSession();
     const artifact = createArtifactInDocForTests(handle.doc, "spec", null);
     handle.store
       .getState()
       .applyChatRecords([chatRecord({ chatId: "chat-registry" })], null);
 
-    expect(() =>
+    await expect(
       handle?.store.getState().reparentArtifact(artifact, "chat-registry"),
-    ).toThrow(CrossFamilyParentError);
+    ).rejects.toMatchObject({ remoteName: "CrossFamilyParentError" });
   });
 
-  it("catches a cycle that spans the doc and record arms", () => {
+  it("catches a cycle that spans the doc and record arms", async () => {
     handle = newSession();
     // chat-registry (record-only, root) <- chat-doc (doc-backed, parented
     // under chat-registry). The chain crosses both arms: this could not be
@@ -237,12 +232,12 @@ describe("reparentArtifact validates against the projected tree", () => {
 
     // Moving chat-registry under chat-doc would cycle: chat-doc already
     // descends from chat-registry.
-    expect(() =>
+    await expect(
       handle?.store.getState().reparentArtifact("chat-registry", "chat-doc"),
-    ).toThrow(ReparentCycleError);
+    ).rejects.toMatchObject({ remoteName: "ReparentCycleError" });
   });
 
-  it("returns false without throwing when the node has no doc entry to write", () => {
+  it("returns false without throwing when the node has no doc entry to write", async () => {
     handle = newSession();
     // A second, real doc-backed chat to serve as a legal (same-family,
     // non-same-parent) target for the registry-backed node.
@@ -257,7 +252,7 @@ describe("reparentArtifact validates against the projected tree", () => {
     const before = handle.store.getState();
     expect(before.tree.nodeById["chat-registry"].parentId).toBeNull();
 
-    const mutated = handle.store
+    const mutated = await handle.store
       .getState()
       .reparentArtifact("chat-registry", docParent);
 
@@ -285,7 +280,7 @@ describe("reparentArtifact validates against the projected tree", () => {
    * that source the node already sits at root. Flagged to the assigning
    * agent per the handoff - not treated as a bug to work around here.
    */
-  it("pins current behaviour: root drop on a dangling raw parentId is a no-op and leaves the raw pointer dirty", () => {
+  it("pins current behaviour: root drop on a dangling raw parentId is a no-op and leaves the raw pointer dirty", async () => {
     handle = newSession();
     const artifact = createArtifactInDocForTests(
       handle.doc,
@@ -297,7 +292,9 @@ describe("reparentArtifact validates against the projected tree", () => {
     // The projection promotes the unknown raw parent to root.
     expect(before.tree.nodeById[artifact].parentId).toBeNull();
 
-    const mutated = handle.store.getState().reparentArtifact(artifact, null);
+    const mutated = await handle.store
+      .getState()
+      .reparentArtifact(artifact, null);
 
     // Projected `parentId` already reads `null`, so this is `same-parent`:
     // a no-op, not a write.
