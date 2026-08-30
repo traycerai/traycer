@@ -44,6 +44,7 @@ import type {
   WebSocketMessageEvent,
   WebSocketOpenEvent,
 } from "../ws-factory";
+import type { DialPriority } from "../dial-priority";
 import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
   WsRpcClient,
@@ -104,6 +105,7 @@ type RecordedSocket = {
   readonly url: string;
   readonly socket: StubWebSocket;
   readonly sent: ClientFrame[];
+  readonly priority: DialPriority;
 };
 
 class StubWebSocket implements WebSocketLike {
@@ -161,9 +163,9 @@ function makeFactory(): {
 } {
   const sockets: RecordedSocket[] = [];
   const factory: IWebSocketFactory = {
-    create(url: string): WebSocketLike {
+    create(url: string, priority: DialPriority): WebSocketLike {
       const socket = new StubWebSocket();
-      sockets.push({ url, socket, sent: socket.sentFrames });
+      sockets.push({ url, socket, sent: socket.sentFrames, priority });
       return socket;
     },
   };
@@ -713,6 +715,75 @@ describe("WsRpcClient", () => {
 
     await expect(pending).resolves.toEqual({ echoed: "HI" });
     expect(stub.closed).toEqual({ code: 1000, reason: "ok" });
+  });
+
+  it("dials the priority `dialPriorityForMethod` computes for the method, not a literal - background for a listed method, interactive for an unlisted one", async () => {
+    const { factory, sockets } = makeFactory();
+    let nextRequestId = 0;
+    const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => `req-priority-${(nextRequestId += 1)}`,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const authority = authorityForToken("token-abc");
+
+    // "host.status" is on `dial-priority.ts`'s background list.
+    const backgroundPending = client.request(
+      "host.status",
+      {},
+      { idempotencyKey: null, authority },
+    );
+    await flush();
+    // "host.echo" is not - it must fall through to the interactive default.
+    const interactivePending = client.request(
+      "host.echo",
+      { message: "hi" },
+      { idempotencyKey: null, authority },
+    );
+    await flush();
+
+    expect(sockets).toHaveLength(2);
+    expect(sockets[0].priority).toBe("background");
+    expect(sockets[1].priority).toBe("interactive");
+
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const statusRequest = expectRequestFrame(sockets[0].sent[1]);
+    sockets[0].socket.fireMessage({
+      kind: "response",
+      requestId: statusRequest.requestId,
+      method: statusRequest.method,
+      schemaVersion: statusRequest.schemaVersion,
+      result: { ready: true },
+      error: null,
+    });
+    await expect(backgroundPending).resolves.toEqual({ ready: true });
+
+    sockets[1].socket.fireOpen();
+    await flush();
+    sockets[1].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    const echoRequest = expectRequestFrame(sockets[1].sent[1]);
+    sockets[1].socket.fireMessage({
+      kind: "response",
+      requestId: echoRequest.requestId,
+      method: echoRequest.method,
+      schemaVersion: echoRequest.schemaVersion,
+      result: { echoed: "HI" },
+      error: null,
+    });
+    await expect(interactivePending).resolves.toEqual({ echoed: "HI" });
   });
 
   it("strips a requested idempotency key on a legacy openAck and classifies post-send loss as unknown", async () => {

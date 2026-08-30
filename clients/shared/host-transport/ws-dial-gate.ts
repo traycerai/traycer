@@ -52,6 +52,15 @@ import type { DialPriority } from "./dial-priority";
  * handshake timeout; that is bounded, it applies to an app that is already not
  * working, and both transports close such sockets on a 10 s dial timeout.
  *
+ * One consequence to know before it is read as host evidence: because a native
+ * constructor that throws is reported as `error` then `close` (the factories
+ * have no caller frame left to throw into once construction is deferred),
+ * `openSession` sees `erroredBeforeOpen` and classifies a MALFORMED URL as a
+ * dial `refusal`, where before the gate `create()` threw out of the request and
+ * reported no dial outcome at all. It is unreachable in practice - dial URLs
+ * are built from host addresses, not user input - and reporting a bare close
+ * instead would classify identically, so it stands as written.
+ *
  * ## Runtime neutrality
  *
  * `@traycer-clients/shared` transport code is the CLI's too. Bun has no

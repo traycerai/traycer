@@ -1120,6 +1120,44 @@ export function useEpicArtifactBodyAvailability(
 }
 
 /**
+ * Whether the body plane has said ANYTHING about `artifactId` yet.
+ *
+ * ## Why this is not the same question as `useEpicArtifactBodyAvailability`
+ *
+ * `EpicArtifactRoomAvailability` has no "not asked yet" member, so every layer
+ * that reads it collapses an ABSENT key into `"unavailable"` - the runtime
+ * (`epic-rooms-replica.ts`), the store helper (`store.ts`), and the hook above.
+ * That collapse is deliberate and correct for its callers: an editor may bind a
+ * live fragment only on `"ready"`, and every other value means "not now",
+ * whatever the reason.
+ *
+ * It is wrong for one caller: the thing that chooses the WORDS. "This document
+ * isn't available right now. It couldn't be opened on its host." is a claim
+ * about a host that refused, and for the first 100-1400 ms of every cold tile
+ * - measured - it was being shown about a subscribe that had not been answered
+ * yet. So this hook asks the question the collapse erases: is there an entry at
+ * all? `Object.hasOwn` rather than a `!== undefined` comparison because
+ * `noUncheckedIndexedAccess` is off here (see this module's header), and it
+ * genuinely is a key-presence test, not a value test - an entry's value is
+ * never `undefined`.
+ *
+ * Do NOT "simplify" this by giving the availability union a fourth member: the
+ * union is mirrored from two different wires (`epic.subscribe@1.0` room frames
+ * and `artifact.subscribe`'s ready/unavailable pair) and every member of it is
+ * a state the HOST states. "Nothing said yet" is the absence of a wire fact,
+ * which is why it lives in the shape of the map rather than in its values.
+ */
+export function useEpicArtifactBodySubscribeAnswered(
+  artifactId: string | null,
+): boolean {
+  const handle = useOpenEpicHandle();
+  return useStore(handle.store, (s) => {
+    if (artifactId === null) return false;
+    return Object.hasOwn(s.artifactRooms.stateByArtifactId, artifactId);
+  });
+}
+
+/**
  * Materializes `artifactId`'s artifact-room and holds it materialized for as
  * long as the calling component is mounted.
  *

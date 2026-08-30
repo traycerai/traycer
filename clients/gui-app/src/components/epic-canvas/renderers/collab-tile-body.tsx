@@ -34,6 +34,7 @@ import { startCommentDraft } from "@/lib/comments/start-comment-draft";
 import {
   useChildIdsOf,
   useEpicArtifactBodyAvailability,
+  useEpicArtifactBodySubscribeAnswered,
   useEpicArtifactBodyAwareness,
   useEpicArtifactFragment,
   useEpicPermissionRole,
@@ -139,8 +140,53 @@ export function CollabTileBody(props: CollabTileBodyProps) {
   const fragment = useEpicArtifactFragment(props.node.id);
   const artifactRoomAwareness = useEpicArtifactBodyAwareness(props.node.id);
   const bodyAvailability = useEpicArtifactBodyAvailability(props.node.id);
+  const bodySubscribeAnswered = useEpicArtifactBodySubscribeAnswered(
+    props.node.id,
+  );
   const snapshotLoaded = useEpicSnapshotLoaded();
   const fragmentDoc = fragment?.doc ?? null;
+
+  /**
+   * Latched, because the question this tile has is "has this body EVER been
+   * answered", and the map underneath can go back to empty:
+   * `dropAllOnViewerDowngrade` clears every entry at once. That is a DROP, and
+   * a drop is something the reader should be told about - without the latch it
+   * would read as "not asked yet" and hold the placeholder for the full 15 s
+   * tile budget.
+   *
+   * Both arms clear the map on a downgrade, by different routes, and the
+   * routes differ in what happens NEXT - which is what this latch is really
+   * reading. `@1` runs `rooms.dropAllOnViewerDowngrade()` from
+   * `applyRootSnapshot` and then stays down, keeping no body state at all; the
+   * lane arm runs `applyPermissionChanged` -> `requestFreshSnapshot()` ->
+   * `rooms.reset(...)`, which clears the same map and then RE-SUBSCRIBES as a
+   * viewer. So on `@1` the latch reports a durable drop, and on lanes it
+   * reports a window that is about to be answered again.
+   *
+   * The derived-state idiom (`use-load-deadline.ts` uses the same shape for
+   * the same reason): seeded from the CURRENT answer, so a tile that mounts
+   * onto an already-refused body states it on its first frame instead of
+   * flashing a placeholder, and advanced by a guarded render-phase set rather
+   * than an effect, so there is no commit in which the latch disagrees with
+   * what is on screen. A remount resets it, which is correct - a fresh tile
+   * genuinely has no answer of its own yet.
+   *
+   * Do not remove the latch on the grounds that it over-reports. It does: the
+   * downgrade is not the only path that empties the map - `resetInternal`
+   * (replace-replica, resume-too-old, reseed, teardown) does too, and through
+   * that window the latch keeps saying the host refused this document while a
+   * legitimate re-subscribe is in flight. That window reads exactly the same
+   * on HEAD, so the latch RETAINS a wrong state rather than introducing one,
+   * and dropping it would trade the drop case for the reseed case rather than
+   * fix anything. Telling the two apart needs a signal the body plane does not
+   * currently send.
+   */
+  const [bodyAnsweredOnce, setBodyAnsweredOnce] = useState(
+    bodySubscribeAnswered,
+  );
+  if (bodySubscribeAnswered && !bodyAnsweredOnce) {
+    setBodyAnsweredOnce(true);
+  }
 
   const bodyPending =
     !snapshotLoaded ||
@@ -160,6 +206,7 @@ export function CollabTileBody(props: CollabTileBodyProps) {
       <CollabTileSkeleton
         testId={props.testId}
         bodyAvailability={bodyAvailability}
+        subscribeAnswered={bodyAnsweredOnce}
         budgetElapsed={loadBudgetElapsed}
       />
     );
@@ -188,20 +235,35 @@ export function CollabTileBody(props: CollabTileBodyProps) {
  * The pulsing bars are kept for the short, genuinely-loading window - they
  * are a good placeholder for content that is coming - and retired the moment
  * the answer is anything else.
+ *
+ * "The answer", precisely: `subscribeAnswered` is false until the body plane
+ * has stated something about this artifact, and an UNANSWERED tile is a
+ * loading one however `bodyAvailability` reads. The two are separate props
+ * rather than one pre-collapsed value so the DOM carries both - a tile that
+ * looks stuck can be told apart from one that was refused without re-running
+ * the app.
  */
 function CollabTileSkeleton(props: {
   readonly testId: string;
   readonly bodyAvailability: EpicArtifactRoomAvailability;
+  readonly subscribeAnswered: boolean;
   readonly budgetElapsed: boolean;
 }) {
   const testIdSuffix =
-    props.bodyAvailability === "unavailable" ? "unavailable" : "loading";
-  const notice = collabTileNotice(props.bodyAvailability, props.budgetElapsed);
+    props.subscribeAnswered && props.bodyAvailability === "unavailable"
+      ? "unavailable"
+      : "loading";
+  const notice = collabTileNotice(
+    props.bodyAvailability,
+    props.budgetElapsed,
+    props.subscribeAnswered,
+  );
 
   return (
     <div
       data-testid={`${props.testId}-${testIdSuffix}`}
       data-artifact-room-availability={props.bodyAvailability}
+      data-body-subscribe-answered={props.subscribeAnswered ? "true" : "false"}
       data-budget-elapsed={props.budgetElapsed ? "true" : "false"}
       className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-8"
     >

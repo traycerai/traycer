@@ -40,6 +40,7 @@ import type {
   StreamWebSocketLike,
   StreamWebSocketMessageEvent,
 } from "../ws-stream-factory";
+import type { DialPriority } from "../dial-priority";
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
@@ -144,6 +145,7 @@ class StubStreamWebSocket implements StreamWebSocketLike {
 interface RecordedSocket {
   readonly url: string;
   readonly socket: StubStreamWebSocket;
+  readonly priority: DialPriority;
 }
 
 function makeFactory(): {
@@ -152,9 +154,9 @@ function makeFactory(): {
 } {
   const sockets: RecordedSocket[] = [];
   const factory: IStreamWebSocketFactory = {
-    create(url: string): StreamWebSocketLike {
+    create(url: string, priority: DialPriority): StreamWebSocketLike {
       const socket = new StubStreamWebSocket();
-      sockets.push({ url, socket });
+      sockets.push({ url, socket, priority });
       return socket;
     },
   };
@@ -462,6 +464,40 @@ describe("WsStreamClient", () => {
     expect(statuses).toContain("open");
 
     session.close();
+  });
+
+  it("dials the priority `dialPriorityForMethod` computes for the method, not a literal - interactive for the Epic's own lane, background for an app-chrome subscription", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    // "epic.state.subscribe" has a mounted shell waiting on its first frame -
+    // `dial-priority.ts` keeps it interactive.
+    const epicSession = client.subscribe("epic.state.subscribe", {
+      epicId: "epic-1",
+      resume: null,
+    });
+    await flush();
+    // "notifications.subscribe" is on the background list - it populates a
+    // surface the user has not looked at yet.
+    const notificationsSession = client.subscribe(
+      "notifications.subscribe",
+      {},
+    );
+    await flush();
+
+    expect(sockets).toHaveLength(2);
+    expect(sockets[0].priority).toBe("interactive");
+    expect(sockets[1].priority).toBe("background");
+
+    epicSession.close();
+    notificationsSession.close();
   });
 
   it("subscribes to a compatible method even when an unrelated method has major skew", async () => {
