@@ -263,6 +263,36 @@ interface AwaitingBody {
   retryRequested: boolean;
 }
 
+/**
+ * What one `body/materialize` settled to, BEFORE any grant is minted from it.
+ *
+ * The hold it describes has already been taken, for every holder that coalesced
+ * onto it. What is deliberately NOT in here is a release closure: the answer is
+ * shared by N holders and each of them owes its own idempotent release, so the
+ * closures are minted per holder by `grantFor` rather than carried once here.
+ * A single shared release would let the first unmount cancel the hold for all
+ * of them, which is finding 11 wearing a different hat.
+ */
+type InFlightOutcome =
+  | { readonly kind: "unavailable"; readonly reason: string }
+  /** Installed and live on this side. */
+  | { readonly kind: "resident"; readonly docKey: string }
+  /** Demand retained worker-side, bytes still to come. */
+  | { readonly kind: "awaiting"; readonly docKey: string };
+
+/** One outstanding `body/materialize`, and everyone waiting on it. */
+interface InFlightAcquire {
+  /**
+   * How many `acquire` callers are waiting on {@link answer}.
+   *
+   * Incremented SYNCHRONOUSLY as each one joins - the whole point of the
+   * record. A holder counted only when its own answer resolves is invisible to
+   * a release that lands first, and that under-count is finding 11.
+   */
+  holders: number;
+  readonly answer: Promise<InFlightOutcome>;
+}
+
 export function createArtifactBodyLeaseBridge(options: {
   readonly bridge: RuntimeWorkerPort;
   readonly docs: MainThreadBodyDocs;
@@ -324,6 +354,15 @@ export function createArtifactBodyLeaseBridge(options: {
    * both. The resolve path moves the count across in one step.
    */
   const awaiting = new Map<string, AwaitingBody>();
+  /**
+   * Materialize calls that have been issued and not yet settled, by ARTIFACT
+   * id.
+   *
+   * Keyed by artifact rather than doc key because that is all an acquire knows:
+   * the doc key is in the answer. An entry lives only for the duration of one
+   * round trip - `resolveAcquire` clears it in the same step as the install.
+   */
+  const inFlight = new Map<string, InFlightAcquire>();
   let leaseSeq = 0;
 
   function postDemote(docKey: string, generation: number): void {
@@ -474,84 +513,174 @@ export function createArtifactBodyLeaseBridge(options: {
       );
   }
 
+  /**
+   * The round trip, run ONCE per outstanding acquire however many holders
+   * coalesced onto it.
+   *
+   * It reads `inFlight`'s count at the moment the answer lands and installs
+   * that many leases in one step, then clears the record - so the transfer
+   * from "counted while in flight" to "counted on the entry" happens with no
+   * suspension point between the read and the install, and a release landing
+   * either side of it finds the count in exactly one place.
+   *
+   * Two edge cases, both decided here rather than left to a caller:
+   *
+   *   - EVERY HOLDER RELEASES WHILE THIS IS OUTSTANDING cannot happen, and it
+   *     is worth saying why rather than guarding for it: a holder has no
+   *     release closure until its own `acquire` promise resolves, and that
+   *     resolution is this function returning. There is no window in which a
+   *     holder both exists and can let go, so no zombie entry can be installed
+   *     for holders that have all left.
+   *   - A FAILED MATERIALIZE clears the record before rejecting, so every
+   *     coalesced holder's promise rejects and the NEXT acquire starts a fresh
+   *     call rather than awaiting a promise that will never resolve again.
+   */
+  async function resolveAcquire(artifactId: string): Promise<InFlightOutcome> {
+    const answer = await options.bridge
+      .call("body/materialize", { artifactId }, NO_TRANSFER)
+      .catch((error: unknown) => {
+        // Edge case (b). Clear FIRST, then rethrow: every coalesced holder is
+        // awaiting this promise and all of them are about to see the
+        // rejection, so leaving the record in place would make the next
+        // acquire join a promise that has already failed and can never resolve
+        // again.
+        inFlight.delete(artifactId);
+        throw error;
+      });
+    // The count, read at the moment the answer lands and consumed in the same
+    // step. There is no `await` between here and the install below, so a
+    // release cannot land halfway through the transfer and decrement a count
+    // that is about to be replaced.
+    //
+    // The record is always there: the first statement of this function is an
+    // `await`, which suspends unconditionally, so the caller's `inFlight.set`
+    // has run by the time control reaches this line. The `1` is what a lone
+    // uncounted holder would need if a future edit ever put a synchronous
+    // return above that await - correct rather than clever, not a live case.
+    const holders = inFlight.get(artifactId)?.holders ?? 1;
+    inFlight.delete(artifactId);
+    // THE DISCRIMINATOR, split. These two nulls used to be read as one
+    // meaning and they are two:
+    //
+    //   `docKey === null`               NOT HELD  - no body for this artifact
+    //                                              on the installed arm, and
+    //                                              the worker released.
+    //   `docKey` set, `update === null` AWAITING  - the worker RETAINED the
+    //                                              demand and bytes will exist
+    //                                              later.
+    //
+    // Collapsing them is the defect: on the lane arm the awaiting case is
+    // every cold open, and answering `unavailable` there left the tile with no
+    // release to hold and no reason to ask again.
+    if (answer.docKey === null) {
+      return { kind: "unavailable", reason: `no body for ${artifactId}` };
+    }
+    const docKey = answer.docKey;
+    // An entry already under this doc key. Two ways to arrive here, and the
+    // second is the one that matters:
+    //
+    //   - a concurrent acquire for the same artifact installed it while this
+    //     call was in flight; or
+    //   - the `@1` arm, where `docKey` is a ROOM id. `findByArtifact` is keyed
+    //     by doc key, so a held legacy entry is not findable by artifact id at
+    //     all, and EVERY legacy re-acquire lands here rather than on the fast
+    //     path above.
+    //
+    // Both must revive a pending demote, which is why this shares one helper
+    // with the fast path instead of only bumping the lease count. Skipping the
+    // revive here leaves the earlier demote armed: its `accepted: true` passes
+    // the generation guard, the entry is deleted, settled cold and dropped -
+    // out from under the editor that just took the new grant.
+    const raced = entries.get(docKey);
+    if (raced !== undefined) {
+      reviveAndHold(raced, holders);
+      return { kind: "resident", docKey };
+    }
+    // AWAITING, checked after the raced-entry lookup on purpose: if this side
+    // already holds a live doc under this key, that doc is the better answer
+    // than a wait, and the worker dropped this call's lease rather than
+    // retaining it (`hasBodyDemand` covers both of its maps).
+    if (answer.update === null) {
+      holdAwaiting(docKey, artifactId, holders);
+      return { kind: "awaiting", docKey };
+    }
+    // A granted answer with no identity is FORWARD-ONLY, not unavailable.
+    //
+    // This branch used to refuse, reasoning that a body which cannot be
+    // demoted would be "installed and stranded". That reasoning holds for the
+    // lanes arm, where every body states an identity - and it makes the `@1`
+    // arm unserviceable, because `@1` states none BY DESIGN and its bodies
+    // were never settled back even before the relocation: `settleColdState`
+    // already refuses without a recorded guid, so the demote path has always
+    // been unreachable there.
+    //
+    // Stranded is therefore `@1`'s normal state, not a hazard this side
+    // introduces. Refusing here would mean no `@1` body ever reaches an
+    // editor, which is the whole arm going dark.
+    installGranted({
+      docKey,
+      update: answer.update,
+      docGuid: answer.docGuid,
+      seedMode: answer.seedMode,
+      hostStateVector: answer.hostStateVector,
+      awarenessFrames: answer.awarenessFrames,
+      leases: holders,
+    });
+    return { kind: "resident", docKey };
+  }
+
+  /**
+   * Mint ONE holder's grant from a settled outcome.
+   *
+   * Separate from the hold itself because the two have different arities: the
+   * hold is taken once for all `holders` that coalesced onto an answer, and a
+   * grant is minted per holder - each with its own idempotent release, so N
+   * holders own N releases against a count of N.
+   */
+  function grantFor(outcome: InFlightOutcome): ArtifactBodyGrant {
+    if (outcome.kind === "unavailable") {
+      return { kind: "unavailable", reason: outcome.reason };
+    }
+    if (outcome.kind === "awaiting") {
+      return {
+        kind: "awaiting-seed",
+        docKey: outcome.docKey,
+        release: releaseAwaitingFor(outcome.docKey),
+      };
+    }
+    return {
+      kind: "granted",
+      docKey: outcome.docKey,
+      release: releaseFor(outcome.docKey),
+    };
+  }
+
   return {
     async acquire(artifactId): Promise<ArtifactBodyGrant> {
       const existing = findByArtifact(entries, artifactId);
       if (existing !== null) {
-        return reviveAndHold(existing.docKey, existing.entry);
+        reviveAndHold(existing.entry, 1);
+        return grantFor({ kind: "resident", docKey: existing.docKey });
       }
-
-      const answer = await options.bridge.call(
-        "body/materialize",
-        { artifactId },
-        NO_TRANSFER,
-      );
-      // THE DISCRIMINATOR, split. These two nulls used to be read as one
-      // meaning and they are two:
-      //
-      //   `docKey === null`               NOT HELD  - no body for this artifact
-      //                                              on the installed arm, and
-      //                                              the worker released.
-      //   `docKey` set, `update === null` AWAITING  - the worker RETAINED the
-      //                                              demand and bytes will
-      //                                              exist later.
-      //
-      // Collapsing them is the defect: on the lane arm the awaiting case is
-      // every cold open, and answering `unavailable` there left the tile with
-      // no release to hold and no reason to ask again.
-      if (answer.docKey === null) {
-        return { kind: "unavailable", reason: `no body for ${artifactId}` };
+      // COALESCED, and counted SYNCHRONOUSLY. A second acquire arriving while
+      // the first one's `body/materialize` is still outstanding joins it here
+      // rather than issuing its own, and - the load-bearing half - it is
+      // counted NOW, before any answer exists. Counting a holder only when its
+      // own answer resolves is finding 11: four acquires were outstanding
+      // together, the first answer installed a hold of one, and that holder's
+      // release took the count to zero and posted `body/release` while three
+      // holders were still waiting.
+      const outstanding = inFlight.get(artifactId);
+      if (outstanding !== undefined) {
+        outstanding.holders += 1;
+        return grantFor(await outstanding.answer);
       }
-      const docKey = answer.docKey;
-      // An entry already under this doc key. Two ways to arrive here, and the
-      // second is the one that matters:
-      //
-      //   - a concurrent acquire for the same artifact installed it while this
-      //     call was in flight; or
-      //   - the `@1` arm, where `docKey` is a ROOM id. `findByArtifact` is
-      //     keyed by doc key, so a held legacy entry is not findable by
-      //     artifact id at all, and EVERY legacy re-acquire lands here rather
-      //     than on the fast path above.
-      //
-      // Both must revive a pending demote, which is why this shares one helper
-      // with the fast path instead of only bumping the lease count. Skipping
-      // the revive here leaves the earlier demote armed: its `accepted: true`
-      // passes the generation guard, the entry is deleted, settled cold and
-      // dropped - out from under the editor that just took the new grant.
-      const raced = entries.get(docKey);
-      if (raced !== undefined) {
-        return reviveAndHold(docKey, raced);
-      }
-      // AWAITING, checked after the raced-entry lookup on purpose: if this side
-      // already holds a live doc under this key, that doc is the better answer
-      // than a wait, and the worker dropped this call's lease rather than
-      // retaining it (`hasBodyDemand` covers both of its maps).
-      if (answer.update === null) {
-        return holdAwaiting(docKey, artifactId);
-      }
-      // A granted answer with no identity is FORWARD-ONLY, not unavailable.
-      //
-      // This branch used to refuse, reasoning that a body which cannot be
-      // demoted would be "installed and stranded". That reasoning holds for
-      // the lanes arm, where every body states an identity - and it makes the
-      // `@1` arm unserviceable, because `@1` states none BY DESIGN and its
-      // bodies were never settled back even before the relocation:
-      // `settleColdState` already refuses without a recorded guid, so the
-      // demote path has always been unreachable there.
-      //
-      // Stranded is therefore `@1`'s normal state, not a hazard this side
-      // introduces. Refusing here would mean no `@1` body ever reaches an
-      // editor, which is the whole arm going dark.
-      installGranted({
-        docKey,
-        update: answer.update,
-        docGuid: answer.docGuid,
-        seedMode: answer.seedMode,
-        hostStateVector: answer.hostStateVector,
-        awarenessFrames: answer.awarenessFrames,
-        leases: 1,
-      });
-      return { kind: "granted", docKey, release: releaseFor(docKey) };
+      const record: InFlightAcquire = {
+        holders: 1,
+        answer: resolveAcquire(artifactId),
+      };
+      inFlight.set(artifactId, record);
+      return grantFor(await record.answer);
     },
     retryAwaitingBodies(isReadyDocKey): void {
       // A COPY of the keys: each iteration can resolve an entry and delete it,
@@ -612,7 +741,7 @@ export function createArtifactBodyLeaseBridge(options: {
    * makes the outstanding ack a no-op; without it the ack still matches, and
    * the document is dropped under a live grant.
    */
-  function reviveAndHold(docKey: string, entry: BodyEntry): ArtifactBodyGrant {
+  function reviveAndHold(entry: BodyEntry, holders: number): void {
     // THE point of the linger: a re-acquire inside the window costs nothing -
     // no materialize call, no round trip, no re-encode. The doc was never
     // released, so this is a reference count going back up.
@@ -622,8 +751,9 @@ export function createArtifactBodyLeaseBridge(options: {
       entry.demotingGeneration = null;
       entry.generation += 1;
     }
-    entry.leases += 1;
-    return { kind: "granted", docKey, release: releaseFor(docKey) };
+    // `holders`, not 1: an answer can resolve for SEVERAL coalesced acquires at
+    // once, and every one of them owes a release.
+    entry.leases += holders;
   }
 
   /**
@@ -745,29 +875,34 @@ export function createArtifactBodyLeaseBridge(options: {
   }
 
   /**
-   * Take (or add to) an awaiting hold and hand back its grant.
+   * Take (or add to) an awaiting hold.
    *
    * The worker retains exactly ONE demand per doc key however many times it is
    * asked, so this side ref-counts the holders and posts one `body/release`
    * when the last of them goes.
    */
-  function holdAwaiting(docKey: string, artifactId: string): ArtifactBodyGrant {
+  function holdAwaiting(
+    docKey: string,
+    artifactId: string,
+    holders: number,
+  ): void {
     const held = awaiting.get(docKey);
     if (held === undefined) {
       awaiting.set(docKey, {
         artifactId,
-        leases: 1,
+        // `holders`, not 1. Every acquire that coalesced onto this one answer
+        // is a holder that owes a release, and starting at 1 is precisely the
+        // finding-11 under-count: the first release then took the entry to
+        // zero and posted `body/release`, dropping the worker's single demand -
+        // and on the lane arm that demand IS the subscription - while the other
+        // holders were still waiting to be told they had one.
+        leases: holders,
         retrying: false,
         retryRequested: false,
       });
     } else {
-      held.leases += 1;
+      held.leases += holders;
     }
-    return {
-      kind: "awaiting-seed",
-      docKey,
-      release: releaseAwaitingFor(docKey),
-    };
   }
 
   /**

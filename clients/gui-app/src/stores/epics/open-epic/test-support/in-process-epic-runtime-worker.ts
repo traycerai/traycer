@@ -21,12 +21,18 @@
  * matter" - is why this file exists rather than a copy in the provider suite.
  */
 import { createFakeBridgePair } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
+import type { FakeBridgeDelivery } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
 import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
 import type { RuntimeWorkerLike } from "../runtime/worker/spawn-epic-runtime-worker";
 import { startEpicRuntimeWorkerHost } from "../runtime/worker/epic-runtime-worker-host";
 import { installEpicRuntimeCore } from "../runtime/worker/install-epic-runtime-core";
 import type { EpicRuntimeStreamFactories } from "../runtime/worker/epic-runtime-composition";
 import type { EpicReplicaRuntime } from "../runtime/epic-replica-runtime";
+
+// Re-exported so the harness entry point can name the delivery mode without
+// opening a second cross-package import edge for a type this module already
+// carries.
+export type { FakeBridgeDelivery };
 
 export interface InProcessEpicRuntimeWorker {
   /**
@@ -49,11 +55,23 @@ export interface InProcessEpicRuntimeWorker {
   composedRuntime(): EpicReplicaRuntime | null;
   /** Deliver everything queued on the pipe, and everything that causes. */
   flush(): Promise<void>;
+  /**
+   * Change delivery for every frame from here on.
+   *
+   * For `openStoreForTestWithQueuedBridge`, which flips to `"queued"` once the
+   * runtime is composed. See `FakeBridgePair.setDelivery` for why it cannot
+   * simply be constructed that way.
+   */
+  setDelivery(next: FakeBridgeDelivery): void;
 }
 
 export function createInProcessEpicRuntimeWorker(
   factories: EpicRuntimeStreamFactories,
 ): InProcessEpicRuntimeWorker {
+  // ALWAYS `"sync"` here: composition happens inside the caller's
+  // `spawnEpicRuntimeWorker`, over this pipe, so a pair queued from birth
+  // cannot construct a runtime at all. A suite that needs queued delivery gets
+  // it by flipping AFTER composition - see `setDelivery`.
   const pair = createFakeBridgePair("sync");
   // The worker side, in this thread: the real host, given the caller's
   // factories in place of the proxy-built ones. That injection is the seam
@@ -70,5 +88,8 @@ export function createInProcessEpicRuntimeWorker(
     }),
     composedRuntime: () => composed(),
     flush: () => pair.flush(),
+    setDelivery: (next) => {
+      pair.setDelivery(next);
+    },
   };
 }

@@ -61,6 +61,26 @@ export interface FakeBridgePair {
   flush(): Promise<void>;
   /** Stops delivery in both directions, as a terminated worker would. */
   sever(): void;
+  /**
+   * Change how frames are delivered from this point on.
+   *
+   * It exists because a pair cannot be `"queued"` FROM BIRTH and still be
+   * constructible: the runtime's composition is synchronous over this pipe -
+   * `spawnEpicRuntimeWorker` publishes its bootstrap during the spawn call
+   * itself - so a pipe that delivers nothing until `flush()` never hands the
+   * bootstrap over, and the caller gets "the worker composed no runtime"
+   * instead of a harness. Construct on `"sync"`, flip after composition.
+   *
+   * The flip belongs to the HARNESS ENTRY POINT that orchestrates a suite, not
+   * to the suite: `openStoreForTestWithQueuedBridge` performs it once, after
+   * the composition assertion. A test calling this itself is describing an
+   * interleave, and that call is then part of the scenario rather than setup.
+   *
+   * Deliberately not a frame-kind predicate. Teaching this pair which frames
+   * are "boot" and which are "body" would move domain knowledge into a
+   * primitive whose whole value is being a dumb pipe.
+   */
+  setDelivery(next: FakeBridgeDelivery): void;
 }
 
 export type FakeBridgeDelivery = "sync" | "queued";
@@ -75,6 +95,10 @@ export function createFakeBridgePair(
   const fromWorker: RecordedPost[] = [];
   const queue: Array<() => void> = [];
   let severed = false;
+  // MUTABLE for the constructor-composition reason documented on
+  // `setDelivery`. Read at each delivery rather than captured, so a flip
+  // applies to every frame after it and to none before.
+  let deliveryMode: FakeBridgeDelivery = delivery;
 
   const mainListeners = new Set<(message: unknown) => void>();
   const workerListeners = new Set<(message: unknown) => void>();
@@ -105,7 +129,7 @@ export function createFakeBridgePair(
           // mutate the collection being walked.
           for (const listener of [...peers]) listener(delivered);
         };
-        if (delivery === "sync") {
+        if (deliveryMode === "sync") {
           deliver();
           return;
         }
@@ -168,6 +192,9 @@ export function createFakeBridgePair(
       throw new Error(
         `fake bridge pair: still delivering after ${String(MAX_FLUSH_ROUNDS)} rounds`,
       );
+    },
+    setDelivery(next): void {
+      deliveryMode = next;
     },
     sever(): void {
       severed = true;

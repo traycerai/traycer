@@ -31,7 +31,11 @@ import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { RuntimeWorkerPort } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import type { EpicReplicaRuntime } from "../runtime/epic-replica-runtime";
-import { createInProcessEpicRuntimeWorker } from "./in-process-epic-runtime-worker";
+import {
+  createInProcessEpicRuntimeWorker,
+  type FakeBridgeDelivery,
+  type InProcessEpicRuntimeWorker,
+} from "./in-process-epic-runtime-worker";
 import { createRecordingStreamClient } from "@traycer-clients/shared/replica-runtime/worker/test-support/recording-stream-client";
 
 import {
@@ -130,8 +134,41 @@ export function openStoreForTest(
   // helper, not inline - the provider suites need the identical construction
   // at the `__setEpicRuntimeWorkerFactoryForTests` seam, and two copies of it
   // is the drift this file's own header warns about.
-  const inProcessWorker = createInProcessEpicRuntimeWorker(options.factories);
+  return openStoreOver(
+    createInProcessEpicRuntimeWorker(options.factories),
+    options,
+    "sync",
+  );
+}
 
+/**
+ * The identical wiring over a QUEUED bridge, for suites that need to control
+ * interleaving rather than have the pipe settle each call before the next.
+ *
+ * Everything below the pipe is the same objects - same host, same core, same
+ * dispatch - so a difference between the two is a difference in ORDERING and
+ * nothing else. That is the whole point: a concurrency defect on this seam is
+ * invisible to the sync pipe, because the sync pipe answers each call before
+ * the next caller starts.
+ *
+ * `flush()` is the only thing that moves a frame here, so a suite using this
+ * must drive it explicitly.
+ */
+export function openStoreForTestWithQueuedBridge(
+  options: OpenStoreForTestOptions,
+): OpenedStoreForTest {
+  return openStoreOver(
+    createInProcessEpicRuntimeWorker(options.factories),
+    options,
+    "queued",
+  );
+}
+
+function openStoreOver(
+  inProcessWorker: InProcessEpicRuntimeWorker,
+  options: OpenStoreForTestOptions,
+  deliveryAfterComposition: FakeBridgeDelivery,
+): OpenedStoreForTest {
   const accounting = createProcessBackedAccountingPort({
     hostId: "test-host",
     epicId: options.epicId,
@@ -277,6 +314,12 @@ export function openStoreForTest(
     // would fail somewhere far from the cause.
     throw new Error("[openStoreForTest] the worker composed no runtime");
   }
+  // The flip, and it lives HERE rather than in a suite: composition is done, so
+  // everything after this is the behaviour under test. A suite that flipped for
+  // itself would be doing setup the entry point already owns, and one that
+  // constructed a queued pair would not get this far - see
+  // `FakeBridgePair.setDelivery`.
+  inProcessWorker.setDelivery(deliveryAfterComposition);
   return {
     ...handle,
     flush: () => inProcessWorker.flush(),
