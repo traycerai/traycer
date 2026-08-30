@@ -8,6 +8,7 @@ import {
   isMainToWorkerFrame,
   type MainToWorkerEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+import { createRecordingAccountingPort } from "@/stores/epics/open-epic/test-support/accounting-port-fixture";
 import { createRecordingStreamClient } from "@traycer-clients/shared/replica-runtime/worker/test-support/recording-stream-client";
 import type { RuntimeProjectionHandlers } from "@traycer-clients/shared/replica-runtime/worker/runtime-projection-subscription";
 import {
@@ -51,6 +52,8 @@ function spawnOptions<TProjection>(
     createWorker: required.createWorker,
     projection: required.projection,
     relay: { log: () => {}, fatal: () => {} },
+    accounting: createRecordingAccountingPort().port,
+    epicId: "epic-fixture",
     streams: createRecordingStreamClient().client,
     writeCommand: () =>
       Promise.resolve({

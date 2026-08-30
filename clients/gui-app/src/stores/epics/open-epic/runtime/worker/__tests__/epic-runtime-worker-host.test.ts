@@ -46,7 +46,11 @@ function bootstrap(protocolVersion: number): {
 } {
   return {
     kind: "bootstrap",
-    bootstrap: { protocolVersion, windowLabel: "test-window" },
+    bootstrap: {
+      protocolVersion,
+      epicId: "epic-under-test",
+      windowLabel: "test-window",
+    },
   };
 }
 

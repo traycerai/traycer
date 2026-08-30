@@ -32,6 +32,7 @@ import {
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 
 import { startEpicRuntimeWorkerHost } from "../epic-runtime-worker-host";
+import { installEpicRuntimeCore } from "../install-epic-runtime-core";
 
 /**
  * The narrowing the shipped entry gets from `resolveWorkerScopeTransport`,
@@ -56,4 +57,9 @@ if (!isMessageTargetLike(scope)) {
   throw new Error("boot-probe worker entry: scope is not a message target");
 }
 
-startEpicRuntimeWorkerHost(createMessageTargetTransport(scope));
+// Tracks the shipped entry per the rule above: it composes the core, so this
+// does too. Without it the boot pin would prove a bare bridge boots, which
+// stopped being what ships the moment the entry grew this line.
+installEpicRuntimeCore(
+  startEpicRuntimeWorkerHost(createMessageTargetTransport(scope)),
+);

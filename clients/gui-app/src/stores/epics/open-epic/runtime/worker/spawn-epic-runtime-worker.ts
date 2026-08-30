@@ -49,6 +49,8 @@ import {
   type WorkerToMainEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import { NO_TRANSFER } from "@traycer-clients/shared/replica-runtime/worker/transferable-bytes";
+import { createMainAccountingBridge } from "./main-accounting-bridge";
+import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port";
 
 /** The part of `Worker` this module uses. */
 export interface RuntimeWorkerLike extends BridgeMessageTargetLike {
@@ -111,6 +113,17 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
    * `accept` is the caller's, because the slice's shape is the store's.
    */
   readonly projection: RuntimeProjectionHandlers<TProjection>;
+  /**
+   * The process-backed books this worker's runtime reports into.
+   *
+   * Built by the CALLER on main, exactly as the in-process store builds it, so
+   * both arms draw their runtime token from the one process-wide sequence.
+   * Nothing about it crosses the bridge - the worker pushes byte facts in the
+   * runtime's own vocabulary and this side names the holders.
+   */
+  readonly accounting: EpicRuntimeAccountingPort;
+  /** The epic this worker serves for its whole life. */
+  readonly epicId: string;
   readonly windowLabel: string;
 }
 
@@ -210,6 +223,16 @@ export function spawnEpicRuntimeWorker<TProjection>(
   // there can be no second one.
   const projections = createRuntimeProjectionOrdering(options.projection);
 
+  // Turns the worker's byte pushes back into calls on the real books, and
+  // answers the accountant's synchronous reads from the snapshot each push
+  // carries. The demote it dispatches is the one inbound member.
+  const accounting = createMainAccountingBridge({
+    port: options.accounting,
+    dispatchDemote: (overBytes) => {
+      bridge.emit({ kind: "accounting/demote", overBytes }, NO_TRANSFER);
+    },
+  });
+
   const unsubscribeEvents = bridge.onEvent((event: WorkerToMainEvent) => {
     switch (event.kind) {
       case "ready":
@@ -231,7 +254,18 @@ export function spawnEpicRuntimeWorker<TProjection>(
         // an unhandled error in a `message` listener with no route back.
         proxy?.handle(event);
         return;
+      case "accounting/books":
+      case "accounting/settle":
+        accounting.handle(event);
+        return;
       case "fatal":
+        // The runtime behind the bridge is gone, so its books must not stay
+        // attached to the process planes. Without this the accountant keeps a
+        // dead runtime's cached numbers and dispatches demote requests into a
+        // bridge nothing is listening on - a plane that never reclaims and
+        // never explains why. Idempotent, so the `dispose()` that follows a
+        // surfaced fatal is not a second deregistration.
+        accounting.dispose();
         options.relay.fatal(event.message, event.stack);
         // A fatal before the handshake is the handshake's answer. After it,
         // the promise has already settled and this is a no-op - the relay is
@@ -248,6 +282,7 @@ export function spawnEpicRuntimeWorker<TProjection>(
       kind: "bootstrap",
       bootstrap: {
         protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION,
+        epicId: options.epicId,
         windowLabel: options.windowLabel,
       },
     },
@@ -291,6 +326,9 @@ export function spawnEpicRuntimeWorker<TProjection>(
       // Only then stop routing. Unsubscribing before the detach drops every
       // report even on a live bridge.
       unsubscribeEvents();
+      // The worker will not get to say `accounting/books registered: false` -
+      // it is about to be terminated - so main releases the holders itself.
+      accounting.dispose();
       // Ask before killing. `shutdown` lets the worker dispose its own core -
       // a durable store mid-write, a transport mid-close - whereas
       // `terminate()` stops it between two machine instructions.

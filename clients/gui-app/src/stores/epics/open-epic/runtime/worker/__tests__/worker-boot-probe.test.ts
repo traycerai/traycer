@@ -3,13 +3,16 @@
  *
  * Every other suite in this directory drives the host over a fake bridge pair
  * on one thread. This one loads the worker module graph with `new Worker(...)`
- * and reads the first frame back off a real `postMessage`, which is the only
- * way to observe two things no same-thread test can:
+ * and reads what comes back off a real `postMessage`, which is the only way to
+ * observe three things no same-thread test can:
  *
  * - the graph is IMPORTABLE in a worker realm at all - no module in it reaches
- *   for a DOM global at import time;
+ *   for a DOM global at import time, and since the flip that graph is the whole
+ *   composition root rather than just the bridge;
  * - `ready` survives the structured clone, carrying the protocol version the
- *   main side negotiates against.
+ *   main side negotiates against;
+ * - the composition runs BEFORE `ready`, which is what makes `ready` mean "I
+ *   can serve" rather than "I have loaded".
  *
  * It boots `test-support/boot-probe-worker-entry.ts` rather than the shipped
  * entry, and that module's header says why: the shim's `self` is window-shaped,
@@ -21,18 +24,48 @@ import { describe, expect, it } from "vitest";
 
 const BOOT_TIMEOUT_MS = 10_000;
 
-function firstMessage(worker: Worker): Promise<unknown> {
-  return new Promise<unknown>((resolve, reject) => {
+interface WorkerFrame {
+  readonly frame: string;
+  readonly event: { readonly kind: string };
+}
+
+function isWorkerFrame(value: unknown): value is WorkerFrame {
+  if (typeof value !== "object" || value === null) return false;
+  const event: unknown = Reflect.get(value, "event");
+  if (typeof event !== "object" || event === null) return false;
+  return typeof Reflect.get(event, "kind") === "string";
+}
+
+/**
+ * Every frame up to and including the first of `kind`.
+ *
+ * Collecting rather than taking the first is the point, and it is a lesson
+ * this file learned the hard way: the composition emits before `ready` does,
+ * so a first-frame assertion pins whichever side effect happens to come first
+ * and reds every time one is added. What matters is which frames arrived and
+ * in what ORDER - so the failure message names what was seen.
+ */
+function framesUntil(worker: Worker, kind: string): Promise<WorkerFrame[]> {
+  return new Promise<WorkerFrame[]>((resolve, reject) => {
+    const seen: WorkerFrame[] = [];
     const timer = setTimeout(() => {
       reject(
         new Error(
-          `no frame from the worker within ${String(BOOT_TIMEOUT_MS)}ms`,
+          `no ${kind} frame within ${String(BOOT_TIMEOUT_MS)}ms; saw ${
+            seen.length === 0
+              ? "nothing"
+              : seen.map((frame) => frame.event.kind).join(", ")
+          }`,
         ),
       );
     }, BOOT_TIMEOUT_MS);
     worker.addEventListener("message", (event: MessageEvent) => {
+      const data: unknown = event.data;
+      if (!isWorkerFrame(data)) return;
+      seen.push(data);
+      if (data.event.kind !== kind) return;
       clearTimeout(timer);
-      resolve(event.data);
+      resolve(seen);
     });
     worker.addEventListener("error", (event: ErrorEvent) => {
       clearTimeout(timer);
@@ -41,65 +74,94 @@ function firstMessage(worker: Worker): Promise<unknown> {
   });
 }
 
+function bootProbeWorker(): Worker {
+  return new Worker(
+    new URL("../test-support/boot-probe-worker-entry.ts", import.meta.url),
+    { type: "module" },
+  );
+}
+
+function bootstrapFrame(protocolVersion: number): unknown {
+  return {
+    frame: "event",
+    event: {
+      kind: "bootstrap",
+      bootstrap: {
+        protocolVersion,
+        epicId: "boot-probe-epic",
+        windowLabel: "boot-probe",
+      },
+    },
+  };
+}
+
 describe("the runtime worker host in a worker realm", () => {
   it("answers the bootstrap handshake with ready over a real postMessage", async () => {
-    const worker = new Worker(
-      new URL("../test-support/boot-probe-worker-entry.ts", import.meta.url),
-      { type: "module" },
-    );
+    const worker = bootProbeWorker();
 
     try {
-      const frame = firstMessage(worker);
+      const frames = framesUntil(worker, "ready");
       // `ready` answers a bootstrap; it is not a boot announcement. Sending
       // the handshake is what makes this a test of the version negotiation
       // rather than of module loading, and a worker that loads but disagrees
       // on the version answers `fatal` here instead.
-      worker.postMessage({
-        frame: "event",
-        event: {
-          kind: "bootstrap",
-          bootstrap: { protocolVersion: 4, windowLabel: "boot-probe" },
-        },
-      });
-      const received = await frame;
+      worker.postMessage(bootstrapFrame(5));
+      const received = await frames;
 
       // Asserted as the whole frame rather than by reaching into it: the shape
       // is the contract the main side parses, and a test that plucked
       // `protocolVersion` out would still pass if the envelope changed.
-      expect(received).toEqual({
+      expect(received.at(-1)).toEqual({
         frame: "event",
-        event: { kind: "ready", protocolVersion: 4 },
+        event: { kind: "ready", protocolVersion: 5 },
       });
     } finally {
       worker.terminate();
     }
   });
 
-  it("answers a version-skewed bootstrap with fatal, not ready", async () => {
-    // Without this the test above cannot tell a negotiated `ready` from a
-    // constant one: a host that emitted `ready` for any bootstrap at all would
-    // satisfy it.
-    const worker = new Worker(
-      new URL("../test-support/boot-probe-worker-entry.ts", import.meta.url),
-      { type: "module" },
-    );
+  it("registers the runtime's books before it answers ready", async () => {
+    // The ordering IS the contract. `ready` is what makes main start sending
+    // calls, so a core installed after it leaves a window where the worker
+    // answers "not held" to reads the runtime could have served - and a books
+    // registration after it leaves the accountant blind to a runtime that is
+    // already allocating.
+    const worker = bootProbeWorker();
 
     try {
-      const frame = firstMessage(worker);
-      worker.postMessage({
-        frame: "event",
-        event: {
-          kind: "bootstrap",
-          bootstrap: { protocolVersion: 3, windowLabel: "boot-probe" },
-        },
-      });
-      const received = await frame;
+      const frames = framesUntil(worker, "ready");
+      worker.postMessage(bootstrapFrame(5));
+      const kinds = (await frames).map((frame) => frame.event.kind);
 
-      expect(received).toMatchObject({
+      expect(kinds).toContain("accounting/books");
+      expect(kinds.indexOf("accounting/books")).toBeLessThan(
+        kinds.indexOf("ready"),
+      );
+    } finally {
+      worker.terminate();
+    }
+  });
+
+  it("answers a version-skewed bootstrap with fatal, and composes nothing", async () => {
+    // Two claims, and the second is the one worth having: a worker that
+    // disagrees on the version must not build a runtime. If it did, it would
+    // register books and open streams for a session main is about to reject,
+    // and the books would then hold a runtime nothing can reach.
+    const worker = bootProbeWorker();
+
+    try {
+      const frames = framesUntil(worker, "fatal");
+      worker.postMessage(bootstrapFrame(4));
+      const received = await frames;
+
+      expect(received.at(-1)).toMatchObject({
         frame: "event",
         event: { kind: "fatal" },
       });
-      expect(JSON.stringify(received)).toContain("protocol mismatch");
+      expect(JSON.stringify(received.at(-1))).toContain("protocol mismatch");
+      expect(received.map((frame) => frame.event.kind)).not.toContain(
+        "accounting/books",
+      );
     } finally {
       worker.terminate();
     }

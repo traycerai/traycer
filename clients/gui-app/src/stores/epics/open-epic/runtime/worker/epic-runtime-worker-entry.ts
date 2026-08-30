@@ -25,5 +25,8 @@
  */
 import { resolveWorkerScopeTransport } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 import { startEpicRuntimeWorkerHost } from "./epic-runtime-worker-host";
+import { installEpicRuntimeCore } from "./install-epic-runtime-core";
 
-startEpicRuntimeWorkerHost(resolveWorkerScopeTransport(self));
+installEpicRuntimeCore(
+  startEpicRuntimeWorkerHost(resolveWorkerScopeTransport(self)),
+);

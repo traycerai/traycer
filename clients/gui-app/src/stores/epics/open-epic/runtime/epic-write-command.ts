@@ -49,9 +49,37 @@ export class EpicWriteCommandTransportUnavailableError extends Error {
   }
 }
 
+/**
+ * A failure that was already classified, on the other side of the bridge.
+ *
+ * `Error` does not survive structured clone, so a write command sent from the
+ * worker is dispatched by MAIN, which owns the requester and therefore owns
+ * the classification. What comes back is the classifier's own union - never a
+ * thrown object the worker would have to reconstruct - and the queue's contract
+ * is `classifyFailure(error)`, so the union has to be carried back INTO a throw
+ * to reach it. This is that carrier, and the first branch below is where it
+ * comes out again.
+ *
+ * The alternative was widening `CommandQueueOptions` to accept a pre-classified
+ * failure, which would change a SHARED contract for one caller's transport.
+ */
+export class RelayedWriteCommandFailureError extends Error {
+  readonly failure: CommandSendFailure;
+
+  constructor(failure: CommandSendFailure) {
+    super(`Write command failed on the main thread: ${failure.kind}`);
+    this.name = "RelayedWriteCommandFailureError";
+    this.failure = failure;
+  }
+}
+
 export function classifyEpicWriteCommandFailure(
   error: unknown,
 ): CommandSendFailure {
+  // First, and it must stay first: this failure has already been through this
+  // function on the other thread. Re-classifying it would reduce a precise
+  // `rejected` with its host code to the catch-all `RPC_ERROR` below.
+  if (error instanceof RelayedWriteCommandFailureError) return error.failure;
   if (
     error instanceof RetryableTransportError ||
     error instanceof StaleHostBindingAuthorityError ||

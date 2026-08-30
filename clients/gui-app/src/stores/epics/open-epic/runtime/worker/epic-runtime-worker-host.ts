@@ -24,6 +24,7 @@
 import {
   createWorkerBridgeEndpoint,
   type BridgeTransport,
+  type MainThreadPort,
   type RuntimeWorkerCallHandlers,
   type WorkerBridgeEndpoint,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
@@ -45,6 +46,8 @@ import {
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
 import type { RuntimeEnvironment } from "@traycer-clients/shared/replica-runtime/runtime-environment";
 import { createWorkerRuntimeEnvironment } from "../worker-runtime-environment";
+import { createWorkerAccountingPort } from "./worker-accounting-port";
+import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port";
 
 /**
  * The relocated composition root, as the bridge sees it.
@@ -137,6 +140,47 @@ export interface EpicRuntimeWorkerHost {
    */
   currentUserId(): string | null;
   /**
+   * The worker->main call surface, for the composed runtime's write commands.
+   *
+   * Narrow by construction: `MainThreadPort` is `call` and nothing else, so a
+   * composition cannot reach `emit` and publish a second projection stream
+   * beside the one {@link publishProjection} owns.
+   */
+  readonly main: MainThreadPort;
+  /**
+   * Publish one projection slice to main.
+   *
+   * The revision is the HOST's, minted here and strictly increasing per
+   * worker, because the main side drops a revision it has already applied. A
+   * caller minting its own would be a second sequence over one stream, and two
+   * sequences interleave into an order that drops deliveries as stale.
+   */
+  publishProjection(value: unknown): void;
+  /**
+   * Runs `listener` when the bootstrap lands, BEFORE `ready` is emitted.
+   *
+   * The composition root cannot be built at construction: it needs the epic id,
+   * and that arrives on the wire. Running before `ready` is the whole point -
+   * `ready` is what makes the main thread start sending calls, so a core
+   * installed after it would leave a window in which the worker answers
+   * "not held" to reads the runtime could have served. A listener that throws
+   * fails the handshake into a `fatal`, which is the honest outcome for a
+   * composition that could not be built.
+   *
+   * Returns an unsubscribe, and does not fire for a SKEWED bootstrap: a
+   * version-mismatched worker must compose nothing.
+   */
+  onBootstrap(listener: (facts: RuntimeWorkerBootstrap) => void): () => void;
+  /**
+   * Where the composed runtime reports its bytes.
+   *
+   * Available before a core is installed, for the same reason `environment` is:
+   * building the core needs it. Pushes over the bridge - the books themselves
+   * are on main, because a worker importing them would COPY the accountant
+   * rather than share it.
+   */
+  readonly accounting: EpicRuntimeAccountingPort;
+  /**
    * Installs the relocated composition root. Called once, by the phase that
    * moves it; a second call replaces the core and disposes the previous one.
    */
@@ -155,6 +199,8 @@ export function startEpicRuntimeWorkerHost(
   // hides chats owned by a different user and shows none while unknown.
   let currentUserId: string | null = null;
   let stopped = false;
+  const bootstrapListeners = new Set<(facts: RuntimeWorkerBootstrap) => void>();
+  let projectionRevision = 0;
 
   const handlers: RuntimeWorkerCallHandlers = {
     "attachment/read": async (request) => {
@@ -264,6 +310,11 @@ export function startEpicRuntimeWorkerHost(
     },
   );
   const environment = createWorkerRuntimeEnvironment(emitLog);
+  // After the bridge, like the log sink and the stream client, and for the
+  // same reason: its emit closes over a `const`.
+  const accounting = createWorkerAccountingPort((event) => {
+    bridge.emit(event, NO_TRANSFER);
+  });
 
   const onEvent = (event: MainToWorkerEvent): void => {
     if (stopped) return;
@@ -293,6 +344,12 @@ export function startEpicRuntimeWorkerHost(
         // answering `fatal` would leave the core builder able to construct
         // against facts the two sides do not agree on.
         bootstrap = event.bootstrap;
+        // Composition BEFORE `ready`. A throw here propagates to the listener
+        // wrapper's catch and becomes a `fatal` with no `ready` - main then
+        // rejects its handshake instead of adopting a worker whose runtime
+        // does not exist.
+        for (const listener of [...bootstrapListeners])
+          listener(event.bootstrap);
         bridge.emit(
           { kind: "ready", protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION },
           NO_TRANSFER,
@@ -327,6 +384,10 @@ export function startEpicRuntimeWorkerHost(
       }
       case "current-user": {
         currentUserId = event.userId;
+        return;
+      }
+      case "accounting/demote": {
+        accounting.demote(event.overBytes);
         return;
       }
       case "shutdown": {
@@ -379,7 +440,21 @@ export function startEpicRuntimeWorkerHost(
   return {
     environment,
     streams,
+    accounting: accounting.port,
     bootstrapFacts: () => bootstrap,
+    main: bridge,
+    publishProjection(value): void {
+      if (stopped) return;
+      projectionRevision += 1;
+      bridge.emit(
+        { kind: "projection", revision: projectionRevision, value },
+        NO_TRANSFER,
+      );
+    },
+    onBootstrap(listener): () => void {
+      bootstrapListeners.add(listener);
+      return () => bootstrapListeners.delete(listener);
+    },
     currentUserId: () => currentUserId,
     installCore(next): void {
       const previous = core;

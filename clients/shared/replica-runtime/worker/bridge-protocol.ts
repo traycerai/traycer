@@ -47,6 +47,7 @@ import type {
 import type { CommandResolution, CommandSendFailure } from "../command-overlay";
 import type { SendOutcome } from "../adapter";
 import type { RuntimeLogFields } from "../runtime-environment";
+import type { ProtectedBytes } from "../memory-accountant";
 
 /**
  * Bumped when a frame's shape changes incompatibly.
@@ -55,6 +56,12 @@ import type { RuntimeLogFields } from "../runtime-environment";
  * it is a stale chunk surviving a dev HMR reload, which otherwise presents as
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
+ *
+ * **5** since the accounting vocabulary: the worker reports its bytes rather
+ * than reaching a process accountant it would have COPIED, so a v4 worker
+ * pushes no settlements and a v4 main answers no demote request. Both sides
+ * would run - and the books would silently hold nothing for that runtime,
+ * which is the failure mode that has no symptom until a plane never evicts.
  *
  * **4** since the body payloads carry `docGuid`: a v3 worker materializes
  * without an identity and a v3 demote cannot be refused on one, so the two
@@ -77,18 +84,95 @@ import type { RuntimeLogFields } from "../runtime-environment";
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 4;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 5;
+
+/**
+ * The runtime facts main's books read between settlements.
+ *
+ * Three of {@link EpicRuntimeAccountingSource}'s four members are pure reads,
+ * and after relocation they are read SYNCHRONOUSLY by an accountant on main
+ * while their answers live in the worker. This snapshot is how that is possible
+ * at all: every settlement carries the current values, so main's cache is never
+ * more than one push stale, and the accountant's synchronous questions are
+ * answered from it rather than from a call that cannot exist.
+ *
+ * `projectionCounts` is `unknown` here for the same reason `projection.value`
+ * is: its shape belongs to the gui-app budget module, and a copy of that
+ * contract in this file would rot against it. The composition root narrows it,
+ * exactly as it does a projection slice.
+ */
+export interface RuntimeAccountingSnapshot {
+  readonly materializedRoomIds: readonly string[];
+  readonly rootBytes: number;
+  /**
+   * The tier's LAST KNOWN protected breakdown, and the reason this member
+   * exists rather than being defaulted to empty on main.
+   *
+   * A deferred eviction answers `reclaimedBytes: 0`, which is also what "there
+   * was nothing to free" answers. The breakdown is the only thing that
+   * distinguishes them, and reporting an empty one would tell the accountant a
+   * plane is unprotected at the exact moment it is entirely pinned.
+   */
+  readonly protectedBytesByKind: readonly ProtectedBytes[];
+  readonly projectionCounts: unknown;
+}
+
+/**
+ * One settlement, in the runtime's own vocabulary.
+ *
+ * A nested union rather than six top-level event kinds, so the mapping to
+ * `EpicRuntimeAccountingPort`'s six reporting members stays one-to-one and a
+ * member added there fails to compile here - while the event vocabulary itself
+ * grows by two rather than by eight.
+ */
+export type RuntimeAccountingSettlement =
+  | { readonly kind: "root"; readonly bytes: number }
+  | {
+      readonly kind: "cold-room";
+      readonly artifactRoomId: string;
+      readonly bytes: number;
+    }
+  | { readonly kind: "command-overlay"; readonly bytes: number }
+  | {
+      readonly kind: "hot-doc";
+      readonly artifactRoomId: string;
+      readonly bytes: number;
+    }
+  | {
+      readonly kind: "hot-doc-provisional";
+      readonly artifactRoomId: string;
+      readonly bytes: number;
+    }
+  | { readonly kind: "hot-doc-release"; readonly artifactRoomId: string };
 
 /**
  * What the worker was told about the surface it is serving.
  *
- * Deliberately scalar, and deliberately down to ONE field. `hostId`/`userId`
- * rode here while the plan was to move the socket; with the transport on main
- * nothing in the worker reads either, and a field nobody reads is the
- * design-by-accident this bridge keeps deleting. They return WITH a reader.
+ * Deliberately scalar, and deliberately minimal. `hostId`/`userId` rode here
+ * while the plan was to move the socket; with the transport on main nothing in
+ * the worker reads either, and a field nobody reads is the design-by-accident
+ * this bridge keeps deleting. The rule that replaced them is the one `epicId`
+ * below satisfies: a field returns WITH a reader, named at the field.
+ *
+ * `hostId` remains absent and remains without a reader - 4e moved holder-id
+ * composition to main, so nothing in the worker names a holder.
  */
 export interface RuntimeWorkerBootstrap {
   readonly protocolVersion: number;
+  /**
+   * The epic this worker serves, for its whole life.
+   *
+   * Back, WITH a reader - which is the condition this doc comment set when
+   * `hostId`/`userId` were removed. The reader is the composition root: it
+   * cannot construct a runtime without an epic id, and the id cannot arrive
+   * later because the composition is what every subsequent frame is answered
+   * by. One worker serves one epic, so this is a constant of the worker rather
+   * than a parameter of its traffic.
+   *
+   * `hostId` is still absent and still has no reader: 4e moved holder-id
+   * composition to main, so nothing in here names a holder.
+   */
+  readonly epicId: string;
   /**
    * Identifies this renderer window in log lines the worker emits.
    *
@@ -154,6 +238,22 @@ export type MainToWorkerEvent =
       readonly kind: "current-user";
       readonly userId: string | null;
     }
+  | {
+      /**
+       * Free `overBytes` from the hot-doc tier, which lives in the worker.
+       *
+       * The one INBOUND half of the accounting seam, and the only one of
+       * `EpicRuntimeAccountingSource`'s four members that is not a pure read:
+       * it performs the eviction. The accountant calls it synchronously during
+       * a reconcile, so main's proxy answers `reclaimedBytes: 0` with the last
+       * known protected breakdown and dispatches this; what was actually
+       * freed arrives as the settlements that follow, and the next reconcile
+       * sees them. A deferral, not a refusal - the two are distinguished by
+       * the breakdown, and the accountant counts them apart.
+       */
+      readonly kind: "accounting/demote";
+      readonly overBytes: number;
+    }
   | { readonly kind: "shutdown" };
 
 export type WorkerToMainEvent =
@@ -205,6 +305,37 @@ export type WorkerToMainEvent =
       readonly kind: "fatal";
       readonly message: string;
       readonly stack: string | null;
+    }
+  | {
+      /**
+       * The runtime's books came up, or went away.
+       *
+       * Separate from the settlements because registration is what makes main
+       * ATTACH this runtime to the process planes, and attaching on the first
+       * settlement instead would leave a runtime that has settled nothing
+       * invisible to the books - which is exactly a freshly opened epic.
+       *
+       * `snapshot` is `null` on deregistration: there is no runtime left to
+       * describe, and carrying the last one's numbers would let a reconcile
+       * racing the teardown read facts about a runtime that is gone.
+       */
+      readonly kind: "accounting/books";
+      readonly registered: boolean;
+      readonly snapshot: RuntimeAccountingSnapshot | null;
+    }
+  | {
+      /**
+       * One settled byte fact, plus the reads main's accountant needs.
+       *
+       * The snapshot rides EVERY settlement rather than being its own event on
+       * a timer: the accountant's questions are synchronous, so the only way to
+       * answer them from main is to have the answer already, and the cheapest
+       * moment to refresh it is the one where the runtime already knows it has
+       * changed.
+       */
+      readonly kind: "accounting/settle";
+      readonly settlement: RuntimeAccountingSettlement;
+      readonly snapshot: RuntimeAccountingSnapshot;
     };
 
 /**
@@ -227,6 +358,7 @@ const MAIN_TO_WORKER_EVENT_COVERAGE: {
   "stream/session-version": true,
   "stream/status": true,
   "stream/manifest": true,
+  "accounting/demote": true,
   shutdown: true,
 };
 
@@ -242,6 +374,8 @@ const WORKER_TO_MAIN_EVENT_COVERAGE: {
   "stream/reconnect": true,
   "stream/close": true,
   fatal: true,
+  "accounting/books": true,
+  "accounting/settle": true,
 };
 
 export const MAIN_TO_WORKER_EVENT_KINDS: readonly MainToWorkerEvent["kind"][] =
