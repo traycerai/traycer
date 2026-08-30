@@ -19,20 +19,26 @@ import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runne
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
 
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
+const playNotificationChimeSoundMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
+vi.mock("@/lib/notifications/notification-chime", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/notifications/notification-chime")
+  >()),
+  playNotificationChimeSound: playNotificationChimeSoundMock,
+}));
+
 afterEach(() => {
   cleanup();
   navigateToSettingsSectionMock.mockClear();
-  useSettingsStore.setState({
-    notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
-  });
+  playNotificationChimeSoundMock.mockClear();
+  useSettingsStore.setState(useSettingsStore.getInitialState(), true);
 });
 
 describe("<AppNotificationsSettingsPanel />", () => {
@@ -62,6 +68,63 @@ describe("<AppNotificationsSettingsPanel />", () => {
       screen.queryByText("Warm, calm, and deliberately subtle."),
     ).toBeNull();
     expect(screen.queryByTestId("notifications-severity-policy")).toBeNull();
+  });
+
+  it("previews a selected chime before persisting the setting", () => {
+    const persistSelection = vi.fn();
+    useSettingsStore.setState({
+      setNotificationChimeSoundForEvent: persistSelection,
+    });
+    renderPanel({ pushPermission: null, systemSettings: null });
+
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Failure sound" }), {
+      key: "ArrowDown",
+    });
+    const classicOption = screen.getByRole("option", { name: "Classic" });
+    fireEvent.focus(classicOption);
+    fireEvent.keyDown(classicOption, { key: "Enter" });
+
+    expect(playNotificationChimeSoundMock).toHaveBeenCalledWith("classic");
+    expect(persistSelection).toHaveBeenCalledWith("failure", "classic");
+    expect(
+      playNotificationChimeSoundMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(persistSelection.mock.invocationCallOrder[0]);
+  });
+
+  it("previews the currently selected chime when it is clicked again", () => {
+    const persistSelection = vi.fn();
+    useSettingsStore.setState({
+      setNotificationChimeSoundForEvent: persistSelection,
+    });
+    renderPanel({ pushPermission: null, systemSettings: null });
+
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Failure sound" }), {
+      key: "ArrowDown",
+    });
+    const selectedOption = screen.getByRole("option", { name: "Rift" });
+    fireEvent.pointerDown(selectedOption, { pointerType: "mouse" });
+    fireEvent.pointerUp(selectedOption, { pointerType: "mouse" });
+
+    expect(playNotificationChimeSoundMock).toHaveBeenCalledWith("rift");
+    expect(persistSelection).not.toHaveBeenCalled();
+  });
+
+  it("previews a chime activated by a synthesized click", () => {
+    const persistSelection = vi.fn();
+    useSettingsStore.setState({
+      setNotificationChimeSoundForEvent: persistSelection,
+    });
+    renderPanel({ pushPermission: null, systemSettings: null });
+
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Failure sound" }), {
+      key: "ArrowDown",
+    });
+    fireEvent.click(screen.getByRole("option", { name: "Classic" }), {
+      detail: 0,
+    });
+
+    expect(playNotificationChimeSoundMock).toHaveBeenCalledWith("classic");
+    expect(persistSelection).toHaveBeenCalledWith("failure", "classic");
   });
 
   it("owns this phone's OS push permission", async () => {
