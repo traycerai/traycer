@@ -1144,6 +1144,7 @@ const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "command-theme",
   "navigation",
   "providers",
+  "session-import",
   "task-context",
   "task-tabs",
 ]);
