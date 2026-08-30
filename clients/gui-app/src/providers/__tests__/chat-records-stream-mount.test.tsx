@@ -31,10 +31,8 @@ import {
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import {
-  openStoreForTest,
-  type OpenedStoreForTest,
-} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import {
   getOpenEpicRegistry,
   handleHostIds,
@@ -189,7 +187,9 @@ const noopStreamFactory: EpicStreamClientFactory = () => ({
  * `epic-session-provider.tsx` does for every handle it creates. A helper that
  * defaulted it would hide the one input the routing gate reads.
  */
-function openEpic(epicId: string, hostId: string | null): OpenedStoreForTest {
+// Returns what the REGISTRY returns, which narrows to the production handle
+// type whatever it was handed. Nothing here reads the harness's extra members.
+function openEpic(epicId: string, hostId: string | null): OpenEpicStoreHandle {
   const handle = getOpenEpicRegistry().acquire(epicId, (id) =>
     openStoreForTest({
       epicId: id,

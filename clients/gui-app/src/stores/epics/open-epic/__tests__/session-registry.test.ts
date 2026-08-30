@@ -85,6 +85,12 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
     detachTransport: () => base.detachTransport(),
     isClean: () => isCleanOverride,
     hotArtifactRoomIdsForTests: () => [],
+    // Forwarded, not stubbed: the wrapper's job is to override `isClean` and
+    // count disposals, so every other member has to be the harness's own or
+    // the wrapper stops standing in for it.
+    flush: () => base.flush(),
+    projection: base.projection,
+    body: base.body,
     ...INERT_ROOT_STATE_PORT,
   };
 

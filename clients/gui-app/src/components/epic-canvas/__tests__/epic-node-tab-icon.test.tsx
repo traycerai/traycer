@@ -8,10 +8,8 @@ import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import {
-  openStoreForTest,
-  type OpenedStoreForTest,
-} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import {
   __resetAppLocalNotificationsStoreForTests,
   emitTerminalCrashedNotification,
@@ -242,7 +240,10 @@ function publishWorking(agentIds: readonly string[]): void {
   ]);
 }
 
-function registerEpicSession(epicId: string): OpenedStoreForTest {
+// Returns what the REGISTRY returns, which is the production handle type -
+// the registry narrows whatever it is handed. The only caller discards it, so
+// nothing here needs the harness's extra members.
+function registerEpicSession(epicId: string): OpenEpicStoreHandle {
   return __getOpenEpicRegistryForTests().acquire(epicId, () =>
     openStoreForTest({
       epicId: epicId,

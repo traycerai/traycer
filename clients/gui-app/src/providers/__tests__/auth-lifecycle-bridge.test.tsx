@@ -31,8 +31,14 @@ function fakeOpenEpicHandle(id: string): OpenEpicStoreHandle & {
   const h = {
     epicId: id,
     userId: null,
-    doc: {} as never,
-    awareness: {} as never,
+    // A production handle has no `doc` / `awareness`: the replica lives on
+    // the worker thread and a `Y.Doc` cannot cross a structured clone.
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store: {
       getState: () => ({ unsyncedQueueSize: 0, snapshotMeta: null }) as never,
       subscribe: () => () => undefined,

@@ -104,8 +104,8 @@ describe("the current-user push", () => {
     useAuthStore.setState({
       profile: {
         userId: "user-2",
+        userName: "User Two",
         email: "user-2@example.com",
-        name: "User Two",
       },
     });
 

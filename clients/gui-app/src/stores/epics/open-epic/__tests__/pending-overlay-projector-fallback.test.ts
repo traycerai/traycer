@@ -173,16 +173,16 @@ describe("projector full-projection fallback while a mutation is pending", () =>
     handle.dispose();
   });
 
-  it("once the overlay empties, the next doc edit resumes the incremental path without error", () => {
+  it("once the overlay empties, the next doc edit resumes the incremental path without error", async () => {
     const { handle } = newSession();
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(id, "Optimistic title");
     if (requestId === null) throw new Error("expected a request id");
-    handle.store.getState().retirePendingMutation(requestId, "failed");
+    await handle.store.getState().retirePendingMutation(requestId, "failed");
 
-    handle.store.getState().renameArtifact(id, "Plain rename");
+    await handle.store.getState().renameArtifact(id, "Plain rename");
 
     expect(handle.store.getState().artifacts.byId[id].title).toBe(
       "Plain rename",

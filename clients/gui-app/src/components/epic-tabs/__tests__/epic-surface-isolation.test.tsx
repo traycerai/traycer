@@ -398,8 +398,10 @@ describe("<EpicSurface /> split isolation", () => {
     expect(firstHandle).not.toBe(secondHandle);
     expect(firstHandle.store).not.toBe(secondHandle.store);
 
-    act(() => {
-      firstHandle.store.getState().setEpicTitle("Only Epic A changed");
+    await act(async () => {
+      await firstHandle.store
+        .getState()
+        .beginEpicTitleMutation("Only Epic A changed");
       useEpicCanvasStore
         .getState()
         .openTileInTab(TAB_A, terminalRef("terminal-a-second", "tile-host-a"));

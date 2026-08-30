@@ -536,13 +536,17 @@ function createDirtyEpicHandle(
     beginEpicTitleMutation: () => Promise.resolve(null),
     beginReparentMutation: () => Promise.resolve(null),
     retirePendingMutation: () => Promise.resolve(false),
-    isLatestRenameStamp: () => false,
+    isLatestRenameStamp: () => Promise.resolve(false),
     ingestFenceIdentity: 0,
-    deleteArtifact: () => false,
-    reparentArtifact: () => false,
-    setEpicTitle: () => false,
+    deleteArtifact: () => Promise.resolve(false),
+    reparentArtifact: () => Promise.resolve(false),
     readAttachmentBytes: () => Promise.resolve(null),
     hasAttachmentBytes: () => false,
+    // The WAITING leg, distinct from the prompt read above - see
+    // `epic-replica-reads.ts`, whose headers say the two must not be merged.
+    awaitAttachmentBytes: () => Promise.resolve(null),
+    heldAttachmentHashes: [],
+    bodyResidencyVersion: 0,
     getArtifactFragment: () => null,
     getArtifactBodyAwareness: () => null,
     getArtifactBodyAvailability: () => "unavailable",
@@ -554,9 +558,16 @@ function createDirtyEpicHandle(
   return {
     epicId,
     userId: null,
-    doc,
-    awareness,
+    // No `doc` / `awareness`: a production handle has neither, because the
+    // replica lives on the worker thread and a `Y.Doc` cannot cross a
+    // structured clone.
     store,
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,

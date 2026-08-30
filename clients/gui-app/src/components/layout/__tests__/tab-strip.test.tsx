@@ -347,16 +347,17 @@ function buildHeaderEpicHandle(
     getState: () => state as never,
     subscribe: () => () => undefined,
   });
-  const awareness = {
-    getStates: () => new Map<number, Record<string, unknown>>(),
-    on: () => undefined,
-    off: () => undefined,
-  };
   return {
     epicId: tab.id,
     userId: null,
-    doc: {} as never,
-    awareness: awareness as never,
+    // A production handle has no `doc` / `awareness`: the replica lives on the
+    // worker thread and a `Y.Doc` cannot cross a structured clone.
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store: storeBase as OpenEpicStoreHandle["store"],
     dispose: () => undefined,
     detachTransport: () => undefined,

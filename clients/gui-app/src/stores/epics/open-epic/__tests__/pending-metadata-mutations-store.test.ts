@@ -838,7 +838,7 @@ describe("chat-record revision guard protects a pending overlay chain from a del
     });
     expect(store.getState().chats.byId.c.title).toBe("C");
 
-    const requestId = store.getState().beginRenameMutation("c", "B");
+    const requestId = await store.getState().beginRenameMutation("c", "B");
     if (requestId === null) throw new Error("expected a request id");
     expect(store.getState().chats.byId.c.title).toBe("B");
 

@@ -101,8 +101,14 @@ function buildHandle(epicId: string, title: string): FakeHandle {
   const handle: FakeHandle = {
     epicId,
     userId: null,
-    doc,
-    awareness: {} as never,
+    // A production handle has no `doc` / `awareness`: the replica lives on the
+    // worker thread and a `Y.Doc` cannot cross a structured clone.
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store,
     dispose: () => undefined,
     detachTransport: () => undefined,

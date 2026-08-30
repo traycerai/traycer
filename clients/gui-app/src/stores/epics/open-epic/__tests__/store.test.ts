@@ -2724,11 +2724,10 @@ describe("createOpenEpicStore", () => {
     // registry's MRU prune takes. The promise must still resolve (null) and
     // the waiter's observer must unbind, rather than dangling on the
     // destroyed doc forever.
-    const controller = new AbortController();
     let settled = false;
     const pending = opened.store
       .getState()
-      .readAttachmentBytes("missing-hash", controller.signal)
+      .readAttachmentBytes("missing-hash")
       .then((bytes) => {
         settled = true;
         return bytes;

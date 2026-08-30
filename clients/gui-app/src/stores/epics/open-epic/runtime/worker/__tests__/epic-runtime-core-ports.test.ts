@@ -551,7 +551,13 @@ describe("bodies.materialize — forward-only vs not-held", () => {
  */
 describe("the body return leg's ownership of its bytes", () => {
   it("copies the update rather than forwarding the array it was handed", async () => {
-    let emit: ((update: Uint8Array) => void) | null = null;
+    // A HOLDER, not a `let`. TypeScript narrows a `let` to its initializer
+    // and cannot see an assignment that happens inside a callback, so every
+    // later read is `null` and the call below is rejected. A property write
+    // has effects TS does not try to order, so the declared type survives.
+    const observer: { emit: ((update: Uint8Array) => void) | null } = {
+      emit: null,
+    };
     const forwarded: Uint8Array[] = [];
     const ports = buildEpicRuntimeCorePorts(
       createSource({
@@ -563,7 +569,7 @@ describe("the body return leg's ownership of its bytes", () => {
           hostStateVector: null,
         }),
         observeBodyDoc: (_docKey, onUpdate) => {
-          emit = onUpdate;
+          observer.emit = onUpdate;
           return () => {};
         },
       }),
@@ -578,7 +584,7 @@ describe("the body return leg's ownership of its bytes", () => {
     await ports.bodies.materialize("artifact-1");
     // Captured into a const: TypeScript will not narrow a `let` that a closure
     // assigns, so calling `emit` directly reads as possibly-null.
-    const emitUpdate = emit;
+    const emitUpdate = observer.emit;
     if (emitUpdate === null) throw new Error("observer never attached");
 
     // The array Yjs would hand to BOTH listeners.
