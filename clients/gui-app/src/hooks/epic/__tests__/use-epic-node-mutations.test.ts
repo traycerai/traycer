@@ -25,6 +25,7 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
 
 const capturedOptions: Record<string, unknown> = {};
 const capturedClients: Record<string, unknown> = {};
+const capturedScopedArgs: Record<string, unknown> = {};
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostMutation: (args: {
     method: string;
@@ -33,6 +34,17 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   }) => {
     capturedOptions[args.method] = args.options;
     capturedClients[args.method] = args.client;
+    return { mutate: vi.fn(), isPending: false };
+  },
+}));
+
+vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
+  useHostScopedMutationForClient: (
+    client: unknown,
+    args: { readonly method: string },
+  ) => {
+    capturedScopedArgs[args.method] = args;
+    capturedClients[args.method] = client;
     return { mutate: vi.fn(), isPending: false };
   },
 }));
@@ -82,13 +94,15 @@ describe("useEpicCreateArtifact", () => {
 });
 
 describe("useEpicDeleteArtifact", () => {
-  it("shows fallback on error", () => {
+  it("refreshes the deleted-artifact inventory after deletion", () => {
     renderHook(() => useEpicDeleteArtifact());
-    const opts = capturedOptions["epic.deleteArtifact"] as {
-      onError: (e: HostRpcError) => void;
+    const args = capturedScopedArgs["epic.deleteArtifact"] as {
+      readonly invalidateMethods: readonly string[];
+      readonly errorMessage: string;
     };
-    opts.onError(makeError("RPC_ERROR"));
-    expect(toast.error).toHaveBeenCalledWith("Couldn't delete artifact.");
+
+    expect(args.invalidateMethods).toContain("epic.deletedArtifacts.list");
+    expect(args.errorMessage).toBe("Couldn't delete artifact.");
   });
 });
 

@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { ChatRecordsStreamDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
@@ -131,8 +131,8 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
 }
 
 function tuiRecord(
-  overrides: Partial<TuiAgentRecordSummary>,
-): TuiAgentRecordSummary {
+  overrides: Partial<Extract<TuiAgentRecordSummaryV12, { origin: "registry" }>>,
+): Extract<TuiAgentRecordSummaryV12, { origin: "registry" }> {
   return {
     tuiAgentId: "tui-1",
     ownerUserId: "user-a",
@@ -156,6 +156,10 @@ function tuiRecord(
     terminalShellCommand: null,
     terminalShellArgs: null,
     revision: 1,
+    // This suite tests the mount's host-stamp routing gate, not doc
+    // residency - an ordinary registry row exercises it.
+    docResident: false,
+    origin: "registry",
     ...overrides,
   };
 }

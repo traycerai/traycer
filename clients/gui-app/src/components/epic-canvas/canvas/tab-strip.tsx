@@ -18,6 +18,7 @@ import {
   Lock,
   SplitSquareHorizontal,
   SplitSquareVertical,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -725,7 +726,6 @@ function TabItemBody(
     if (rename.isEditing) return;
     onSelect(groupId, tab.instanceId);
     if (
-      isActive &&
       consumeNotificationEntity !== null &&
       (tab.type === "chat" ||
         tab.type === "terminal" ||
@@ -740,7 +740,6 @@ function TabItemBody(
     consumeNotificationEntity,
     epicId,
     groupId,
-    isActive,
     onSelect,
     rename.isEditing,
     tab,
@@ -1218,6 +1217,8 @@ function renderFixedTabIcon(
       return <CommGraphTileIcon className="size-3.5" />;
     case "published-chat":
       return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
+    case "deleted-artifacts":
+      return <Trash2 className="size-3.5 shrink-0 text-muted-foreground" />;
     default:
       return null;
   }

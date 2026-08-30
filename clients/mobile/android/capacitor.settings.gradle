@@ -14,6 +14,9 @@ project(':capacitor-barcode-scanner').projectDir = new File('../../../node_modul
 include ':capacitor-device'
 project(':capacitor-device').projectDir = new File('../../../node_modules/.bun/@capacitor+device@8.0.0+f68449e264960a74/node_modules/@capacitor/device/android')
 
+include ':capacitor-filesystem'
+project(':capacitor-filesystem').projectDir = new File('../../../node_modules/.bun/@capacitor+filesystem@8.1.3+f68449e264960a74/node_modules/@capacitor/filesystem/android')
+
 include ':capacitor-keyboard'
 project(':capacitor-keyboard').projectDir = new File('../../../node_modules/.bun/@capacitor+keyboard@8.0.5+f68449e264960a74/node_modules/@capacitor/keyboard/android')
 
@@ -22,6 +25,9 @@ project(':capacitor-network').projectDir = new File('../../../node_modules/.bun/
 
 include ':capacitor-push-notifications'
 project(':capacitor-push-notifications').projectDir = new File('../../../node_modules/.bun/@capacitor+push-notifications@8.1.2+f68449e264960a74/node_modules/@capacitor/push-notifications/android')
+
+include ':capacitor-share'
+project(':capacitor-share').projectDir = new File('../../../node_modules/.bun/@capacitor+share@8.0.1+f68449e264960a74/node_modules/@capacitor/share/android')
 
 include ':capacitor-native-settings'
 project(':capacitor-native-settings').projectDir = new File('../../../node_modules/.bun/capacitor-native-settings@8.2.0+f68449e264960a74/node_modules/capacitor-native-settings/android')

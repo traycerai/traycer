@@ -101,6 +101,12 @@ const baseDeletedEpicArtifactFields = {
   title: z.string(),
   artifactRoomId: z.string().nullable(),
   deletedAt: z.string(),
+  folderName: z.string().nullish(),
+  parentId: z.string().nullish(),
+  createdAt: z.number().nullish(),
+  createdManually: z.boolean().nullish(),
+  assignee: z.string().nullish(),
+  status: ticketStatusSchema.nullish(),
 } as const;
 
 export const deletedSpecArtifactSchema = z.object({
@@ -112,14 +118,12 @@ export type DeletedSpecArtifact = z.infer<typeof deletedSpecArtifactSchema>;
 export const deletedTicketArtifactSchema = z.object({
   kind: z.literal("ticket"),
   ...baseDeletedEpicArtifactFields,
-  status: ticketStatusSchema,
 });
 export type DeletedTicketArtifact = z.infer<typeof deletedTicketArtifactSchema>;
 
 export const deletedStoryArtifactSchema = z.object({
   kind: z.literal("story"),
   ...baseDeletedEpicArtifactFields,
-  status: ticketStatusSchema,
 });
 export type DeletedStoryArtifact = z.infer<typeof deletedStoryArtifactSchema>;
 
@@ -136,3 +140,36 @@ export const deletedEpicArtifactSchema = z.discriminatedUnion("kind", [
   deletedReviewArtifactSchema,
 ]);
 export type DeletedEpicArtifact = z.infer<typeof deletedEpicArtifactSchema>;
+
+/**
+ * Builds the metadata tombstone written atomically with an artifact removal.
+ *
+ * The nullable scalar slots deliberately exist on every artifact kind. This
+ * gives delete/revive and crash recovery one total shape while old, slim
+ * tombstones remain valid through the schemas' nullish additions.
+ */
+export function buildDeletedEpicArtifact(
+  artifact: EpicArtifact,
+  deletedAt: string,
+): DeletedEpicArtifact {
+  return {
+    id: artifact.id,
+    kind: artifact.kind,
+    title: artifact.title,
+    artifactRoomId:
+      artifact.artifactRoomId.length > 0 ? artifact.artifactRoomId : null,
+    deletedAt,
+    folderName: artifact.folderName,
+    parentId: artifact.parentId,
+    createdAt: artifact.createdAt,
+    createdManually: artifact.createdManually,
+    assignee:
+      artifact.kind === "ticket" || artifact.kind === "story"
+        ? artifact.assignee
+        : null,
+    status:
+      artifact.kind === "ticket" || artifact.kind === "story"
+        ? artifact.status
+        : null,
+  };
+}

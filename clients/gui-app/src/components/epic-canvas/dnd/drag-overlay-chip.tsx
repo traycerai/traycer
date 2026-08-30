@@ -16,6 +16,7 @@ import {
   GitPullRequest,
   Globe,
   Lock,
+  Trash2,
 } from "lucide-react";
 import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
@@ -37,6 +38,7 @@ import {
   isBlankTileRef,
   isBrowserSessionTileRef,
   isCommGraphTileRef,
+  isDeletedArtifactsTileRef,
   isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
@@ -232,6 +234,14 @@ function EpicCanvasNodeDragOverlay(props: {
     return (
       <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
         <CommGraphTileIcon className="size-3.5" />
+        <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+      </m.div>
+    );
+  }
+  if (isDeletedArtifactsTileRef(props.node)) {
+    return (
+      <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+        <Trash2 className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 truncate font-medium">{props.node.name}</span>
       </m.div>
     );

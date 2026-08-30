@@ -58,11 +58,11 @@ export function formatUnknownHolderConsequence(
 
 export function formatUncheckedInUseKnown(processCount: number): string {
   const unit = processCount === 1 ? "process" : "processes";
-  return `In use by ${String(processCount)} ${unit} · Select individually to review`;
+  return `In use by ${String(processCount)} ${unit} · Check to review`;
 }
 
 export function formatUncheckedInUseUnknown(): string {
-  return "This host reports background work here, but cannot identify it · Select individually to review";
+  return "This host reports background work here, but cannot identify it · Check to review";
 }
 
 export function formatStopHeading(input: {

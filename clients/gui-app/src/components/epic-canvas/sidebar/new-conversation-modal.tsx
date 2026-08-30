@@ -1260,6 +1260,13 @@ function useLatestConversationSettingsSeed(): {
       };
     }
     const agent = projection.tuiAgents.byId[latest.id];
+    if (agent.harnessId === null) {
+      // Nothing to seed FROM. A cross-host replica whose cloud row predates
+      // `runSettingsSummary` cannot say what it runs, and a composer seeded
+      // with a guessed harness would create the next agent under it. Fall back
+      // to the same "no memory yet" answer an epic with no prior agent gives.
+      return { settings: null, composerMode: fallbackComposerMode };
+    }
     return {
       settings: {
         harnessId: agent.harnessId,

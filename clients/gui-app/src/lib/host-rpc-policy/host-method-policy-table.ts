@@ -783,6 +783,35 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "epic.artifactVersions.list": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersions.getBlob": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersions.restore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.deletedArtifacts.list": { ...LATEST_SCHEDULING, poll: null },
+  "epic.deletedArtifacts.revive": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.get": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersionSettings.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.setRetentionPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.clearHistory": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Deleting an artifact permanently removes its document node.
   "epic.deleteArtifact": {
     mode: "fifo",

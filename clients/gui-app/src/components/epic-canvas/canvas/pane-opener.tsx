@@ -36,8 +36,11 @@ import {
   usePaletteScrollReset,
 } from "@/components/command-palette/palette-cmdk-controller";
 import { getOpenerItems } from "@/lib/commands/registry";
+import { deletedArtifactsOpenerItem } from "@/lib/commands/sources/open/deleted-artifacts-leaf";
 import { PaletteQueryProvider } from "@/lib/commands/palette-query-context";
 import { SearchRunView } from "@/components/epic-canvas/canvas/search-run-view";
+import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
   isSearchRunSubpageId,
   parseSearchRunSubpageId,
@@ -97,7 +100,14 @@ export function PaneOpener(props: PaneOpenerProps) {
     close: () => undefined,
   });
 
-  const openerItems = useMemo(() => getOpenerItems(ctx), [ctx]);
+  const epicHostId = useEpicSessionHostId();
+  const deletedArtifactsAvailable = useDeletedArtifactsAvailable(epicHostId);
+  const openerItems = useMemo(() => {
+    const items = getOpenerItems(ctx);
+    return deletedArtifactsAvailable && epicHostId !== null
+      ? [...items, deletedArtifactsOpenerItem(ctx, epicHostId)]
+      : items;
+  }, [ctx, deletedArtifactsAvailable, epicHostId]);
   const { activeSubpage, runItem, popSubpage } = controller;
 
   // The text-search step-2 sub-page is rendered by a bespoke view (query +

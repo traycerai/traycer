@@ -36,8 +36,10 @@ import type {
   IHostManagement,
   IHostTray,
   IFileDropHost,
+  IFileSaveHost,
   IMigrationHost,
   INotificationHost,
+  IRendererCrashTelemetryHost,
   IRunnerHost,
   ISecureStorage,
   IServiceHost,
@@ -216,6 +218,7 @@ export interface DesktopPreloadBridge {
     start(): Promise<DeviceFlowSession | null>;
   };
   notifications: {
+    readonly systemSettings: { open(): Promise<void> } | null;
     show(
       title: string,
       body: string,
@@ -387,6 +390,7 @@ export interface DesktopMigrationBridge {
 }
 
 export interface DesktopPlatformBridge {
+  crashTelemetry: IRendererCrashTelemetryHost;
   clipboard?: {
     writeImage(input: {
       readonly type: string;
@@ -658,6 +662,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly tray: ITrayState;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
+  readonly fileSave: IFileSaveHost;
   readonly windows: DesktopWindowsBridge;
   readonly menu: DesktopMenuBridge;
   readonly appUpdates: DesktopAppUpdatesBridge;
@@ -667,6 +672,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly traycerCli: ITraycerCli;
   readonly migration: IMigrationHost;
   readonly platform: DesktopPlatformBridge;
+  readonly crashTelemetry: IRendererCrashTelemetryHost;
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
   readonly browserView: BrowserViewBridge;
@@ -701,6 +707,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.globalShortcuts = options.bridge.globalShortcuts;
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
+    this.crashTelemetry = options.bridge.platform.crashTelemetry;
     this.power = options.bridge.power;
     this.browserView = options.bridge.browserView;
     // Passed straight through: the client instance, its issued attach
@@ -759,6 +766,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.tokenStore = options.bridge.tokenStore;
 
     this.notifications = {
+      systemSettings: this.bridge.notifications.systemSettings,
       show: (
         title,
         body,
@@ -795,6 +803,7 @@ export class DesktopRunnerHost implements IRunnerHost {
       pickFolders: () => this.bridge.workspaceFolders.pickFolders(),
     };
     this.fileDrops = buildDesktopFileDrops(this.bridge.fileDrops);
+    this.fileSave = buildDesktopFileSave(this.bridge.fileDrops);
     this.service = {
       install: () => this.bridge.service.install(),
       uninstall: (purge) => this.bridge.service.uninstall(purge),
@@ -1143,6 +1152,21 @@ function isEphemeralDropPath(filePath: string): boolean {
     /[\\/]TemporaryItems[\\/]/i.test(filePath) ||
     /screencaptureui/i.test(filePath)
   );
+}
+
+/**
+ * The desktop's `IFileSaveHost`, over the same preload surface the drop
+ * helpers use. The sandboxed renderer cannot write through the File System
+ * Access API (`createWritable()` throws `NotAllowedError`), so the bytes go to
+ * the main process, which shows a native save dialog and writes them there;
+ * the dialog is also what makes this the one shell that learns an absolute
+ * path, and therefore the one that can re-open the file afterwards.
+ */
+function buildDesktopFileSave(bridge: DesktopFileDropsBridge): IFileSaveHost {
+  return {
+    saveFile: (request) => bridge.saveFile(request),
+    openSavedFile: (path) => bridge.openSavedFile(path),
+  };
 }
 
 function buildDesktopFileDrops(bridge: DesktopFileDropsBridge): IFileDropHost {

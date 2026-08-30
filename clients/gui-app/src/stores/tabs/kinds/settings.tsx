@@ -29,6 +29,8 @@ export function settingsRouteOptions(section: SettingsSectionId) {
       return { to: "/settings/general" } as const;
     case "appearance":
       return { to: "/settings/appearance" } as const;
+    case "app-notifications":
+      return { to: "/settings/app-notifications" } as const;
     case "providers":
       return { to: "/settings/providers" } as const;
     case "notifications":

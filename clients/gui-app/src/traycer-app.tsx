@@ -215,7 +215,10 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                         onConfigureShell={configureShell}
                         onOpenSettings={openSettings}
                       >
-                        <RootErrorBoundary router={router}>
+                        <RootErrorBoundary
+                          router={router}
+                          crashTelemetry={props.runnerHost.crashTelemetry}
+                        >
                           <TraycerAuthenticatedRuntime router={router} />
                         </RootErrorBoundary>
                       </HostReadinessControllerProvider>
