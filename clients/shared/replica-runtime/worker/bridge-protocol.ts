@@ -63,6 +63,11 @@ import type {
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
+ * **9** since `root/encode` / `root/apply`: the root-state transfer the merge
+ * sites depend on. A v8 worker answers `unserved`, so a session replacement
+ * silently transfers nothing - the failure the `applied` boolean exists to
+ * make impossible.
+ *
  * **8** since `command/enqueue`: the write-command queue's enqueue crossed as a
  * call, because the queue mints the id and refuses from its own state. A v7
  * worker answers `unserved`, so every write is refused at the call site - loud
@@ -107,7 +112,7 @@ import type {
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 8;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 9;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -677,6 +682,38 @@ export const WORKER_TO_MAIN_EVENT_KINDS: readonly WorkerToMainEvent["kind"][] =
  */
 export interface RuntimeWorkerCallMap {
   /**
+   * The root replica's encoded state, for a transfer into another session.
+   *
+   * The two callers are the merge sites - the provider's replacement path and
+   * the registry's transfer - and both read from one session and apply into
+   * another. Post-relocation that is one worker's doc going to a different
+   * one, so the bytes have to cross main to get there.
+   */
+  "root/encode": {
+    request: Record<string, never>;
+    response: { readonly update: Uint8Array };
+  };
+  /**
+   * Take a root state in.
+   *
+   * `applied` is a CALL's answer and not a push's silence because it is a
+   * data-loss guard: `INERT_ROOT_STATE_PORT`'s own comment says a fixture
+   * claiming `true` "would let a retention decision retire the only copy of a
+   * document". The caller uses it to decide whether the source's edits are
+   * safely in the replacement.
+   *
+   * `asLocalEdit` is load-bearing: it decides whether the applied update is
+   * attributed to this client (and so re-sent) or treated as remote.
+   */
+  "root/apply": {
+    request: {
+      readonly update: Uint8Array;
+      readonly asLocalEdit: boolean;
+    };
+    response: { readonly applied: boolean };
+  };
+
+  /**
    * Enqueue one epic write command on the runtime's queue.
    *
    * A CALL and not a `runtime/command` push, because the caller needs two
@@ -1044,6 +1081,8 @@ const RUNTIME_WORKER_CALL_COVERAGE: {
   "body/update": true,
   "mutation/apply": true,
   "command/enqueue": true,
+  "root/encode": true,
+  "root/apply": true,
 };
 
 export const RUNTIME_WORKER_CALL_KINDS: readonly RuntimeWorkerCallKind[] =
@@ -1109,6 +1148,8 @@ const CALL_BUILDERS: {
   "body/update": (request) => ({ kind: "body/update", request }),
   "mutation/apply": (request) => ({ kind: "mutation/apply", request }),
   "command/enqueue": (request) => ({ kind: "command/enqueue", request }),
+  "root/encode": (request) => ({ kind: "root/encode", request }),
+  "root/apply": (request) => ({ kind: "root/apply", request }),
 };
 
 /** Builds the envelope for one call, with its kind and request correlated. */
@@ -1237,6 +1278,16 @@ export const CALL_RESPONSE_PARSERS: {
     value: unknown,
   ) => RuntimeWorkerCallResponse<K> | null;
 } = {
+  "root/encode": (value) => {
+    if (!isRecord(value)) return null;
+    return isUint8Array(value.update) ? { update: value.update } : null;
+  },
+  "root/apply": (value) => {
+    if (!isRecord(value)) return null;
+    return typeof value.applied === "boolean"
+      ? { applied: value.applied }
+      : null;
+  },
   "command/enqueue": (value) => {
     if (!isRecord(value)) return null;
     if (value.outcome === "refused") return { outcome: "refused" };

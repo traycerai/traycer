@@ -37,6 +37,16 @@ export function stubRuntimeWorkerCallHandlers(
         value: { outcome: "refused" as const },
         transfer: NO_TRANSFER,
       }),
+    // Fail-closed for the same reason `command/enqueue` is: `applied: true`
+    // from a stub would let a retention decision retire the only copy of a
+    // document.
+    "root/encode": () =>
+      Promise.resolve({
+        value: { update: new Uint8Array() },
+        transfer: NO_TRANSFER,
+      }),
+    "root/apply": () =>
+      Promise.resolve({ value: { applied: false }, transfer: NO_TRANSFER }),
     "attachment/read": () =>
       Promise.resolve({ value: { bytes: null }, transfer: NO_TRANSFER }),
     "body/materialize": () =>

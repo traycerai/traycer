@@ -108,6 +108,11 @@ export interface EpicRuntimeCorePorts {
     /** The queue mints the id and decides the refusal; both come back. */
     enqueueWrite(intent: unknown): EnqueuedWriteCommand;
   };
+  /** The root replica's state, in and out, for session-to-session transfers. */
+  readonly root: {
+    encode(): Promise<Uint8Array>;
+    apply(update: Uint8Array, asLocalEdit: boolean): Promise<boolean>;
+  };
   /** The one durable transport this session owns (T12's ruling, worker-side). */
   readonly transport: { close(): void };
   /** The per-window indexed store. */
@@ -181,6 +186,17 @@ export function createEpicRuntimeWorkerCore(
       // the host awaits, not a deferral.
       if (!serving) return Promise.resolve(inertMutationResult(mutation));
       return Promise.resolve(ports.mutations.apply(mutation));
+    },
+    encodeRootState() {
+      // Empty rather than a throw while shutting down: the caller is a
+      // transfer, and its `applied` check is what decides whether the source
+      // may be retired.
+      if (!serving) return Promise.resolve(new Uint8Array());
+      return ports.root.encode();
+    },
+    applyRootUpdate(update, asLocalEdit) {
+      if (!serving) return Promise.resolve(false);
+      return ports.root.apply(update, asLocalEdit);
     },
     enqueueWriteCommand(intent) {
       // Refused while shutting down, for the same reason a demote is: the

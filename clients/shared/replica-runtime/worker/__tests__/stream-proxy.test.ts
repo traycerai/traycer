@@ -169,7 +169,7 @@ describe("the bridge vocabulary and its version", () => {
     // the two: editing either union reddens this test, and the comment the
     // reader lands on is the one telling them to bump. That is a prompt, not a
     // proof, and it is named as such rather than dressed up as coverage.
-    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(8);
+    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(9);
     expect(MAIN_TO_WORKER_EVENT_KINDS).toEqual([
       "bootstrap",
       "current-user",
@@ -205,6 +205,8 @@ describe("the bridge vocabulary and its version", () => {
       "body/update",
       "mutation/apply",
       "command/enqueue",
+      "root/encode",
+      "root/apply",
     ]);
   });
 });

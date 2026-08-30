@@ -158,6 +158,9 @@ export function installEpicRuntimeCore(host: EpicRuntimeWorkerHost): void {
             runtime.retryWriteCommand(commandId),
           discardWriteCommand: (commandId) =>
             runtime.discardWriteCommand(commandId),
+          encodeRootState: () => runtime.encodeRootState(),
+          applyRootUpdate: (update, asLocalEdit) =>
+            runtime.applyRootUpdate(update, asLocalEdit),
           detachTransport: () => {
             runtime.detachTransport();
           },

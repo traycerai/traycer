@@ -131,6 +131,10 @@ export interface EpicRuntimeWorkerCore {
    * own state, which is why this is a call and not a push.
    */
   enqueueWriteCommand(intent: unknown): Promise<EnqueuedWriteCommand>;
+  /** The root replica's encoded state, for a transfer into another session. */
+  encodeRootState(): Promise<Uint8Array>;
+  /** Take a root state in. `applied` is a data-loss guard, never optimistic. */
+  applyRootUpdate(update: Uint8Array, asLocalEdit: boolean): Promise<boolean>;
   dispose(): void;
 }
 
@@ -299,6 +303,23 @@ export function startEpicRuntimeWorkerHost(
         value: await core.updateBody(request),
         transfer: NO_TRANSFER,
       };
+    },
+    "root/encode": async () => {
+      // Empty bytes without a core, and the caller's `applied` guard is what
+      // makes that safe: an empty update applies as nothing rather than as a
+      // document, and the transfer site checks the answer before retiring the
+      // source.
+      const update = core === null ? new Uint8Array() : await core.encodeRootState();
+      return { value: { update }, transfer: takeBytesForTransfer(update) };
+    },
+    "root/apply": async (request) => {
+      // FALSE without a core. A `true` here would tell a retention decision
+      // the edits are safely in the replacement when nothing received them.
+      const applied =
+        core === null
+          ? false
+          : await core.applyRootUpdate(request.update, request.asLocalEdit);
+      return { value: { applied }, transfer: NO_TRANSFER };
     },
     "command/enqueue": async (request) => {
       // REFUSED without a core, never a minted id: an id handed back for a

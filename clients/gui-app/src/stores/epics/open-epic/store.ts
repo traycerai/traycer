@@ -62,20 +62,25 @@ import type {
   TreeSlice,
 } from "./types";
 import type { PendingChatCreation } from "./pending-chat-creations";
-import { readEpicDocRecordArms } from "./doc-record-arms";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { EpicLaneSelectionSources } from "./runtime/epic-replica-runtime";
+import { appLogger } from "@/lib/logger";
+import { createArtifactBodyLeaseBridge } from "./runtime/worker/artifact-body-lease-bridge";
+import { createHotBodyBudgetAdapter } from "./runtime/worker/hot-body-budget-adapter";
+import { createMainThreadBodyDocStore } from "./runtime/worker/main-thread-body-docs";
+import type { RuntimeProjectionHandlers } from "@traycer-clients/shared/replica-runtime/worker/runtime-projection-subscription";
 import {
-  createEpicReplicaRuntime,
-  type EpicLaneSelectionSources,
-  type EpicReplicaRuntime,
-} from "./runtime/epic-replica-runtime";
-import { createRendererRuntimeEnvironment } from "./runtime/runtime-environment";
-import { createProcessBackedAccountingPort } from "./runtime/process-backed-accounting-port";
-import { dispatchEpicWriteCommand } from "./runtime/epic-write-command-dispatch";
-import {
-  createBatchingDelivery,
-  type EpicRuntimeDelivery,
-} from "./runtime/projection-delivery";
+  NO_TRANSFER,
+  takeBytesForTransfer,
+} from "@traycer-clients/shared/replica-runtime/worker/transferable-bytes";
+import type {
+  EpicMutation,
+  EpicMutationResult,
+  RuntimeCommand,
+} from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+import type { RuntimeWorkerPort } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
+import type { EpicRuntimeAccountingPort } from "./runtime/epic-runtime-accounting-port";
+
 import {
   EMPTY_RECORDS_PROJECTION,
   EMPTY_ROOMS_PROJECTION,
@@ -195,8 +200,6 @@ interface PersistedSlice {
  */
 export interface OpenEpicState {
   readonly epicId: string;
-  readonly doc: Y.Doc;
-  readonly awareness: Awareness;
   /**
    * React remount token for live-`Y` bindings, mapped from the runtime's
    * `bindingEpoch`. Bumped when the `Y.Doc` / `XmlFragment` / `Awareness`
@@ -416,8 +419,6 @@ export interface OpenEpicState {
   // ── Actions: focus + connection lifecycle ────────────────────────────
   setLastFocusedArtifactId: (artifactId: string | null) => void;
   setLastFocusedThreadId: (threadId: string | null) => void;
-  applyLocalUpdate: (updateBytes: Uint8Array) => void;
-  sendAwareness: (awarenessBytes: Uint8Array) => void;
   /**
    * Discards the renderer's local dirty signal and any offline-buffered
    * bytes. Used by quit-and-discard flows where the session is about to
@@ -437,7 +438,7 @@ export interface OpenEpicState {
    * No-op when no migration has been observed on this session.
    */
   retryMigration: () => void;
-  enqueueWriteCommand: (intent: EpicWriteCommandIntent) => string | null;
+  enqueueWriteCommand: (intent: EpicWriteCommandIntent) => Promise<string | null>;
   waitForWriteCommand: (
     commandId: string,
   ) => Promise<CommandRecord<EpicWriteCommandIntent>>;
@@ -624,7 +625,7 @@ export interface OpenEpicState {
   // setup the renderer cannot fake. The actions below are the optimistic
   // fast path layered under those same host RPCs.
   /** Returns true when the title actually changed in the Y.Doc. */
-  renameArtifact: (artifactId: string, nextTitle: string) => boolean;
+  renameArtifact: (artifactId: string, nextTitle: string) => Promise<boolean>;
   // ── Optimistic metadata overlay (Phase 1.1) ──────────────────────────
   // Each `begin*` stamps a client request id, patches the published
   // projection, and returns that id; the caller fires the RPC and reports
@@ -638,14 +639,14 @@ export interface OpenEpicState {
   // registry-backed chat or terminal agent has no doc entry, so
   // `renameArtifact` no-ops for it and has done since chats moved off YJS.
   /** Optimistic rename for an artifact, chat, or terminal agent. */
-  beginRenameMutation: (nodeId: string, nextTitle: string) => string | null;
+  beginRenameMutation: (nodeId: string, nextTitle: string) => Promise<string | null>;
   /** Optimistic epic-header title change. */
-  beginEpicTitleMutation: (nextTitle: string) => string | null;
+  beginEpicTitleMutation: (nextTitle: string) => Promise<string | null>;
   /** Optimistic reparent, validated against the projected tree. */
   beginReparentMutation: (
     nodeId: string,
     newParentId: string | null,
-  ) => string | null;
+  ) => Promise<string | null>;
   /**
    * Report a mutation's RPC outcome. `"failed"` (terminal failure only - a
    * retryable transport error must stay pending or the row flaps) drops the
@@ -659,7 +660,7 @@ export interface OpenEpicState {
   retirePendingMutation: (
     requestId: string,
     outcome: "landed" | "failed",
-  ) => boolean;
+  ) => Promise<boolean>;
   /**
    * Whether `requestId` is the LAST-STAMPED rename for its node - the guard
    * the persisted canvas-tab snapshot writes on. RPC settles are not
@@ -674,9 +675,12 @@ export interface OpenEpicState {
    * write of a rename that SUCCEEDED. The tombstone survives the sweep, so
    * the only acks it refuses are ones a newer stamp genuinely superseded.
    */
-  isLatestRenameStamp: (nodeId: string, requestId: string) => boolean;
+  isLatestRenameStamp: (
+    nodeId: string,
+    requestId: string,
+  ) => Promise<boolean>;
   /** Returns true when a delete actually happened. Reparents children. */
-  deleteArtifact: (artifactId: string) => boolean;
+  deleteArtifact: (artifactId: string) => Promise<boolean>;
   /**
    * Move an artifact, chat, or terminal-agent to a new parent within its own
    * family.
@@ -690,9 +694,12 @@ export interface OpenEpicState {
    * Returns `false` without throwing when the node has no doc entry to write:
    * that node is registry-backed and `epic.reparentChat` owns its pointer.
    */
-  reparentArtifact: (artifactId: string, newParentId: string | null) => boolean;
+  reparentArtifact: (
+    artifactId: string,
+    newParentId: string | null,
+  ) => Promise<boolean>;
   /** Returns true when the title actually changed. */
-  setEpicTitle: (nextTitle: string) => boolean;
+
 
   // ── Actions: live-Y escape hatches ───────────────────────────────────
   /**
@@ -720,7 +727,7 @@ export interface OpenEpicState {
     signal: AbortSignal,
   ) => Promise<Uint8Array | null>;
   /** Synchronously reports whether the root attachment map has this hash. */
-  hasAttachmentBytes: (hash: string) => boolean;
+
   /**
    * Returns the artifact-room-scoped Awareness instance hosting `artifactId`'s body
    * presence channel, or `null` when the artifactRoom is not currently `ready`.
@@ -778,8 +785,6 @@ export interface OpenEpicState {
 export interface OpenEpicStoreHandle {
   readonly epicId: string;
   readonly userId: string | null;
-  readonly doc: Y.Doc;
-  readonly awareness: Awareness;
   /**
    * Transfer this session's root state into another, and take one in.
    *
@@ -793,6 +798,15 @@ export interface OpenEpicStoreHandle {
     update: Uint8Array,
     asLocalEdit: boolean,
   ) => Promise<boolean>;
+  /**
+   * What the spawner reduces this session's projection stream into.
+   *
+   * Handed OUT rather than taken in, because the store is what knows the
+   * slice's shape - and the spawner owns the one watermark, so a second
+   * reducer over the same stream is unreachable. The provider wires these into
+   * the spawn; nothing else may.
+   */
+  readonly projection: RuntimeProjectionHandlers<Partial<EpicRuntimeProjection>>;
   readonly store: UseBoundStore<StoreApi<OpenEpicState>>;
   readonly dispose: () => void;
   /**
@@ -841,17 +855,40 @@ let nextIngestFenceIdentity = 1;
  *   - Persist only `lastFocusedArtifactId` + `lastFocusedThreadId` to
  *     localStorage under a key scoped to `epicId`
  */
+/**
+ * A published slice, as far as this layer checks.
+ *
+ * A predicate rather than an assertion, and a CHEAP one on purpose: the
+ * contract says this "may legitimately be a cheap envelope check rather than a
+ * full validator" because both ends ship in one bundle graph. What it must do
+ * is distinguish a slice from a FOREIGN payload - a frame from a stale chunk,
+ * or something that is not a publication at all - which is what a non-null
+ * object check answers. Re-validating every key would be a second copy of the
+ * projection's shape, and that copy is what rots.
+ */
+function isProjectionPatch(
+  value: unknown,
+): value is Partial<EpicRuntimeProjection> {
+  return typeof value === "object" && value !== null;
+}
+
 export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {
   const { epicId, userId } = options;
-  const commandRequester = options.commandRequester ?? null;
   const mintedIngestFenceIdentity = nextIngestFenceIdentity;
   nextIngestFenceIdentity += 1;
 
   let storeApi: StoreApi<OpenEpicState> | null = null;
-  let runtimeRef: EpicReplicaRuntime | null = null;
-  let publishedReplicaGeneration = 0;
+  /**
+   * Disposal is a MAIN-side fact now.
+   *
+   * `isDisposed()` used to ask the runtime. Asking a worker whether it is
+   * disposed is asking a thread that may not be there to answer, and the
+   * question is really about this session's own lifetime - which this side
+   * owns.
+   */
+  let disposed = false;
   let unsubscribeAuthUserId: (() => void) | null = null;
 
   /**
@@ -866,22 +903,26 @@ export function createOpenEpicStore(
   let preStorePatch: Partial<EpicRuntimeProjection> | null = null;
 
   /**
-   * The one write into zustand.
+   * The one write into zustand, and now the PROJECTION HANDLER's apply.
    *
    * `bindingEpoch` is translated here rather than published under its final
    * name, because the translation IS the seam: the runtime reports that a live
-   * binding was invalidated, and only this side knows that the consequence is a
+   * binding was invalidated, and only this side knows the consequence is a
    * React remount.
    *
-   * The `doc` / `awareness` republish rides the same write. They are live `Y`
-   * objects and cannot cross a projection sink, so the runtime exposes them as
-   * getters plus a generation counter, and the first delivery after a replica
-   * replacement carries the new pair.
+   * The `doc` / `awareness` republish that used to ride this write is gone
+   * with them. They were live `Y` objects the runtime exposed as getters plus
+   * a generation counter; the root replica is worker-side now, so there is no
+   * pair to republish and no generation to compare - which is why
+   * `replicaGeneration` stopped having a question to answer.
+   *
+   * Batching is gone too, and deliberately: the WORKER batches, publishing one
+   * coalesced slice per commit. Re-batching here would be a second window over
+   * an already-windowed stream.
    */
-  const delivery: EpicRuntimeDelivery = createBatchingDelivery((patch) => {
+  function applyProjection(patch: Partial<EpicRuntimeProjection>): void {
     const api = storeApi;
-    const runtime = runtimeRef;
-    if (api === null || runtime === null) {
+    if (api === null) {
       preStorePatch =
         preStorePatch === null
           ? { ...patch }
@@ -892,22 +933,12 @@ export function createOpenEpicStore(
     preStorePatch = null;
     const { bindingEpoch, ...projected } =
       held === null ? patch : { ...held, ...patch };
-    const next: Partial<OpenEpicState> =
+    api.setState(
       bindingEpoch === undefined
         ? projected
-        : { ...projected, bindingVersion: bindingEpoch };
-    const generation = runtime.replicaGeneration();
-    if (generation === publishedReplicaGeneration) {
-      api.setState(next);
-      return;
-    }
-    publishedReplicaGeneration = generation;
-    api.setState({
-      ...next,
-      doc: runtime.doc,
-      awareness: runtime.awareness,
-    });
-  });
+        : { ...projected, bindingVersion: bindingEpoch },
+    );
+  }
 
   /**
    * The relocated runtime, reached through the bridge.
@@ -921,6 +952,14 @@ export function createOpenEpicStore(
    * plane, or is answered from the projection.
    */
   const runtime = options.runtime;
+
+  /**
+   * One mutation, over the bridge. Callers narrow on their own literal `kind`.
+   */
+  const applyMutation = (
+    mutation: EpicMutation,
+  ): Promise<EpicMutationResult> =>
+    runtime.port.call("mutation/apply", mutation, NO_TRANSFER);
 
   const bodyDocs = createMainThreadBodyDocStore(() => {
     // Residency is a MAIN-THREAD fact and nothing else publishes it.
@@ -945,8 +984,6 @@ export function createOpenEpicStore(
         storeApi = api;
         return {
           epicId,
-          doc: runtime.doc,
-          awareness: runtime.awareness,
           // The React remount token starts where the runtime's binding epoch
           // does; every later value IS that epoch, translated on delivery.
           bindingVersion: EMPTY_ROOMS_PROJECTION.bindingEpoch,
@@ -968,12 +1005,6 @@ export function createOpenEpicStore(
             set({ lastFocusedThreadId: threadId });
           },
 
-          applyLocalUpdate: (updateBytes) => {
-            runtime.applyLocalUpdate(updateBytes);
-          },
-          sendAwareness: (awarenessBytes) => {
-            runtime.sendAwareness(awarenessBytes);
-          },
           discardUnsyncedEdits: () => {
             runtime.command({ kind: "discard-unsynced-edits", payload: {} });
           },
@@ -983,8 +1014,27 @@ export function createOpenEpicStore(
           retryMigration: () => {
             runtime.command({ kind: "retry-migration", payload: {} });
           },
-          enqueueWriteCommand: (intent) =>
-            runtime.enqueueWriteCommand(intent)?.commandId ?? null,
+          /**
+           * ASYNC, because the queue is on the other thread and it owns BOTH
+           * answers: `CommandQueue.enqueue` mints the id, and it refuses from
+           * queue state this side does not hold. Minting here and pushing
+           * would hand back an id for a command the queue may have refused,
+           * and `waitForWriteCommand` would then watch the projection for a
+           * record that never arrives.
+           *
+           * `null` is still the refusal at this boundary - callers already
+           * branch on it - but it is now a REFUSED arm on the wire rather than
+           * a nullable, so "refused" and "something went wrong" stay distinct
+           * on the way here.
+           */
+          enqueueWriteCommand: async (intent) => {
+            const answer = await runtime.port.call(
+              "command/enqueue",
+              { intent },
+              NO_TRANSFER,
+            );
+            return answer.outcome === "enqueued" ? answer.commandId : null;
+          },
           waitForWriteCommand: (commandId) => {
             const current = get().writeCommands.find(
               (command) => command.commandId === commandId,
@@ -1061,39 +1111,135 @@ export function createOpenEpicStore(
           },
 
           detachTransport: () => {
-            runtime.detachTransport();
+            runtime.detach();
           },
           dispose: () => {
-            if (runtime.isDisposed()) return;
+            if (disposed) return;
             unsubscribeAuthUserId?.();
             unsubscribeAuthUserId = null;
+            disposed = true;
+            bodyDocs.dropAll();
             runtime.dispose();
           },
 
-          renameArtifact: (artifactId, nextTitle) =>
-            runtime.renameArtifact(artifactId, nextTitle),
-          beginRenameMutation: (nodeId, nextTitle) =>
-            runtime.beginRenameMutation(nodeId, nextTitle),
-          beginEpicTitleMutation: (nextTitle) =>
-            runtime.beginEpicTitleMutation(nextTitle),
-          beginReparentMutation: (nodeId, newParentId) =>
-            runtime.beginReparentMutation(nodeId, newParentId),
-          retirePendingMutation: (requestId, outcome) =>
-            runtime.retirePendingMutation(requestId, outcome),
-          isLatestRenameStamp: (nodeId, requestId) =>
-            runtime.isLatestRenameStamp(nodeId, requestId),
-          deleteArtifact: (artifactId) => runtime.deleteArtifact(artifactId),
-          reparentArtifact: (artifactId, newParentId) =>
-            runtime.reparentArtifact(artifactId, newParentId),
-          setEpicTitle: (nextTitle) => runtime.setEpicTitle(nextTitle),
-
-          readAttachmentBytes: (hash, signal) =>
-            runtime.readAttachmentBytes(hash, signal),
-          hasAttachmentBytes: (hash) => runtime.hasAttachmentBytes(hash),
-          getArtifactFragment: (artifactId) =>
-            runtime.getArtifactFragment(artifactId),
-          getArtifactBodyAwareness: (artifactId) =>
-            runtime.getArtifactBodyAwareness(artifactId),
+          /**
+           * The eight metadata mutations, over `mutation/apply`.
+           *
+           * Each narrows on its own literal `kind`, which is what lets the
+           * answer be typed without an assertion - a generic dispatch over the
+           * result union cannot be made to compile without one, at exactly the
+           * point where a wrong-shaped answer would be bound to a kind.
+           *
+           * They became async because the replica is on another thread; every
+           * caller is a handler or a promise arm and none reads one during
+           * render, which was checked call site by call site before this
+           * landed.
+           */
+          renameArtifact: async (artifactId, nextTitle) => {
+            const result = await applyMutation({
+              kind: "rename-artifact",
+              request: { artifactId, title: nextTitle },
+            });
+            return result.kind === "rename-artifact"
+              ? result.value.changed
+              : false;
+          },
+          deleteArtifact: async (artifactId) => {
+            const result = await applyMutation({
+              kind: "delete-artifact",
+              request: { artifactId },
+            });
+            return result.kind === "delete-artifact"
+              ? result.value.changed
+              : false;
+          },
+          reparentArtifact: async (artifactId, newParentId) => {
+            const result = await applyMutation({
+              kind: "reparent-artifact",
+              request: { artifactId, newParentId },
+            });
+            return result.kind === "reparent-artifact"
+              ? result.value.changed
+              : false;
+          },
+          beginRenameMutation: async (nodeId, nextTitle) => {
+            const result = await applyMutation({
+              kind: "begin-rename",
+              request: { nodeId, title: nextTitle },
+            });
+            return result.kind === "begin-rename"
+              ? result.value.requestId
+              : null;
+          },
+          beginEpicTitleMutation: async (nextTitle) => {
+            const result = await applyMutation({
+              kind: "begin-epic-title",
+              request: { title: nextTitle },
+            });
+            return result.kind === "begin-epic-title"
+              ? result.value.requestId
+              : null;
+          },
+          beginReparentMutation: async (nodeId, newParentId) => {
+            const result = await applyMutation({
+              kind: "begin-reparent",
+              request: { nodeId, newParentId },
+            });
+            return result.kind === "begin-reparent"
+              ? result.value.requestId
+              : null;
+          },
+          retirePendingMutation: async (requestId, outcome) => {
+            const result = await applyMutation({
+              kind: "retire-pending",
+              request: { requestId, outcome },
+            });
+            return result.kind === "retire-pending"
+              ? result.value.retired
+              : false;
+          },
+          isLatestRenameStamp: async (nodeId, requestId) => {
+            const result = await applyMutation({
+              kind: "is-latest-rename-stamp",
+              request: { nodeId, requestId },
+            });
+            return result.kind === "is-latest-rename-stamp"
+              ? result.value.latest
+              : false;
+          },
+          /**
+           * `signal` is accepted and no longer used to bound a WAIT.
+           *
+           * The runtime's read waited indefinitely for a hash that had not
+           * synced, and `hasAttachmentBytes` existed solely to stop callers
+           * parking on it - "the guard is not optional". Across the bridge the
+           * worker answers not-held promptly (its own `hasAttachmentBytes`
+           * check is inside `attachment/read`), so the guard has no caller-side
+           * job left and is gone. The parameter stays because callers hold one
+           * and dropping it would be a second change to their call shape.
+           */
+          readAttachmentBytes: async (hash, _signal) => {
+            const answer = await runtime.port.call(
+              "attachment/read",
+              { hash },
+              NO_TRANSFER,
+            );
+            return answer.bytes;
+          },
+          // Answered from the MAIN-SIDE docs. Both stay SYNCHRONOUS, which
+          // is the whole reason the hot half is on this thread: a
+          // `Y.XmlFragment` is what Tiptap binds to by reference and cannot
+          // become a promise at the binding site.
+          getArtifactFragment: (artifactId) => {
+            const docKey = get().getArtifactBodyDocKey(artifactId);
+            return docKey === null
+              ? null
+              : bodyDocs.fragment(docKey, artifactId);
+          },
+          getArtifactBodyAwareness: (artifactId) => {
+            const docKey = get().getArtifactBodyDocKey(artifactId);
+            return docKey === null ? null : bodyDocs.awareness(docKey);
+          },
           getArtifactBodyAvailability: (artifactId) =>
             // Zero new payload: the runtime's own implementation was already a
             // projection read - `sink.read().artifactRooms.stateByArtifactId[id]
@@ -1112,8 +1258,34 @@ export function createOpenEpicStore(
             const roomId = state.artifacts.byId[artifactId].artifactRoomId;
             return roomId !== null && roomId.length > 0 ? roomId : null;
           },
-          acquireArtifactBodyLease: (artifactId) =>
-            runtime.acquireArtifactBodyLease(artifactId),
+          /**
+           * SYNCHRONOUS on the way in, asynchronous underneath.
+           *
+           * The caller is a `useLayoutEffect` that must return its cleanup
+           * immediately (`lib/epic-selectors.ts:1147-1150`), so this cannot
+           * become a promise. The materialize it starts is a bridge call, so
+           * the grant arrives later - which makes RELEASE-BEFORE-GRANT a real
+           * ordering: a tile unmounted before its materialize resolves must
+           * still release the lease the grant is about to hand it, or the room
+           * never cools.
+           */
+          acquireArtifactBodyLease: (artifactId) => {
+            let released = false;
+            let grantedRelease: (() => void) | null = null;
+            void bodyLeases.acquire(artifactId).then((grant) => {
+              if (grant.kind !== "granted") return;
+              if (released) {
+                grant.release();
+                return;
+              }
+              grantedRelease = grant.release;
+            });
+            return () => {
+              if (released) return;
+              released = true;
+              grantedRelease?.();
+            };
+          },
           readArtifactTitle: (artifactId) => {
             // The PROJECTION, in the doc read's own family order: artifacts,
             // then chats, then terminal agents, falling through on ENTRY
@@ -1156,7 +1328,7 @@ export function createOpenEpicStore(
   unsubscribeAuthUserId = useAuthStore.subscribe((state, prevState) => {
     const nextUserId = state.profile?.userId ?? null;
     const prevUserId = prevState.profile?.userId ?? null;
-    if (nextUserId === prevUserId || runtime.isDisposed()) return;
+    if (nextUserId === prevUserId || disposed) return;
     // An answer scoped to the previous viewer cannot authorize absence for the
     // next one. The viewer-keyed query will set this again when its own result
     // is applied.
@@ -1182,23 +1354,44 @@ export function createOpenEpicStore(
     runtime.command({ kind: "reproject-for-viewer-change", payload: {} });
   });
 
-  // Started last so the runtime's first projection lands after the store is
-  // fully constructed - otherwise it would race with the persist middleware's
-  // hydration write.
-  runtime.start();
+  // No `start()` here. The worker's composition root calls `runtime.start()`
+  // itself, after `installCore` and before it answers `ready` - so by the time
+  // this store exists the runtime is already projecting.
 
   return {
     epicId,
     userId,
-    get doc() {
-      return runtime.doc;
+    projection: {
+      // A cheap envelope check, which the contract explicitly allows: both
+      // ends ship in one bundle graph, so this distinguishes a slice from a
+      // FOREIGN payload rather than re-validating a shape the compiler
+      // already agreed on.
+      accept: (value) => (isProjectionPatch(value) ? value : null),
+      apply: (value) => {
+        applyProjection(value);
+      },
+      reject: (reason, revision) => {
+        appLogger.warn("[open-epic] dropped a projection publication", {
+          epicId,
+          reason,
+          revision,
+        });
+      },
     },
-    get awareness() {
-      return runtime.awareness;
+    encodeRootState: async () => {
+      const answer = await runtime.port.call("root/encode", {}, NO_TRANSFER);
+      return answer.update;
     },
-    encodeRootState: () => runtime.encodeRootState(),
-    applyRootUpdate: (update, asLocalEdit) =>
-      runtime.applyRootUpdate(update, asLocalEdit),
+    applyRootUpdate: async (update, asLocalEdit) => {
+      // The bytes are TRANSFERRED, not cloned - this is a whole root replica.
+      const encoded = takeBytesForTransfer(update);
+      const answer = await runtime.port.call(
+        "root/apply",
+        { update: encoded.bytes, asLocalEdit },
+        encoded.transfer,
+      );
+      return answer.applied;
+    },
     store,
     dispose: () => {
       store.getState().dispose();
@@ -1206,7 +1399,7 @@ export function createOpenEpicStore(
     detachTransport: () => {
       store.getState().detachTransport();
     },
-    hotArtifactRoomIdsForTests: () => runtime.materializedArtifactRoomIds(),
+    hotArtifactRoomIdsForTests: () => bodyDocs.residentDocKeys(),
     requestFreshSnapshot: () => {
       store.getState().requestFreshSnapshot();
     },

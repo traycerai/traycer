@@ -106,6 +106,8 @@ export interface EpicRuntimeCorePortSource {
   retryMigration(): void;
   retryWriteCommand(commandId: string): void;
   discardWriteCommand(commandId: string): void;
+  encodeRootState(): Promise<Uint8Array>;
+  applyRootUpdate(update: Uint8Array, asLocalEdit: boolean): Promise<boolean>;
   detachTransport(): void;
   dispose(): void;
 }
@@ -358,6 +360,11 @@ export function buildEpicRuntimeCorePorts(
         }
         applyArgumentCommand(source, command);
       },
+    },
+    root: {
+      encode: () => source.encodeRootState(),
+      apply: (update, asLocalEdit) =>
+        source.applyRootUpdate(update, asLocalEdit),
     },
     // The core's documented shutdown order, mapped onto the runtime's two
     // teardown members: the core stops serving, then the transport closes,
