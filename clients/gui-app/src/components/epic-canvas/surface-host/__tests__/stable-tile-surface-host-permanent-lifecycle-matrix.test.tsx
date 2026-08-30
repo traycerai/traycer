@@ -476,6 +476,7 @@ function buildAssistantSnapshotMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }

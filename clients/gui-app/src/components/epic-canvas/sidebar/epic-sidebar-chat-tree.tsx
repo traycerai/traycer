@@ -9,7 +9,10 @@ import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
+import {
+  chatOpensPublishedCopy,
+  makeChatOpenTileRef,
+} from "@/lib/chats/chat-open-tile-ref";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
   useEpicArchiveChat,
@@ -1465,42 +1468,34 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
   const ownerUserId = useEpicNodeOwnerUserId(nodeId);
-  const opensPublishedCopy = chatRowOpensPublishedCopy({
-    isChat: openableType === "chat",
-    ownerHostId,
-    ownerUserId,
-    ownerIsUnreachable: ownerReachability.status === "unreachable",
-  });
   const openRef = useCallback(
     () =>
-      // The null re-checks below are for the COMPILER, not for the logic:
-      // `chatRowOpensPublishedCopy` guarantees both are non-null whenever it
-      // returns true, but that fact lives behind the function call where
-      // TypeScript's narrowing cannot follow it.
-      opensPublishedCopy && ownerHostId !== null && ownerUserId !== null
-        ? makePublishedChatTileRef({
+      openableType === "chat"
+        ? makeChatOpenTileRef({
             taskId: epicId,
             chatId: nodeId,
-            ownerUserId,
             ownerHostId,
+            ownerUserId,
+            ownerIsUnreachable: ownerReachability.status === "unreachable",
             name: nodeName,
-            hostId: readingHostId,
+            sessionHostId: readingHostId,
           })
         : {
             id: nodeId,
-            type: openableType ?? "chat",
+            instanceId: uuidv4(),
+            type: openableType ?? "terminal-agent",
             name: nodeName,
             hostId: openHostId,
           },
     [
-      opensPublishedCopy,
+      openableType,
       ownerHostId,
       ownerUserId,
+      ownerReachability.status,
       epicId,
       nodeId,
       nodeName,
       readingHostId,
-      openableType,
       openHostId,
     ],
   );
@@ -1511,7 +1506,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     navigateNested(epicId, tabId, () =>
       prepareOpenTilePreviewInTabFocusTarget(tabId, {
         ...openRef(),
-        instanceId: uuidv4(),
       }),
     );
     // The opening itself is the tree's, on every surface. A mounting surface
@@ -2655,30 +2649,6 @@ interface ChatRowButtonProps {
 const ARCHIVED_ROW_CLASS = "opacity-55";
 
 /**
- * Whether a chat row's click opens the published copy instead of a live tab.
- *
- * ONE predicate for the two components that must agree on the answer:
- * `ChatNode` builds the tile ref from it and `ChatRowButton` renders the lock
- * (and its "opens read-only" tooltip) from it. They started as two inlined
- * copies and drifted - the button showed the lock for a record with no owner
- * user while the click fell back to a live ref, promising a read-only copy and
- * then dialing the dead host - so the decision lives here and both read it.
- */
-function chatRowOpensPublishedCopy(input: {
-  readonly isChat: boolean;
-  readonly ownerHostId: string | null;
-  readonly ownerUserId: string | null;
-  readonly ownerIsUnreachable: boolean;
-}): boolean {
-  return (
-    input.isChat &&
-    input.ownerHostId !== null &&
-    input.ownerUserId !== null &&
-    input.ownerIsUnreachable
-  );
-}
-
-/**
  * The row button's accessible name. Its explicit `aria-label` replaces the
  * subtree as the name, so every state a glyph inside the row shows visually
  * (archived prefix, offline lock) has to be restated here or a keyboard /
@@ -2689,20 +2659,55 @@ function chatRowAriaLabel(input: {
   readonly nodeName: string;
   readonly isArchived: boolean;
   readonly sharedWithTask: boolean;
-  readonly offlineHostLabel: string | null;
+  readonly offlineLock: OfflineRowLock | null;
 }): string {
   const stateSuffix = [
     input.isArchived ? "archived" : null,
     input.sharedWithTask ? "shared with task" : null,
-    input.offlineHostLabel !== null
-      ? `on ${input.offlineHostLabel}, offline, opens read-only`
-      : null,
+    input.offlineLock === null
+      ? null
+      : `on ${input.offlineLock.hostLabel}, offline, ${
+          input.offlineLock.access === "published-copy"
+            ? "opens read-only"
+            : "unavailable until that machine is back"
+        }`,
   ]
     .filter((part): part is string => part !== null)
     .join(", ");
   return stateSuffix.length > 0
     ? `${input.nodeName}, ${stateSuffix}`
     : input.nodeName;
+}
+
+/**
+ * The lock a row shows when its owner host is unreachable, and WHAT IT
+ * PROMISES - which is not the same promise for the two record kinds.
+ *
+ * A CHAT has a published copy: its transcript was replicated to the cloud, so
+ * an unreachable owner still leaves something to read, and the row says so
+ * (`published-copy`). That is a real, distinct access tier.
+ *
+ * A TERMINAL AGENT has no such tier and cannot have one. Its content is a live
+ * PTY and its resume metadata is host-local state that never crosses the cloud
+ * metadata projection - so there is nothing published to fall back to, and
+ * borrowing the chat copy here would promise a read the click cannot deliver.
+ * The honest word is UNAVAILABLE: the agent is intact, on its own machine, and
+ * comes back when that machine does (`unavailable`).
+ *
+ * Carrying the promise on the lock rather than deriving it at each of the two
+ * render sites is what stops the tooltip and the accessible name from telling
+ * a reader two different stories about the same row.
+ */
+type OfflineRowLock = {
+  readonly hostLabel: string;
+  readonly access: "published-copy" | "unavailable";
+};
+
+/** The tooltip for {@link OfflineRowLock}, in that promise's own words. */
+function offlineRowLockTooltip(lock: OfflineRowLock): string {
+  return lock.access === "published-copy"
+    ? `Lives on ${lock.hostLabel}, which is offline. Opens read-only from the last published copy.`
+    : `Lives on ${lock.hostLabel}, which is offline. The agent and its transcript stay on that machine, and it becomes available again when ${lock.hostLabel} is back.`;
 }
 
 // Only chats and terminal-agents own a resource-tracked process tree; other
@@ -2800,12 +2805,36 @@ function ChatRowButton(props: ChatRowButtonProps) {
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
   const rowOwnerUserId = useEpicNodeOwnerUserId(nodeId);
-  const showUnreachableLock = chatRowOpensPublishedCopy({
-    isChat: artifactType === "chat",
+  const ownerIsUnreachable = ownerReachability.status === "unreachable";
+  const offlineLock = useMemo<OfflineRowLock | null>(() => {
+    if (
+      chatOpensPublishedCopy({
+        isChat: artifactType === "chat",
+        ownerHostId,
+        ownerUserId: rowOwnerUserId,
+        ownerIsUnreachable,
+      })
+    ) {
+      return {
+        hostLabel: ownerReachability.hostLabel,
+        access: "published-copy",
+      };
+    }
+    // The terminal-agent sibling. It needs no owner-user check where the chat
+    // predicate does: that check exists because the published read is keyed by
+    // `(task, owner, chat)` and an incomplete identity could not address one.
+    // There is no published read here, so the only thing the row has to be
+    // able to name is the machine it lives on.
+    if (artifactType !== "terminal-agent") return null;
+    if (ownerHostId === null || !ownerIsUnreachable) return null;
+    return { hostLabel: ownerReachability.hostLabel, access: "unavailable" };
+  }, [
+    artifactType,
     ownerHostId,
-    ownerUserId: rowOwnerUserId,
-    ownerIsUnreachable: ownerReachability.status === "unreachable",
-  });
+    ownerIsUnreachable,
+    ownerReachability.hostLabel,
+    rowOwnerUserId,
+  ]);
   const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
     () =>
       sourceHostId === null
@@ -2913,6 +2942,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
         nodeId={nodeId}
         nodeName={nodeName}
         hostId={null}
+        // No host to be unreachable: this arm passes `hostId: null`, so the
+        // metadata outcome is already out of reach.
+        ownerHostUnreachable={false}
         ownerKind={null}
         roleClaims={roleClaims}
         side="right"
@@ -2932,9 +2964,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         nodeName,
         isArchived,
         sharedWithTask: showSharedIndicator,
-        offlineHostLabel: showUnreachableLock
-          ? ownerReachability.hostLabel
-          : null,
+        offlineLock,
       })}
       data-testid={`epic-sidebar-item-${nodeId}`}
       data-sidebar-node-id={nodeId}
@@ -2979,9 +3009,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
               />
             </TooltipWrapper>
           ) : null}
-          {showUnreachableLock ? (
+          {offlineLock !== null ? (
             <TooltipWrapper
-              label={`Lives on ${ownerReachability.hostLabel}, which is offline. Opens read-only from the last published copy.`}
+              label={offlineRowLockTooltip(offlineLock)}
               side="right"
               sideOffset={undefined}
               align={undefined}
@@ -3037,6 +3067,11 @@ function ChatRowButton(props: ChatRowButtonProps) {
       nodeId={nodeId}
       nodeName={nodeName}
       hostId={ownerHostId}
+      // THE SAME verdict the offline lock above reads, from the same call.
+      // Two subscriptions on one host id could momentarily disagree, and this
+      // row would then show a lock while its hover promised live worktree
+      // metadata from the machine that lock says is gone.
+      ownerHostUnreachable={ownerIsUnreachable}
       ownerKind={ownerKind}
       roleClaims={roleClaims}
       side="right"

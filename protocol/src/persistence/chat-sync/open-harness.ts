@@ -54,6 +54,11 @@ import { z } from "zod";
  * | `blocks[].steer.sender` | `snapshotSteerBlockSchema` |
  * | `events[].actor` | `snapshotChatEventSchema` |
  *
+ * One NON-harness leaf is reopened here too, on identical reasoning:
+ * `blocks[].text.providerNotice.noticeKind` (see the note on
+ * `snapshotProviderNoticeMetadataSchema`). It is out of the table above because
+ * the sweep test that backs the table is specifically a harness-id sweep.
+ *
  * `messages[].sessionAnchor` is not in this table because it is no longer in
  * the presentation core at all. Its harness id is a per-variant discriminator
  * in a nested discriminated union, so reopening it is not even possible
@@ -88,6 +93,14 @@ import { z } from "zod";
  */
 export const openHarnessIdSchema = z.string().min(1);
 
+/**
+ * A provider-notice kind as this record carries it: any non-empty string.
+ * Renderers already read only `tone` / `title` / `message` / `details`, so an
+ * unrecognized kind is not a rendering decision - it is just a label they do
+ * not need. See `snapshotProviderNoticeMetadataSchema` for why it is open.
+ */
+export const openProviderNoticeKindSchema = z.string().min(1);
+
 // ---- Senders ----------------------------------------------------------- //
 
 export const snapshotAgentSenderSchema = agentSenderSchema.extend({
@@ -121,10 +134,22 @@ export type SnapshotChatRunSettings = z.infer<
 // field bound to the base's live schema (its type, not just its name), so an
 // upstream change lands here with no edit; only the check has to be re-applied
 // by hand.
+//
+// `noticeKind` is reopened for the SAME reason as the harness id beside it, and
+// the reasoning transfers exactly: the kind roster grows whenever a harness
+// gains a notice worth persisting, the block's `type` is `"text"` and therefore
+// KNOWN, so the passthrough hands it to this schema, and a closed enum then
+// fails on the value and takes the whole shard with it. A cloud renderer needs
+// the kind for nothing - it renders `tone` / `title` / `message` / `details` and
+// no shipped consumer switches on it - so the enum bought type precision the
+// record cannot afford. `metadata` stays closed by the logged decision in
+// `COMPATIBILITY.md` §5; the re-applied check below still binds the two, and a
+// kind an old reader does not know arrives with `metadata: null`.
 export const snapshotProviderNoticeMetadataSchema = z
   .object({
     ...providerNoticeMetadataSchema.shape,
     harnessId: openHarnessIdSchema,
+    noticeKind: openProviderNoticeKindSchema,
   })
   .superRefine((notice, ctx) => {
     if (

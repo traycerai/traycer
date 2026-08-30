@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
 import { claimBareKey } from "@/lib/keybindings/bare-key-owner";
 
 /**
@@ -23,6 +23,17 @@ import { claimBareKey } from "@/lib/keybindings/bare-key-owner";
  * stack the component does not own - so it has to leave the component, which
  * an effect event may not do. The ref is the correct tool for that shape.
  *
+ * The hand-off is a LAYOUT effect, not a passive one, because the caller is
+ * outside React: a window listener fires on whatever task the key lands on,
+ * including the gap between a commit and React's passive-effect flush, which
+ * is a separate scheduler task. A passive hand-off leaves the ref pointing at
+ * the PREVIOUS render for that whole window, so the surface is on screen in
+ * its new state while the key still runs the old closure - the refresh key
+ * reading a `trigger` that thinks a refresh is still in flight and no-ops, the
+ * sweep dialog's `A` toggling against a stale row set. A layout effect lands
+ * in the same commit as the DOM, so "what the user can see" and "what the key
+ * does" can never disagree.
+ *
  * Returns a factory rather than claiming directly because callers gate the
  * claim differently - a plain effect for an overlay that unmounts when it
  * closes, `useActivePaneEffect` for one that stays mounted in an unfocused
@@ -33,7 +44,7 @@ export function useBareKeyClaimer(
   handler: (event: KeyboardEvent) => void,
 ): () => () => void {
   const handlerRef = useRef(handler);
-  useEffect(() => {
+  useLayoutEffect(() => {
     handlerRef.current = handler;
   }, [handler]);
   return useCallback(

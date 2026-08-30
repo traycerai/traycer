@@ -11,7 +11,7 @@
  * pending-creation registry. Each is argued below, at the point that holds it.
  */
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { TuiAgentRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { TerminalAgentsSlice } from "../types";
 import { EMPTY_TERMINAL_AGENTS_SLICE } from "../types";
@@ -44,7 +44,7 @@ export interface TuiAgentRecordTable {
   current(): TerminalAgentsSlice;
   ingestSeq(): number;
   applyRecords(
-    records: readonly TuiAgentRecordSummaryV11[],
+    records: readonly TuiAgentRecordSummaryV12[],
     issuedAtSeq: number | null,
   ): TuiAgentRecordPublication | null;
   applyDelta(delta: TuiAgentRecordDelta): TuiAgentRecordPublication | null;
@@ -52,12 +52,62 @@ export interface TuiAgentRecordTable {
   servesNodeToViewer(nodeId: string, currentUserId: string | null): boolean;
 }
 
+/**
+ * Whether an incoming terminal-agent row should REPLACE the one held.
+ *
+ * AUTHORITY FIRST, revision second - and the order is the whole point.
+ *
+ * A `cloud` row is a read-only replica of an agent on another machine; a
+ * `registry` (or `doc`) row is the serving host's own. Comparing revisions
+ * first treats the two as interchangeable, and they are not: the host may
+ * legitimately answer with an authoritative row at the SAME revision a stale
+ * replica already carries - it silently drops a stale replica sitting under a
+ * live local row, then serves the local row from its next list - and a
+ * revision-first rule rejects it as "not newer". The GUI then keeps the cloud
+ * copy for good: it is unlaunchable and unforkable, and because the id WAS in
+ * the snapshot, the omission fence cannot remove it either.
+ *
+ * The doc-over-doc waiver is the clause this plane already had, and it stands
+ * unchanged: a doc row has no registry seq to carry, so it ships at
+ * `revision: 0` on EVERY answer - `0 > 0` would reject each refresh and freeze
+ * that agent at whatever the first answer of the session said. Under `@2` that
+ * row is its only source, so the freeze hides a peer-host rename, reparent and
+ * archive alike. Two doc reads are the same authority and the later one is
+ * newer by construction, being a fresher read of the same map. It stays narrow:
+ * the revision guard still applies the moment either side is registry-backed.
+ *
+ * Keyed on `origin`, NOT on `docResident`, which is the sharper half of what
+ * `@1.2` brought. `docResident` is a boolean a REGISTRY row may also carry -
+ * it says "the doc map has a copy of me", not "I came from the doc map" - so
+ * the old `held.docResident && candidate.docResident` test would waive the
+ * revision guard between two registry rows that happen to be doc-resident.
+ * `origin` is the authority discriminant and answers the question the waiver
+ * is actually about.
+ *
+ * ONE rule for both paths, where this plane previously had two. The delta
+ * path's carve-out said "the plane is REGISTRY-ONLY by construction there, so
+ * both sides carry a real revision" - true at `@1.1` and FALSE at `@1.2`,
+ * whose whole point is that `tuiUpsert` can now carry a cross-host replica.
+ * A delta path still comparing revisions first is exactly the stale-replica
+ * trap above, reached by the newer of the two routes.
+ */
+function tuiAgentRowSupersedes(
+  candidate: TuiAgentRecordSummaryV12,
+  held: TuiAgentRecordSummaryV12,
+): boolean {
+  const candidateIsLocal = candidate.origin !== "cloud";
+  const heldIsLocal = held.origin !== "cloud";
+  if (candidateIsLocal !== heldIsLocal) return candidateIsLocal;
+  if (candidate.origin === "doc" && held.origin === "doc") return true;
+  return candidate.revision > held.revision;
+}
+
 export function createTuiAgentRecordTable(
   sources: TuiAgentRecordTableSources,
 ): TuiAgentRecordTable {
   const { getCurrentUserId, onBeforePublish } = sources;
 
-  const table: RecordTable<TuiAgentRecordSummaryV11, TerminalAgentsSlice> =
+  const table: RecordTable<TuiAgentRecordSummaryV12, TerminalAgentsSlice> =
     createRecordTable(
       {
         /**
@@ -80,31 +130,12 @@ export function createTuiAgentRecordTable(
         isVisibleToUser: (row, currentUserId) =>
           isTerminalAgentVisibleToUser(row.ownerUserId, currentUserId),
         /**
-         * The monotonic-`revision` test, EXCEPT doc-resident over doc-resident,
-         * which it cannot judge. A doc row has no registry seq to carry, so it
-         * ships at `revision: 0` on EVERY answer - `0 <= 0` would reject each
-         * refresh and freeze that agent at whatever the first answer of the
-         * session said, for the life of the session. Under `@2` that row is its
-         * only source, so the freeze hides a peer-host rename, reparent and
-         * archive alike.
-         *
-         * Narrow, and in one direction only. The guard still applies the moment
-         * either side is registry-backed: a doc row at 0 can never clobber an
-         * adopted registry row (`0 <= n`), and an adopted row still replaces the
-         * frozen copy (`n <= 0` is false). What is waived is only the comparison
-         * between two rows that both carry a placeholder, where the later answer
-         * is newer by construction because it is a fresher read of the same map.
+         * Both paths take the SAME rule, and the merge that brought
+         * `@1.2` here is why they no longer differ - see
+         * {@link tuiAgentRowSupersedes}.
          */
-        supersedesOnSnapshot: (candidate, held) =>
-          (held.docResident && candidate.docResident) ||
-          candidate.revision > held.revision,
-        /**
-         * No carve-out on the delta path: the plane is REGISTRY-ONLY by
-         * construction there (see `applyDelta`), so both sides of a comparison
-         * that reaches here carry a real revision.
-         */
-        supersedesOnUpsert: (candidate, held) =>
-          candidate.revision > held.revision,
+        supersedesOnSnapshot: tuiAgentRowSupersedes,
+        supersedesOnUpsert: tuiAgentRowSupersedes,
         buildSlice: (visibleRows) => {
           const next = tuiAgentRecordsSlice(visibleRows);
           return next.allIds.length === 0 ? EMPTY_TERMINAL_AGENTS_SLICE : next;
@@ -151,18 +182,26 @@ export function createTuiAgentRecordTable(
       if (delta.kind === "tuiRemove") {
         return published(table.applyRemoval(delta.tuiAgentId, delta.reason));
       }
-      // The delta plane is REGISTRY-ONLY by construction - a doc-resident agent
-      // has no registry row, so it can never produce a delta. So `false` here
-      // is a fact about the source, not a filled-in default.
+      // Passed through as it arrived. The row is already in its final shape
+      // by the time it reaches this plane, and stamping it here would be
+      // wrong in both directions now:
       //
-      // It is also what makes ADOPTION converge through the staleness test:
-      // `epic.listTuiAgents@1.1` serves a frozen doc row at `revision: 0`, so
-      // the first real delta after that agent's binding host upgrades and the
-      // sweep imports it strictly exceeds 0 and replaces the frozen copy in
-      // place.
-      return published(
-        table.applyUpsert({ ...delta.record, docResident: false }),
-      );
+      //  - From an `@1.1` host the fill has already happened, one layer down.
+      //    `parseV11Frame` sets `docResident: false, origin: "registry"` on
+      //    exactly this frame kind, and argues there why that is EXACT rather
+      //    than a default. Re-stamping restates a decision that is no longer
+      //    ours to make.
+      //  - From an `@1.2` host the record is a real union arm carrying its own
+      //    authority. `cloud` has no `docResident` AT ALL - deliberately, a
+      //    replica is not addressable through the registry affordances - so a
+      //    blanket stamp does not type, and forcing `false` onto a `doc` or
+      //    `registry` arm would overwrite what the wire actually said.
+      //
+      // The old rationale here ("the delta plane is REGISTRY-ONLY by
+      // construction") was true at `@1.1` and is false at `@1.2`, whose whole
+      // point is that `tuiUpsert` can carry a cross-host replica - the same
+      // premise that {@link tuiAgentRowSupersedes} had to stop relying on.
+      return published(table.applyUpsert(delta.record));
     },
 
     republishForCurrentUser: () => published(table.republish()),

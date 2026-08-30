@@ -33,8 +33,8 @@ const STATE_DESCRIPTIONS: { readonly [K in PushPermissionState]: string } = {
 const READ_FAILED = "Couldn't read this phone's notification setting.";
 
 /**
- * The one row in Settings → Notifications that is NOT about a host: the OS
- * push permission of the phone this renderer runs on.
+ * The OS push permission of the phone this renderer runs on. It belongs under
+ * Application → Notifications because it never varies with the selected host.
  *
  * It exists because the OS remembers a refusal forever - the app asks once,
  * and after a "Don't Allow" no amount of relaunching can re-prompt. Without

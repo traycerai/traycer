@@ -40,11 +40,32 @@ import { cn } from "@/lib/utils";
  */
 export type DeadTileOwnerKind = "terminal" | "agent";
 
+/**
+ * WHY this tile cannot show a live session.
+ *
+ * `host-unreachable` - the bound host cannot be reached from here at all.
+ *
+ * `not-running-remotely` - the host IS reachable and simply has no PTY for
+ * this agent. It is a separate reason because the honest remedy is different
+ * and this client has none of it: the tile may not start one. A cross-host
+ * REPLICA carries no `harnessSessionId` (that never leaves the owning
+ * machine), so creating a session here would not resume the conversation - it
+ * would mint a SECOND provider session under the same agent id, on top of
+ * whatever the owner may still be driving. Access to a remote agent is
+ * live-only by construction; the owner's machine is the only place it can be
+ * started.
+ */
+export type DeadTileReason = "host-unreachable" | "not-running-remotely";
+
 function terminalDeadTileMessage(
+  reason: DeadTileReason,
   unavailability: HostUnavailability | null,
   ownerKind: DeadTileOwnerKind,
   hostLabel: string,
 ): string {
+  if (reason === "not-running-remotely") {
+    return `This agent is not running on "${hostLabel}" right now, and it can only be started on that machine. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
+  }
   if (unavailability === "plan-restricted") {
     return ownerKind === "agent"
       ? `Host "${hostLabel}" is local only on your current plan, so this agent cannot be reached from here. Upgrade to use that host remotely — the agent and its transcript are kept either way.`
@@ -58,6 +79,12 @@ function terminalDeadTileMessage(
 export interface TerminalDeadTileBannerProps {
   readonly hostLabel: string;
   readonly ownerKind: DeadTileOwnerKind;
+  /**
+   * Which end state this is. REQUIRED rather than defaulted: the two read
+   * differently to a person and name different remedies, and a default would
+   * silently pick one for a call site that had not thought about it.
+   */
+  readonly reason: DeadTileReason;
   /**
    * WHY the bound host cannot be reached, from `useHostReachability`.
    *
@@ -90,6 +117,7 @@ export function TerminalDeadTileBanner(
     >
       <p className="max-w-md">
         {terminalDeadTileMessage(
+          props.reason,
           props.unavailability,
           props.ownerKind,
           props.hostLabel,
@@ -108,8 +136,14 @@ export function TerminalDeadTileBanner(
           context={createReportIssueContext(
             props.ownerKind === "agent"
               ? {
-                  title: "Agent host is unreachable",
-                  message: "The agent's bound host is unreachable.",
+                  title:
+                    props.reason === "not-running-remotely"
+                      ? "Agent is not running on its host"
+                      : "Agent host is unreachable",
+                  message:
+                    props.reason === "not-running-remotely"
+                      ? "The agent has no running session on the host it is bound to."
+                      : "The agent's bound host is unreachable.",
                   code: null,
                   source: "Agent",
                 }

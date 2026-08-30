@@ -3179,7 +3179,8 @@ export const epicSchemaSurfaceBaseline = {
                                           "enum": [
                                             "model_rerouted",
                                             "model_verification",
-                                            "safety_buffering"
+                                            "safety_buffering",
+                                            "harness_message"
                                           ]
                                         },
                                         "tone": {
@@ -6220,6 +6221,17 @@ export const epicSchemaSurfaceBaseline = {
                         ]
                       },
                       "serviceTier": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "envCredentialVar": {
                         "default": null,
                         "anyOf": [
                           {
@@ -11417,7 +11429,8 @@ export const epicSchemaSurfaceBaseline = {
                                           "enum": [
                                             "model_rerouted",
                                             "model_verification",
-                                            "safety_buffering"
+                                            "safety_buffering",
+                                            "harness_message"
                                           ]
                                         },
                                         "tone": {
@@ -14544,6 +14557,17 @@ export const epicSchemaSurfaceBaseline = {
                           }
                         ]
                       },
+                      "envCredentialVar": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "imageResolutions": {
                         "default": [],
                         "type": "array",
@@ -14693,6 +14717,7 @@ export const epicSchemaSurfaceBaseline = {
                       "usage",
                       "reasoningEffort",
                       "serviceTier",
+                      "envCredentialVar",
                       "imageResolutions"
                     ],
                     "additionalProperties": false

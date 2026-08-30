@@ -49,7 +49,7 @@ import type { SendOutcome } from "../adapter";
 import type { RuntimeLogFields } from "../runtime-environment";
 import type { ProtectedBytes } from "../memory-accountant";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -491,7 +491,7 @@ export interface RuntimeCommandMap {
   };
   "apply-chat-record-delta": { readonly delta: ChatRecordDelta };
   "apply-tui-agent-records": {
-    readonly records: readonly TuiAgentRecordSummaryV11[];
+    readonly records: readonly TuiAgentRecordSummaryV12[];
     readonly issuedAtSeq: number | null;
   };
   "apply-tui-agent-record-delta": { readonly delta: TuiAgentRecordDelta };

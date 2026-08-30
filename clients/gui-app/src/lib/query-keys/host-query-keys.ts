@@ -97,6 +97,12 @@ export const hostQueryKeys = {
       "worktree.sweepCandidates",
       epicKey,
     ] as const,
+  sweepWorktreeHolders: (hostId: string | null, worktreePath: string) =>
+    [
+      ...hostQueryKeys.scope(hostId),
+      "worktree.listHolders",
+      worktreePath,
+    ] as const,
   /**
    * Named alias for `host.usage.summary` (Usage page + epic cost badge).
    * Keyed on the full request (`timezone`/`windowDays`/`epicId`), so the

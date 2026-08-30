@@ -21,7 +21,9 @@ import {
   applySkeletonChunk,
   applyWindowedSnapshot,
   emptyTranscriptWindow,
+  streamWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
+  transcriptWindowChargedBytes,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import type {
@@ -72,6 +74,26 @@ function event(eventId: string, timestamp: number): ChatEvent {
   };
 }
 
+function grownUserMessage(message: Message, index: number): Message {
+  if (message.role !== "user") return message;
+  return {
+    ...message,
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: `chunk ${index} `.repeat(600) }],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+  };
+}
+
 function skeletonEntry(rowId: string, ordinal: number): RowSkeletonEntry {
   return {
     rowId,
@@ -101,12 +123,17 @@ function rangeOf(
 }
 
 function windowWithSkeleton(rowCount: number): TranscriptWindow {
-  const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
-    epoch: 1,
-    rowCount,
-    indexRevision: null,
-    tail: { fromOrdinal: rowCount, messages: [], events: [] },
-  });
+  const seeded = applyWindowedSnapshot(
+    emptyTranscriptWindow(),
+    {
+      epoch: 1,
+      rowCount,
+      indexRevision: null,
+      tail: { fromOrdinal: rowCount, messages: [], events: [] },
+    },
+    null,
+    null,
+  );
   return applySkeletonChunk(seeded, {
     epoch: 1,
     fromOrdinal: 0,
@@ -179,10 +206,14 @@ describe("evictChatWindowForAccountant", () => {
     window = applyRangeResponse(
       window,
       rangeOf(0, ["row-0"], [userMessage("m-0", 0)]),
+      null,
+      null,
     );
     window = applyRangeResponse(
       window,
       rangeOf(1, ["row-1"], [userMessage("m-1", 1)]),
+      null,
+      null,
     );
     window = appendLiveRecords(window, {
       messages: [userMessage("m-live", 9)],
@@ -210,14 +241,20 @@ describe("evictChatWindowForAccountant", () => {
     window = applyRangeResponse(
       window,
       rangeOf(0, ["row-0"], [userMessage("m-0", 0)]),
+      null,
+      null,
     );
     window = applyRangeResponse(
       window,
       rangeOf(2, ["row-2"], [userMessage("m-2", 2)]),
+      null,
+      null,
     );
     window = applyRangeResponse(
       window,
       rangeOf(4, ["row-4"], [userMessage("m-4", 4)]),
+      null,
+      null,
     );
     const { outcome } = evictChatWindowForAccountant(
       window,
@@ -232,6 +269,76 @@ describe("evictChatWindowForAccountant", () => {
       outcome.protectedBytesByKind.some((entry) => entry.kind === "required"),
     ).toBe(true);
     expect(outcome.reclaimedBytes).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The feature's own motivating case, end to end: a huge IN-FLIGHT turn has to
+ * evict the cold scrollback it is competing with.
+ *
+ * The chain has three links and each one is load-bearing. The turn's deltas
+ * are `deferred`, so they deliberately leave `hydratedBytes` unmoved. The mark
+ * they leave in `unsettledByteMessageIds` is what carries the growth forward.
+ * `evictTranscriptWindowToBudget` settles FIRST and only then reads its gate,
+ * which is the moment the growth becomes a figure at all. Break any link and
+ * the window reads as under budget while holding a turn's worth of bytes.
+ */
+describe("an in-flight turn's growth reaches the eviction gate", () => {
+  it("evicts cold spans once a STREAMING row grows past the budget", () => {
+    let window = windowWithSkeleton(4);
+    window = applyRangeResponse(
+      window,
+      rangeOf(0, ["row-0"], [userMessage("m-0", 0)]),
+      null,
+      null,
+    );
+    window = applyRangeResponse(
+      window,
+      rangeOf(1, ["row-1"], [userMessage("m-1", 1)]),
+      null,
+      null,
+    );
+    window = appendLiveRecords(window, {
+      messages: [userMessage("m-live", 9)],
+      events: [],
+    });
+    const spansBefore = window.spans.length;
+    expect(spansBefore).toBeGreaterThan(0);
+
+    // The budget is the charge BEFORE the turn grows, so nothing but the
+    // growth itself can push this window over it.
+    const budget = transcriptWindowChargedBytes(window);
+    const figureBeforeGrowth = window.hydratedBytes;
+
+    for (let index = 0; index < 8; index += 1) {
+      window = streamWindowMessage(
+        window,
+        "m-live",
+        (message) => grownUserMessage(message, index),
+        null,
+      ).window;
+    }
+
+    // Deferred: the stored figure has NOT moved, which is what keeps
+    // `settleWindowBytes` off the per-token path.
+    expect(window.hydratedBytes).toBe(figureBeforeGrowth);
+    // ...but the true charge has, and by more than the budget allows.
+    expect(transcriptWindowChargedBytes(window)).toBeGreaterThan(budget);
+
+    const { window: next, outcome } = evictChatWindowForAccountant(
+      window,
+      budget,
+      null,
+      [],
+    );
+
+    expect(outcome.reclaimedBytes).toBeGreaterThan(0);
+    expect(next.spans.length).toBeLessThan(spansBefore);
+    // The live row itself survives - it has no ordinal, so evicting it would
+    // not be recoverable by range hydration.
+    expect(next.liveMessages.map((message) => message.messageId)).toEqual([
+      "m-live",
+    ]);
   });
 });
 

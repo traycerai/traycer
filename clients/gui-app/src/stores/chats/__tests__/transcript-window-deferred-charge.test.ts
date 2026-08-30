@@ -16,6 +16,7 @@ import {
   emptyTranscriptWindow,
   settleWindowBytes,
   streamWindowMessage,
+  updateWindowMessage,
 } from "@/stores/chats/transcript-window";
 
 vi.mock(
@@ -80,8 +81,11 @@ describe("deferred streaming charge", () => {
 
     const deltaCount = 20;
     for (let index = 0; index < deltaCount; index += 1) {
-      window = streamWindowMessage(window, "live", (message) =>
-        messageWithText(message, `chunk ${index} `.repeat(80)),
+      window = streamWindowMessage(
+        window,
+        "live",
+        (message) => messageWithText(message, `chunk ${index} `.repeat(80)),
+        null,
       ).window;
     }
 
@@ -94,5 +98,55 @@ describe("deferred streaming charge", () => {
     );
     expect(settled.unsettledByteMessageIds).toEqual([]);
     expect(settled.hydratedBytes).toBeGreaterThan(window.hydratedBytes);
+  });
+});
+
+/**
+ * The live term of `hydratedBytes` is maintained at exactly one site
+ * (`rewriteWindowMessage`) rather than derived, so it is the one place the
+ * merged definition can silently go stale. Upstream's incremental adjustment
+ * covers only records the LEDGER holds; these pin the half that covers the
+ * live-only ones.
+ */
+describe("the live term of hydratedBytes", () => {
+  it("MOVES when a `now` charge rewrites a LIVE-only record", () => {
+    const original = userMessage("live", 1);
+    const window = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [original],
+      events: [] as ChatEvent[],
+    });
+    const before = window.hydratedBytes;
+    const grown = messageWithText(original, "x".repeat(4096));
+
+    // A live-only record has no ledger entry, so it skips the fresh-term
+    // adjustment entirely. Without the live-term delta this figure would go on
+    // describing the pre-rewrite body - the case `updateWindowMessage`'s own
+    // contract ("live or hydrated") reaches on an image resolving.
+    const next = updateWindowMessage(window, "live", () => grown, null).window;
+
+    expect(next.hydratedBytes).toBe(
+      before + recordByteLength(grown) - recordByteLength(original),
+    );
+    expect(next.hydratedBytes).toBeGreaterThan(before);
+  });
+
+  it("is UNMOVED by a `deferred` charge, per the eviction gate's own premise", () => {
+    const window = appendLiveRecords(emptyTranscriptWindow(), {
+      messages: [userMessage("live", 1)],
+      events: [] as ChatEvent[],
+    });
+    const before = window.hydratedBytes;
+
+    const next = streamWindowMessage(
+      window,
+      "live",
+      (message) => messageWithText(message, "x".repeat(4096)),
+      null,
+    ).window;
+
+    // `evictWindowAfterInPlaceGrowth` is gated on this figure alone and is
+    // affordable only because a streaming row cannot move it. Charging the
+    // live term here would put `settleWindowBytes` back on the per-token path.
+    expect(next.hydratedBytes).toBe(before);
   });
 });

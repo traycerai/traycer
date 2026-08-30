@@ -29,6 +29,7 @@ import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
 import { useHostBinding } from "@/lib/host/runtime";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { appServerClock } from "@/lib/clock/app-server-clock";
 import { getGuiClientIdentity } from "@/lib/host/client-identity";
 import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -256,6 +257,11 @@ export function buildHostStreamClient(params: {
       // bearer at a wake-time re-attach revalidates + redials instead of
       // terminally closing the shared session (`RemoteSessionOptions.auth`).
       auth: params.auth,
+      // The same app-wide verdict the local branch passes below. A wrong wall
+      // clock wedges a remote session identically - it is the machine's clock,
+      // not the host's - and a user connected across a relay is the one least
+      // placed to guess why nothing works.
+      clock: appServerClock,
       rpcRegistry: hostRpcRegistry,
       streamRegistry: hostStreamRpcRegistry,
       webSocketFactory: browserStreamWebSocketFactory,
@@ -276,6 +282,12 @@ export function buildHostStreamClient(params: {
     endpoint: params.endpoint,
     bearer: params.bearer,
     auth: params.auth,
+    // App-wide for the same reason the mint flow below is: the wall clock is a
+    // property of the machine, so every stream in the renderer parks and
+    // resumes on ONE verdict. Without it, a bearer that reads "expired" only
+    // because the clock is hours off walks this session to `goTerminal` with a
+    // diagnosis that blames the credential.
+    clock: appServerClock,
     // Always the app-wide flow, never a per-caller one: the renderer holds
     // several clients against one host, and the shared module is what keeps
     // that from becoming several concurrent mints revoking each other. It

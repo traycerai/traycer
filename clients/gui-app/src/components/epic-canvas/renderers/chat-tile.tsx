@@ -71,6 +71,7 @@ import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-bu
 import {
   droppedRunDirectoriesFromDraft,
   teardownHolderSetDrifted,
+  worktreeDraftCommitsRebind,
 } from "@/lib/worktree/owner-teardown-snapshot";
 import {
   takeArmedTeardownSubmit,
@@ -88,7 +89,17 @@ import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-con
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
 import type { ChatMessageActions } from "@/components/chat/chat-message";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
-import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
+import type {
+  ChatComposerSideChatInput,
+  ChatComposerSubmitInput,
+} from "@/components/chat/composer/chat-composer";
+import {
+  sideChatPlacementForTile,
+  startSideChat,
+} from "@/lib/commands/actions/start-side-chat";
+import type { CancelFn } from "@/lib/commands/actions/new-chat";
+import { visibleWorktreeIntent } from "@/lib/worktree/fork-workspace-seed";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   useChatById,
   useEpicLiveArtifactTitle,
@@ -147,7 +158,10 @@ import {
 } from "@/hooks/agent/use-host-reachability";
 import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { TileHostLoadState } from "./tile-host-load-state";
-import { useEpicUpdateChatRunSettings } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  useEpicCreateChatForHost,
+  useEpicUpdateChatRunSettings,
+} from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatCloneOnHostSwitch } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
 import { CloneProfileRecovery } from "@/components/epic-canvas/renderers/clone-profile-recovery";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
@@ -155,7 +169,10 @@ import {
   findManualCompactCommand,
   promoteQueuedMessageToFront,
 } from "@/lib/chats/compact-conversation";
-import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
+import {
+  NO_LOCAL_SLASH_COMMANDS,
+  useSlashCommands,
+} from "@/hooks/composer/use-slash-commands";
 import { chatTileActivationQueryPolicy } from "./chat-tile-activation-query-policy";
 import {
   ChatDeadTileBanner,
@@ -1272,6 +1289,28 @@ function teardownSendRefusalReason(
   return undefined;
 }
 
+/**
+ * A send held by the rebind-consent dialog: the input to re-dispatch on
+ * confirm, the PATH-SPECIFIC dispatch that must run it — a confirmed
+ * compaction still needs its lock and queue promotion, not the composer's
+ * title bookkeeping — and the path's LIVE eligibility recheck. The values a
+ * path examined at click time may be a whole open dialog older by the time
+ * the user confirms (a blocking approval can arrive, the turn can start
+ * stopping), so `refusal` reads current state and returns the sentence to
+ * surface instead of dispatching, or `null` when the send is still
+ * eligible. Never a silent no-op: an ineligible confirm states why.
+ */
+type GatedChatSend = {
+  readonly submit: ChatComposerSubmitInput;
+  readonly dispatch: (input: ChatComposerSubmitInput) => boolean;
+  readonly refusal: () => string | null;
+};
+
+// The composer submit's own eligibility (access + sign-in) is re-checked
+// live by the dialog's confirm handler itself, so its slot carries the
+// always-eligible refusal. Module scope for a stable identity.
+const NO_LIVE_SEND_REFUSAL = (): string | null => null;
+
 // eslint-disable-next-line complexity
 function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const { handle, node, viewTabId, tileId, isActive, currentEpicId } = props;
@@ -1335,6 +1374,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const profile = useAuthStore((state) => state.profile);
   const activeHostId = useTabHostId();
   const currentUserId = profile?.userId ?? null;
+  // The `/btw` side chat's create, on this tab's own host client: the fork is
+  // bound to the source's host for life, like the source itself.
+  const createSideChat = useEpicCreateChatForHost();
   const localSnapshotClearMarker = useLocalSnapshotClearStore((store) =>
     localSnapshotsClearedAt(
       store.clearedAtByScope,
@@ -1430,6 +1472,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       accumulatedFileChanges: s.accumulatedFileChanges,
       accumulatedFileChangeSummaries: s.accumulatedFileChangeSummaries,
       accumulatedSummaryGenerationSeated: s.accumulatedSummaryGenerationSeated,
+      accumulatedSummaryAssemblyStarted: s.accumulatedSummaryAssemblyStarted,
       accumulatedFileChangeCount: s.accumulatedFileChangeCount,
       backgroundItems: s.backgroundItems,
       pendingBackgroundStops: s.pendingBackgroundStops,
@@ -1757,6 +1800,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     hostChangeCount: state.accumulatedFileChangeCount,
     deliveredSummaryCount: state.accumulatedFileChangeSummaries.length,
     generationSeated: state.accumulatedSummaryGenerationSeated,
+    assemblyStarted: state.accumulatedSummaryAssemblyStarted,
   });
   const restoreContext = useMemo(
     () => ({
@@ -1844,6 +1888,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     // and resolving against a catalog the composer never saw.
     workingDirectories: resolvedComposerMentionRoots,
     enabled: activationQueries.discoverActionSlashCommands,
+    localCommands: NO_LOCAL_SLASH_COMMANDS,
   });
   // Null until loaded, which makes a `$` prompt stay plain text rather than
   // chip against a catalog we have not seen yet.
@@ -2102,8 +2147,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly holders: readonly WorktreeBusyHolder[];
   } | null>(null);
-  const pendingSubmitRef =
-    useRef<ArmedTeardownSubmit<ChatComposerSubmitInput> | null>(null);
+  const pendingSubmitRef = useRef<ArmedTeardownSubmit<GatedChatSend> | null>(
+    null,
+  );
   const [teardownOwnerId, setTeardownOwnerId] = useState(node.id);
   if (node.id !== teardownOwnerId) {
     setTeardownOwnerId(node.id);
@@ -2165,6 +2211,68 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ],
   );
 
+  // The one rebind-consent gate for every send-shaped path this tile owns —
+  // composer submits, next-step clicks, implement-plan, compaction. A path
+  // that calls `chatActions.sendMessage` without passing through here
+  // reopens one of two holes: a phantom disclosure on a no-op draft, or a
+  // staged rebind committing silently.
+  const submitThroughRebindGate = useCallback(
+    (send: GatedChatSend): boolean => {
+      const { submit, dispatch } = send;
+      const stagedKey: WorktreeStagingKey = {
+        surface: "owner",
+        hostId: activeHostId,
+        epicId: currentEpicId,
+        ownerKind: "chat",
+        ownerId: node.id,
+      };
+      // The disclosure is consent for the rebind a send would commit. A send
+      // whose draft commits nothing (none staged, or one that restates the
+      // committed binding) has no rebind to consent to — gating it would put
+      // "Send in the new folder?" in front of every steer of a busy agent.
+      if (
+        !worktreeDraftCommitsRebind({
+          binding: state.worktreeBinding,
+          draft: readStagedWorktreeIntent(stagedKey),
+          removedWorkspacePaths: [],
+        })
+      ) {
+        return dispatch(submit);
+      }
+      const snapshot = snapshotTeardownHolders(
+        droppedRunDirectoriesFromDraft({
+          binding: state.worktreeBinding,
+          draft: readStagedWorktreeIntent(stagedKey),
+          removedWorkspacePaths: [],
+        }),
+      );
+      const capture: WorktreeCommitCapture = {
+        draft: readStagedWorktreeIntent(stagedKey),
+        revision: stagedWorktreeIntentRevision(stagedKey),
+        binding: state.worktreeBinding,
+        removedWorkspacePaths: [],
+        stopTargets: snapshot.stopTargets,
+      };
+      if (snapshot.holders.length > 0) {
+        pendingSubmitRef.current = {
+          input: send,
+          capture,
+          ownerId: node.id,
+        };
+        setTeardownDialog({ holders: snapshot.holders });
+        return false;
+      }
+      return dispatch(submit);
+    },
+    [
+      activeHostId,
+      currentEpicId,
+      node.id,
+      snapshotTeardownHolders,
+      state.worktreeBinding,
+    ],
+  );
+
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
       if (!canAct) return false;
@@ -2199,6 +2307,38 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return true;
       }
+      return submitThroughRebindGate({
+        submit: input,
+        dispatch: dispatchUserSend,
+        refusal: NO_LIVE_SEND_REFUSAL,
+      });
+    },
+    [
+      activeEditingQueueItemId,
+      canAct,
+      chatActions,
+      dispatchUi,
+      dispatchUserSend,
+      profile,
+      submitThroughRebindGate,
+    ],
+  );
+  // `/btw` / `/side`: fork this chat and ask there. The tile contributes what
+  // only it knows about its own chat - owner, title, lineage, workspace, pane -
+  // and `startSideChat` owns the create, its recovery, and the open. Deliberately
+  // not gated on `canAct`: a viewer of someone else's chat can still fork it
+  // (the fork dialog allows exactly that), and the side chat is the viewer's own.
+  const sideChatCancelsRef = useRef(new Set<CancelFn>());
+  useEffect(() => {
+    const cancels = sideChatCancelsRef.current;
+    return () => {
+      for (const cancel of cancels) cancel();
+      cancels.clear();
+    };
+  }, []);
+  const startSideChatFromComposer = useCallback(
+    (input: ChatComposerSideChatInput): boolean => {
+      if (profile === null) return false;
       const stagedKey: WorktreeStagingKey = {
         surface: "owner",
         hostId: activeHostId,
@@ -2206,43 +2346,46 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         ownerKind: "chat",
         ownerId: node.id,
       };
-      const snapshot = snapshotTeardownHolders(
-        droppedRunDirectoriesFromDraft({
-          binding: state.worktreeBinding,
-          draft: readStagedWorktreeIntent(stagedKey),
-          removedWorkspacePaths: [],
-        }),
-      );
-      const capture: WorktreeCommitCapture = {
-        draft: readStagedWorktreeIntent(stagedKey),
-        revision: stagedWorktreeIntentRevision(stagedKey),
-        binding: state.worktreeBinding,
-        removedWorkspacePaths: [],
-        stopTargets: snapshot.stopTargets,
-      };
-      if (snapshot.holders.length > 0) {
-        pendingSubmitRef.current = {
-          input,
-          capture,
-          ownerId: node.id,
-        };
-        setTeardownDialog({ holders: snapshot.holders });
-        return false;
-      }
-      return dispatchUserSend(input);
+      const cancel = startSideChat({
+        epicId: currentEpicId,
+        tabId: viewTabId,
+        hostId: activeHostId,
+        userId: profile.userId,
+        sourceChatId: node.id,
+        sourceChatTitle: state.chat?.title ?? "",
+        sourceOwnerUserId: state.chat?.userId ?? null,
+        content: input.content,
+        settings: input.settings,
+        accountContext: useAccountContextStore.getState().accountContext,
+        // The source's visible workspace - its binding overlaid with any unsent
+        // staged pick - so the fork works where the source's composer shows.
+        worktreeIntent: visibleWorktreeIntent(
+          state.worktreeBinding,
+          readStagedWorktreeIntent(stagedKey),
+        ),
+        placement: sideChatPlacementForTile(viewTabId, node.id),
+        createChat: (request, callbacks) =>
+          createSideChat.mutate(request, callbacks),
+        onHistoryUnavailable: (reason) => {
+          toast(
+            reason === "no-checkpoint"
+              ? "This agent hasn't replied yet, so the side chat starts without its history."
+              : "This host can't fork chat history yet, so the side chat starts without it.",
+          );
+        },
+      });
+      sideChatCancelsRef.current.add(cancel);
+      return true;
     },
     [
-      activeEditingQueueItemId,
       activeHostId,
-      canAct,
-      chatActions,
+      createSideChat,
       currentEpicId,
-      dispatchUi,
-      dispatchUserSend,
       node.id,
       profile,
-      snapshotTeardownHolders,
+      state.chat,
       state.worktreeBinding,
+      viewTabId,
     ],
   );
   const canSendNextStep =
@@ -2252,27 +2395,71 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       state.pendingApprovals,
       state.pendingFileEditApprovals.length,
     );
+  // `canSendNextStep`, re-derived from LIVE store state for the consent
+  // dialog's deferred dispatch. The render-scope boolean above is what the
+  // click checked, and it can be a whole open dialog stale by confirm time —
+  // reading the stores imperatively is the point, not a shortcut.
+  const nextStepSendRefusal = useCallback((): string | null => {
+    const live = handle.store.getState();
+    if (
+      !chatTileCanAct(
+        live.connectionStatus,
+        live.access?.canAct === true,
+        useAuthStore.getState().profile !== null,
+      )
+    ) {
+      return "You don't have permission to send.";
+    }
+    const liveStopPending = Object.values(live.pendingActions).some(
+      (action) => action.action === "stop",
+    );
+    if (
+      liveStopPending ||
+      resolvedTurnStatus(live, composerTurnStatus(live.runStatus)) ===
+        "stopping"
+    ) {
+      return "The agent is stopping — send again once it settles.";
+    }
+    if (
+      composerHasBlockingApprovals(
+        live.pendingApprovals,
+        live.pendingFileEditApprovals.length,
+      )
+    ) {
+      return "Resolve the pending approval before sending.";
+    }
+    return null;
+  }, [handle.store]);
   const sendNextStep = useCallback(
     (option: TraycerNextStepOption): boolean => {
       if (!canSendNextStep) return false;
-      const sender = userMessageSenderForProfile(profile);
-      if (sender === null) return false;
+      if (userMessageSenderForProfile(profile) === null) return false;
       const content = buildSubmittedChatJSONContent(
         plainTextPromptContent(option.prompt),
         slashCatalog,
       );
-      return (
-        chatActions.sendMessage({
+      return submitThroughRebindGate({
+        submit: {
           content,
-          sender,
-          settings: nextStepSettings,
+          contentText: option.prompt,
           attachments: [],
+          settings: nextStepSettings,
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
-        }) !== null
-      );
+        },
+        dispatch: dispatchUserSend,
+        refusal: nextStepSendRefusal,
+      });
     },
-    [canSendNextStep, chatActions, nextStepSettings, profile, slashCatalog],
+    [
+      canSendNextStep,
+      dispatchUserSend,
+      nextStepSendRefusal,
+      nextStepSettings,
+      profile,
+      slashCatalog,
+      submitThroughRebindGate,
+    ],
   );
   // Runs the harness's own compaction from the context-usage chip. Never
   // interrupts: with a turn running (or work already queued) the compact
@@ -2304,18 +2491,18 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     [],
   );
-  const compactConversation = useCallback(
-    (commandName: string): void => {
-      if (!canSendNextStep) return;
+  // The compaction's own dispatch behind the rebind gate: the lock, the
+  // queue-or-run-now policy, and the promotion belong to the moment the send
+  // actually leaves — a consent dialog may sit between the click and this, so
+  // deciding them at click time would act on stale turn/queue state (and take
+  // the double-click lock for a compaction that never fired).
+  const dispatchCompactSend = useCallback(
+    (input: ChatComposerSubmitInput): boolean => {
       const states = compactStateByChatIdRef.current;
       const existing = states.get(handle.chatId);
-      if (existing?.locked === true) return;
+      if (existing?.locked === true) return false;
       const sender = userMessageSenderForProfile(profile);
-      if (sender === null) return;
-      const content = buildSubmittedChatJSONContent(
-        plainTextPromptContent(`/${commandName}`),
-        slashCatalog,
-      );
+      if (sender === null) return false;
       // A cheap re-entrancy guard against a double-click firing two real
       // compactions: the optimistic-queue dedupe only suppresses the second
       // row's on-screen echo, not the frame that already went to the host.
@@ -2332,29 +2519,60 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       const { activeTurn, queue } = handle.store.getState();
       const runNow = activeTurn === null && queue.items.length === 0;
       const sent = chatActions.sendMessage({
-        content,
+        content: input.content,
         sender,
-        settings: nextStepSettings,
-        attachments: [],
+        settings: input.settings,
+        attachments: input.attachments,
         deliveryPolicy: runNow ? "auto" : "after_turn",
-        restore: { content, browserAnnotations: [] },
+        restore: input.restore,
       });
-      if (sent === null || runNow) return;
+      if (sent === null) return false;
+      if (runNow) return true;
       state.cancelPromotion?.();
       state.cancelPromotion = promoteQueuedMessageToFront({
         store: handle.store,
         messageId: sent.messageId,
         reorder: chatActions.queueReorder,
       });
+      return true;
+    },
+    [chatActions, handle.chatId, handle.store, profile],
+  );
+  const compactConversation = useCallback(
+    (commandName: string): void => {
+      if (!canSendNextStep) return;
+      if (compactStateByChatIdRef.current.get(handle.chatId)?.locked === true) {
+        return;
+      }
+      if (userMessageSenderForProfile(profile) === null) return;
+      const content = buildSubmittedChatJSONContent(
+        plainTextPromptContent(`/${commandName}`),
+        slashCatalog,
+      );
+      submitThroughRebindGate({
+        submit: {
+          content,
+          contentText: `/${commandName}`,
+          attachments: [],
+          settings: nextStepSettings,
+          // Placeholder only: `dispatchCompactSend` decides queue-or-run-now
+          // from live turn/queue state at actual dispatch.
+          deliveryPolicy: "auto",
+          restore: { content, browserAnnotations: [] },
+        },
+        dispatch: dispatchCompactSend,
+        refusal: nextStepSendRefusal,
+      });
     },
     [
       canSendNextStep,
-      chatActions,
+      dispatchCompactSend,
       handle.chatId,
-      handle.store,
+      nextStepSendRefusal,
       nextStepSettings,
       profile,
       slashCatalog,
+      submitThroughRebindGate,
     ],
   );
   const nextStepActions = useMemo(
@@ -2364,36 +2582,52 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     }),
     [canSendNextStep, sendNextStep],
   );
+  // Implement-plan is a submit like any next-step, so it takes the SAME
+  // eligibility rule at every point: the button (`canSend` below), this click
+  // gate, and the consent dialog's deferred confirm (`nextStepSendRefusal`).
+  // A bare `canAct` here once let a click send over a blocking file-edit/tool
+  // approval that the composer and every next-step correctly refuse - and
+  // worse, made the deferred confirm refuse a send the immediate path
+  // allowed: one click, two behaviors.
   const sendImplementPlanMessage = useCallback((): boolean => {
-    if (!canAct) return false;
-    const sender = userMessageSenderForProfile(profile);
-    if (sender === null) return false;
+    if (!canSendNextStep) return false;
+    if (userMessageSenderForProfile(profile) === null) return false;
     const content = buildSubmittedChatJSONContent(
       plainTextPromptContent("Implement the plan above."),
       slashCatalog,
     );
-    return (
-      chatActions.sendMessage({
+    return submitThroughRebindGate({
+      submit: {
         content,
-        sender,
-        settings: nextStepSettings,
+        contentText: "Implement the plan above.",
         attachments: [],
+        settings: nextStepSettings,
         deliveryPolicy: "auto",
         restore: { content, browserAnnotations: [] },
-      }) !== null
-    );
-  }, [canAct, chatActions, nextStepSettings, profile, slashCatalog]);
+      },
+      dispatch: dispatchUserSend,
+      refusal: nextStepSendRefusal,
+    });
+  }, [
+    canSendNextStep,
+    dispatchUserSend,
+    nextStepSendRefusal,
+    nextStepSettings,
+    profile,
+    slashCatalog,
+    submitThroughRebindGate,
+  ]);
   const planActions = useMemo<ChatPlanActionsContextValue>(
     () => ({
       epicId: currentEpicId,
       chatId: node.id,
-      canAct,
+      canSend: canSendNextStep,
       pending: approvalDecisionPending,
       onImplement: sendImplementPlanMessage,
     }),
     [
       approvalDecisionPending,
-      canAct,
+      canSendNextStep,
       currentEpicId,
       node.id,
       sendImplementPlanMessage,
@@ -2708,6 +2942,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       onSubmitMessage: submitMessage,
+      onSideChat: startSideChatFromComposer,
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -2722,6 +2957,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       isFolderlessWorkspace,
       currentEpicId,
       submitMessage,
+      startSideChatFromComposer,
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -2798,6 +3034,17 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           toast("Sign in to send this message.");
           return;
         }
+        // The armed path's OWN eligibility, re-read from live state: a
+        // blocking approval or a stopping turn can arrive while the dialog
+        // sits open, and the click-time check cannot see it. Peeked before
+        // taking the armed submit so a refusal keeps the dialog and its
+        // armed send (and the staged draft — consent was for a send that
+        // did not happen), matching the access refusals above.
+        const armedRefusal = pendingSubmitRef.current?.input.refusal() ?? null;
+        if (armedRefusal !== null) {
+          toast(armedRefusal);
+          return;
+        }
         const armed = takeArmedTeardownSubmit(pendingSubmitRef);
         if (armed === null) return;
         if (armed.ownerId !== node.id) {
@@ -2829,7 +3076,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         const drifted =
           worktreeCommitCaptureIsStale(armed.capture, live) ||
           teardownHolderSetDrifted(disclosedHolders, liveSnapshot.holders);
-        if (drifted && liveSnapshot.holders.length > 0) {
+        // Same bar as arming the dialog: a live draft that commits no rebind
+        // has nothing left to re-consent to, so a drift that CLEARED the
+        // rebind sends rather than re-disclosing holders forever.
+        const liveCommitsRebind = worktreeDraftCommitsRebind({
+          binding: live.binding,
+          draft: live.draft,
+          removedWorkspacePaths: live.removedWorkspacePaths,
+        });
+        if (drifted && liveCommitsRebind && liveSnapshot.holders.length > 0) {
           pendingSubmitRef.current = {
             input: armed.input,
             capture: live,
@@ -2839,7 +3094,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           return;
         }
         setTeardownDialog(null);
-        dispatchUserSend(armed.input);
+        armed.input.dispatch(armed.input.submit);
       },
       onDismiss: () => {
         pendingSubmitRef.current = null;
@@ -2916,6 +3171,7 @@ function ContextUsageChipForChat(props: {
     harnessId: props.harnessId,
     workingDirectories: props.workingDirectories,
     enabled: props.commandsEnabled,
+    localCommands: NO_LOCAL_SLASH_COMMANDS,
   });
   const compactCommand = findManualCompactCommand(commands);
   const requestCompact = props.onCompact;

@@ -15,6 +15,7 @@ import {
 } from "@/components/epic-canvas/mobile/switcher-categories";
 import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherTerminalsList } from "@/components/epic-canvas/mobile/switcher-terminals-list";
+import { SwitcherBrowsersList } from "@/components/epic-canvas/mobile/switcher-browsers-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import { SwitcherCommentsList } from "@/components/epic-canvas/mobile/switcher-comments-list";
 import { SwitcherPrPresenceProbe } from "@/components/epic-canvas/mobile/switcher-pr-presence-probe";
@@ -81,7 +82,7 @@ function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
  * The mobile tab switcher: a drag-dismissable `vaul` bottom sheet whose
  * category bar mirrors the desktop left-panel registry and whose content region
  * shows the active category - the desktop chat tree for Agents, flat lists for
- * Terminals/Artifacts, the
+ * Terminals/Browsers/Artifacts, the
  * shared comments panel for Comments, and the embedded desktop File-tree /
  * Git-diff / Pull-requests / Sharing panel bodies for the rest. Creating is a
  * row inside the category that owns the kind, not a sheet-level control.
@@ -267,6 +268,10 @@ function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
           tabId={tabId}
           onClose={onClose}
         />
+      );
+    case "browsers":
+      return (
+        <SwitcherBrowsersList epicId={epicId} tabId={tabId} onClose={onClose} />
       );
     case "artifacts":
       return (

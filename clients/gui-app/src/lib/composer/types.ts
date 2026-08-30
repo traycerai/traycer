@@ -261,7 +261,20 @@ export type ProviderSlashCommand = GuiAgentCommandOption & {
   preview: MentionPreview;
 };
 
-export type SlashCommand = ProviderSlashCommand;
+/**
+ * A command the RENDERER handles rather than the provider - today the `/btw`
+ * side-chat command (`lib/chats/side-chat-command.ts`). Same row shape as a
+ * provider command so the picker, the chip and the raw-text converter treat it
+ * identically; `harnessId` is the composer's current harness, not a fact about
+ * who serves it. A surface that cannot honor the command simply does not offer
+ * it (see `useComposerPickerItems`'s `localSlashCommands`).
+ */
+export type LocalSlashCommand = GuiAgentCommandOption & {
+  source: "local";
+  preview: MentionPreview;
+};
+
+export type SlashCommand = ProviderSlashCommand | LocalSlashCommand;
 
 /**
  * Character that opened a slash picker, or that a raw-text prompt led with.

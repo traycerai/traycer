@@ -22,7 +22,7 @@
  */
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -150,7 +150,7 @@ export interface EpicRuntimeCorePortSource {
   ): void;
   applyChatRecordDelta(delta: ChatRecordDelta): void;
   applyTuiAgentRecords(
-    records: readonly TuiAgentRecordSummaryV11[],
+    records: readonly TuiAgentRecordSummaryV12[],
     issuedAtSeq: number | null,
   ): void;
   applyTuiAgentRecordDelta(delta: TuiAgentRecordDelta): void;

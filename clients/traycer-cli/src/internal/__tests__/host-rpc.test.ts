@@ -30,7 +30,7 @@ import {
 } from "@traycer/protocol/host/agent/profiles";
 import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host";
 import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
-import { worktreeDeleteByPathServerFrameSchemaV11 } from "@traycer/protocol/host/worktree-delete-stream";
+import { worktreeDeleteByPathServerFrameSchemaV12 } from "@traycer/protocol/host/worktree-delete-stream";
 
 /**
  * Mirrors `getLatestContract`'s traversal (highest major -> its
@@ -522,12 +522,12 @@ describe("parseHostResponse creep guard", () => {
 });
 
 describe("canonical stream frame pairing (worktree.deleteByPath)", () => {
-  it("worktreeDeleteByPathServerFrameSchemaV11 is the canonical serverFrameSchema for worktree.deleteByPath", () => {
+  it("worktreeDeleteByPathServerFrameSchemaV12 is the canonical serverFrameSchema for worktree.deleteByPath", () => {
     expect(
       latestStreamServerFrameSchema(
         hostStreamRpcRegistry["worktree.deleteByPath"],
       ),
-    ).toBe(worktreeDeleteByPathServerFrameSchemaV11);
+    ).toBe(worktreeDeleteByPathServerFrameSchemaV12);
   });
 
   // The v1.0 -> v1.1 diff on this method is an OPTIONAL field
@@ -542,7 +542,7 @@ describe("canonical stream frame pairing (worktree.deleteByPath)", () => {
     // `monitor.ts` parses agentInboxSubscribeServerFrameSchemaV10/V11/V12 (plus
     // the base envelope) ON PURPOSE - that is per-connection negotiated-version
     // dispatch (try newest, fall back), not a stale call site. `worktree-delete.ts`
-    // names `worktreeDeleteByPathServerFrameSchemaV11` explicitly, verified
+    // names `worktreeDeleteByPathServerFrameSchemaV12` explicitly, verified
     // canonical by the assertion above.
     const ALLOWLIST = new Set(["monitor.ts", "worktree-delete.ts"]);
     const versionedFrameSchemaPattern = /[A-Za-z]+ServerFrameSchemaV\d+/;

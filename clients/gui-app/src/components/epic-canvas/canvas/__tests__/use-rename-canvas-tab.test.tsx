@@ -35,7 +35,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   EpicArtifactRef,
   EpicTerminalRef,
@@ -250,7 +250,9 @@ function newSession(): OpenedStoreForTest {
 }
 
 /** A REGISTRY row (docResident: false) - the shape that routes to the RPC. */
-function agentRecord(tuiAgentId: string): TuiAgentRecordSummaryV11 {
+function agentRecord(
+  tuiAgentId: string,
+): Extract<TuiAgentRecordSummaryV12, { origin: "registry" }> {
   return {
     tuiAgentId,
     ownerUserId: "user-1",
@@ -275,6 +277,7 @@ function agentRecord(tuiAgentId: string): TuiAgentRecordSummaryV11 {
     terminalShellArgs: null,
     revision: 1,
     docResident: false,
+    origin: "registry",
   };
 }
 

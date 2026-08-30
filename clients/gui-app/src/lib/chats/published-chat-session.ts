@@ -333,6 +333,7 @@ export function publishedChatSessionState(
     // A published transcript is not on the windowed line and streams no
     // chunks, so there is no generation to be waiting on.
     accumulatedSummaryGenerationSeated: true,
+    accumulatedSummaryAssemblyStarted: false,
     backgroundItems: undefined,
     pendingBackgroundStops: {},
     pendingBackgroundStopAll: null,
