@@ -103,6 +103,7 @@ describe("chat-composer submit gate (path resolution)", () => {
           imagesUnsupported: false,
           attachmentPreparationPending: pending,
           onSubmitMessage,
+          onSideChat: null,
         }),
       { initialProps: true },
     );
@@ -381,6 +382,7 @@ function mountSubmitHook(args: {
       imagesUnsupported: false,
       attachmentPreparationPending: false,
       onSubmitMessage: args.onSubmitMessage,
+      onSideChat: null,
     }),
   );
 }

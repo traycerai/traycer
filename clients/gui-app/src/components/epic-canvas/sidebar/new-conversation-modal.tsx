@@ -32,6 +32,7 @@ import {
   type NewConversationTransientState,
 } from "./new-conversation-transient-context";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
+import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -652,6 +653,8 @@ export function NewConversationModalBody(props: {
     // Skip the eager catalog fetch when the modal is in Terminal mode: the chat
     // editor is hidden and cannot be pasted into. Mirrors `chatEditorIsActive`.
     isActive: chatComposerActive,
+    // No chat exists yet, so there is nothing a `/btw` could fork.
+    localSlashCommands: NO_LOCAL_SLASH_COMMANDS,
   });
 
   // Creates bind to the SUBMIT client: host-frozen for the resolved host, so a

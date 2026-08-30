@@ -189,6 +189,7 @@ const COMPOSER: ChatLowerComposerState = {
   fallbackToGlobalMentionRoots: true,
   currentEpicId: "epic-1",
   onSubmitMessage: () => false,
+  onSideChat: () => false,
   onSettingsChange: null,
   workspaceControls: (
     <>
