@@ -655,9 +655,29 @@ describe("EpicAccessCoordinator", () => {
         // Still open: a spent slot is not a verdict.
         expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-1"]);
         expect(toastInfo).not.toHaveBeenCalled();
-        // `requestFreshSnapshot` resets `snapshotFetchError` to null; simulate
-        // the retry itself failing the same way the real reconnect would, so
-        // the next slot is taken by a genuine re-arrival.
+        // Simulate the retry itself failing the same way the real reconnect
+        // would, so the next slot is taken by a genuine re-ARRIVAL. The
+        // arrival is the point: the coordinator arms the next slot on the
+        // error TRANSITIONING back in, not on its presence.
+        //
+        // Cleared explicitly first, and that is what the relocation changed.
+        // `snapshotFetchError` is the WORKER's state now, projected to main,
+        // and `requestFreshSnapshot` clears it by publishing a change-gated
+        // patch. The worker never saw the direct `setState` below, so after the
+        // first cycle its own value is already null and it emits nothing for
+        // this field - main keeps the error the test wrote, the re-seed is a
+        // no-op transition, and the loop stalls one slot short with the third
+        // retry never fired. Only the first iteration worked, on a clear the
+        // worker still had a reason to publish.
+        //
+        // Writing both halves here keeps the simulation at ONE layer instead of
+        // depending on the worker to supply half of it.
+        act(() => {
+          handle.store.setState({ snapshotFetchError: null });
+        });
+        await act(async () => {
+          await Promise.resolve();
+        });
         act(() => {
           handle.store.setState({ snapshotFetchError: unavailableError });
         });

@@ -12,11 +12,24 @@ import {
 interface FakeState {
   readonly acquireArtifactBodyLease: (artifactId: string) => () => void;
   readonly getArtifactFragment: (artifactId: string) => Y.XmlFragment | null;
-  readonly readAttachmentBytes: (
+  /**
+   * The two attachment legs, and they are DIFFERENT store members - which is
+   * the whole property this fixture exists to keep observable.
+   *
+   * `awaitAttachmentBytes` waits, so it takes the signal that bounds the wait.
+   * `readAttachmentBytes` answers from what the replica already holds, so it
+   * takes the hash alone: there is no wait, and nothing to abort.
+   *
+   * `hasAttachmentBytes` is deliberately ABSENT. It was the held leg's
+   * synchronous presence guard on main, and the relocation moved it into the
+   * worker, which now answers `null` for a hash it does not hold. A fixture
+   * still offering it would let a test pin a guard that no longer runs here.
+   */
+  readonly awaitAttachmentBytes: (
     hash: string,
     signal: AbortSignal,
   ) => Promise<Uint8Array | null>;
-  readonly hasAttachmentBytes: (hash: string) => boolean;
+  readonly readAttachmentBytes: (hash: string) => Promise<Uint8Array | null>;
 }
 
 function createHandle(state: FakeState): OpenEpicStoreHandle {
@@ -54,8 +67,8 @@ function createState(overrides: Partial<FakeState>): FakeState {
   return {
     acquireArtifactBodyLease: () => () => {},
     getArtifactFragment: () => null,
+    awaitAttachmentBytes: () => Promise.resolve(null),
     readAttachmentBytes: () => Promise.resolve(null),
-    hasAttachmentBytes: () => false,
     ...overrides,
   };
 }
@@ -129,54 +142,61 @@ describe("holdArtifactBody", () => {
   });
 });
 
+/**
+ * The two legs must not collapse into one another.
+ *
+ * `epic-replica-reads.ts` states the cost of merging them, in both directions:
+ * guarding the waiting leg turns "still replicating" into "missing" for exactly
+ * the images expected to be late, and dropping the guard on the held leg parks
+ * the chat chain forever on a hash the epic doc never held. So every test below
+ * asserts BOTH which member ran and which did not - a pin that only checked the
+ * result would pass with the two wired to the same member, which is the defect.
+ */
 describe("attachment reads", () => {
-  it("waits through readEpicAttachmentBytes without consulting presence", async () => {
+  it("waits through awaitAttachmentBytes, and never takes the held read", async () => {
     const signal = new AbortController().signal;
     const bytes = Uint8Array.from([1, 2, 3]);
-    const read = vi.fn((_hash: string, receivedSignal: AbortSignal) => {
+    const waited = vi.fn((_hash: string, receivedSignal: AbortSignal) => {
       expect(receivedSignal).toBe(signal);
       return Promise.resolve(bytes);
     });
-    const has = vi.fn(() => {
-      throw new Error("presence must not be consulted");
-    });
+    const held = vi.fn(() => Promise.resolve(null));
     const handle = createHandle(
-      createState({ readAttachmentBytes: read, hasAttachmentBytes: has }),
+      createState({ awaitAttachmentBytes: waited, readAttachmentBytes: held }),
     );
 
     await expect(readEpicAttachmentBytes(handle, "hash", signal)).resolves.toBe(
       bytes,
     );
-    expect(has).not.toHaveBeenCalled();
+    expect(waited).toHaveBeenCalledWith("hash", signal);
+    // The held leg answers `null` for a hash still replicating, so reaching it
+    // here IS the "still syncing becomes missing" regression.
+    expect(held).not.toHaveBeenCalled();
   });
 
-  it("returns null without reading when held bytes are absent", async () => {
-    const read = vi.fn(() => Promise.resolve(Uint8Array.from([1])));
+  it("answers null from the held read alone when the replica does not hold the bytes", async () => {
+    const held = vi.fn(() => Promise.resolve(null));
+    const waited = vi.fn(() => Promise.resolve(Uint8Array.from([1])));
     const handle = createHandle(
-      createState({
-        hasAttachmentBytes: () => false,
-        readAttachmentBytes: read,
-      }),
+      createState({ readAttachmentBytes: held, awaitAttachmentBytes: waited }),
     );
 
     await expect(
       readHeldEpicAttachmentBytes(handle, "missing"),
     ).resolves.toBeNull();
-    expect(read).not.toHaveBeenCalled();
+    // The `null` comes from the WORKER's own presence check, which is where the
+    // guard moved; main no longer asks a separate predicate first.
+    expect(held).toHaveBeenCalledWith("missing");
+    // Waiting here would park the chat chain on a hash the epic doc never held.
+    expect(waited).not.toHaveBeenCalled();
   });
 
-  it("forwards the signal when held bytes are present", async () => {
-    const signal = new AbortController().signal;
+  it("passes the hash alone when held bytes are present - there is no wait to abort", async () => {
     const bytes = Uint8Array.from([4, 5]);
-    const read = vi.fn((_hash: string, receivedSignal: AbortSignal) => {
-      expect(receivedSignal).toBe(signal);
-      return Promise.resolve(bytes);
-    });
+    const held = vi.fn(() => Promise.resolve(bytes));
+    const waited = vi.fn(() => Promise.resolve(null));
     const handle = createHandle(
-      createState({
-        hasAttachmentBytes: () => true,
-        readAttachmentBytes: read,
-      }),
+      createState({ readAttachmentBytes: held, awaitAttachmentBytes: waited }),
     );
 
     await expect(readHeldEpicAttachmentBytes(handle, "hash")).resolves.toBe(
@@ -184,6 +204,7 @@ describe("attachment reads", () => {
     );
     // ONE argument: the held read stopped taking a signal when its wait moved
     // to `awaitAttachmentBytes`, which is the leg the signal belongs to.
-    expect(read).toHaveBeenCalledWith("hash");
+    expect(held).toHaveBeenCalledWith("hash");
+    expect(waited).not.toHaveBeenCalled();
   });
 });

@@ -52,6 +52,40 @@ __setEpicRuntimeWorkerFactoryForTests(() => {
   };
 });
 
+// ── The session's durable transport, for every jsdom suite ──────────────────
+//
+// The SAME shape as the worker default above, and here for the same reason: one
+// place, not a `beforeEach` in thirty files. A suite that merely mounts a
+// session must not be handed a live socket it did not ask for.
+//
+// WHY IT BECAME NECESSARY, since a reader will otherwise wonder why thirty
+// suites managed without it. `EpicSessionProvider` used to SKIP opening a
+// transport when a test had installed a stream-factory override
+// (`__setEpicStreamClientFactoryForTests`), so most suites reached
+// `openTransport` never, and the handful that stubbed it could safely stub it
+// with a THROW. That override is deleted: a stream factory built on MAIN cannot
+// cross `postMessage` to a runtime that lives in the worker, so overriding it
+// could not do what its name promised. With the branch gone the provider opens
+// UNCONDITIONALLY (`epic-session-provider.tsx`, the `openTransport` call in
+// `createHandle`), and every suite that mounts a session reaches the real hook -
+// which dials a real socket off `useHostClient()` and dies on the first member a
+// test's host stub does not implement. Five suites failed exactly that way,
+// through `createEpicSessionTestHarness`, none of them naming a transport
+// anywhere in their source.
+//
+// A suite that cares about the transport still mocks this module itself, and a
+// file-level `vi.mock` takes precedence over this one - twenty do. The suite
+// that exercises the real dialing path targets `durable-stream-transport.ts`,
+// a different module, and is untouched by this.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
+});
+
 // CI stability net. A stray late async error - an `unhandledRejection` or
 // `uncaughtException` from a timer, socket, or microtask that fires AFTER a
 // test's teardown - otherwise takes down the whole vitest worker (exit 1 with
