@@ -156,6 +156,10 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const [sessionOutcomes, setSessionOutcomes] = useState<
     ReadonlyMap<string, SweepSessionOutcome>
   >(() => new Map());
+  const sessionOutcomesRef = useRef(sessionOutcomes);
+  useEffect(() => {
+    sessionOutcomesRef.current = sessionOutcomes;
+  }, [sessionOutcomes]);
   const reviewRefreshGate = useRef(false);
   const claimRefreshKey = useBareKeyClaimer("r", (event) => {
     event.preventDefault();
@@ -172,12 +176,23 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     ReadonlyMap<string, boolean>
   >(() => new Map());
   const selectionKey = sweepSessionKey(hostId, epicIds);
+  const activeSessionKeyRef = useRef(selectionKey);
+  useEffect(() => {
+    if (selectionKey !== null) {
+      activeSessionKeyRef.current = selectionKey;
+    }
+  }, [selectionKey]);
   const [previousSelectionKey, setPreviousSelectionKey] =
     useState(selectionKey);
   const [previousInUseByPath, setPreviousInUseByPath] = useState<
     ReadonlyMap<string, boolean>
   >(() => new Map());
-  const selectionRetargeted = selectionKey !== previousSelectionKey;
+  // Closing disables the candidates query, which temporarily makes the key
+  // null. Keep the session parked across that gap so reopening Sweep resumes
+  // the same selection, review receipt, and in-flight progress. A genuinely
+  // different non-null target still starts a fresh session.
+  const selectionRetargeted =
+    selectionKey !== null && selectionKey !== previousSelectionKey;
   applySelectionRetarget({
     selectionRetargeted,
     selectionKey,
@@ -200,6 +215,9 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     setCheckOverrides,
   });
   const sweepingPaths = useSweepingWorktreePaths(hostId);
+  const activeSweepCount = rows.filter((row) =>
+    sweepingPaths.has(row.entry.worktreePath),
+  ).length;
   const isRowSweeping = (row: EpicSweepWorktreeRow): boolean =>
     sweepingPaths.has(row.entry.worktreePath);
   const sessionOutcomeOf = (
@@ -213,7 +231,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     return checkOverrides.get(row.entry.worktreePath) ?? row.defaultChecked;
   };
   const checkedRows = rows.filter(isRowChecked);
-  const isSweeping = sweepMutation.isPending;
   const proofReady = !isPending && !isError;
   const bulkRows = rows.filter(
     (row) => isBulkScopeRow(row) && !isRowSweeping(row) && !isRowUncertain(row),
@@ -248,12 +265,25 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     rows.map((row) => row.entry),
   );
   const kickoff = (targets: ReadonlyArray<EpicSweepWorktreeRow>): void => {
+    const kickoffSessionKey = selectionKey;
+    // A confirmed batch is now represented by the per-row shared mutation
+    // state. Park the session on Choose before closing so reopening shows the
+    // live rows, rather than a spent confirmation receipt.
+    setStep("choose");
+    setTypedSweep("");
+    setInventoryChanged(false);
     startSweepKickoff({
       hostId,
       targets,
       mutate: sweepMutation.mutate,
       onClose: () => onOpenChange(false),
       onSweepOutcome: (result) => {
+        if (
+          kickoffSessionKey === null ||
+          activeSessionKeyRef.current !== kickoffSessionKey
+        ) {
+          return;
+        }
         setInventoryChanged(true);
         setTypedSweep("");
         setCheckOverrides((current) =>
@@ -261,10 +291,11 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         );
         const identityByPath = identityByPathFromRows(rows, reviewSnapshot);
         const nextOutcomes = mergeSessionOutcomes(
-          sessionOutcomes,
+          sessionOutcomesRef.current,
           result,
           identityByPath,
         );
+        sessionOutcomesRef.current = nextOutcomes;
         setSessionOutcomes(nextOutcomes);
         setReviewSnapshot((current) =>
           applySweepOutcome(current, result, nextOutcomes),
@@ -304,7 +335,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             taskTitles={taskTitles}
             typedValue={typedSweep}
             inventoryChanged={inventoryChanged}
-            submitting={isSweeping}
+            activeSweepCount={activeSweepCount}
             onTypedValueChange={setTypedSweep}
             onBack={() => {
               setStep("choose");
@@ -334,9 +365,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             rows={rows}
             isRowChecked={isRowChecked}
             isRowSweeping={isRowSweeping}
-            interactionDisabled={
-              isSweeping || refresh.refreshing || !proofReady
-            }
+            interactionDisabled={refresh.refreshing || !proofReady}
             bulkRows={bulkRows}
             bulkSelectedCount={bulkSelectedCount}
             allBulkSelected={allBulkSelected}
@@ -367,12 +396,11 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             primaryDisabled={
               hostId === null ||
               !proofReady ||
-              isSweeping ||
               refresh.refreshing ||
               checkedRows.length === 0
             }
             elevated={!selectionIsSafeOnly(checkedRows)}
-            isSweeping={isSweeping}
+            activeSweepCount={activeSweepCount}
             selectedEpicIds={selectedEpicIds}
             agentNames={agentNames}
             sessionOutcomes={sessionOutcomes}
@@ -560,14 +588,14 @@ function startSweepKickoff(input: {
     },
     {
       onSuccess: (result) => {
-        if (result.holdersChanged.length === 0) {
-          input.onClose();
-          return;
-        }
         input.onSweepOutcome(result);
       },
     },
   );
+  // The mutation cache owns the run after kickoff. Do not hold the user in a
+  // modal while the host streams cleanup; reopening reads that shared pending
+  // state and resumes this dialog session.
+  input.onClose();
 }
 
 function toggleSweepSelectAll(input: {
@@ -681,7 +709,7 @@ function SweepWorktreesChoose(props: {
   readonly onPrimary: () => void;
   readonly primaryDisabled: boolean;
   readonly elevated: boolean;
-  readonly isSweeping: boolean;
+  readonly activeSweepCount: number;
   readonly selectedEpicIds: ReadonlySet<string>;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly sessionOutcomes: ReadonlyMap<string, SweepSessionOutcome>;
@@ -779,7 +807,7 @@ function SweepWorktreesChoose(props: {
           onClick={props.onCancel}
           data-testid="sweep-worktrees-cancel"
         >
-          Cancel
+          {props.activeSweepCount > 0 ? "Close" : "Cancel"}
         </Button>
         <Button
           type="button"
@@ -790,13 +818,6 @@ function SweepWorktreesChoose(props: {
           onClick={props.onPrimary}
           data-testid="sweep-worktrees-confirm"
         >
-          {props.isSweeping ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
           {props.elevated ? "Review consequences" : "Sweep selected"}
           {props.elevated ? (
             <ArrowRight className="size-3.5" aria-hidden />
@@ -1121,6 +1142,16 @@ function SweepWorktreeRowItem(props: {
           />
         ) : null}
       </div>
+      {isSweeping ? (
+        <span className="inline-flex shrink-0 items-center gap-2 text-ui-xs text-muted-foreground">
+          <AgentSpinningDots
+            className={undefined}
+            testId="sweep-worktrees-row-sweeping-spinner"
+            variant={undefined}
+          />
+          Sweeping…
+        </span>
+      ) : null}
     </li>
   );
 }

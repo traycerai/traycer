@@ -240,3 +240,196 @@ export const epicListTuiAgentsUpgradeV10ToV11 = defineUpgradePath<
     })),
   }),
 });
+
+/**
+ * WHERE a served row came from, and therefore WHAT it can honestly carry.
+ *
+ * - `registry` - this host's own chat registry. The authoritative row, with the
+ *   full resume metadata; the serving host may write it.
+ * - `doc`      - still frozen in the epic doc's `tuiAgents` map, because its
+ *   binding host has not upgraded. Full-shaped, read-only, and NOT addressable
+ *   through the registry affordances (this is exactly `@1.1`'s `docResident`).
+ * - `cloud`    - a READ-ONLY REPLICA of a terminal agent owned by ANOTHER of
+ *   the viewer's hosts, pulled from this host's per-viewer change feed. Narrow
+ *   by construction - see {@link tuiAgentRecordSummaryV12CloudSchema}.
+ *
+ * ## Why an enum and not a second boolean beside `docResident`
+ *
+ * `docResident` answers one question ("is this the doc's frozen copy") and the
+ * phase-2 population needs a second, structurally different answer ("does this
+ * row carry the fields at all"). Two independent booleans would admit
+ * combinations that cannot exist (`docResident && cloud`) and would leave the
+ * shape of a row derivable only by inspecting its keys. One closed
+ * discriminator names the three populations that exist and nothing else, and it
+ * is what the row union below discriminates ON, so the type system carries the
+ * distinction rather than a convention.
+ *
+ * `docResident` stays on the two full-shaped arms and is NOT removed: a `@1.1`
+ * peer's schema requires it, and minors inside a major are additive - there is
+ * no per-minor response downgrade to strip a field back in.
+ */
+export const tuiAgentRecordOriginSchema = z.enum([
+  "registry",
+  "doc",
+  "cloud",
+] as const);
+export type TuiAgentRecordOrigin = z.infer<typeof tuiAgentRecordOriginSchema>;
+
+/**
+ * The `@1.1` row, marked as the serving host's own registry row.
+ *
+ * `docResident` stays `z.boolean()` and is deliberately NOT pinned to
+ * `z.literal(false)` on this arm, even though a registry row always answers
+ * false. Pinning it would NARROW a released field, which is a reduction a minor
+ * may not make - and, concretely, it would stop the `@1.1` row shape from
+ * projecting onto this arm, which is the whole basis on which the additivity
+ * check admits the widening. The invariant is enforced where the row is BUILT.
+ */
+export const tuiAgentRecordSummaryV12RegistrySchema =
+  tuiAgentRecordSummaryV11Schema.extend({
+    origin: z.literal("registry"),
+  });
+export type TuiAgentRecordSummaryV12Registry = z.infer<
+  typeof tuiAgentRecordSummaryV12RegistrySchema
+>;
+
+/** The `@1.1` row, marked as the doc map's frozen copy. `docResident` is `true`. */
+export const tuiAgentRecordSummaryV12DocSchema =
+  tuiAgentRecordSummaryV11Schema.extend({
+    origin: z.literal("doc"),
+  });
+export type TuiAgentRecordSummaryV12Doc = z.infer<
+  typeof tuiAgentRecordSummaryV12DocSchema
+>;
+
+/**
+ * A terminal agent owned by ANOTHER of the viewer's hosts, as this host's
+ * record inbox replicated it - the phase-2 roster row.
+ *
+ * ## Why it is a NARROW arm and not the released row with holes punched in it
+ *
+ * The replica's whole content is the cloud metadata projection, and that
+ * projection does not carry `workspaceFolders` or `agentMode`, both REQUIRED on
+ * the released row. Relaxing them there was the alternative and is rejected: a
+ * `registry` row's consumers are real (the fork dialog seeds its workspace from
+ * `workspaceFolders`), so making them nullable would push a "may be absent"
+ * check into every local-row call site to describe a population those call sites
+ * never see. A separate arm states the same fact once, in the type.
+ *
+ * Nothing functional is lost on this arm. `agentMode` is hardcoded `"regular"`
+ * at launch and `workspaceFolders` is deliberately never read for a launch cwd;
+ * a replica cannot be launched, resumed or forked from here regardless - see
+ * `harnessSessionId` below.
+ *
+ * ## The absent field that is load-bearing: `harnessSessionId`
+ *
+ * There is none, and there never can be: the provider CLI's resumable session id
+ * is host-local state that does not cross the metadata projection. That is what
+ * makes "clone this agent onto my machine" structurally impossible rather than
+ * merely unimplemented, and it is also the no-double-driver safety property -
+ * one driver per provider CLI session, by construction. Access to a replica is
+ * LIVE-ONLY, through its own binding host; there is no published-copy tier.
+ *
+ * `harnessId` is NULLABLE here where the released row requires it: it is read
+ * off the cloud row's `runSettingsSummary`, which a row written before that
+ * field existed does not carry. A client that cannot name the harness renders
+ * the row without a harness mark rather than dropping the agent from the roster.
+ *
+ * `archived` ships without `archivedAt` for the same reason the chat row's
+ * timestamp is null on a replica: the cloud row stores the BOOLEAN, and the
+ * timestamp is a host-registry fact that never crosses. The boolean is the
+ * rendering-authoritative field, so the arm loses nothing by omitting a key it
+ * could only ever answer `null` for.
+ */
+export const tuiAgentRecordSummaryV12CloudSchema = z.object({
+  origin: z.literal("cloud"),
+  tuiAgentId: z.string().min(1),
+  /** IDENTITY-BEARING, as on every other row - never render, always key. */
+  ownerUserId: z.string().min(1),
+  /** The BINDING host: the machine this agent lives on and is addressed through. */
+  hostId: z.string().min(1),
+  /** From the cloud row's `runSettingsSummary`; see the header. */
+  harnessId: z.string().min(1).nullable(),
+  parentId: z.string().nullable(),
+  title: z.string(),
+  isTitleEditedByUser: z.boolean(),
+  createdAt: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+  archived: z.boolean(),
+  revision: z.number().int().nonnegative(),
+});
+export type TuiAgentRecordSummaryV12Cloud = z.infer<
+  typeof tuiAgentRecordSummaryV12CloudSchema
+>;
+
+/**
+ * The `@1.2` row: the three populations a host can serve, discriminated.
+ *
+ * A NEW schema rather than an edit of {@link tuiAgentRecordSummaryV11Schema},
+ * on the same rule `@1.1` followed: the `@1.1` response and the frozen `@1.1`
+ * STREAM FRAME both embed the older consts by reference, so mutating one in
+ * place would silently change a released shape.
+ */
+export const tuiAgentRecordSummaryV12Schema = z.discriminatedUnion("origin", [
+  tuiAgentRecordSummaryV12RegistrySchema,
+  tuiAgentRecordSummaryV12DocSchema,
+  tuiAgentRecordSummaryV12CloudSchema,
+]);
+export type TuiAgentRecordSummaryV12 = z.infer<
+  typeof tuiAgentRecordSummaryV12Schema
+>;
+
+export const listTuiAgentsResponseV12Schema = z.object({
+  tuiAgents: z.array(tuiAgentRecordSummaryV12Schema),
+});
+export type ListTuiAgentsResponseV12 = z.infer<
+  typeof listTuiAgentsResponseV12Schema
+>;
+
+/**
+ * The `@1.2` request is the `@1.1` request unchanged.
+ *
+ * `hasDocReplica` still decides the doc-resident remainder and nothing about
+ * the cloud arm needs asking: a replica exists in this host's inbox or it does
+ * not, and no client holds a competing copy of one to be duplicated against.
+ * Aliased rather than re-declared so the two versions cannot drift.
+ */
+export const listTuiAgentsRequestV12Schema = listTuiAgentsRequestV11Schema;
+export type ListTuiAgentsRequestV12 = ListTuiAgentsRequestV11;
+
+export const epicListTuiAgentsV12 = defineRpcContract({
+  method: "epic.listTuiAgents",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: listTuiAgentsRequestV12Schema,
+  responseSchema: listTuiAgentsResponseV12Schema,
+});
+
+/**
+ * `origin` is DERIVED from `docResident`, and that is a fact about the `@1.1`
+ * peer rather than a default chosen for it.
+ *
+ * A `@1.1` host serves exactly two populations - its registry rows and the
+ * doc-resident remainder - and `docResident` is precisely the field that tells
+ * them apart. It cannot serve a cloud replica: the inbox arm that produces one
+ * is phase 2, and it ships in the same host build as this minor. So the mapping
+ * is total, and the third arm is unreachable through this path by construction
+ * rather than by omission.
+ *
+ * The REQUEST is unchanged, so the request fill is the identity.
+ */
+export const epicListTuiAgentsUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicListTuiAgentsV11,
+  typeof epicListTuiAgentsV12
+>({
+  from: epicListTuiAgentsV11.schemaVersion,
+  to: epicListTuiAgentsV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    tuiAgents: response.tuiAgents.map((row) =>
+      row.docResident
+        ? { ...row, origin: "doc" as const }
+        : { ...row, origin: "registry" as const },
+    ),
+  }),
+});

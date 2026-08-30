@@ -191,13 +191,20 @@ export function buildHostScopeOptions(
  * call hangs — the scope read `ready`, panels mounted, and the Add-host dialog
  * announced a machine as connected and ready to run agents.
  *
+ * EXPORTED for `useConnectableHostIds`, which answers the same question of the
+ * raw directory for a surface that must know the fleet's shape before it can
+ * afford to mount `useHostOptions` (Sweep's host-picker gate). It calls THIS
+ * rather than restating it, for exactly the reason the paragraph above gives:
+ * a hand-copied dialability predicate is only right until the transport learns
+ * something the copy cannot be told.
+ *
  * The plan gate is the same kind of claim. A remote host on a plan without
  * remote hosts advertises a relay URL the server refuses to attach
  * (`plan_restricted`); the header and workspace pickers already disable those
  * rows. Registry-backed administration is account-level and unaffected, so it
  * keeps rendering — the entitlement costs the RPC route, not the whole host.
  */
-function isAdministrableRoute(
+export function isAdministrableRoute(
   entry: HostDirectoryEntry | null,
   remoteHostsPlanRestricted: boolean,
   hasLiveSession: boolean,

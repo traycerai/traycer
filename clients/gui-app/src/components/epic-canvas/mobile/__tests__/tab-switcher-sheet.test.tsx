@@ -47,6 +47,16 @@ vi.mock("@/components/epic-canvas/mobile/switcher-agents-list", () => ({
 vi.mock("@/components/epic-canvas/mobile/switcher-terminals-list", () => ({
   SwitcherTerminalsList: () => <div data-testid="mock-terminals-list" />,
 }));
+vi.mock("@/components/epic-canvas/mobile/switcher-browsers-list", () => ({
+  // Named for what it stands in FOR, not for what the real list renders. A
+  // stub that reproduces the real component's own accessible name would let
+  // this assertion read as "the browsers list rendered" when all it can ever
+  // witness is "the sheet routed this category to its body" - which is the
+  // claim this file exists to make.
+  SwitcherBrowsersList: () => (
+    <div role="note" aria-label="browsers category body" />
+  ),
+}));
 vi.mock("@/components/epic-canvas/mobile/switcher-artifacts-list", () => ({
   SwitcherArtifactsList: () => <div data-testid="mock-artifacts-list" />,
 }));
@@ -117,6 +127,7 @@ const CATEGORY_NAMES = [
   "File Tree",
   "Git Diff",
   "Terminals",
+  "Browsers",
   "Sharing",
   "Comments",
 ];
@@ -160,12 +171,12 @@ describe("<TabSwitcherSheet />", () => {
   });
   afterEach(cleanup);
 
-  it("renders exactly the seven always-on category tabs when open on mobile", () => {
+  it("renders exactly the eight always-on category tabs when open on mobile", () => {
     renderSheet(true, () => {});
     for (const name of CATEGORY_NAMES) {
       expect(screen.getByRole("tab", { name })).toBeTruthy();
     }
-    expect(screen.getAllByRole("tab")).toHaveLength(7);
+    expect(screen.getAllByRole("tab")).toHaveLength(8);
   });
 
   it("keeps the Comments tab on the bar with no artifact tile open", () => {
@@ -259,7 +270,7 @@ describe("<TabSwitcherSheet />", () => {
     setPullRequestPresence(true);
     renderSheet(true, () => {});
     const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(8);
+    expect(tabs).toHaveLength(9);
     expect(tabs.map((tab) => tab.getAttribute("data-testid"))).toEqual([
       "mobile-switcher-tab-chats",
       "mobile-switcher-tab-artifacts",
@@ -267,9 +278,43 @@ describe("<TabSwitcherSheet />", () => {
       "mobile-switcher-tab-git-diff",
       "mobile-switcher-tab-pull-requests",
       "mobile-switcher-tab-terminals",
+      "mobile-switcher-tab-browsers",
       "mobile-switcher-tab-sharing",
       "mobile-switcher-tab-comments",
     ]);
+  });
+
+  it("carries a Browsers tab, so an agent's browser tab is reachable", () => {
+    renderSheet(true, () => {});
+    expect(screen.getByRole("tab", { name: "Browsers" })).toBeTruthy();
+  });
+
+  it("shows the browsers list when the category is selected", async () => {
+    const user = userEvent.setup();
+    renderSheet(true, () => {});
+    await user.click(screen.getByRole("tab", { name: "Browsers" }));
+    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
+      "browsers",
+    );
+    expect(
+      screen.getByRole("note", { name: "browsers category body" }),
+    ).toBeTruthy();
+  });
+
+  it("opens straight onto a browsers selection the desktop rail persisted", () => {
+    // Selection is shared with the rail through this one store; clamping it
+    // away would strand a phone user on Agents after choosing Browsers on the
+    // desktop.
+    useLeftPanelStore.setState({
+      activePanelIdByTabId: { [TAB_ID]: "browsers" },
+    });
+    renderSheet(true, () => {});
+    expect(
+      screen.getByRole("tab", { name: "Browsers" }).getAttribute("data-state"),
+    ).toBe("active");
+    expect(
+      screen.getByRole("note", { name: "browsers category body" }),
+    ).toBeTruthy();
   });
 
   it("shows the comments panel when the category is selected", async () => {
@@ -372,7 +417,7 @@ describe("<TabSwitcherSheet />", () => {
     streamState.prSupport = "unsupported";
     renderSheet(true, () => {});
     expect(screen.queryByRole("tab", { name: "Pull Requests" })).toBeNull();
-    expect(screen.getAllByRole("tab")).toHaveLength(7);
+    expect(screen.getAllByRole("tab")).toHaveLength(8);
   });
 
   it("clamps a persisted pull-requests selection when the host lost stream support", () => {

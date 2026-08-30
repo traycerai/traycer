@@ -172,7 +172,11 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           ref={overlayButtonRef}
           type="button"
           hidden={showStartPage}
-          className="absolute inset-0 h-full w-full cursor-default overflow-hidden bg-background p-0 text-left outline-none"
+          // `touch-none`: the controller translates a finger drag into wheel
+          // frames itself, and it can only see the moves the browser does not
+          // consume for its own panning and pinch-zoom. Touch-action governs
+          // touch and pen alone, so a mouse is unaffected.
+          className="absolute inset-0 h-full w-full cursor-default touch-none overflow-hidden bg-background p-0 text-left outline-none"
           aria-label="Browser screencast controls"
           {...session.overlayHandlers}
         >
