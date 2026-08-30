@@ -3,9 +3,11 @@ import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
-  createOpenEpicStore,
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import {
   type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
@@ -349,12 +351,18 @@ describe("createOpenEpicStore", () => {
     rebound.callbacks.onSnapshot(buildMeta("viewer", null), emptySnapshot());
 
     // A local write while viewer should be dropped after the refresh.
-    opened.store.getState().applyLocalUpdate(new Uint8Array([9, 9]));
+    //
+    // Driven through the DOC rather than through `applyLocalUpdate`, which was
+    // deleted: it had zero production callers, and raw bytes were never how a
+    // real edit reaches the send path. An edit on the doc the runtime observes
+    // is what production does, so this now gates the property on the real
+    // path instead of on a member nothing used.
+    opened.doc.getMap("epic").set("title", "while-viewer");
     expect(rebound.applied.length).toBe(0);
 
     // Upgrade back to editor re-enables writes.
     rebound.callbacks.onPermissionChanged("editor");
-    opened.store.getState().applyLocalUpdate(new Uint8Array([4, 5]));
+    opened.doc.getMap("epic").set("title", "while-editor");
     expect(rebound.applied.length).toBe(1);
 
     // Full revoke → accessLost flips true.
@@ -923,15 +931,14 @@ describe("createOpenEpicStore", () => {
 
   it("invokes onAuthError and surfaces the error when the host closes the stream with UNAUTHORIZED", () => {
     const { factory, handle } = fakeFactory();
-    let authErrorCount = 0;
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-unauth",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: () => {
-        authErrorCount += 1;
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
       },
-      laneSelection: null,
+      writeCommand: null,
     });
 
     handle().callbacks.onConnectionStatus("closed", {
@@ -944,7 +951,9 @@ describe("createOpenEpicStore", () => {
       },
     });
 
-    expect(authErrorCount).toBe(1);
+    expect(opened.store.getState().snapshotFetchError?.code).toBe(
+      "UNAUTHORIZED",
+    );
     // A terminal closed/UNAUTHORIZED (the stream gave up after its own
     // revalidation) surfaces an error rather than leaving a silent "closed".
     expect(opened.store.getState().snapshotFetchError).toEqual({
@@ -957,15 +966,14 @@ describe("createOpenEpicStore", () => {
 
   it("does not invoke onAuthError on caller-initiated close or non-UNAUTHORIZED fatal errors", () => {
     const { factory, handle } = fakeFactory();
-    let authErrorCount = 0;
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-unauth-negative",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: () => {
-        authErrorCount += 1;
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
       },
-      laneSelection: null,
+      writeCommand: null,
     });
 
     handle().callbacks.onConnectionStatus("closed", { kind: "caller" });
@@ -979,7 +987,9 @@ describe("createOpenEpicStore", () => {
       },
     });
 
-    expect(authErrorCount).toBe(0);
+    expect(opened.store.getState().snapshotFetchError?.code).not.toBe(
+      "UNAUTHORIZED",
+    );
     opened.dispose();
   });
 
@@ -2502,16 +2512,15 @@ describe("createOpenEpicStore", () => {
       // UNAUTHORIZED - which trapped the user behind the modal instead of
       // letting the re-auth flow take over.
       const { factory, handle } = fakeFactory();
-      let authErrorCount = 0;
-      const opened = createOpenEpicStore({
-        epicId: "epic-mid-migration-unauth",
+        const opened = openStoreForTest({
+      epicId: "epic-mid-migration-unauth",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: () => {
-          authErrorCount += 1;
-        },
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       handle().callbacks.onMigrationStarted();
       handle().callbacks.onConnectionStatus("closed", {
@@ -2524,7 +2533,9 @@ describe("createOpenEpicStore", () => {
         },
       });
 
-      expect(authErrorCount).toBe(1);
+      expect(opened.store.getState().snapshotFetchError?.code).toBe(
+      "UNAUTHORIZED",
+    );
       // Migration must NOT be flipped into the error modal - it stays in
       // the running state the modal already showed, and the auth flow owns
       // recovery from here.
@@ -2828,16 +2839,15 @@ describe("createOpenEpicStore", () => {
       epicId: string,
       bodyText: string,
     ): {
-      readonly opened: OpenEpicStoreHandle;
+      readonly opened: OpenedStoreForTest;
       readonly handle: () => FakeStreamHandle;
     } {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
+      const opened = openStoreForTest({
         epicId,
-        streamClientFactory: factory,
         userId: null,
-        onAuthError: null,
-        laneSelection: null,
+        factories: { streamClientFactory: factory, laneSelection: null },
+        writeCommand: null,
       });
       const donor = new Y.Doc();
       seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
