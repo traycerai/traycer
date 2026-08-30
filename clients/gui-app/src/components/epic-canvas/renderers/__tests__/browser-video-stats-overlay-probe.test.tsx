@@ -93,7 +93,7 @@ function buildFakeSession(input: {
   return {
     refs,
     image: null,
-    video: { mode: "video", media: null, active: true },
+    video: { media: null, active: true },
     videoStats: null,
     lifecycle: "live",
     details: null,

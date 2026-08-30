@@ -853,6 +853,12 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // Which capture is running for this subscriber, and so what its input
+      // correlates against: `jpeg` = frames are being pumped, correlate on the
+      // presented frame; `video` = the JPEG cast is stopped for the video
+      // plane, correlate on the viewport epoch. `video` is sent when the
+      // attempt STARTS, not when a track goes live - the client shows its
+      // connecting loader for that window and paints no stale frame.
       kind: z.literal("captureMode"),
       ...textFrameFields,
       mode: browserScreencastCaptureModeSchema,

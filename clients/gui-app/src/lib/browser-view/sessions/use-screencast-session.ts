@@ -40,7 +40,7 @@ import type {
 } from "@/lib/browser-view/sessions/screencast-input-encoding";
 import {
   createVideoPlaneSession,
-  JPEG_VIEW,
+  NO_VIDEO_VIEW,
   type VideoPlaneSession,
   type VideoPlaneView,
 } from "@/lib/browser-view/sessions/video-plane-session";
@@ -92,14 +92,20 @@ export interface ScreencastImage {
 
 export interface ScreencastSession {
   readonly refs: ScreencastSessionRefs;
+  /**
+   * The last JPEG frame, or `null` when the JPEG plane is not painting -
+   * either none has arrived yet, or the host stopped the cast to attempt
+   * video. Exactly one of this and {@link video}`.active` is ever the tile's
+   * surface; when neither is, the tile shows its connecting loader.
+   */
   readonly image: ScreencastImage | null;
   /**
    * The video plane's display state. `media` is non-null from the inbound
    * track onwards so the `<video>` can mount and decode; `active` says it has
-   * decoded a frame and is the surface to show. Until then the JPEG image
-   * keeps painting - there is no black-tile window during ICE.
+   * decoded a frame and is the surface to show. The window in between is the
+   * loader's, never a JPEG frame kept alive underneath (ticket 26).
    */
-  readonly video: VideoPlaneView & { readonly active: boolean };
+  readonly video: VideoPlaneView;
   /** The video plane's latest 5s stats sample (ticket 11); `null` off the live round. */
   readonly videoStats: WebrtcVideoStatsSample | null;
   readonly lifecycle: ScreencastLifecycle;
@@ -222,7 +228,8 @@ export function useScreencastSession(
     readonly client: IHostStreamClient<HostStreamRpcRegistry>;
     readonly cursor: AgentCursorPosition;
   } | null>(null);
-  const [videoViewState, setVideoView] = useState<VideoPlaneView>(JPEG_VIEW);
+  const [videoViewState, setVideoView] =
+    useState<VideoPlaneView>(NO_VIDEO_VIEW);
   const [videoStats, setVideoStats] = useState<WebrtcVideoStatsSample | null>(
     null,
   );
@@ -261,6 +268,9 @@ export function useScreencastSession(
         streamRef.current?.sendClientFrame(frame);
       },
       readControlPlaneRttMs,
+      // The same latest-value ref the dormant snapshot reads, synced by the
+      // passive effect below: pointer events always land after that commit.
+      readVideoPainting: () => videoActiveRef.current,
       listeners: {
         // Control, not the arm epoch, is what a render shows: a hover pre-arm
         // holds the epoch at the host but drives nothing.
@@ -334,7 +344,7 @@ export function useScreencastSession(
     [client],
   );
   const setImage = useCallback(
-    (value: ScreencastImage) => {
+    (value: ScreencastImage | null) => {
       setStreamState((current) => ({
         ...resetScreencastStateForClient(current, client),
         image: value,
@@ -508,6 +518,12 @@ export function useScreencastSession(
       } else if (frame.kind === "captureMode") {
         captureMode = frame.mode;
         controller.setCaptureMode(frame.mode);
+        // The JPEG cast has stopped, so the frame still on screen is the last
+        // one of a plane that is no longer producing: drop it and let the tile
+        // show its connecting loader until a plane actually paints again
+        // (ticket 26). This is the ONLY thing that retires a JPEG frame - a
+        // frame arriving is what puts one up.
+        if (frame.mode === "video") setImage(null);
       } else if (frame.kind === "agentCursor") {
         // Only the video plane can be looking at a superseded viewport: a
         // JPEG tile's cursor is decoration over whatever frame it has painted,
@@ -786,7 +802,7 @@ export function useScreencastSession(
   return {
     refs,
     image,
-    video: { ...videoView, active: videoActive },
+    video: videoView,
     videoStats: videoStatsForRender,
     lifecycle,
     details,
@@ -860,11 +876,11 @@ function deriveScreencastPlaneView(input: {
     streamState,
     videoFrameSize,
   } = input;
-  const videoView = subscribed ? videoViewState : JPEG_VIEW;
+  const videoView = subscribed ? videoViewState : NO_VIDEO_VIEW;
   const videoStatsForRender = subscribed ? videoStats : null;
   const stateMatchesClient = streamState.client === client;
   const image = stateMatchesClient ? streamState.image : null;
-  const videoActive = videoView.mode === "video";
+  const videoActive = videoView.active;
   const baseLifecycle = stateMatchesClient
     ? streamState.lifecycle
     : "connecting";

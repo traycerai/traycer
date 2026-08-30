@@ -1707,7 +1707,13 @@ describe("BrowserPeekTile input capture", () => {
       }),
     ]);
   });
-  it("carries the viewport epoch once the host announces the video plane", () => {
+  it("withholds pointer input while the tile is on its connecting loader", () => {
+    // The host stopped the cast to attempt video (ticket 26), so the frame
+    // that was on screen is retired and nothing has replaced it yet. There is
+    // no box to normalize a pointer against, and aiming at a surface the
+    // viewer cannot see is worse than dropping the frame. Epoch correlation
+    // itself is pinned in `screencast-input-correlation.test.tsx`, on a tile
+    // that has a plane.
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -1730,20 +1736,9 @@ describe("BrowserPeekTile input capture", () => {
       );
     });
 
+    expect(screen.queryByAltText("Browser screencast")).toBeNull();
     sendPointerClick(overlayButton(), 400, 300);
-
-    expect(framesOfKind(stream, "pointer")).toEqual([
-      expect.objectContaining({
-        type: "down",
-        castSequence: null,
-        viewportEpoch: 9,
-      }),
-      expect.objectContaining({
-        type: "up",
-        castSequence: null,
-        viewportEpoch: 9,
-      }),
-    ]);
+    expect(framesOfKind(stream, "pointer")).toEqual([]);
   });
 
   it("drops the video plane when the transport dies", () => {

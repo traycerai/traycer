@@ -8,9 +8,11 @@ import { cn } from "@/lib/utils";
  * The pixels of the PiP mirror: the JPEG frame its own subscription delivers,
  * with the tile's shared video track painted over it when one exists.
  *
- * Same two-surface shape as `ScreencastSurface` (both `object-contain` in one
- * box, the `<img>` hidden rather than unmounted so a fallback repaints on the
- * next JPEG frame), but deliberately NOT that component:
+ * Both surfaces are `object-contain` in one box, as on the tile, but the
+ * layering the tile deleted in ticket 26 is RIGHT here: a PiP subscriber never
+ * attaches to the video broker, so its own JPEG cast keeps running for the
+ * whole life of the mirror - there is a live frame under the borrowed track,
+ * not a stale one. Deliberately NOT `ScreencastSurface`:
  *
  * - `ScreencastSurface` takes a `ScreencastSession`, and PiP has none. It does
  *   not use `useScreencastSession` at all - that hook is the tile's input,

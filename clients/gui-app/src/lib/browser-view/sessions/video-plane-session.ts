@@ -13,23 +13,17 @@ import {
 } from "@/lib/browser-view/sessions/control-plane-deadlines";
 
 /**
- * The tile's display plane, as three named states:
+ * The tile's video plane, as what a render needs to know about it: whether a
+ * track exists to mount, and whether it has decoded a frame.
  *
- * ```
- *   jpeg ──sdpOffer──▶ negotiating ──first decoded frame──▶ video
- *     ▲                     │                                 │
- *     └── failure/deadline ─┴─────────── failure ─────────────┘
- * ```
+ * `active` is entered by the first decoded frame and nothing else - that is
+ * what `videoPlaneState: "live"` reports. It is deliberately NOT what turns
+ * the host's JPEG pump off: the pump is already off for the whole attempt
+ * (ticket 26), and this report only confirms the attempt paid off.
  *
- * - `jpeg` is the INITIAL state, not a degraded one: the subscription paints
- *   JPEG from its first frame, so there is never a black tile while ICE runs.
- * - `negotiating` still paints JPEG, and covers the registry's `streaming`
- *   phase too: an arrived track has decoded nothing yet. The `<video>` mounts
- *   there (it has to be in the tree to decode) but stays invisible.
- * - `video` is entered by the first decoded frame and nothing else - that is
- *   what `videoPlaneState: "live"` reports, and the host's
- *   `setCaptureEnabled(false)` hangs off that report. Reporting on `ontrack`
- *   would kill the JPEG pump before a pixel had been painted.
+ * Between `ontrack` and that first frame the `<video>` is mounted but blank -
+ * it has to be in the tree to decode - and the tile shows its connecting
+ * loader over it. Nothing paints a JPEG frame underneath it.
  *
  * This is the SINK half of the split `webrtc-media-registry` documents:
  * peer-level failures (track death, terminal connection state) are the
@@ -37,20 +31,15 @@ import {
  * no-first-frame deadline are only visible from the `<video>` and are
  * reported in from here.
  *
- * There is no client-scheduled retry. The host's only re-arm seam is
- * `BrowserVideoPlaneBroker.attach()`, which runs on SUBSCRIBE, so a retry
- * costs a full re-subscription: dropping a healthy JPEG stream (and the arm
- * epoch, and any open dialog) to gamble on video. The next natural
- * re-subscribe - reconnect, visibility toggle, `runtime.revision` remount -
- * re-arms the broker and a fresh offer arrives on its own. Ticket 14 owns
- * whether a deliberate retry is ever worth that cost.
+ * There is no client-scheduled retry: the broker re-offers on its own backoff
+ * (ticket 23), and the next natural re-subscribe - reconnect, visibility
+ * toggle, `runtime.revision` remount - re-arms it as well.
  */
-export type VideoPlaneMode = "jpeg" | "negotiating" | "video";
-
 export interface VideoPlaneView {
-  readonly mode: VideoPlaneMode;
-  /** Non-null from `ontrack` onwards, in `negotiating` as well as `video`. */
+  /** Non-null from `ontrack` onwards, blank until the first decoded frame. */
   readonly media: MediaStream | null;
+  /** A frame has been decoded: this plane is the tile's surface. */
+  readonly active: boolean;
 }
 
 export interface VideoPlaneSession {
@@ -77,7 +66,8 @@ export interface VideoPlaneSession {
   readonly close: () => void;
 }
 
-export const JPEG_VIEW: VideoPlaneView = { mode: "jpeg", media: null };
+/** No track, nothing decoded: the tile is on JPEG or on its loader. */
+export const NO_VIDEO_VIEW: VideoPlaneView = { media: null, active: false };
 
 /**
  * Ticket 11's stats cadence. Sampled only while the round is live (a
@@ -254,17 +244,10 @@ export function createVideoPlaneSession(options: {
     syncDeadline(snapshot);
     syncStatsTimer(snapshot);
     if (snapshot.phase === "streaming") {
-      onChange({
-        mode: isLive(snapshot) ? "video" : "negotiating",
-        media: snapshot.stream,
-      });
+      onChange({ media: snapshot.stream, active: isLive(snapshot) });
       return;
     }
-    onChange(
-      snapshot.phase === "negotiating"
-        ? { mode: "negotiating", media: null }
-        : JPEG_VIEW,
-    );
+    onChange(NO_VIDEO_VIEW);
   };
 
   const unsubscribe = entry.subscribe(publish);

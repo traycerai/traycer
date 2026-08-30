@@ -205,8 +205,21 @@ export function createScreencastController(options: {
    * (ticket 18), and only when a press is buffered.
    */
   readonly readControlPlaneRttMs: () => number | null;
+  /**
+   * Whether the video plane has DECODED a frame - not merely attached a
+   * track. The `<video>` is in the tree from `ontrack`, blank, while the tile
+   * shows its connecting loader; a pointer normalized against that element
+   * would be aimed at pixels nobody can see.
+   */
+  readonly readVideoPainting: () => boolean;
 }): ScreencastController {
-  const { listeners, readControlPlaneRttMs, refs, sendFrame } = options;
+  const {
+    listeners,
+    readControlPlaneRttMs,
+    readVideoPainting,
+    refs,
+    sendFrame,
+  } = options;
 
   let visible = false;
   let armEpochCounter = 0;
@@ -260,27 +273,23 @@ export function createScreencastController(options: {
   const claimedLocalCodes = new Set<string>();
 
   /**
-   * The one place the display plane decides anything on this side: which
-   * token the pointer frames (and the arm buffer) correlate against. The
-   * JPEG plane's `castSequence` path is untouched by the video plane's epoch
-   * and vice versa - only this reads `captureMode`.
-   */
-  /**
-   * The element a pointer's coordinates are normalized against.
-   *
-   * Deliberately NOT keyed off `captureMode`: that is the HOST's echo, while
-   * the tile swaps surfaces on its own first decoded frame, and in the RTT
-   * window between the two the host-chosen element is the `display:none` one -
-   * a zeroed `getBoundingClientRect`, a non-positive scale, and every pointer
-   * event silently dropped (permanently, if that `captureMode` frame is lost).
-   *
-   * The `<video>` is mounted only while the video plane holds a track, and
-   * both surfaces are `object-contain` inside the same overlay button, so the
-   * one that exists is always the right box - whichever plane is correlating.
+   * The element a pointer's coordinates are normalized against: whichever
+   * plane is PAINTING, since exactly one ever is (ticket 26) and both are
+   * `object-contain` inside the same overlay button. `null` for the whole
+   * loader window - a mounted-but-blank `<video>` is not a surface - and a
+   * pointer frame built against nothing is dropped rather than misaimed.
    */
   const paintSurface = (): HTMLElement | null =>
-    refs.videoRef.current ?? refs.imageRef.current;
+    (readVideoPainting() ? refs.videoRef.current : null) ??
+    refs.imageRef.current;
 
+  /**
+   * The one place the display plane decides anything on this side: which token
+   * the pointer frames (and the arm buffer) correlate against. `captureMode`
+   * is the host telling us whether a JPEG frame is coming at all - `video`
+   * covers the whole time its cast is stopped, live track or not - so the
+   * epoch is the only token that exists in that window.
+   */
   const inputCorrelation = (): ScreencastInputCorrelation =>
     captureMode === "video"
       ? { castSequence: null, viewportEpoch }

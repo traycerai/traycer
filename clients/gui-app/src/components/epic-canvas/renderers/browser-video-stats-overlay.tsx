@@ -31,7 +31,7 @@ export function BrowserVideoStatsOverlay(props: {
 
   return (
     <div className="pointer-events-none absolute left-1 top-1 rounded bg-black/70 px-1.5 py-1 font-mono text-[10px] leading-tight text-white">
-      <div>plane: {video.mode}</div>
+      <div>plane: {videoPlaneLabel(video)}</div>
       <div>fps: {fps === null ? "-" : fps.toFixed(0)}</div>
       <div>drops: {videoStats === null ? "-" : videoStats.framesDropped}</div>
       <div>
@@ -54,6 +54,12 @@ export function BrowserVideoStatsOverlay(props: {
       </div>
     </div>
   );
+}
+
+/** The three display states of the video plane, for the readout. */
+function videoPlaneLabel(video: ScreencastSession["video"]): string {
+  if (video.active) return "video";
+  return video.media === null ? "off" : "negotiating";
 }
 
 /** `-` for a measurement this stream cannot produce; never a fabricated 0. */

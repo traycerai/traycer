@@ -31,6 +31,13 @@ export interface MountedController {
   readonly image: HTMLImageElement;
   readonly video: HTMLVideoElement;
   readonly imeInput: HTMLInputElement;
+  /**
+   * What `readVideoPainting` answers: whether the video plane has DECODED a
+   * frame. Both surfaces are mounted here, so this is what decides which one
+   * the controller normalizes against - `false` (the default) is the JPEG
+   * plane and the whole loader window.
+   */
+  readonly setVideoPainting: (value: boolean) => void;
 }
 
 /**
@@ -41,6 +48,7 @@ export interface MountedController {
  */
 export function mountController(): MountedController {
   const sent: BrowserScreencastClientFrame[] = [];
+  let videoPainting = false;
   const engaged: number[] = [];
   const captured: { current: ScreencastController | null } = { current: null };
 
@@ -54,6 +62,7 @@ export function mountController(): MountedController {
     const controllerRef = useRef<ScreencastController | null>(null);
     controllerRef.current ??= createScreencastController({
       readControlPlaneRttMs: () => null,
+      readVideoPainting: () => videoPainting,
       refs: {
         tileRef,
         viewportRef,
@@ -104,7 +113,18 @@ export function mountController(): MountedController {
     new DOMRect(0, 0, FRAME_SIZE.width, FRAME_SIZE.height);
   const imeInput = view.container.querySelector("input");
   if (imeInput === null) throw new Error("no IME input");
-  return { controller, sent, engaged, overlay, image, video, imeInput };
+  return {
+    controller,
+    sent,
+    engaged,
+    overlay,
+    image,
+    video,
+    imeInput,
+    setVideoPainting: (value) => {
+      videoPainting = value;
+    },
+  };
 }
 
 /**

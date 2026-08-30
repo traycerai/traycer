@@ -212,14 +212,14 @@ describe("video plane session", () => {
     expect(plane.answers).toEqual([
       { negotiationId: 3, sdp: "answer-for:offer-sdp", candidates: [] },
     ]);
-    expect(plane.views.at(-1)?.mode).toBe("negotiating");
+    expect(plane.views.at(-1)).toEqual({ media: null, active: false });
 
-    // The track alone is not liveness: reporting here would kill the JPEG
-    // pump before a single pixel had been decoded.
+    // The track alone is not liveness: the element mounts to decode, but the
+    // tile stays on its connecting loader until a pixel actually lands.
     plane.peers[0]?.handlers.onStream(fakeStream("track"));
     expect(plane.views.at(-1)).toEqual({
-      mode: "negotiating",
       media: fakeStream("track"),
+      active: false,
     });
     expect(plane.states).toEqual([]);
     expect(plane.session.lastVideoFrameAt()).toBeNull();
@@ -229,7 +229,10 @@ describe("video plane session", () => {
     expect(plane.states).toEqual([
       { negotiationId: 3, state: "live", reason: null },
     ]);
-    expect(plane.views.at(-1)?.mode).toBe("video");
+    expect(plane.views.at(-1)).toEqual({
+      media: fakeStream("track"),
+      active: true,
+    });
     expect(plane.session.lastVideoFrameAt()).not.toBeNull();
 
     plane.session.noteVideoFrame(null);
@@ -251,7 +254,7 @@ describe("video plane session", () => {
       state: "failed",
       reason: "track-ended",
     });
-    expect(plane.views.at(-1)).toEqual({ mode: "jpeg", media: null });
+    expect(plane.views.at(-1)).toEqual({ media: null, active: false });
     // Liveness goes back to the JPEG pump's clock the moment video stops.
     expect(plane.session.lastVideoFrameAt()).toBeNull();
   });
@@ -271,7 +274,7 @@ describe("video plane session", () => {
         reason: "no decoded video frame before deadline",
       },
     ]);
-    expect(plane.views.at(-1)).toEqual({ mode: "jpeg", media: null });
+    expect(plane.views.at(-1)).toEqual({ media: null, active: false });
   });
 
   it("keeps a live round past the deadline window", async () => {

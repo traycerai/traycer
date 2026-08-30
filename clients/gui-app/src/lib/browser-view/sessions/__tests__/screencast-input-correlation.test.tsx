@@ -51,7 +51,9 @@ describe("screencast input correlation", () => {
   });
 
   it("normalizes against the video element while the video plane paints", () => {
-    const { controller, sent, overlay, video } = mountController();
+    const { controller, sent, overlay, video, setVideoPainting } =
+      mountController();
+    setVideoPainting(true);
     // Deliberately a different box from the image, so a frame normalized
     // against the wrong surface is visible in the numbers.
     video.getBoundingClientRect = () =>
@@ -73,31 +75,6 @@ describe("screencast input correlation", () => {
       expect(frame.normalizedY).toBeCloseTo(1);
     }
     expect(pointerFrames(sent)).toHaveLength(2);
-  });
-
-  it("normalizes against the video element before the host echoes the mode", () => {
-    // The tile swaps surfaces on its first decoded frame; the host's
-    // `captureMode` frame lands an RTT later. In that window the `<img>` is
-    // `hidden` (a zeroed box) while correlation is still on the JPEG token -
-    // measuring the host-chosen element would drop every pointer event.
-    const { controller, sent, overlay, image, video } = mountController();
-    image.getBoundingClientRect = () => new DOMRect(0, 0, 0, 0);
-    video.getBoundingClientRect = () =>
-      new DOMRect(0, 0, FRAME_SIZE.width, FRAME_SIZE.height);
-    controller.notePresentedSequence(7);
-
-    clickUnarmed(overlay);
-    controller.noteArmed(1);
-
-    expect(pointerFrames(sent).map((frame) => frame.type)).toEqual([
-      "down",
-      "up",
-    ]);
-    for (const frame of pointerFrames(sent)) {
-      expect(frame.castSequence).toBe(7);
-      expect(frame.normalizedX).toBeCloseTo(0.25);
-      expect(frame.normalizedY).toBeCloseTo(0.5);
-    }
   });
 
   it("drops the arming click when the epoch moved while arming", () => {

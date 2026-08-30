@@ -151,6 +151,10 @@ function jpegFrame(sequence: number, bytes: readonly number[]): void {
   );
 }
 
+/**
+ * A subscription on a host that will attempt video: the JPEG cast is off from
+ * the start (ticket 26), so nothing paints until a plane does.
+ */
 function renderTile(): void {
   render(
     <BrowserPeekTile
@@ -162,6 +166,12 @@ function renderTile(): void {
   );
   act(() => {
     liveStream().emitStatus("open");
+  });
+}
+
+/** The cast's geometry, which the host announces once and never re-sends. */
+function emitStarted(): void {
+  act(() => {
     liveStream().emit(
       {
         kind: "started",
@@ -172,11 +182,38 @@ function renderTile(): void {
       },
       null,
     );
-    jpegFrame(7, [1, 2, 3]);
   });
 }
 
+/** The JPEG plane running: what a fallback (or a host with no video) looks like. */
+function paintJpeg(sequence: number, bytes: readonly number[]): void {
+  emitStarted();
+  act(() => {
+    jpegFrame(sequence, bytes);
+  });
+}
+
+function emitCaptureMode(mode: "jpeg" | "video"): void {
+  act(() => {
+    liveStream().emit(
+      { kind: "captureMode", hasBinaryPayload: false, mode },
+      null,
+    );
+  });
+}
+
+/**
+ * The host's round start: the cast stops, the pump re-mints the viewport epoch
+ * input now correlates against, then the offer arrives.
+ */
 async function offer(negotiationId: number): Promise<void> {
+  emitCaptureMode("video");
+  act(() => {
+    liveStream().emit(
+      { kind: "viewportEpoch", hasBinaryPayload: false, epoch: 9 },
+      null,
+    );
+  });
   await act(async () => {
     liveStream().emit(
       {
@@ -190,6 +227,40 @@ async function offer(negotiationId: number): Promise<void> {
     );
     await Promise.resolve();
   });
+}
+
+/** Armed, with the overlay button given a real box to normalize against. */
+function armTile(): HTMLElement {
+  const button = screen.getByRole("button", {
+    name: "Browser screencast controls",
+  });
+  act(() => {
+    fireEvent.focus(button);
+    liveStream().emit(
+      { kind: "armed", hasBinaryPayload: false, armEpoch: 1 },
+      null,
+    );
+  });
+  return button;
+}
+
+function clickTile(button: HTMLElement): void {
+  const init = { pointerId: 1, clientX: 400, clientY: 300, detail: 0 };
+  fireEvent.pointerDown(button, { ...init, button: 0, buttons: 1 });
+  fireEvent.pointerUp(button, { ...init, button: 0, buttons: 0 });
+}
+
+function pointerFrames(): Array<Record<string, unknown>> {
+  return liveStream().sentFrames.filter((frame) => frame.kind === "pointer");
+}
+
+/** jsdom lays nothing out; the plane's own box is what normalization reads. */
+function giveSurfaceABox(element: HTMLElement): void {
+  element.getBoundingClientRect = () => new DOMRect(0, 0, 800, 600);
+}
+
+function loaderShown(): boolean {
+  return screen.queryByTestId("screencast-connecting") !== null;
 }
 
 /** The tile mounts the element on `ontrack`; a decoded frame makes it live. */
@@ -291,20 +362,24 @@ describe("BrowserPeekTile video plane", () => {
     restoreCanvasPrototype();
   });
 
-  it("answers the offer, keeps painting JPEG, and swaps on the first decoded frame", async () => {
+  it("holds the connecting loader through negotiation, then paints video with no JPEG underneath", async () => {
     renderTile();
     const stream = liveStream();
+    expect(loaderShown()).toBe(true);
 
     await offer(1);
     expect(sentKinds(stream)).toContain("sdpAnswer");
     expect(planeStates(stream)).toEqual([]);
-    // Still the JPEG plane: no black tile while the connection comes up.
-    expect(screencastImage()?.hidden).toBe(false);
+    expect(loaderShown()).toBe(true);
+    expect(screencastImage()).toBeNull();
 
     const video = attachTrack(0);
+    // Mounted to decode, still invisible - over the loader, never over a JPEG
+    // frame the host is no longer producing.
     expect(video.className).toContain("opacity-0");
     expect(planeStates(stream)).toEqual([]);
-    expect(screencastImage()?.hidden).toBe(false);
+    expect(loaderShown()).toBe(true);
+    expect(screencastImage()).toBeNull();
 
     decodeFrame(video);
 
@@ -318,11 +393,52 @@ describe("BrowserPeekTile video plane", () => {
       },
     ]);
     expect(video.className).not.toContain("opacity-0");
-    expect(screencastImage()?.hidden).toBe(true);
+    expect(screencastImage()).toBeNull();
+    expect(loaderShown()).toBe(false);
     expect(screen.getByText("Live")).toBeTruthy();
   });
 
-  it("reports failed and repaints JPEG without waiting for a started frame", async () => {
+  it("drops the JPEG frame for the loader when a renegotiation stops the cast, then paints video", async () => {
+    renderTile();
+    paintJpeg(7, [1, 2, 3]);
+    expect(screencastImage()).not.toBeNull();
+    expect(loaderShown()).toBe(false);
+
+    // The host stopped the cast to attempt video: the frame on screen is the
+    // last of a plane that is no longer producing, so it goes.
+    await offer(1);
+    expect(screencastImage()).toBeNull();
+    expect(loaderShown()).toBe(true);
+
+    const video = attachTrack(0);
+    decodeFrame(video);
+    expect(loaderShown()).toBe(false);
+    expect(screencastImage()).toBeNull();
+    expect(video.className).not.toContain("opacity-0");
+  });
+
+  it("falls back to the loader, then to JPEG once frames actually arrive", async () => {
+    renderTile();
+    await offer(1);
+    const video = attachTrack(0);
+    decodeFrame(video);
+
+    act(() => {
+      peers[0]?.handlers.onFailure("track-ended");
+    });
+    // The host restarts its capture on the fallback, which takes a moment;
+    // until a frame lands there is nothing honest to paint.
+    emitCaptureMode("jpeg");
+    expect(screen.queryByTestId("browser-screencast-video")).toBeNull();
+    expect(screencastImage()).toBeNull();
+    expect(loaderShown()).toBe(true);
+
+    paintJpeg(8, [9, 9, 9]);
+    expect(screencastImage()).not.toBeNull();
+    expect(loaderShown()).toBe(false);
+  });
+
+  it("reports failed and repaints JPEG on the frame alone", async () => {
     renderTile();
     const stream = liveStream();
     await offer(1);
@@ -343,20 +459,19 @@ describe("BrowserPeekTile video plane", () => {
     expect(peers[0]?.closed).toBe(true);
     expect(screen.queryByTestId("browser-screencast-video")).toBeNull();
 
-    // G4: `started` is latched host-side and never re-fires, so the resumed
-    // JPEG pump has to paint on the frame alone.
-    const before = screencastImage()?.src;
+    // `started` is latched host-side and does not re-fire for a cast that has
+    // already run once, so a resumed pump has to paint on the frame alone.
     act(() => {
       jpegFrame(8, [9, 9, 9]);
     });
-    const after = screencastImage();
-    expect(after?.hidden).toBe(false);
-    expect(after?.src).not.toBe(before);
+    expect(screencastImage()).not.toBeNull();
+    expect(loaderShown()).toBe(false);
   });
 
   it("snapshots the last decoded video frame into the dormant cache on plane fallback (ticket 13)", async () => {
     stubCanvasPrototype("data:image/jpeg;base64,DORMANT_SNAPSHOT");
     renderTile();
+    paintJpeg(7, [1, 2, 3]);
     await offer(1);
     const video = attachTrack(0);
     markDecodedSize(video, 640, 480);
@@ -364,8 +479,8 @@ describe("BrowserPeekTile video plane", () => {
     expect(screen.getByText("Live")).toBeTruthy();
 
     const key = browserPeekFrameKey(peekNode);
-    // The JPEG cache write already ran once at mount (`renderTile`'s
-    // `jpegFrame(7, ...)`); the video snapshot below must overwrite it.
+    // The JPEG cache write already ran once (`paintJpeg` above); the video
+    // snapshot below must overwrite it.
     const beforeFallback = getLastBrowserPeekFrame(key)?.src;
 
     act(() => {
@@ -435,6 +550,7 @@ describe("BrowserPeekTile video plane", () => {
   it("stays on JPEG when the host advertises video but never offers", () => {
     vi.useFakeTimers();
     renderTile();
+    paintJpeg(7, [1, 2, 3]);
     const stream = liveStream();
 
     act(() => {
@@ -445,6 +561,40 @@ describe("BrowserPeekTile video plane", () => {
     expect(sentKinds(stream)).not.toContain("sdpAnswer");
     expect(planeStates(stream)).toEqual([]);
     expect(screen.queryByTestId("browser-screencast-video")).toBeNull();
+    // Never offered means the cast never stopped: the JPEG plane keeps it.
+    expect(screencastImage()).not.toBeNull();
+    expect(loaderShown()).toBe(false);
+  });
+
+  it("withholds pointer input until the video plane has decoded a frame", async () => {
+    renderTile();
+    // Geometry without pixels: the frame size is known all the way through, so
+    // the ONLY thing withholding a pointer below is the missing paint surface.
+    emitStarted();
+    await offer(1);
+    const button = armTile();
+    giveSurfaceABox(button);
+
+    // (a) The connecting loader: no plane at all, nothing to aim at.
+    clickTile(button);
+    expect(pointerFrames()).toEqual([]);
+
+    // (b) The track arrived and the element is mounted, but it has decoded
+    // nothing - it is a blank box over the same loader, not a surface.
+    const video = attachTrack(0);
+    giveSurfaceABox(video);
+    markDecodedSize(video, 800, 600);
+    act(() => {
+      fireEvent(video, new Event("resize"));
+    });
+    clickTile(button);
+    expect(pointerFrames()).toEqual([]);
+
+    // (c) The first decoded frame is the boundary: now there are pixels the
+    // viewer can see, and a pointer means something.
+    decodeFrame(video);
+    clickTile(button);
+    expect(pointerFrames().map((frame) => frame.type)).toEqual(["down", "up"]);
   });
 
   it("ignores a duplicate offer for the round already in flight", async () => {
