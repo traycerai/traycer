@@ -233,7 +233,31 @@ export function createMainThreadBodyDocStore(
         // Same lineage: apply. Yjs merges an update from the same ancestry
         // idempotently, so a re-delivered snapshot is a no-op rather than a
         // duplication - which is why `seedMode` does not need to branch here.
-        if (held.docGuid === input.docGuid) {
+        // A guid-less FULL seed REPLACES. `null === null` is not evidence of
+        // shared lineage - it is two bodies both declining to state one, and
+        // the `@1` arm declines by design. Reading it as "same lineage" made
+        // every re-seed a merge, so a body the tier had DISCARDED (a viewer
+        // downgrade clearing unsent edits, fail-closed) came back with those
+        // edits still in main's copy: the discard happened worker-side and
+        // main never heard it.
+        //
+        // Safe to replace precisely because this arm relays: every `@1` edit
+        // is posted through `body/update` when it is made, so a full snapshot
+        // from the tier already contains anything main legitimately holds.
+        // What it does NOT contain is what the tier deliberately threw away,
+        // which is the whole point.
+        //
+        // A DELTA still applies - it describes a change to what is held, not a
+        // replacement for it - so this is scoped to `"full"` rather than to
+        // guid-lessness alone.
+        if (
+          held.docGuid === null &&
+          input.docGuid === null &&
+          input.seedMode === "full"
+        ) {
+          destroy(held);
+          bodies.delete(input.docKey);
+        } else if (held.docGuid === input.docGuid) {
           // Origin-stamped: this is the worker's copy of the body arriving,
           // not something the editor typed. See MAIN_BODY_REMOTE_ORIGIN.
           Y.applyUpdate(held.doc, input.update, MAIN_BODY_REMOTE_ORIGIN);

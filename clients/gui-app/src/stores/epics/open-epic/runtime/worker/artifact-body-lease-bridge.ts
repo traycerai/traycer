@@ -123,6 +123,21 @@ export interface ArtifactBodyLeaseBridge {
   /** Doc keys posted for demotion and not yet settled. A test seam. */
   unacknowledgedDemoteKeys(): readonly string[];
   /**
+   * Forget every entry WITHOUT posting anything.
+   *
+   * For a binding-epoch advance, which means the worker destroyed its room
+   * replicas: there is nothing on the far side to settle bytes back INTO, so a
+   * demote would be answered `not-held` and the entry would sit pending
+   * forever. Distinct from `flushLingering`, which posts because the far side
+   * is still there.
+   *
+   * The caller drops the live docs. That discards main-side edits which were
+   * never sent - and that is the honest outcome rather than a loss this
+   * introduces: the replica they belonged to is already gone, so keeping them
+   * would show a user edits that can never reach anywhere.
+   */
+  forget(docKey: string): void;
+  /**
    * Post every LINGERING doc's demote/release now, without waiting.
    *
    * For teardown. A linger is a bet that the user is coming back to this body;
@@ -460,6 +475,12 @@ export function createArtifactBodyLeaseBridge(options: {
         if (entry.demotingGeneration !== null) keys.push(docKey);
       }
       return keys;
+    },
+    forget(docKey): void {
+      const entry = entries.get(docKey);
+      if (entry === undefined) return;
+      cancelLinger(entry);
+      entries.delete(docKey);
     },
     flushLingering(): void {
       // Snapshot first: `postLifecycleEnd` mutates `entries` for the

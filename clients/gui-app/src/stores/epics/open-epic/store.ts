@@ -70,6 +70,7 @@ import { ARTIFACT_ROOM_LEASE_POLICY } from "./runtime/artifact-room-tier";
 import { createHotBodyBudgetAdapter } from "./runtime/worker/hot-body-budget-adapter";
 import { createMainThreadBodyDocStore } from "./runtime/worker/main-thread-body-docs";
 import type { RuntimeProjectionHandlers } from "@traycer-clients/shared/replica-runtime/worker/runtime-projection-subscription";
+import { BridgeDisposedError } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import type { EpicRuntimeBodyReturnTarget } from "./runtime/worker/spawn-epic-runtime-worker";
 import {
   NO_TRANSFER,
@@ -895,6 +896,14 @@ export function createOpenEpicStore(
 
   let storeApi: StoreApi<OpenEpicState> | null = null;
   /**
+   * The last binding epoch main acted on, so an advance is detectable.
+   *
+   * Separate from the store's `bindingVersion` (which is the same number, for
+   * React remounts) because this fires BEFORE `setState` and must not depend
+   * on the store existing yet.
+   */
+
+  /**
    * Disposal is a MAIN-side fact now.
    *
    * `isDisposed()` used to ask the runtime. Asking a worker whether it is
@@ -934,6 +943,45 @@ export function createOpenEpicStore(
    * coalesced slice per commit. Re-batching here would be a second window over
    * an already-windowed stream.
    */
+  /**
+   * Release main's copy of any body whose ROOM is no longer `ready`.
+   *
+   * Main holds the live docs; the worker holds the replicas they are copies
+   * of. When the worker destroys a replica - a reset after a fresh root
+   * snapshot, a room leaving `ready`, a viewer downgrade discarding unsent
+   * edits - main's copy becomes a document nothing will ever settle, and a
+   * re-acquire REVIVES it rather than materializing the new replica. That is
+   * how a discarded offline edit came back after a reconnect.
+   *
+   * Keyed on AVAILABILITY rather than on `bindingEpoch`, which was the obvious
+   * signal and the wrong one: the epoch advances on every room SEED
+   * (`epic-rooms-replica.ts:281`), so acting on it dropped every live body
+   * each time any room was seeded. Availability says which rooms exist right
+   * now, which is the question actually being asked.
+   *
+   * Entries are forgotten WITHOUT posting: there is nothing on the far side to
+   * settle into, and a demote would sit pending on a `not-held`.
+   */
+  function dropBodiesWhoseRoomIsGone(): void {
+    const resident = bodyDocs.residentDocKeys();
+    if (resident.length === 0) return;
+    const state = storeApi?.getState();
+    if (state === undefined) return;
+    const ready = new Set<string>();
+    for (const [artifactId, availability] of Object.entries(
+      state.artifactRooms.stateByArtifactId,
+    )) {
+      if (availability !== "ready") continue;
+      const docKey = state.getArtifactBodyDocKey(artifactId);
+      if (docKey !== null) ready.add(docKey);
+    }
+    for (const docKey of resident) {
+      if (ready.has(docKey)) continue;
+      bodyLeases.forget(docKey);
+      bodyDocs.drop(docKey);
+    }
+  }
+
   function applyProjection(patch: Partial<EpicRuntimeProjection>): void {
     const api = storeApi;
     if (api === null) {
@@ -952,6 +1000,7 @@ export function createOpenEpicStore(
         ? projected
         : { ...projected, bindingVersion: bindingEpoch },
     );
+    dropBodiesWhoseRoomIsGone();
   }
 
   /**
@@ -1280,12 +1329,32 @@ export function createOpenEpicStore(
            * and dropping it would be a second change to their call shape.
            */
           readAttachmentBytes: async (hash, _signal) => {
-            const answer = await runtime.port.call(
-              "attachment/read",
-              { hash },
-              NO_TRANSFER,
-            );
-            return answer.bytes;
+            try {
+              const answer = await runtime.port.call(
+                "attachment/read",
+                { hash },
+                NO_TRANSFER,
+              );
+              return answer.bytes;
+            } catch (cause: unknown) {
+              // TEARDOWN SETTLES NULL. Disposing the session rejects every
+              // call still in flight, but this read's contract has always been
+              // "bytes, or `null` when they are not coming" - a session going
+              // away is the second case, not an error the caller can act on.
+              //
+              // Before the relocation this was structurally impossible: the
+              // read was in-process and teardown cancelled its waiter, which
+              // resolved null. Across the bridge the same teardown arrives as
+              // a rejection, and a paste handler awaiting it would get an
+              // unhandled one instead of a decision.
+              //
+              // Narrowed to the disposal case ON THE ERROR TYPE, not a blanket
+              // catch: a decode failure or a worker that threw is a real
+              // fault, and swallowing it as "no bytes" would turn a bug into a
+              // paste that silently does nothing.
+              if (cause instanceof BridgeDisposedError) return null;
+              throw cause;
+            }
           },
           // Answered from the MAIN-SIDE docs. Both stay SYNCHRONOUS, which
           // is the whole reason the hot half is on this thread: a
