@@ -151,6 +151,7 @@ function makeClient(
     endpoint: () => mockLocalHostEntry,
     bearer: () => ctx.credentials,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
