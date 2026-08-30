@@ -5,6 +5,7 @@ import {
   type BrowserScreencastClientFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import {
+  armViaGesture,
   mountController,
   type MountedController,
 } from "@/lib/browser-view/sessions/__tests__/screencast-controller-harness";
@@ -53,7 +54,7 @@ function armedOnChannels(): MountedController & {
   mounted.controller.setCaptureMode("video");
   mounted.controller.noteViewportEpoch(4);
   mounted.controller.setInputTransport(channels.transport);
-  mounted.controller.noteArmed(1);
+  armViaGesture(mounted, 1);
   return { ...mounted, channels };
 }
 
@@ -157,7 +158,7 @@ describe("screencast input transport", () => {
     const channels = channelRecorder();
     mounted.controller.notePresentedSequence(7);
     mounted.controller.setInputTransport(channels.transport);
-    mounted.controller.noteArmed(1);
+    armViaGesture(mounted, 1);
 
     pointerMove(mounted.overlay, 100);
     pointerDown(mounted.overlay);
@@ -210,12 +211,12 @@ describe("screencast input transport", () => {
     expect(kinds(sent)).toEqual(["pointer:down", "pointer:up"]);
   });
 
-  it("holds a mid-arm promotion until the next arm", () => {
+  it("holds a mid-arm promotion until the host acks the mux", () => {
     const mounted = mountController();
     const channels = channelRecorder();
     mounted.controller.setCaptureMode("video");
     mounted.controller.noteViewportEpoch(4);
-    mounted.controller.noteArmed(1);
+    armViaGesture(mounted, 1);
 
     pointerDown(mounted.overlay);
     // The channels come up mid-drag. Adopting here would let the moves and
@@ -232,14 +233,36 @@ describe("screencast input transport", () => {
       "pointer:up",
     ]);
 
-    // The host resets its `lastSeq` per arm, so the next arm is the first
-    // moment nothing can reorder against the channel.
-    mounted.controller.noteArmed(2);
+    // An ack short of the last mux frame proves nothing: seq 2 is still out
+    // there and a channel frame would overtake it.
+    mounted.controller.noteInputAck(1, 1);
     pointerDown(mounted.overlay);
+    expect(channels.sends).toEqual([]);
+
+    // Covered now - the mux holds nothing this epoch, so the promotion lands
+    // mid-arm instead of waiting for the next one.
+    mounted.controller.noteInputAck(1, 3);
+    pointerUp(mounted.overlay);
 
     expect(kinds(channels.sends.map((send) => send.frame))).toEqual([
-      "pointer:down",
+      "pointer:up",
     ]);
+  });
+
+  it("ignores an input ack from a superseded arm epoch", () => {
+    const mounted = mountController();
+    const channels = channelRecorder();
+    mounted.controller.setCaptureMode("video");
+    mounted.controller.noteViewportEpoch(4);
+    armViaGesture(mounted, 2);
+
+    pointerDown(mounted.overlay);
+    mounted.controller.setInputTransport(channels.transport);
+    // The previous epoch's watermark says nothing about this epoch's mux.
+    mounted.controller.noteInputAck(1, 99);
+    pointerUp(mounted.overlay);
+
+    expect(channels.sends).toEqual([]);
   });
 
   it("replays a buffered arming gesture through the channels", () => {

@@ -423,7 +423,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     expect(useScreencastArmedStore.getState().ownerId).toBeNull();
   });
 
-  it("clears the armed flag on Escape-free blur out of the tile", async () => {
+  it("keeps control across a blur out of the tile", async () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -440,7 +440,12 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     fireEvent.blur(imeInput(), { relatedTarget: document.body });
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
+    // Focus is not ownership: release is explicit (the Release button above),
+    // or a steal, a hidden tile, or a dead transport - never a click away.
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
+    expect(framesOfKind(stream, "disarm")).toEqual([]);
+    // The badge reads arm state, not focus state.
+    expect(screen.getByText("Controlling")).not.toBeNull();
   });
 
   it("does not preventDefault the V keydown of a paste chord", async () => {

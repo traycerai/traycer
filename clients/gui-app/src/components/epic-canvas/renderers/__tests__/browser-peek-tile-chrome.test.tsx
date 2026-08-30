@@ -452,7 +452,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
     expect(addressInput().value).toBe(URL_B);
   });
 
-  it("disarms after leaving the tile from the address bar", async () => {
+  it("keeps control after leaving the tile from the address bar", async () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -470,7 +470,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
     fireEvent.blur(addressInput(), { relatedTarget: document.body });
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
-    expect(screen.queryByText("Controlling")).toBeNull();
+    // Focus is not ownership (ticket 20): the badge follows the arm, so it
+    // stays legible across a click into the address bar and out of the tile.
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
+    expect(screen.getByText("Controlling")).not.toBeNull();
   });
 });

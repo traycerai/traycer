@@ -127,7 +127,6 @@ export interface ScreencastSession {
    * driving it. Positional only - the overlay owns how long it stays visible.
    */
   readonly agentCursor: AgentCursorPosition | null;
-  readonly onFocusExit: (relatedTarget: EventTarget | null) => void;
   readonly overlayHandlers: ScreencastOverlayHandlers;
   readonly imeHandlers: ScreencastImeHandlers;
 }
@@ -196,6 +195,12 @@ export function useScreencastSession(
   // state and the current callback at cleanup time without re-running - the
   // effect's own dependency array intentionally does not include either.
   const videoActiveRef = useRef(false);
+  /**
+   * The committed client, for the controller's `onControlEngaged` - which
+   * fires from a DOM event, outside the subscription effect that owns the
+   * `client` the frame handlers close over.
+   */
+  const clientRef = useRef(client);
   const captureDormantSnapshotRef = useRef(options.captureDormantSnapshot);
   const tileRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -257,6 +262,13 @@ export function useScreencastSession(
       },
       readControlPlaneRttMs,
       listeners: {
+        // Control, not the arm epoch, is what a render shows: a hover pre-arm
+        // holds the epoch at the host but drives nothing.
+        onControlEngaged: (epoch) => {
+          const engagedClient = clientRef.current;
+          if (engagedClient === null) return;
+          setArmedState({ client: engagedClient, epoch });
+        },
         onLocalArmCleared: resetLocalArmState,
         onComposingChange: setComposing,
         onDialogSettled: () => {
@@ -371,12 +383,13 @@ export function useScreencastSession(
     const videoPlane = createVideoPlaneSession({
       media,
       port: {
-        sendSdpAnswer: ({ negotiationId, sdp }) => {
+        sendSdpAnswer: ({ negotiationId, sdp, candidates }) => {
           send({
             kind: "sdpAnswer",
             hasBinaryPayload: false,
             negotiationId,
             sdp,
+            candidates: [...candidates],
           });
         },
         sendIceCandidate: ({ negotiationId, ...candidate }) => {
@@ -404,6 +417,9 @@ export function useScreencastSession(
             ...stats,
           });
         },
+        // A12: the batch's flush window scales with this same measured
+        // control-plane RTT (webrtc-media-registry.ts).
+        readControlPlaneRttMs,
       },
       onChange: setVideoView,
       onVideoStats: setVideoStats,
@@ -487,6 +503,8 @@ export function useScreencastSession(
           hasBinaryPayload: false,
           probeId: frame.probeId,
         });
+      } else if (frame.kind === "inputAck") {
+        controller.noteInputAck(frame.armEpoch, frame.lastSeq);
       } else if (frame.kind === "captureMode") {
         captureMode = frame.mode;
         controller.setCaptureMode(frame.mode);
@@ -533,31 +551,16 @@ export function useScreencastSession(
       } else if (frame.kind === "unsupportedInteraction") {
         toastScreencastUnsupportedInteraction(frame.feature);
       }
-      const control = applyScreencastControlFrame({
+      applyScreencastArmFrame({
         frame,
-        desiredEpoch: controller.desiredArmEpoch(),
-        activeEpoch: controller.activeArmEpoch(),
+        controller,
+        onDialogOpened: (nextDialog) => {
+          setDialogState({ client, dialog: nextDialog });
+        },
+        onDialogSettled: () => {
+          setDialogState(null);
+        },
       });
-      if (control === "teardown") {
-        controller.clearLocalArm(false);
-      } else if (control === "armed" && frame.kind === "armed") {
-        controller.noteArmed(frame.armEpoch);
-        setArmedState({ client, epoch: frame.armEpoch });
-      } else {
-        handleDialogServerFrame({
-          frame,
-          armEpoch: controller.activeArmEpoch(),
-          current: controller.activeDialog(),
-          opened: (nextDialog) => {
-            controller.setActiveDialog(nextDialog);
-            setDialogState({ client, dialog: nextDialog });
-          },
-          settled: () => {
-            controller.setActiveDialog(null);
-            setDialogState(null);
-          },
-        });
-      }
     };
 
     stream = new BrowserScreencastStreamClient({
@@ -633,6 +636,7 @@ export function useScreencastSession(
   // layout effect.
   useEffect(() => {
     videoActiveRef.current = videoActive;
+    clientRef.current = client;
     captureDormantSnapshotRef.current = options.captureDormantSnapshot;
   });
 
@@ -797,7 +801,6 @@ export function useScreencastSession(
     respondToDialog: controller.respondToDialog,
     notePresented,
     agentCursor,
-    onFocusExit: controller.onFocusExit,
     overlayHandlers: controller.overlayHandlers,
     imeHandlers: controller.imeHandlers,
   };
@@ -1116,6 +1119,54 @@ function useScreencastViewportBridge(
       if (timer !== null) window.clearTimeout(timer);
     };
   }, [ref, sendViewport, visible]);
+}
+
+/**
+ * The arm half of a server frame: what it does to the local arm, and - since
+ * a dialog only exists inside one - to the dialog the arm carries. Pulled out
+ * of the frame handler so that handler stays a flat dispatch over frame kinds;
+ * everything here is one concern, the arm lifecycle.
+ */
+function applyScreencastArmFrame(input: {
+  readonly frame: BrowserScreencastServerFrame;
+  readonly controller: ScreencastController;
+  readonly onDialogOpened: (dialog: ScreencastDialog) => void;
+  readonly onDialogSettled: () => void;
+}): void {
+  const { frame, controller } = input;
+  const control = applyScreencastControlFrame({
+    frame,
+    desiredEpoch: controller.desiredArmEpoch(),
+    activeEpoch: controller.activeArmEpoch(),
+  });
+  if (control === "teardown") {
+    // A refused pre-arm is the one teardown that says nothing about this
+    // tile's own state - only that someone else is driving.
+    if (frame.kind === "revoked" && frame.cause === "denied") {
+      controller.notePreArmDenied();
+    }
+    controller.clearLocalArm(false);
+    return;
+  }
+  if (control === "armed" && frame.kind === "armed") {
+    // `noteArmed` reports the engagement itself when this arm was a
+    // deliberate one; a pre-arm's `armed` deliberately renders nothing.
+    controller.noteArmed(frame.armEpoch);
+    return;
+  }
+  handleDialogServerFrame({
+    frame,
+    armEpoch: controller.activeArmEpoch(),
+    current: controller.activeDialog(),
+    opened: (nextDialog) => {
+      controller.setActiveDialog(nextDialog);
+      input.onDialogOpened(nextDialog);
+    },
+    settled: () => {
+      controller.setActiveDialog(null);
+      input.onDialogSettled();
+    },
+  });
 }
 
 type ScreencastControlResult = "armed" | "teardown" | "ignore";

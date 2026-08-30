@@ -73,7 +73,11 @@ function fakeStatsReport(input: {
 }
 
 interface PlaneState {
-  readonly answers: { negotiationId: number; sdp: string }[];
+  readonly answers: {
+    negotiationId: number;
+    sdp: string;
+    candidates: readonly WebrtcIceCandidate[];
+  }[];
   readonly states: {
     negotiationId: number;
     state: "live" | "failed";
@@ -111,6 +115,7 @@ function setupWithRtt(readControlPlaneRttMs: () => number | null): PlaneState {
     sendIceCandidate: () => {},
     sendVideoPlaneState: (input) => states.push({ ...input }),
     sendVideoStats: (input) => statsFrames.push({ ...input }),
+    readControlPlaneRttMs,
   };
   keyCounter += 1;
   const media = acquireBrowserMediaEntry({
@@ -128,6 +133,10 @@ function setupWithRtt(readControlPlaneRttMs: () => number | null): PlaneState {
         statsReport: null,
         answerOffer: (sdp) => {
           peer.offers.push(sdp);
+          // Models gathering finishing before the answer settles, same as
+          // `webrtc-media-registry.test.ts`'s default harness - the A12
+          // batching mechanics are that module's own to pin.
+          handlers.onIceGatheringComplete();
           return Promise.resolve(`answer-for:${sdp}`);
         },
         addRemoteCandidate: (candidate) => {
@@ -201,7 +210,7 @@ describe("video plane session", () => {
     plane.session.handleServerFrame(offerFrame(3, "offer-sdp"));
     await settle();
     expect(plane.answers).toEqual([
-      { negotiationId: 3, sdp: "answer-for:offer-sdp" },
+      { negotiationId: 3, sdp: "answer-for:offer-sdp", candidates: [] },
     ]);
     expect(plane.views.at(-1)?.mode).toBe("negotiating");
 
@@ -308,7 +317,7 @@ describe("video plane session", () => {
 
     expect(plane.peers).toHaveLength(1);
     expect(plane.answers).toEqual([
-      { negotiationId: 4, sdp: "answer-for:offer-sdp" },
+      { negotiationId: 4, sdp: "answer-for:offer-sdp", candidates: [] },
     ]);
   });
 

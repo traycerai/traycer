@@ -22,7 +22,12 @@ const peers: Array<{ readonly handlers: MediaPeerHandlers }> = [];
 function createFakePeer(handlers: MediaPeerHandlers): MediaPeer {
   peers.push({ handlers });
   return {
-    answerOffer: (sdp) => Promise.resolve(`answer-for:${sdp}`),
+    answerOffer: (sdp) => {
+      // Models gathering finishing before the answer settles - the A12
+      // batching mechanics are `webrtc-media-registry.test.ts`'s to pin.
+      handlers.onIceGatheringComplete();
+      return Promise.resolve(`answer-for:${sdp}`);
+    },
     addRemoteCandidate: () => Promise.resolve(),
     getStats: () => Promise.resolve(new Map()),
     close: () => undefined,
@@ -54,6 +59,7 @@ function recorderPort(): RecorderPort {
         sendVideoPlaneStateCalls.push(1);
       },
       sendVideoStats: () => undefined,
+      readControlPlaneRttMs: () => null,
     },
     sendSdpAnswerCalls,
     sendVideoPlaneStateCalls,

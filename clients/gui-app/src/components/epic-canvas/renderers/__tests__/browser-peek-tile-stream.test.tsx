@@ -52,6 +52,10 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
       prepare(),
 }));
 
+function peekTile(): HTMLElement {
+  return screen.getByTestId(`browser-peek-tile-${PEEK_NODE.instanceId}`);
+}
+
 /** Latest stream session (React StrictMode remount may open more than one). */
 function liveStream(): FakeStreamSession {
   const sessions = hookState.streamClient?.sessions ?? [];
@@ -314,7 +318,92 @@ describe("BrowserPeekTile", () => {
     expect(screen.getByText("Screencast ended.")).toBeTruthy();
   });
 
-  it("ignores an armed ack that arrives after blur disarmed the tile", () => {
+  it("pre-arms on hover and stops re-claiming once the host denies it", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    const stream = liveStream();
+    const controls = screen.getByRole("button", {
+      name: "Browser screencast controls",
+    });
+
+    fireEvent.pointerEnter(controls);
+    expect(stream.sentFrames).toContainEqual({
+      kind: "preArm",
+      hasBinaryPayload: false,
+      armEpoch: 1,
+    });
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "revoked",
+          hasBinaryPayload: false,
+          armEpoch: 1,
+          cause: "denied",
+        },
+        null,
+      );
+    });
+    fireEvent.pointerLeave(controls);
+    fireEvent.pointerEnter(controls);
+
+    // Someone else is driving: hovering across the tile must not storm the
+    // control plane with claims that will be refused again.
+    expect(
+      stream.sentFrames.filter((frame) => frame.kind === "preArm"),
+    ).toHaveLength(1);
+    expect(controls.className).not.toContain("ring-primary");
+  });
+
+  it("shows no control chrome for a hover pre-arm and lights it on the click", () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    const stream = liveStream();
+    const controls = screen.getByRole("button", {
+      name: "Browser screencast controls",
+    });
+
+    fireEvent.pointerEnter(controls);
+    act(() => {
+      stream.emit(
+        { kind: "armed", hasBinaryPayload: false, armEpoch: 1 },
+        null,
+      );
+    });
+
+    // The claim is granted, but hovering is not controlling.
+    expect(screen.queryByText("Controlling")).toBeNull();
+    expect(peekTile().querySelector(".ring-primary")).toBeNull();
+
+    fireEvent.pointerDown(controls, {
+      pointerId: 1,
+      clientX: 100,
+      clientY: 100,
+      button: 0,
+      buttons: 1,
+    });
+
+    // No second arm round trip: the claim it needed was already there.
+    expect(
+      stream.sentFrames.filter((frame) => frame.kind === "arm"),
+    ).toHaveLength(0);
+    expect(screen.getByText("Controlling")).not.toBeNull();
+    expect(peekTile().querySelector(".ring-primary")).not.toBeNull();
+  });
+
+  it("ignores an armed ack that arrives after an explicit Release", () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -334,7 +423,13 @@ describe("BrowserPeekTile", () => {
       hasBinaryPayload: false,
       armEpoch: 1,
     });
-    fireEvent.blur(controls);
+    act(() => {
+      stream.emit(
+        { kind: "armed", hasBinaryPayload: false, armEpoch: 1 },
+        null,
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Release control" }));
     expect(stream.sentFrames).toContainEqual({
       kind: "disarm",
       hasBinaryPayload: false,

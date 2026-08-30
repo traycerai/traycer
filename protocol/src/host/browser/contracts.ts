@@ -610,12 +610,30 @@ export type BrowserNavState = z.infer<typeof browserNavStateSchema>;
  * new one, so late candidates from an abandoned round are ignored rather
  * than mis-applied to the next attempt.
  */
-const browserScreencastIceCandidateFields = {
-  negotiationId: z.number().int().nonnegative(),
+/**
+ * The candidate fields shared by the per-candidate `iceCandidate` trickle
+ * frame and the A12 batch riding `sdpAnswer.candidates` - everything but
+ * `negotiationId`, which only the standalone frame needs (the batch's own
+ * frame already carries one for the whole array).
+ */
+const browserScreencastIceCandidateBaseFields = {
   candidate: z.string(),
   sdpMid: z.string().nullable(),
   sdpMLineIndex: z.number().int().nonnegative().nullable(),
 } as const;
+
+const browserScreencastIceCandidateFields = {
+  negotiationId: z.number().int().nonnegative(),
+  ...browserScreencastIceCandidateBaseFields,
+} as const;
+
+/** One candidate as it rides `sdpAnswer.candidates` (perf-hardening A12). */
+const browserScreencastBatchedIceCandidateSchema = z.object(
+  browserScreencastIceCandidateBaseFields,
+);
+export type BrowserScreencastBatchedIceCandidate = z.infer<
+  typeof browserScreencastBatchedIceCandidateSchema
+>;
 
 /**
  * One ICE server the client should configure its `RTCPeerConnection` with,
@@ -738,7 +756,24 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
       kind: z.literal("revoked"),
       ...textFrameFields,
       armEpoch: z.number().int().nonnegative(),
-      cause: z.enum(["disarmed", "stolen"]),
+      // `denied` answers a `preArm` the host refused because another viewer
+      // holds control. Only a viewer that sent one can ever receive it, which
+      // is why adding it to this enum cannot break an older client.
+      cause: z.enum(["disarmed", "stolen", "denied"]),
+    })
+    .strict(),
+  z
+    .object({
+      // How far the host has consumed this arm epoch's input sequence
+      // (ticket 20). Sent only for input that arrived over the MUX, coalesced,
+      // so it exists exactly during the window where the client is waiting to
+      // promote its pending DataChannel transport: once `lastSeq` covers the
+      // last frame the client put on the mux, nothing can reorder against the
+      // channel and the client promotes mid-arm.
+      kind: z.literal("inputAck"),
+      ...textFrameFields,
+      armEpoch: z.number().int().nonnegative(),
+      lastSeq: z.number().int().nonnegative(),
     })
     .strict(),
   z
@@ -893,6 +928,19 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // A speculative claim raised on hover (ticket 20), so the host has the
+      // dispatcher live before the click that needs it. Its own kind rather
+      // than a flag on `arm` because the AUTHORIZATION differs: this one is
+      // refused (`revoked`, cause `denied`) when another viewer holds control,
+      // where `arm` steals. Same epoch counter, same ordering, same
+      // registry - only the steal is withheld.
+      kind: z.literal("preArm"),
+      ...textFrameFields,
+      armEpoch: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal("disarm"),
       ...textFrameFields,
       armEpoch: z.number().int().nonnegative(),
@@ -987,6 +1035,14 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       ...textFrameFields,
       negotiationId: z.number().int().nonnegative(),
       sdp: z.string(),
+      // Perf-hardening A12: local candidates gathered before the answer
+      // shipped, batched here instead of one `iceCandidate` frame each.
+      // `.default([])` - additive, and `browser.screencast` is not in the
+      // released baseline (ticket 18's hazard note covers the future) - so
+      // an older client that sends none still parses.
+      candidates: z
+        .array(browserScreencastBatchedIceCandidateSchema)
+        .default([]),
     })
     .strict(),
   z

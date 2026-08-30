@@ -110,6 +110,7 @@ function setup(): PlaneState {
     sendIceCandidate: () => {},
     sendVideoPlaneState: () => {},
     sendVideoStats: (input) => statsFrames.push({ ...input }),
+    readControlPlaneRttMs: () => null,
   };
   keyCounter += 1;
   const media = acquireBrowserMediaEntry({

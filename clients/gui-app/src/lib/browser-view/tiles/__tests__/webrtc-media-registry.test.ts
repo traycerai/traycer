@@ -39,6 +39,13 @@ function peerHarness(): PeerHarness {
         closeCount: 0,
         answerOffer: (sdp) => {
           peer.offers.push(sdp);
+          // Real gathering completing before the answer settles is one of
+          // the two A12 flush triggers; the harness models that as the
+          // common case so pre-existing assertions can read `port.answers`
+          // right after the promise resolves. The dedicated batching tests
+          // below construct a peer that does NOT do this, to exercise the
+          // 500ms deadline and the early-candidate batch instead.
+          handlers.onIceGatheringComplete();
           return Promise.resolve(`answer-for:${sdp}`);
         },
         addRemoteCandidate: (candidate) => {
@@ -57,7 +64,11 @@ function peerHarness(): PeerHarness {
 }
 
 interface RecordingPort extends WebrtcSignalPort {
-  readonly answers: { negotiationId: number; sdp: string }[];
+  readonly answers: {
+    negotiationId: number;
+    sdp: string;
+    candidates: readonly WebrtcIceCandidate[];
+  }[];
   readonly candidates: ({ negotiationId: number } & WebrtcIceCandidate)[];
   readonly states: {
     negotiationId: number;
@@ -67,7 +78,12 @@ interface RecordingPort extends WebrtcSignalPort {
   readonly stats: { negotiationId: number }[];
 }
 
+/** No measured RTT (the common case in these tests) - the batch window floors at 150ms. */
 function recordingPort(): RecordingPort {
+  return recordingPortWithRtt(null);
+}
+
+function recordingPortWithRtt(rttMs: number | null): RecordingPort {
   const port: RecordingPort = {
     answers: [],
     candidates: [],
@@ -85,6 +101,7 @@ function recordingPort(): RecordingPort {
     sendVideoStats: (input) => {
       port.stats.push({ negotiationId: input.negotiationId });
     },
+    readControlPlaneRttMs: () => rttMs,
   };
   return port;
 }
@@ -274,7 +291,7 @@ describe("webrtc media registry", () => {
 
     await vi.advanceTimersByTimeAsync(0);
     expect(port.answers).toEqual([
-      { negotiationId: 3, sdp: "answer-for:offer-sdp" },
+      { negotiationId: 3, sdp: "answer-for:offer-sdp", candidates: [] },
     ]);
     expect(harness.peers[0]?.remoteCandidates).toEqual([
       { candidate: "early", sdpMid: "0", sdpMLineIndex: 0 },
@@ -523,7 +540,7 @@ describe("webrtc media registry", () => {
     expect(harness.peers).toHaveLength(2);
     expect(harness.peers[0]?.closeCount).toBe(1);
     expect(livePort.answers).toEqual([
-      { negotiationId: 9, sdp: "answer-for:second" },
+      { negotiationId: 9, sdp: "answer-for:second", candidates: [] },
     ]);
     expect(deadPort.answers).toHaveLength(1);
 
@@ -660,6 +677,361 @@ describe("webrtc media registry", () => {
     b.release();
     await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
     expect(activeBrowserMediaKeyIds()).toEqual([]);
+  });
+
+  describe("A12 batched ICE trickle", () => {
+    /**
+     * Unlike `peerHarness()`, this one does NOT signal gathering-complete
+     * from inside `answerOffer` - these tests drive that signal (or the
+     * 500ms deadline) themselves.
+     */
+    function controlledPeerHarness(): PeerHarness {
+      const peers: FakePeer[] = [];
+      return {
+        peers,
+        createPeer: (handlers, iceServers) => {
+          const peer: FakePeer = {
+            handlers,
+            offers: [],
+            remoteCandidates: [],
+            iceServers,
+            closeCount: 0,
+            answerOffer: (sdp) => {
+              peer.offers.push(sdp);
+              return Promise.resolve(`answer-for:${sdp}`);
+            },
+            addRemoteCandidate: (candidate) => {
+              peer.remoteCandidates.push(candidate);
+              return Promise.resolve();
+            },
+            getStats: () => Promise.resolve(new Map()),
+            close: () => {
+              peer.closeCount += 1;
+            },
+          };
+          peers.push(peer);
+          return peer;
+        },
+      };
+    }
+
+    it("batches local candidates gathered before the flush into the sdpAnswer frame, then trickles late ones individually", async () => {
+      const key = nextKey();
+      const harness = controlledPeerHarness();
+      const port = recordingPort();
+      const held = acquireBrowserMediaEntry({
+        key,
+        createPeer: harness.createPeer,
+      });
+
+      held.entry.acceptOffer({
+        negotiationId: 1,
+        sdp: "offer",
+        port,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(port.answers).toEqual([]);
+
+      const peer = harness.peers.at(0);
+      if (peer === undefined) throw new Error("peer not created");
+      const handlers = peer.handlers;
+      handlers.onLocalIceCandidate({
+        candidate: "a",
+        sdpMid: "0",
+        sdpMLineIndex: 0,
+      });
+      handlers.onLocalIceCandidate({
+        candidate: "b",
+        sdpMid: "0",
+        sdpMLineIndex: 0,
+      });
+      // Batched, not trickled - the answer has not shipped yet.
+      expect(port.candidates).toEqual([]);
+
+      handlers.onIceGatheringComplete();
+      expect(port.answers).toEqual([
+        {
+          negotiationId: 1,
+          sdp: "answer-for:offer",
+          candidates: [
+            { candidate: "a", sdpMid: "0", sdpMLineIndex: 0 },
+            { candidate: "b", sdpMid: "0", sdpMLineIndex: 0 },
+          ],
+        },
+      ]);
+      expect(port.candidates).toEqual([]);
+
+      // A late candidate after the batch shipped trickles individually.
+      handlers.onLocalIceCandidate({
+        candidate: "late",
+        sdpMid: "0",
+        sdpMLineIndex: 0,
+      });
+      expect(port.candidates).toEqual([
+        { negotiationId: 1, candidate: "late", sdpMid: "0", sdpMLineIndex: 0 },
+      ]);
+
+      // A second gathering-complete signal (Chrome can fire the state change
+      // more than once in edge cases) must not re-flush.
+      handlers.onIceGatheringComplete();
+      expect(port.answers).toHaveLength(1);
+
+      held.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    });
+
+    it("flushes the batch on the RTT-derived floor (150ms) when gathering never signals complete and no RTT is measured", async () => {
+      const key = nextKey();
+      const harness = controlledPeerHarness();
+      const port = recordingPort();
+      const held = acquireBrowserMediaEntry({
+        key,
+        createPeer: harness.createPeer,
+      });
+
+      held.entry.acceptOffer({
+        negotiationId: 2,
+        sdp: "offer",
+        port,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      harness.peers[0]?.handlers.onLocalIceCandidate({
+        candidate: "solo",
+        sdpMid: null,
+        sdpMLineIndex: null,
+      });
+      expect(port.answers).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(149);
+      expect(port.answers).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(port.answers).toEqual([
+        {
+          negotiationId: 2,
+          sdp: "answer-for:offer",
+          candidates: [
+            { candidate: "solo", sdpMid: null, sdpMLineIndex: null },
+          ],
+        },
+      ]);
+
+      held.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    });
+
+    it("a superseded round's pending flush timer never fires against the new round", async () => {
+      const key = nextKey();
+      const harness = controlledPeerHarness();
+      const port = recordingPort();
+      const held = acquireBrowserMediaEntry({
+        key,
+        createPeer: harness.createPeer,
+      });
+
+      held.entry.acceptOffer({
+        negotiationId: 1,
+        sdp: "first",
+        port,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // Never signals gathering-complete for round 1, so its flush timer is
+      // still armed when round 2 supersedes it.
+      held.entry.acceptOffer({
+        negotiationId: 2,
+        sdp: "second",
+        port,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      harness.peers[1]?.handlers.onIceGatheringComplete();
+      expect(port.answers).toEqual([
+        { negotiationId: 2, sdp: "answer-for:second", candidates: [] },
+      ]);
+
+      // Round 1's floor deadline elapsing afterwards must not emit a stale
+      // second answer frame.
+      await vi.advanceTimersByTimeAsync(150);
+      expect(port.answers).toHaveLength(1);
+
+      held.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    });
+
+    it("derives the flush window from the measured RTT, floored at 150ms and ceilinged at 500ms (minor 6)", async () => {
+      // Fast link: 2 round trips at 10ms floors at 150ms, same as no RTT.
+      const fastKey = nextKey();
+      const fastHarness = controlledPeerHarness();
+      const fastPort = recordingPortWithRtt(10);
+      const fast = acquireBrowserMediaEntry({
+        key: fastKey,
+        createPeer: fastHarness.createPeer,
+      });
+      fast.entry.acceptOffer({
+        negotiationId: 1,
+        sdp: "offer",
+        port: fastPort,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(149);
+      expect(fastPort.answers).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fastPort.answers).toHaveLength(1);
+      fast.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+
+      // Slow link: 2 round trips at 1000ms (2000ms) ceilings at 500ms, not
+      // the uncapped 2000ms - the negotiation critical path still needs a cap.
+      const slowKey = nextKey();
+      const slowHarness = controlledPeerHarness();
+      const slowPort = recordingPortWithRtt(1_000);
+      const slow = acquireBrowserMediaEntry({
+        key: slowKey,
+        createPeer: slowHarness.createPeer,
+      });
+      slow.entry.acceptOffer({
+        negotiationId: 1,
+        sdp: "offer",
+        port: slowPort,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(499);
+      expect(slowPort.answers).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(slowPort.answers).toHaveLength(1);
+      slow.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    });
+  });
+
+  describe("blocker fix: same-id ICE-restart re-offer", () => {
+    it("renegotiates on the EXISTING peer instead of dropping the offer or recreating the peer", async () => {
+      const key = nextKey();
+      const harness = peerHarness();
+      const firstPort = recordingPort();
+      const held = acquireBrowserMediaEntry({
+        key,
+        createPeer: harness.createPeer,
+      });
+
+      held.entry.acceptOffer({
+        negotiationId: 5,
+        sdp: "first-offer",
+        port: firstPort,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      harness.peers[0]?.handlers.onStream(fakeStream("t"));
+      held.entry.reportFirstDecodedFrame();
+      expect(firstPort.answers).toEqual([
+        { negotiationId: 5, sdp: "answer-for:first-offer", candidates: [] },
+      ]);
+
+      // The host restarts on the SAME negotiationId, over a fresh reply
+      // channel (a genuine reconnect can bring one), with different SDP
+      // (a real ICE restart offer, not a resend).
+      const restartPort = recordingPort();
+      held.entry.acceptOffer({
+        negotiationId: 5,
+        sdp: "restart-offer",
+        port: restartPort,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // No second peer: the existing one renegotiated in place.
+      expect(harness.peers).toHaveLength(1);
+      expect(harness.peers[0]?.closeCount).toBe(0);
+      expect(harness.peers[0]?.offers).toEqual([
+        "first-offer",
+        "restart-offer",
+      ]);
+      expect(restartPort.answers).toEqual([
+        {
+          negotiationId: 5,
+          sdp: "answer-for:restart-offer",
+          candidates: [],
+        },
+      ]);
+      // The stream never dropped (no `fail()` ran) - phase stayed streaming
+      // and the round is still live under its original report latch.
+      expect(held.entry.getSnapshot()).toMatchObject({
+        phase: "streaming",
+        negotiationId: 5,
+      });
+
+      held.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    });
+
+    it("drops a bit-for-bit duplicate resend of the already-answered offer", async () => {
+      const key = nextKey();
+      const harness = peerHarness();
+      const port = recordingPort();
+      const held = acquireBrowserMediaEntry({
+        key,
+        createPeer: harness.createPeer,
+      });
+
+      held.entry.acceptOffer({
+        negotiationId: 3,
+        sdp: "offer",
+        port,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(port.answers).toHaveLength(1);
+
+      held.entry.acceptOffer({
+        negotiationId: 3,
+        sdp: "offer",
+        port,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(harness.peers).toHaveLength(1);
+      expect(harness.peers[0]?.offers).toEqual(["offer"]);
+      expect(port.answers).toHaveLength(1);
+
+      held.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    });
+
+    it("still drops a lower negotiationId as stale", async () => {
+      const key = nextKey();
+      const harness = peerHarness();
+      const port = recordingPort();
+      const held = acquireBrowserMediaEntry({
+        key,
+        createPeer: harness.createPeer,
+      });
+
+      held.entry.acceptOffer({
+        negotiationId: 6,
+        sdp: "offer",
+        port,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      held.entry.acceptOffer({
+        negotiationId: 4,
+        sdp: "older",
+        port,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(harness.peers).toHaveLength(1);
+      expect(harness.peers[0]?.offers).toEqual(["offer"]);
+
+      held.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    });
   });
 
   describe("delivered ICE servers", () => {

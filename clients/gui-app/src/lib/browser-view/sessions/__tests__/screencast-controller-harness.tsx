@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import type { BrowserScreencastClientFrame } from "@traycer/protocol/host/browser/contracts";
 import {
   createScreencastController,
@@ -25,6 +25,8 @@ export interface MountedController {
   readonly controller: ScreencastController;
   /** Frames that went out on the mux (`sendFrame`). */
   readonly sent: BrowserScreencastClientFrame[];
+  /** Arm epochs the controller reported as CONTROL, not a bare pre-arm. */
+  readonly engaged: number[];
   readonly overlay: HTMLElement;
   readonly image: HTMLImageElement;
   readonly video: HTMLVideoElement;
@@ -39,6 +41,7 @@ export interface MountedController {
  */
 export function mountController(): MountedController {
   const sent: BrowserScreencastClientFrame[] = [];
+  const engaged: number[] = [];
   const captured: { current: ScreencastController | null } = { current: null };
 
   function Harness(): React.JSX.Element {
@@ -61,6 +64,7 @@ export function mountController(): MountedController {
       },
       sendFrame: (frame) => sent.push(frame),
       listeners: {
+        onControlEngaged: (epoch) => engaged.push(epoch),
         onLocalArmCleared: () => {},
         onComposingChange: () => {},
         onDialogSettled: () => {},
@@ -100,5 +104,21 @@ export function mountController(): MountedController {
     new DOMRect(0, 0, FRAME_SIZE.width, FRAME_SIZE.height);
   const imeInput = view.container.querySelector("input");
   if (imeInput === null) throw new Error("no IME input");
-  return { controller, sent, overlay, image, video, imeInput };
+  return { controller, sent, engaged, overlay, image, video, imeInput };
+}
+
+/**
+ * Arm the way a viewer does - a deliberate gesture, then the host's `armed` -
+ * because a bare `noteArmed` is also how a hover PRE-arm lands, and a pre-arm
+ * deliberately drives nothing. The arm frame itself is dropped from `sent`;
+ * the arm path is pinned in `screencast-arm-path.test.tsx`.
+ */
+export function armViaGesture(
+  mounted: MountedController,
+  armEpoch: number,
+): void {
+  fireEvent.focus(mounted.imeInput);
+  mounted.controller.noteArmed(armEpoch);
+  const armIndex = mounted.sent.findIndex((frame) => frame.kind === "arm");
+  if (armIndex >= 0) mounted.sent.splice(armIndex, 1);
 }

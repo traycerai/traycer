@@ -1,4 +1,9 @@
 import type { BrowserViewNativeTabKey } from "@traycer-clients/shared/platform/browser-view";
+import {
+  VIEWER_CONTROL_PLANE_DEADLINES,
+  deriveViewerDeadlineMs,
+  type ControlPlaneDeadlineSpec,
+} from "@/lib/browser-view/sessions/control-plane-deadlines";
 import { compositeKey } from "./browser-view-keys";
 
 /**
@@ -50,6 +55,13 @@ export interface WebrtcSignalPort {
   sendSdpAnswer(input: {
     readonly negotiationId: number;
     readonly sdp: string;
+    /**
+     * A12: local candidates gathered before the answer shipped, batched onto
+     * this frame instead of one `iceCandidate` frame each. Empty when
+     * gathering hadn't produced any yet - never omitted, so an older host
+     * (which ignores the field) and a new one see the same shape either way.
+     */
+    readonly candidates: readonly WebrtcIceCandidate[];
   }): void;
   sendIceCandidate(
     input: { readonly negotiationId: number } & WebrtcIceCandidate,
@@ -62,6 +74,12 @@ export interface WebrtcSignalPort {
   sendVideoStats(
     input: { readonly negotiationId: number } & WebrtcVideoStatsSample,
   ): void;
+  /**
+   * The subscription's measured control-plane RTT (ticket 18), `null` until
+   * an `rttProbe` has landed. A12's batch flush window derives from it - see
+   * {@link ICE_TRICKLE_BATCH_DEADLINE}.
+   */
+  readControlPlaneRttMs(): number | null;
 }
 
 /** The `videoStats` wire frame's payload, minus the envelope. */
@@ -112,6 +130,12 @@ export interface MediaDataChannel {
 export interface MediaPeerHandlers {
   /** A locally gathered candidate to trickle back. */
   readonly onLocalIceCandidate: (candidate: WebrtcIceCandidate) => void;
+  /**
+   * A12: every local candidate has been gathered
+   * (`RTCPeerConnection.iceGatheringState === "complete"`). One of the two
+   * batch-flush triggers, alongside the RTT-derived deadline.
+   */
+  readonly onIceGatheringComplete: () => void;
   /** The remote stream, once `ontrack` delivers it. */
   readonly onStream: (stream: MediaStream) => void;
   /** An inbound DataChannel (ticket 15's input transport). */
@@ -218,6 +242,85 @@ export interface BrowserMediaEntry {
  */
 const RELEASE_GRACE_MS = 1_000;
 
+/**
+ * A12: how long a round's local-candidate batch waits for
+ * {@link MediaPeerHandlers.onIceGatheringComplete} before shipping anyway.
+ * Either trigger sends the same batch once - whichever fires first.
+ *
+ * Derived off the measured control-plane RTT (ticket 18's table), not a flat
+ * literal: on a fast link the window should shrink (nothing worth waiting
+ * for), on a slow one it should grow with the path, same as every other
+ * viewer deadline. Two round trips is the STUN gather itself - one request
+ * plus response, with a second for a retry/relay hop - so it tracks the thing
+ * this window is actually waiting on rather than an arbitrary multiple.
+ */
+const ICE_TRICKLE_BATCH_DEADLINE: ControlPlaneDeadlineSpec = {
+  floorMs: 150,
+  roundTrips: 2,
+};
+const ICE_TRICKLE_BATCH_CEILING_MS = 500;
+
+function iceTrickleBatchMs(rttMs: number | null): number {
+  return Math.min(
+    ICE_TRICKLE_BATCH_CEILING_MS,
+    deriveViewerDeadlineMs(ICE_TRICKLE_BATCH_DEADLINE, rttMs),
+  );
+}
+
+/**
+ * Blocker fix (batch-3a review): `connectionState: "failed"` is potentially
+ * recoverable - the host may drive a same-id ICE restart on this SAME peer
+ * (see `acceptOffer`'s `===` branch) - so it must not fail the round the
+ * instant it fires; that races the host's restart and always wins, tearing
+ * the peer down before the restart offer can land. This is how long the
+ * client waits for the connection to recover on its own before giving up and
+ * reporting failure. `VIEWER_CONTROL_PLANE_DEADLINES.firstFrame` is "the
+ * negotiation deadline spec" the review named as the right bound: its floor
+ * alone (no RTT reading is available at peer-creation time) already covers
+ * the host's own restart window, which that same spec sizes.
+ */
+const CONNECTION_FAILED_GRACE_MS =
+  VIEWER_CONTROL_PLANE_DEADLINES.firstFrame.floorMs;
+
+/**
+ * One negotiation round's live state. Named (rather than inline) because A12
+ * added enough batching fields that an inline literal type stopped reading as
+ * one shape.
+ */
+interface ActiveRound {
+  readonly negotiationId: number;
+  /** The reply channel; re-pointed on a same-id restart in case it changed. */
+  port: WebrtcSignalPort;
+  readonly peer: MediaPeer;
+  /**
+   * The offer SDP this round last negotiated against - lets a same-id
+   * ICE-restart re-offer (blocker fix, batch-3a review) tell a genuine
+   * restart from a duplicate resend of the SDP it already answered.
+   */
+  lastOfferSdp: string;
+  /** Candidates that arrived before the answer set the remote description. */
+  readonly pendingCandidates: WebrtcIceCandidate[];
+  /** This round's input channels, by label. */
+  readonly channels: Map<BrowserInputChannelLabel, MediaDataChannel>;
+  remoteReady: boolean;
+  reportedLive: boolean;
+  reportedFailed: boolean;
+  /**
+   * Local candidates gathered before the answer ships (A12), batched onto
+   * the `sdpAnswer` frame instead of one `iceCandidate` frame each. Emptied
+   * the moment the batch flushes.
+   */
+  readonly localCandidateBatch: WebrtcIceCandidate[];
+  /** True once the batch has shipped; every later local candidate trickles individually. */
+  answerSent: boolean;
+  /** True once `RTCPeerConnection.iceGatheringState` reaches `"complete"`. */
+  gatheringComplete: boolean;
+  /** The RTT-derived flush deadline; cleared once the batch ships or the round ends. */
+  flushTimer: number | null;
+  /** Known only once `answerOffer()` resolves; `null` before that. */
+  flushAnswer: (() => void) | null;
+}
+
 interface RegistryRecord {
   readonly entry: BrowserMediaEntry;
   readonly dispose: () => void;
@@ -281,18 +384,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     inputReady: false,
   };
 
-  let round: {
-    readonly negotiationId: number;
-    readonly port: WebrtcSignalPort;
-    readonly peer: MediaPeer;
-    /** Candidates that arrived before the answer set the remote description. */
-    readonly pendingCandidates: WebrtcIceCandidate[];
-    /** This round's input channels, by label. */
-    readonly channels: Map<BrowserInputChannelLabel, MediaDataChannel>;
-    remoteReady: boolean;
-    reportedLive: boolean;
-    reportedFailed: boolean;
-  } | null = null;
+  let round: ActiveRound | null = null;
 
   const publish = (next: Partial<BrowserMediaSnapshot>): void => {
     snapshot = { ...snapshot, ...next };
@@ -341,10 +433,17 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     publish({ inputReady: ready });
   };
 
+  const clearFlushTimer = (active: ActiveRound): void => {
+    if (active.flushTimer === null) return;
+    window.clearTimeout(active.flushTimer);
+    active.flushTimer = null;
+  };
+
   const fail = (reason: string): void => {
     if (round === null) return;
     report("failed", reason);
     closeChannels();
+    clearFlushTimer(round);
     round.peer.close();
     round = null;
     publish({
@@ -353,6 +452,54 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
       failureReason: reason,
       inputReady: false,
     });
+  };
+
+  /**
+   * Runs one `answerOffer` round against `started`, whether this is its
+   * FIRST offer or a same-id ICE-restart re-offer on the SAME peer (blocker
+   * fix, batch-3a review: the host restarts under the SAME `negotiationId`
+   * rather than minting a new one, so the round is reused, not recreated).
+   * Arms the A12 batch/flush machinery fresh each call.
+   */
+  const negotiateRound = (started: ActiveRound, sdp: string): void => {
+    started.lastOfferSdp = sdp;
+    void started.peer
+      .answerOffer(sdp)
+      .then((answerSdp) => {
+        if (round !== started) return;
+        started.remoteReady = true;
+        for (const candidate of started.pendingCandidates.splice(0)) {
+          void started.peer.addRemoteCandidate(candidate).catch(noop);
+        }
+        // A12: ship the answer with whatever local candidates have already
+        // gathered, at end-of-gathering or the RTT-derived deadline -
+        // whichever comes first. `onIceGatheringComplete` may already have
+        // fired (gathering can finish before this promise settles), in which
+        // case the flush happens immediately instead of arming the timer.
+        const flush = (): void => {
+          if (round !== started || started.answerSent) return;
+          started.answerSent = true;
+          clearFlushTimer(started);
+          started.port.sendSdpAnswer({
+            negotiationId: started.negotiationId,
+            sdp: answerSdp,
+            candidates: started.localCandidateBatch.splice(0),
+          });
+        };
+        started.flushAnswer = flush;
+        if (started.gatheringComplete) {
+          flush();
+        } else {
+          started.flushTimer = window.setTimeout(
+            flush,
+            iceTrickleBatchMs(started.port.readControlPlaneRttMs()),
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (round !== started) return;
+        fail(`answer-failed: ${errorText(error)}`);
+      });
   };
 
   const entry: BrowserMediaEntry = {
@@ -365,7 +512,25 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     },
 
     acceptOffer: ({ negotiationId, sdp, port, iceServers }) => {
-      if (round !== null && negotiationId <= round.negotiationId) return;
+      if (round !== null && negotiationId < round.negotiationId) return;
+      if (round !== null && negotiationId === round.negotiationId) {
+        // Blocker fix (batch-3a review): the staleness guard used to drop
+        // this outright, silently swallowing the host's same-id ICE-restart
+        // re-offer. A bit-for-bit resend of the SDP this round already
+        // answered is the one degenerate case left to drop - nothing
+        // changed, so there is nothing to renegotiate.
+        if (sdp === round.lastOfferSdp) return;
+        const existing = round;
+        clearFlushTimer(existing);
+        existing.port = port;
+        existing.remoteReady = false;
+        existing.answerSent = false;
+        existing.gatheringComplete = false;
+        existing.flushAnswer = null;
+        existing.localCandidateBatch.length = 0;
+        negotiateRound(existing, sdp);
+        return;
+      }
       if (
         round === null &&
         snapshot.negotiationId !== null &&
@@ -374,13 +539,29 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
         return;
       }
       closeChannels();
+      if (round !== null) clearFlushTimer(round);
       round?.peer.close();
 
       const peer = createPeer(
         {
           onLocalIceCandidate: (candidate) => {
             if (round?.negotiationId !== negotiationId) return;
-            port.sendIceCandidate({ negotiationId, ...candidate });
+            // A12: batch until the answer ships, then trickle individually -
+            // a late candidate after the batch is gone is still worth
+            // sending, just no longer worth holding. `round.port`, not the
+            // `port` this offer was accepted with: a same-id restart
+            // re-points it, and this handler outlives that (the peer, and
+            // its handlers, are never recreated for a restart).
+            if (round.answerSent) {
+              round.port.sendIceCandidate({ negotiationId, ...candidate });
+              return;
+            }
+            round.localCandidateBatch.push(candidate);
+          },
+          onIceGatheringComplete: () => {
+            if (round?.negotiationId !== negotiationId) return;
+            round.gatheringComplete = true;
+            round.flushAnswer?.();
           },
           onStream: (stream) => {
             if (round?.negotiationId !== negotiationId) return;
@@ -405,15 +586,21 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
         },
         iceServers,
       );
-      const started = {
+      const started: ActiveRound = {
         negotiationId,
         port,
+        lastOfferSdp: sdp,
         peer,
         pendingCandidates: [],
         channels: new Map<BrowserInputChannelLabel, MediaDataChannel>(),
         remoteReady: false,
         reportedLive: false,
         reportedFailed: false,
+        localCandidateBatch: [],
+        answerSent: false,
+        gatheringComplete: false,
+        flushTimer: null,
+        flushAnswer: null,
       };
       round = started;
       publish({
@@ -423,21 +610,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
         failureReason: null,
         inputReady: false,
       });
-
-      void peer
-        .answerOffer(sdp)
-        .then((answerSdp) => {
-          if (round !== started) return;
-          port.sendSdpAnswer({ negotiationId, sdp: answerSdp });
-          started.remoteReady = true;
-          for (const candidate of started.pendingCandidates.splice(0)) {
-            void started.peer.addRemoteCandidate(candidate).catch(noop);
-          }
-        })
-        .catch((error: unknown) => {
-          if (round !== started) return;
-          fail(`answer-failed: ${errorText(error)}`);
-        });
+      negotiateRound(started, sdp);
     },
 
     acceptRemoteCandidate: ({ negotiationId, ...candidate }) => {
@@ -483,6 +656,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     closeTimer: null,
     dispose: () => {
       closeChannels();
+      if (round !== null) clearFlushTimer(round);
       round?.peer.close();
       round = null;
       listeners.clear();
@@ -495,6 +669,86 @@ function errorText(error: unknown): string {
 }
 
 function noop(): void {}
+
+function isStatsRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * The inbound video RTP stat's jitter, in milliseconds - `null` when the
+ * report carries none yet (pre-first-sample). Duplicated in miniature from
+ * `sessions/webrtc-video-stats.ts` rather than imported: that module already
+ * imports types FROM this one, and it maps the whole wire shape where this
+ * needs only one field off the raw report.
+ */
+function inboundVideoJitterMs(report: RTCStatsReport): number | null {
+  for (const value of report.values()) {
+    if (!isStatsRecord(value)) continue;
+    if (value.type !== "inbound-rtp" || value.kind !== "video") continue;
+    return typeof value.jitter === "number" ? value.jitter * 1000 : null;
+  }
+  return null;
+}
+
+/**
+ * A4/F6: sizes the receiver's jitter buffer off the CURRENTLY measured
+ * jitter instead of trusting Chromium's constant default (30-100ms,
+ * inflated further by DERP's TCP burstiness). Re-evaluated on every
+ * `getStats()` read - the existing 5s sampler in `video-plane-session.ts` -
+ * rather than its own timer. `jitterBufferTarget` is absent on older
+ * receivers, so it is feature-detected rather than assumed from the DOM
+ * typings (which declare it unconditionally).
+ */
+export function applyAdaptiveJitterBufferTarget(
+  receiver: RTCRtpReceiver | null,
+  report: RTCStatsReport,
+): void {
+  if (receiver === null || !("jitterBufferTarget" in receiver)) return;
+  const jitterMs = inboundVideoJitterMs(report);
+  if (jitterMs === null) return;
+  receiver.jitterBufferTarget = Math.min(200, Math.max(0, jitterMs * 2));
+}
+
+/**
+ * An actual `a=rtpmap` payload line, not just the substring "h264" appearing
+ * anywhere in the SDP (a `cname`/`msid`/tool banner can legitimately contain
+ * it) - the payload-type digit is what makes this a real codec offer rather
+ * than a coincidence.
+ */
+const H264_RTPMAP_PATTERN = /a=rtpmap:\d+ h264\//i;
+
+/**
+ * A4/F6: prefers H.264 over the offer's default (VP8) ANSWERER-side, and
+ * only when both ends can actually use it - this engine's
+ * `RTCRtpReceiver.getCapabilities` reports H.264 decode support AND the
+ * offer's SDP already carries an H.264 payload (the offerer negotiates
+ * whatever its own `createOffer` puts on the wire; it does not itself
+ * prefer a codec - that stays ticket 23's `index.html` entry point,
+ * untouched here). VP8 stays the floor otherwise: `setCodecPreferences` is
+ * simply never called, so the default (VP8-first) order survives. Read
+ * right after `setRemoteDescription`, before `createAnswer`, since the
+ * answer is what carries the preference back to the offerer.
+ */
+export function preferH264IfCapable(
+  connection: RTCPeerConnection,
+  offerSdp: string,
+): void {
+  if (!H264_RTPMAP_PATTERN.test(offerSdp)) return;
+  const capabilities = RTCRtpReceiver.getCapabilities("video");
+  if (capabilities === null) return;
+  const h264Codecs = capabilities.codecs.filter(
+    (codec) => codec.mimeType.toLowerCase() === "video/h264",
+  );
+  if (h264Codecs.length === 0) return;
+  const otherCodecs = capabilities.codecs.filter(
+    (codec) => codec.mimeType.toLowerCase() !== "video/h264",
+  );
+  for (const transceiver of connection.getTransceivers()) {
+    if (transceiver.receiver.track.kind !== "video") continue;
+    if (typeof transceiver.setCodecPreferences !== "function") continue;
+    transceiver.setCodecPreferences([...h264Codecs, ...otherCodecs]);
+  }
+}
 
 /**
  * The real peer. Adapting `RTCPeerConnection` here rather than exposing it is
@@ -521,6 +775,16 @@ export function createBrowserMediaPeer(
           })),
   });
   let stream: MediaStream | null = null;
+  /** A4/F6: the video receiver, captured here so the stats sampler can tune its `jitterBufferTarget`. */
+  let videoReceiver: RTCRtpReceiver | null = null;
+  /**
+   * Blocker fix (batch-3a review): armed the moment `connectionState` reads
+   * "failed", cleared the moment it reads anything else. "failed" is
+   * potentially recoverable - the host may drive a same-id ICE restart on
+   * this SAME peer - so it must not report failure the instant it fires;
+   * that races the restart and always wins. `null` while unarmed.
+   */
+  let connectionFailedTimer: number | null = null;
 
   connection.onicecandidate = (event) => {
     const candidate = event.candidate;
@@ -531,12 +795,17 @@ export function createBrowserMediaPeer(
       sdpMLineIndex: candidate.sdpMLineIndex,
     });
   };
+  connection.onicegatheringstatechange = () => {
+    if (connection.iceGatheringState !== "complete") return;
+    handlers.onIceGatheringComplete();
+  };
   connection.ontrack = (event) => {
     const received = event.streams.at(0);
     if (received === undefined) return;
     event.track.onended = () => {
       handlers.onFailure("track-ended");
     };
+    if (event.track.kind === "video") videoReceiver = event.receiver;
     stream = received;
     handlers.onStream(received);
   };
@@ -562,20 +831,50 @@ export function createBrowserMediaPeer(
     handlers.onDataChannel(adapted);
   };
   connection.onconnectionstatechange = () => {
-    if (connection.connectionState === "failed") {
-      handlers.onFailure("connection-failed");
+    const state = connection.connectionState;
+    if (state === "closed") {
+      // Terminal - nothing left to restart, unlike "failed" below.
+      if (connectionFailedTimer !== null) {
+        window.clearTimeout(connectionFailedTimer);
+        connectionFailedTimer = null;
+      }
+      handlers.onFailure("connection-closed");
+      return;
     }
+    if (state !== "failed") {
+      // Recovered (a same-id ICE restart landing, or a transient blip
+      // clearing on its own) - the grace timer's job is done.
+      if (connectionFailedTimer !== null) {
+        window.clearTimeout(connectionFailedTimer);
+        connectionFailedTimer = null;
+      }
+      return;
+    }
+    if (connectionFailedTimer !== null) return;
+    connectionFailedTimer = window.setTimeout(() => {
+      connectionFailedTimer = null;
+      handlers.onFailure("connection-failed");
+    }, CONNECTION_FAILED_GRACE_MS);
   };
 
   return {
     answerOffer: async (sdp) => {
       await connection.setRemoteDescription({ type: "offer", sdp });
+      preferH264IfCapable(connection, sdp);
       const answer = await connection.createAnswer();
       await connection.setLocalDescription(answer);
       return connection.localDescription?.sdp ?? answer.sdp ?? "";
     },
     addRemoteCandidate: (candidate) => connection.addIceCandidate(candidate),
-    getStats: () => connection.getStats(),
+    getStats: () => {
+      const report = connection.getStats();
+      // Piggybacks the existing 5s stats cadence rather than a second timer -
+      // see `applyAdaptiveJitterBufferTarget`.
+      void report.then((stats) =>
+        applyAdaptiveJitterBufferTarget(videoReceiver, stats),
+      );
+      return report;
+    },
     close: () => {
       for (const track of stream?.getTracks() ?? []) track.stop();
       stream = null;

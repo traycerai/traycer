@@ -137,16 +137,6 @@ export function BrowserPeekTileMobile(props: BrowserPeekTileMobileProps) {
       ref={tileRef}
       className="flex h-full w-full flex-col bg-canvas text-foreground"
       data-testid={`browser-peek-tile-mobile-${node.instanceId}`}
-      onBlurCapture={(event) => {
-        // The dialog sheet portals its content outside this subtree (unlike
-        // the desktop tile's inline `<dialog>`), so Radix's own focus trap
-        // moving focus into it would otherwise read as "focus left the
-        // tile" here and disarm - wiping the dialog `onFocusExit` was
-        // supposed to leave alone. Skip while it is open; a real
-        // focus-leaves-the-tile disarm resumes once it closes.
-        if (dialog !== null) return;
-        session.onFocusExit(event.relatedTarget);
-      }}
     >
       <MobileScreencastNavBar
         url={chrome.controller.url}
@@ -251,6 +241,10 @@ function useTouchScreencastOverlayHandlers(args: {
   return useMemo<ScreencastOverlayHandlers>(
     () => ({
       onFocus: overlayHandlers.onFocus,
+      // Touch has no hover: `pointerenter` fires as part of the tap itself,
+      // so pre-arming here would only put a speculative claim on the wire a
+      // millisecond before the tap's own arm supersedes it.
+      onPointerEnter: () => {},
       onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
         if (event.pointerType === "touch" && armed) {
           const point: TouchScreenPoint = {

@@ -523,7 +523,7 @@ describe("BrowserPeekTile input capture", () => {
     expect(releasePointerCapture).toHaveBeenCalledWith(1);
   });
 
-  it("releases pointer capture on blur-disarm", () => {
+  it("releases pointer capture on an explicit Release", () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -548,7 +548,7 @@ describe("BrowserPeekTile input capture", () => {
         detail: 0,
       }),
     );
-    fireEvent.blur(imeInput(), { relatedTarget: document.body });
+    fireEvent.click(screen.getByRole("button", { name: "Release control" }));
 
     expect(releasePointerCapture).toHaveBeenCalledWith(1);
     expect(framesOfKind(stream, "disarm")).toContainEqual({

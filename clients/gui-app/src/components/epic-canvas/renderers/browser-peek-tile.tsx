@@ -249,7 +249,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       ref={tileRef}
       className="flex h-full w-full flex-col bg-canvas text-foreground"
       data-testid={`browser-peek-tile-${node.instanceId}`}
-      onBlurCapture={(event) => session.onFocusExit(event.relatedTarget)}
     >
       <ScreencastPeekChromeBar
         controller={controller}

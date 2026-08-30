@@ -116,6 +116,39 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
     ).toBe(true);
   });
 
+  it("defaults sdpAnswer.candidates to [] for an older client that sends none", () => {
+    const parsed = browserScreencastClientFrameSchema.parse({
+      kind: "sdpAnswer",
+      hasBinaryPayload: false,
+      negotiationId: 1,
+      sdp: "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n",
+    });
+    expect(parsed).toMatchObject({ candidates: [] });
+  });
+
+  it("round-trips a sdpAnswer carrying A12's batched ICE candidates", () => {
+    const candidates = [
+      {
+        candidate: "candidate:1 1 UDP 2113937151 10.0.0.1 54321 typ host",
+        sdpMid: "0",
+        sdpMLineIndex: 0,
+      },
+      {
+        candidate: "candidate:2 1 UDP 2113937151 10.0.0.2 54322 typ host",
+        sdpMid: null,
+        sdpMLineIndex: null,
+      },
+    ];
+    const parsed = browserScreencastClientFrameSchema.parse({
+      kind: "sdpAnswer",
+      hasBinaryPayload: false,
+      negotiationId: 1,
+      sdp: "v=0\r\n",
+      candidates,
+    });
+    expect(parsed).toMatchObject({ candidates });
+  });
+
   it("rejects signaling frames missing negotiationId (no optional-field bypass)", () => {
     expect(
       parsesServer({

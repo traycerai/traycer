@@ -54,6 +54,8 @@ export interface ScreencastSessionRefs {
 
 export interface ScreencastOverlayHandlers {
   readonly onFocus: () => void;
+  /** Hover pre-arms, so the click that follows costs no arm round trip. */
+  readonly onPointerEnter: () => void;
   readonly onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   readonly onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   readonly onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => void;
@@ -79,6 +81,13 @@ export interface ScreencastImeHandlers {
  * render ever reads, which is why it does not live in the hook.
  */
 export interface ScreencastControllerListeners {
+  /**
+   * The viewer took CONTROL of this tab - a press, a nav, focus in the IME -
+   * as opposed to merely holding the host-side claim a hover pre-arm raised.
+   * Everything a render shows about being in control hangs off this, not off
+   * the arm epoch, which a pre-arm also owns.
+   */
+  readonly onControlEngaged: (armEpoch: number) => void;
   /** Local arm torn down: React must drop armed / dialog / composing state. */
   readonly onLocalArmCleared: () => void;
   readonly onComposingChange: (composing: boolean) => void;
@@ -125,8 +134,9 @@ export interface ScreencastController {
    * high-frequency input frames ever look at it; arm/disarm, nav, dialog,
    * viewport, ack and videoPlaneState stay on the mux unconditionally.
    *
-   * A transport is adopted at the next `noteArmed`, not here - see the
-   * reordering hazard documented there. `null` takes effect immediately.
+   * A transport is adopted only once the mux holds nothing this arm epoch -
+   * see the reordering hazard on `adoptPendingTransport`. `null` takes effect
+   * immediately.
    */
   readonly setInputTransport: (
     transport: ScreencastInputTransport | null,
@@ -135,8 +145,20 @@ export interface ScreencastController {
   readonly noteFrameArrived: (sequence: number) => void;
   /** Allocates the next arm epoch without sending; the caller emits the frame. */
   readonly startArmEpoch: () => number;
-  readonly arm: () => void;
   readonly noteArmed: (armEpoch: number) => void;
+  /**
+   * The host refused a pre-arm (another viewer is driving). Latches hover
+   * pre-arm off for the rest of this transport's life so a pointer crossing a
+   * contested tile cannot storm the mux; an explicit click still arms, which
+   * steals, exactly as it did before pre-arm existed.
+   */
+  readonly notePreArmDenied: () => void;
+  /**
+   * How far the host has consumed this epoch's input sequence. Once it covers
+   * the last frame this client put on the mux, a pending DataChannel transport
+   * is promoted immediately - the mux cannot reorder against it any more.
+   */
+  readonly noteInputAck: (armEpoch: number, lastSeq: number) => void;
   readonly disarm: () => void;
   readonly clearLocalArm: (notifyHost: boolean) => void;
   /**
@@ -152,7 +174,6 @@ export interface ScreencastController {
     accept: boolean,
     promptText: string | null,
   ) => void;
-  readonly onFocusExit: (relatedTarget: EventTarget | null) => void;
   readonly handleTileKeyDown: (event: KeyboardEvent) => void;
   readonly handleTileKeyUp: (event: KeyboardEvent) => void;
   readonly clearClaimedLocalCodes: () => void;
@@ -197,6 +218,28 @@ export function createScreencastController(options: {
   let captureMode: BrowserScreencastCaptureMode = "jpeg";
   let inputTransport: ScreencastInputTransport | null = null;
   let pendingInputTransport: ScreencastInputTransport | null = null;
+  /**
+   * The sequence of the last input frame this epoch put on the MUX, or `null`
+   * when the mux is known to be drained. Promotion to the DataChannels is
+   * gated on it: while a mux frame is unaccounted for, a channel frame could
+   * overtake it and be stale-rejected ahead of it.
+   */
+  let lastMuxInputSeq: number | null = null;
+  /** Whether the arm request in flight is a speculative (hover) one. */
+  let pendingArmIsPreArm = false;
+  /**
+   * Deliberate control, as opposed to the bare host-side claim a hover
+   * pre-arm holds. A pre-armed tile owns the epoch (so the click that follows
+   * costs no round trip) but drives nothing: no ring, no badge, no pointer
+   * moves into the remote page against whatever agent is working there.
+   */
+  let gestureArmed = false;
+  /**
+   * Deliberate: once refused, hovering stops re-probing a contested tile for
+   * the rest of this transport's life. A click still arms - and steals - so
+   * the cost of being wrong (the owner released meanwhile) is one click.
+   */
+  let preArmDenied = false;
   let lastFrameAt: number | null = null;
   let activeDialog: ScreencastDialog | null = null;
   let composing = false;
@@ -283,7 +326,22 @@ export function createScreencastController(options: {
     ) {
       return;
     }
+    lastMuxInputSeq = wire.seq;
     sendFrame(wire);
+  };
+
+  /**
+   * Adopt a pending transport as soon as the mux holds nothing this epoch -
+   * at the arm itself (the host resets its `lastSeq` there, so nothing can
+   * reorder against the channel), or later, when a host `inputAck` says the
+   * mux has drained. The two transports have no ordering between them and the
+   * mux runs seconds behind the channel, so a frame still in flight there
+   * would arrive after - and be stale-rejected against - the first channel
+   * frame that overtook it: a press left on the mux turns a drag into a hover.
+   */
+  const adoptPendingTransport = (): void => {
+    if (pendingInputTransport === null || lastMuxInputSeq !== null) return;
+    inputTransport = pendingInputTransport;
   };
 
   const releaseCapturedPointer = (): void => {
@@ -414,6 +472,8 @@ export function createScreencastController(options: {
     const armEpoch = activeArmEpoch ?? desiredArmEpoch;
     desiredArmEpoch = null;
     activeArmEpoch = null;
+    lastMuxInputSeq = null;
+    gestureArmed = false;
     activeDialog = null;
     composing = false;
     resetTransientInput();
@@ -424,16 +484,53 @@ export function createScreencastController(options: {
     armEpochCounter += 1;
     desiredArmEpoch = armEpochCounter;
     inputSequence = 0;
+    // Minting an epoch outside `sendArmRequest` (the reconnect-with-focus arm
+    // in `use-screencast-session`) is always a real claim.
+    pendingArmIsPreArm = false;
+    gestureArmed = true;
     return armEpochCounter;
   };
 
-  const arm = (): void => {
-    if (desiredArmEpoch !== null || activeArmEpoch !== null) return;
-    sendFrame({
-      kind: "arm",
-      hasBinaryPayload: false,
-      armEpoch: startArmEpoch(),
-    });
+  const sendArmRequest = (kind: "arm" | "preArm"): void => {
+    const armEpoch = startArmEpoch();
+    pendingArmIsPreArm = kind === "preArm";
+    gestureArmed = kind === "arm";
+    sendFrame({ kind, hasBinaryPayload: false, armEpoch });
+  };
+
+  /**
+   * Promote the claim this tile already holds into control. A pre-armed tile
+   * is already armed at the host, so there is no frame to send and nothing to
+   * wait for - only the render (and the move forwarding) to catch up.
+   */
+  const engageControl = (): void => {
+    if (gestureArmed) return;
+    gestureArmed = true;
+    if (activeArmEpoch !== null) listeners.onControlEngaged(activeArmEpoch);
+  };
+
+  const preArm = (): void => {
+    if (desiredArmEpoch !== null || activeArmEpoch !== null || preArmDenied) {
+      return;
+    }
+    sendArmRequest("preArm");
+  };
+
+  /**
+   * The arm a deliberate gesture needs - a press, or a nav from the toolbar:
+   * a real one. A speculative claim still in flight is REPLACED rather than
+   * waited on, because it may be refused, and the gesture is itself the
+   * authorization to take control from whoever holds it. The refusal for the
+   * superseded epoch is ignored on arrival (neither the desired nor the active
+   * epoch matches it any more).
+   */
+  const armForGesture = (): void => {
+    if (activeArmEpoch !== null) {
+      engageControl();
+      return;
+    }
+    if (desiredArmEpoch === null || pendingArmIsPreArm) sendArmRequest("arm");
+    else gestureArmed = true;
   };
 
   const clearLocalArm = (notifyHost: boolean): void => {
@@ -465,17 +562,13 @@ export function createScreencastController(options: {
   };
 
   const noteArmed = (armEpoch: number): void => {
-    // A promotion is adopted HERE, never mid-arm: the two transports have no
-    // ordering between them and the mux runs seconds behind the channel, so a
-    // frame already in flight on the mux would arrive after (and be
-    // stale-rejected against) the first channel frame that overtook it - a
-    // press left on the mux turns a drag into a hover. The host resets its
-    // `lastSeq` per arm, so nothing sent before this epoch can reorder against
-    // it. Cost: after a mid-arm promotion, input stays on the mux until the
-    // next arm. A host-side input ack carrying `lastSeq` would let the client
-    // promote as soon as the mux is drained instead.
-    if (pendingInputTransport !== null) inputTransport = pendingInputTransport;
+    // The host resets its `lastSeq` on every arm, so this epoch starts with an
+    // empty mux by definition.
+    lastMuxInputSeq = null;
+    preArmDenied = false;
+    adoptPendingTransport();
     activeArmEpoch = armEpoch;
+    if (gestureArmed) listeners.onControlEngaged(armEpoch);
     deliverArmBuffer();
     const pending = pendingNav;
     pendingNav = [];
@@ -488,7 +581,7 @@ export function createScreencastController(options: {
       return;
     }
     pendingNav = [...pendingNav, frame];
-    arm();
+    armForGesture();
   };
 
   const releaseForwardedPageKeys = (): void => {
@@ -552,9 +645,8 @@ export function createScreencastController(options: {
   const onPointerDown = (event: ReactPointerEvent<HTMLButtonElement>): void => {
     event.preventDefault();
     capturePointer(event);
-    const armed = activeArmEpoch !== null;
-    const arming = desiredArmEpoch !== null;
-    if (armed) {
+    if (activeArmEpoch !== null) {
+      engageControl();
       const frame = buildPointerFrame({
         event,
         type: "down",
@@ -563,8 +655,8 @@ export function createScreencastController(options: {
         deltaY: 0,
       });
       if (frame !== null) sendDiscretePointer(frame);
-    } else if (!arming) {
-      arm();
+    } else {
+      armForGesture();
       if (event.button !== 0) {
         suppressPointerId = event.pointerId;
       } else {
@@ -603,7 +695,9 @@ export function createScreencastController(options: {
       return;
     }
     if (suppressPointerId === event.pointerId) return;
-    if (activeArmEpoch === null) return;
+    // A hover-only claim forwards nothing: the pointer crossing a tile must
+    // not drive the remote cursor.
+    if (activeArmEpoch === null || !gestureArmed) return;
     const frame = buildPointerFrame({
       event,
       type: "move",
@@ -754,16 +848,25 @@ export function createScreencastController(options: {
     setInputTransport: (transport) => {
       pendingInputTransport = transport;
       // Demotion is immediate and safe (the fast frames were sent first, so
-      // they arrive first); promotion waits for `noteArmed`.
+      // they arrive first); promotion waits for a drained mux.
       if (transport === null) inputTransport = null;
+      else adoptPendingTransport();
     },
     noteFrameArrived: (sequence) => {
       lastFrameAt = Date.now();
       sendFrame({ kind: "ack", hasBinaryPayload: false, sequence });
     },
     startArmEpoch,
-    arm,
     noteArmed,
+    notePreArmDenied: () => {
+      preArmDenied = true;
+    },
+    noteInputAck: (armEpoch, lastSeq) => {
+      if (armEpoch !== activeArmEpoch || lastMuxInputSeq === null) return;
+      if (lastSeq < lastMuxInputSeq) return;
+      lastMuxInputSeq = null;
+      adoptPendingTransport();
+    },
     disarm: () => {
       clearLocalArm(true);
     },
@@ -793,15 +896,6 @@ export function createScreencastController(options: {
         promptText,
       });
       refs.imeInputRef.current?.focus();
-    },
-    onFocusExit: (relatedTarget) => {
-      if (
-        relatedTarget instanceof Node &&
-        refs.tileRef.current?.contains(relatedTarget) === true
-      ) {
-        return;
-      }
-      clearLocalArm(true);
     },
     handleTileKeyDown: (event) => {
       const tile = refs.tileRef.current;
@@ -858,6 +952,7 @@ export function createScreencastController(options: {
       onFocus: () => {
         refs.imeInputRef.current?.focus();
       },
+      onPointerEnter: preArm,
       onPointerDown,
       onPointerMove,
       onPointerUp,
@@ -868,7 +963,7 @@ export function createScreencastController(options: {
       },
     },
     imeHandlers: {
-      onFocus: arm,
+      onFocus: armForGesture,
       onKeyDown: onImeKeyDown,
       onKeyUp: onImeKeyUp,
       onPaste: (event) => {

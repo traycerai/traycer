@@ -60,6 +60,7 @@ function fakeVideoElement(): HTMLVideoElement & FakeVideoFrameCallback {
 
 const noopOverlayHandlers: ScreencastOverlayHandlers = {
   onFocus: () => {},
+  onPointerEnter: () => {},
   onPointerDown: () => {},
   onPointerMove: () => {},
   onPointerUp: () => {},
@@ -107,7 +108,6 @@ function buildFakeSession(input: {
     respondToDialog: () => {},
     notePresented: () => {},
     agentCursor: null,
-    onFocusExit: () => {},
     overlayHandlers: noopOverlayHandlers,
     imeHandlers: noopImeHandlers,
   };
