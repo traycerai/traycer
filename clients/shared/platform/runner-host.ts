@@ -1095,7 +1095,9 @@ export interface IDeviceFlowHost {
    * process. Resolves with a `DeviceFlowSession` once authorization succeeds,
    * or `null` when authorization itself fails (network/5xx) or the shell has no
    * device-flow backend - the caller surfaces a launch-style failure and may
-   * retry. The shell supplies its own `client_id` (`"desktop"`) and host label.
+   * retry. The shell supplies its own client kind as `client_id` - the kind it
+   * signs sessions in as (`"desktop"` for the desktop app, `"mobile"` for the
+   * phone shell) - and its host label.
    */
   start(): Promise<DeviceFlowSession | null>;
 }
@@ -1334,6 +1336,12 @@ export type NotificationShowOutcome =
 export type NotificationFeedSource = "host" | "cloud" | "app-local" | "global";
 
 export interface INotificationHost {
+  /**
+   * Native OS notification preferences for this desktop app. Phones expose
+   * their richer read/request/repair surface through `pushPermission` instead;
+   * browser/dev shells leave this null.
+   */
+  readonly systemSettings: INotificationSystemSettingsHost | null;
   show(
     title: string,
     body: string,
@@ -1347,6 +1355,11 @@ export interface INotificationHost {
   onForegroundDisplay(
     handler: (display: NotificationForegroundDisplay) => void,
   ): Disposable;
+}
+
+export interface INotificationSystemSettingsHost {
+  /** Opens the OS notification preferences owned by this application. */
+  open(): Promise<void>;
 }
 
 /**

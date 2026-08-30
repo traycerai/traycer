@@ -106,6 +106,28 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
     await shell.openExternal(url);
   });
 
+  // Opens the native notification-preferences page. The URL is selected in
+  // main rather than supplied by the renderer, so this intentionally bypasses
+  // the http-only external-link gate just like the microphone settings link.
+  bridge.handleInvoke(
+    RunnerHostInvoke.notificationOpenSystemSettings,
+    async () => {
+      const url =
+        process.platform === "darwin"
+          ? "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+          : process.platform === "win32"
+            ? "ms-settings:notifications"
+            : null;
+      if (url === null) {
+        log.warn(
+          "[support] notification system settings unsupported on this platform",
+        );
+        return;
+      }
+      await shell.openExternal(url);
+    },
+  );
+
   bridge.handleInvoke(
     RunnerHostInvoke.notificationShow,
     async (

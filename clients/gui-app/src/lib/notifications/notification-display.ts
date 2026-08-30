@@ -36,10 +36,16 @@ import {
   type ParsedNotificationActivationPayload,
 } from "@/lib/notifications/notification-activation-envelope";
 import type { NotificationPayload } from "@/lib/notifications/payload";
+import {
+  notificationChimeEventTypeForSeverities,
+  playNotificationChimeSound,
+  type NotificationChimeEventType,
+} from "@/lib/notifications/notification-chime";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
-  readonly playChime: () => void;
+  readonly playChime: (eventType: NotificationChimeEventType) => void;
   readonly onToastClick: (row: MergedNotificationRow) => void;
 }
 
@@ -75,7 +81,7 @@ interface NativeNotificationDisplayOptions {
 export function displayForwardedForegroundNotification(
   display: NotificationForegroundDisplay,
   target: {
-    readonly playChime: () => void;
+    readonly playChime: (eventType: NotificationChimeEventType) => void;
     readonly onToastClick: (payload: unknown) => void;
   },
 ): void {
@@ -117,7 +123,9 @@ export function displayForwardedForegroundNotification(
     description: actionable ? undefined : display.body,
     id: display.replaceKey ?? undefined,
   });
-  target.playChime();
+  target.playChime(
+    parsed?.kind === "v1" ? parsed.envelope.chimeEventType : "done",
+  );
 }
 
 /**
@@ -256,6 +264,7 @@ async function displayNotificationRowsAwaitNative(
       : buildNotificationActivationEnvelope({
           route: content.payload,
           feed: { source: content.row.source, id: content.row.sourceId },
+          chimeEventType: content.chimeEventType,
           originHostId: options.originHostId,
         });
   let nativeDisplay: Promise<NotificationShowOutcome>;
@@ -288,7 +297,7 @@ async function displayNotificationRowsAwaitNative(
   // pending, and a re-read would double-chime on focused-then-blurred and
   // stay silent on blurred-then-focused.
   if (outcome === "undeliverable" && !renderChimed) {
-    target.playChime();
+    target.playChime(content.chimeEventType);
   }
 }
 
@@ -337,7 +346,7 @@ function renderNotificationToast(
   // which is never the sole delivery: an unseen toast is harmless, while a
   // chime from a window nobody is looking at is not.
   if (!isDocumentFocused()) return false;
-  target.playChime();
+  target.playChime(content.chimeEventType);
   return true;
 }
 
@@ -483,28 +492,12 @@ export function displayAppLocalNotification(
   );
 }
 
-export function playNotificationChime(): void {
-  if (typeof window === "undefined") return;
-  if (typeof window.AudioContext === "undefined") return;
-  try {
-    const context = new window.AudioContext();
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.value = 880;
-    gain.gain.setValueAtTime(0.0001, context.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.18);
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-    oscillator.start();
-    oscillator.stop(context.currentTime + 0.2);
-    oscillator.onended = () => {
-      void context.close();
-    };
-  } catch {
-    // Autoplay/device restrictions can reject audio setup; the toast/feed still work.
-  }
+export function playNotificationChime(
+  eventType: NotificationChimeEventType,
+): void {
+  playNotificationChimeSound(
+    useSettingsStore.getState().notificationChimeSounds[eventType],
+  );
 }
 
 interface NotificationToastContent {
@@ -513,12 +506,16 @@ interface NotificationToastContent {
   readonly row: MergedNotificationRow;
   readonly payload: NotificationPayload | null;
   readonly replaceKey: string;
+  readonly chimeEventType: NotificationChimeEventType;
 }
 
 function buildNotificationToastContent(
   rows: ReadonlyArray<MergedNotificationRow>,
 ): NotificationToastContent {
   const first = rows[0];
+  const chimeEventType =
+    notificationChimeEventTypeForSeverities(rows.map((row) => row.severity)) ??
+    "done";
   if (rows.length === 1) {
     return {
       title: first.title,
@@ -526,6 +523,7 @@ function buildNotificationToastContent(
       row: first,
       payload: first.payload,
       replaceKey: notificationReplaceKey(first),
+      chimeEventType,
     };
   }
   return {
@@ -534,6 +532,7 @@ function buildNotificationToastContent(
     row: first,
     payload: first.payload,
     replaceKey: "notification-batch",
+    chimeEventType,
   };
 }
 
