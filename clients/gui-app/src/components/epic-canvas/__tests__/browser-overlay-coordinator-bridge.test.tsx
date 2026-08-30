@@ -235,6 +235,10 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve({ ok: true, rawKey: wrappedKey });
   }
 
+  forgetLogins(): Promise<void> {
+    return Promise.resolve();
+  }
+
   onPersistenceStateChanged(
     _handler: (state: BrowserPersistenceState) => void,
   ): { dispose: () => void } {
@@ -295,6 +299,14 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
   }
 
   setReservedChords(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  clearSite() {
+    return Promise.resolve({ status: "refused" as const, reason: "test" });
+  }
+
+  evictSite(): Promise<void> {
     return Promise.resolve();
   }
 

@@ -592,6 +592,8 @@ function buildFakeBridge(
         storageState: { cookies: [], origins: [] },
         reason: null,
       }),
+      clearSite: async () => ({ status: "refused" as const, reason: "test" }),
+      evictSite: async () => undefined,
       getCookieCryptoState: async () => ({
         mode: "real" as const,
         persistence: "persistent" as const,
@@ -613,6 +615,7 @@ function buildFakeBridge(
         ok: false as const,
         reason: "no keystore in this test bridge",
       }),
+      forgetLogins: async () => undefined,
       onPersistenceStateChanged: (_handler) => ({ dispose: () => undefined }),
       onPrimaryProfileDelta: (_handler) => ({ dispose: () => undefined }),
       onFindChange: (_handler) => ({ dispose: () => undefined }),

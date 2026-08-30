@@ -122,6 +122,7 @@ const CHROME_CONTROLLER: TileController = {
   onResetZoom: () => undefined,
   onViewportPresetChange: () => undefined,
   onOpenDevTools: () => undefined,
+  onClearSite: () => undefined,
 };
 
 interface NativeStatusChange {

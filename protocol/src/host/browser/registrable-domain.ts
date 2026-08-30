@@ -1,35 +1,41 @@
 /**
- * Registrable-domain ("eTLD+1") derivation for cookie scopes, without a public
+ * Registrable-domain ("eTLD+1") derivation for cookie scopes, over the public
  * suffix list.
  *
- * The one job here is **coalescing**: a burst of cookie changes across
- * `a.example.com`, `www.example.com` and `example.com` must collapse into one
- * `{ kind: "domain", domain }` capture scope, and both ends of the wire have to
- * agree on which one. That is why this lives in the protocol package rather
- * than in either client: the desktop derives the scope, the host merges against
- * it, and a disagreement would silently split one jar slice in two.
+ * Two callers depend on this split, and they want different things from it:
  *
- * It is deliberately a heuristic. A domain-scoped capture always carries the
- * complete picture of its scope (every cookie the scope subtree holds), so
- * getting the split wrong is a coalescing loss, never a correctness loss:
+ * - **Coalescing** (ticket 06): a burst of cookie changes across
+ *   `a.example.com`, `www.example.com` and `example.com` must collapse into one
+ *   `{ kind: "domain", domain }` capture scope, and both ends of the wire have
+ *   to agree on which one. That is why this lives in the protocol package
+ *   rather than in either client: the desktop derives the scope, the host
+ *   merges against it, and a disagreement would silently split one jar slice
+ *   in two.
+ * - **Blast radius** (ticket 07's "clear cookies for this site"): the derived
+ *   domain is the set of cookies the user is about to destroy, here and in
+ *   every other live context for them. Over-coalescing there is not a wasted
+ *   window, it is signing the user out of somebody else's site:
+ *   `user.github.io` collapsed to `github.io` would clear every GitHub Pages
+ *   login on the machine. That is what buys the public suffix list.
  *
- * - **Over-splitting** (`user.github.io` treated as `github.io`, or
- *   `a.example.com` never collapsed with `example.com`) costs an extra capture
- *   window, nothing more.
- * - **Under-splitting** onto a public suffix (`co.uk`) would widen the scope to
- *   a whole registry - still safe, because the cookies sent are exactly the
- *   cookies that scope holds, but wasteful. The two-label-suffix rule below is
- *   what keeps that from happening for the common ccTLD shapes.
+ * So `tldts` decides, with `allowPrivateDomains` on: the private section of the
+ * list is exactly the "these subdomains are separate sites" registry
+ * (`github.io`, `s3.amazonaws.com`, ...) that the blast radius has to respect.
  *
- * Ticket 07 ("clear cookies for this site") is the first caller whose blast
- * radius depends on the split, and it is the ticket that decides whether a real
- * PSL is vendored. Until then: no PSL.
+ * The heuristic below survives as the **fallback**, for the hosts the list has
+ * no answer for: IP literals, `localhost`, and any other single-label or
+ * unlisted host. Those answer with themselves - a cookie on one is scoped to
+ * exactly it - which is the narrowest safe answer in both roles.
  */
 
+import { getDomain } from "tldts";
+
 /**
- * Generic second-level labels that act as a public suffix under a two-letter
- * ccTLD (`co.uk`, `com.au`, `ne.jp`, ...). Under those, the registrable domain
- * is the last *three* labels.
+ * Fallback only. Generic second-level labels that act as a public suffix under
+ * a two-letter ccTLD (`co.uk`, `com.au`, `ne.jp`, ...); under those, the
+ * registrable domain is the last *three* labels. The public suffix list
+ * answers for every host it knows, so this is reached only for hosts it does
+ * not - where a wrong split is still better than none.
  */
 const CCTLD_SECOND_LEVEL_SUFFIXES: ReadonlySet<string> = new Set([
   "ac",
@@ -59,9 +65,9 @@ const IPV4_PATTERN = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u;
 
 /**
  * The registrable domain of a host, or `null` when there is nothing sensible to
- * derive (empty input). IP literals, `localhost`, and any other single-label
- * host answer with themselves: they have no registrable parent, and a cookie on
- * one is scoped to exactly it.
+ * derive (empty input). IP literals, `localhost`, and any other host the public
+ * suffix list cannot place answer with themselves: they have no registrable
+ * parent, and a cookie on one is scoped to exactly it.
  *
  * A leading dot - the RFC 6265 wire form of a domain cookie (`.example.com`) -
  * is stripped, as is one trailing root dot.
@@ -72,6 +78,23 @@ export function registrableDomain(host: string): string | null {
   if (isIpLiteral(normalized)) return normalized;
   const labels = normalized.split(".");
   if (labels.some((label) => label.length === 0)) return null;
+  // `allowPrivateDomains` keeps a hosting suffix (`github.io`, `vercel.app`,
+  // `s3.amazonaws.com`) a suffix, so one tenant's cookies are never in another
+  // tenant's clear-site scope.
+  const listed = getDomain(normalized, { allowPrivateDomains: true });
+  if (listed !== null && listed.length > 0) return listed;
+  return heuristicRegistrableDomain(labels, normalized);
+}
+
+/**
+ * The pre-PSL split, for hosts the list has no entry for. Kept deliberately:
+ * a single-label host, an IP, or an unlisted TLD still has to answer with
+ * *something*, and "the host itself" is the narrowest answer available.
+ */
+function heuristicRegistrableDomain(
+  labels: readonly string[],
+  normalized: string,
+): string {
   if (labels.length <= 2) return normalized;
   const tld = labels[labels.length - 1];
   const secondLevel = labels[labels.length - 2];

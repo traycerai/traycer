@@ -1,4 +1,9 @@
-import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
+import type {
+  ClearStorageDataOptions,
+  Cookie,
+  CookiesGetFilter,
+  CookiesSetDetails,
+} from "electron";
 import { z } from "zod";
 import {
   browserStorageCookieSchema as protocolStorageCookieSchema,
@@ -14,6 +19,7 @@ import type {
   BrowserCookieCryptoState,
   BrowserPrimaryProfileCaptureResult,
 } from "@traycer-clients/shared/platform/browser-view";
+import { cookieDomainInScope } from "@traycer-clients/shared/platform/registrable-domain";
 
 type BrowserStorageCookieSameSite = ProtocolStorageCookie["sameSite"];
 const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
@@ -68,6 +74,37 @@ export interface BrowserCookieStore {
 
 export interface BrowserStorageSession {
   readonly cookies: BrowserCookieStore;
+}
+
+/**
+ * The slice of Electron's `Session` a site clear needs. It is its own port
+ * rather than an extension of the seed/capture one: only this path removes
+ * anything. `clearStorageData` is called with an `origin` and nothing else -
+ * the whole-partition form of the same call is how "forget all logins" works
+ * (ticket 08), and one site's clear must never widen into it.
+ */
+export interface BrowserSiteClearSession {
+  readonly cookies: {
+    get(filter: CookiesGetFilter): Promise<Cookie[]>;
+    remove(url: string, name: string): Promise<void>;
+    flushStore(): Promise<void>;
+  };
+  clearStorageData(options: ClearStorageDataOptions): Promise<void>;
+}
+
+export interface BrowserSiteClearDependencies {
+  readonly getSession: (partition: string) => BrowserSiteClearSession;
+  /**
+   * Origins whose localStorage this process has seen (the capture
+   * coordinator's memory). Cookies are enumerable from the jar; localStorage
+   * is not, so these are the only origins a clear can name.
+   */
+  readonly rememberedOrigins: () => readonly string[];
+}
+
+export interface BrowserSiteClearOutcome {
+  readonly cookiesRemoved: number;
+  readonly originsCleared: number;
 }
 
 export interface BrowserStorageSeedWebContents {
@@ -144,6 +181,8 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
   private readonly origins = new Map<string, SequencedPrimaryProfileOrigin>();
   private readonly observations = new Set<Promise<void>>();
   private sequence = 0;
+  /** Bumped by `reset()`; observations from an earlier era are discarded. */
+  private era = 0;
 
   constructor(
     private readonly captureProfile: (
@@ -159,10 +198,11 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
     const origin = parseCurrentOrigin(url);
     if (origin === null) return;
     const sequence = ++this.sequence;
+    const era = this.era;
     let observation: Promise<void>;
     observation = this.captureOrigin(origin, webContents)
       .then((snapshot) => {
-        if (snapshot === null) return;
+        if (snapshot === null || era !== this.era) return;
         const current = this.origins.get(origin);
         if (current !== undefined && current.sequence > sequence) return;
         this.origins.delete(origin);
@@ -178,6 +218,17 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
         this.observations.delete(observation);
       });
     this.observations.add(observation);
+  }
+
+  /**
+   * Forgets every remembered origin ("forget all browser logins", ticket 08).
+   * Observations already in flight are discarded with them: each was read from
+   * the jar being cleared, and one landing afterwards would re-seed a recreated
+   * tile with the localStorage the user just forgot.
+   */
+  reset(): void {
+    this.origins.clear();
+    this.era += 1;
   }
 
   /**
@@ -283,6 +334,63 @@ export async function captureBrowserViewStorageState(
     localStorageAvailable: localStorage.available,
     localStorageReason: localStorage.reason,
   };
+}
+
+/**
+ * "Clear cookies for this site" (spec §6.5, decision #13): every cookie the
+ * registrable domain's subtree holds, plus the localStorage of every remembered
+ * origin under it, gone from one partition.
+ *
+ * The scope is the registrable domain, matched with the same RFC 6265 predicate
+ * the delta and the host's merge use - so what this removes is exactly the
+ * slice the delta afterwards reports as empty, and exactly what the host is
+ * allowed to tombstone. A cookie on `example.org` is untouched by a clear of
+ * `example.com`, and so is `notexample.com`.
+ *
+ * The caller owns the delta: this runs inside
+ * `suppressBrowserPrimaryProfileDelta` so the removals cannot echo back as a
+ * burst of windows, and the one delta that follows is issued explicitly.
+ */
+export async function clearBrowserSite(
+  input: { readonly partition: string; readonly domain: string },
+  dependencies: BrowserSiteClearDependencies,
+): Promise<BrowserSiteClearOutcome> {
+  const domain = input.domain;
+  const browserSession = dependencies.getSession(input.partition);
+  const cookies = (await browserSession.cookies.get({ domain })).filter(
+    (cookie) => cookieDomainInScope(cookie.domain ?? "", domain),
+  );
+  let cookiesRemoved = 0;
+  for (const cookie of cookies) {
+    // Through the same normalisation the capture path uses, so the URL names
+    // the cookie's own scope (host-only vs domain, path, secure) rather than a
+    // guess - Electron removes by {url, name}.
+    const scoped = toStorageCookie(cookie);
+    await browserSession.cookies.remove(cookieUrl(scoped), scoped.name);
+    cookiesRemoved += 1;
+  }
+  let originsCleared = 0;
+  for (const origin of dependencies.rememberedOrigins()) {
+    const host = originHost(origin);
+    if (host === null || !cookieDomainInScope(host, domain)) continue;
+    await browserSession.clearStorageData({
+      origin,
+      storages: ["localstorage"],
+    });
+    originsCleared += 1;
+  }
+  // Cookie removals are held in memory until the store is flushed; without
+  // this, a quit right after the clear could resurrect the site's logins.
+  await browserSession.cookies.flushStore();
+  return { cookiesRemoved, originsCleared };
+}
+
+function originHost(origin: string): string | null {
+  try {
+    return new URL(origin).hostname;
+  } catch {
+    return null;
+  }
 }
 
 function parseStorageState(value: ProtocolStorageState): DesktopStorageState {

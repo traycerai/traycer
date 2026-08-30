@@ -339,6 +339,12 @@ class FakeBridge {
   readonly onPrimaryProfileDelta = vi.fn<
     BrowserViewBridge["onPrimaryProfileDelta"]
   >(() => ({ dispose: () => {} }));
+  readonly clearSite = vi.fn<BrowserViewBridge["clearSite"]>(() =>
+    Promise.resolve({ status: "refused" as const, reason: "test" }),
+  );
+  readonly evictSite = vi.fn<BrowserViewBridge["evictSite"]>(() =>
+    Promise.resolve(),
+  );
   readonly capturePrimaryProfile = vi.fn<
     BrowserViewBridge["capturePrimaryProfile"]
   >(() =>

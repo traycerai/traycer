@@ -40,14 +40,26 @@ describe("registrableDomain", () => {
     expect(registrableDomain("..a.com")).toBeNull();
   });
 
-  // Pinning the heuristic's known limit (see registrable-domain.ts's module
-  // comment): with no public suffix list, a hosting suffix that looks like an
-  // ordinary two-label domain collapses one level further than it should.
-  // That is deliberate over-coalescing - a wasted capture window at worst,
-  // never a correctness loss - so this test exists to notice if the heuristic
-  // is ever changed to "fix" it without updating that comment too.
-  it("over-coalesces a hosting suffix like github.io (documented heuristic limit)", () => {
-    expect(registrableDomain("user.github.io")).toBe("github.io");
+  it("keeps a private-suffix tenant to itself - the clear-site blast radius", () => {
+    // The public suffix list's private section is what makes these separate
+    // sites: collapsing to `github.io` would put every GitHub Pages login in
+    // one clear-site scope.
+    expect(registrableDomain("app.github.io")).toBe("app.github.io");
+    expect(registrableDomain("user.github.io")).toBe("user.github.io");
+    expect(registrableDomain("page.user.github.io")).toBe("user.github.io");
+  });
+
+  it("keeps a registry's own second level whole", () => {
+    expect(registrableDomain("foo.co.uk")).toBe("foo.co.uk");
+    expect(registrableDomain("a.b.example.com")).toBe("example.com");
+  });
+
+  // The list has no entry for an invented TLD, so the fallback heuristic is
+  // what answers - two labels, as it always did.
+  it("falls back to the heuristic for a host the list cannot place", () => {
+    expect(registrableDomain("a.b.example.invalidtld")).toBe(
+      "example.invalidtld",
+    );
   });
 });
 

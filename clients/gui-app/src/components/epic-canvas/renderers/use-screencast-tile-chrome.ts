@@ -123,6 +123,9 @@ export function useScreencastTileChrome(
     onResetZoom: ignoreChromeAction,
     onViewportPresetChange: ignoreViewportPreset,
     onOpenDevTools: ignoreChromeAction,
+    // A screencast tile watches a headless context on the host; there is no
+    // local jar here to clear, and the host's own eviction is what reaches it.
+    onClearSite: null,
   };
 
   return {

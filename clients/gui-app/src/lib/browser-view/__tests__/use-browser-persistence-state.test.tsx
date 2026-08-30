@@ -186,6 +186,10 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve({ ok: true, rawKey: wrappedKey });
   }
 
+  forgetLogins(): Promise<void> {
+    return Promise.resolve();
+  }
+
   onPersistenceStateChanged(
     handler: (state: BrowserPersistenceState) => void,
   ): { dispose: () => void } {
@@ -204,6 +208,14 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
   }
 
   overlayPaintAck(_overlayId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  clearSite() {
+    return Promise.resolve({ status: "refused" as const, reason: "test" });
+  }
+
+  evictSite(): Promise<void> {
     return Promise.resolve();
   }
 

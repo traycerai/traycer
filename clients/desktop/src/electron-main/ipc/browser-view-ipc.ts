@@ -31,13 +31,18 @@ import {
   clearBrowserViewPendingCertificateError,
   ensureBrowserViewSession,
   ensureBrowserViewSessionForPartition,
+  currentPrimaryBrowserViewPartition,
+  emitBrowserPrimaryProfileDeltaNow,
   onBrowserPrimaryProfileDelta,
   onBrowserViewCertificateError,
   onBrowserViewDownloadChange,
   partitionForProfile,
   readBrowserViewPendingCertificateError,
   registerBrowserViewWebContents,
+  existingPersistentBrowserViewSession,
   releaseBrowserViewSession,
+  suppressAllBrowserPrimaryProfileDeltas,
+  suppressBrowserPrimaryProfileDelta,
   type BrowserSessionProfileRequest,
 } from "../browser-view/browser-session";
 import { describeLogError, log } from "../app/logger";
@@ -47,14 +52,19 @@ import {
   getBrowserCookieCryptoState,
   getBrowserPersistenceState,
 } from "../browser-view/storage/browser-cookie-crypto";
+import type { BrowserSiteClearDependencies } from "../browser-view/storage/browser-storage-state";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserOriginLocalStorage,
   captureBrowserPrimaryProfile,
   captureBrowserViewStorageState,
+  clearBrowserSite,
   seedBrowserViewCookies,
 } from "../browser-view/storage/browser-storage-state";
-import { migrateBrowserPersistenceToPersistentPartition } from "../browser-view/storage/browser-persistence-migration";
+import {
+  forgetBrowserPersistentLogins,
+  migrateBrowserPersistenceToPersistentPartition,
+} from "../browser-view/storage/browser-persistence-migration";
 import {
   unwrapStoreKey,
   wrapStoreKey,
@@ -65,6 +75,7 @@ import type {
   BrowserPersistenceState,
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
+  BrowserViewClearSiteResult,
 } from "@traycer-clients/shared/platform/browser-view";
 
 /**
@@ -87,6 +98,16 @@ export function registerBrowserViewIpc(
       }),
     captureBrowserOriginLocalStorage,
   );
+  // The remembered origins are the coordinator's: localStorage is not
+  // enumerable from the session, so the origins this process has actually
+  // visited are the only ones a site clear can name.
+  const clearSiteDependencies: BrowserSiteClearDependencies = {
+    getSession: (partition) => ensureBrowserViewSessionForPartition(partition),
+    rememberedOrigins: () =>
+      primaryProfileSnapshots
+        .rememberedOrigins()
+        .map((origin) => origin.origin),
+  };
   const manager = new BrowserViewManager({
     createView: createElectronBrowserView,
     getWindow: (windowId) =>
@@ -334,6 +355,74 @@ export function registerBrowserViewIpc(
     primaryProfileSnapshots.capture(),
   );
 
+  // "Clear cookies for this site" (spec §6.5). The manager derives the site
+  // from the tile's own current URL; the jar is the one `primary` guests share
+  // right now, which is the only jar a tile menu may reach.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewClearSite,
+    async (event, payload) => {
+      const windowId = readSenderWindowId(bridge, event);
+      const target = manager.readClearSiteTarget(
+        windowId,
+        browserViewIpcPayload.tileKey.parse(payload),
+      );
+      if (target === null) {
+        return {
+          status: "refused",
+          reason:
+            "This tile has no site to clear - it is a private session or is not on a web page.",
+        } satisfies BrowserViewClearSiteResult;
+      }
+      // One delta, issued explicitly inside the suppression window: the
+      // removals themselves are muted so the burst cannot echo, and what the
+      // host hears is a single complete picture of an emptied slice.
+      const outcome = await suppressBrowserPrimaryProfileDelta(
+        target.domain,
+        async () => {
+          const cleared = await clearBrowserSite(
+            {
+              partition: currentPrimaryBrowserViewPartition(),
+              domain: target.domain,
+            },
+            clearSiteDependencies,
+          );
+          await emitBrowserPrimaryProfileDeltaNow(target.domain);
+          return cleared;
+        },
+      );
+      log.info("[browser-view] cleared cookies for one site", {
+        cookiesRemoved: outcome.cookiesRemoved,
+        originsCleared: outcome.originsCleared,
+      });
+      return {
+        status: "cleared",
+        domain: target.domain,
+        ...outcome,
+      } satisfies BrowserViewClearSiteResult;
+    },
+  );
+
+  // The host says this site was cleared somewhere else for this user. Same
+  // removal, no delta: the store recorded the tombstones before it sent the
+  // frame, so an echo would only re-assert what it already decided - and with
+  // the observer suppressed there is nothing to echo with.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewEvictSite,
+    async (_event, payload) => {
+      const domain = browserViewIpcPayload.evictDomain.parse(payload).domain;
+      const outcome = await suppressBrowserPrimaryProfileDelta(domain, () =>
+        clearBrowserSite(
+          { partition: currentPrimaryBrowserViewPartition(), domain },
+          clearSiteDependencies,
+        ),
+      );
+      log.info("[browser-view] evicted one site on the host's request", {
+        cookiesRemoved: outcome.cookiesRemoved,
+        originsCleared: outcome.originsCleared,
+      });
+    },
+  );
+
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewStartAnnotation,
     (event, payload) => {
@@ -457,6 +546,24 @@ export function registerBrowserViewIpc(
       }
     },
   );
+
+  // The desktop half of "forget all browser logins" (spec §6.5). Reached only
+  // through the host's `primaryProfileForgotten`, which the host sends after it
+  // has already shredded this user's key and slice - so the jar is never
+  // cleared while the host still holds the logins in it. Everything runs with
+  // the cookie-delta observer muted for every domain: `clearStorageData` fires
+  // a removal for each cookie, and those deltas would re-create the entry the
+  // host just deleted.
+  bridge.handleInvoke(RunnerHostInvoke.browserViewForgetLogins, async () => {
+    await forgetBrowserPersistentLogins({
+      suppressDeltas: suppressAllBrowserPrimaryProfileDeltas,
+      readPersistentSession: existingPersistentBrowserViewSession,
+      resetLocalStorageSnapshots: () => {
+        primaryProfileSnapshots.reset();
+      },
+      recreateTabs: () => manager.migrateNativeTabsForPersistence(),
+    });
+  });
 
   // Chromium caches the macOS keychain lookup per process, so a denial can
   // only be re-asked from a fresh one.

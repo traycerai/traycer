@@ -158,6 +158,12 @@ const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
 /** Base64 key material crossing the store-key handshake (ticket 05). */
 const storeKeyMaterialSchema = z.base64();
 
+/**
+ * The registrable domain an evict names (ticket 07). Non-empty only: the scope
+ * is what bounds the removal, and an empty one would name the whole jar.
+ */
+const evictDomainSchema = z.object({ domain: z.string().min(1) });
+
 export const browserViewIpcPayload = {
   annotationAttachResult: annotationAttachResultSchema,
   annotationStart: annotationStartSchema,
@@ -170,6 +176,7 @@ export const browserViewIpcPayload = {
   electronTabCdpDispatch: electronTabCdpDispatchSchema,
   electronTabControl: electronTabControlSchema,
   ensureTab: ensureTabSchema,
+  evictDomain: evictDomainSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
   nativeTabCapability: nativeTabCapabilitySchema,

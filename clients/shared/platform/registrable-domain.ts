@@ -7,8 +7,9 @@
  * about which jar slice a capture covers. Clients import it from here so the
  * protocol dependency stays a single, obvious hop.
  *
- * See the protocol module for why this is a PSL-free heuristic and what an
- * imprecise split does (and does not) cost.
+ * See the protocol module for how the split is decided (the public suffix list
+ * via `tldts`, with the pre-PSL heuristic as the fallback for hosts the list
+ * cannot place) and why the private section of the list is honoured.
  */
 export {
   cookieDomainInScope,

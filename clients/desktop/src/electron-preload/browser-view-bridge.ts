@@ -12,6 +12,7 @@ import type {
   BrowserStoreKeyWrapResult,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
+  BrowserViewClearSiteResult,
   BrowserViewDebugSnapshot,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
@@ -174,6 +175,10 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewStoreKeyUnwrap,
           wrappedKey,
         ) as Promise<BrowserStoreKeyUnwrapResult>,
+      forgetLogins: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewForgetLogins,
+        ) as Promise<void>,
       onPersistenceStateChanged: (handler) =>
         subscribe<BrowserPersistenceState>(
           RunnerHostEvent.browserViewPersistenceStateChanged,
@@ -188,6 +193,17 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewPrimaryProfileCapture,
         ) as Promise<BrowserPrimaryProfileCaptureResult>,
+      // The tile key, not a domain: main derives the site from that tile's own
+      // URL, so no renderer can name a site it is not looking at.
+      clearSite: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewClearSite,
+          input,
+        ) as Promise<BrowserViewClearSiteResult>,
+      evictSite: (domain) =>
+        ipcRenderer.invoke(RunnerHostInvoke.browserViewEvictSite, {
+          domain,
+        }) as Promise<void>,
       onFindChange: (handler) =>
         subscribe<BrowserViewFindChange>(
           RunnerHostEvent.browserViewFindChange,

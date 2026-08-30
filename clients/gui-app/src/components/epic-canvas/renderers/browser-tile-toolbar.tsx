@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bug,
+  Cookie,
   EllipsisVertical,
   ExternalLink,
   Minus,
@@ -29,6 +30,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { cn } from "@/lib/utils";
@@ -62,11 +64,13 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { forgetAllBrowserLogins } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type {
   BrowserCookieCryptoState,
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
+import { registrableDomainForUrl } from "@traycer-clients/shared/platform/registrable-domain";
 
 export interface BrowserPictureInPictureControl {
   readonly disabled: boolean;
@@ -265,6 +269,11 @@ function BrowserTileToolbarTrailing(props: {
 }) {
   const controller = props.controller;
   const capabilities = controller.capabilities;
+  // The confirm dialog lives here, not inside the menu: selecting the item
+  // closes the dropdown, which would unmount a dialog rendered under it before
+  // it could ever open.
+  const [clearSiteConfirmOpen, setClearSiteConfirmOpen] = useState(false);
+  const clearSite = browserClearSiteAction(controller);
   return (
     <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
       <BrowserTileShield controller={controller} />
@@ -278,10 +287,51 @@ function BrowserTileToolbarTrailing(props: {
       capabilities.viewportPreset ||
       capabilities.devtools ||
       capabilities.siteInfo ? (
-        <BrowserMoreMenu controller={controller} />
+        <BrowserMoreMenu
+          controller={controller}
+          clearSite={clearSite}
+          onRequestClearSite={() => setClearSiteConfirmOpen(true)}
+        />
       ) : null}
+      {clearSite === null || clearSite.site === null ? null : (
+        <ConfirmDestructiveDialog
+          open={clearSiteConfirmOpen}
+          onOpenChange={setClearSiteConfirmOpen}
+          title={`Clear cookies for ${clearSite.site}?`}
+          description={`You will be signed out of ${clearSite.site} in Traycer, everywhere this account is signed in. Other sites are untouched.`}
+          cascadeSummary={null}
+          actionLabel="Clear cookies"
+          isPending={false}
+          onConfirm={() => {
+            setClearSiteConfirmOpen(false);
+            clearSite.clear();
+          }}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * The clear-site action for one tile. `null` hides the item outright, for the
+ * two tiles that have no jar of their own to clear: a private session, whose
+ * partition dies with the session and is shared with nothing (spec §6.1), and
+ * a screencast tile, which watches a context on the host.
+ *
+ * A `null` `site` keeps the item visible but disabled: the tile is on
+ * `about:blank` or a devtools URL, so there is a jar but no site to name. That
+ * is a state the user can leave by navigating, which is why it reads as
+ * disabled rather than as an action that quietly disappeared.
+ */
+function browserClearSiteAction(
+  controller: TileController,
+): { readonly site: string | null; readonly clear: () => void } | null {
+  const clear = controller.onClearSite;
+  if (clear === null || controller.profile === "isolated") return null;
+  const site = isWebOriginUrl(controller.url)
+    ? registrableDomainForUrl(controller.url)
+    : null;
+  return { site, clear };
 }
 
 const SHIELD_ICONS: Record<
@@ -357,6 +407,7 @@ function BrowserPersistenceShield(props: {
   readonly persistence: BrowserPersistenceController;
 }) {
   const [open, setOpen] = useState(false);
+  const [confirmingForget, setConfirmingForget] = useState(false);
   const state = props.persistence.state;
   // Nothing is claimed before the desktop has answered: an optimistic "saved
   // securely" here would be a lie about where the user's cookies are.
@@ -364,42 +415,77 @@ function BrowserPersistenceShield(props: {
   const copy = browserPersistenceShieldCopy(state);
   const Icon = SHIELD_ICONS[copy.tone];
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <TooltipWrapper
-        label={copy.headline}
-        side="top"
-        sideOffset={6}
-        align="center"
-      >
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Saved logins: ${copy.headline}`}
-            className={cn(
-              "shrink-0 aria-expanded:bg-accent aria-expanded:text-accent-foreground",
-              SHIELD_TONE_CLASS[copy.tone],
-            )}
-          >
-            <Icon aria-hidden />
-          </Button>
-        </PopoverTrigger>
-      </TooltipWrapper>
-      <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
-        <PopoverHeader>
-          <PopoverTitle>{copy.headline}</PopoverTitle>
-          <PopoverDescription className="text-ui-xs">
-            {copy.detail}
-          </PopoverDescription>
-        </PopoverHeader>
-        <BrowserPersistenceShieldAffordance
-          action={copy.action}
-          persistence={props.persistence}
-          onActed={() => setOpen(false)}
-        />
-      </PopoverContent>
-    </Popover>
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <TooltipWrapper
+          label={copy.headline}
+          side="top"
+          sideOffset={6}
+          align="center"
+        >
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Saved logins: ${copy.headline}`}
+              className={cn(
+                "shrink-0 aria-expanded:bg-accent aria-expanded:text-accent-foreground",
+                SHIELD_TONE_CLASS[copy.tone],
+              )}
+            >
+              <Icon aria-hidden />
+            </Button>
+          </PopoverTrigger>
+        </TooltipWrapper>
+        <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
+          <PopoverHeader>
+            <PopoverTitle>{copy.headline}</PopoverTitle>
+            <PopoverDescription className="text-ui-xs">
+              {copy.detail}
+            </PopoverDescription>
+          </PopoverHeader>
+          <BrowserPersistenceShieldAffordance
+            action={copy.action}
+            persistence={props.persistence}
+            onActed={() => setOpen(false)}
+          />
+          {state.cryptoState.reason === "os-backed" ? (
+            // Only where there is something to forget: on every other state this
+            // machine holds no durable jar, and the button would promise a shred
+            // of nothing.
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="self-start px-0 text-ui-xs font-medium text-destructive hover:bg-transparent hover:text-destructive"
+              onClick={() => {
+                // The popover closes first: the dialog is rendered as its
+                // sibling, so a popover that stayed open would only be something
+                // for the dialog's focus trap to fight with.
+                setOpen(false);
+                setConfirmingForget(true);
+              }}
+            >
+              Forget all browser logins…
+            </Button>
+          ) : null}
+        </PopoverContent>
+      </Popover>
+      <ConfirmDestructiveDialog
+        open={confirmingForget}
+        onOpenChange={setConfirmingForget}
+        title="Forget all browser logins?"
+        description="Traycer deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out, and agent sessions using them are suspended. This cannot be undone."
+        cascadeSummary={null}
+        actionLabel="Forget logins"
+        isPending={false}
+        onConfirm={() => {
+          forgetAllBrowserLogins();
+          setConfirmingForget(false);
+        }}
+      />
+    </>
   );
 }
 
@@ -438,9 +524,14 @@ function BrowserPersistenceShieldAffordance(props: {
   );
 }
 
-function BrowserMoreMenu(props: { readonly controller: TileController }) {
+function BrowserMoreMenu(props: {
+  readonly controller: TileController;
+  readonly clearSite: { readonly site: string | null } | null;
+  readonly onRequestClearSite: () => void;
+}) {
   const controller = props.controller;
   const capabilities = controller.capabilities;
+  const clearSite = props.clearSite;
   return (
     <DropdownMenu>
       <TooltipWrapper
@@ -484,6 +575,16 @@ function BrowserMoreMenu(props: { readonly controller: TileController }) {
             }
           />
         ) : null}
+        {clearSite === null ? null : (
+          <DropdownMenuItem
+            aria-label={browserClearSiteLabel(clearSite.site)}
+            disabled={controller.disabled || clearSite.site === null}
+            onSelect={props.onRequestClearSite}
+          >
+            <Cookie aria-hidden />
+            {browserClearSiteLabel(clearSite.site)}
+          </DropdownMenuItem>
+        )}
         {capabilities.devtools ? (
           <>
             <DropdownMenuLabel className="mt-1 text-overline uppercase tracking-wide">
@@ -502,6 +603,12 @@ function BrowserMoreMenu(props: { readonly controller: TileController }) {
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function browserClearSiteLabel(site: string | null): string {
+  return site === null
+    ? "Clear cookies for this site"
+    : `Clear cookies for ${site}`;
 }
 
 function BrowserZoomControls(props: { readonly controller: TileController }) {

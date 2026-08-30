@@ -344,6 +344,12 @@ export const RunnerHostInvoke = {
   browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
   browserViewPrimaryProfileCapture:
     "runnerHost:browserView:primaryProfile:capture",
+  // Clear cookies for one site (keychain refactor ticket 07). `...ClearSite` is
+  // the user's tile-menu action and reports the emptied slice to the host;
+  // `...EvictSite` is the host telling this desktop the same site was cleared
+  // elsewhere, and deliberately reports nothing back.
+  browserViewClearSite: "runnerHost:browserView:primaryProfile:clearSite",
+  browserViewEvictSite: "runnerHost:browserView:primaryProfile:evictSite",
   browserViewCookieCryptoStateGet:
     "runnerHost:browserView:cookieCryptoState:get",
   // Lazy persistence (keychain refactor ticket 01). `...Enable` is the only
@@ -357,6 +363,10 @@ export const RunnerHostInvoke = {
   // keystore is already os-backed, so neither can raise a first OS prompt.
   browserViewStoreKeyWrap: "runnerHost:browserView:storeKey:wrap",
   browserViewStoreKeyUnwrap: "runnerHost:browserView:storeKey:unwrap",
+  // "Forget all browser logins" (keychain refactor ticket 08). Driven by the
+  // host's `primaryProfileForgotten`, never by the renderer on its own: the
+  // host shreds its slice first, then every connected desktop clears its jar.
+  browserViewForgetLogins: "runnerHost:browserView:forgetLogins",
   browserViewStartAnnotation: "runnerHost:browserView:annotation:start",
   browserViewCancelAnnotation: "runnerHost:browserView:annotation:cancel",
   browserViewSetAnnotationTargetChatLabel:

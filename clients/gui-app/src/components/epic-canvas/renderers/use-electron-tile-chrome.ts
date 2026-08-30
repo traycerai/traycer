@@ -211,6 +211,14 @@ export function useElectronTabChrome(
     onOpenDevTools: () => {
       void control({ kind: "openDevTools" }).catch(ignoreError);
     },
+    // The tile key is all that crosses: main derives the site from this tile's
+    // current URL, so a renderer cannot name a site it is not looking at.
+    onClearSite:
+      surfaceServices === null
+        ? null
+        : () => {
+            void surfaceServices.clearSite(tileKey).catch(ignoreError);
+          },
   };
 
   return {

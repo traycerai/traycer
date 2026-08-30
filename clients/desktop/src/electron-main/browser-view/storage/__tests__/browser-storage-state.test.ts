@@ -407,6 +407,54 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
       ],
     ]);
   });
+
+  it("forgets remembered origins on reset, including an observation still in flight", async () => {
+    let resolveInFlight: (
+      snapshot: BrowserPrimaryProfileOriginSnapshot,
+    ) => void = () => undefined;
+    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
+      (origins) =>
+        Promise.resolve({
+          status: "captured",
+          storageState: {
+            cookies: [],
+            origins: origins.map((origin) => ({
+              origin: origin.origin,
+              localStorage: [...origin.localStorage],
+            })),
+          },
+          reason: null,
+        }),
+      (origin) =>
+        origin === "https://settled.example"
+          ? Promise.resolve({
+              origin,
+              localStorage: [{ name: "token", value: "kept" }],
+            })
+          : new Promise((resolve) => {
+              resolveInFlight = resolve;
+            }),
+    );
+    const webContents = {
+      getURL: () => "https://unused.example/",
+      executeJavaScript: () => Promise.resolve([]),
+    };
+    coordinator.observe("https://settled.example/inbox", webContents);
+    coordinator.observe("https://in-flight.example/inbox", webContents);
+    await Promise.resolve();
+    expect(coordinator.rememberedOrigins()).toHaveLength(1);
+
+    coordinator.reset();
+    // Read from the jar the forget is clearing: landing after the reset would
+    // re-seed a recreated tile with the localStorage just forgotten.
+    resolveInFlight({
+      origin: "https://in-flight.example",
+      localStorage: [{ name: "token", value: "stale" }],
+    });
+    await coordinator.capture();
+
+    expect(coordinator.rememberedOrigins()).toEqual([]);
+  });
 });
 
 function storageCookie(name: string): {

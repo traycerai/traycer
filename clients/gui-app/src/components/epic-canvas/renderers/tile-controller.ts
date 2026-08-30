@@ -64,6 +64,15 @@ export interface TileController {
     preset: BrowserViewViewportPresetId,
   ) => void;
   readonly onOpenDevTools: () => void;
+  /**
+   * "Clear cookies for this site" (spec §6.5): removes this tile's registrable
+   * domain from the shared `primary` jar, here and - through the host's
+   * tombstones - in every other live context for this user. `null` where there
+   * is no desktop jar to clear (a screencast tile). The site is derived in the
+   * main process from this tile's own URL, so the toolbar names it but never
+   * chooses it.
+   */
+  readonly onClearSite: (() => void) | null;
 }
 
 /** Full chrome on the primary-profile runtime. */

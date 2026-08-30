@@ -258,6 +258,52 @@ export async function suppressBrowserPrimaryProfileDelta<T>(
   return await primaryCookieObserver.suppress(domain, action);
 }
 
+/**
+ * The same, for a change that spans the whole jar: ticket 08's "forget all
+ * browser logins". A `clearStorageData()` fires a removal for every cookie
+ * there is, and those deltas would reach the host after it had already shredded
+ * the slice - re-creating an entry for the identity just forgotten.
+ */
+export async function suppressAllBrowserPrimaryProfileDeltas<T>(
+  action: () => Promise<T>,
+): Promise<T> {
+  if (primaryCookieObserver === null) return await action();
+  return await primaryCookieObserver.suppressAll(action);
+}
+
+/**
+ * The durable `primary` jar, but only if this process already opened it.
+ * Forget-all must never be the call that *creates* it: opening a `persist:`
+ * partition is what makes Chromium reach for the OS keystore, and this path can
+ * run on a machine where the user never enabled saved logins (spec §6.1).
+ */
+export function existingPersistentBrowserViewSession(): Session | null {
+  return sessionsByPartition.get(BROWSER_VIEW_PARTITION) ?? null;
+}
+
+/**
+ * Emits exactly one delta for `domain`, now, from the durable `primary` jar.
+ * Ticket 07's clear-site is the only caller: it removes the site's cookies with
+ * the observer suppressed, then says the one true thing about that slice
+ * instead of letting a burst of change events say it many times over. A no-op
+ * where nothing is observed (ephemeral or isolated jars have no store to tell).
+ */
+export async function emitBrowserPrimaryProfileDeltaNow(
+  domain: string,
+): Promise<void> {
+  if (primaryCookieObserver === null) return;
+  await primaryCookieObserver.emitDeltaNow(domain);
+}
+
+/**
+ * The jar `primary` guests share right now - persistent or ephemeral, whichever
+ * the persistence decision currently yields. `sessionId` is read only for an
+ * isolated partition, so it has no bearing here.
+ */
+export function currentPrimaryBrowserViewPartition(): string {
+  return partitionForProfile("primary", "");
+}
+
 export function createBrowserViewWebPreferences(
   request: BrowserSessionProfileRequest,
 ): WebPreferences {

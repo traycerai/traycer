@@ -26,6 +26,7 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
 import type { BrowserStorageStateCaptureResult } from "./storage/browser-storage-state";
+import { registrableDomainForUrl } from "@traycer-clients/shared/platform/registrable-domain";
 import { describeLogError, log } from "../app/logger";
 import type {
   BrowserSessionCertificateErrorChange,
@@ -87,6 +88,11 @@ import { BrowserViewDebugSessions } from "./manager/debug-session-for";
 export const BOUNDS_STREAM_LOG_INTERVAL_MS = 1000;
 
 const DEVTOOLS_TITLE = "Traycer Browser DevTools";
+
+/** The site one tile's "clear cookies for this site" would clear. */
+export interface BrowserViewClearSiteTarget {
+  readonly domain: string;
+}
 
 interface BrowserViewManagerOptions {
   readonly createView: (
@@ -473,6 +479,27 @@ export class BrowserViewManager {
       sha256: createHash("sha256").update(bytes).digest("hex"),
       capturedAt: Date.now(),
     };
+  }
+
+  /**
+   * What "clear cookies for this site" would clear for one tile: the
+   * registrable domain of the page it is on. `null` refuses the action, for
+   * the three reasons it must be refused - the tile is gone, it is not on an
+   * http(s) page (there is no site to name), or it is a private session, whose
+   * partition dies with the session and is shared with nothing.
+   *
+   * The site is derived here, from the tile's own URL, and never taken from
+   * the renderer: a domain on the wire would let any window name any site.
+   */
+  readClearSiteTarget(
+    windowId: string,
+    input: BrowserViewTileKey,
+  ): BrowserViewClearSiteTarget | null {
+    const entry = this.entries.getTile(windowId, input);
+    if (entry === undefined || entry.profile !== "primary") return null;
+    if (!isHttpBrowserUrl(entry.currentUrl)) return null;
+    const domain = registrableDomainForUrl(entry.currentUrl);
+    return domain === null ? null : { domain };
   }
 
   getDebugSnapshot(
@@ -1001,5 +1028,18 @@ function readNavigationReadings(webContents: BrowserViewWebContents): {
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * A clear-site scope only means anything for a page: `about:blank`, a devtools
+ * URL or a `file://` tile has no site whose logins could be cleared.
+ */
+function isHttpBrowserUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
   }
 }

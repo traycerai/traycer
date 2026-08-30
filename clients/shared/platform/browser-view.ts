@@ -220,6 +220,24 @@ export type BrowserPrimaryProfileCaptureResult =
       readonly reason: string;
     };
 
+/**
+ * The answer to "clear cookies for this site" (spec §6.5). `refused` is not a
+ * failure: a tile with no site to name (a non-http(s) page) or a private
+ * session has nothing to clear, and the reason is what the UI says instead of
+ * a success toast.
+ */
+export type BrowserViewClearSiteResult =
+  | {
+      readonly status: "cleared";
+      readonly domain: string;
+      readonly cookiesRemoved: number;
+      readonly originsCleared: number;
+    }
+  | {
+      readonly status: "refused";
+      readonly reason: string;
+    };
+
 export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabCapability {
   readonly target: BrowserCdpTarget;
   readonly command: BrowserCdpCommand;
@@ -434,6 +452,17 @@ export interface BrowserViewBridge {
   /** Opens a blob wrapped earlier on this machine, so the host can unseal. */
   unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult>;
   /**
+   * "Forget all browser logins" (spec §6.5), this machine's half: clear the
+   * durable `primary` partition, drop the remembered localStorage origins, and
+   * recreate the open primary tiles at their URLs on the empty jar.
+   *
+   * Called only in answer to the host's `primaryProfileForgotten`, so the key
+   * and the host's slice are already gone by the time the jar is cleared -
+   * never the other way round, which would leave the host holding logins the
+   * user believes are forgotten.
+   */
+  forgetLogins(): Promise<void>;
+  /**
    * Push for every persistence state change (enable / decline / relaunch
    * pending / boot). One shared truth per window, so every open tile's shield
    * and card move together instead of polling per tile.
@@ -453,6 +482,20 @@ export interface BrowserViewBridge {
   /** Renderer confirms the replacement frame is painted before main parks the view. */
   readonly overlayPaintAck: (overlayId: string) => Promise<void>;
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
+  /**
+   * "Clear cookies for this site" (spec §6.5): removes the tile's registrable
+   * domain from the shared `primary` jar - cookies and the localStorage of
+   * every remembered origin under it - and reports the emptied slice to the
+   * host as one delta, which is what turns it into tombstones.
+   */
+  clearSite(input: BrowserViewTileKey): Promise<BrowserViewClearSiteResult>;
+  /**
+   * The receiving half of the same action: the host says one site was cleared
+   * somewhere else for this user (`primaryProfileEvict`), so this partition
+   * drops it too. Emits **no** delta - the store already recorded the
+   * tombstones, and an echo would only re-assert what it just decided.
+   */
+  evictSite(domain: string): Promise<void>;
   onFindChange(handler: (change: BrowserViewFindChange) => void): {
     dispose: () => void;
   };
