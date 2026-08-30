@@ -1,23 +1,15 @@
-export const CORE_NOTIFICATION_CHIME_SOUNDS = [
+export const NOTIFICATION_CHIME_SOUNDS = [
   "classic",
   "prism",
   "ripple",
   "ember",
   "orbit",
   "rift",
-] as const;
-
-export const PLAYFUL_NOTIFICATION_CHIME_SOUNDS = [
   "coin",
   "bloop",
   "cuckoo",
   "ta-da",
   "beacon",
-] as const;
-
-export const NOTIFICATION_CHIME_SOUNDS = [
-  ...CORE_NOTIFICATION_CHIME_SOUNDS,
-  ...PLAYFUL_NOTIFICATION_CHIME_SOUNDS,
   "none",
 ] as const;
 

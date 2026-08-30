@@ -176,7 +176,7 @@ describe("playNotificationChimeSound", () => {
     ["cuckoo", 4],
     ["ta-da", 6],
     ["beacon", 3],
-  ] as const)("plays the Playful %s recipe", (sound, voiceCount) => {
+  ] as const)("plays the %s recipe", (sound, voiceCount) => {
     vi.stubGlobal("AudioContext", FakeAudioContext);
 
     playNotificationChimeSound(sound);
