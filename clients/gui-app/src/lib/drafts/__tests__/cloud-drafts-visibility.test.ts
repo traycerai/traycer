@@ -25,18 +25,26 @@ describe("cloudDraftsDirectoryIsVisible", () => {
     ).toBe(false);
   });
 
-  it("hides on old-host errors", () => {
+  it("hides on old-host errors even while the query is still pending", () => {
+    // `isPending` on its own keeps the section visible, so this case can only
+    // pass if the unsupported classification actually fires - with the
+    // settled flags it would read `false` for any error at all, including
+    // `null`.
     expect(
       cloudDraftsDirectoryIsVisible({
         scopeId: "scp_1",
         error: error("E_HOST_UNSUPPORTED"),
-        isPending: false,
+        isPending: true,
         isSuccess: false,
       }),
     ).toBe(false);
   });
 
-  it("hides on any settled list error, including free-tier FORBIDDEN", () => {
+  it("hides free-tier FORBIDDEN by SETTLING, not by classifying it", () => {
+    // Free-tier arrives as FORBIDDEN and is deliberately not classified: what
+    // hides the section is the query having settled without success. Both
+    // halves are asserted so the pair states the mechanism rather than
+    // restating a `false` that any error value would produce.
     expect(
       cloudDraftsDirectoryIsVisible({
         scopeId: "scp_1",
@@ -45,6 +53,14 @@ describe("cloudDraftsDirectoryIsVisible", () => {
         isSuccess: false,
       }),
     ).toBe(false);
+    expect(
+      cloudDraftsDirectoryIsVisible({
+        scopeId: "scp_1",
+        error: error("FORBIDDEN"),
+        isPending: true,
+        isSuccess: false,
+      }),
+    ).toBe(true);
   });
 
   it("shows while a capable host is listing or has listed", () => {

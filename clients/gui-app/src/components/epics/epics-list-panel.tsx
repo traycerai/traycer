@@ -258,6 +258,26 @@ function AmbientEpicsListPanel(props: AmbientEpicsListPanelProps): ReactNode {
   );
 }
 
+/**
+ * `allowSelection` only hides the idle "Select" button. The ACTIVE cluster
+ * (Select all / Cancel / Sweep / Delete) renders off `selectionMode`, which
+ * nothing else clears - so turning the drafts facet on mid-selection left
+ * Delete live over epic rows the body had stopped rendering.
+ *
+ * A render-phase adjustment (React's derived-state pattern) rather than an
+ * effect: an effect would commit one frame with that cluster still armed.
+ */
+function useSelectionDroppedOnDraftsFacet(
+  showDrafts: boolean,
+  selectionMode: boolean,
+  cancelSelection: () => void,
+): void {
+  const [shown, setShown] = useState(showDrafts);
+  if (shown === showDrafts) return;
+  setShown(showDrafts);
+  if (showDrafts && selectionMode) cancelSelection();
+}
+
 function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const { variant, onSelectEpic, onOpenItem, historySearch } = props;
   // Destructure the stable `update`/`clear` functions (the hook returns a fresh
@@ -540,6 +560,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const hasActiveFilters = hasActiveHistoryFilters(search);
   const searchCopy = historySearchFieldCopy(showDrafts);
   const allowSelection = selectionEnabled ? !showDrafts : false;
+
+  useSelectionDroppedOnDraftsFacet(showDrafts, selectionMode, cancelSelection);
 
   const handleClear = () => {
     clearSearch();

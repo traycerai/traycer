@@ -25,11 +25,18 @@ export function useCloudDraftsIngest(
   useEffect(() => {
     if (!directory.visible || client === null || hostId === null) return;
     const port = createHostCloudChatReadPort(client);
+    // The reads below are detached, so a host or scope change while one is in
+    // flight would otherwise let it hand a stale record to the global draft
+    // stores. `ingestCloudDraftSummary` validates neither.
+    const scope = new AbortController();
     const foreign = directory.chats.filter(
       (chat) => chat.ownerHostId !== hostId,
     );
     for (const summary of foreign) {
-      const key = `${summary.identity.taskId}:${summary.identity.chatId}:${summary.identity.ownerUserId}`;
+      // `headSha256` is in the key on purpose: the identity alone is stable
+      // across publishes, so a newer head for the same draft hit this guard
+      // and was skipped, leaving the replica stale until the scope changed.
+      const key = `${summary.identity.taskId}:${summary.identity.chatId}:${summary.identity.ownerUserId}:${summary.headSha256}`;
       if (ingested.current.has(key)) continue;
       ingested.current.add(key);
       void (async () => {
@@ -38,10 +45,13 @@ export function useCloudDraftsIngest(
           port,
           sha256Hex: webCryptoSha256Hex,
         });
-        if (outcome.kind !== "ok") return;
+        if (scope.signal.aborted || outcome.kind !== "ok") return;
         const document = draftDocumentFromCloudHead(summary, outcome.record);
         await ingestCloudDraftSummary({ hostId, summary, document });
       })();
     }
+    return () => {
+      scope.abort();
+    };
   }, [client, directory.chats, directory.visible, hostId]);
 }

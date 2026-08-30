@@ -64,8 +64,41 @@ export const draftComposerPortableSchema = z.object({
 });
 export type DraftComposerPortable = z.infer<typeof draftComposerPortableSchema>;
 
+/**
+ * The same payload where a WRITER supplies it. The default above is a
+ * reader-side courtesy to a 1.0 head written before the field existed; on
+ * the write path it would silently turn an omitting client into a claim
+ * that the draft is open, and because the host applies an upsert as a
+ * whole-document LWW that write replaces a retained `closed: true` row.
+ * Every write branch names the state explicitly.
+ */
+export const draftComposerPortableWriteSchema =
+  draftComposerPortableSchema.extend({
+    closed: z.boolean(),
+  });
+export type DraftComposerPortableWrite = z.infer<
+  typeof draftComposerPortableWriteSchema
+>;
+
+/**
+ * One interview answer as the draft carries it across devices.
+ *
+ * `selected` is the LABEL snapshot and is not enough on its own: labels
+ * repeat, so a round-trip that keeps only labels turns an exact selection
+ * into a legacy label-only row whose later settlement must be neutral
+ * (`StoredInterviewDraftAnswer` documents that degradation). `questionIdentity`
+ * and `selectedOptionIndices` carry the interaction-time evidence instead.
+ *
+ * Both are OPTIONAL because the label-only row is a REAL shape - an answer
+ * drafted before indices existed - and requiring them here would force a
+ * writer to manufacture evidence its row never held. The drafts minor is
+ * unreleased and still pinned at {1,0}, so this is an in-place dialect edit,
+ * not a new minor.
+ */
 export const draftInterviewAnswerSchema = z.object({
+  questionIdentity: z.string().min(1).optional(),
   selected: z.array(z.string()),
+  selectedOptionIndices: z.array(z.number().int().nonnegative()).optional(),
   otherText: z.string(),
   otherSelected: z.boolean(),
 });

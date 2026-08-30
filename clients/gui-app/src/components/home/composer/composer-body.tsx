@@ -200,7 +200,11 @@ export function ComposerBody({
                 <TerminalLaunchPanel
                   store={toolbarStore}
                   pending={isSubmitting}
-                  disabledHint={workspaceDisabledHint}
+                  disabledHint={
+                    editorReadOnly
+                      ? "Take over this draft to start a terminal agent"
+                      : workspaceDisabledHint
+                  }
                   hostId={hostId}
                   onStart={onStartTerminal}
                 />

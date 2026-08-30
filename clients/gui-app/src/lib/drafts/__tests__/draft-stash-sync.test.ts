@@ -10,7 +10,7 @@ import {
 import { stashDraftWrite } from "@/lib/drafts/draft-write-codec";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
-import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { fakeDraftStreamClient } from "@/lib/drafts/__tests__/draft-mirror-test-stream";
 
 const HOST_ID = "host-stash";
 const EMPTY_DOC = {
@@ -22,21 +22,6 @@ afterEach(() => {
   resetDraftMirrorCoordinatorForTests();
   usePromptStashStore.setState({ rows: [] });
 });
-
-function fakeStream(): {
-  subscribe: () => IStreamSession;
-} {
-  return {
-    subscribe: () => ({
-      sendClientFrame: () => undefined,
-      onServerFrame: () => undefined,
-      onStatusChange: () => undefined,
-      requestReconnect: () => undefined,
-      close: () => undefined,
-      getNegotiatedSchemaVersion: () => ({ major: 1, minor: 0 }),
-    }),
-  };
-}
 
 describe("stash host sync", () => {
   it("upserts a stash-entry once and treats a second consume delete as idempotent", async () => {
@@ -85,7 +70,7 @@ describe("stash host sync", () => {
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
       } as never,
-      streamClient: fakeStream() as never,
+      streamClient: fakeDraftStreamClient(),
       timing: undefined,
     });
     await Promise.resolve();
@@ -160,7 +145,7 @@ describe("stash host sync", () => {
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
       } as never,
-      streamClient: fakeStream() as never,
+      streamClient: fakeDraftStreamClient(),
       timing: undefined,
     });
     await Promise.resolve();
@@ -222,7 +207,7 @@ describe("stash host sync", () => {
           return Promise.reject(new Error(`unexpected A ${String(method)}`));
         },
       } as never,
-      streamClient: fakeStream() as never,
+      streamClient: fakeDraftStreamClient(),
       timing: undefined,
     });
     acquireDraftMirrorSession({
@@ -276,7 +261,7 @@ describe("stash host sync", () => {
           return Promise.reject(new Error(`unexpected B ${String(method)}`));
         },
       } as never,
-      streamClient: fakeStream() as never,
+      streamClient: fakeDraftStreamClient(),
       timing: undefined,
     });
     await Promise.resolve();

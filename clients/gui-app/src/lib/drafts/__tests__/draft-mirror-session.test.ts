@@ -88,6 +88,7 @@ function listResponse(
     drafts: [...drafts],
     tombstones: [...tombstones],
     snapshotSeq,
+    scopeId: null,
   };
 }
 
@@ -424,6 +425,9 @@ describe("DraftMirrorSession", () => {
       revision: 1,
       draft: landingDocument({ draftId: "ghost", revision: 1 }),
     });
+    // Yield first: the frame handler is async, so asserting in the emitting
+    // tick would pass even if the stale frame were accepted one await later.
+    await Promise.resolve();
     expect(sink.upserts).toEqual([]);
   });
 

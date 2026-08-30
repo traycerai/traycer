@@ -159,6 +159,13 @@ interface LandingDraftStoreState {
    */
   deleteDraft: (id: string) => void;
   /**
+   * Destroy the local row for a delete the HOST already performed. Same
+   * removal as `deleteDraft` minus the outbound `drafts.delete`: routing one
+   * back for a tombstone we are applying is a redundant request whose only
+   * possible outcome is `deleted: false`.
+   */
+  applyHostDelete: (id: string) => void;
+  /**
    * Restore a retained draft to the tab strip (`closed: false`) and make
    * it active. T11's "open" action. No-op if id is not in the store.
    */
@@ -460,6 +467,7 @@ function destroyLandingDraft(
   get: () => LandingDraftStoreState,
   set: (partial: Partial<LandingDraftStoreState>) => void,
   id: string,
+  routeHostDelete: boolean,
 ): void {
   const { drafts, activeDraftId } = get();
   const closing = drafts.find((d) => d.id === id);
@@ -467,7 +475,7 @@ function destroyLandingDraft(
   draftRuntimeRegistry.close(id);
   // Route the host delete while the row still exists: `routeLocalDelete`
   // resolves the session via `hostIdForDraft`, which reads this store.
-  if (closing.adoption.state === "adopted") {
+  if (routeHostDelete && closing.adoption.state === "adopted") {
     notifyDraftLocalDelete(id);
   }
   set({
@@ -563,7 +571,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         const closing = get().drafts.find((d) => d.id === id);
         if (closing === undefined) return;
         if (isEmptyLandingDraftContent(closing.content)) {
-          destroyLandingDraft(get, set, id);
+          destroyLandingDraft(get, set, id, true);
           return;
         }
         if (closing.closed) {
@@ -588,7 +596,11 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       },
 
       deleteDraft: (id) => {
-        destroyLandingDraft(get, set, id);
+        destroyLandingDraft(get, set, id, true);
+      },
+
+      applyHostDelete: (id) => {
+        destroyLandingDraft(get, set, id, false);
       },
 
       openDraft: (id) => {
@@ -1041,7 +1053,7 @@ function copyChatRunSettings(
   return settings === null ? null : { ...settings };
 }
 
-function sameNullableChatRunSettings(
+export function sameNullableChatRunSettings(
   left: ChatRunSettings | null,
   right: ChatRunSettings | null,
 ): boolean {
@@ -1334,7 +1346,7 @@ function copyRepoIdentifier(
     : { owner: repoIdentifier.owner, repo: repoIdentifier.repo };
 }
 
-function sameLandingDraftWorkspace(
+export function sameLandingDraftWorkspace(
   a: LandingDraftWorkspaceSnapshot,
   b: LandingDraftWorkspaceSnapshot,
 ): boolean {
@@ -1687,7 +1699,7 @@ export function applyLandingHostDocument(
 }
 
 export function applyLandingHostDelete(draftId: string): void {
-  useLandingDraftStore.getState().deleteDraft(draftId);
+  useLandingDraftStore.getState().applyHostDelete(draftId);
 }
 
 export function collectLandingDirtyWrites(hostId: string): ReadonlyArray<{

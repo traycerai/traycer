@@ -94,6 +94,30 @@ describe("listHistoryLandingDrafts", () => {
     ).toEqual(["local", "unadopted"]);
   });
 
+  it("excludes a foreign-owned draft while this host is unresolved", () => {
+    const foreign = draft({
+      id: "foreign",
+      origin: "own",
+      ownerHostId: "host-b",
+    });
+    const unadopted = draft({
+      id: "unadopted",
+      origin: null,
+      ownerHostId: null,
+    });
+
+    expect(isHistoryListedLandingDraft(foreign, null)).toBe(false);
+    expect(isHistoryListedLandingDraft(unadopted, null)).toBe(true);
+
+    expect(
+      listHistoryLandingDrafts({
+        drafts: [foreign, unadopted],
+        query: "",
+        currentHostId: null,
+      }).map((row) => row.id),
+    ).toEqual(["unadopted"]);
+  });
+
   it("filters by derived title and surfaces workspace when present", () => {
     const withWorkspace = draft({
       id: "ws",

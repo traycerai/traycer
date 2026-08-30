@@ -24,7 +24,9 @@ export function useDraftAuthorityControl(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly publication: DraftPublication | null;
 }): DraftAuthorityControl {
-  const { claiming, claim: claimDraft } = useDraftClaim(args.client);
+  const { mutation: claimMutation, claim: claimDraft } = useDraftClaim(
+    args.client,
+  );
   const [claimError, setClaimError] = useState<string | null>(null);
   const ownerLabel = args.ownerHostId ?? "another host";
   const readOnly =
@@ -44,7 +46,7 @@ export function useDraftAuthorityControl(args: {
   return {
     readOnly,
     ownerLabel,
-    claiming,
+    claiming: claimMutation.isPending,
     claimError,
     publicationLabel: draftPublicationLabel(args.publication),
     claim,

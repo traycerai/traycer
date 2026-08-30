@@ -817,12 +817,24 @@ export function LandingComposer(props: LandingComposerProps) {
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!workspaceCanStart || isSubmitting) return;
+      // Terminal mode bypasses `canSubmit` entirely, so the authority gate
+      // has to be restated here: a replica must not create an agent before
+      // the claim lands, and `ComposerBody` disabling Start is only the
+      // affordance half of that.
+      if (authority.readOnly) return;
       const refusal = actions.selectTerminalAgent(launch, draftId);
       raiseHostNotice(
         refusal === null ? null : { kind: "refused", message: refusal.message },
       );
     },
-    [actions, draftId, isSubmitting, raiseHostNotice, workspaceCanStart],
+    [
+      actions,
+      authority.readOnly,
+      draftId,
+      isSubmitting,
+      raiseHostNotice,
+      workspaceCanStart,
+    ],
   );
 
   const handleRemoveImage = useCallback(

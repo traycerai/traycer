@@ -1030,18 +1030,26 @@ export class TabCommandCoordinator {
       mobileStableDraftId ??
       (target.create ? uuidv4() : null);
     if (draftId === null) return null;
-    const exists = useLandingDraftStore
-      .getState()
-      .drafts.some(
-        (draft) => draft.id === draftId && isOpenLandingDraft(draft),
-      );
-    if (!target.create && !exists) return null;
+    const drafts = useLandingDraftStore.getState().drafts;
+    const present = drafts.some((draft) => draft.id === draftId);
+    const open = drafts.some(
+      (draft) => draft.id === draftId && isOpenLandingDraft(draft),
+    );
+    if (!target.create && !open) return null;
     const ref: TabRef = { kind: "draft", id: draftId };
     return this.activationForRef(layout, ref, () => {
-      if (!exists) {
+      if (!present) {
         useLandingDraftStore
           .getState()
           .createDraftWithId(draftId, target.settings);
+        return;
+      }
+      if (!open) {
+        // Retained-but-closed. `createDraftWithId` would no-op on the
+        // existing row and leave `closed` set, so the ref we are installing
+        // would name a draft `tabSourceRefs()` excludes - a tab pointing at
+        // nothing reachable. Reopening is the create this target asked for.
+        useLandingDraftStore.getState().openDraft(draftId);
         return;
       }
       useLandingDraftStore.getState().setActiveDraft(draftId);

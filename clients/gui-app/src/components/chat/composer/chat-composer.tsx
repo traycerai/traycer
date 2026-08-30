@@ -516,6 +516,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       workspaceBlocked,
       imagesUnsupported,
       attachmentPreparationPending: pastePending,
+      draftReadOnly: authority.readOnly,
       onSubmitMessage,
     });
   const attachmentPending = composerAttachmentPending(
@@ -584,6 +585,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
+    draftReadOnly: authority.readOnly,
   });
   const utilityClearanceVisible = composerUtilityNeedsClearance({
     rowCount: promptStash.rows.length,
@@ -872,6 +874,13 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+  /**
+   * The draft belongs to another host and has not been claimed. Disabling the
+   * editor is not enough on its own: the toolbar's send button and the
+   * editor's own Enter handler both reach `submitDraft` without going through
+   * it, so the gate has to sit on the submit path too.
+   */
+  readonly draftReadOnly: boolean;
 }
 
 /**
@@ -935,6 +944,7 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
     !args.attachmentPreparationPending &&
+    !args.draftReadOnly &&
     (args.draftHasText || args.draftHasImages)
   );
 }

@@ -125,9 +125,12 @@ if (runsFirstShard) {
       "src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
     ),
   );
-  runVitest(
-    "vitest.react-compiler.config.ts",
-    "src/hooks/terminal/__tests__/use-epic-terminal-durable-create.test.tsx",
+  exitCode = firstFailure(
+    exitCode,
+    runVitest(
+      "vitest.react-compiler.config.ts",
+      "src/hooks/terminal/__tests__/use-epic-terminal-durable-create.test.tsx",
+    ),
   );
   if (runsBrowserRegressions) {
     exitCode = firstFailure(

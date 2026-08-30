@@ -117,7 +117,18 @@ export function subscribeDraftsCloudScope(listener: () => void): () => void {
 
 const composerHostByChatId = new Map<string, string>();
 const interviewHostByKey = new Map<string, string>();
+/**
+ * Live binds per `(chat, block, host)`. Two duplicate views of the same
+ * interview mount the same binding, and unmounting either one used to delete
+ * the single map entry - leaving the surviving view unsynchronized until it
+ * remounted. Counted, so the entry outlives every view but the last.
+ */
+const interviewBindingRefs = new Map<string, number>();
 const newChatHostByEpicId = new Map<string, string>();
+
+function interviewBindingRefKey(bindingKey: string, hostId: string): string {
+  return `${bindingKey}\u0000${hostId}`;
+}
 
 /** Placement host that may lazily adopt landing drafts (decision #9). */
 let landingAdoptionHostId: string | null = null;
@@ -243,7 +254,14 @@ function dropStashEntry(draftId: string): void {
   if (hostId !== undefined) {
     stashSeenOnHost.delete(stashSeenKey(hostId, draftId));
   }
-  void usePromptStashStore.getState().dropRemote(draftId);
+  usePromptStashStore
+    .getState()
+    .dropRemote(draftId)
+    .catch((error: unknown) => {
+      appLogger.warn("[draft-mirror] stash drop failed", {
+        error: describeLogError(error),
+      });
+    });
 }
 
 function dropStashAbsentFromList(
@@ -273,7 +291,10 @@ export function bindInterviewDraftHost(
   blockId: string,
   hostId: string,
 ): void {
-  interviewHostByKey.set(interviewDraftBindingKey(chatId, blockId), hostId);
+  const key = interviewDraftBindingKey(chatId, blockId);
+  const refKey = interviewBindingRefKey(key, hostId);
+  interviewBindingRefs.set(refKey, (interviewBindingRefs.get(refKey) ?? 0) + 1);
+  interviewHostByKey.set(key, hostId);
 }
 
 export function unbindInterviewDraftHost(
@@ -282,6 +303,13 @@ export function unbindInterviewDraftHost(
   hostId: string,
 ): void {
   const key = interviewDraftBindingKey(chatId, blockId);
+  const refKey = interviewBindingRefKey(key, hostId);
+  const remaining = (interviewBindingRefs.get(refKey) ?? 0) - 1;
+  if (remaining > 0) {
+    interviewBindingRefs.set(refKey, remaining);
+    return;
+  }
+  interviewBindingRefs.delete(refKey);
   if (interviewHostByKey.get(key) === hostId) interviewHostByKey.delete(key);
 }
 
@@ -666,14 +694,22 @@ export async function adoptUnadoptedLandingDraftsForHost(
 ): Promise<void> {
   if (landingAdoptionHostId !== hostId) return;
   const client = sessionClients.get(hostId);
+  // `upsertDirty` awaits this before it collects a single write, so awaiting
+  // each draft's blobs in turn put N serialized round trips in front of the
+  // first upsert of every bootstrap flush. The uploads are independent.
+  const uploads: Promise<void>[] = [];
   for (const draft of collectUnadoptedLandingDrafts()) {
     if (wanted !== null && !wanted.has(draft.id)) continue;
     adoptLandingDraft(draft.id, hostId);
     if (client === undefined) continue;
     const hashes = blobHashesFromContent(draft.content);
-    const confirmed = await putDraftBlobs(hostId, client, hashes);
-    rememberLandingBlobsOnHost(draft.id, confirmed);
+    uploads.push(
+      putDraftBlobs(hostId, client, hashes).then((confirmed) => {
+        rememberLandingBlobsOnHost(draft.id, confirmed);
+      }),
+    );
   }
+  await Promise.all(uploads);
 }
 
 export function resetDraftMirrorCoordinatorForTests(): void {
@@ -685,6 +721,7 @@ export function resetDraftMirrorCoordinatorForTests(): void {
   cloudScopeIdByHost.clear();
   composerHostByChatId.clear();
   interviewHostByKey.clear();
+  interviewBindingRefs.clear();
   newChatHostByEpicId.clear();
   landingAdoptionHostId = null;
   stashHostById.clear();
@@ -706,9 +743,17 @@ export function draftMirrorSessionCountForTests(): number {
 
 export async function submitComposerDraft(chatId: string): Promise<void> {
   const before = readComposerDraftSnapshot(chatId);
-  useComposerDraftStore.getState().clearDraft(chatId);
+  const store = useComposerDraftStore.getState();
+  store.clearDraft(chatId);
   if (before.draftId === null) return;
+  // Resolve the session while the id is still on the row - `sessionForDraft`
+  // finds it through the store.
   const session = sessionForDraft(before.draftId);
+  // Then retire the id. `clearDraft` keeps it, so an edit made during the
+  // flush/delete round-trip below would be published under the id this
+  // function is about to tombstone, and the tombstone would mark that
+  // content synced. The next edit mints a fresh id and a fresh host row.
+  store.detachSubmittedDraft(chatId);
   if (session === null) return;
   await session.flush([before.draftId]);
   await session.deleteOnHost(before.draftId);

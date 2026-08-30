@@ -12,17 +12,18 @@ export interface HistoryLandingDraft {
 /**
  * Landing drafts this history facet may list: this host's store, not T8's
  * other-host cloud-drafts surface. Replicas and foreign-owned rows stay out.
+ *
+ * An unresolved host cannot MATCH an owner, so a row stamped with one stays
+ * out while `currentHostId` is null. Treating the unresolved case as "mine"
+ * hands the facet's open and delete actions a row that may belong to another
+ * machine, on the one read where we cannot tell.
  */
 export function isHistoryListedLandingDraft(
   draft: LandingDraftTab,
   currentHostId: string | null,
 ): boolean {
   if (draft.origin === "replica") return false;
-  if (
-    draft.ownerHostId !== null &&
-    currentHostId !== null &&
-    draft.ownerHostId !== currentHostId
-  ) {
+  if (draft.ownerHostId !== null && draft.ownerHostId !== currentHostId) {
     return false;
   }
   return true;

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DraftDocument } from "@traycer/protocol/host";
-import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { fakeDraftStreamClient } from "@/lib/drafts/__tests__/draft-mirror-test-stream";
 import {
   acquireDraftMirrorSession,
   adoptUnadoptedLandingDraftsForHost,
@@ -20,19 +20,6 @@ import {
 } from "@/stores/home/landing-draft-store";
 import { EMPTY_LANDING_DRAFT_CONTENT } from "@/stores/home/landing-draft-content";
 import { tabSourceRefs } from "@/stores/tabs/source-refs";
-
-function fakeStream(): { subscribe: () => IStreamSession } {
-  return {
-    subscribe: () => ({
-      sendClientFrame: () => undefined,
-      onServerFrame: () => undefined,
-      onStatusChange: () => undefined,
-      requestReconnect: () => undefined,
-      close: () => undefined,
-      getNegotiatedSchemaVersion: () => ({ major: 1, minor: 0 }),
-    }),
-  };
-}
 
 describe("landing draft host-mirror bookkeeping", () => {
   beforeEach(() => {
@@ -358,7 +345,7 @@ describe("landing draft host-mirror bookkeeping", () => {
           return Promise.reject(new Error(`unexpected ${String(method)}`));
         },
       } as never,
-      streamClient: fakeStream() as never,
+      streamClient: fakeDraftStreamClient(),
       timing: undefined,
     });
     await Promise.resolve();

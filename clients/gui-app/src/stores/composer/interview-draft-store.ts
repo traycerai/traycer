@@ -67,6 +67,17 @@ interface InterviewDraftStore {
   ) => void;
 }
 
+/**
+ * Targets bound by a card whose row does not exist yet. `bindTarget` runs on
+ * mount, before the first keystroke creates a row, so without this the first
+ * `saveDraft` writes `targetEpicId: null` and the coordinator withholds every
+ * upsert for that draft until something re-binds - which nothing does, since
+ * the bind effect does not re-run when the row appears. Keyed by
+ * `interviewDraftBindingKey`; an entry is the epic the chat belongs to, so a
+ * stale one can only ever re-state the same fact.
+ */
+const pendingInterviewTargets = new Map<string, string>();
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -98,7 +109,17 @@ function parseStoredAnswer(value: unknown): StoredInterviewDraftAnswer | null {
   };
 }
 
-function parseStoredDraft(value: unknown): StoredInterviewDraft | null {
+interface ParsedStoredDraft {
+  readonly draft: StoredInterviewDraft;
+  /**
+   * The persisted row carried no id, so `draft.draftId` was minted while
+   * reading it. The caller writes the row back so the id becomes the
+   * persisted one - see `readAllStoredDraftsUnguarded`.
+   */
+  readonly mintedDraftId: boolean;
+}
+
+function parseStoredDraft(value: unknown): ParsedStoredDraft | null {
   if (
     !isRecord(value) ||
     typeof value.pageIndex !== "number" ||
@@ -109,23 +130,32 @@ function parseStoredDraft(value: unknown): StoredInterviewDraft | null {
   }
   const parsedAnswers = value.answers.map(parseStoredAnswer);
   if (parsedAnswers.some((answer) => answer === null)) return null;
+  const storedId =
+    typeof value.draftId === "string" && value.draftId.length > 0
+      ? value.draftId
+      : null;
   return {
-    pageIndex: Math.max(0, Math.trunc(value.pageIndex)),
-    answers: parsedAnswers.filter(
-      (answer): answer is StoredInterviewDraftAnswer => answer !== null,
-    ),
-    draftId:
-      typeof value.draftId === "string" && value.draftId.length > 0
-        ? value.draftId
-        : mintDraftId(),
-    hostRevision: nonNegative(value.hostRevision),
-    targetEpicId:
-      typeof value.targetEpicId === "string" && value.targetEpicId.length > 0
-        ? value.targetEpicId
-        : null,
-    lastTouchedAt: nonNegative(value.lastTouchedAt),
-    generation: 1,
-    syncedGeneration: 0,
+    mintedDraftId: storedId === null,
+    draft: {
+      pageIndex: Math.max(0, Math.trunc(value.pageIndex)),
+      answers: parsedAnswers.filter(
+        (answer): answer is StoredInterviewDraftAnswer => answer !== null,
+      ),
+      draftId: storedId ?? mintDraftId(),
+      hostRevision: nonNegative(value.hostRevision),
+      targetEpicId:
+        typeof value.targetEpicId === "string" && value.targetEpicId.length > 0
+          ? value.targetEpicId
+          : null,
+      lastTouchedAt: nonNegative(value.lastTouchedAt),
+      // The mirror bookkeeping is PERSISTED (`writeStoredDraft` serializes
+      // the whole row), so read it back. Resetting to 1/0 here made every
+      // synced row dirty again on each storage event, and this window then
+      // re-published it. A row that never carried the pair is genuinely
+      // legacy and starts dirty exactly once.
+      generation: countOrDefault(value.generation, 1),
+      syncedGeneration: countOrDefault(value.syncedGeneration, 0),
+    },
   };
 }
 
@@ -133,6 +163,12 @@ function nonNegative(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value
     : 0;
+}
+
+function countOrDefault(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : fallback;
 }
 
 // ── Prototype-safe map access ──────────────────────────────────────────────
@@ -165,7 +201,7 @@ export function selectInterviewDraft(
 // map and erases another window's unrelated draft. The reactive `draftsByChat`
 // map below mirrors these keys for in-memory reads and cross-pane subscription.
 
-function parseStoredDraftJson(raw: string): StoredInterviewDraft | null {
+function parseStoredDraftJson(raw: string): ParsedStoredDraft | null {
   // Boundary: raw storage bytes are untrusted and can be malformed JSON. A
   // JSON.parse SyntaxError can echo a fragment of the offending input, and
   // that input is the user's own persisted interview answer text - use the
@@ -255,11 +291,16 @@ function readAllStoredDraftsUnguarded(): StoredInterviewDraftsByChat {
     if (chatId === null || blockId === null) continue;
     const raw = window.localStorage.getItem(key);
     if (raw === null) continue;
-    const draft = parseStoredDraftJson(raw);
-    if (draft === null) continue;
+    const parsed = parseStoredDraftJson(raw);
+    if (parsed === null) continue;
+    // Migrate a pre-id row in place. Keeping the minted id in memory only
+    // let a second window mint a DIFFERENT id for the same row and publish
+    // two host rows for one interview; the first window to read it fixes
+    // the id in storage, and every later rehydration reads that one.
+    if (parsed.mintedDraftId) writeStoredDraft(chatId, blockId, parsed.draft);
     const chatMap =
       byChat.get(chatId) ?? new Map<string, StoredInterviewDraft>();
-    chatMap.set(blockId, draft);
+    chatMap.set(blockId, parsed.draft);
     byChat.set(chatId, chatMap);
   }
   return Object.fromEntries(
@@ -317,7 +358,12 @@ export const useInterviewDraftStore = create<InterviewDraftStore>()(
           answers: draft.answers,
           draftId,
           hostRevision: current?.hostRevision ?? 0,
-          targetEpicId: current?.targetEpicId ?? null,
+          targetEpicId:
+            current?.targetEpicId ??
+            pendingInterviewTargets.get(
+              interviewDraftBindingKey(chatId, blockId),
+            ) ??
+            null,
           lastTouchedAt: Date.now(),
           generation: (current?.generation ?? 0) + 1,
           syncedGeneration: current?.syncedGeneration ?? 0,
@@ -333,6 +379,12 @@ export const useInterviewDraftStore = create<InterviewDraftStore>()(
       notifyDraftLocalEdit(draftId);
     },
     bindTarget: (chatId, blockId, epicId) => {
+      // Record it even when there is no row yet: `saveDraft` seeds the first
+      // one from here.
+      pendingInterviewTargets.set(
+        interviewDraftBindingKey(chatId, blockId),
+        epicId,
+      );
       const existingChat = ownValue(get().draftsByChat, chatId);
       const current =
         existingChat === undefined
@@ -504,14 +556,25 @@ export function applyInterviewHostDocument(document: DraftDocument): void {
       chatDrafts === undefined ? undefined : ownValue(chatDrafts, blockId);
     const next: StoredInterviewDraft = {
       pageIndex: document.portable.pageIndex,
+      // Restore the interaction-time evidence, not just the labels: an
+      // answer that arrives without indices is a genuinely legacy row, and
+      // dropping them here would manufacture one out of an exact selection.
       answers: document.portable.answers.map((answer) => ({
+        questionIdentity: answer.questionIdentity,
         selected: [...answer.selected],
+        selectedOptionIndices:
+          answer.selectedOptionIndices === undefined
+            ? undefined
+            : [...answer.selectedOptionIndices],
         otherText: answer.otherText,
         otherSelected: answer.otherSelected,
       })),
       draftId: document.draftId,
       hostRevision: document.revision,
-      targetEpicId: document.target.epicId,
+      // Same rule as the dirty branch below: the store withholds every
+      // upsert until the target is known, so a document with no epic must
+      // never clear one this window already bound.
+      targetEpicId: document.target.epicId ?? current?.targetEpicId ?? null,
       lastTouchedAt: document.lastTouchedAt,
       generation: current?.generation ?? 0,
       syncedGeneration: current?.generation ?? 0,

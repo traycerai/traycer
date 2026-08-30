@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { interviewDraftKey } from "@/lib/persist";
 import {
+  interviewDraftIsDirty,
+  interviewDraftRememberSynced,
   readInterviewDraftSnapshot,
   rehydrateInterviewDraftsFromStorage,
   selectInterviewDraft,
@@ -316,5 +318,70 @@ describe("interview draft store", () => {
     ).toBe(true);
     // A different chat id must not resolve through the prototype chain.
     expect(readInterviewDraftSnapshot("other-chat", "__proto__")).toBeNull();
+  });
+});
+
+describe("host-mirror bookkeeping", () => {
+  it("seeds the first save with a target bound before any row existed", () => {
+    // The card binds on mount; the row only appears on the first keystroke.
+    useInterviewDraftStore.getState().bindTarget("chat-t", "block-t", "epic-t");
+    expect(readInterviewDraftSnapshot("chat-t", "block-t")).toBeNull();
+
+    useInterviewDraftStore.getState().saveDraft("chat-t", "block-t", {
+      pageIndex: 0,
+      answers: [{ selected: ["Alpha"], otherText: "", otherSelected: false }],
+    });
+
+    // Without the seed this was `null`, and the coordinator withholds every
+    // upsert for a draft whose target it does not know.
+    expect(readInterviewDraftSnapshot("chat-t", "block-t")?.targetEpicId).toBe(
+      "epic-t",
+    );
+  });
+
+  it("persists a minted id and keeps generation across rehydration", () => {
+    // A row written before drafts carried ids.
+    window.localStorage.setItem(
+      interviewDraftKey("chat-legacy", "block-legacy"),
+      JSON.stringify({
+        pageIndex: 0,
+        answers: [{ selected: ["Alpha"], otherText: "", otherSelected: false }],
+      }),
+    );
+
+    rehydrateInterviewDraftsFromStorage();
+    const first = readInterviewDraftSnapshot("chat-legacy", "block-legacy");
+    expect(first?.draftId).toBeDefined();
+    // Legacy row: dirty exactly once, so it publishes.
+    expect(first?.generation).toBe(1);
+    expect(first?.syncedGeneration).toBe(0);
+
+    // The id is now IN storage, so a second window reads the same one instead
+    // of minting a rival and publishing a duplicate host row.
+    const persisted: unknown = JSON.parse(
+      window.localStorage.getItem(
+        interviewDraftKey("chat-legacy", "block-legacy"),
+      ) ?? "null",
+    );
+    expect(persisted).toMatchObject({ draftId: first?.draftId });
+
+    // And a row that has already synced stays synced across a storage event.
+    useInterviewDraftStore.getState().saveDraft("chat-legacy", "block-legacy", {
+      pageIndex: 0,
+      answers: [{ selected: ["Beta"], otherText: "", otherSelected: false }],
+    });
+    const beforeSync = readInterviewDraftSnapshot(
+      "chat-legacy",
+      "block-legacy",
+    );
+    interviewDraftRememberSynced(
+      beforeSync?.draftId ?? "",
+      4,
+      Number.POSITIVE_INFINITY,
+    );
+    expect(interviewDraftIsDirty(beforeSync?.draftId ?? "")).toBe(false);
+
+    rehydrateInterviewDraftsFromStorage();
+    expect(interviewDraftIsDirty(beforeSync?.draftId ?? "")).toBe(false);
   });
 });

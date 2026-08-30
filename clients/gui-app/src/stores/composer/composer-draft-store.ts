@@ -128,6 +128,17 @@ interface ComposerDraftStore {
    * routes the clear to the host mirror.
    */
   readonly clearDraft: (chatId: string) => void;
+  /**
+   * Retire the submitted draft's host identity. `clearDraft` empties the
+   * document but KEEPS `draftId`, so a keystroke landing while the submit
+   * finalizer is still flushing and deleting that row would be published
+   * under the very id about to be tombstoned - and the tombstone's
+   * `rememberSynced(id, 0, ...)` would then mark that content clean, leaving
+   * it local-only. Dropping the id here means the next edit mints a fresh
+   * one and a fresh host row. The row is left CLEAN because it is empty and
+   * its old id is on its way out; nothing is owed to the host.
+   */
+  readonly detachSubmittedDraft: (chatId: string) => void;
   readonly bindTarget: (chatId: string, epicId: string) => void;
 }
 const EMPTY_COMPOSER_CONTENT: JsonContent = {
@@ -297,6 +308,26 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           EMPTY_COMPOSER_SELECTION,
         );
         scheduleLandingImageReconcile();
+      },
+      detachSubmittedDraft: (chatId) => {
+        set((state) => {
+          const current = ensureDraft(state.drafts, chatId);
+          if (current.draftId === null) return state;
+          return {
+            drafts: {
+              ...state.drafts,
+              [chatId]: {
+                ...current,
+                draftId: null,
+                hostRevision: 0,
+                ownerHostId: null,
+                origin: null,
+                publication: null,
+                syncedGeneration: current.generation,
+              },
+            },
+          };
+        });
       },
       bindTarget: (chatId, epicId) => {
         const current = ensureDraft(get().drafts, chatId);

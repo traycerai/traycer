@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   draftComposerPortableSchema,
+  draftComposerPortableWriteSchema,
   draftInterviewPortableSchema,
   draftStashPortableSchema,
   draftTargetSchema,
@@ -150,17 +151,17 @@ export const draftWriteSchema = z.discriminatedUnion("kind", [
   z.object({
     ...draftWriteCommonFields,
     kind: z.literal("landing"),
-    portable: draftComposerPortableSchema,
+    portable: draftComposerPortableWriteSchema,
   }),
   z.object({
     ...draftWriteCommonFields,
     kind: z.literal("new-chat"),
-    portable: draftComposerPortableSchema,
+    portable: draftComposerPortableWriteSchema,
   }),
   z.object({
     ...draftWriteCommonFields,
     kind: z.literal("chat-composer"),
-    portable: draftComposerPortableSchema,
+    portable: draftComposerPortableWriteSchema,
   }),
   z.object({
     ...draftWriteCommonFields,
@@ -206,6 +207,12 @@ export type DraftsListRequest = z.infer<typeof draftsListRequestSchema>;
  * `revision` is the tombstone's revision: hold
  * `{ kind: "tombstone", revision }` so a later higher-revision upsert
  * still revives.
+ *
+ * `positive()`, and the `delete` subscribe frame's `revision` is the same
+ * domain: a deletion is a BUMP of the row's revision, so `0` names no
+ * deletion at all. Splitting the two would let a host emit a delete a
+ * `drafts.list` could not represent, and the reconnecting client would then
+ * order that id by `storeSeq` instead of by revision.
  */
 export const draftListTombstoneSchema = z.object({
   draftId: z.string().min(1),
@@ -414,7 +421,8 @@ export const draftsSubscribeServerFrameSchemaV10 = z
       ...textFrameFields,
       ...storeSeqField,
       draftId: z.string().min(1),
-      revision: z.number().int().nonnegative(),
+      // Same domain as `draftListTombstoneSchema.revision` - see there.
+      revision: z.number().int().positive(),
     }),
     z.object({
       kind: z.literal("pong"),

@@ -80,6 +80,12 @@ type PendingFlush = {
   retryCount: number;
 };
 
+/** One draft's outstanding `drafts.upsert`, and the generation it carries. */
+type PendingSend = {
+  promise: Promise<void>;
+  readonly highestGeneration: number;
+};
+
 /**
  * One host's live draft mirror: `drafts.list` snapshot + `drafts.subscribe`
  * frames, debounced upsert, delete. Unreachable / `E_HOST_UNSUPPORTED` leaves
@@ -92,6 +98,20 @@ export class DraftMirrorSession {
   private readonly sink: DraftMirrorSink;
   private readonly timing: DraftMirrorTiming;
   private readonly now: () => number;
+
+  /**
+   * Per-draft send chain. Two `upsertDirty` runs can overlap (a debounce
+   * timer firing while a `flush` is awaiting `collectDirtyWrites`), and the
+   * request coordinator keys its FIFO queue by the FULL params - so two
+   * writes for the same draft carry different params and land in different
+   * queues. The host applies an upsert as a whole-document LWW, so an older
+   * body reaching it last wins. Ordering therefore has to be owned here.
+   *
+   * The entry lives only while a send for that draft is outstanding, so no
+   * generation bookkeeping survives a drained chain - a store that later
+   * restarts its own generation counter (a re-created row) is unaffected.
+   */
+  private readonly sendChain = new Map<string, PendingSend>();
 
   private snapshotSeq = 0;
   private listedScopeId: string | null = null;
@@ -125,6 +145,7 @@ export class DraftMirrorSession {
     this.closed = true;
     this.bootGeneration += 1;
     this.clearAllTimers();
+    this.sendChain.clear();
     this.streamSession?.close();
     this.streamSession = null;
   }
@@ -314,7 +335,18 @@ export class DraftMirrorSession {
   }): Promise<void> {
     if (this.closed || this.capabilityMissing) return;
     const parsed = draftsSubscribeServerFrameSchemaV10.safeParse(envelope);
-    if (!parsed.success) return;
+    if (!parsed.success) {
+      // A shape this client version does not accept stops convergence with
+      // no other signal at all - the drafts simply stop moving. Name it in
+      // dev rather than leaving the next reader to infer it.
+      if (import.meta.env.DEV) {
+        appLogger.warn("[draft-mirror] dropped unparsable subscribe frame", {
+          kind: envelope.kind,
+          issues: parsed.error.issues.map((issue) => issue.message),
+        });
+      }
+      return;
+    }
     const frame = parsed.data;
     if (frame.kind === "pong") return;
     if (frame.kind === "scope") {
@@ -406,35 +438,75 @@ export class DraftMirrorSession {
     for (const entry of writes) {
       if (wanted !== null && !wanted.has(entry.write.draftId)) continue;
       if (this.isAbandoned()) return;
-      try {
-        const prepared = await this.sink.prepareWrite(this.hostId, entry.write);
-        const response = await this.rpc.upsert(prepared);
-        this.held.set(response.draft.draftId, {
-          kind: "row",
-          revision: response.draft.revision,
-        });
-        this.sink.rememberSynced(
-          response.draft.draftId,
-          response.draft.revision,
-          entry.generation,
-        );
-        this.pending.delete(entry.write.draftId);
-        if (this.sink.isDirty(response.draft.draftId)) {
-          this.schedule(response.draft.draftId);
+      await this.sendUpsert(entry);
+    }
+  }
+
+  /**
+   * One draft's upsert, queued behind that draft's own outstanding send.
+   * Collection order and send order are not the same order, so a body an
+   * equal-or-newer generation already covers is dropped rather than queued
+   * behind it - re-sending it would hand the host the older document last.
+   */
+  private sendUpsert(entry: DraftDirtyWrite): Promise<void> {
+    const draftId = entry.write.draftId;
+    const outstanding = this.sendChain.get(draftId);
+    if (
+      outstanding !== undefined &&
+      outstanding.highestGeneration >= entry.generation
+    ) {
+      return outstanding.promise;
+    }
+    const pending: PendingSend = {
+      promise: Promise.resolve(),
+      highestGeneration: entry.generation,
+    };
+    pending.promise = (outstanding?.promise ?? Promise.resolve())
+      .then(() => this.runUpsert(entry))
+      .finally(() => {
+        if (this.sendChain.get(draftId) === pending) {
+          this.sendChain.delete(draftId);
         }
-      } catch (error: unknown) {
-        if (isDraftsCapabilityMissing(error)) {
-          this.markUnsupported();
-          return;
-        }
-        appLogger.warn("[draft-mirror] drafts.upsert failed; staying local", {
-          error: describeLogError(error),
-        });
-        // Dirty gate is correct (keep suppressing host frames) but it must
-        // have a live retry behind it — re-arm with bounded backoff.
-        if (this.sink.isDirty(entry.write.draftId)) {
-          this.scheduleRetry(entry.write.draftId);
-        }
+      });
+    this.sendChain.set(draftId, pending);
+    return pending.promise;
+  }
+
+  private async runUpsert(entry: DraftDirtyWrite): Promise<void> {
+    if (this.isAbandoned()) return;
+    const draftId = entry.write.draftId;
+    try {
+      const prepared = await this.sink.prepareWrite(this.hostId, entry.write);
+      const response = await this.rpc.upsert(prepared);
+      this.held.set(response.draft.draftId, {
+        kind: "row",
+        revision: response.draft.revision,
+      });
+      this.sink.rememberSynced(
+        response.draft.draftId,
+        response.draft.revision,
+        entry.generation,
+      );
+      // `clearTimer`, not `pending.delete`: `schedule()` can have re-armed
+      // this draft while the upsert was in flight, and a bare map delete
+      // leaves that handle out of `clearAllTimers()`'s reach - it would then
+      // fire after `close()`.
+      this.clearTimer(draftId);
+      if (this.sink.isDirty(response.draft.draftId)) {
+        this.schedule(response.draft.draftId);
+      }
+    } catch (error: unknown) {
+      if (isDraftsCapabilityMissing(error)) {
+        this.markUnsupported();
+        return;
+      }
+      appLogger.warn("[draft-mirror] drafts.upsert failed; staying local", {
+        error: describeLogError(error),
+      });
+      // Dirty gate is correct (keep suppressing host frames) but it must
+      // have a live retry behind it — re-arm with bounded backoff.
+      if (this.sink.isDirty(draftId)) {
+        this.scheduleRetry(draftId);
       }
     }
   }

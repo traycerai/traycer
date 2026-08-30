@@ -134,8 +134,16 @@ export function interviewDraftWrite(input: {
     workspace: null,
     portable: {
       pageIndex: input.draft.pageIndex,
+      // Labels alone are a LEGACY answer, whose settlement must stay
+      // neutral - carry the interaction-time evidence too, or a draft
+      // silently degrades by crossing the host.
       answers: input.draft.answers.map((answer) => ({
+        questionIdentity: answer.questionIdentity,
         selected: [...answer.selected],
+        selectedOptionIndices:
+          answer.selectedOptionIndices === undefined
+            ? undefined
+            : [...answer.selectedOptionIndices],
         otherText: answer.otherText,
         otherSelected: answer.otherSelected,
       })),

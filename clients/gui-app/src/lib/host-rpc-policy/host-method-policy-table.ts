@@ -1110,6 +1110,13 @@ export const HOST_METHOD_POLL_TABLE = {
   // client keeps device-local drafts. No poll: subscribe is the freshness
   // channel, and a host missing the stream also misses these methods.
   "drafts.list": { ...LATEST_SCHEDULING, poll: null },
+  // `fifo` here does NOT order two writes of the same draft: the coordinator
+  // keys its queue by the full params, so two revisions of one draft carry
+  // different params and get different queues. Per-draft ordering is owned by
+  // `DraftMirrorSession` (`sendUpsert`), which chains sends per `draftId` and
+  // drops a body an equal-or-newer generation already covers - the host
+  // applies an upsert as a whole-document LWW, so an older body arriving last
+  // would win.
   "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.claim": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },

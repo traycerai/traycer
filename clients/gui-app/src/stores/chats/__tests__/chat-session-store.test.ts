@@ -1903,7 +1903,13 @@ describe("createChatSessionStore", () => {
       expect(harness.handle.store.getState().pendingInterviews).toEqual([
         { blockId, requestedAt: 2 },
       ]);
-      expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toEqual(draft);
+      // The stored row also carries the host-mirror bookkeeping (draftId /
+      // hostRevision / generation / ...), which this test says nothing
+      // about; the helper asserts the payload it does own.
+      expectPersistedInterviewDraft(
+        readInterviewDraftSnapshot(CHAT_ID, blockId),
+        draft,
+      );
     };
 
     callbacks.onInterviewAnswered({

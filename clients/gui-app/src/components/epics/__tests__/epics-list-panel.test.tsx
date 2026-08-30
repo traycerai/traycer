@@ -1663,8 +1663,23 @@ describe("<EpicsListPanel />", () => {
   });
 
   it("cycles draft rows with the arrow keys and returns to the query", async () => {
-    seedRetainedLandingDraft("alpha draft");
-    seedRetainedLandingDraft("beta draft");
+    const alphaId = seedRetainedLandingDraft("alpha draft");
+    const betaId = seedRetainedLandingDraft("beta draft");
+    // Both seeds land in the same millisecond, and the comparator's tiebreak
+    // for equal `lastTouchedAt` is the uuid - which is random, so the row
+    // order this case is about was a coin flip. Stamp it.
+    const stampedAt = new Map([
+      [alphaId, 1],
+      [betaId, 2],
+    ]);
+    useLandingDraftStore.setState((state) => ({
+      drafts: state.drafts.map((draft) => {
+        const lastTouchedAt = stampedAt.get(draft.id);
+        return lastTouchedAt === undefined
+          ? draft
+          : { ...draft, lastTouchedAt };
+      }),
+    }));
     useHistorySearchStore.setState({
       search: { ...DEFAULT_HISTORY_SEARCH, drafts: ["landing"] },
     });

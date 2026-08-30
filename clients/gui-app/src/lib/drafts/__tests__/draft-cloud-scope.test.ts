@@ -7,7 +7,9 @@ import type { DraftWrite } from "@traycer/protocol/host";
 import {
   acquireDraftMirrorSession,
   draftsCloudScopeId,
+  releaseDraftMirrorSession,
   resetDraftMirrorCoordinatorForTests,
+  subscribeDraftsCloudScope,
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { cloudDraftsDirectoryIsVisible } from "@/lib/drafts/cloud-drafts-visibility";
 
@@ -127,8 +129,12 @@ describe("cloud-drafts scope subscribe frame", () => {
     ).toBe(true);
   });
 
-  it("makes the section visible when the first subscribe frame is a late-joiner peek", async () => {
+  it("notifies scope subscribers on the frame and clears the scope on release", async () => {
     const stream = streamHarness();
+    let notifications = 0;
+    const unsubscribe = subscribeDraftsCloudScope(() => {
+      notifications += 1;
+    });
     acquireDraftMirrorSession({
       hostId: HOST_ID,
       client: listNullClient() as never,
@@ -138,14 +144,25 @@ describe("cloud-drafts scope subscribe frame", () => {
     await vi.waitFor(() => {
       expect(stream.subscribeCalls.count).toBe(1);
     });
+    const beforeFrame = notifications;
     stream.emit({
       kind: "scope",
       hasBinaryPayload: false,
       scopeId: SCOPE_ID,
     });
+    // `useCloudDraftsDirectory` reads the scope through
+    // `useSyncExternalStore`, so the section only appears if the advisory
+    // frame actually rings the subscription - not merely if the getter
+    // would now answer.
     await vi.waitFor(() => {
-      expect(draftsCloudScopeId(HOST_ID)).toBe(SCOPE_ID);
+      expect(notifications).toBeGreaterThan(beforeFrame);
     });
+    expect(draftsCloudScopeId(HOST_ID)).toBe(SCOPE_ID);
+
+    // The last release tears the session down; a scope left behind would
+    // keep the section visible for a host that is no longer connected.
+    releaseDraftMirrorSession(HOST_ID);
+    expect(draftsCloudScopeId(HOST_ID)).toBeNull();
     expect(
       cloudDraftsDirectoryIsVisible({
         scopeId: draftsCloudScopeId(HOST_ID),
@@ -153,6 +170,7 @@ describe("cloud-drafts scope subscribe frame", () => {
         isPending: true,
         isSuccess: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
+    unsubscribe();
   });
 });

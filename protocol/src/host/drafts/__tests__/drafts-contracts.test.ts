@@ -431,6 +431,62 @@ describe("drafts.subscribe@1.0 frames", () => {
     expect(result.success).toBe(false);
   });
 
+  it("refuses revision 0 for a deletion on both the frame and the list", () => {
+    expect(
+      draftsSubscribeServerFrameSchemaV10.safeParse({
+        kind: "delete",
+        hasBinaryPayload: false,
+        storeSeq: 15,
+        draftId: "draft-1",
+        revision: 0,
+      }).success,
+    ).toBe(false);
+    expect(
+      draftsListResponseSchema.safeParse({
+        drafts: [],
+        tombstones: [{ draftId: "draft-1", revision: 0 }],
+        snapshotSeq: 15,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a composer write that omits `closed`", () => {
+    const portableWithoutClosed = {
+      content: LANDING_WRITE.portable.content,
+      selection: LANDING_WRITE.portable.selection,
+      runSettings: LANDING_WRITE.portable.runSettings,
+      composerMode: LANDING_WRITE.portable.composerMode,
+      blobHashes: LANDING_WRITE.portable.blobHashes,
+    };
+    expect(
+      draftWriteSchema.safeParse({
+        ...LANDING_WRITE,
+        portable: portableWithoutClosed,
+      }).success,
+    ).toBe(false);
+    // The document/reader side keeps the 1.0 default so an older head still
+    // decodes as open.
+    const decoded = draftDocumentSchema.parse({
+      ...LANDING_DOCUMENT,
+      portable: portableWithoutClosed,
+    });
+    expect(decoded.kind).toBe("landing");
+    if (decoded.kind !== "landing") return;
+    expect(decoded.portable.closed).toBe(false);
+  });
+
+  it("rejects an upsert whose envelope revision differs from its row", () => {
+    const result = draftsSubscribeServerFrameSchemaV10.safeParse({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      storeSeq: 12,
+      draftId: LANDING_DOCUMENT.draftId,
+      revision: LANDING_DOCUMENT.revision + 1,
+      draft: LANDING_DOCUMENT,
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("parses a delete that carries the host revision and storeSeq", () => {
     const frame = {
       kind: "delete" as const,

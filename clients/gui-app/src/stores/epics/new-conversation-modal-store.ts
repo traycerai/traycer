@@ -13,6 +13,8 @@ import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-
 import {
   mergeLandingDraftWorkspaceFolders,
   removeLandingDraftWorkspaceFolder,
+  sameLandingDraftWorkspace,
+  sameNullableChatRunSettings,
   setLandingDraftWorkspacePrimary,
 } from "@/stores/home/landing-draft-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
@@ -149,56 +151,65 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
     setContent: (epicId, content) => {
       notifyDraftLocalEdit(applyNewChatLocalPatch(epicId, { content }, true));
     },
+    // Every reducer below compares before it writes. `mergePatch` mints a
+    // draft identity and bumps `generation`, so an unchanged value applied
+    // anyway makes a modal the user never touched dirty and publishes it.
     setSelection: (epicId, selection) => {
+      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+      if (sameNewChatSelection(current.selection, selection)) return;
       notifyDraftLocalEdit(
         applyNewChatLocalPatch(epicId, { selection }, false),
       );
     },
     clearSelection: (epicId) => {
+      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+      if (current.selection === null) return;
       notifyDraftLocalEdit(
         applyNewChatLocalPatch(epicId, { selection: null }, false),
       );
     },
     setSettings: (epicId, settings) => {
+      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+      if (sameNullableChatRunSettings(current.settings, settings)) return;
       notifyDraftLocalEdit(applyNewChatLocalPatch(epicId, { settings }, false));
     },
     setComposerMode: (epicId, mode) => {
+      const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+      if (current.composerMode === mode) return;
       notifyDraftLocalEdit(
         applyNewChatLocalPatch(epicId, { composerMode: mode }, false),
       );
     },
     addResolvedFolders: (epicId, seedWorkspace, folders) => {
-      const beforeWorkspace =
-        get().draftPatchesByEpicId[epicId]?.workspace ?? seedWorkspace;
       const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
+      const beforeWorkspace = current.workspace ?? seedWorkspace;
       const workspace = mergeLandingDraftWorkspaceFolders(
-        current.workspace ?? seedWorkspace,
+        beforeWorkspace,
         folders,
       );
+      // A merge that adds nothing (every folder already staged) evicts
+      // nothing either, so there is no work and no patch.
+      if (sameLandingDraftWorkspace(beforeWorkspace, workspace)) return [];
       notifyDraftLocalEdit(
         applyNewChatLocalPatch(epicId, { workspace }, false),
       );
-      const afterWorkspace =
-        get().draftPatchesByEpicId[epicId]?.workspace ?? seedWorkspace;
-      const afterSet = new Set(afterWorkspace.folders);
+      const afterSet = new Set(workspace.folders);
       return beforeWorkspace.folders.filter((path) => !afterSet.has(path));
     },
     removeFolder: (epicId, seedWorkspace, folderKey) => {
       const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
-      const workspace = removeLandingDraftWorkspaceFolder(
-        current.workspace ?? seedWorkspace,
-        folderKey,
-      );
+      const before = current.workspace ?? seedWorkspace;
+      const workspace = removeLandingDraftWorkspaceFolder(before, folderKey);
+      if (sameLandingDraftWorkspace(before, workspace)) return;
       notifyDraftLocalEdit(
         applyNewChatLocalPatch(epicId, { workspace }, false),
       );
     },
     setPrimaryFolder: (epicId, seedWorkspace, folderPath) => {
       const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
-      const workspace = setLandingDraftWorkspacePrimary(
-        current.workspace ?? seedWorkspace,
-        folderPath,
-      );
+      const before = current.workspace ?? seedWorkspace;
+      const workspace = setLandingDraftWorkspacePrimary(before, folderPath);
+      if (sameLandingDraftWorkspace(before, workspace)) return;
       notifyDraftLocalEdit(
         applyNewChatLocalPatch(epicId, { workspace }, false),
       );
@@ -217,6 +228,14 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
     resetForTests: () => set({ draftPatchesByEpicId: {} }),
   }),
 );
+
+function sameNewChatSelection(
+  left: NewConversationModalDraftPatch["selection"],
+  right: NewConversationModalDraftPatch["selection"],
+): boolean {
+  if (left === null || right === null) return left === right;
+  return left.from === right.from && left.to === right.to;
+}
 
 function applyNewChatLocalPatch(
   epicId: string,
