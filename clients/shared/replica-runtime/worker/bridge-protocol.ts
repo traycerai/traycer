@@ -63,6 +63,11 @@ import type {
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
+ * **11** since the body plane's RETURN leg: `body/doc-in`,
+ * `body/awareness-out` and `body/awareness-in`. A v10 worker pushes no
+ * collaborator edits and no presence, so an epic looks alive and edits
+ * one-way - the failure a version check exists to make loud.
+ *
  * **10** since `attachment/await` / `attachment/cancel`: the WAITING half of
  * the attachment class, which `attachment/read` alone could not serve without
  * turning "still replicating" into "missing". One bump for the pair - they
@@ -117,7 +122,7 @@ import type {
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 10;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 11;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -273,6 +278,19 @@ export type MainToWorkerEvent =
     }
   | {
       /**
+       * A local presence frame for one artifact body, on its way to the arm.
+       *
+       * An EVENT, not a call: presence is fire-and-forget and self-corrects on
+       * the next frame, so a dropped one costs a stale cursor rather than
+       * data. An unknown `docKey` is dropped silently at the far end for the
+       * same reason - there is no answer a sender could act on.
+       */
+      readonly kind: "body/awareness-out";
+      readonly docKey: string;
+      readonly frame: Uint8Array;
+    }
+  | {
+      /**
        * One fire-and-forget command for the relocated runtime.
        *
        * See {@link RuntimeCommandMap} for why this is one kind rather than
@@ -348,6 +366,30 @@ export type WorkerToMainEvent =
       readonly kind: "fatal";
       readonly message: string;
       readonly stack: string | null;
+    }
+  | {
+      /**
+       * A collaborator's edit, for the live body doc MAIN holds.
+       *
+       * The return leg of the body plane, and the one whose absence made
+       * collaborative editing one-way: the tier applies a remote update
+       * worker-side, and without this nothing carries it to the doc the editor
+       * is actually bound to.
+       *
+       * Pushed only for a docKey main is known to hold. Main stamps these with
+       * the same module-private origin it stamps an install with, so its own
+       * observer does not forward a collaborator's edit straight back out -
+       * the echo loop's second entrance.
+       */
+      readonly kind: "body/doc-in";
+      readonly docKey: string;
+      readonly update: Uint8Array;
+    }
+  | {
+      /** A remote presence frame for one body, for main's `Awareness`. */
+      readonly kind: "body/awareness-in";
+      readonly docKey: string;
+      readonly frame: Uint8Array;
     }
   | {
       /**
@@ -647,6 +689,7 @@ const MAIN_TO_WORKER_EVENT_COVERAGE: {
   "stream/manifest": true,
   "accounting/demote": true,
   "runtime/command": true,
+  "body/awareness-out": true,
   shutdown: true,
 };
 
@@ -664,6 +707,8 @@ const WORKER_TO_MAIN_EVENT_COVERAGE: {
   fatal: true,
   "accounting/books": true,
   "accounting/settle": true,
+  "body/doc-in": true,
+  "body/awareness-in": true,
 };
 
 export const MAIN_TO_WORKER_EVENT_KINDS: readonly MainToWorkerEvent["kind"][] =

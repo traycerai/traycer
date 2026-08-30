@@ -169,7 +169,7 @@ describe("the bridge vocabulary and its version", () => {
     // the two: editing either union reddens this test, and the comment the
     // reader lands on is the one telling them to bump. That is a prompt, not a
     // proof, and it is named as such rather than dressed up as coverage.
-    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(10);
+    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(11);
     expect(MAIN_TO_WORKER_EVENT_KINDS).toEqual([
       "bootstrap",
       "current-user",
@@ -179,6 +179,7 @@ describe("the bridge vocabulary and its version", () => {
       "stream/manifest",
       "accounting/demote",
       "runtime/command",
+      "body/awareness-out",
       "shutdown",
     ]);
     expect(WORKER_TO_MAIN_EVENT_KINDS).toEqual([
@@ -193,6 +194,8 @@ describe("the bridge vocabulary and its version", () => {
       "fatal",
       "accounting/books",
       "accounting/settle",
+      "body/doc-in",
+      "body/awareness-in",
     ]);
     // CALLS too, which this pin did not cover until `mutation/apply` was added
     // without the version moving. Events were coupled to the version and calls
