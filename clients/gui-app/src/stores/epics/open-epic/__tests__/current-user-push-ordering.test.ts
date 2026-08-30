@@ -76,12 +76,32 @@ afterEach(() => {
 });
 
 describe("the current-user push", () => {
-  it("pushes the signed-in user at construction", () => {
-    const opened = openWithRecording("user-1");
+  it("pushes the AUTH user at construction, not the persistence identity", () => {
+    // THE distinguishing case, and the reason this pin exists in this shape.
+    //
+    // `options.userId` and the auth profile carry the SAME VALUE in production
+    // and are not the same FACT: the option is the identity persisted state is
+    // namespaced under, while the projector's question is who is signed in
+    // right now. This pushed the option once, so every caller that namespaces
+    // by nothing started its worker with no viewer - and a null viewer hides
+    // nothing, which is the fail-OPEN direction.
+    //
+    // The two are deliberately DIFFERENT here. A refactor that reads the
+    // option again - reasonable-looking, since they match in production - goes
+    // red on this line rather than in a projection nobody is watching.
+    useAuthStore.setState({
+      profile: {
+        userId: "auth-user",
+        userName: "Auth User",
+        email: "auth@example.com",
+      },
+    });
+
+    const opened = openWithRecording("persistence-user");
 
     // FIRST call, not merely present: anything the store does before this
-    // would be work the worker does for a null user.
-    expect(opened.calls[0]).toBe("current-user:user-1");
+    // would be work the worker does for the wrong viewer.
+    expect(opened.calls[0]).toBe("current-user:auth-user");
 
     opened.dispose();
   });
