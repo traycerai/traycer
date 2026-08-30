@@ -528,9 +528,28 @@ describe("chat-sync derived schema forks", () => {
     expectDerivedFrom(
       snapshotProviderNoticeMetadataSchema.shape,
       providerNoticeMetadataSchema.shape,
-      ["harnessId"],
+      ["harnessId", "noticeKind"],
       [],
     );
+  });
+
+  it("carries a notice kind the epic enum does not know", () => {
+    const parsed = snapshotContentBlockSchema.parse({
+      ...noticeTextBlock,
+      providerNotice: {
+        harnessId: FUTURE_HARNESS,
+        noticeKind: "a_kind_from_a_later_release",
+        tone: "warning",
+        title: "Claude Code warning",
+        message: "Blank prompt",
+        details: [],
+        metadata: null,
+      },
+    });
+
+    expect(
+      parsed.type === "text" ? parsed.providerNotice?.noticeKind : null,
+    ).toBe("a_kind_from_a_later_release");
   });
 
   it("keeps the assistant message bound to the epic schema's live fields", () => {
