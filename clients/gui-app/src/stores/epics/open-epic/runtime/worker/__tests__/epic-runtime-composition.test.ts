@@ -22,6 +22,7 @@ import {
   INERT_STATUS_CALLBACKS,
 } from "../test-support/epic-stream-callback-fixtures";
 import { buildProxiedStreamFactories } from "../epic-runtime-composition";
+import { absentLaneUnaries } from "../../../test-support/absent-lane-unaries";
 
 /** Worker client -> real proxy host -> recording socket. No stub between. */
 function proxied() {
@@ -61,6 +62,7 @@ describe("buildProxiedStreamFactories", () => {
       streams: worker.client,
       support: () => "unknown",
       subscribeSupport: () => () => {},
+      unaries: absentLaneUnaries(),
     });
 
     factories.streamClientFactory("epic-1", INERT_LEGACY_CALLBACKS, () => null);
@@ -79,6 +81,7 @@ describe("buildProxiedStreamFactories", () => {
       streams: worker.client,
       support: () => "supported",
       subscribeSupport: () => () => {},
+      unaries: absentLaneUnaries(),
     });
     const lanes = factories.laneSelection;
     expect(lanes).not.toBeNull();
@@ -113,6 +116,7 @@ describe("buildProxiedStreamFactories", () => {
         return method === "epic.state.subscribe" ? "supported" : "unknown";
       },
       subscribeSupport: () => () => {},
+      unaries: absentLaneUnaries(),
     });
 
     // On main this read casts the method to the registry's key type. Here it is
@@ -131,6 +135,7 @@ describe("buildProxiedStreamFactories", () => {
       streams: worker.client,
       support: () => "supported",
       subscribeSupport: () => () => {},
+      unaries: absentLaneUnaries(),
     });
     const statuses: string[] = [];
     factories.laneSelection?.statusStreamClientFactory("epic-1", {

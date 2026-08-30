@@ -17,6 +17,7 @@ import {
 import { createProcessBackedAccountingPort } from "@/stores/epics/open-epic/runtime/process-backed-accounting-port";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { dispatchEpicWriteCommand } from "@/stores/epics/open-epic/runtime/epic-write-command-dispatch";
+import { dispatchEpicLaneUnary } from "@/stores/epics/open-epic/runtime/epic-lane-unary-dispatch";
 import {
   classifyEpicWriteCommandFailure,
   readWriteCommandIntent,
@@ -52,7 +53,9 @@ import {
   getOpenEpicRegistry,
   handleHostClients,
   handleHostIds,
+  isEpicSessionHandleDead,
   releaseOpenEpicSessionIfUnused,
+  trackEpicSessionHandleLiveness,
 } from "@/lib/registries/epic-session-registry";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
@@ -610,6 +613,12 @@ export function EpicSessionProvider(
       // during composition.
       let bodyTarget: EpicRuntimeBodyReturnTarget | null = null;
 
+      // Created BEFORE the spawn and mapped to the handle after it, because a
+      // protocol-mismatch fatal arrives synchronously from inside
+      // `spawnEpicRuntimeWorker` - before `handle` exists. See
+      // `handleWorkerLiveness` for why this is a cell rather than a set entry.
+      const liveness = { dead: false };
+
       const runtimeWorker = spawnEpicRuntimeWorker<
         Partial<EpicRuntimeProjection>
       >({
@@ -639,6 +648,19 @@ export function EpicSessionProvider(
               { epicId },
               { message, stack },
             );
+            // RECORDED, not acted on. `failed` is the presentation that carries
+            // the Retry affordance, and Retry alone could not recover: it bumps
+            // `retryGeneration`, the acquire effect sees
+            // `current.hostId === targetHostId`, and presents this same dead
+            // handle as `ready` - the affordance unable to recover from the one
+            // failure it is shown for. Marking the handle is what lets that
+            // pass retire it instead.
+            //
+            // Marked rather than disposed HERE because this runs on a bridge
+            // callback that can be inside the registry's own acquire
+            // transaction; the acquire effect owns registry mutation and reads
+            // this on its next pass.
+            liveness.dead = true;
             presentSession({
               kind: "failed",
               targetHostId,
@@ -678,7 +700,18 @@ export function EpicSessionProvider(
             };
           }
         },
+        // Reduced HERE, on main, for the same reason `writeCommand` is: an
+        // `Error` does not survive structured clone.
+        laneUnary: (request) =>
+          dispatchEpicLaneUnary(
+            { epicId, requester: () => getCommandRequester() },
+            request,
+          ),
         streams: wsStreamClient,
+        // The SAME object as `streams`, narrowed to the two members the
+        // manifest is built from - see the option's own doc for why the two
+        // are separate parameters rather than one widened one.
+        methodSupport: wsStreamClient,
         accounting,
         projection: projection.handlers,
         body: {
@@ -789,9 +822,32 @@ export function EpicSessionProvider(
       // stamp is what routes RPCs and capability answers to the host that owns
       // the stream (F1).
       handleHostIds.set(handle, targetHostId);
+      // The same cell the fatal relay above writes, so a death that happened
+      // before this line is already recorded on the handle the moment it
+      // exists.
+      trackEpicSessionHandleLiveness(handle, liveness);
       return handle;
     };
     let current = sessionRef.current;
+    // A handle whose runtime worker died is not a session; it is a corpse that
+    // every arm below would treat as live - the fast path would present it
+    // `ready`, and the re-point arm would try to encode a root state out of a
+    // bridge with nothing behind it. Forgetting it here is what makes Retry a
+    // recovery: the bump re-runs this effect, `current` becomes null, and the
+    // acquire arm below runs.
+    //
+    // FORGETTING ONLY. The retirement belongs to `acquireMounted`, which is the
+    // one line that hands a mounted handle out and therefore the only place
+    // that can promise every caller a live one - including a fresh surface that
+    // never had a `current` to check. Retiring here as well would be a second
+    // owner of one decision, and the version that did exactly that is what left
+    // the corpse window open for a second tab. What this arm does that the
+    // registry cannot is clear THIS provider's own reference.
+    if (current !== null && isEpicSessionHandleDead(current.handle)) {
+      sessionRef.current = null;
+      setSession(null);
+      current = null;
+    }
     // R-1: see `readOwnerIdentityVerdict` for the invariant this enforces.
     const ownerIdentityVerdict = readOwnerIdentityVerdict(
       current,
@@ -1054,7 +1110,24 @@ export function EpicSessionProvider(
           editsTransferredToReplacement = false;
         }
       }
-      if (lifecycle.cancelled) return;
+      if (lifecycle.cancelled) {
+        // OWNERSHIP, and it changed hands one line before this function was
+        // called. `commitReplacement` sets `settled = true` before dispatching
+        // here, which permanently disarms both `disposePending` and the
+        // deadline - so from that assignment onward THIS function owns
+        // `nextHandle` on every exit, and the cleanup's `disposePending()` is
+        // a no-op it cannot rely on.
+        //
+        // Every other exit already discharges it: `adoptWinner` disposes, the
+        // no-winner arm disposes, and the success arm hands it to the registry.
+        // This one returned bare, so an unmount or a target change landing
+        // while `encodeRootState` / `applyRootUpdate` was awaiting abandoned a
+        // fully-built candidate - its worker, its stream transport, its socket
+        // and its accounting registrations alive for the life of the tab, with
+        // nothing left holding a reference that could ever end them.
+        nextHandle.dispose();
+        return;
+      }
       // Identity of the handle being REPLACED, for the retention (F10). Read
       // from the construction stamp rather than from `current.hostId`: the two
       // agree today, but "derive, don't assert" is the whole of step 1, and

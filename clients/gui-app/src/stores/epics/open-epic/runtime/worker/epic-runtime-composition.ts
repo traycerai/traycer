@@ -37,6 +37,7 @@ import type { CommandIdFactory } from "@traycer-clients/shared/replica-runtime/c
 import {
   createEpicReplicaRuntime,
   type EpicLaneSelectionSources,
+  type EpicLaneUnaries,
   type EpicReplicaRuntime,
 } from "../epic-replica-runtime";
 import type { EpicStreamClientFactory } from "../legacy-epic-stream-adapter";
@@ -72,6 +73,16 @@ export interface ProxiedStreamFactoryOptions {
   readonly support: (method: string) => "unknown" | "supported" | "unsupported";
   /** Fires when a manifest push lands. */
   readonly subscribeSupport: (listener: () => void) => () => void;
+  /**
+   * The two lane unaries, already crossing the bridge.
+   *
+   * An option and not something this module builds, for the same reason the
+   * streams are: these ride the MAIN thread's requester, so their
+   * implementation is a `main/lane-unary` call the worker host owns, and a
+   * caller composing its own runtime (the provider's override seam, the
+   * suites) supplies its own.
+   */
+  readonly unaries: EpicLaneUnaries;
 }
 
 export function buildProxiedStreamFactories(
@@ -141,6 +152,7 @@ export function buildProxiedStreamFactories(
           callbacks,
           seedOfferProvider,
         }),
+      unaries: options.unaries,
     },
   };
 }

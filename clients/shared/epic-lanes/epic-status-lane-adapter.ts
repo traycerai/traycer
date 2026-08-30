@@ -221,6 +221,23 @@ export function createEpicStatusLaneAdapter(
       onSnapshot: (frame: EpicStatusSnapshotFrame) => {
         if (!accepts(generation)) return;
         foldAuthorityEpoch(frame.authorityEpoch);
+        // The BOUNDARY first, because it is what makes this cycle's answer
+        // authoritative and the facts below are that answer's contents.
+        //
+        // Flattening the snapshot into ordinary events - which the rest of this
+        // handler does, deliberately - drops the fact that a snapshot happened
+        // at all, and that fact is not recoverable downstream: a lane delta and
+        // a lane snapshot arrive as the same event kinds. The legacy arm never
+        // had to say it separately because ONE function
+        // (`applyRootSnapshot`) both landed the snapshot and adopted its role,
+        // so the boundary was implicit in the call. This lane has no such
+        // function, and without this event the open cycle's freshness latch is
+        // never set: every write is refused before dispatch and the reconnect
+        // drain never runs, for the life of the session.
+        emit({
+          kind: "control-snapshot-complete",
+          role: frame.permissionRole,
+        });
         // Every field, restated, in the order a consumer needs them: the
         // permission verdict gates what the rest may do, so it lands first.
         emit({

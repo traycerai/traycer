@@ -176,7 +176,13 @@ describe("the bridge vocabulary and its version", () => {
     // the two: editing either union reddens this test, and the comment the
     // reader lands on is the one telling them to bump. That is a prompt, not a
     // proof, and it is named as such rather than dressed up as coverage.
-    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(11);
+    // 12 since `main/lane-unary` and the first production emitter of
+    // `stream/manifest`. The event unions below did NOT change for the second
+    // of those, which is exactly the case this prompt is for: the kind was
+    // always declared and always handled, and what moved is that main finally
+    // sends one - a change no vocabulary comparison can see, and one whose
+    // absence pinned every worker-hosted runtime to the legacy arm.
+    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(12);
     expect(MAIN_TO_WORKER_EVENT_KINDS).toEqual([
       "bootstrap",
       "current-user",
@@ -232,12 +238,17 @@ describe("the bridge vocabulary and its version", () => {
   });
 });
 
-describe("the one worker->main call", () => {
-  it("names exactly one member", () => {
-    // BY NAME, not counted. This map went 0 -> 2 -> 0 -> 1 across four
-    // rulings; the count alone would have read the same at two of those points
-    // while naming entirely different calls.
-    expect([...MAIN_CALL_KINDS]).toEqual(["main/write-command"]);
+describe("the worker->main calls", () => {
+  it("names exactly its two members", () => {
+    // BY NAME, not counted. This map went 0 -> 2 -> 0 -> 1 -> 2 across five
+    // rulings; the count alone would have read the same at three of those
+    // points while naming entirely different calls - and the first `2` was
+    // `main/auth-revalidate` + `main/mint-credential`, which share not one
+    // member with today's.
+    expect([...MAIN_CALL_KINDS]).toEqual([
+      "main/write-command",
+      "main/lane-unary",
+    ]);
   });
 
   it("round-trips a classified failure without an Error crossing", async () => {

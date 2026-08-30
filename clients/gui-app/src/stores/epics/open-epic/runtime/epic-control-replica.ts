@@ -402,6 +402,21 @@ export function createEpicControlReplica(
     effects.drainWritePathsAfterReconnect();
   }
 
+  /**
+   * This subscription cycle now holds a complete, authoritative answer.
+   *
+   * Both arms reach this: `@1` through the runtime's `applyRootSnapshot`, the
+   * lanes through a `control-snapshot` event. It is deliberately the ONLY
+   * writer of `hasFreshRootSnapshotForOpenCycle` to `true` - every other
+   * assignment clears it - because that latch is what the write gate and the
+   * reconnect drain read, and a second way to set it would be a second
+   * definition of "this session may write".
+   */
+  function adoptSnapshotRole(role: PermissionRole | null): void {
+    currentRole = role;
+    hasFreshRootSnapshotForOpenCycle = true;
+  }
+
   function applyPermissionChanged(role: PermissionRole | null): void {
     // The clears run BEFORE the role moves and before anything is published,
     // exactly as the closure ordered them. A queue cleared afterwards is a
@@ -422,6 +437,56 @@ export function createEpicControlReplica(
     }
     currentRole = role;
     publish({ permissionRole: role });
+  }
+
+  /**
+   * The three DIRTINESS arms, lifted out of `apply` as one subject.
+   *
+   * Split by what the events are ABOUT rather than by an arbitrary halving,
+   * for the reason `readWriteCommandIntent` states about its own split: the
+   * `complexity` rule counts every `case` and every guard inside one, and
+   * these three carry three of each without any single decision being hard.
+   * Lifting them keeps the switch above readable as a routing table and gives
+   * a fourth dirtiness event an obvious home.
+   *
+   * The rule they share is the one worth keeping in one place: only the ATOMIC
+   * snapshot may ESTABLISH dirtiness (a delta cannot prove this subscription
+   * has seen every room), and each delta is change-gated so a restatement
+   * costs no publish.
+   */
+  function applyDirtiness(
+    event: Extract<
+      EpicControlEvent,
+      { kind: "dirty-snapshot" | "root-dirty" | "room-dirty" }
+    >,
+  ): void {
+    if (event.kind === "dirty-snapshot") {
+      const artifactRoomDirtyByArtifactRoomId: Record<string, boolean> = {};
+      for (const room of event.rooms) {
+        artifactRoomDirtyByArtifactRoomId[room.artifactRoomId] = room.dirty;
+      }
+      publish({
+        rootDirty: event.rootDirty,
+        hasDirtySnapshotForOpenCycle: true,
+        artifactRoomDirtyByArtifactRoomId,
+      });
+      return;
+    }
+    if (event.kind === "root-dirty") {
+      if (sink.read().rootDirty === event.dirty) return;
+      publish({ rootDirty: event.dirty });
+      return;
+    }
+    const held =
+      sink.read().artifactRoomDirtyByArtifactRoomId[event.artifactRoomId] ??
+      false;
+    if (held === event.dirty) return;
+    publish({
+      artifactRoomDirtyByArtifactRoomId: {
+        ...sink.read().artifactRoomDirtyByArtifactRoomId,
+        [event.artifactRoomId]: event.dirty,
+      },
+    });
   }
 
   return {
@@ -463,43 +528,22 @@ export function createEpicControlReplica(
         case "permission-changed":
           applyPermissionChanged(event.role);
           break;
+        case "control-snapshot":
+          // The lane arm's route to the SAME adoption the `@1` arm performs
+          // inside `applyRootSnapshot`. One implementation, reached two ways:
+          // a second copy here would be a second answer to "may this session
+          // write", which is the one question this replica exists to answer
+          // once.
+          adoptSnapshotRole(event.role);
+          break;
         case "cloud-sync-status":
           applyCloudSyncStatus(event.status);
           break;
-        case "dirty-snapshot": {
-          const artifactRoomDirtyByArtifactRoomId: Record<string, boolean> = {};
-          for (const room of event.rooms) {
-            artifactRoomDirtyByArtifactRoomId[room.artifactRoomId] = room.dirty;
-          }
-          publish({
-            rootDirty: event.rootDirty,
-            hasDirtySnapshotForOpenCycle: true,
-            artifactRoomDirtyByArtifactRoomId,
-          });
+        case "dirty-snapshot":
+        case "root-dirty":
+        case "room-dirty":
+          applyDirtiness(event);
           break;
-        }
-        case "root-dirty": {
-          // A delta does not establish that this subscription has seen every
-          // room. Only the atomic dirtySnapshot can make dirtiness known for
-          // sync-pill purposes.
-          if (sink.read().rootDirty === event.dirty) break;
-          publish({ rootDirty: event.dirty });
-          break;
-        }
-        case "room-dirty": {
-          const held =
-            sink.read().artifactRoomDirtyByArtifactRoomId[
-              event.artifactRoomId
-            ] ?? false;
-          if (held === event.dirty) break;
-          publish({
-            artifactRoomDirtyByArtifactRoomId: {
-              ...sink.read().artifactRoomDirtyByArtifactRoomId,
-              [event.artifactRoomId]: event.dirty,
-            },
-          });
-          break;
-        }
         case "epic-deleted":
           // Record the remote-delete signal + attribution. The app-level access
           // coordinator observes this and force-closes the tab (redirecting an
@@ -571,10 +615,7 @@ export function createEpicControlReplica(
       // Nothing to release: this plane holds no docs, no timers and no sockets.
     },
 
-    adoptSnapshotRole(role: PermissionRole | null): void {
-      currentRole = role;
-      hasFreshRootSnapshotForOpenCycle = true;
-    },
+    adoptSnapshotRole,
 
     noteSnapshotLanded(role: PermissionRole | null): void {
       const state = sink.read();

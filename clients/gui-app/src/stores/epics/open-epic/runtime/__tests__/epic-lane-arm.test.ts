@@ -197,8 +197,15 @@ function buildArmRig(): ArmRig {
     statusStreamClientFactory: status.factory,
     getCurrentUserId: () => null,
     isDisposed: () => false,
+    onStateLeadSnapshot: () => {},
     onStateSlices: () => undefined,
     onControlEvent: () => undefined,
+    // REJECTS, so the tab-open read the arm now issues on `attach` fails and
+    // establishes nothing - which is what keeps every pin below about the
+    // lanes' own lifecycle rather than about a workspace context.
+    getWorkspaceContext: () =>
+      Promise.reject(new Error("no workspace-context transport in this rig")),
+    onWorkspaceContext: () => undefined,
     onReplacementRequested: () => undefined,
     artifactStreamClientFactory: artifacts.factory,
     readDocSeed: () => null,

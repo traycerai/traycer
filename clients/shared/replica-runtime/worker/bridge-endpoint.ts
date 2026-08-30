@@ -45,6 +45,7 @@ import {
   type WorkerToMainFrame,
 } from "./bridge-protocol";
 import { NO_TRANSFER } from "./transferable-bytes";
+import { assertNever } from "../../host-lifecycle/evidence";
 
 /**
  * The pipe, reduced to what a `Worker`, a `MessagePort` and a worker's own
@@ -459,6 +460,32 @@ export function createWorkerBridgeEndpoint(
 }
 
 /**
+ * Per-MEMBER dispatch, which this became the moment `MainCallMap` grew a
+ * second member - and the previous shape said so in advance.
+ *
+ * It read `handlers[call.kind](call.request)`, indexed rather than switched,
+ * under a comment explaining that a single-key `MainCall` is not a union, so
+ * `default: assertNever(call)` could not compile. That comment also named this
+ * edit as the forcing function: a second member makes `handlers[call.kind]` a
+ * union of function types whose call site demands the INTERSECTION of their
+ * parameters, which no request satisfies. It did exactly that, on exactly that
+ * line, which is why this switch exists rather than a cast around the index.
+ */
+function invokeMainCall(
+  handlers: MainCallHandlers,
+  call: MainCall,
+): Promise<MainCallResponse<MainCallKind>> {
+  switch (call.kind) {
+    case "main/write-command":
+      return handlers[call.kind](call.request);
+    case "main/lane-unary":
+      return handlers[call.kind](call.request);
+    default:
+      return assertNever(call, "worker->main call kind");
+  }
+}
+
+/**
  * Runs the worker->main call against the main-side handler, and never rejects -
  * for the same reason {@link serve} does not: a rejection here is a lost call,
  * and the worker's promise would hang with nothing to settle it, inside a
@@ -469,21 +496,7 @@ async function serveMainCall(
   call: MainCall,
 ): Promise<BridgeCallResult<MainCallResponse<MainCallKind>>> {
   try {
-    // Indexed, not switched, and ONLY because `MainCallMap` has exactly one
-    // member. A `switch` with a `default: assertNever(call)` does not compile
-    // here: `MainCall` over a single key is not a UNION, so TypeScript has no
-    // member to exhaust and leaves `call` fully typed in the default arm
-    // instead of narrowing it to `never`. Writing that switch is what produced
-    // this file's only compile red.
-    //
-    // Indexing is also the forcing function a grep rule would only ask for. A
-    // SECOND member makes `call.kind` a union, `handlers[call.kind]` a union of
-    // function types, and the call below requires the INTERSECTION of their
-    // parameters - which no request satisfies. So adding one fails to compile
-    // on this exact line, and whoever adds it writes the per-member dispatch
-    // then, when the union it needs actually exists.
-    const value = await handlers[call.kind](call.request);
-    return { outcome: "ok", value };
+    return { outcome: "ok", value: await invokeMainCall(handlers, call) };
   } catch (cause: unknown) {
     return {
       outcome: "error",

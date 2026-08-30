@@ -202,7 +202,28 @@ export function openStoreForTest(
       const sent = await options.writeCommand(commandId, narrowed);
       return { ok: true, hostId: sent.hostId };
     },
+    // UNREACHABLE in this harness, and answered rather than defaulted so it
+    // stays that way. `main/lane-unary` is issued only by the factories
+    // `buildProxiedRuntimeFactories` builds; this harness supplies the SUITE's
+    // factories, whose `unaries` the suite owns. A suite that somehow reaches
+    // this learns why from the refusal instead of watching a promise never
+    // settle.
+    laneUnary: () =>
+      Promise.resolve({
+        ok: false,
+        reason:
+          "openStoreForTest composes the suite's own lane unaries; this bridge handler is not the path",
+      }),
     streams: createRecordingStreamClient().client,
+    // Nothing negotiated, which is what `"unknown"` means - and inert here for
+    // the same reason `laneUnary` is: the composition reads the suite's
+    // `laneSelection.support`, not this. What it DOES feed is the manifest's
+    // `docArm`, and an unrecorded host answers "the doc is still a source",
+    // which is the value this harness has always run with.
+    methodSupport: {
+      getMethodSupport: () => "unknown",
+      subscribeMethodSupport: () => () => {},
+    },
     accounting,
     projection: projection.handlers,
     body: {

@@ -1,3 +1,4 @@
+import * as Y from "yjs";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -528,10 +529,11 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
    * Waits for the merge tail to run to completion.
    *
    * A MACROTASK, not a count of microtasks. The tail is
-   * `encode().then(apply).catch().finally(dispose)` - four chained handlers -
-   * and counting ticks means guessing that depth right, which is how a pin
-   * ends up asserting scheduling. Every pending microtask runs before a
-   * `setTimeout` callback, so this needs no depth at all.
+   * `encode().then(apply).then(disposeOrKeep).catch(keep)` - and it crosses
+   * the worker bridge in the middle, so counting ticks means guessing that
+   * depth right, which is how a pin ends up asserting scheduling. Every
+   * pending microtask runs before a `setTimeout` callback, so this needs no
+   * depth at all.
    */
   async function settled(): Promise<void> {
     await new Promise<void>((resolve) => {
@@ -573,7 +575,14 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     return {
       handle,
       settle: (outcome) => {
-        if (outcome === "resolve") release?.(new Uint8Array([1, 2, 3]));
+        // A REAL update, and the three fabricated bytes that used to stand
+        // here are worth naming: `Y.applyUpdate` threw on them, the target
+        // answered `applied: false`, and the pin below still read green -
+        // because the code disposed the source in every outcome and could not
+        // tell an accepted transfer from a refused one. "Resolve" has to mean
+        // the target ACCEPTS, or the happy path is never exercised at all.
+        if (outcome === "resolve")
+          release?.(Y.encodeStateAsUpdate(new Y.Doc()));
         else fail?.(new Error("encode failed"));
       },
       disposed: () => disposeCount,
@@ -604,7 +613,17 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     expect(source.transportClosed()).toBe(true);
   });
 
-  it("disposes the merged-from handle even when the transfer REJECTS", async () => {
+  it("KEEPS the merged-from handle when the transfer rejects, as its own buffer", async () => {
+    // REVERSED, and the reversal is the point. This pin used to assert
+    // `disposed() === 1` under the reasoning that "a rejected transfer still
+    // has to dispose: leaving it alive is a handle with no transport that
+    // nothing will ever retire". The first half was a real concern and the
+    // second half was false: `appendRetainedBuffer` puts it in the collection
+    // that IS retired - by tab close, by Drain, by sign-out - and that
+    // collection is what the quit sheet enumerates. So the choice was never
+    // "dispose or leak"; it was "dispose or retain", and a rejection means
+    // "I could not ask", which leaves the source holding the ONLY copy of its
+    // unsynced edits.
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const first = buildRetentionHandle(EPIC, true, 2);
     registry.acquireMounted(EPIC, () => first.handle);
@@ -613,14 +632,20 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     const third = buildRetentionHandle(EPIC, false, 0);
     repoint(registry, source.handle, third.handle, IDENTITY_A);
 
+    // PREMISE, positively: the merge really was attempted - one buffer, with
+    // the source's three edits optimistically credited onto the target's two.
+    expect(registry.retainedCountForTests(EPIC)).toBe(1);
+    expect([...registry.retainedQueueSizesForTests(EPIC)]).toEqual([5]);
+
     source.settle("reject");
     await settled();
 
-    // `finally`, not `then`. A rejected transfer still has to dispose: leaving
-    // it alive is a handle with no transport that nothing will ever retire.
-    // What a rejection changes is the caller's belief about where the edits
-    // live, not whether this handle is cleaned up.
-    expect(source.disposed()).toBe(1);
+    expect(source.disposed()).toBe(0);
+    expect(registry.retainedCountForTests(EPIC)).toBe(2);
+    // And the credit for a transfer that did not happen was taken back. The
+    // TOTAL is 5 either way, which is why this reads the buffers rather than
+    // the row.
+    expect([...registry.retainedQueueSizesForTests(EPIC)]).toEqual([2, 3]);
   });
 
   // NO PIN for "a second merge for the same source", and the absence is

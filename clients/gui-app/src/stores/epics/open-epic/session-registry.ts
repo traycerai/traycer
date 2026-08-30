@@ -55,6 +55,52 @@ export { DEFAULT_MAX_LIVE_EPICS } from "@/stores/replica-memory/budget-limits";
 const RETAINED_UNSYNCED_SOFT_CAP = 16;
 
 /**
+ * Whether the runtime worker behind a handle has reported a FATAL.
+ *
+ * A cell per handle rather than a `WeakSet<OpenEpicStoreHandle>`, and the
+ * indirection is the point: a protocol-mismatch fatal is delivered
+ * SYNCHRONOUSLY inside `spawnEpicRuntimeWorker`, which runs inside the handle
+ * factory, which runs inside {@link OpenEpicSessionRegistry.acquireMounted}'s
+ * own transaction - so at the moment the fatal is reported the handle object
+ * does not exist yet and cannot be a key. The provider's factory creates the
+ * cell first, the fatal relay writes it, and the finished handle is mapped to
+ * the same cell. A death before the handle escapes is therefore already
+ * recorded when the entry appears, with no ordering to get wrong.
+ *
+ * It lives in THIS module rather than beside the app-wide registry singleton
+ * because `acquireMounted` is what has to consult it, and that module imports
+ * this one. It is re-exported there so the provider's import path is unchanged.
+ *
+ * Reported by the relay rather than acted on there: the fatal arrives on a
+ * bridge callback that can be inside the spawning transaction, and disposing
+ * from within one would re-enter it. The retirement happens at the acquire
+ * seam, which is a fresh transaction on every later pass.
+ */
+const handleWorkerLiveness = new WeakMap<
+  OpenEpicStoreHandle,
+  { dead: boolean }
+>();
+
+/** Binds a handle to the liveness cell its own fatal relay writes. */
+export function trackEpicSessionHandleLiveness(
+  handle: OpenEpicStoreHandle,
+  liveness: { dead: boolean },
+): void {
+  handleWorkerLiveness.set(handle, liveness);
+}
+
+/**
+ * Whether this handle's runtime is gone.
+ *
+ * An untracked handle answers `false`: absence means "no fatal was recorded",
+ * and the fail-open direction is the safe one here - a live handle wrongly
+ * called dead would be retired under a tab that was working.
+ */
+export function isEpicSessionHandleDead(handle: OpenEpicStoreHandle): boolean {
+  return handleWorkerLiveness.get(handle)?.dead ?? false;
+}
+
+/**
  * Every epic entry shares one scope. The registry's scope key discriminates
  * REBUILDS within one identity, and this plane has none: a re-point goes
  * through {@link OpenEpicSessionRegistry.replaceMounted}, which is an explicit
@@ -401,6 +447,21 @@ export class OpenEpicSessionRegistry {
     return this.retained.get(epicId)?.length ?? 0;
   }
 
+  /**
+   * Each retained buffer's own `queueSize`, in bucket order.
+   *
+   * The second half of the same seam, and it exists because the COUNT alone
+   * cannot see the merge's optimistic credit. `queueSize` is credited to the
+   * merge target synchronously and reverted by the transfer's failure path, so
+   * a merge that failed and correctly kept its source shows `[target, source]`
+   * while one that kept its source and forgot the revert shows
+   * `[target + source, source]` - the same count, the same public row total,
+   * and the user's work counted twice.
+   */
+  retainedQueueSizesForTests(epicId: string): readonly number[] {
+    return (this.retained.get(epicId) ?? []).map((buffer) => buffer.queueSize);
+  }
+
   setReleaseListener(listener: ((epicId: string) => void) | null): void {
     this.releaseListener = listener;
   }
@@ -440,6 +501,14 @@ export class OpenEpicSessionRegistry {
     factory: (epicId: string) => OpenEpicStoreHandle,
   ): OpenEpicStoreHandle {
     return this.sessions.transact(() => {
+      // THE SEAM, and the reason the check is here rather than at a caller.
+      // This is the one line in production that hands a mounted handle out, so
+      // it is the only place that can promise the handle it returns has a
+      // runtime behind it. A guard at the caller covers the path that caller
+      // takes; a fresh surface with no prior session takes none of them and
+      // would adopt a handle whose worker is gone - the identical defect, one
+      // path over, which is exactly what a fix on ONE path to a state costs.
+      this.retireIfDead(epicId);
       const handle = this.sessions.acquire(epicId, EPIC_SESSION_SCOPE, () =>
         this.createSession(epicId, factory(epicId)),
       ).handle;
@@ -447,6 +516,40 @@ export class OpenEpicSessionRegistry {
       this.sessions.notify();
       return handle;
     });
+  }
+
+  /**
+   * Drop the mounted handle for `epicId` when its RUNTIME is gone, so the
+   * acquire that follows builds a replacement.
+   *
+   * Distinct from every neighbour here, and each difference is the dead
+   * runtime. `releaseMounted` drops a mount reference and leaves the session
+   * WARM - the worst answer for this case, since the next surface to open the
+   * epic would adopt the corpse. `release(…, "keep", …)` would offer to retain
+   * its unsynced edits, and there is nothing to retain: those edits live in a
+   * worker that is not answering, so `encodeRootState` would hang on a bridge
+   * with nothing behind it and the retention would be an empty buffer competing
+   * with the replacement. `replaceMounted` needs a successor, and this path has
+   * none - the caller's factory builds it a line later.
+   *
+   * A surviving surface's mounted REFERENCE goes with the entry, and that is
+   * the established behaviour rather than a new hazard: `attach` does exactly
+   * this on a scope mismatch, for the same reason (a session that must not be
+   * handed out is torn down and rebuilt at demand 1), and `dropDemand` guards
+   * the underflow a later stray release would otherwise cause.
+   *
+   * PRIVATE, and it has one caller. It was briefly public with the provider
+   * calling it, which is what left the corpse window open - two owners of one
+   * decision, neither covering the path the other did not.
+   */
+  private retireIfDead(epicId: string): void {
+    const entry = this.sessions.peekEntry(epicId);
+    if (entry === null) return;
+    if (!isEpicSessionHandleDead(entry.session.handle)) return;
+    // NO retention, stated rather than defaulted - see above for why the dirty
+    // test would answer "the only copy" about a document nothing can read.
+    entry.session.pendingRetention = null;
+    this.sessions.discard(epicId, "released");
   }
 
   releaseMounted(epicId: string): void {
@@ -520,14 +623,41 @@ export class OpenEpicSessionRegistry {
    * tab, so this is only ever an outgoing handle the registry no longer tracks.
    */
   /**
-   * Transfers a merged-from handle's root state into its target, then disposes
-   * it - after the transfer settles, in BOTH outcomes.
+   * Transfers a merged-from handle's root state into its target, and disposes
+   * it ONLY once the target has affirmatively taken the update.
    *
-   * `finally` and not `then`: a rejected apply still has to dispose the source,
-   * because leaving it alive is a handle with no transport that nothing will
-   * ever retire. What a rejection changes is the CALLER's belief about where
-   * the edits live - see the provider's `editsTransferredToReplacement` - not
-   * whether this handle is cleaned up.
+   * ## Why an affirmative answer, and not `finally`
+   *
+   * `applyRootUpdate` returns a boolean that is a DATA-LOSS GUARD, and its own
+   * implementation says so: "a torn-down session answers `false`: nothing was
+   * applied, and the caller must not retire its source on the strength of it."
+   * This chain used to `.catch(() => false).finally(dispose)`, which discarded
+   * that answer and disposed in every outcome - so a `false` from a worker that
+   * had begun teardown destroyed the only copy of the source's unsynced edits
+   * while the target's `queueSize` had already been credited as if the transfer
+   * had happened. Credited-but-not-transferred is its own lie, so the failure
+   * path reverses it.
+   *
+   * `false` is reachable two ways and neither is exotic: a `BridgeDisposedError`
+   * resolves to `null` and becomes `false`, and the worker can answer
+   * `applied: false` outright. Both are teardown races, which is exactly when a
+   * window is closing and unsynced edits matter most.
+   *
+   * ## What the old `finally` argument got right, and where it stopped
+   *
+   * It reasoned about REJECTION - "a rejected apply still has to dispose the
+   * source, because leaving it alive is a handle with no transport that nothing
+   * will ever retire" - and that is a true statement about LEAVING IT ALIVE.
+   * The refusal case then rode the same branch silently, because a resolved
+   * `false` and a thrown error both reach a `finally`. They are different
+   * facts: one says "I could not ask", the other says "I asked and was told no".
+   *
+   * Retaining is not leaving it alive. The failure path hands the source to the
+   * retention, which is the mechanism that owns exactly this - a detached
+   * handle holding edits nothing else has - and which retires it on
+   * `disposeRetainedForEpic`. So the orphan the old argument feared cannot
+   * happen on either branch now, and neither branch has to trade the edits away
+   * to prevent it.
    *
    * NO GUARD against a second merge for the same source, because there is no
    * second merge to guard against. `onBeforeDispose` nulls `pendingRetention`
@@ -537,15 +667,29 @@ export class OpenEpicSessionRegistry {
    * the same defect as the `reparentArtifact` catch this ticket deleted.
    */
   private mergeRetainedThenDispose(
-    source: OpenEpicStoreHandle,
-    target: OpenEpicStoreHandle,
+    source: EpicRegistrySession,
+    identity: RetainedHandleIdentity,
+    target: RetainedUnsyncedBuffer,
+    creditedQueueSize: number,
   ): void {
-    void source
+    const keepSourceAsItsOwnBuffer = (): void => {
+      // The credit named a transfer that did not happen.
+      target.queueSize -= creditedQueueSize;
+      this.appendRetainedBuffer(source, identity, creditedQueueSize);
+    };
+    void source.handle
       .encodeRootState()
-      .then((update) => target.applyRootUpdate(update, false))
-      .catch(() => false)
-      .finally(() => {
-        source.dispose();
+      .then((update) => target.handle.applyRootUpdate(update, false))
+      .then((applied) => {
+        if (!applied) {
+          keepSourceAsItsOwnBuffer();
+          return;
+        }
+        source.handle.dispose();
+      })
+      .catch(() => {
+        // "I could not ask." The edits are still only here.
+        keepSourceAsItsOwnBuffer();
       });
   }
 
@@ -566,21 +710,35 @@ export class OpenEpicSessionRegistry {
       // which is what makes this legal with no `roomId` and therefore legal
       // below `@1.2`. Merge rather than append; a second slot for one room
       // would show the user two rows for one task.
+      // Credited OPTIMISTICALLY, and reverted by the merge's own failure path.
+      // The credit has to happen here because the verdict this method serves is
+      // synchronous, and it has to be reversible because the transfer is not.
       mergeTarget.queueSize += queueSize;
       // Through the PORT, and asynchronously. The verdict this method serves is
       // synchronous - its caller returns `"retain"` immediately - so the async
-      // tail owns exactly one thing: disposing the merged-from handle once the
-      // transfer has settled. Nothing waits on a promise to decide anything.
+      // tail owns exactly one thing: deciding what becomes of the merged-from
+      // handle once the transfer has settled. Nothing waits on a promise to
+      // decide anything.
       //
       // The window this opens is real and named: between here and the
-      // `finally`, the source handle is DETACHED (line above), MERGED-FROM, and
-      // NOT YET DISPOSED. Its transport is already gone, so it cannot dial or
-      // claim anything; what it must not do is accept a second merge, which the
-      // guard below refuses.
-      this.mergeRetainedThenDispose(session.handle, mergeTarget.handle);
+      // settlement, the source handle is DETACHED (line above), MERGED-FROM,
+      // and NOT YET DISPOSED. Its transport is already gone, so it cannot dial
+      // or claim anything; what it must not do is accept a second merge, which
+      // the guard below refuses.
+      this.mergeRetainedThenDispose(session, identity, mergeTarget, queueSize);
       return;
     }
 
+    this.appendRetainedBuffer(session, identity, queueSize);
+  }
+
+  /** The retention's one growth point, so the merge's failure path reuses it. */
+  private appendRetainedBuffer(
+    session: EpicRegistrySession,
+    identity: RetainedHandleIdentity,
+    queueSize: number,
+  ): void {
+    const bucket = this.retained.get(session.epicId) ?? [];
     this.nextRetentionSeq += 1;
     bucket.push({
       epicId: session.epicId,

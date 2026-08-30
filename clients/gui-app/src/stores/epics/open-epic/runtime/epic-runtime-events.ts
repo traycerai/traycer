@@ -216,6 +216,19 @@ export type EpicControlEvent =
       readonly kind: "permission-changed";
       readonly role: PermissionRole | null;
     }
+  /**
+   * The lane arm's counterpart of `applyRootSnapshot`'s role adoption: this
+   * subscription cycle now holds a complete, authoritative control answer.
+   *
+   * `@1` needs no such event because its root snapshot IS a frame the runtime
+   * routes, so one function adopts the role and lands the snapshot together.
+   * The lanes flatten their snapshot into ordinary facts, so the boundary has
+   * to travel as its own event or the freshness latch never closes.
+   */
+  | {
+      readonly kind: "control-snapshot";
+      readonly role: PermissionRole | null;
+    }
   | { readonly kind: "cloud-sync-status"; readonly status: EpicCloudSyncStatus }
   /**
    * The atomic `@1.1` baseline for this subscription cycle. Its ARRIVAL, not

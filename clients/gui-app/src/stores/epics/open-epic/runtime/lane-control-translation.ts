@@ -129,6 +129,15 @@ export function legacyControlEventOf(event: ControlEvent): EpicControlEvent {
         kind: "permission-changed",
         role: narrowPermissionRole(event.role),
       };
+    case "control-snapshot-complete":
+      // Narrowed by the SAME parser as `permission-changed`, and that matters
+      // more here than there: this is the role the write gate adopts for the
+      // cycle, so an unrecognised role must reach it as `null` - unwritable -
+      // rather than as anything this build could mistake for an editor.
+      return {
+        kind: "control-snapshot",
+        role: narrowPermissionRole(event.role),
+      };
     case "cloud-sync-status":
       return {
         kind: "cloud-sync-status",

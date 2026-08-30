@@ -347,7 +347,7 @@ describe("createEpicStatusLaneAdapter - the false-clean dirty guard", () => {
 // ─── Snapshot emission order ────────────────────────────────────────────────
 
 describe("createEpicStatusLaneAdapter - snapshot emission order", () => {
-  it("permission-changed, then cloud-sync-status, then dirty, then migration, then epic-deleted", () => {
+  it("the snapshot BOUNDARY first, then permission-changed, cloud-sync-status, dirty, migration, epic-deleted", () => {
     const { factory, latest } = createFakeStreamClientFactory();
     const adapter = createEpicStatusLaneAdapter(
       createSources(factory, undefined),
@@ -372,6 +372,18 @@ describe("createEpicStatusLaneAdapter - snapshot emission order", () => {
     );
 
     expect(emittedEvents(log).map((event) => event.kind)).toEqual([
+      // FIRST, and it is not one more flattened fact. Flattening a snapshot
+      // into ordinary events drops the fact that a snapshot happened at all,
+      // and that fact is not recoverable downstream - a lane delta and a lane
+      // snapshot arrive as the same event kinds. The legacy arm never had to
+      // say it separately because ONE function landed the snapshot and adopted
+      // its role; this lane has no such function, and without this event the
+      // open cycle's freshness latch is never set, so every write on the lane
+      // arm is refused before dispatch for the life of the session.
+      //
+      // Before the CONTENTS because it is what makes this cycle's answer
+      // authoritative and they are that answer's contents.
+      "control-snapshot-complete",
       "permission-changed",
       "cloud-sync-status",
       "aggregate-dirty",

@@ -45,6 +45,7 @@ import {
 import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
 import { encodeDocStateVectorBase64 } from "@/stores/epics/open-epic/runtime/dirty-watermark";
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
+import { absentLaneUnaries } from "../test-support/absent-lane-unaries";
 
 const ARTIFACT = "art-1";
 const EPOCH = "epoch-1";
@@ -113,6 +114,7 @@ function createLaneRig(): LaneRig {
     // arm, rather than a manifest a test resolved by hand.
     support: () => "unknown",
     subscribeSupport: () => () => {},
+    unaries: absentLaneUnaries(),
     stateStreamClientFactory: stateFactory,
     statusStreamClientFactory: statusFactory,
     artifactStreamClientFactory: artifactFactory,

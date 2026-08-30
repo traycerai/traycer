@@ -70,6 +70,31 @@ export function buildProxiedRuntimeFactories(
       return entry === undefined ? "unknown" : entry.support;
     },
     subscribeSupport: (listener) => host.streams.subscribeManifest(listener),
+    unaries: {
+      getWorkspaceContext: async () => {
+        const outcome = await host.main.call("main/lane-unary", {
+          kind: "workspace-context",
+        });
+        // REJECT rather than answer an empty context. The refresh policy
+        // distinguishes a failed read from a delivered one - it retries the
+        // first on its next trigger and projects the second into
+        // `snapshotMeta` - and a synthesised empty payload would be projected
+        // as authoritative, wiping a context an earlier read had established.
+        if (!outcome.ok) throw new Error(outcome.reason);
+        if (outcome.kind !== "workspace-context") {
+          throw new Error(
+            `epic.getWorkspaceContext answered a ${outcome.kind} outcome`,
+          );
+        }
+        return outcome.context;
+      },
+      retryMigration: async () => {
+        const outcome = await host.main.call("main/lane-unary", {
+          kind: "retry-migration",
+        });
+        if (!outcome.ok) throw new Error(outcome.reason);
+      },
+    },
   });
 }
 

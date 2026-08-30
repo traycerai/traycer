@@ -61,6 +61,7 @@ import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import { encodeDocStateVectorBase64 } from "@/stores/epics/open-epic/runtime/dirty-watermark";
+import { absentLaneUnaries } from "../test-support/absent-lane-unaries";
 
 const ARTIFACT = "art-1";
 const ROOM = "artifact-room-0";
@@ -265,6 +266,7 @@ function createLaneArm(): AvailabilityArm {
     // connection reaches it, not by a manifest a test resolved by hand.
     support: () => "unknown",
     subscribeSupport: () => () => {},
+    unaries: absentLaneUnaries(),
     stateStreamClientFactory: stateFactory,
     statusStreamClientFactory: statusFactory,
     artifactStreamClientFactory: artifactFactory,

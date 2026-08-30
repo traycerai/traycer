@@ -20,6 +20,14 @@ import {
   type RuntimeWorkerLike,
   type SpawnEpicRuntimeWorkerOptions,
 } from "../spawn-epic-runtime-worker";
+import { buildProxiedRuntimeFactories } from "../install-epic-runtime-core";
+import {
+  readEpicAdapterVerdict,
+  type EpicAdapterVerdict,
+} from "../../epic-adapter-selection";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { StreamMethodSupportSource } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 
 /**
  * Projection handlers that accept nothing, for tests that are not about
@@ -64,6 +72,18 @@ function spawnOptions<TProjection>(
           boundedRetry: false,
         },
       }),
+    laneUnary: () =>
+      Promise.resolve({
+        ok: false,
+        reason: "no lane unary transport in this fixture",
+      }),
+    // Nothing negotiated. `"unknown"` is the honest fixture answer and it is
+    // also what the manifest this spawner now emits will carry - which is a
+    // fact these tests can assert on rather than a stub that hides one.
+    methodSupport: {
+      getMethodSupport: () => "unknown",
+      subscribeMethodSupport: () => () => {},
+    },
     hostId: "host-1",
     windowLabel: "window-1",
     body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
@@ -107,11 +127,20 @@ describe("spawnEpicRuntimeWorker", () => {
     );
 
     await expect(handle.ready).resolves.toBeUndefined();
-    // The handshake is the WHOLE preamble now. Nothing this spawner sends is a
-    // credential or an address any more - the socket never left this thread -
-    // so a second event here would mean a channel came back without a ruling.
+    // The preamble is the handshake plus the negotiated MANIFEST, and the
+    // second one arrived with a ruling: this event was declared by the protocol
+    // and consumed by the worker host from the start, and no emitter was ever
+    // written - which pinned every worker-hosted runtime to the fail-closed
+    // legacy arm for its whole life. Nothing this spawner sends is a credential
+    // or an address (the socket never left this thread), so a THIRD event here
+    // would still mean a channel came back without one.
+    //
+    // ORDER is asserted, not just membership: the manifest follows the
+    // bootstrap, because the bootstrap is the protocol handshake and a worker
+    // that has not validated its version has no business acting on state.
     expect(mainEvents(fixture.pair).map((event) => event.kind)).toEqual([
       "bootstrap",
+      "stream/manifest",
     ]);
     handle.dispose();
     fixture.host?.shutdown();
@@ -401,5 +430,119 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
     expect(rejected).toEqual([{ reason: "unrecognised", revision: 1 }]);
     expect(applied).toEqual([{ value: { title: "a" }, revision: 1 }]);
     handle.dispose();
+  });
+});
+
+/**
+ * The negotiated manifest actually crosses, and a host that upgrades under an
+ * open tab moves the arm.
+ *
+ * `stream/manifest` was declared by the protocol and consumed by the worker
+ * host, and NOTHING on main ever emitted one. That is not a missing
+ * optimisation. `support(method)` answers `"unknown"` against a null manifest,
+ * `"unknown"` is deliberately not a selection, and the fail-closed default is
+ * the legacy `@1` arm - so every worker-hosted runtime held legacy for its
+ * whole life, on lane-serving hosts included. The capability PROBE masks the
+ * cold case (the status lane's own subscribe settles a connection's verdict),
+ * which is exactly why this went unnoticed; what a probe cannot do is move a
+ * tab whose host upgraded underneath it, because that signal exists only here.
+ *
+ * The chain is pinned END TO END rather than at the emit: main emits, the REAL
+ * worker host applies, the PRODUCTION support reader reads what it applied, and
+ * the PRODUCTION verdict function turns that into an arm. A pin that stopped at
+ * "an event was posted" would have passed against a payload no reader could
+ * use.
+ */
+describe("the negotiated manifest crossing to the worker", () => {
+  function supportController(): {
+    readonly source: StreamMethodSupportSource<HostStreamRpcRegistry>;
+    set(support: StreamMethodSupport): void;
+  } {
+    let current: StreamMethodSupport = "unknown";
+    const listeners = new Set<() => void>();
+    return {
+      source: {
+        getMethodSupport: () => current,
+        subscribeMethodSupport: (listener) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+      },
+      set: (support) => {
+        current = support;
+        for (const listener of [...listeners]) listener();
+      },
+    };
+  }
+
+  /** The production reader and the production decision, over a real host. */
+  function armOf(host: EpicRuntimeWorkerHost): EpicAdapterVerdict {
+    const lanes = buildProxiedRuntimeFactories(host).laneSelection;
+    if (lanes === null) throw new Error("the proxied factories built no lanes");
+    return readEpicAdapterVerdict(lanes.support);
+  }
+
+  it("upgrades a live session from legacy to lanes when support resolves", () => {
+    const fixture = createFixture(true);
+    const host = fixture.host;
+    if (host === null) throw new Error("the fixture built no worker host");
+    const support = supportController();
+
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { methodSupport: support.source },
+      ),
+    );
+
+    // The INITIAL push, which `subscribeMethodSupport` alone cannot deliver:
+    // it reports movement, not state, so a worker spawned onto a transport
+    // whose handshake already resolved would otherwise wait for an edge that
+    // has been and gone. `"unknown"` is not a selection, so the verdict is
+    // undecided rather than legacy - which is the distinction the probe
+    // depends on.
+    expect(armOf(host)).toBe("undecided");
+
+    support.set("supported");
+    expect(armOf(host)).toBe("lanes");
+
+    // And back through unknown, because a reconnect CLEARS the support map and
+    // re-probes - the window every healthy reconnect on a lane host passes
+    // through, and the one a raw digest would read as a manifest change.
+    support.set("unknown");
+    expect(armOf(host)).toBe("undecided");
+
+    support.set("unsupported");
+    expect(armOf(host)).toBe("legacy");
+
+    handle.dispose();
+    host.shutdown();
+  });
+
+  it("stops pushing once the handle is disposed", () => {
+    const fixture = createFixture(true);
+    const host = fixture.host;
+    if (host === null) throw new Error("the fixture built no worker host");
+    const support = supportController();
+
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { methodSupport: support.source },
+      ),
+    );
+    handle.dispose();
+
+    // The TRANSPORT outlives this worker on the retained-buffer path, so a
+    // listener left behind would emit onto a disposed bridge every time that
+    // connection re-handshakes. Observed through the reader rather than by
+    // counting posts: what matters is that the worker's view stopped moving.
+    const before = armOf(host);
+    support.set("supported");
+    expect(armOf(host)).toBe(before);
+
+    host.shutdown();
   });
 });

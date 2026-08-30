@@ -50,6 +50,7 @@ import { createRendererRuntimeEnvironment } from "../runtime/runtime-environment
 import { createRecordingAccountingPort } from "../runtime/__tests__/accounting-port-fixture";
 import { createBatchingDelivery } from "../runtime/projection-delivery";
 import { DOC_IS_THE_ONLY_RECORD_SOURCE } from "../projection-helpers";
+import { absentLaneUnaries } from "../test-support/absent-lane-unaries";
 
 // ── A controllable support reader ───────────────────────────────────────────
 
@@ -399,6 +400,7 @@ function buildRuntimeRig(mode: SupportMode): RuntimeRig {
     stateStreamClientFactory: state.factory,
     statusStreamClientFactory: status.factory,
     artifactStreamClientFactory: artifacts.factory,
+    unaries: absentLaneUnaries(),
   };
   const runtime = createEpicReplicaRuntime({
     epicId: `epic-lane-probe-${nextEpicSequence}`,

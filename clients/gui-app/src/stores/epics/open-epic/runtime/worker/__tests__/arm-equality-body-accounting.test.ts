@@ -97,6 +97,7 @@ import {
   resetProcessMemoryRuntimeForTests,
 } from "@/stores/replica-memory/process-memory-accountant";
 import { createRendererRuntimeEnvironment } from "../../runtime-environment";
+import { absentLaneUnaries } from "../../../test-support/absent-lane-unaries";
 
 const ARTIFACT = "art-equality";
 const EPOCH = "epoch-1";
@@ -151,6 +152,7 @@ function createLaneRig(epicId: string): LaneRig {
   const laneSelection: EpicLaneSelectionSources = {
     support: () => "unknown",
     subscribeSupport: () => () => {},
+    unaries: absentLaneUnaries(),
     stateStreamClientFactory: stateFactory,
     statusStreamClientFactory: statusFactory,
     artifactStreamClientFactory: artifactFactory,

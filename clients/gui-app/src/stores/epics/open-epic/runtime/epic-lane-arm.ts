@@ -53,8 +53,10 @@ import type {
 import {
   createEpicStateLaneAdapter,
   createEpicStatusLaneAdapter,
+  createWorkspaceContextRefreshPolicy,
 } from "@traycer-clients/shared/epic-lanes";
 import type { ArtifactSubscribeSeedOffer } from "@traycer/protocol/host/epic/artifact-subscribe";
+import type { EarlyMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicControlEvent, EpicRoomEvent } from "./epic-runtime-events";
 import {
   createEpicArtifactBodyLanes,
@@ -77,8 +79,32 @@ export interface EpicLaneArmSources {
   readonly isDisposed: () => boolean;
   /** Publish the records lane's populations. Called only when they moved. */
   readonly onStateSlices: (slices: EpicLaneStateSlices) => void;
+  /**
+   * The records lane's LEAD snapshot landed.
+   *
+   * Separate from `onStateSlices` because that one fires only when the
+   * populations moved, and a lead snapshot for an epic with no artifacts moves
+   * nothing while still being the authoritative answer.
+   */
+  readonly onStateLeadSnapshot: () => void;
   /** One control event, already in the `@1` replica's vocabulary. */
   readonly onControlEvent: (event: EpicControlEvent) => void;
+  /**
+   * `epic.getWorkspaceContext@1.0`, on the main thread's requester.
+   *
+   * The READ only. When to issue it is this arm's business, because the
+   * contract's refetch obligation is written in terms of the control lane's
+   * own frames and this is the module that holds them - see
+   * {@link workspaceContext}.
+   */
+  readonly getWorkspaceContext: () => Promise<EarlyMetaEpic>;
+  /**
+   * Where a workspace context lands. The runtime routes it into the SAME
+   * early-meta projection path the `@1` arm's `earlyMeta` frame takes, which is
+   * the point: this payload is that frame, and a second projection route for it
+   * would be a second answer to what `snapshotMeta` holds before a snapshot.
+   */
+  readonly onWorkspaceContext: (context: EarlyMetaEpic) => void;
   /**
    * Either lane asking for the replica to be rebuilt. The runtime coalesces -
    * two lanes reporting ONE epoch change is two true statements.
@@ -201,14 +227,77 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     getCurrentUserId,
     isDisposed,
     onStateSlices,
+    onStateLeadSnapshot,
     onControlEvent,
-    onReplacementRequested,
+    getWorkspaceContext,
+    onWorkspaceContext,
+    onReplacementRequested: reportReplacementRequested,
     artifactStreamClientFactory,
     readDocSeed,
     onRoomEvent,
     onProbeOutcome,
     onRequiredLaneUnsupported,
   } = sources;
+
+  /**
+   * The `epic.getWorkspaceContext@1.0` fetch-and-REFETCH policy, living here
+   * because its triggers are this module's frames.
+   *
+   * The read is a one-liner; the contract is the refetch obligation, which is
+   * written in terms of the CONTROL LANE - "fetch at tab open, and REFETCH on
+   * reconnect and on every migration or permission frame" - plus the epoch
+   * change that a completing migration IS. Every one of those is a value this
+   * arm holds and the runtime above does not: the runtime sees control events
+   * only after {@link legacyControlEventOf} has translated them into the `@1`
+   * vocabulary, and the policy folds the LANE's.
+   *
+   * Constructed once and never disposed here. Its `isDisposed` is the
+   * RUNTIME's, which is the lifetime that actually bounds it, and disposal is
+   * terminal - so calling it from {@link EpicLaneArm.detach} would silently
+   * retire the context refresh for every arm installed after a
+   * `manifest-changed` replacement, on a path whose whole purpose is to
+   * re-install the lanes.
+   */
+  const workspaceContext = createWorkspaceContextRefreshPolicy({
+    epicId,
+    environment,
+    fetch: () => getWorkspaceContext(),
+    onContext: (context) => {
+      onWorkspaceContext(context);
+    },
+    // The policy has already logged the failure with its cause. There is no
+    // composition-level remedy on THIS arm and saying so is the honest
+    // handling: the contract's degrade for an unsupported read is the legacy
+    // adapter, and a connection that reached this code is one whose three lane
+    // stream methods are supported - so it is not going to legacy, and the
+    // outcome is the same `snapshotMeta` a lane session had before this policy
+    // existed. Latching a failure would be worse than reporting it, since the
+    // next trigger's fetch is exactly what recovers a transient one.
+    onError: () => {},
+    isDisposed,
+  });
+
+  /**
+   * Every replacement request, from either lane or any body, plus the ONE
+   * refresh trigger the policy cannot infer from a control frame.
+   *
+   * All six `ReplicaReplacementReason` members feed it, and that is the
+   * contract rather than an over-approximation: the policy's own cause is
+   * named `"authority-epoch-changed"` and documented as "a replacement, or a
+   * migration completing", so a replacement IS the trigger. A completing
+   * migration is the case that motivated it - there is no "migration
+   * completed" frame anywhere in this design, so a policy watching only
+   * control events would refetch throughout a migration and never once after
+   * it, which is the single moment the context is most likely to have moved.
+   *
+   * Cost of the coarse read is bounded by the policy's own coalescing: at most
+   * one request in flight, and a trigger that arrives during one sets a re-run
+   * flag rather than starting a second.
+   */
+  function onReplacementRequested(reason: ReplicaReplacementReason): void {
+    workspaceContext.noteAuthorityEpochChanged();
+    reportReplacementRequested(reason);
+  }
 
   const stateReplica: EpicLaneStateReplica = createEpicLaneStateReplica({
     getCurrentUserId,
@@ -241,6 +330,10 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
       environment,
       emit: (event: EpicStateLaneEvent) => {
         stateReplica.apply(event);
+        // AFTER the replica applied it, so the loaded flag never leads the rows
+        // it claims are loaded. A reseed lands here too and re-publishes, which
+        // is harmless and honest: the answer really was replaced.
+        if (event.kind === "record-snapshot") onStateLeadSnapshot();
       },
       // The resume OUTCOME is a statement about the subscription, and the
       // replica already learns everything it needs from the frames that follow
@@ -339,6 +432,13 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
         // resolves - see `answerProbe`'s callers and
         // `isMethodIncompatibleClose`.
         answerProbe("succeeded");
+        // The LANE's event, before translation. The refetch obligation is
+        // written against this vocabulary - the policy decides which frames
+        // move the workspace context - and `legacyControlEventOf` narrows some
+        // of them away (the lane's `dirty: null` emits nothing at all, and the
+        // permission role is re-parsed), so folding the translated event would
+        // hand the policy a different set of facts than its contract names.
+        workspaceContext.noteControlEvent(event);
         onControlEvent(legacyControlEventOf(event));
         // The status snapshot is the frame that first names an epoch, and a
         // later one arrives whenever the authority reissues it. Reconciling
@@ -363,6 +463,13 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           answerProbe("unsupported");
           reportRequiredLaneUnsupported();
         }
+        // The CONTROL lane's transitions and not the records lane's, because
+        // the policy's reconnect trigger is one fact and two lanes reporting
+        // the same reconnect would be two. This is the lane the contract names
+        // - "the control lane is what tells a client its workspace context may
+        // have moved" - and it is also the lane that is always attached, since
+        // the probe opens it alone.
+        workspaceContext.noteTransportStatus(status.connection);
         onControlEvent({
           kind: "transport-status",
           status: status.connection,
@@ -404,6 +511,13 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
       // `ensureStatusAttached` rather than `attachStatus`, because the probe
       // usually got here first and its stream IS this lane.
       ensureStatusAttached();
+      // The tab-open read, on ATTACH and never on `probe`. A probe that
+      // resolves method-unsupported installs the LEGACY arm, whose `earlyMeta`
+      // frame is this same payload - so reading here would put two writers on
+      // `snapshotMeta` for the one session that has a working alternative.
+      // `start` is idempotent, so the reattach after a `manifest-changed`
+      // replacement costs nothing; the epoch trigger is what refreshes there.
+      workspaceContext.start();
       if (stateAttached) return;
       attachState();
       stateAttached = true;

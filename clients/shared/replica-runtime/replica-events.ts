@@ -556,6 +556,26 @@ export type ControlEvent =
        */
       readonly securityEpoch: number;
     }
+  /**
+   * The control lane's authoritative SNAPSHOT completed, with the role it
+   * carried.
+   *
+   * The boundary, not the facts. A lane adapter flattens its snapshot into the
+   * ordinary events above, which is right - a consumer wanting the facts should
+   * not have to know which frame carried them - but flattening alone loses the
+   * one thing only a snapshot can say: that this subscription cycle now has a
+   * complete, authoritative answer. Consumers that gate on freshness (a write
+   * gate, a reconnect drain) need the boundary and cannot reconstruct it from a
+   * stream of deltas that look identical to the snapshot's own.
+   *
+   * Carries the role because the fact and the boundary must not be able to
+   * disagree: a consumer that adopted the role from a separate event would be
+   * trusting an ordering nothing enforces.
+   */
+  | {
+      readonly kind: "control-snapshot-complete";
+      readonly role: string | null;
+    }
   | {
       readonly kind: "cloud-sync-status";
       readonly status: string;

@@ -315,6 +315,12 @@ export interface EpicRecordsReplica extends Replica<
    * that changed nothing has already been gated before it reaches here.
    */
   applyLaneState(slices: EpicLaneStateSlices): void;
+  /**
+   * The lane arm's lead state snapshot landed - see the implementation. The
+   * `@1` counterpart is {@link EpicRecordsReplica.publishSnapshotLanded}, and
+   * both reach one publish site.
+   */
+  publishLaneSnapshotLoaded(): void;
   /** Publish the first projection. Called once the sink's consumer is live. */
   start(): void;
   /** Logical count of root updates the transport has not carried yet. */
@@ -676,19 +682,55 @@ export function createEpicRecordsReplica(
     return divergence;
   }
 
+  /**
+   * The ONE place `snapshotLoaded` becomes true, on either arm.
+   *
+   * Both arms land a lead snapshot and both must leave the UI's skeletons; what
+   * differs is only what ELSE each knows at that moment, which is why the
+   * difference is a parameter rather than a second function. Two publish sites
+   * that must agree about the same flag is the drift shape this epic has
+   * already paid for more than once - and it is how the lane arm shipped
+   * without ever setting this at all.
+   *
+   * `snapshotLoaded` is written LAST so the caller's patch cannot displace it:
+   * a caller passing this is landing a snapshot by definition.
+   */
+  function publishSnapshotLoaded(
+    alsoPublish: Partial<EpicRecordsProjection>,
+  ): void {
+    sink.transact(() => {
+      projector.projectFull();
+      publish({ ...alsoPublish, snapshotLoaded: true });
+    });
+  }
+
   function publishSnapshotLanded(
     meta: SnapshotMetaEpic,
     divergence: DivergenceState,
   ): void {
-    sink.transact(() => {
-      projector.projectFull();
-      publish({
-        snapshotMeta: meta,
-        snapshotLoaded: true,
-        ...divergence,
-        unsyncedQueueSize: 0,
-      });
+    publishSnapshotLoaded({
+      snapshotMeta: meta,
+      ...divergence,
+      unsyncedQueueSize: 0,
     });
+  }
+
+  /**
+   * The lane arm's lead state snapshot.
+   *
+   * Carries no meta and no divergence, and that is a statement rather than a
+   * gap: the lane's workspace context arrives on its own unary, and the
+   * unsynced-queue divergence is a `@1` root-doc concept with no lane
+   * counterpart. What it shares with `@1` is the only thing that gates the UI.
+   *
+   * Fired on the lead snapshot itself rather than off the slices, because
+   * `onStateSlices` publishes only when the populations MOVED - and an epic
+   * with no artifacts has a perfectly good lead snapshot that moves nothing.
+   * Gating the loaded flag on movement would leave exactly the emptiest
+   * sessions behind their skeletons forever.
+   */
+  function publishLaneSnapshotLoaded(): void {
+    publishSnapshotLoaded({});
   }
 
   function applyEarlyMeta(meta: EarlyMetaEpic): void {
@@ -1234,6 +1276,7 @@ export function createEpicRecordsReplica(
 
     ingestSnapshot,
     publishSnapshotLanded,
+    publishLaneSnapshotLoaded,
     applyEarlyMeta,
     applyLocalUpdate,
     sendAwareness,

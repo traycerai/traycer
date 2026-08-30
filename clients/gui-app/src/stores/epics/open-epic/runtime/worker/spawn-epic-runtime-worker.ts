@@ -44,12 +44,17 @@ import {
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 import {
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
+  type LaneUnaryOutcome,
+  type LaneUnaryRequest,
   type WriteCommandOutcome,
   type RuntimeWorkerLogEntry,
   type RuntimeCommand,
   type WorkerToMainEvent,
   isStreamProxyEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+import type { StreamMethodSupportSource } from "@traycer-clients/shared/host-transport/host-stream-client";
+import { EPIC_LANE_METHODS } from "@traycer-clients/shared/epic-lanes";
+import { readEpicDocRecordArms } from "@/stores/epics/open-epic/doc-record-arms";
 import {
   NO_TRANSFER,
   takeBytesForTransfer,
@@ -61,6 +66,27 @@ import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port"
 export interface RuntimeWorkerLike extends BridgeMessageTargetLike {
   terminate(): void;
 }
+
+/**
+ * The CLOSED method set a replicated manifest names.
+ *
+ * The four stream methods an epic runtime can open, and nothing else. The
+ * manifest is a replica of main's negotiation, not a copy of it: the worker's
+ * lookup answers `"unknown"` / `null` for anything absent, which is the same
+ * answer a relay connection gives forever and which selection already treats as
+ * "not a selection". So a method the worker never opens costs a wire entry and
+ * buys nothing.
+ *
+ * `epic.subscribe` is in the set even though it is the arm being retired -
+ * the legacy arm is still selectable, and a manifest that named only the lanes
+ * would replicate a negotiation the legacy adapter cannot read its own version
+ * off.
+ *
+ * Derived from `EPIC_LANE_METHODS` rather than restating those three, so a
+ * fourth lane added there arrives here without a second list to remember.
+ */
+const EPIC_MANIFEST_METHODS: readonly (keyof HostStreamRpcRegistry & string)[] =
+  ["epic.subscribe", ...EPIC_LANE_METHODS];
 
 /**
  * Where a worker's log lines and its fatal go.
@@ -111,6 +137,26 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
     commandId: string,
     intent: unknown,
   ) => Promise<WriteCommandOutcome>;
+  /**
+   * Issues one lane unary on this session's requester, and reduces its failure
+   * to a clonable value HERE, on the main thread - the same rule
+   * {@link writeCommand} states, for the same reason.
+   */
+  readonly laneUnary: (request: LaneUnaryRequest) => Promise<LaneUnaryOutcome>;
+  /**
+   * This connection's negotiated per-method support, and a notification when it
+   * moves.
+   *
+   * SEPARATE from {@link streams} even though production passes one object for
+   * both, and narrow (`StreamMethodSupportSource`) rather than the whole
+   * client. Two reasons, and neither is style. `streams` is typed
+   * `IStreamClient` because that is all the proxy host relays frames over -
+   * widening it would drag `isReady` and `subscribeAvailabilityRecovered` onto
+   * every fake a suite hands this spawner, for members nothing here reads. And
+   * the two are used at opposite ends: `streams` is the thing PROXIED, this is
+   * the thing the manifest is BUILT from.
+   */
+  readonly methodSupport: StreamMethodSupportSource<HostStreamRpcRegistry>;
   /**
    * The session's REAL stream client, which stays on this thread.
    *
@@ -236,11 +282,12 @@ export function spawnEpicRuntimeWorker<TProjection>(
   options: SpawnEpicRuntimeWorkerOptions<TProjection>,
 ): EpicRuntimeWorkerHandle {
   const worker = options.createWorker();
-  // Built from what the caller holds. The one worker->main call, answered by
-  // the session's own requester - see `MainCallMap` for why it is a call.
+  // Built from what the caller holds. Both worker->main calls, answered by the
+  // session's own requester - see `MainCallMap` for why they are calls.
   const mainCallHandlers: MainCallHandlers = {
     "main/write-command": (request) =>
       options.writeCommand(request.commandId, request.intent),
+    "main/lane-unary": (request) => options.laneUnary(request),
   };
   const bridge = createMainBridgeEndpoint(
     createMessageTargetTransport(worker),
@@ -376,7 +423,61 @@ export function spawnEpicRuntimeWorker<TProjection>(
     NO_TRANSFER,
   );
 
+  /**
+   * The negotiated manifest, replicated into the worker so it can SELECT an
+   * arm at all.
+   *
+   * The protocol declared `stream/manifest` and the worker host consumed it;
+   * nothing on this side ever emitted one. The consequence is not a missing
+   * optimisation: `support(method)` answers `"unknown"` for every method
+   * against a manifest that is `null` forever, `"unknown"` is deliberately not
+   * a selection, and the fail-closed default is the legacy `@1` arm. So a
+   * worker-hosted runtime held legacy for its entire life on every host,
+   * including one that serves the lanes - the cutover's whole subject, absent,
+   * with a working epic as the symptom. The initial capability PROBE masks part
+   * of it (the status lane's own subscribe settles the verdict for a
+   * connection), which is precisely why it went unnoticed; what the probe
+   * cannot do is move a tab whose host upgraded underneath it, because that
+   * signal only exists in the manifest.
+   *
+   * `docArm` is read here rather than pushed by a caller because it is a MAIN
+   * fact - `readEpicDocRecordArms` consults the ambient negotiated-manifest
+   * registry - and the same edge that moves method support is the one that
+   * moves it: a reconnect reaching a new host incarnation re-handshakes and
+   * rewrites both. Bundling the three into one event is the protocol's own
+   * rule, so that a worker can never read a support verdict from one
+   * negotiation beside a doc arm from another.
+   */
   let disposed = false;
+
+  function emitManifest(): void {
+    if (disposed) return;
+    bridge.emit(
+      {
+        kind: "stream/manifest",
+        manifest: {
+          methodVersions: EPIC_MANIFEST_METHODS.map((method) => ({
+            method,
+            version: options.streams.getMethodSchemaVersion(method),
+          })),
+          methodSupport: EPIC_MANIFEST_METHODS.map((method) => ({
+            method,
+            support: options.methodSupport.getMethodSupport(method),
+          })),
+          docArm: readEpicDocRecordArms(options.hostId),
+        },
+      },
+      NO_TRANSFER,
+    );
+  }
+
+  // ONCE before any change, because `subscribeMethodSupport` reports movement
+  // and not state: a connection whose handshake resolved before this worker was
+  // spawned - a second tab on a warm transport - would otherwise wait for an
+  // edge that has already happened.
+  emitManifest();
+  const unsubscribeMethodSupport =
+    options.methodSupport.subscribeMethodSupport(emitManifest);
 
   function detach(): void {
     // The WORKER first, before main's proxy goes away.
@@ -450,6 +551,10 @@ export function spawnEpicRuntimeWorker<TProjection>(
       // Only then stop routing. Unsubscribing before the detach drops every
       // report even on a live bridge.
       unsubscribeEvents();
+      // The transport outlives this worker on the retained-buffer path, so a
+      // manifest listener left behind would emit onto a disposed bridge every
+      // time that connection re-handshakes.
+      unsubscribeMethodSupport();
       // The worker will not get to say `accounting/books registered: false` -
       // it is about to be terminated - so main releases the holders itself.
       accounting.dispose();

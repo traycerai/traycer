@@ -48,6 +48,10 @@ import type { CommandResolution, CommandSendFailure } from "../command-overlay";
 import type { SendOutcome } from "../adapter";
 import type { RuntimeLogFields } from "../runtime-environment";
 import type { ProtectedBytes } from "../memory-accountant";
+import {
+  earlyMetaEpicSchema,
+  type EarlyMetaEpic,
+} from "@traycer/protocol/host/epic/snapshot-meta";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
@@ -62,6 +66,17 @@ import type {
  * it is a stale chunk surviving a dev HMR reload, which otherwise presents as
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
+ *
+ * **12** since `main/lane-unary` and the first production emitter of
+ * `stream/manifest`. The two moved together because they are the lane arm's
+ * two halves: the manifest is what lets a worker SELECT the lanes at all, and
+ * the unary is what the lane arm needs once selected. A v11 worker never
+ * receives a manifest, so it reads every method's support as `"unknown"`
+ * forever and holds the fail-closed legacy arm for its whole life - an epic
+ * that works, on the arm this cutover exists to retire, with no symptom. A v11
+ * MAIN answers `unserved` to the call, so a v12 worker's workspace context
+ * never arrives and its migration retry never reaches a host. Both are the
+ * quiet-degradation failure this constant exists to make loud.
  *
  * **11** since the body plane's RETURN leg: `body/doc-in`,
  * `body/awareness-out`, `body/awareness-in` and `body/release`. A v10 worker
@@ -124,7 +139,7 @@ import type {
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 11;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 12;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -1108,18 +1123,30 @@ export interface RuntimeWorkerCallMap {
 export type ArtifactBodySeedMode = "full" | "delta-against-offer";
 
 /**
- * The calls the WORKER may issue to the main thread. Exactly two, forever
- * unless the header's paragraph is extended.
+ * The calls the WORKER may issue to the main thread. TWO, and the count is the
+ * contract - see the header's rule.
  *
- * Both are app-wide single-flights that must not be copied per worker, and
- * both are on the recovery path rather than the hot path - a dial that lost
- * its credential, and a host that needs one minted. Neither is reached while
- * frames are flowing, which is what keeps this from re-creating the stall the
- * relocation removes.
+ * This doc used to describe `main/auth-revalidate` and `main/mint-credential`,
+ * which were deleted with the socket-relocation plan. It survived them, which
+ * is worth naming rather than quietly fixing: a member list in prose does not
+ * fail to compile when its members go, so the file's own introduction to this
+ * interface named two calls neither of which existed, while the member below
+ * correctly said the count was one. Prose describing a set is stale the moment
+ * the set moves, and this one had been stale since the deletion.
  *
- * The response types are the CONTRACT's own (`RevalidateOutcome`,
- * `HostCredentialMintOutcome`), imported rather than restated: a copy here
- * would drift from the thing that actually produces them.
+ * Both surviving members are unaries on the MAIN-THREAD REQUESTER, and that is
+ * the single fact that forces the direction for both: the unary messenger
+ * shares the same module-scoped process-wide `RemoteSession` cache the stream
+ * client does, so a worker copy is a second Noise session and relay socket per
+ * (hostId, userId) - the identical fact that kept the socket on main. Every
+ * other member of the composition root's options is a value, a push or an
+ * event; these two are the only "ask, and act on the answer" shapes, which has
+ * no push or event spelling.
+ *
+ * MAIN OWNS THE ERROR in both, for one reason: an `Error` does not survive
+ * structured clone. So main catches, reduces the failure to a clonable value,
+ * and the worker acts on that - never on a thrown object it would have to
+ * reconstruct.
  */
 export interface MainCallMap {
   /**
@@ -1145,8 +1172,8 @@ export interface MainCallMap {
    * its `classifyFailure` unwraps it, which leaves the SHARED
    * `CommandQueueOptions` contract untouched.
    *
-   * A SECOND worker->main call must not appear without a paragraph like this
-   * one, and `MAIN_CALL_KINDS` pins the count at 1.
+   * A FURTHER worker->main call must not appear without a paragraph like this
+   * one, and `MAIN_CALL_KINDS` pins the count at 2.
    */
   readonly "main/write-command": {
     readonly request: {
@@ -1156,7 +1183,82 @@ export interface MainCallMap {
     };
     readonly response: WriteCommandOutcome;
   };
+  /**
+   * The two unary reads that complete the epic LANE surface -
+   * `epic.getWorkspaceContext@1.0` and `epic.retryMigration@1.0` - issued on
+   * the main thread's requester.
+   *
+   * The paragraph this member owes, and it starts with why they are here at
+   * all. Both are on `hostRpcRegistry`, not the stream registry: they are
+   * unaries, so they ride the main-thread messenger, and the messenger reaches
+   * the same process-wide `RemoteSession` cache as the socket. That is the
+   * whole justification, and it is the same one `main/write-command` gives -
+   * these are not a new kind of coupling, they are two more members of the one
+   * class this bridge already carries.
+   *
+   * Why they cannot be pushes. The workspace context IS a payload the runtime
+   * consumes (it is `earlyMeta`, which the legacy arm receives as a frame and
+   * projects into `snapshotMeta`), so there is nothing to push. The retry is a
+   * COMMAND whose whole reason for becoming a unary was that the monolith's
+   * fire-and-forget client frame made "the host refused" and "the host never
+   * received it" the same observation - so spelling it as a bridge EVENT here
+   * would reintroduce, one layer over, the exact defect the protocol change
+   * removed.
+   *
+   * ONE kind carrying both rather than two kinds, because they are one class
+   * and move as one: `lane-unaries.ts` defines them together, the registry
+   * degrades them together (`degrade: { kind: "unsupported" }`, both off the
+   * released floor), and both are unreachable on the legacy arm. A caller that
+   * has one has the other.
+   *
+   * Neither is on the hot path: the context is read at open and on named
+   * refresh triggers, and the retry is a user gesture on a failed migration.
+   * Neither is reached while frames are flowing, which is what keeps this from
+   * re-creating the stall the relocation removes.
+   */
+  readonly "main/lane-unary": {
+    readonly request: LaneUnaryRequest;
+    readonly response: LaneUnaryOutcome;
+  };
 }
+
+/**
+ * Which lane unary to issue.
+ *
+ * No `epicId`: the SESSION owns it, exactly as it does for
+ * `main/write-command`, so main's handler supplies it rather than trusting a
+ * value that crossed a boundary. A worker naming an epic would be a worker
+ * able to name the WRONG one.
+ */
+export type LaneUnaryRequest =
+  | { readonly kind: "workspace-context" }
+  | { readonly kind: "retry-migration" };
+
+/**
+ * What main answers a lane unary with.
+ *
+ * `ok: false` carries a `reason` STRING rather than a classified union,
+ * and the asymmetry with `WriteCommandOutcome` is deliberate rather than an
+ * omission. A write command's failure drives a queue that retries, defers or
+ * rejects, so its arms are load-bearing and are reconstructed field by field.
+ * These two have no queue: a failed context read is retried by the refresh
+ * policy's next trigger and is otherwise a log line, and a failed retry is a
+ * log line too. Inventing arms nothing branches on would be a contract that
+ * looks richer than the behaviour behind it.
+ *
+ * The success arm is DISCRIMINATED because one parser serves both kinds - the
+ * pending table is keyed by call id and cannot carry each entry's response
+ * type - so `{ ok: true }` alone could not tell a context answer from a retry
+ * acknowledgement.
+ */
+export type LaneUnaryOutcome =
+  | {
+      readonly ok: true;
+      readonly kind: "workspace-context";
+      readonly context: EarlyMetaEpic;
+    }
+  | { readonly ok: true; readonly kind: "retry-migration" }
+  | { readonly ok: false; readonly reason: string };
 
 /**
  * What main answers a write command with.
@@ -1181,7 +1283,7 @@ export type MainCallResponse<K extends MainCallKind> =
 
 export const MAIN_CALL_KIND_COVERAGE: {
   readonly [K in MainCallKind]: true;
-} = { "main/write-command": true };
+} = { "main/write-command": true, "main/lane-unary": true };
 
 /**
  * The worker->main call kinds, DERIVED from the record so there is one place a
@@ -1209,6 +1311,7 @@ const MAIN_CALL_BUILDERS: {
   readonly [K in MainCallKind]: (request: MainCallRequest<K>) => MainCall;
 } = {
   "main/write-command": (request) => ({ kind: "main/write-command", request }),
+  "main/lane-unary": (request) => ({ kind: "main/lane-unary", request }),
 };
 
 export function buildMainCall<K extends MainCallKind>(
@@ -1236,6 +1339,28 @@ export const MAIN_CALL_RESPONSE_PARSERS: {
     if (value.ok !== false) return null;
     const failure = parseCommandSendFailure(value.failure);
     return failure === null ? null : { ok: false, failure };
+  },
+  "main/lane-unary": (value) => {
+    if (!isRecord(value)) return null;
+    if (value.ok === false) {
+      return typeof value.reason === "string"
+        ? { ok: false, reason: value.reason }
+        : null;
+    }
+    if (value.ok !== true) return null;
+    if (value.kind === "retry-migration") return { ok: true, kind: value.kind };
+    if (value.kind !== "workspace-context") return null;
+    // The PROTOCOL's own schema, not a hand-rolled walk of it. The two other
+    // parsers in this file rebuild their payloads field by field because those
+    // payloads are the bridge's own vocabulary and have no schema anywhere
+    // else; this one's does exist, is the same schema the legacy `earlyMeta`
+    // frame is decoded with, and carries five nested collections. A second
+    // hand-written narrowing of it here would be a copy that rots against the
+    // contract - silently, by admitting a shape the host stopped sending.
+    const parsed = earlyMetaEpicSchema.safeParse(value.context);
+    return parsed.success
+      ? { ok: true, kind: "workspace-context", context: parsed.data }
+      : null;
   },
 };
 

@@ -174,6 +174,11 @@ import {
 } from "@/lib/host/test-support/fake-durable-stream-transport";
 import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
 import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
+import {
+  RUNTIME_BRIDGE_PROTOCOL_VERSION,
+  type WorkerToMainEvent,
+} from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+import type { BridgeMessageEventLike } from "@traycer-clients/shared/replica-runtime/worker/bridge-transports";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
 
 /** The jsdom setup file's coreless worker, put back in `afterEach`. */
@@ -194,6 +199,95 @@ let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
  * The deleted stream override was called once per session too, so this matches
  * what these tests have always exercised.
  */
+/**
+ * What {@link installWorkerWithFatalOnFirstSpawn} hands back.
+ *
+ * `spawnCount` is the pin's real observable: "Retry rebuilt" and "Retry
+ * re-presented the corpse" both end with a `ready` presentation, and only the
+ * number of workers actually started tells them apart.
+ */
+interface FatalWorkerRig {
+  /** Report a runtime fatal from the FIRST worker, as a live one would. */
+  fatal(): void;
+  spawnCount(): number;
+}
+
+/**
+ * A worker that answers the handshake and then dies ON COMMAND, followed by
+ * real in-process workers for every later spawn.
+ *
+ * The first worker is a fake rather than a real composition because a fatal has
+ * no product trigger - it is what a crashed thread produces - and the second
+ * onwards are real because the whole question is whether a REPLACEMENT gets
+ * built and reaches `ready`. A rig that faked both halves could not tell a
+ * rebuild from a re-presentation.
+ */
+function installWorkerWithFatalOnFirstSpawn(
+  factory: EpicStreamClientFactory,
+): FatalWorkerRig {
+  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
+  let spawns = 0;
+  let deliverFatal: (() => void) | null = null;
+  __setEpicRuntimeWorkerFactoryForTests(() => {
+    spawns += 1;
+    if (spawns > 1) {
+      return createInProcessEpicRuntimeWorker({
+        streamClientFactory: factory,
+        laneSelection: null,
+      }).createWorker();
+    }
+    const listeners = new Set<(event: BridgeMessageEventLike) => void>();
+    const deliver = (event: WorkerToMainEvent): void => {
+      for (const listener of [...listeners]) {
+        listener({ data: { frame: "event", event } });
+      }
+    };
+    let answeredHandshake = false;
+    deliverFatal = (): void => {
+      deliver({
+        kind: "fatal",
+        message: "the runtime worker died",
+        stack: null,
+      });
+    };
+    return {
+      postMessage: (): void => {
+        // The FIRST message only, which is the bootstrap. Answering every
+        // message would re-settle `ready` on a `shutdown` too, which is not
+        // something a worker does and not something this pin should rely on.
+        if (answeredHandshake) return;
+        answeredHandshake = true;
+        deliver({
+          kind: "ready",
+          protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION,
+        });
+      },
+      addEventListener: (
+        _type: "message",
+        listener: (event: BridgeMessageEventLike) => void,
+      ): void => {
+        listeners.add(listener);
+      },
+      removeEventListener: (
+        _type: "message",
+        listener: (event: BridgeMessageEventLike) => void,
+      ): void => {
+        listeners.delete(listener);
+      },
+      terminate: (): void => {},
+    };
+  });
+  return {
+    fatal: (): void => {
+      if (deliverFatal === null) {
+        throw new Error("the first worker was never spawned");
+      }
+      deliverFatal();
+    },
+    spawnCount: () => spawns,
+  };
+}
+
 function installStreamFactory(factory: EpicStreamClientFactory): void {
   previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
   __setEpicRuntimeWorkerFactoryForTests(() =>
@@ -2493,5 +2587,210 @@ describe("<EpicSessionProvider />", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("retires the handle a worker fatal killed, so Retry rebuilds instead of re-presenting the corpse", async () => {
+    // A fatal only moved the PRESENTATION to `failed`. The handle stayed
+    // registered and undisposed, so Retry - which bumps `retryGeneration` and
+    // re-runs the acquire effect - reached `current.hostId === targetHostId`
+    // and presented that same dead handle as `ready`. The recovery affordance
+    // could not recover from the one failure it is shown for.
+    const EPIC_ID = "epic-worker-fatal-retry";
+    const streams: ControlledEpicStream[] = [];
+    const rig = installWorkerWithFatalOnFirstSpawn((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    const presentations: Array<EpicSessionPresentation | null> = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+        <PresentationProbe
+          onPresentation={(presentation) => presentations.push(presentation)}
+        />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+
+    expect(rig.spawnCount()).toBe(1);
+    expect(seenHandles).toHaveLength(1);
+    expect(presentations.at(-1)?.kind).toBe("ready");
+    const dead = seenHandles[0];
+
+    act(() => {
+      rig.fatal();
+    });
+    expect(presentations.at(-1)?.kind).toBe("failed");
+    // PREMISE, positively: the fatal really did leave the corpse mounted.
+    // Without this the assertions below could pass because the handle was
+    // never registered in the first place.
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(dead);
+
+    act(() => {
+      presentations.at(-1)?.retry();
+    });
+    await act(() => Promise.resolve());
+
+    // A SECOND worker was actually started. This is the assertion that
+    // separates the two outcomes: both end at `ready`, and only the spawn
+    // count says whether anything was rebuilt.
+    expect(rig.spawnCount()).toBe(2);
+    expect(seenHandles.at(-1)).not.toBe(dead);
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).not.toBe(dead);
+    expect(presentations.at(-1)?.kind).toBe("ready");
+  });
+
+  it("hands a FRESH surface a new handle during the corpse window, before any Retry", async () => {
+    // The path finding 8's first fix could not reach. `retireDeadMounted` was
+    // called from the acquire effect, gated on the surface ALREADY holding the
+    // dead handle - so a second tab opening this epic between the fatal and any
+    // Retry has no `current`, skips that gate entirely, and adopts the corpse
+    // from `acquireMounted`. Same bug shape, one path over.
+    //
+    // A fix on one path to a state has to enumerate EVERY path to it, and
+    // `acquireMounted` is the seam every path goes through: it has exactly one
+    // production caller, and it is the line that hands out the handle.
+    const EPIC_ID = "epic-corpse-window";
+    const streams: ControlledEpicStream[] = [];
+    const rig = installWorkerWithFatalOnFirstSpawn((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const firstSurface: OpenEpicStoreHandle[] = [];
+    const presentations: Array<EpicSessionPresentation | null> = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-1`}>
+        <HandleProbe onHandle={(handle) => firstSurface.push(handle)} />
+        <PresentationProbe
+          onPresentation={(presentation) => presentations.push(presentation)}
+        />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+    expect(firstSurface).toHaveLength(1);
+    const dead = firstSurface[0];
+
+    act(() => {
+      rig.fatal();
+    });
+    expect(presentations.at(-1)?.kind).toBe("failed");
+    // PREMISE: we are INSIDE the corpse window - nobody has retried, and the
+    // registry still holds the dead handle. Without this the assertion below
+    // could pass because the window had already closed on its own.
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(dead);
+
+    // A SECOND surface on the same epic - a duplicated tab, or the same epic
+    // opened in another window. It has no prior handle of its own, which is
+    // exactly what makes it take the acquire path rather than any re-point arm.
+    const secondSurface: OpenEpicStoreHandle[] = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={`${EPIC_ID}-tab-2`}>
+        <HandleProbe onHandle={(handle) => secondSurface.push(handle)} />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+
+    expect(rig.spawnCount()).toBe(2);
+    expect(secondSurface).toHaveLength(1);
+    expect(secondSurface[0]).not.toBe(dead);
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).not.toBe(dead);
+  });
+
+  it("disposes the replacement candidate when the provider unmounts mid-transfer", async () => {
+    // `commitReplacement` sets `settled = true` before dispatching the
+    // transfer, which permanently disarms `disposePending` and the deadline -
+    // so from that assignment the transfer tail OWNS the candidate on every
+    // exit. Its cancellation exit returned bare, leaving a fully built
+    // session - worker, stream transport, socket, accounting registrations -
+    // alive with nothing holding a reference that could ever end it.
+    const EPIC_ID = "epic-cancelled-transfer";
+    const streams: ControlledEpicStream[] = [];
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    installStreamFactory((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const view = render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+      </EpicSessionProvider>,
+    );
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    const firstHandle = seenHandles.at(-1);
+    if (firstHandle === undefined) throw new Error("expected initial handle");
+    await act(async () => {
+      deliverSnapshot(streams[0], "room-a");
+      // A local edit and an EQUAL room, so the swap takes the MERGE path -
+      // the only one with an awaited `encodeRootState` / `applyRootUpdate` for
+      // an unmount to land inside.
+      await seedLocalRootEdit(
+        firstHandle,
+        "cancelled-transfer-edit",
+        "pending",
+      );
+    });
+
+    act(() => {
+      hostState.id = "host-b";
+      view.rerender(
+        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+        </EpicSessionProvider>,
+      );
+    });
+    await waitFor(() => {
+      expect(streams).toHaveLength(2);
+    });
+    expect(streams[1].closeCount).toBe(0);
+
+    // The snapshot commits the replacement (settled) and dispatches the
+    // transfer; the unmount lands while that transfer is still awaiting, in
+    // the SAME act so nothing drains in between.
+    await act(async () => {
+      deliverSnapshot(streams[1], "room-a");
+      view.unmount();
+      await Promise.resolve();
+    });
+    await act(() => Promise.resolve());
+
+    // The candidate's own transport. Under the unfixed tree this stays 0 for
+    // the life of the tab.
+    expect(streams[1].closeCount).toBe(1);
   });
 });

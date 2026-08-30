@@ -58,7 +58,10 @@ import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/art
 import type { EpicDocRecordArms } from "../projection-helpers";
 import type { EpicArtifactRoomAvailability } from "../types";
 import type { PendingChatCreation } from "../pending-chat-creations";
-import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type {
+  EarlyMetaEpic,
+  SnapshotMetaEpic,
+} from "@traycer/protocol/host/epic/snapshot-meta";
 import type {
   EpicOutboundRequest,
   EpicRuntimeEvent,
@@ -194,6 +197,51 @@ export interface EpicLaneSelectionSources {
    * and every lane is a method on it, so a per-tile body does not dial.
    */
   readonly artifactStreamClientFactory: ArtifactStreamClientFactory;
+  /**
+   * The two unaries that complete the lane surface.
+   *
+   * Inside `laneSelection` rather than beside it, under this interface's own
+   * rule: they are only ever meaningful together with the three stream
+   * factories. Both are unreachable on the legacy arm - `epic.subscribe@1`
+   * carries the workspace context as its `earlyMeta` frame and the retry as a
+   * client frame - so a caller that has one has all five, and `null` remains
+   * one fact about the caller.
+   */
+  readonly unaries: EpicLaneUnaries;
+}
+
+/**
+ * `epic.getWorkspaceContext@1.0` and `epic.retryMigration@1.0`, as this runtime
+ * consumes them.
+ *
+ * Injected, never dialled here, for the same reason `writeCommandSender` is:
+ * these are UNARIES, they ride the main thread's requester, and the requester
+ * reaches a module-scoped process-wide `RemoteSession` cache that must not be
+ * copied into a worker. What crosses is `main/lane-unary`; see `MainCallMap`.
+ *
+ * No `epicId` parameter on either. The session owns it, so a caller that could
+ * name an epic is a caller that could name the wrong one.
+ */
+export interface EpicLaneUnaries {
+  /**
+   * The workspace context - repos, workspaces, repo mapping, resolved folders,
+   * `epicLight`, permission role. Exactly `earlyMeta`'s payload.
+   *
+   * REJECTS rather than answering `null` on failure, because the refresh policy
+   * distinguishes a failed read (retried on the next trigger, and possibly a
+   * host that does not serve the method) from a delivered one, and a nullable
+   * answer would collapse them.
+   */
+  getWorkspaceContext(): Promise<EarlyMetaEpic>;
+  /**
+   * Re-run a failed major migration. Resolves when the host ACCEPTED the retry;
+   * progress arrives on the status lane, not here.
+   *
+   * A refusal is a rejection - the contract's two refusals (no write access, no
+   * failed migration to retry) are typed RPC errors, and a boolean would
+   * collapse them into one indistinguishable "no".
+   */
+  retryMigration(): Promise<void>;
 }
 
 export interface EpicReplicaRuntime {
@@ -838,10 +886,46 @@ export function createEpicReplicaRuntime(
               records.applyLaneState(slices);
             });
           },
+          // The lane arm's half of what `applyRootSnapshot` does on `@1`: the
+          // control half (adopting the role, which opens the write gate) rides
+          // the status lane's own snapshot boundary, and this is the records
+          // half. Split across the two lanes because the two facts arrive on
+          // two subscriptions - which is exactly why neither could be left
+          // implicit in a call the way `@1` leaves both.
+          onStateLeadSnapshot: () => {
+            noteInboundFrameApplied();
+            delivery.batch(() => {
+              records.publishLaneSnapshotLoaded();
+            });
+          },
           onControlEvent: (event) => {
             noteInboundFrameApplied();
             delivery.batch(() => {
               control.apply(event);
+            });
+          },
+          getWorkspaceContext: () =>
+            laneSelection.unaries.getWorkspaceContext(),
+          // The SAME two writes the `@1` arm performs for its `earlyMeta`
+          // frame, in the same one store write - `snapshotMeta` on the records
+          // plane, the DISPLAY role on the control plane. Routed through
+          // `control.apply` rather than a direct publish so the early role
+          // keeps its documented distinction from the snapshot-derived one: it
+          // moves the display and clears `accessLost`, and deliberately does
+          // NOT touch the write gate.
+          //
+          // The ONE lane callback that does not call
+          // `noteInboundFrameApplied`, and the omission is load-bearing rather
+          // than an oversight. That hook clears the replacement coalescer, and
+          // this is not an inbound frame: it is a unary answer, and one that a
+          // replacement itself TRIGGERS (`noteAuthorityEpochChanged`). Clearing
+          // there would let the second lane's report of the one epoch change
+          // rebuild the replica a second time - the exact double bump the
+          // coalescer exists to stop, reintroduced through its own trigger.
+          onWorkspaceContext: (context) => {
+            delivery.batch(() => {
+              records.applyEarlyMeta(context);
+              control.apply({ kind: "early-meta", meta: context });
             });
           },
           onReplacementRequested: (reason) => {
@@ -1255,7 +1339,29 @@ export function createEpicReplicaRuntime(
       const reopen = control.facts.transportStatus() !== "open";
       if (reopen) requestFreshSnapshot();
       control.markMigrationRetrying();
-      if (!reopen) adapter.send({ kind: "retry-migration" });
+      if (reopen) return;
+      // WHICH ARM, because the two speak different transports for this one
+      // gesture and the legacy spelling is not merely suboptimal on the lane
+      // arm - it is inert. `adapter` is the `@1` stream adapter, and on the
+      // lane arm it is detached, so `send` answers `dropped` and the modal
+      // sits in `retrying` until the whole session is reopened. The button
+      // looked like it worked; nothing had been asked of the host.
+      //
+      // Deliberately still fire-and-forget from here. The unary's ANSWER is a
+      // statement that the host accepted the retry, and progress arrives on the
+      // status lane either way - so awaiting it would only let this method
+      // decide something the control replica already owns. A rejection is
+      // logged by the dispatcher; the modal's recovery from a refused retry is
+      // the same path it has always had.
+      if (installedArm === "lanes" && laneSelection !== null) {
+        void laneSelection.unaries.retryMigration().catch(() => {
+          // Reported at the dispatcher, which holds the cause. Swallowed here
+          // because this is a detached continuation: rethrowing would surface
+          // as an unhandled rejection with no stack back to the gesture.
+        });
+        return;
+      }
+      adapter.send({ kind: "retry-migration" });
     },
 
     enqueueWriteCommand: (intent) =>
