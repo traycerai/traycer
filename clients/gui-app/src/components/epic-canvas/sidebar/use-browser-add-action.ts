@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -53,8 +53,9 @@ export function useAddBrowserAction(
   const prepareOpen = useEpicCanvasStore(
     (state) => state.prepareOpenTileInTabFocusTarget,
   );
+  const openTabKey = browserMutationKeys.openTab(sessions.hostId);
   const addMutation = useMutation<OpenedBrowserTab>({
-    mutationKey: browserMutationKeys.openTab(sessions.hostId),
+    mutationKey: openTabKey,
     mutationFn: async () => {
       const hostId = sessions.hostId;
       if (sessions.lifecycle !== "live" || hostId === null) {
@@ -73,7 +74,10 @@ export function useAddBrowserAction(
       toast.error(cause.message);
     },
   });
-  const isAdding = addMutation.isPending;
+  // Counted across every surface adding on this host, not just this hook's
+  // own call: the header and the empty state mount together, so a per-hook
+  // flag would let one tap on each open two tabs.
+  const isAdding = useIsMutating({ mutationKey: openTabKey }) > 0;
   const mutate = addMutation.mutate;
   const add = useCallback(() => {
     if (isAdding) return;
