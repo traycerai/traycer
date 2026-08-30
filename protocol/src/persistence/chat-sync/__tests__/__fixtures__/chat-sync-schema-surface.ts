@@ -1958,11 +1958,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                     },
                                                     "noticeKind": {
                                                       "type": "string",
-                                                      "enum": [
-                                                        "model_rerouted",
-                                                        "model_verification",
-                                                        "safety_buffering"
-                                                      ]
+                                                      "minLength": 1
                                                     },
                                                     "tone": {
                                                       "type": "string",
