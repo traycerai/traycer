@@ -7,6 +7,8 @@ import {
 } from "@/lib/browser-view/sessions/video-plane-session";
 import {
   acquireBrowserMediaEntry,
+  activeBrowserMediaKeyIds,
+  RELEASE_GRACE_MS,
   type MediaPeer,
   type MediaPeerHandlers,
   type WebrtcIceCandidate,
@@ -159,8 +161,12 @@ function setupWithRtt(readControlPlaneRttMs: () => number | null): PlaneState {
     onVideoStats: (sample) => statsSamples.push(sample),
     readControlPlaneRttMs,
   });
+  openSessions.push(session);
   return { answers, states, statsFrames, statsSamples, views, peers, session };
 }
+
+/** Every setup takes a registry lease; `afterEach` gives them all back. */
+const openSessions: VideoPlaneSession[] = [];
 
 function offerFrame(
   negotiationId: number,
@@ -201,6 +207,11 @@ describe("video plane session", () => {
   });
 
   afterEach(() => {
+    for (const session of openSessions) session.close();
+    openSessions.length = 0;
+    // The registry disposes a released entry after its grace window.
+    vi.advanceTimersByTime(RELEASE_GRACE_MS);
+    expect(activeBrowserMediaKeyIds()).toEqual([]);
     vi.useRealTimers();
   });
 
@@ -238,6 +249,28 @@ describe("video plane session", () => {
     plane.session.noteVideoFrame(null);
     plane.session.noteVideoFrame(null);
     expect(plane.states).toHaveLength(1);
+  });
+
+  it("re-reports live after a same-id ICE-restart re-offer heals", async () => {
+    const plane = setup();
+    plane.session.handleServerFrame(offerFrame(3, "offer-sdp"));
+    await settle();
+    plane.peers[0]?.handlers.onStream(fakeStream("track"));
+    plane.session.noteVideoFrame(null);
+    expect(plane.states).toHaveLength(1);
+
+    // The host restarts ICE on the SAME negotiationId; its restart deadline
+    // is cancelled only by a fresh `live`, so the first decoded frame after
+    // the restart must re-report it - and only once.
+    plane.session.handleServerFrame(offerFrame(3, "restart-sdp"));
+    await settle();
+    plane.session.noteVideoFrame(null);
+    plane.session.noteVideoFrame(null);
+
+    expect(plane.states).toEqual([
+      { negotiationId: 3, state: "live", reason: null },
+      { negotiationId: 3, state: "live", reason: null },
+    ]);
   });
 
   it("reverts to jpeg and stops owning liveness when the peer fails", async () => {

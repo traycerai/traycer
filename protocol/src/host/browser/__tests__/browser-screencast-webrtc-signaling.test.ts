@@ -321,6 +321,64 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
     ).toBe(false);
   });
 
+  it("maps an off-vocabulary iceCandidatePairType to 'unknown' (no free text)", () => {
+    const parsed = browserScreencastClientFrameSchema.parse({
+      kind: "videoStats",
+      hasBinaryPayload: false,
+      negotiationId: 1,
+      framesDecoded: 900,
+      framesDropped: 3,
+      packetsLost: 0,
+      jitterMs: 4.2,
+      roundTripTimeMs: 18,
+      glassToGlassMs: null,
+      iceCandidatePairType: "candidate:842163049 1 udp 1677729535",
+    });
+    expect(parsed).toMatchObject({ iceCandidatePairType: "unknown" });
+  });
+
+  it("bounds the SDP and candidate wire strings", () => {
+    expect(
+      parsesServer({
+        kind: "sdpOffer",
+        hasBinaryPayload: false,
+        negotiationId: 1,
+        sdp: "a".repeat(1_048_577),
+      }),
+    ).toBe(false);
+    expect(
+      parsesClient({
+        kind: "sdpAnswer",
+        hasBinaryPayload: false,
+        negotiationId: 1,
+        sdp: "a".repeat(1_048_577),
+      }),
+    ).toBe(false);
+    expect(
+      parsesServer({
+        kind: "iceCandidate",
+        hasBinaryPayload: false,
+        negotiationId: 1,
+        candidate: "a".repeat(16_385),
+        sdpMid: "0",
+        sdpMLineIndex: 0,
+      }),
+    ).toBe(false);
+    expect(
+      parsesClient({
+        kind: "sdpAnswer",
+        hasBinaryPayload: false,
+        negotiationId: 1,
+        sdp: "answer",
+        candidates: Array.from({ length: 257 }, () => ({
+          candidate: "candidate:1 1 udp 1 10.0.0.1 1 typ host",
+          sdpMid: "0",
+          sdpMLineIndex: 0,
+        })),
+      }),
+    ).toBe(false);
+  });
+
   it("rejects a videoStats frame sent the wrong direction (client-only stats)", () => {
     expect(
       parsesServer({

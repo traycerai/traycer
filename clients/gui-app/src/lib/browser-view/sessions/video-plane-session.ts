@@ -319,9 +319,12 @@ export function createVideoPlaneSession(options: {
         return;
       }
       lastFrameAt = Date.now();
+      // Before the `liveRound` gate: a same-id ICE restart reopens the
+      // registry's per-round latch, and only a fresh `live` report cancels the
+      // host's restart deadline. The latch keeps this idempotent.
+      entry.reportFirstDecodedFrame();
       if (snapshot.negotiationId === liveRound) return;
       liveRound = snapshot.negotiationId;
-      entry.reportFirstDecodedFrame();
       publish();
     },
     lastVideoFrameAt: () => (isLive(entry.getSnapshot()) ? lastFrameAt : null),

@@ -369,3 +369,35 @@ describe("createBrowserMediaPeer connectionState 'failed' grace (blocker 2)", ()
     expect(failures).toEqual(["connection-closed"]);
   });
 });
+
+describe("createBrowserMediaPeer.getStats rejection ownership", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("routes a rejecting getStats through exactly one promise the caller owns", async () => {
+    const connection = stubPeerConnection();
+    const failure = new Error("connection closing");
+    connection.getStats = () => Promise.reject(failure);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    const peer = createBrowserMediaPeer(NOOP_HANDLERS, []);
+    const observed: unknown[] = [];
+    await peer.getStats().catch((error: unknown) => {
+      observed.push(error);
+    });
+    // Node reports an unhandled rejection on the check that runs after the
+    // microtask queue drains, so a detached child promise would surface here.
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    process.off("unhandledRejection", onUnhandled);
+
+    expect(observed).toEqual([failure]);
+    expect(unhandled).toEqual([]);
+  });
+});

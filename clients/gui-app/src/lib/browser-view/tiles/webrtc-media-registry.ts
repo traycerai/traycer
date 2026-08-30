@@ -1,3 +1,4 @@
+import type { BrowserScreencastIcePairType } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserViewNativeTabKey } from "@traycer-clients/shared/platform/browser-view";
 import {
   VIEWER_CONTROL_PLANE_DEADLINES,
@@ -96,7 +97,7 @@ export interface WebrtcVideoStatsSample {
   readonly decodeCompositeMs: number | null;
   /** DataChannel-up / mux-down `ping` round trip; null until one completes. */
   readonly dataChannelRttMs: number | null;
-  readonly iceCandidatePairType: string;
+  readonly iceCandidatePairType: BrowserScreencastIcePairType;
 }
 
 /**
@@ -240,7 +241,7 @@ export interface BrowserMediaEntry {
  * the last release only schedules the close. The window is generous enough to
  * also cover a remount that straddles a state update arriving off the wire.
  */
-const RELEASE_GRACE_MS = 1_000;
+export const RELEASE_GRACE_MS = 1_000;
 
 /**
  * A12: how long a round's local-candidate batch waits for
@@ -401,6 +402,11 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
   const report = (state: "live" | "failed", reason: string | null): void => {
     if (round === null) return;
     if (state === "live") {
+      // The host only accepts `live` on an ANSWERED round, and both ride one
+      // FIFO stream: a frame decoded between a restart re-offer and its
+      // answer flush would arrive first and be rejected. Defer rather than
+      // consume the latch - the next frame after the flush reports.
+      if (!round.answerSent) return;
       if (round.reportedLive) return;
       round.reportedLive = true;
     } else {
@@ -524,6 +530,9 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
         clearFlushTimer(existing);
         existing.port = port;
         existing.remoteReady = false;
+        // The host's restart deadline is cancelled only by a fresh `live`
+        // report, so the latch must reopen for the restarted round.
+        existing.reportedLive = false;
         existing.answerSent = false;
         existing.gatheringComplete = false;
         existing.flushAnswer = null;
@@ -867,13 +876,13 @@ export function createBrowserMediaPeer(
     },
     addRemoteCandidate: (candidate) => connection.addIceCandidate(candidate),
     getStats: () => {
-      const report = connection.getStats();
       // Piggybacks the existing 5s stats cadence rather than a second timer -
-      // see `applyAdaptiveJitterBufferTarget`.
-      void report.then((stats) =>
-        applyAdaptiveJitterBufferTarget(videoReceiver, stats),
-      );
-      return report;
+      // see `applyAdaptiveJitterBufferTarget`. One chain, so the caller's
+      // catch owns the rejection a closing connection produces.
+      return connection.getStats().then((stats) => {
+        applyAdaptiveJitterBufferTarget(videoReceiver, stats);
+        return stats;
+      });
     },
     close: () => {
       for (const track of stream?.getTracks() ?? []) track.stop();

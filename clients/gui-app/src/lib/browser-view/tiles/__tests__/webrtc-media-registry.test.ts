@@ -956,12 +956,68 @@ describe("webrtc media registry", () => {
           candidates: [],
         },
       ]);
-      // The stream never dropped (no `fail()` ran) - phase stayed streaming
-      // and the round is still live under its original report latch.
+      // The stream never dropped (no `fail()` ran) - phase stayed streaming.
       expect(held.entry.getSnapshot()).toMatchObject({
         phase: "streaming",
         negotiationId: 5,
       });
+
+      // The restart reopens the live latch: the host's restart deadline is
+      // cancelled only by a fresh `live`, so the next decoded frame must
+      // re-report it - exactly once, however many frames follow.
+      expect(restartPort.states).toEqual([]);
+      held.entry.reportFirstDecodedFrame();
+      held.entry.reportFirstDecodedFrame();
+      expect(restartPort.states).toEqual([
+        { negotiationId: 5, state: "live", reason: null },
+      ]);
+
+      held.release();
+      await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+    });
+
+    it("defers a decoded frame that lands before the restart's answer ships", async () => {
+      const key = nextKey();
+      const harness = peerHarness();
+      const port = recordingPort();
+      const held = acquireBrowserMediaEntry({
+        key,
+        createPeer: harness.createPeer,
+      });
+
+      held.entry.acceptOffer({
+        negotiationId: 7,
+        sdp: "first-offer",
+        port,
+        iceServers: [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      harness.peers[0]?.handlers.onStream(fakeStream("t"));
+      held.entry.reportFirstDecodedFrame();
+      expect(port.states).toHaveLength(1);
+
+      held.entry.acceptOffer({
+        negotiationId: 7,
+        sdp: "restart-offer",
+        port,
+        iceServers: [],
+      });
+      // The re-offer's answer has not shipped yet: `live` here would reach
+      // the host ahead of the answer on the same FIFO stream and be rejected
+      // as an invalid transition, so it must be deferred, not swallowed.
+      held.entry.reportFirstDecodedFrame();
+      expect(port.answers).toHaveLength(1);
+      expect(port.states).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(port.answers).toHaveLength(2);
+      held.entry.reportFirstDecodedFrame();
+      held.entry.reportFirstDecodedFrame();
+
+      expect(port.states).toEqual([
+        { negotiationId: 7, state: "live", reason: null },
+        { negotiationId: 7, state: "live", reason: null },
+      ]);
 
       held.release();
       await vi.advanceTimersByTimeAsync(GRACE_MS * 2);

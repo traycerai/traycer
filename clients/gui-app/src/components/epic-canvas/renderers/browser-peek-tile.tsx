@@ -69,6 +69,22 @@ export type BrowserPeekNode = Pick<
 const lastFrameCache = new Map<string, ScreencastImage>();
 
 /**
+ * Every tile open/close cycle mints a fresh `instanceId`, so keys are never
+ * reused and the targeted `clearLastBrowserPeekFrame` cannot reclaim the
+ * strays. Insertion-order eviction bounds what the strays can cost.
+ */
+const LAST_FRAME_CACHE_LIMIT = 20;
+
+function retainLastFrame(key: string, image: ScreencastImage): void {
+  lastFrameCache.delete(key);
+  lastFrameCache.set(key, image);
+  for (const stale of lastFrameCache.keys()) {
+    if (lastFrameCache.size <= LAST_FRAME_CACHE_LIMIT) break;
+    lastFrameCache.delete(stale);
+  }
+}
+
+/**
  * The one key builder for a browser peek tile's frame cache / dormant
  * placeholder lookup - host+session+tab+tile-instance. Shared by both
  * viewers (`BrowserPeekTile`, `BrowserPeekTileMobile`) and by
@@ -107,11 +123,12 @@ export function useRetainLastBrowserPeekFrame(
   image: ScreencastImage | null,
 ): void {
   useEffect(() => {
-    if (image !== null) lastFrameCache.set(key, image);
+    if (image !== null) retainLastFrame(key, image);
   }, [key, image]);
 }
 
 const VIDEO_SNAPSHOT_JPEG_QUALITY = 0.7;
+const VIDEO_SNAPSHOT_MAX_EDGE_PX = 960;
 
 /**
  * Draws a `<video>` element's currently decoded frame into the SAME dormant
@@ -145,13 +162,22 @@ export function snapshotVideoFrameIntoPeekCache(
 ): void {
   if (!wasActivePlane) return;
   if (video.videoWidth <= 0 || video.videoHeight <= 0) return;
+  // The placeholder renders this at opacity-30/grayscale/object-contain, so
+  // native resolution buys nothing and costs a ~16MiB RGBA buffer plus a
+  // synchronous `toDataURL` on the main thread during unmount.
+  const scale = Math.min(
+    1,
+    VIDEO_SNAPSHOT_MAX_EDGE_PX / Math.max(video.videoWidth, video.videoHeight),
+  );
   const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
+  // Clamped: an extreme aspect ratio can round a scaled axis to 0, and
+  // `toDataURL` on a zero-dimension canvas throws inside this unmount path.
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
   const context = canvas.getContext("2d");
   if (context === null) return;
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  lastFrameCache.set(key, {
+  retainLastFrame(key, {
     src: canvas.toDataURL("image/jpeg", VIDEO_SNAPSHOT_JPEG_QUALITY),
     sequence: -1, // never read back; the dormant placeholder only reads `.src`.
   });

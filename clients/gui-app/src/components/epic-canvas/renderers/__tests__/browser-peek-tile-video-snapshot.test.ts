@@ -174,4 +174,73 @@ describe("snapshotVideoFrameIntoPeekCache", () => {
       "data:image/jpeg;base64,FIRST",
     );
   });
+
+  it("scales the snapshot down to a 960px max edge", () => {
+    const drawImage: unknown[][] = [];
+    const sizes: { width: number; height: number }[] = [];
+    stubCanvasPrototype({
+      getContext: function getContext(this: HTMLCanvasElement) {
+        sizes.push({ width: this.width, height: this.height });
+        return {
+          drawImage: (...args: unknown[]) => {
+            drawImage.push(args);
+          },
+        };
+      },
+      toDataURL: () => "data:image/jpeg;base64,SCALED",
+    });
+
+    snapshotVideoFrameIntoPeekCache(KEY, fakeVideo(2560, 1600), true);
+
+    // 960 / 2560 = 0.375 -> 960x600.
+    expect(sizes).toEqual([{ width: 960, height: 600 }]);
+    expect(drawImage).toEqual([[expect.anything(), 0, 0, 960, 600]]);
+  });
+});
+
+describe("last-frame cache bound", () => {
+  const cacheKey = (index: number): string => `cache-bound-${index}`;
+
+  afterEach(() => {
+    for (let index = 0; index < 32; index += 1) {
+      clearLastBrowserPeekFrame(cacheKey(index));
+    }
+  });
+
+  function write(key: string, src: string): void {
+    stubCanvasPrototype({
+      getContext: () => ({ drawImage: () => {} }),
+      toDataURL: () => src,
+    });
+    snapshotVideoFrameIntoPeekCache(key, fakeVideo(640, 480), true);
+  }
+
+  it("evicts the oldest entry past 20 keys", () => {
+    for (let index = 0; index < 21; index += 1) {
+      write(cacheKey(index), `data:image/jpeg;base64,N${index}`);
+    }
+
+    expect(getLastBrowserPeekFrame(cacheKey(0))).toBeNull();
+    expect(getLastBrowserPeekFrame(cacheKey(1))?.src).toBe(
+      "data:image/jpeg;base64,N1",
+    );
+    expect(getLastBrowserPeekFrame(cacheKey(20))?.src).toBe(
+      "data:image/jpeg;base64,N20",
+    );
+  });
+
+  it("refreshes an existing key's position instead of aging it out", () => {
+    for (let index = 0; index < 20; index += 1) {
+      write(cacheKey(index), `data:image/jpeg;base64,N${index}`);
+    }
+    // Re-writing the oldest key must move it to the newest slot.
+    write(cacheKey(0), "data:image/jpeg;base64,REFRESHED");
+    write(cacheKey(20), "data:image/jpeg;base64,N20");
+
+    expect(getLastBrowserPeekFrame(cacheKey(0))?.src).toBe(
+      "data:image/jpeg;base64,REFRESHED",
+    );
+    // Key 1 became the oldest once key 0 was refreshed, so it is what goes.
+    expect(getLastBrowserPeekFrame(cacheKey(1))).toBeNull();
+  });
 });

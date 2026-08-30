@@ -10,6 +10,7 @@
  * both are the session's to add (`video-plane-session.ts`) rather than this
  * mapper's to invent.
  */
+import { browserScreencastIcePairTypeSchema } from "@traycer/protocol/host/browser/contracts";
 import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
 /**
@@ -165,7 +166,9 @@ export function mapWebrtcVideoStats(
     jitterMs: numberField(inboundRtp, "jitter") * 1000,
     roundTripTimeMs:
       numberField(selectedPair ?? {}, "currentRoundTripTime") * 1000,
-    iceCandidatePairType:
-      typeof candidateType === "string" ? candidateType : "unknown",
+    // The wire vocabulary is closed; anything else the DOM reports is "unknown".
+    iceCandidatePairType: browserScreencastIcePairTypeSchema
+      .catch("unknown")
+      .parse(candidateType),
   };
 }

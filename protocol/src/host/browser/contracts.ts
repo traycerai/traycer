@@ -586,6 +586,18 @@ export type BrowserScreencastUnsupportedFeature = z.infer<
   typeof browserScreencastUnsupportedFeatureSchema
 >;
 
+/** ICE candidate-pair types telemetry may report - a closed vocabulary. */
+export const browserScreencastIcePairTypeSchema = z.enum([
+  "host",
+  "srflx",
+  "prflx",
+  "relay",
+  "unknown",
+]);
+export type BrowserScreencastIcePairType = z.infer<
+  typeof browserScreencastIcePairTypeSchema
+>;
+
 /** Full navigation snapshot every time; consumers never reconstruct deltas. */
 export const browserNavStateSchema = z
   .object({
@@ -617,7 +629,7 @@ export type BrowserNavState = z.infer<typeof browserNavStateSchema>;
  * frame already carries one for the whole array).
  */
 const browserScreencastIceCandidateBaseFields = {
-  candidate: z.string(),
+  candidate: z.string().max(16_384),
   sdpMid: z.string().nullable(),
   sdpMLineIndex: z.number().int().nonnegative().nullable(),
 } as const;
@@ -812,7 +824,7 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
       kind: z.literal("sdpOffer"),
       ...textFrameFields,
       negotiationId: z.number().int().nonnegative(),
-      sdp: z.string(),
+      sdp: z.string().max(1_048_576),
       iceServers: z.array(browserScreencastIceServerSchema).default([]),
     })
     .strict(),
@@ -1040,7 +1052,7 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       kind: z.literal("sdpAnswer"),
       ...textFrameFields,
       negotiationId: z.number().int().nonnegative(),
-      sdp: z.string(),
+      sdp: z.string().max(1_048_576),
       // Perf-hardening A12: local candidates gathered before the answer
       // shipped, batched here instead of one `iceCandidate` frame each.
       // `.default([])` - additive, and `browser.screencast` is not in the
@@ -1048,6 +1060,7 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       // an older client that sends none still parses.
       candidates: z
         .array(browserScreencastBatchedIceCandidateSchema)
+        .max(256)
         .default([]),
     })
     .strict(),
@@ -1105,7 +1118,8 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       dataChannelRttMs: z.number().nonnegative().nullable().default(null),
       // getStats() candidate-pair `candidateType` of the active receive
       // path (only observable receiver-side) - the "ICE path taken" metric.
-      iceCandidatePairType: z.string(),
+      // Closed vocabulary: telemetry carries no free text.
+      iceCandidatePairType: browserScreencastIcePairTypeSchema.catch("unknown"),
     })
     .strict(),
   z

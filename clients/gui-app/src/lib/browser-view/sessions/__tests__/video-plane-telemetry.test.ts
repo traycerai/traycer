@@ -6,6 +6,8 @@ import {
 } from "@/lib/browser-view/sessions/video-plane-session";
 import {
   acquireBrowserMediaEntry,
+  activeBrowserMediaKeyIds,
+  RELEASE_GRACE_MS,
   type MediaDataChannel,
   type MediaPeer,
   type MediaPeerHandlers,
@@ -142,8 +144,12 @@ function setup(): PlaneState {
     onVideoStats: (sample) => statsSamples.push(sample),
     readControlPlaneRttMs: () => null,
   });
+  openSessions.push(session);
   return { statsFrames, statsSamples, peers, session };
 }
+
+/** Every setup takes a registry lease; `afterEach` gives them all back. */
+const openSessions: VideoPlaneSession[] = [];
 
 function offerFrame(
   negotiationId: number,
@@ -213,6 +219,11 @@ describe("video plane telemetry (ticket 17)", () => {
   });
 
   afterEach(() => {
+    for (const session of openSessions) session.close();
+    openSessions.length = 0;
+    // The registry disposes a released entry after its grace window.
+    vi.advanceTimersByTime(RELEASE_GRACE_MS);
+    expect(activeBrowserMediaKeyIds()).toEqual([]);
     vi.useRealTimers();
   });
 
