@@ -167,6 +167,15 @@ interface BodyEntry {
    * tab switch that remounts a tile must not pay to re-materialize the body.
    */
   lingerTimer: RuntimeTimer | null;
+  /**
+   * A monotonic stamp of when this doc was last HELD, for the cap's eviction
+   * order.
+   *
+   * A counter rather than a clock: this only ever needs to order entries
+   * against each other, and a wall-clock read would make the order depend on
+   * timer resolution for two acquires in the same tick.
+   */
+  lastHeldSeq: number;
 }
 
 export function createArtifactBodyLeaseBridge(options: {
@@ -195,8 +204,22 @@ export function createArtifactBodyLeaseBridge(options: {
    * how one silently becomes the other.
    */
   readonly lingerMs: number;
+  /**
+   * The BACKSTOP ceiling on hot docs - not the reclaim mechanism, which is the
+   * linger.
+   *
+   * It moved here for the same reason the linger did: it bounds how many HOT
+   * docs can exist, and the hot docs are main's now. The tier's own copy of
+   * this cap governs its cold entries, which is a different population.
+   *
+   * A pinned (still-leased) doc is never evicted, so this can legitimately be
+   * exceeded by editors genuinely in use - the tier says the same, and treats
+   * a lower value as a regression rather than a tightening.
+   */
+  readonly maxHotDocs: number;
 }): ArtifactBodyLeaseBridge {
   const entries = new Map<string, BodyEntry>();
+  let leaseSeq = 0;
 
   function postDemote(docKey: string, generation: number): void {
     const entry = entries.get(docKey);
@@ -342,8 +365,13 @@ export function createArtifactBodyLeaseBridge(options: {
         docGuid: answer.docGuid,
         demotingGeneration: null,
         lingerTimer: null,
+        lastHeldSeq: (leaseSeq += 1),
       });
       options.budget.chargeHot(docKey, answer.update.byteLength);
+      // AFTER the new doc is installed and charged, so the entry that just
+      // arrived is part of the population being measured - and it is leased,
+      // so it can never be its own victim.
+      enforceHotCap();
       return { kind: "granted", docKey, release: releaseFor(docKey) };
     },
     resendUnacknowledgedDemotes(): void {
@@ -391,6 +419,7 @@ export function createArtifactBodyLeaseBridge(options: {
     // no materialize call, no round trip, no re-encode. The doc was never
     // released, so this is a reference count going back up.
     cancelLinger(entry);
+    entry.lastHeldSeq = leaseSeq += 1;
     if (entry.demotingGeneration !== null) {
       entry.demotingGeneration = null;
       entry.generation += 1;
@@ -411,6 +440,48 @@ export function createArtifactBodyLeaseBridge(options: {
     entry.generation += 1;
     entry.demotingGeneration = entry.generation;
     postDemote(docKey, entry.generation);
+  }
+
+  /**
+   * Evict lingering docs until the hot population is back under the cap.
+   *
+   * Least-recently-held first, and ONLY docs whose last lease is already gone:
+   * a leased doc is pinned, exactly as it was in the tier, because evicting a
+   * body under a bound editor is data loss rather than reclamation. If every
+   * hot doc is leased this does nothing and the cap is exceeded - which is the
+   * documented behaviour, not a gap.
+   */
+  function enforceHotCap(): void {
+    // Counted, NOT `entries.size`. An acknowledged demote leaves its entry in
+    // place until the ack lands - that is the whole point of the shape - so a
+    // doc already on its way out still occupies a slot in the map while no
+    // longer occupying one in the population this cap governs. Measuring the
+    // map instead evicts every evictable doc in one pass, because the size
+    // never drops as the loop runs. (Written from the pin, which caught it.)
+    const stayingHot = (): number => {
+      let count = 0;
+      for (const entry of entries.values()) {
+        if (entry.demotingGeneration === null) count += 1;
+      }
+      return count;
+    };
+    while (stayingHot() > options.maxHotDocs) {
+      let victimKey: string | null = null;
+      let victim: BodyEntry | null = null;
+      for (const [docKey, entry] of entries) {
+        if (entry.leases > 0 || entry.demotingGeneration !== null) continue;
+        if (victim === null || entry.lastHeldSeq < victim.lastHeldSeq) {
+          victimKey = docKey;
+          victim = entry;
+        }
+      }
+      // Nothing evictable: every remaining doc is leased or already on its way
+      // out. Stop rather than spin - this loop's exit cannot depend on finding
+      // a victim it is allowed to take.
+      if (victimKey === null || victim === null) return;
+      cancelLinger(victim);
+      postLifecycleEnd(victimKey, victim);
+    }
   }
 
   function cancelLinger(entry: BodyEntry): void {

@@ -1019,6 +1019,9 @@ export function createOpenEpicStore(
     // re-materialize", and a second number beside the first is how one
     // silently becomes the other.
     lingerMs: ARTIFACT_ROOM_LEASE_POLICY.cooldownMs,
+    // Same source as the linger, and the same reason: the hot docs are here
+    // now, so the ceiling on how many of them exist is here too.
+    maxHotDocs: ARTIFACT_ROOM_LEASE_POLICY.maxMaterialized,
   });
 
   const store = create<OpenEpicState>()(

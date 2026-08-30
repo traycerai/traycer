@@ -32,6 +32,8 @@ import type {
 /** The linger window these tests drive. Any positive number; the bridge takes
  * its production value from `ARTIFACT_ROOM_LEASE_POLICY.cooldownMs`. */
 const LINGER_MS = 60_000;
+/** Deliberately small, so the cap is reachable in a test. */
+const MAX_HOT = 3;
 
 import {
   createArtifactBodyLeaseBridge,
@@ -193,6 +195,7 @@ function setup() {
     },
     scheduler,
     lingerMs: LINGER_MS,
+    maxHotDocs: MAX_HOT,
   });
   return {
     pair,
@@ -247,6 +250,7 @@ describe("acquire / materialize", () => {
       releaseForwardOnly: () => {},
       scheduler: createScheduler(),
       lingerMs: LINGER_MS,
+      maxHotDocs: MAX_HOT,
     });
 
     const grant = await leases.acquire("artifact-missing");
@@ -390,6 +394,7 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
       releaseForwardOnly: () => {},
       scheduler: createScheduler(),
       lingerMs: LINGER_MS,
+      maxHotDocs: MAX_HOT,
     });
     // The re-send is driven from the state the ORIGINAL bridge holds, so this
     // asserts the observable half: the doc survived with its bytes intact and
@@ -545,6 +550,7 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
       releaseForwardOnly: () => {},
       scheduler,
       lingerMs: LINGER_MS,
+      maxHotDocs: MAX_HOT,
     });
 
     const first = await leases.acquire("artifact-1");
@@ -704,5 +710,52 @@ describe("the linger window — re-arming", () => {
     // ...and it still demotes on its own clock.
     scheduler.advance(LINGER_MS / 2);
     expect(worker.demotes).toHaveLength(1);
+  });
+});
+
+describe("the hot-doc cap", () => {
+  it("evicts the least-recently-held lingering doc once the population exceeds it", async () => {
+    // The BACKSTOP, and it moved here for the same reason the linger did: it
+    // bounds how many HOT docs exist, and the hot docs are main's now. The
+    // tier's copy of this cap governs its cold entries - a different
+    // population, which is why both can exist without being a duplication.
+    const { leases, worker, docs, scheduler } = setup();
+
+    // Fill to the cap and let every one of them go, so all are evictable.
+    for (let index = 0; index < MAX_HOT; index += 1) {
+      const grant = await leases.acquire(`artifact-${String(index)}`);
+      if (grant.kind !== "granted") throw new Error("expected a grant");
+      grant.release();
+    }
+    // Inside the linger window: all still hot, nothing posted yet. Without
+    // this the eviction below could not be distinguished from expiry.
+    scheduler.advance(LINGER_MS - 1);
+    expect(worker.demotes).toEqual([]);
+    expect(docs.dropped).toEqual([]);
+
+    // One past the cap.
+    const overflow = await leases.acquire("artifact-overflow");
+    if (overflow.kind !== "granted") throw new Error("expected a grant");
+
+    // The OLDEST held doc goes, and exactly one of them.
+    expect(worker.demotes).toHaveLength(1);
+    expect(worker.demotes[0]?.docKey).toBe("artifact-0");
+  });
+
+  it("never evicts a doc that is still leased, even past the cap", async () => {
+    // A pinned doc is not evictable: taking a body out from under a bound
+    // editor is data loss, not reclamation. The documented consequence is that
+    // the cap CAN be exceeded by editors genuinely in use.
+    const { leases, worker } = setup();
+    const held = [];
+    for (let index = 0; index < MAX_HOT + 2; index += 1) {
+      const grant = await leases.acquire(`artifact-${String(index)}`);
+      if (grant.kind !== "granted") throw new Error("expected a grant");
+      held.push(grant);
+    }
+
+    // Every one is leased, so there was no legal victim at any point.
+    expect(worker.demotes).toEqual([]);
+    for (const grant of held) grant.release();
   });
 });
