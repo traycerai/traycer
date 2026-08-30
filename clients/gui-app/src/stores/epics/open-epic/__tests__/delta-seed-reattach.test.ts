@@ -4,10 +4,7 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicSubscribeClientSeedOffer } from "@traycer/protocol/host/epic/subscribe";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import {
-  openStoreForTest,
-  type OpenedStoreForTest,
-} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
  * `epic.subscribe@1.3` delta-seeded reattach - gui-app store side.

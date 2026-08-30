@@ -22,10 +22,7 @@ import {
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import {
-  openStoreForTest,
-  type OpenedStoreForTest,
-} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   publishAgentActivity,
   resetAgentActivity,

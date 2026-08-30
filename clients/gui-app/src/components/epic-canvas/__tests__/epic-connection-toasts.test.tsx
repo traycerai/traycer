@@ -210,10 +210,24 @@ describe("<EpicConnectionToasts />", () => {
       expect(handle.store.getState().permissionRole).toBe("owner");
     });
 
-    const originalDoc = handle.doc;
-    act(() => {
-      handle.store.getState().applyLocalUpdate(new Uint8Array([1]));
+    // The replica REPLACEMENT is observed through `bindingVersion`, not by
+    // comparing `Y.Doc` references: the doc lives on the worker thread now and
+    // main has no reference to compare. `bindingVersion` IS the binding epoch
+    // the runtime advances when it swaps a replica, and it is what production
+    // consumers remount on - so this asserts the same event through the
+    // channel that still carries it.
+    const originalBinding = handle.store.getState().bindingVersion;
+
+    // A real local edit, through the root-state port. `applyLocalUpdate` is
+    // gone; `applyRootUpdate(update, /* asLocalEdit */ true)` is the member
+    // that puts local bytes into the replica, and it needs real update bytes
+    // rather than a placeholder because it actually applies them.
+    const donor = new Y.Doc();
+    donor.getMap("epic").set("unsynced", "edit");
+    await act(async () => {
+      await handle.applyRootUpdate(Y.encodeStateAsUpdate(donor), true);
     });
+    donor.destroy();
     expect(handle.store.getState().unsyncedQueueSize).toBe(1);
 
     act(() => {
@@ -227,7 +241,7 @@ describe("<EpicConnectionToasts />", () => {
       );
     });
     expect(handle.store.getState().unsyncedQueueSize).toBe(0);
-    expect(handle.doc).not.toBe(originalDoc);
+    expect(handle.store.getState().bindingVersion).not.toBe(originalBinding);
     expect(streams).toHaveLength(2);
     expect(streams[0].closeCount).toBe(1);
   });

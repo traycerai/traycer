@@ -3,10 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatBackupStatusResponse } from "@traycer/protocol/host/epic/chat-backup-status";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import {
-  openStoreForTest,
-  type OpenedStoreForTest,
-} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatProjection } from "@/stores/epics/open-epic/types";
 import {
   publishAgentActivity,

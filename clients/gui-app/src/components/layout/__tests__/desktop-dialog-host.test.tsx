@@ -510,7 +510,11 @@ function createDirtyEpicHandle(
     },
     requestFreshSnapshot: () => undefined,
     retryMigration: () => undefined,
-    enqueueWriteCommand: () => null,
+    // These became ASYNC when the replica moved: the queue mints ids and the
+    // mutations stamp the overlay on the worker thread, so every one of them
+    // answers over the bridge. The stub keeps its verdicts and only changes
+    // shape.
+    enqueueWriteCommand: () => Promise.resolve(null),
     waitForWriteCommand: () => Promise.reject(new Error("unused in this test")),
     retryWriteCommand: () => undefined,
     discardWriteCommand: () => undefined,
@@ -527,11 +531,11 @@ function createDirtyEpicHandle(
     dispose: () => undefined,
     createArtifact: () => "fake-id",
     createTerminalChat: () => null,
-    renameArtifact: () => false,
-    beginRenameMutation: () => null,
-    beginEpicTitleMutation: () => null,
-    beginReparentMutation: () => null,
-    retirePendingMutation: () => false,
+    renameArtifact: () => Promise.resolve(false),
+    beginRenameMutation: () => Promise.resolve(null),
+    beginEpicTitleMutation: () => Promise.resolve(null),
+    beginReparentMutation: () => Promise.resolve(null),
+    retirePendingMutation: () => Promise.resolve(false),
     isLatestRenameStamp: () => false,
     ingestFenceIdentity: 0,
     deleteArtifact: () => false,

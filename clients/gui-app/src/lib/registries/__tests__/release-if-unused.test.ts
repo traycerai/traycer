@@ -5,10 +5,7 @@ import {
 } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import {
-  openStoreForTest,
-  type OpenedStoreForTest,
-} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
  * The registry is keyed by EPIC and the UI is keyed by TAB, and one window can

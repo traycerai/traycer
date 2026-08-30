@@ -32,10 +32,7 @@ import type {
 } from "@/lib/windows/types";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import {
-  openStoreForTest,
-  type OpenedStoreForTest,
-} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   clearDesktopTabsPersistence,
   installDesktopTabsPersistence,

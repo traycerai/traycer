@@ -2,10 +2,7 @@ import { createRoot } from "react-dom/client";
 import { UnsyncedCloseDialog } from "@/components/layout/dialogs/unsynced-close-dialog";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import {
-  openStoreForTest,
-  type OpenedStoreForTest,
-} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import "@/index.css";
 
 /**

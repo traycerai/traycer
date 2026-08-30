@@ -17,10 +17,7 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import {
-  openStoreForTest,
-  type OpenedStoreForTest,
-} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type {
   DesktopAppUpdateCheckIntent,
   DesktopAppUpdateChannelChange,
