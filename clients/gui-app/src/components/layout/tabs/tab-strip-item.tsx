@@ -225,7 +225,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     [resolvedTabName, tab],
   );
   const commitEpicTitle = useCallback(
-    (next: string) => {
+    async (next: string) => {
       if (tab.kind !== "epic") return;
       const epicId = tab.epicId;
       const tabHostId = tab.hostId;
@@ -250,7 +250,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         const hostId = client?.getActiveHostId() ?? null;
         const userId = client?.getRequestContextUserId() ?? null;
         const state = handle.store.getState();
-        const commandId = state.enqueueWriteCommand({
+        const commandId = await state.enqueueWriteCommand({
           kind: "update-epic-title",
           title: next,
           updatedAt: Date.now(),

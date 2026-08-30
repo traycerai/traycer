@@ -732,7 +732,23 @@ export interface OpenEpicState {
    * for the hash to sync in (surviving replica swaps); resolves null only when
    * the caller's `signal` aborts.
    */
-  readAttachmentBytes: (
+  readAttachmentBytes: (hash: string) => Promise<Uint8Array | null>;
+  /**
+   * WAITS for bytes that have not synced in yet; `null` only when the caller
+   * aborts or the runtime tears down.
+   *
+   * A SEPARATE member from {@link readAttachmentBytes}, not a flag on it, and
+   * the two must not be merged - `epic-replica-reads.ts` says so in its own
+   * headers. The prompt read answers "does the replica hold this NOW"; this
+   * one is the acquisition an image referenced by a still-replicating artifact
+   * depends on. Collapsing them turns "still syncing" into "missing" for
+   * exactly the images the design expects to be late.
+   *
+   * The `signal` is load-bearing here, unlike on the prompt read: it is what
+   * drives `attachment/cancel`, and without it a caller that unmounts leaves
+   * the worker holding a wait forever.
+   */
+  awaitAttachmentBytes: (
     hash: string,
     signal: AbortSignal,
   ) => Promise<Uint8Array | null>;
@@ -899,6 +915,13 @@ export function createOpenEpicStore(
   nextIngestFenceIdentity += 1;
 
   let storeApi: StoreApi<OpenEpicState> | null = null;
+  /**
+   * Ids for pending attachment WAITS, unique per store.
+   *
+   * The worker keys its pending waits on this, and `attachment/cancel` names
+   * one - so a reused id would cancel somebody else's wait.
+   */
+  let nextAttachmentAwaitId = 1;
   /**
    * The last binding epoch main acted on, so an advance is detectable.
    *
@@ -1410,7 +1433,41 @@ export function createOpenEpicStore(
            * job left and is gone. The parameter stays because callers hold one
            * and dropping it would be a second change to their call shape.
            */
-          readAttachmentBytes: async (hash, _signal) => {
+          awaitAttachmentBytes: async (hash, signal) => {
+            if (signal.aborted) return null;
+            const awaitId = nextAttachmentAwaitId;
+            nextAttachmentAwaitId += 1;
+            // Cancel is its own CALL, and the abort listener is what turns the
+            // caller's signal into one. Registered BEFORE the await is posted:
+            // an abort that fires between posting and subscribing would
+            // otherwise never be delivered, and the worker would hold the wait
+            // for the life of the session.
+            const onAbort = (): void => {
+              void runtime.port
+                .call("attachment/cancel", { awaitId }, NO_TRANSFER)
+                .catch(() => {
+                  // The bridge is gone, so the wait is gone with it. Nothing
+                  // to cancel and nobody to tell.
+                });
+            };
+            signal.addEventListener("abort", onAbort, { once: true });
+            try {
+              const answer = await runtime.port.call(
+                "attachment/await",
+                { awaitId, hash },
+                NO_TRANSFER,
+              );
+              return answer.bytes;
+            } catch (cause: unknown) {
+              // Teardown settles null, exactly as the prompt read does - see
+              // its comment for why this is narrowed on the error type.
+              if (cause instanceof BridgeDisposedError) return null;
+              throw cause;
+            } finally {
+              signal.removeEventListener("abort", onAbort);
+            }
+          },
+          readAttachmentBytes: async (hash) => {
             try {
               const answer = await runtime.port.call(
                 "attachment/read",

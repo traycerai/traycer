@@ -19,7 +19,11 @@ async function enqueueAndWait(
   intent: EpicWriteCommandIntent,
 ): Promise<CommandRecord<EpicWriteCommandIntent>> {
   const state = handle.store.getState();
-  const commandId = state.enqueueWriteCommand(intent);
+  // AWAITED: the queue is worker-side now, so it mints the id over the bridge.
+  // A `Promise<string | null>` here is TRUTHY, so the `=== null` refusal check
+  // below would pass for a refused write and hand a promise to
+  // `waitForWriteCommand` as if it were an id.
+  const commandId = await state.enqueueWriteCommand(intent);
   if (commandId === null) {
     throw new Error("The write was refused by the current epic projection");
   }

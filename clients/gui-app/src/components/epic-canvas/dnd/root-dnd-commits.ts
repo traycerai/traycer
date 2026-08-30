@@ -734,9 +734,9 @@ function agentReparentRoute(
  * branch below, and `handleDragEnd` additionally ends the drag in a `finally`
  * so no future escape from this function can strand the session.
  */
-export function commitSidebarReparentDrop(
+export async function commitSidebarReparentDrop(
   input: SidebarReparentDropInput,
-): void {
+): Promise<void> {
   const handle = getOpenEpicRegistry().peek(input.epicId);
   if (handle === null) return;
   // Evaluated against the PROJECTED tree, not the doc maps: a registry-backed
@@ -795,12 +795,16 @@ export function commitSidebarReparentDrop(
     // projected tree the gate above read, synchronously, so it cannot refuse
     // a move that gate accepted; `null` (same parent, viewer) makes retire a
     // no-op.
-    const requestId = handle.store
+    // AWAITED: the overlay stamp is minted by the worker's queue now, so the
+    // id comes back over the bridge. Everything below reads `requestId`, and a
+    // promise here is TRUTHY - the `=== null` guards would pass and a promise
+    // would be handed to `retirePendingMutation` as if it were an id.
+    const requestId = await handle.store
       .getState()
       .beginReparentMutation(input.sourceNodeId, input.newParentId);
-    const retire = (outcome: "landed" | "failed"): void => {
+    const retire = async (outcome: "landed" | "failed"): Promise<void> => {
       if (requestId === null) return;
-      handle.store.getState().retirePendingMutation(requestId, outcome);
+      await handle.store.getState().retirePendingMutation(requestId, outcome);
     };
     void client
       .request("epic.reparentChat", {

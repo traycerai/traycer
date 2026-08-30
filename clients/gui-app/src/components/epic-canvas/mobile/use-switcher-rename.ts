@@ -70,7 +70,7 @@ export function useSwitcherRename(
   const renameTerminal = useTerminalRenameFor(useEpicSessionHostClient());
 
   return useCallback(
-    (kind, nodeId, title) => {
+    async (kind, nodeId, title) => {
       // Trimmed for BOTH the stamp and the RPC - and for the raw terminal
       // too, whose arm previously sat above this guard and would send a
       // whitespace-only title straight to `terminal.rename`. The overlay
@@ -120,21 +120,23 @@ export function useSwitcherRename(
       ) {
         return;
       }
-      const requestId = epicHandle.store
+      const requestId = await epicHandle.store
         .getState()
         .beginRenameMutation(nodeId, trimmed);
       // Retire rides the `mutateAsync` promise - never a per-call
       // `onSettled`, which TanStack drops on unmount and replaces on a
       // consecutive `mutate()`. Contract note in `use-rename-canvas-tab.ts`.
-      const retire = (outcome: "landed" | "failed"): void => {
+      const retire = async (outcome: "landed" | "failed"): Promise<void> => {
         if (requestId === null) return;
-        epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+        await epicHandle.store
+          .getState()
+          .retirePendingMutation(requestId, outcome);
       };
-      const landed = (): void => {
-        retire("landed");
+      const landed = async (): Promise<void> => {
+        await retire("landed");
       };
-      const failed = (): void => {
-        retire("failed");
+      const failed = async (): Promise<void> => {
+        await retire("failed");
       };
       if (kind === "chat") {
         void renameChat

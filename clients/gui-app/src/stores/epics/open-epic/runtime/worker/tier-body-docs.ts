@@ -41,6 +41,14 @@ export function createTierBodyDocs(
   source: TierBodyDocsSource,
 ): MainThreadBodyDocs {
   return {
+    applyRemoteAwareness: () => {
+      // A NO-OP, and honestly so. This adapter round-trips through the tier's
+      // own docs, so the tier already holds the presence a materialize would
+      // carry - there is no second `Awareness` on this side to apply it to.
+      // It is scaffolding with a known expiry (see this file's header) and no
+      // production caller; a member that pretended to apply would be worse
+      // than one that says it does nothing.
+    },
     install: (input) => {
       // The `@1` arm states no identity, and this adapter cannot represent
       // that: `installColdState` requires one. It is scaffolding with a known

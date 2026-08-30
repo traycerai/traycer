@@ -150,7 +150,6 @@ async function readChatAttachmentFromHost(
 async function readAttachmentFromEpicDoc(
   handle: OpenEpicStoreHandle | null,
   hash: string,
-  signal: AbortSignal,
 ): Promise<ImageBytesResult | null> {
   if (handle === null) return null;
   // Through the replica-read seam, in its non-waiting variant - the same
@@ -195,7 +194,7 @@ export function useChatImageFetcher(): ImageBytesFetcher {
         signal,
       );
       if (fromChatPlane !== null) return fromChatPlane;
-      const fromDoc = await readAttachmentFromEpicDoc(handle, hash, signal);
+      const fromDoc = await readAttachmentFromEpicDoc(handle, hash);
       if (fromDoc !== null) return fromDoc;
       throw new Error(`Image attachment ${hash} unavailable`);
     },

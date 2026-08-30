@@ -69,7 +69,7 @@ export function MobileEpicHeaderTitle(props: {
   const updateTitle = useEpicUpdateTitle();
   const queryClient = useQueryClient();
   const handleCommit = useCallback(
-    (next: string) => {
+    async (next: string) => {
       // Optimistic overlay, so this control behaves identically to the wide
       // viewport's tab strip. Both were RPC-only here until 1.1, which meant
       // the SAME user on the SAME device got different feedback either side of
@@ -104,11 +104,13 @@ export function MobileEpicHeaderTitle(props: {
         const hostId = sessionClient?.getActiveHostId() ?? null;
         const userId = sessionClient?.getRequestContextUserId() ?? null;
         const state = handle.store.getState();
-        const commandId = state.enqueueWriteCommand({
+        const commandId = await state.enqueueWriteCommand({
           kind: "update-epic-title",
           title: next,
           updatedAt: Date.now(),
         });
+        // A promise is truthy, so this guard only means anything against the
+        // awaited value - see the enqueue above.
         if (commandId === null) return;
         void state.waitForWriteCommand(commandId).then((command) => {
           if (command.state === "committed") {

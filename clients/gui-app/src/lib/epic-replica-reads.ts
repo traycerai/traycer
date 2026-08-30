@@ -110,7 +110,12 @@ export async function readEpicAttachmentBytes(
   hash: string,
   signal: AbortSignal,
 ): Promise<Uint8Array | null> {
-  return handle.store.getState().readAttachmentBytes(hash, signal);
+  // The WAITING member, which is a different call than the prompt read below
+  // - `attachment/await` rather than `attachment/read`. They were briefly the
+  // same store member, which silently made this leg answer `null` for an
+  // image still replicating: the exact "still syncing becomes missing" this
+  // function's header exists to prevent.
+  return handle.store.getState().awaitAttachmentBytes(hash, signal);
 }
 
 /**

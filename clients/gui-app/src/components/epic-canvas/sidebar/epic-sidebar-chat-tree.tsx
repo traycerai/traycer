@@ -1594,7 +1594,10 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     }, 0);
   }, [canMutate, nodeName, writeRoute]);
 
-  const commitRename = useCallback(() => {
+  // ASYNC: the doc write's verdict and the rename-stamp check are both round
+  // trips now. Callers fire-and-forget it, and a function returning
+  // `Promise<void>` is assignable to one returning `void`.
+  const commitRename = useCallback(async () => {
     const trimmed = renameValue.trim();
     if (trimmed.length === 0) {
       setIsRenaming(false);
@@ -1618,7 +1621,10 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     if (artifactType === "terminal-agent") {
       const agents = epicHandle.store.getState().tuiAgents.byId;
       if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
-        if (epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
+        // AWAITED: the replica is on the worker thread, so the doc write's
+        // verdict is a round trip. A promise here is truthy, so the branch
+        // would be taken even for a write that failed.
+        if (await epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
           renameArtifactInTab(tabId, nodeId, trimmed);
         }
         return;
@@ -1629,15 +1635,17 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     // post chats-off-YJS is most of this tree — so these renames had no local
     // feedback at all. Rationale and the promise-carried retire contract live
     // in `use-rename-canvas-tab.ts`, which this mirrors.
-    const requestId = epicHandle.store
+    const requestId = await epicHandle.store
       .getState()
       .beginRenameMutation(nodeId, trimmed);
-    const retire = (outcome: "landed" | "failed"): void => {
+    const retire = async (outcome: "landed" | "failed"): Promise<void> => {
       if (requestId === null) return;
-      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+      await epicHandle.store
+        .getState()
+        .retirePendingMutation(requestId, outcome);
     };
-    const landed = (): void => {
-      retire("landed");
+    const landed = async (): Promise<void> => {
+      await retire("landed");
       // The tab snapshot only on settlement - it is a persisted fallback with
       // no rollback path, so a speculative write would preserve a rejected
       // title across restarts - and only while this is still the LATEST
@@ -1646,7 +1654,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       // `use-rename-canvas-tab.ts`.
       if (
         requestId === null ||
-        epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
+        (await epicHandle.store
+          .getState()
+          .isLatestRenameStamp(nodeId, requestId))
       ) {
         renameArtifactInTab(tabId, nodeId, trimmed);
       }
