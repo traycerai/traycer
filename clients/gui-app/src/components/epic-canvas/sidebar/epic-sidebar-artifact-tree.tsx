@@ -87,7 +87,6 @@ import {
   useEpicPermissionRole,
   useEpicTreeIndex,
   useEpicTreeNode,
-  useRootIds,
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -203,29 +202,44 @@ interface ArtifactDescendantEntry {
 function usePanelRootIds(
   comparator: NodeComparator | null,
 ): ReadonlyArray<string> {
-  const yDocRootIds = useRootIds();
   // Filter roots by the TREE node's type, not the projected artifact records.
   // `useEpicArtifactRecords()` rebuilds a fresh record array (and fresh record
   // objects) on every store tick, so during chat streaming the active chat's
   // record changes identity each token and `liveRecords` churns - which used to
   // recompute this memo, churn `rootIds` -> `expandedIds` -> the `expansion`
-  // controller, and re-render every memoized `ArtifactNode`. The tree index
-  // (`s.tree`) does NOT change on chat tokens, and its `nodeById[id].type` is
-  // the same value space this `treeFilter` already uses for CHILD nodes
-  // (`usePanelChildIds`), so the result is identical but identity-stable while
-  // streaming.
-  const tree = useEpicTreeIndex();
-  return useMemo(() => {
-    const treeFilter = ARTIFACTS_TREE_FILTER;
-    const roots = yDocRootIds.filter(
-      (rootId) =>
-        Object.hasOwn(tree.nodeById, rootId) &&
-        treeFilter(tree.nodeById[rootId].type),
-    );
-    // `yDocRootIds` is in projector (default) order; re-sort only for a
-    // non-default mode (`comparator !== null`).
-    return sortNodeIds(roots, tree.nodeById, comparator);
-  }, [tree, yDocRootIds, comparator]);
+  // controller, and re-render every memoized `ArtifactNode`. Its `nodeById[id]
+  // .type` is the same value space this `treeFilter` already uses for CHILD
+  // nodes (`usePanelChildIds`), so the result is identical.
+  //
+  // ## Subscribed to the ANSWER (epic-sync-overhaul finding 12, round 2)
+  //
+  // That earlier fix read `useEpicTreeIndex()` and derived in a `useMemo`, on
+  // the stated premise that "the tree index does NOT change on chat tokens".
+  // True for chat tokens - and false for body writes, which move `updatedAt`,
+  // which `TreeNode` carries. So the memo recomputed on every body write, and
+  // `.filter()` ALWAYS allocates, which walked the chain the comment above
+  // describes all the way to re-rendering every memoized row. The guard rail
+  // was correct; it was keyed on something that had started to move.
+  //
+  // Comparing the ANSWER shallowly closes it at the source: the root id list is
+  // what actually has to change before anything downstream should move, and it
+  // does not move when one row's `updatedAt` is stamped. `useRootIds()`'s own
+  // subscription is already identity-stable (`stabilizeTree` preserves
+  // `rootIds` when the id set is unchanged, `epic-projector.ts:1449-1451`); the
+  // allocation this removes was this hook's own filter.
+  return useEpicStore(
+    useShallow((state: OpenEpicState): ReadonlyArray<string> => {
+      const nodeById = state.tree.nodeById;
+      const treeFilter = ARTIFACTS_TREE_FILTER;
+      const roots = state.tree.rootIds.filter(
+        (rootId) =>
+          Object.hasOwn(nodeById, rootId) && treeFilter(nodeById[rootId].type),
+      );
+      // `rootIds` arrive in projector (default) order; re-sort only for a
+      // non-default mode (`comparator !== null`).
+      return sortNodeIds(roots, nodeById, comparator);
+    }),
+  );
 }
 
 /**
@@ -433,7 +447,9 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     () => applyVisibleFilter(allRootIds, visibleIds),
     [allRootIds, visibleIds],
   );
-  const tree = useEpicTreeIndex();
+  // No whole-slice read left in this component: with the three derivations
+  // below subscribed to their own answers, the panel itself no longer
+  // re-renders on a record change either.
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -488,18 +504,26 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     [expandedIds, toggleExpanded, ensureExpanded],
   );
   const bulkSelection = useMaybeSidebarBulkSelection();
-  const selectableIds = useMemo(
-    () =>
+  // Hygiene, not part of the memo-churn chain: `tree` is a direct input, so
+  // this recomputed on every record change and handed the effect below a fresh
+  // array each time. That never reached a row - `setSelectableSidebarIds`
+  // equality-guards with `sameStringArray` and returns the same state object,
+  // so the write was already a no-op - but the effect still fired ~4/s for
+  // nothing. Comparing the answer stops that at the source. The walk itself
+  // still runs per notification; `useShallow` bails the subscriber, not the
+  // recompute.
+  const selectableIds = useEpicStore(
+    useShallow((state: OpenEpicState): readonly string[] =>
       collectVisibleSidebarTreeIds({
         rootIds,
         expandedIds,
-        tree,
+        tree: state.tree,
         treeFilter: ARTIFACTS_TREE_FILTER,
         emitFilter: ARTIFACTS_TREE_FILTER,
         visibleIds,
         comparator,
       }),
-    [rootIds, expandedIds, tree, visibleIds, comparator],
+    ),
   );
   const setSelectableIds = bulkSelection?.setSelectableIds ?? null;
   useEffect(() => {

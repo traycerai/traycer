@@ -1320,20 +1320,50 @@ export function useEpicArtifactStatus(id: string): number | null {
   );
 }
 
+/**
+ * Ancestor ids of `nodeId`, nearest first, cycle-guarded. Empty for a root, a
+ * null id, or an id the tree does not hold.
+ *
+ * ## Subscribed to the ANSWER (epic-sync-overhaul finding 12, round 2)
+ *
+ * This read the whole `tree` slice and walked it in a `useMemo`, so it returned
+ * a fresh `Set` on every store tick that re-minted the slice - which a body
+ * write does, because it stamps `updatedAt` and `TreeNode` carries it. In the
+ * sidebar that identity fed `forcedExpandedIds` -> `expandedIds` ->
+ * `toggleExpanded` -> the `expansion` controller, and re-rendered every
+ * memoized row. The ancestor CHAIN had not changed; only its container had.
+ *
+ * `useShallow` is enough despite the return being a `Set`, and needs no bespoke
+ * equality - just the same wrapper the rest of this file uses. Both zustand
+ * copies present in this tree compare Set MEMBERS: v5's `shallow` routes any
+ * iterable carrying `.entries()` through `compareEntries` and a `Set` has one;
+ * v4's has a dedicated `instanceof Set` branch that does the same. The reason
+ * to say so here is not version dependence - it is that two copies exist
+ * (`zustand@4.5.7` and `@5.0.15`), so a claim about `shallow` has to be read
+ * off the package this workspace RESOLVES (`clients/gui-app/node_modules/
+ * zustand` -> 5.0.15) rather than whichever vendored copy a grep opens first.
+ *
+ * Callers consume the members, never the identity: three read an active or
+ * revealed node's ancestors to force-expand them, and the chat tree's reveal
+ * layout effect is driven by `revealRequest`'s NONCE, not by this set's
+ * identity, so stabilizing here cannot silence a reveal.
+ */
 export function useAncestorIds(nodeId: string | null): ReadonlySet<string> {
-  const index = useEpicTreeIndex();
-  return useMemo(() => {
-    if (nodeId === null) return EMPTY_TREE_ID_SET;
-    if (!Object.hasOwn(index.nodeById, nodeId)) return EMPTY_TREE_ID_SET;
-    const ancestors = new Set<string>();
-    let current: string | null = index.nodeById[nodeId].parentId;
-    while (current !== null && !ancestors.has(current)) {
-      ancestors.add(current);
-      if (!Object.hasOwn(index.nodeById, current)) break;
-      current = index.nodeById[current].parentId;
-    }
-    return ancestors.size === 0 ? EMPTY_TREE_ID_SET : ancestors;
-  }, [index, nodeId]);
+  return useEpicStore(
+    useShallow((state: OpenEpicState): ReadonlySet<string> => {
+      const nodeById = state.tree.nodeById;
+      if (nodeId === null) return EMPTY_TREE_ID_SET;
+      if (!Object.hasOwn(nodeById, nodeId)) return EMPTY_TREE_ID_SET;
+      const ancestors = new Set<string>();
+      let current: string | null = nodeById[nodeId].parentId;
+      while (current !== null && !ancestors.has(current)) {
+        ancestors.add(current);
+        if (!Object.hasOwn(nodeById, current)) break;
+        current = nodeById[current].parentId;
+      }
+      return ancestors.size === 0 ? EMPTY_TREE_ID_SET : ancestors;
+    }),
+  );
 }
 
 export function useDescendantIds(nodeId: string): readonly string[] {

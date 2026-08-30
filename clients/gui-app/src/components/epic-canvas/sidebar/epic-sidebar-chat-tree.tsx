@@ -1035,18 +1035,23 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => ({ expandedIds, toggleExpanded, ensureExpanded }),
     [expandedIds, toggleExpanded, ensureExpanded],
   );
-  const selectableIds = useMemo(
-    () =>
+  // Same hygiene fix as the artifact panel: `tree` is a direct input, so this
+  // recomputed per record change and handed the effect below a fresh array.
+  // The store write was already a no-op (`setSelectableSidebarIds` guards with
+  // `sameStringArray`), so nothing re-rendered - the effect just fired for
+  // nothing. Comparing the answer stops it firing.
+  const selectableIds = useEpicStore(
+    useShallow((state: OpenEpicState): readonly string[] =>
       collectVisibleSidebarTreeIds({
         rootIds,
         expandedIds,
-        tree,
+        tree: state.tree,
         treeFilter: CHATS_TREE_FILTER,
         emitFilter: CHATS_TREE_FILTER,
         visibleIds,
         comparator,
       }),
-    [rootIds, expandedIds, tree, visibleIds, comparator],
+    ),
   );
   const setSelectableIds = bulkSelection?.setSelectableIds ?? null;
   useEffect(() => {
