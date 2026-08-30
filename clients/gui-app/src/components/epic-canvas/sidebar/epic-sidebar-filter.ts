@@ -96,6 +96,17 @@ export function mergeForcedExpanded(
  * (`epic-selectors.ts`: "`useShallow` bails the subscriber's re-render but not
  * the recompute"). That is the right side of it here: the work is a filter over
  * one row's children, and what it buys is not re-rendering a whole subtree.
+ *
+ * ## `useShallow` is load-bearing for CORRECTNESS, not only for cost
+ *
+ * Do not remove it to "simplify" this. A deriving selector mints a fresh array
+ * every call and `useSyncExternalStore` compares snapshots with `Object.is`, so
+ * without an equality wrapper every notification looks like a change: the
+ * subscriber re-renders, derives another new array, and React stops it with
+ * "Maximum update depth exceeded". Dropping it does not degrade this hook back
+ * to the whole-slice behaviour it replaced - it breaks the panel outright. The
+ * same holds for every `useShallow` selector added alongside this one in
+ * `epic-sidebar-artifact-tree.tsx` and `epic-sidebar-chat-tree.tsx`.
  */
 export function useFilteredPanelChildIds(
   parentId: string,

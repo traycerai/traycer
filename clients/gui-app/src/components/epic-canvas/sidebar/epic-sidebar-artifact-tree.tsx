@@ -701,6 +701,10 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   // `memo` on this component is not a defence and never was - it blocks a
   // re-render pushed down by a parent, not one this component's own
   // subscription triggers. So the reads below subscribe to their ANSWERS.
+  //
+  // `useShallow` is required, not decorative: a deriving selector returns a
+  // fresh object each call, so without it `useSyncExternalStore` sees a change
+  // on every notification and loops. See `epic-sidebar-filter.ts`.
   const cascadeCounts = useEpicStore(
     useShallow((state: OpenEpicState) =>
       computeDescendantCountsFromTree(state.tree, nodeId),

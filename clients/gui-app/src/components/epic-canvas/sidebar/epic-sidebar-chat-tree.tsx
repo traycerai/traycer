@@ -486,6 +486,10 @@ function useChatDescendantStatus(args: {
   // row, so reading the slice re-rendered every row on every stamp. The ids are
   // strings, so a shallow compare bails exactly when this row's descendant set
   // is unchanged - which a stamp never alters.
+  //
+  // `useShallow` is required, not decorative: a deriving selector returns a
+  // fresh array each call, so without it `useSyncExternalStore` sees a change
+  // on every notification and loops. See `epic-sidebar-filter.ts`.
   const descendants = useEpicStore(
     useShallow((state: OpenEpicState) =>
       collectDescendantChatIds(nodeId, state.tree, visibleIds),
