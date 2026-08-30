@@ -19,10 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
-import {
-  __getOpenEpicRegistryForTests,
-  __setEpicStreamClientFactoryForTests,
-} from "@/lib/registries/epic-session-registry";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -312,7 +309,6 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
     useEpicCanvasStore.setState({ tabsById: {} });
     useMobileHeaderStore.setState({ rightActions: null });
     useTabsStore.setState({ items: [], activeItemId: null });

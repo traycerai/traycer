@@ -11,10 +11,7 @@ import {
   type UnsyncedEditsEntry,
 } from "@/stores/epics/open-epic/session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type {
-  EpicStreamClientFactory,
-  OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { releaseDesktopEpicOwnershipForEpic } from "@/lib/windows/desktop-epic-ownership";
@@ -109,32 +106,18 @@ registry.setReleaseListener((epicId) => {
 });
 
 /**
- * Test / production seam. Defaults to real `EpicStreamClient`; tests swap
- * via `__setEpicStreamClientFactoryForTests(...)` so the provider can be
- * mounted in jsdom without a live host.
- */
-let streamClientFactoryOverride: EpicStreamClientFactory | null = null;
-
-export function __setEpicStreamClientFactoryForTests(
-  factory: EpicStreamClientFactory | null,
-): void {
-  streamClientFactoryOverride = factory;
-}
-
-export function getEpicStreamClientFactoryOverride(): EpicStreamClientFactory | null {
-  return streamClientFactoryOverride;
-}
-
-/**
- * Test / production seam for the runtime WORKER, beside the stream one above.
+ * Test / production seam for the runtime WORKER - now the ONLY one.
  *
  * jsdom has no `Worker`, so every suite that mounts a session needs a
- * constructor it can supply - and after the composition cut there is no
- * in-process bypass to fall back on. An overridden stream no longer means "no
- * worker": it means the worker's composition is built over the caller's stream
- * instead of the proxy's, through the same explicit factories option. So a test
- * sets this once per file and reaches the real host, the real core and the real
- * composition on its own thread.
+ * constructor it can supply. This sat "beside the stream one above" until that
+ * one was deleted: a stream factory built on MAIN cannot cross `postMessage`
+ * to a runtime that lives in the worker, so overriding it could not do what its
+ * name promised, and the provider's own branch for it could only ever throw.
+ *
+ * A suite drives this session's stream by supplying a fake TRANSPORT at the
+ * opener instead, and its own composition - if it wants a live replica - with
+ * `createInProcessEpicRuntimeWorker` at this seam. Both reach the real host,
+ * the real core and the real composition on their own thread.
  *
  * `null` uses the production constructor, which is the only path that calls
  * `new Worker(new URL(...))` - a form Vite must see literally, and which jsdom

@@ -108,22 +108,28 @@ const resolveSessionHostClient = vi.hoisted(
     },
 );
 
-// The provider now opens its own durable transport via this factory, but every
-// test installs an `__setEpicStreamClientFactoryForTests` override that
-// short-circuits before `openTransport` is ever called - so a stub factory that
-// is never invoked is all the provider needs to render in jsdom. The real hook
-// returns a referentially-STABLE opener; the stub mirrors that with a single
-// hoisted instance so the acquire effect's `openTransport` dep never churns.
-const transportState = vi.hoisted((): { opener: () => never } => ({
-  opener: () => {
-    throw new Error(
-      "openTransport must not be called when the factory is overridden",
-    );
-  },
-}));
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => transportState.opener,
-}));
+// The provider opens its own durable transport via this factory, and
+// UNCONDITIONALLY. This stub used to THROW - "openTransport must not be called
+// when the factory is overridden" - and the name of the thing it referred to is
+// the point: the `__setEpicStreamClientFactoryForTests` override made the
+// provider short-circuit before the opener ran, so every test in this file
+// passed WITHOUT one. That override is deleted (a stream factory built on MAIN
+// cannot cross `postMessage` to a runtime living in the worker), and with it the
+// only reason a throw here was safe.
+//
+// The fake supplies "no socket in tests" at the opener instead. It keeps the
+// property the old stub's comment named as load-bearing: the real hook returns a
+// referentially-STABLE opener, and this one is a single module-scoped instance
+// for the same reason - so the acquire effect's `openTransport` dep never churns.
+// Resetting it clears the record array in place rather than replacing it.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
+});
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => hostState.id,
@@ -154,11 +160,49 @@ import {
 } from "@/lib/epics/session-created-epics";
 import {
   __getOpenEpicRegistryForTests,
-  __setEpicStreamClientFactoryForTests,
   EpicSessionPresentationContext,
   getEpicSessionHandleHostId,
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
+import {
+  __setEpicRuntimeWorkerFactoryForTests,
+  getEpicRuntimeWorkerFactoryOverride,
+} from "@/lib/registries/epic-runtime-worker-factory-slot";
+import {
+  fakeDurableStreamTransports,
+  resetFakeDurableStreamTransports,
+} from "@/lib/host/test-support/fake-durable-stream-transport";
+import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-support/in-process-epic-runtime-worker";
+import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
+
+/** The jsdom setup file's coreless worker, put back in `afterEach`. */
+let previousWorkerFactory: (() => RuntimeWorkerLike) | null = null;
+
+/**
+ * Install this test's stream factory, one seam over.
+ *
+ * Every call site below used to read `installStreamFactory(fn)`
+ * and passed the SAME `fn` unchanged; only the seam moved, because a factory
+ * built on MAIN cannot cross `postMessage` to a runtime living in the worker.
+ * Keeping one helper rather than inlining the composition twenty-two times is
+ * what makes that a rename at each site instead of twenty-two chances to differ.
+ *
+ * A FRESH worker per spawn: one helper instance owns one bridge pair and one
+ * composition, so a shared instance would hand two sessions the same runtime -
+ * and this file re-points sessions across hosts, which acquires a second one.
+ * The deleted stream override was called once per session too, so this matches
+ * what these tests have always exercised.
+ */
+function installStreamFactory(factory: EpicStreamClientFactory): void {
+  previousWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
+  __setEpicRuntimeWorkerFactoryForTests(() =>
+    createInProcessEpicRuntimeWorker({
+      streamClientFactory: factory,
+      laneSelection: null,
+    }).createWorker(),
+  );
+}
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
@@ -540,7 +584,7 @@ describe("<EpicSessionProvider />", () => {
     navigateMock.mockClear();
     resetCanvasStore();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
+    resetFakeDurableStreamTransports();
     setDesktopEpicOwnershipBridge(null);
     clearSessionCreatedEpics();
     resetAuth("signed-in", "alice@example.com");
@@ -549,7 +593,8 @@ describe("<EpicSessionProvider />", () => {
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
+    // RESTORED, not nulled - see `previousWorkerFactory`.
+    __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
     setDesktopEpicOwnershipBridge(null);
     resetCanvasStore();
     resetAuth("signed-out", null);
@@ -560,7 +605,7 @@ describe("<EpicSessionProvider />", () => {
 
   it("shares one resolved host client with every session consumer", async () => {
     const seenClients: unknown[] = [];
-    __setEpicStreamClientFactoryForTests(() => ({
+    installStreamFactory(() => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -599,7 +644,7 @@ describe("<EpicSessionProvider />", () => {
   it("reacquires a fresh handle when the signed-in identity changes", async () => {
     const streams: ControlledStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+    installStreamFactory((_epicId, _callbacks) => {
       const stream: ControlledStream = { closeCount: 0 };
       streams.push(stream);
       return {
@@ -670,7 +715,7 @@ describe("<EpicSessionProvider />", () => {
     };
     const streams: ControlledStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+    installStreamFactory((_epicId, _callbacks) => {
       const stream: ControlledStream = { closeCount: 0 };
       streams.push(stream);
       return {
@@ -744,7 +789,7 @@ describe("<EpicSessionProvider />", () => {
     });
     window.localStorage.setItem(legacyKey, persistedBlob);
 
-    __setEpicStreamClientFactoryForTests(() => ({
+    installStreamFactory(() => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -813,7 +858,7 @@ describe("<EpicSessionProvider />", () => {
     window.localStorage.setItem(legacyKey, legacyBlob);
     window.localStorage.setItem(canonicalKey, canonicalBlob);
 
-    __setEpicStreamClientFactoryForTests(() => ({
+    installStreamFactory(() => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -860,7 +905,7 @@ describe("<EpicSessionProvider />", () => {
   it("keeps the old handle mounted, then CRDT-merges it after an equal-room re-point", async () => {
     const streams: ControlledEpicStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+    installStreamFactory((_epicId, callbacks) => {
       const stream: ControlledEpicStream = { closeCount: 0, callbacks };
       streams.push(stream);
       return {
@@ -938,7 +983,7 @@ describe("<EpicSessionProvider />", () => {
   it("uses a plain swap when the replacement reports a different room", async () => {
     const streams: ControlledEpicStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+    installStreamFactory((_epicId, callbacks) => {
       const stream: ControlledEpicStream = { closeCount: 0, callbacks };
       streams.push(stream);
       return {
@@ -1006,7 +1051,7 @@ describe("<EpicSessionProvider />", () => {
     const handlesB: OpenEpicStoreHandle[] = [];
     const presentationsA: Array<EpicSessionPresentation | null> = [];
     const presentationsB: Array<EpicSessionPresentation | null> = [];
-    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+    installStreamFactory((_epicId, callbacks) => {
       const stream: ControlledEpicStream = { closeCount: 0, callbacks };
       streams.push(stream);
       return {
@@ -1082,7 +1127,7 @@ describe("<EpicSessionProvider />", () => {
     try {
       const streams: ControlledEpicStream[] = [];
       const presentations: Array<EpicSessionPresentation | null> = [];
-      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      installStreamFactory((_epicId, callbacks) => {
         const stream: ControlledEpicStream = { closeCount: 0, callbacks };
         streams.push(stream);
         return {
@@ -1161,7 +1206,7 @@ describe("<EpicSessionProvider />", () => {
       const streams: ControlledEpicStream[] = [];
       const seenHandles: OpenEpicStoreHandle[] = [];
       const presentations: Array<EpicSessionPresentation | null> = [];
-      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      installStreamFactory((_epicId, callbacks) => {
         const stream: ControlledEpicStream = { closeCount: 0, callbacks };
         streams.push(stream);
         return {
@@ -1244,7 +1289,7 @@ describe("<EpicSessionProvider />", () => {
 
   it("absorbs a churning effect dependency instead of re-presenting", async () => {
     const presentations: Array<EpicSessionPresentation | null> = [];
-    __setEpicStreamClientFactoryForTests(() => ({
+    installStreamFactory(() => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -1278,7 +1323,10 @@ describe("<EpicSessionProvider />", () => {
     // churns the dependency again, which writes again - an infinite render
     // loop, not a wasted render. `epic-surface-isolation` hung on exactly this.
     act(() => {
-      transportState.opener = () => {
+      // Still a THROW, and still correct after the deletion: the pin is that
+      // the provider does NOT re-acquire, so the churned opener must never be
+      // reached. What changed is only where the mutable slot lives.
+      fakeDurableStreamTransports().opener = () => {
         throw new Error("openTransport must not be called after the churn");
       };
       view.rerender(tree());
@@ -1378,7 +1426,7 @@ describe("<EpicSessionProvider />", () => {
   it("(R-1) reacquires a fresh handle on a same-host remote public-key rotation, isolated from every other field", async () => {
     const streams: ControlledStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+    installStreamFactory((_epicId, _callbacks) => {
       const stream: ControlledStream = { closeCount: 0 };
       streams.push(stream);
       return {
@@ -1441,7 +1489,7 @@ describe("<EpicSessionProvider />", () => {
   it("defers acquisition without crashing while the active host is null, then acquires when it binds", async () => {
     const streams: ControlledStream[] = [];
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+    installStreamFactory((_epicId, _callbacks) => {
       const stream: ControlledStream = { closeCount: 0 };
       streams.push(stream);
       return {
@@ -1520,14 +1568,28 @@ describe("<EpicSessionProvider />", () => {
       hasMore: false,
     });
     const seenHandles: OpenEpicStoreHandle[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => ({
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => undefined,
-    }));
+    // The stream is CAPTURED, where it used to be discarded. The assertion
+    // below begins an epic-title write command, and
+    // `beginEpicTitleMutationWithId` refuses one outright unless
+    // `session.writeGateRole()` is writable - a role that arrives only with a
+    // snapshot. A session that never received one has `permissionRole: null`,
+    // so the mutation returned `null`, stamped no overlay, and the title this
+    // test reads through the cache stayed "". That gate is not new; what was
+    // new is the caller. This test used to drive `setEpicTitle`, which had no
+    // permission gate, and the write-command conversion swapped it for a gated
+    // one without giving the session a role to pass the gate with.
+    const streams: ControlledEpicStream[] = [];
+    installStreamFactory((_epicId, callbacks) => {
+      streams.push({ callbacks, closeCount: 0 });
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => undefined,
+      };
+    });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -1548,6 +1610,14 @@ describe("<EpicSessionProvider />", () => {
       expect(seenHandles).toHaveLength(1);
     });
     expect(seenHandles[0].userId).toBe(sessionUserId);
+
+    // The role, before the write. `snapshotMeta` carries `"editor"`, which is
+    // what makes the gate above passable. Synchronous `act`: `deliverSnapshot`
+    // is a plain callback invocation, and an `async` wrapper with nothing to
+    // await is what `require-await` rejects.
+    act(() => {
+      deliverSnapshot(streams[0], "room-history");
+    });
 
     await act(async () => {
       // `setEpicTitle` is gone: the epic title is a WRITE COMMAND now, and its
@@ -1583,7 +1653,7 @@ describe("<EpicSessionProvider />", () => {
     setDesktopEpicOwnershipBridge(
       createDesktopWindowsBridgeForTests(calls, () => claim),
     );
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => {
+    installStreamFactory((_epicId, _callbacks) => {
       const stream: ControlledStream = { closeCount: 0 };
       streams.push(stream);
       return {
@@ -1654,7 +1724,7 @@ describe("<EpicSessionProvider />", () => {
     setDesktopEpicOwnershipBridge(
       createDesktopWindowsBridgeForTests(calls, { ok: true }),
     );
-    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => ({
+    installStreamFactory((_epicId, _callbacks) => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -1742,7 +1812,7 @@ describe("<EpicSessionProvider />", () => {
 
   describe("a completed re-point keeps the document it merged (B5)", () => {
     function installControlledFactory(streams: ControlledEpicStream[]): void {
-      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      installStreamFactory((_epicId, callbacks) => {
         const stream: ControlledEpicStream = { closeCount: 0, callbacks };
         streams.push(stream);
         return {
@@ -1976,7 +2046,7 @@ describe("<EpicSessionProvider />", () => {
 
   describe("warm-handle adoption after a provider remount (F1)", () => {
     function installControlledFactory(streams: ControlledEpicStream[]): void {
-      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      installStreamFactory((_epicId, callbacks) => {
         const stream: ControlledEpicStream = { closeCount: 0, callbacks };
         streams.push(stream);
         return {
@@ -2169,7 +2239,7 @@ describe("<EpicSessionProvider />", () => {
     // `beforeEach`) is deliberately a DIFFERENT host than the marker records,
     // so a pass here can only mean the marker's host won.
     markEpicCreatedThisSession(EPIC_ID, "host-create");
-    __setEpicStreamClientFactoryForTests(() => ({
+    installStreamFactory(() => ({
       applyUpdate: () => undefined,
       awareness: () => undefined,
       applyArtifactRoomUpdate: () => undefined,
@@ -2211,7 +2281,7 @@ describe("<EpicSessionProvider />", () => {
     // the seed in the first place.
     markEpicCreatedThisSession(EPIC_ID, "host-create");
     const streams: ControlledEpicStream[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+    installStreamFactory((_epicId, callbacks) => {
       const stream: ControlledEpicStream = { closeCount: 0, callbacks };
       streams.push(stream);
       return {
@@ -2272,7 +2342,7 @@ describe("<EpicSessionProvider />", () => {
     hostState.id = null;
     markEpicCreatedThisSession(EPIC_ID, "host-create");
     const streams: ControlledEpicStream[] = [];
-    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+    installStreamFactory((_epicId, callbacks) => {
       const stream: ControlledEpicStream = { closeCount: 0, callbacks };
       streams.push(stream);
       return {
@@ -2341,7 +2411,7 @@ describe("<EpicSessionProvider />", () => {
       const EPIC_ID = "epic-create-host-retry-test";
       markEpicCreatedThisSession(EPIC_ID, "host-create");
       const streams: ControlledEpicStream[] = [];
-      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      installStreamFactory((_epicId, callbacks) => {
         const stream: ControlledEpicStream = { closeCount: 0, callbacks };
         streams.push(stream);
         return {

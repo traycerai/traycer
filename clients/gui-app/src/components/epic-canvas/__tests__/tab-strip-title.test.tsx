@@ -45,16 +45,21 @@ vi.mock("@/lib/host", () => ({
   }),
 }));
 
-// `EpicSessionProvider` opens its own durable transport via this factory, but
-// the test installs an `__setEpicStreamClientFactoryForTests` override that
-// short-circuits before `openTransport` runs - so a stable stub opener that is
-// never invoked lets the provider mount without the full host runtime.
-const openTransportStub = vi.hoisted(() => () => {
-  throw new Error("openTransport must not be called in this test");
+// `EpicSessionProvider` opens its own durable transport via this factory, and
+// UNCONDITIONALLY now. The stub here used to THROW, which was safe only while
+// the `__setEpicStreamClientFactoryForTests` override made the provider
+// short-circuit before `openTransport` ran; with that branch deleted, every
+// test in this file reached the throw. The fake supplies "no socket in tests"
+// instead. This suite needs no live replica, so it keeps the jsdom setup
+// file's coreless worker and does not touch the worker seam.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
 });
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => openTransportStub,
-}));
 
 // `null` support is "still negotiating", which keeps the notification feed -
 // and therefore the tab's indicator derivation - on the local host path these

@@ -31,8 +31,7 @@ import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { RuntimeWorkerPort } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import type { EpicReplicaRuntime } from "../runtime/epic-replica-runtime";
-import { createFakeBridgePair } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
-import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
+import { createInProcessEpicRuntimeWorker } from "./in-process-epic-runtime-worker";
 import { createRecordingStreamClient } from "@traycer-clients/shared/replica-runtime/worker/test-support/recording-stream-client";
 
 import {
@@ -44,8 +43,6 @@ import { createProcessBackedAccountingPort } from "../runtime/process-backed-acc
 import { createRendererRuntimeEnvironment } from "../runtime/runtime-environment";
 import { spawnEpicRuntimeWorker } from "../runtime/worker/spawn-epic-runtime-worker";
 import { createLateBoundProjectionTarget } from "../runtime/worker/late-bound-projection-target";
-import { startEpicRuntimeWorkerHost } from "../runtime/worker/epic-runtime-worker-host";
-import { installEpicRuntimeCore } from "../runtime/worker/install-epic-runtime-core";
 import type { EpicRuntimeStreamFactories } from "../runtime/worker/epic-runtime-composition";
 import type { EpicRuntimeProjection } from "../runtime/epic-runtime-projection";
 import {
@@ -128,12 +125,12 @@ export interface OpenedStoreForTest extends OpenEpicStoreHandle {
 export function openStoreForTest(
   options: OpenStoreForTestOptions,
 ): OpenedStoreForTest {
-  const pair = createFakeBridgePair("sync");
-
-  // The worker side, in this thread: the real host, given the suite's
-  // factories in place of the proxy-built ones.
-  const host = startEpicRuntimeWorkerHost(pair.worker);
-  const composedRuntime = installEpicRuntimeCore(host, () => options.factories);
+  // The worker side, in this thread: the real host with a real core, given the
+  // suite's factories in place of the proxy-built ones. Through the SHARED
+  // helper, not inline - the provider suites need the identical construction
+  // at the `__setEpicRuntimeWorkerFactoryForTests` seam, and two copies of it
+  // is the drift this file's own header warns about.
+  const inProcessWorker = createInProcessEpicRuntimeWorker(options.factories);
 
   const accounting = createProcessBackedAccountingPort({
     hostId: "test-host",
@@ -168,12 +165,7 @@ export function openStoreForTest(
   // during composition.
   let bodyTarget: OpenEpicStoreHandle["body"] | null = null;
   const worker = spawnEpicRuntimeWorker<Partial<EpicRuntimeProjection>>({
-    createWorker: () => ({
-      ...createFakeWorkerTarget(pair),
-      terminate: () => {
-        pair.sever();
-      },
-    }),
+    createWorker: () => inProcessWorker.createWorker(),
     relay: { log: () => {}, fatal: () => {} },
     writeCommand: async (commandId, intent) => {
       if (options.writeCommand === null) {
@@ -256,7 +248,7 @@ export function openStoreForTest(
   projection.attach(handle.projection);
   bodyTarget = handle.body;
 
-  const runtime = composedRuntime();
+  const runtime = inProcessWorker.composedRuntime();
   if (runtime === null) {
     // The bootstrap is emitted synchronously by `spawnEpicRuntimeWorker` over
     // a `"sync"` pipe, so this is unreachable - and it is checked rather than
@@ -266,7 +258,7 @@ export function openStoreForTest(
   }
   return {
     ...handle,
-    flush: () => pair.flush(),
+    flush: () => inProcessWorker.flush(),
     // GETTERS, not captured values. `epic-session-provider.tsx` states the
     // cost of getting this wrong: freezing them "leaves every consumer holding
     // a DESTROYED `Y.Doc` and `Awareness` while the live ones are unreachable"

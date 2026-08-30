@@ -10,10 +10,10 @@ import {
   type Mock,
 } from "vitest";
 import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
-import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
-import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import {
+  fakeDurableStreamTransports,
+  resetFakeDurableStreamTransports,
+} from "@/lib/host/test-support/fake-durable-stream-transport";
 
 // `attached` mirrors the sibling suite's shape even though every test here
 // leaves it `true` - the hooks below are mocked identically so the provider
@@ -72,79 +72,28 @@ const resolveSessionHostClient = vi.hoisted(
  * minted, in open order.
  *
  * THIS is the seam the whole file pins: the transport is opened by the fake
- * itself (counted here), never by a stream client - unlike the sibling
- * `epic-session-provider.test.tsx`, whose stub `openTransport` throws because
- * every one of its tests overrides the stream factory instead.
+ * itself (counted here), never by a stream client.
+ *
+ * The fake was hand-rolled here, and the sibling `epic-session-provider.test.tsx`
+ * had a stub that THREW instead - safe only because every one of its tests
+ * overrode the stream factory and the provider short-circuited before the opener
+ * ran. That override is gone, so every provider suite needs an opener that
+ * ANSWERS, and they share this one rather than growing six copies of it. The
+ * adapter-verdict reasoning that used to sit on `getMethodSupport` here moved
+ * with it, to the member it describes.
  */
-interface FakeTransportRecord {
-  readonly hostId: string;
-  closeCount: number;
-  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
-}
-const transportRegistry = vi.hoisted(() => {
-  const records: FakeTransportRecord[] = [];
-
-  function fakeStreamSession(): IStreamSession {
-    return {
-      sendClientFrame: () => undefined,
-      onServerFrame: () => undefined,
-      onStatusChange: () => undefined,
-      getNegotiatedSchemaVersion: () => null,
-      requestReconnect: () => undefined,
-      close: () => undefined,
-    };
-  }
-
-  function createWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
-    let closed = false;
-    return {
-      subscribe: () => fakeStreamSession(),
-      subscribeWithParamsProvider: () => fakeStreamSession(),
-      close: () => {
-        closed = true;
-      },
-      isClosed: () => closed,
-      isReady: () => true,
-      getClosedReason: () => null,
-      notifyBearerRotated: () => undefined,
-      reconnectAll: () => undefined,
-      // Every lane method reads "unsupported", which pins the adapter-selection
-      // verdict to "legacy" (never "undecided", never "lanes") - see
-      // `readEpicAdapterVerdict` / `EPIC_LANE_METHODS`. That is deliberate: it
-      // is what makes the provider's real `@1` stream-client factory run for
-      // real in this file, while the lane arm itself stays out of scope (owned
-      // by `epic-adapter-{selection,lifecycle}.test.ts`).
-      getMethodSupport: () => "unsupported",
-      subscribeMethodSupport: () => () => undefined,
-      getMethodSchemaVersion: () => null,
-      instanceId: `fake-ws-stream-client-${records.length}`,
-      subscribeAvailabilityRecovered: () => () => undefined,
-      onClosed: () => () => undefined,
-    };
-  }
-
-  function opener(hostId: string): DurableStreamTransport {
-    const wsStreamClient = createWsStreamClient();
-    const record: FakeTransportRecord = {
-      hostId,
-      closeCount: 0,
-      wsStreamClient,
-    };
-    records.push(record);
-    return {
-      wsStreamClient,
-      close: () => {
-        record.closeCount += 1;
-      },
-    };
-  }
-
-  return { records, opener };
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
 });
-
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => transportRegistry.opener,
-}));
+// Resolved on THIS side of the mock boundary, and deliberately the same module:
+// a `vi.mock` factory is hoisted above every import, so it cannot close over a
+// value the test body holds. Both sides call the accessor instead.
+const transportRegistry = fakeDurableStreamTransports();
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => hostState.id,
@@ -169,10 +118,7 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
-import {
-  __getOpenEpicRegistryForTests,
-  __setEpicStreamClientFactoryForTests,
-} from "@/lib/registries/epic-session-registry";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -248,18 +194,16 @@ describe("<EpicSessionProvider /> transport ownership", () => {
     sessionHostRows.byHostId.clear();
     sessionHostRows.userId = null;
     sessionHostClients.byHostId.clear();
-    transportRegistry.records.length = 0;
+    resetFakeDurableStreamTransports();
     resetHostConnectionRegistryForTest();
     navigateMock.mockClear();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
     resetAuth("signed-in", "alice@example.com");
   });
 
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
     resetAuth("signed-out", null);
     hostBindingRef.value = null;
     resetHostConnectionRegistryForTest();
@@ -369,25 +313,23 @@ describe("<EpicSessionProvider /> transport ownership", () => {
     expect(secondRecord.closeCount).toBe(1);
   });
 
-  it("opens NOTHING when the stream factory is overridden for tests", async () => {
-    __setEpicStreamClientFactoryForTests(() => ({
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => undefined,
-    }));
-
+  // RETIRED AND REPLACED: this used to be "opens NOTHING when the stream
+  // factory is overridden for tests". Its subject no longer exists - the
+  // stream-factory override was deleted, because a factory built on MAIN
+  // cannot cross `postMessage` to a runtime living in the worker, and the
+  // provider branch serving it could only ever reach a throw.
+  //
+  // What replaces it is the property the deletion makes universal, and it is
+  // the stronger claim: there is no longer ANY path that opens a session
+  // without a transport, so "exactly one per session" holds unconditionally
+  // rather than "one, unless a test said otherwise".
+  it("opens exactly one transport per session, with no opt-out path", async () => {
     const { handle } = await mountSession(
       "epic-transport-test",
       "epic-transport-test",
     );
 
-    // The override IS "a test is supplying this session's stream" - the
-    // session opens no socket at all, which is exactly what lets the sibling
-    // suite's stub `openTransport` throw on every one of its tests.
-    expect(transportRegistry.records).toHaveLength(0);
+    expect(transportRegistry.records).toHaveLength(1);
     expect(() => handle.store.getState()).not.toThrow();
   });
 

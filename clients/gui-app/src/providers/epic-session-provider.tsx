@@ -48,7 +48,6 @@ import {
   EpicSessionContext,
   EpicSessionHostClientContext,
   EpicSessionPresentationContext,
-  getEpicStreamClientFactoryOverride,
   getEpicSessionHandleHostId,
   getOpenEpicRegistry,
   handleHostClients,
@@ -519,23 +518,25 @@ export function EpicSessionProvider(
       // session is a NEW handle and therefore a new transport - this one is
       // never handed on.
       //
-      // ## The override seam decides whether a transport is opened AT ALL
+      // ALWAYS opened. There used to be a branch here that skipped the
+      // transport when a test had installed a stream-factory override, on the
+      // reasoning that "the override IS a test supplying this session's
+      // stream". That branch produced a null `wsStreamClient` and the guard
+      // below then threw unconditionally, so installing the override could not
+      // do anything except fail - two comments in this one function stating
+      // opposite contracts, with the code implementing both.
       //
-      // A session whose stream is driven by `__setEpicStreamClientFactoryForTests`
-      // has no socket and no lanes: the override IS "a test is supplying this
-      // session's stream". Reading it once here, rather than only per factory
-      // call, is what keeps `openTransport` uncalled on that path - the
-      // provider suite asserts exactly that, by stubbing the opener with a
-      // throw. Selection reads method support off the transport BEFORE deciding
-      // what to open, so a lazily-opened transport would be opened by the read
-      // and the assertion would fire anyway; the honest shape is to decide up
-      // front and give an overridden session no lane selection.
-      const streamIsOverridden = getEpicStreamClientFactoryOverride() !== null;
-      const transport = streamIsOverridden ? null : openTransport(targetHostId);
-      const wsStreamClient = transport?.wsStreamClient ?? null;
+      // The seam that survives the relocation is the WORKER factory, not the
+      // stream factory: the worker builds its own typed clients over a proxied
+      // `IStreamClient`, and a factory constructed on MAIN cannot cross
+      // `postMessage` to reach it. A suite that wants to drive this session's
+      // stream supplies a fake TRANSPORT at this opener instead, and gets the
+      // real proxy path underneath it.
+      const transport = openTransport(targetHostId);
+      const wsStreamClient = transport.wsStreamClient;
       let transportClosed = false;
       const closeSessionTransport = (): void => {
-        if (transportClosed || transport === null) return;
+        if (transportClosed) return;
         transportClosed = true;
         transport.close();
       };
@@ -544,24 +545,15 @@ export function EpicSessionProvider(
       // worker builds them itself over its proxied `IStreamClient`
       // (`buildProxiedStreamFactories`). What crosses is this session's real
       // `wsStreamClient`, whose socket never leaves this thread.
-      if (wsStreamClient === null) {
-        // A session with no transport cannot spawn a runtime: the worker's
-        // whole composition is built over this client's proxy. Stated as a
-        // throw rather than a non-null assertion, keeping the posture the
-        // deleted stream factory had - a path that reaches here without a
-        // transport fails loudly instead of dialling one this session never
-        // opened.
-        //
-        // NOTE: the OVERRIDE case used to be served here. Suites that inject a
-        // fake stream through `getEpicStreamClientFactoryOverride` have no
-        // path any more, because the worker builds the typed clients itself -
-        // they inject at the WORKER seam instead
-        // (`__setEpicRuntimeWorkerFactoryForTests`). That migration is part of
-        // the caller sweep, not a hole in this guard.
-        throw new Error(
-          "[epic-session] cannot spawn a runtime worker with no session transport",
-        );
-      }
+      //
+      // There is deliberately no "no transport" guard left. One stood here and
+      // threw, which was the right posture while a branch above could produce a
+      // null client; with that branch gone, `DurableStreamTransport` declares
+      // `wsStreamClient` non-nullable and the check became unreachable - and a
+      // dead `=== null` is what `no-unnecessary-condition` exists to reject.
+      // The property is carried by the TYPE now, which is the stronger form of
+      // the same guarantee: a runtime throw catches a null that reaches it,
+      // whereas this one cannot be constructed.
 
       /**
        * The books, on MAIN, and the one set for this session.
