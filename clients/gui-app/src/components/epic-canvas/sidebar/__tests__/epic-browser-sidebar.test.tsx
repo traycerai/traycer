@@ -10,6 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
   BrowserSessionInfo,
@@ -219,8 +220,21 @@ function session(
   };
 }
 
+// The panel's close action is a TanStack mutation. One client for the file's
+// lifetime, so a re-render never strands existing observers on an old one.
+const testQueryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: false, gcTime: 0 },
+    mutations: { retry: false },
+  },
+});
+
 function wrapper(node: ReactNode): ReactNode {
-  return <TooltipProvider delayDuration={0}>{node}</TooltipProvider>;
+  return (
+    <QueryClientProvider client={testQueryClient}>
+      <TooltipProvider delayDuration={0}>{node}</TooltipProvider>
+    </QueryClientProvider>
+  );
 }
 
 function replaceSessions(items: readonly BrowserSessionInfo[]): void {
@@ -548,7 +562,7 @@ describe("BrowsersPanelBody", () => {
     ]);
   });
 
-  it("keeps duplicate close names disambiguated while pending", () => {
+  it("keeps duplicate close names disambiguated while pending", async () => {
     closeTab.mockImplementation(() => new Promise<void>(() => undefined));
     const tabIds = ["tab-duplicate-aaaa", "tab-duplicate-bbbb"];
     sessionsState.value = {
@@ -576,14 +590,17 @@ describe("BrowsersPanelBody", () => {
       fireEvent.click(button);
     }
 
-    expect(
-      screen
-        .getAllByRole("button", { name: /^Closing JioHotstar/ })
-        .map((button) => button.getAttribute("aria-label")),
-    ).toEqual([
-      "Closing JioHotstar (www.hotstar.com (aaaa))",
-      "Closing JioHotstar (www.hotstar.com (bbbb))",
-    ]);
+    // Pending state arrives with the mutation, one microtask after the click.
+    await waitFor(() => {
+      expect(
+        screen
+          .getAllByRole("button", { name: /^Closing JioHotstar/ })
+          .map((button) => button.getAttribute("aria-label")),
+      ).toEqual([
+        "Closing JioHotstar (www.hotstar.com (aaaa))",
+        "Closing JioHotstar (www.hotstar.com (bbbb))",
+      ]);
+    });
   });
 
   it("keeps the plain close name when the active title is unique", () => {
@@ -785,7 +802,11 @@ describe("BrowsersPanelBody", () => {
     expect(findOpenArtifactInTab("view-tab-1", pointer.id)).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Close Live page" }));
-    expect(closeTab).toHaveBeenCalledWith("sess-primary", "tab-live");
+    // The close runs as a mutation, so the host frame goes out on the next
+    // microtask rather than inside the click.
+    await waitFor(() => {
+      expect(closeTab).toHaveBeenCalledWith("sess-primary", "tab-live");
+    });
     await waitFor(() => {
       expect(findOpenArtifactInTab("view-tab-1", pointer.id)).toBeNull();
     });
@@ -1055,8 +1076,18 @@ describe("BrowsersPanelBody", () => {
         .querySelector(".lucide-bot"),
     ).not.toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close Live page" }));
+    // Real timers before the close: the mutation that drives the pending state
+    // settles on the microtask queue, and `waitFor` needs a real clock to
+    // observe it.
     vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Close Live page" }));
+    // The pending state arrives with the mutation, one microtask after the
+    // click, so the row is re-read once it has settled into closing.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Closing Live page" }),
+      ).toBeTruthy();
+    });
     const row = screen.getByTestId("epic-browser-sidebar-row-tab-live");
     expect(row.querySelector(".lucide-bot")).toBeNull();
     const pendingClose = screen.getByTestId(
@@ -1293,7 +1324,9 @@ describe("BrowsersPanelActions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
 
-    expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    });
     await waitFor(() => {
       expect(navigateNested).toHaveBeenCalledWith(
         "epic-1",
@@ -1321,7 +1354,9 @@ describe("BrowsersPanelActions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
 
-    expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    });
     await waitFor(() => {
       expect(navigateNested).toHaveBeenCalledOnce();
     });
