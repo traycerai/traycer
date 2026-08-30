@@ -237,40 +237,6 @@ export const EMPTY_ROOMS_PROJECTION: EpicRoomsProjection = Object.freeze({
 // ─── Control plane ────────────────────────────────────────────────────────
 
 export interface EpicControlProjection {
-  /**
-   * Which adapter arm is installed, projected.
-   *
-   * `null` before the first selection. A READ of runtime state that the store
-   * needs synchronously - `getArtifactBodyDocKey` answers the artifact id on
-   * the lanes arm and the artifact's ROOM id on `@1` - so it belongs in the
-   * projection rather than in a call into the replica.
-   *
-   * Published through `delivery.publish`, which takes a
-   * `Partial<EpicRuntimeProjection>` and therefore reaches any member. The
-   * per-replica sinks are typed to their own sub-projection, so the runtime -
-   * which is what owns the arm - could not have published this through
-   * `records.sink` without putting a selection fact on the records slice.
-   */
-  readonly installedArm: EpicAdapterArm | null;
-  /**
-   * Every content-addressed attachment hash the root replica currently holds.
-   *
-   * A PROJECTION rather than a call, and it is the one member of the
-   * attachment-read class that could not be anything else: three paste
-   * handlers read it synchronously inside a ProseMirror handler that decides
-   * whether to accept a paste and cannot await
-   * (`new-conversation-modal.tsx:698`, `chat-message-user-body.tsx:642`,
-   * `chat-composer.tsx:280`). `lib/epic-replica-reads.ts`'s header named this
-   * shape before the relocation started: "answered from a projected set of
-   * held hashes rather than from a live doc read - a projection, not a call".
-   *
-   * Same argument as {@link installedArm} above: a read of runtime state the
-   * store needs SYNCHRONOUSLY belongs in the projection rather than in a call
-   * into the replica. One push of staleness is acceptable here - a hash that
-   * just landed reads as absent until the next publish, and the paste path
-   * treats absent as "not ours to accept", which is the fail-closed direction.
-   */
-  readonly heldAttachmentHashes: readonly string[];
   readonly permissionRole: PermissionRole | null;
   /**
    * VISIBLE connection status: `deriveConnectionStatus(hostTransportStatus,
@@ -347,8 +313,6 @@ export interface EpicControlProjection {
  */
 export const INITIAL_CONTROL_PROJECTION: EpicControlProjection = Object.freeze({
   permissionRole: null,
-  installedArm: null,
-  heldAttachmentHashes: [],
   connectionStatus: "connecting",
   hostTransportStatus: "connecting",
   cloudSyncStatus: "connected",
@@ -373,4 +337,55 @@ export const INITIAL_CONTROL_PROJECTION: EpicControlProjection = Object.freeze({
  * a sink).
  */
 export interface EpicRuntimeProjection
-  extends EpicRecordsProjection, EpicRoomsProjection, EpicControlProjection {}
+  extends EpicRecordsProjection, EpicRoomsProjection, EpicControlProjection {
+  /**
+   * Every content-addressed attachment hash the root replica currently holds.
+   *
+   * A PROJECTION rather than a call, and it is the one member of the
+   * attachment-read class that could not be anything else: three paste
+   * handlers read it synchronously inside a ProseMirror handler that decides
+   * whether to accept a paste and cannot await
+   * (`new-conversation-modal.tsx:698`, `chat-message-user-body.tsx:642`,
+   * `chat-composer.tsx:280`). `lib/epic-replica-reads.ts`'s header named this
+   * shape before the relocation started: "answered from a projected set of
+   * held hashes rather than from a live doc read - a projection, not a call".
+   *
+   * One push of staleness is acceptable - a hash that just landed reads as
+   * absent until the next publish, and the paste path treats absent as "not
+   * ours to accept", which is the fail-closed direction.
+   *
+   * **Top-level, and deliberately NOT on the control slice**, which is where
+   * it lived until it was found always-empty. The key was DECLARED on
+   * `EpicControlProjection` but PUBLISHED by the runtime's own
+   * `delivery.publish`, so the control sink carried a copy it seeded from the
+   * initial constant and never updated - and every whole-slice control
+   * delivery (the reset at `epic-control-replica.ts:564` most of all)
+   * republished that stale `[]` over the real value. One key, two publishers,
+   * and the wrong one won on every control change.
+   *
+   * A key belongs on the slice whose sink OWNS its publishes. This one's
+   * publisher is the runtime, so it lives here.
+   */
+  readonly heldAttachmentHashes: readonly string[];
+  /**
+   * Which adapter arm is installed, projected.
+   *
+   * `null` before the first selection. A READ of runtime state that the store
+   * needs synchronously - `getArtifactBodyDocKey` answers the artifact id on
+   * the lanes arm and the artifact's ROOM id on `@1` - so it belongs in the
+   * projection rather than in a call into the replica.
+   *
+   * Top-level for the same reason as the key above, and its old comment was
+   * already describing the hazard without drawing the conclusion: it noted
+   * that the runtime publishes this through `delivery.publish` and that "the
+   * per-replica sinks are typed to their own sub-projection". Declaring it on
+   * the CONTROL slice anyway gave that sink a copy it seeded from the initial
+   * constant and never updated - so every whole-slice control delivery
+   * republished `null` over the real arm. Not owning the publish is what makes
+   * a slice the wrong home; it does not matter WHICH sink-owned slice it is.
+   */
+  readonly installedArm: EpicAdapterArm | null;
+}
+
+/** The initial held-hash set. Its own constant because its key is its own. */
+export const INITIAL_HELD_ATTACHMENT_HASHES: readonly string[] = [];

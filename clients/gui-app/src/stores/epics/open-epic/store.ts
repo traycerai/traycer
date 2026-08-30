@@ -87,6 +87,7 @@ import {
   EMPTY_RECORDS_PROJECTION,
   EMPTY_ROOMS_PROJECTION,
   INITIAL_CONTROL_PROJECTION,
+  INITIAL_HELD_ATTACHMENT_HASHES,
 } from "./runtime/epic-runtime-projection";
 import type {
   EpicMigrationSlice,
@@ -1037,6 +1038,12 @@ export function createOpenEpicStore(
           ...EMPTY_RECORDS_PROJECTION,
           artifactRooms: EMPTY_ROOMS_PROJECTION.artifactRooms,
           ...INITIAL_CONTROL_PROJECTION,
+          // Its own key now, so its own seed - see the projection's comment on
+          // why it left the control slice.
+          heldAttachmentHashes: INITIAL_HELD_ATTACHMENT_HASHES,
+          // Same: its own key, so its own seed. `null` is "no arm selected
+          // yet", which is what every reader already treats it as.
+          installedArm: null,
           ingestFenceIdentity: mintedIngestFenceIdentity,
           lastFocusedArtifactId: null,
           lastFocusedThreadId: null,
