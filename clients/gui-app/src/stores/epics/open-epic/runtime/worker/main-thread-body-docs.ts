@@ -74,7 +74,21 @@ export interface MainThreadBodyDocStore extends MainThreadBodyDocs {
   dropAll(): void;
 }
 
-export function createMainThreadBodyDocStore(): MainThreadBodyDocStore {
+/**
+ * Fires whenever the resident SET changes - an install that adds a body, or a
+ * drop that removes one.
+ *
+ * Without it the hot half is invisible to React. Availability is a projection
+ * and says the room is `ready`; residency is a main-thread fact and says the
+ * fragment exists. An editor that re-rendered only on availability would read
+ * `null` at `ready` and never look again, because nothing else changes when
+ * the materialize finally lands. Not fired for an install that merely applies
+ * an update to a body already resident: the fragment reference is unchanged
+ * and Yjs notifies its own observers.
+ */
+export function createMainThreadBodyDocStore(
+  onResidencyChange: () => void,
+): MainThreadBodyDocStore {
   const bodies = new Map<string, LiveBody>();
 
   function destroy(body: LiveBody): void {
@@ -112,6 +126,7 @@ export function createMainThreadBodyDocStore(): MainThreadBodyDocStore {
         docGuid: input.docGuid,
         hostStateVector: input.hostStateVector,
       });
+      onResidencyChange();
     },
 
     encode(docKey): Uint8Array {
@@ -130,6 +145,7 @@ export function createMainThreadBodyDocStore(): MainThreadBodyDocStore {
       if (held === undefined) return;
       bodies.delete(docKey);
       destroy(held);
+      onResidencyChange();
     },
 
     has(docKey): boolean {
@@ -156,6 +172,7 @@ export function createMainThreadBodyDocStore(): MainThreadBodyDocStore {
       // sees the post-teardown state rather than a half-emptied map.
       bodies.clear();
       for (const body of held) destroy(body);
+      if (held.length > 0) onResidencyChange();
     },
   };
 }

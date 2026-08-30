@@ -37,6 +37,15 @@ function snapshotWith(text: string): { update: Uint8Array; guid: string } {
   return { update, guid };
 }
 
+/**
+ * ONE construction site, so the next member added to this factory is one
+ * compile error rather than eight. The residency callback defaults to a no-op
+ * here; the suite that cares about it passes its own.
+ */
+function createStore(): MainThreadBodyDocStore {
+  return createMainThreadBodyDocStore(() => {});
+}
+
 function textOf(store: MainThreadBodyDocStore): string {
   const fragment = store.fragment(DOC_KEY, ARTIFACT);
   return fragment === null ? "<not resident>" : fragment.toJSON();
@@ -44,7 +53,7 @@ function textOf(store: MainThreadBodyDocStore): string {
 
 describe("install", () => {
   it("makes the body resident and its fragment readable", () => {
-    const store = createMainThreadBodyDocStore();
+    const store = createStore();
     const seed = snapshotWith("hello");
 
     store.install({
@@ -62,7 +71,7 @@ describe("install", () => {
   it("REPLACES rather than merges when the guid changes", () => {
     // The data-loss pin. Two unrelated histories, same doc key - which is
     // exactly a body deleted and recreated while a lease was held.
-    const store = createMainThreadBodyDocStore();
+    const store = createStore();
     const first = snapshotWith("original");
     const second = snapshotWith("recreated");
     expect(first.guid).not.toBe(second.guid);
@@ -93,7 +102,7 @@ describe("install", () => {
   it("merges when the guid is the same, and does so idempotently", () => {
     // The other direction, so the replace pin cannot be satisfied by a store
     // that throws everything away on every install.
-    const store = createMainThreadBodyDocStore();
+    const store = createStore();
     const seed = snapshotWith("hello");
 
     store.install({
@@ -129,7 +138,7 @@ describe("install", () => {
 
 describe("encode", () => {
   it("round-trips the live document, local edits included", () => {
-    const store = createMainThreadBodyDocStore();
+    const store = createStore();
     const seed = snapshotWith("hello");
     store.install({
       docKey: DOC_KEY,
@@ -160,7 +169,7 @@ describe("encode", () => {
     // The caller is the demote path and the lease bridge already refuses to
     // post for an entry it does not have; a throw here turns a benign race
     // into a failed teardown.
-    const store = createMainThreadBodyDocStore();
+    const store = createStore();
 
     expect(store.encode("absent")).toEqual(new Uint8Array());
   });
@@ -168,7 +177,7 @@ describe("encode", () => {
 
 describe("drop", () => {
   it("makes the body non-resident and its fragment unreachable", () => {
-    const store = createMainThreadBodyDocStore();
+    const store = createStore();
     const seed = snapshotWith("hello");
     store.install({
       docKey: DOC_KEY,
@@ -187,7 +196,7 @@ describe("drop", () => {
   });
 
   it("is a no-op for a key it never held", () => {
-    const store = createMainThreadBodyDocStore();
+    const store = createStore();
 
     expect(() => store.drop("absent")).not.toThrow();
   });
@@ -197,7 +206,7 @@ describe("awareness", () => {
   it("is per body, and a different instance per doc key", () => {
     // Two bodies must not share a presence channel: a caret bound to one
     // fragment would otherwise be routed through the other's topology.
-    const store = createMainThreadBodyDocStore();
+    const store = createStore();
     const first = snapshotWith("one");
     const second = snapshotWith("two");
     store.install({
@@ -225,7 +234,7 @@ describe("awareness", () => {
 
 describe("residentDocKeys", () => {
   it("is the main-side answer to what used to be the tier's hot set", () => {
-    const store = createMainThreadBodyDocStore();
+    const store = createStore();
     const seed = snapshotWith("hello");
     store.install({
       docKey: "room-1",
@@ -241,5 +250,55 @@ describe("residentDocKeys", () => {
 
     expect(store.residentDocKeys()).toEqual([]);
     expect(store.has("room-1")).toBe(false);
+  });
+});
+
+describe("the residency signal", () => {
+  it("fires when a body becomes resident and when it is dropped", () => {
+    // The re-render signal. Without it a synchronous `getArtifactFragment`
+    // read of an asynchronously-filled set is invisible to React: the editor
+    // sees `null` at `ready` and never looks again.
+    let fired = 0;
+    const store = createMainThreadBodyDocStore(() => {
+      fired += 1;
+    });
+    const seed = snapshotWith("hello");
+
+    store.install({
+      docKey: DOC_KEY,
+      update: seed.update,
+      docGuid: seed.guid,
+      seedMode: "full",
+      hostStateVector: null,
+    });
+    expect(fired).toBe(1);
+
+    store.drop(DOC_KEY);
+    expect(fired).toBe(2);
+  });
+
+  it("does not fire for an update applied to a body already resident", () => {
+    // The fragment REFERENCE is unchanged, and Yjs notifies its own observers
+    // for the content. A bump here would re-render every editor on every
+    // inbound delta for no reason.
+    let fired = 0;
+    const store = createMainThreadBodyDocStore(() => {
+      fired += 1;
+    });
+    const seed = snapshotWith("hello");
+    const install = (): void => {
+      store.install({
+        docKey: DOC_KEY,
+        update: seed.update,
+        docGuid: seed.guid,
+        seedMode: "full",
+        hostStateVector: null,
+      });
+    };
+
+    install();
+    install();
+
+    expect(fired).toBe(1);
   });
 });
