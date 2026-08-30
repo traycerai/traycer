@@ -450,3 +450,54 @@ describe("bodies.materialize — the lease it stands on", () => {
     expect(rig.releases).toEqual([]);
   });
 });
+
+describe("bodies.materialize — forward-only vs not-held", () => {
+  /**
+   * The discrimination that matters, both directions.
+   *
+   * `encodeColdState` refuses for two reasons and only one of them may become
+   * a forward-only install. Giving an identity-STATED room the forward-only
+   * treatment would retire its settle path silently - the demote invariant
+   * dying for that room with nothing to say so.
+   */
+  function coldRefusingSource(
+    forwardOnly: Uint8Array | null,
+  ): EpicRuntimeCorePortSource {
+    return createSource({
+      acquireBodyLease: () => () => {},
+      bodyDocKey: (artifactId) => `room-${artifactId}`,
+      encodeColdState: () => null,
+      encodeForwardOnly: () => forwardOnly,
+    });
+  }
+
+  it("serves an identity-ABSENT room forward-only, with a null guid", async () => {
+    // The `@1` arm: its adapter states no identity by design, so cold state
+    // refuses and the live bytes are the only way across. Refusing here takes
+    // the whole arm dark.
+    const ports = buildEpicRuntimeCorePorts(
+      coldRefusingSource(new Uint8Array([7])),
+    );
+
+    const materialized = await ports.bodies.materialize("art-1");
+
+    expect(materialized).not.toBeNull();
+    expect(materialized?.docGuid).toBeNull();
+    expect(materialized?.update).toEqual(new Uint8Array([7]));
+  });
+
+  it("answers NOT-HELD when the source offers no forward-only bytes", async () => {
+    // PLUMBING ONLY, and named that way deliberately. This drives
+    // `encodeForwardOnly` at the SOURCE, so it pins the ports' both-directions
+    // wiring and NOT the discrimination that decides which rooms get here.
+    //
+    // That discrimination - identity-absent serves forward-only, identity-
+    // STATED answers not-held - lives in `encodeArtifactBodyForwardOnly`
+    // (`epic-replica-runtime.ts`), which reads `tier.statedDocGuid`. Ablating
+    // that check leaves THIS suite green, which is how the gap was found. Its
+    // pin is owed at the runtime level, against a real tier.
+    const ports = buildEpicRuntimeCorePorts(coldRefusingSource(null));
+
+    await expect(ports.bodies.materialize("art-1")).resolves.toBeNull();
+  });
+});

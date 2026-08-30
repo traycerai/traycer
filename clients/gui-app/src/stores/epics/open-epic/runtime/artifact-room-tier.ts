@@ -374,6 +374,17 @@ export interface ArtifactRoomTier {
    * projection ends up pinning the whole working set.
    */
   peek(artifactRoomId: string): ArtifactRoomReplicaEntry | null;
+  /**
+   * The identity this room's snapshots STATED, or `null` when none did.
+   *
+   * A read of the same map `encodeColdState` decides on, exposed so a caller
+   * can tell that refusal's two reasons apart: no replica entry, versus a
+   * replica with no stated identity. Those are different situations - the
+   * first is "nothing here", the second is the `@1` arm working as designed -
+   * and a caller that conflated them would give an identity-stated room the
+   * forward-only treatment, quietly retiring its settle path.
+   */
+  statedDocGuid(artifactRoomId: string): string | null;
   leaseCount(artifactRoomId: string): number;
   /** Ids currently materialised as live `Y.Doc`s. */
   materializedIds(): readonly string[];
@@ -1207,6 +1218,10 @@ export function createArtifactRoomTier(
         if (entry.pendingUpdates.length > 0) return true;
       }
       return false;
+    },
+
+    statedDocGuid(artifactRoomId) {
+      return docGuidByRoom.get(artifactRoomId) ?? null;
     },
 
     encodeColdState(artifactRoomId) {

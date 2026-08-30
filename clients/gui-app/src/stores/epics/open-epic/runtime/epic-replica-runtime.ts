@@ -1314,6 +1314,12 @@ export function createEpicReplicaRuntime(
 
     encodeArtifactBodyColdState: (docKey) => tier.encodeColdState(docKey),
     encodeArtifactBodyForwardOnly: (docKey) => {
+      // IDENTITY-ABSENT only, checked explicitly rather than inferred from a
+      // cold refusal. `encodeColdState` refuses for two reasons, and only one
+      // of them belongs here: a room that STATED an identity and merely has no
+      // replica must answer not-held, because serving it forward-only would
+      // retire its settle path without anything saying so.
+      if (tier.statedDocGuid(docKey) !== null) return null;
       const entry = tier.peek(docKey);
       return entry === null ? null : Y.encodeStateAsUpdate(entry.doc);
     },
