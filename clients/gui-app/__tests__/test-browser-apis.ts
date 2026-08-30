@@ -23,10 +23,24 @@ import { __setEpicRuntimeWorkerFactoryForTests } from "@/lib/registries/epic-run
 // transport and a shared host would have `installCore` dispose the first
 // session's core when the second arrived (`epic-runtime-worker-host.ts:141`).
 //
-// Inert until the flip. Nothing spawns a runtime worker in production yet, and
-// the worker entry does not compose or `installCore`, so a host started here
-// answers "not held" to everything. That is the honest current state: this
-// seam exists and is wired; it does not yet carry a runtime.
+// CORELESS, and no longer "inert until the flip" - which is what this comment
+// said, and it stopped being true when `epic-runtime-worker-entry.ts` started
+// calling `installEpicRuntimeCore`. The entry composes a runtime now; what this
+// factory does not do is run the entry.
+//
+// So a host started HERE has no core and answers "not held" to everything,
+// while the same spawn in production carries a full runtime. That is deliberate
+// and it is the honest default: a suite that merely mounts a session must not
+// be handed a live replica it did not ask for, and the suites that DO want one
+// build it themselves (`open-store-for-test.ts` installs a core on its own
+// pair; `arm-b-accounting-equality.test.ts` installs one behind a spawned
+// worker's port, which is what makes the owed #4 pin's second arm exist at
+// all).
+//
+// The correction matters beyond this file: §8 argued Arm B was not
+// constructible BECAUSE the entry did not compose, and that argument expired
+// with this comment. A reader checking the claim would have found this text and
+// stopped.
 __setEpicRuntimeWorkerFactoryForTests(() => {
   const pair = createFakeBridgePair("sync");
   const host = startEpicRuntimeWorkerHost(pair.worker);
