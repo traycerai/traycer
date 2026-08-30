@@ -352,9 +352,12 @@ export function runPreReady(state: BootState): void {
   // No `setWebRTCIPHandlingPolicy` call, deliberately: Electron's default is
   // Chromium's `default` (gather on ALL interfaces), while the explicit
   // `default_public_and_private_interfaces` we used to set narrows gathering to
-  // the default-route interface and drops the VPN path to a remote host. Our
-  // own candidates stay mDNS-obfuscated and need no grant here; the host's
-  // capture helper is the end that offers real IPs. Full write-up:
+  // the default-route interface and drops the VPN path to a remote host. No
+  // grant is needed here either, but not because our candidates stay hidden:
+  // `installPermissionHandlers` already allows the audio media CHECK for
+  // dictation, and that is the same check Chromium's port allocator consults,
+  // so this end also gathers real per-interface addresses (tailnet included).
+  // Full write-up:
   // `traycer-host` `BROWSER_CAPTURE_HELPER_PERMISSIONS`.
   applyHardwareAccelerationPreference();
   suppressWslKernelCoreDumps();

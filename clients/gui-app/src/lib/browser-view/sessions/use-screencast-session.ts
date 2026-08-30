@@ -185,6 +185,19 @@ export function useScreencastSession(
   const streamRef = useRef<BrowserScreencastStreamClient | null>(null);
   const videoPlaneRef = useRef<VideoPlaneSession | null>(null);
   /**
+   * The last geometry the viewport bridge measured, restated on every
+   * subscription below.
+   *
+   * A subscription is re-established far more often than the tile is resized
+   * (client change, tab switch, reconnect), and the bridge only mints on a
+   * RESIZE - so a re-subscribe of an already-laid-out tile carried no
+   * `viewport` frame at all, leaving the host on the default metrics it falls
+   * back to when the last tile closes. Field evidence: a live round whose most
+   * recent `viewport_override` was `last-tile-close` 1280x720 and which never
+   * saw a `tile-resize`, while the tile had been measuring 1272x800@2 all along.
+   */
+  const lastViewportRef = useRef<ScreencastViewportInput | null>(null);
+  /**
    * The host's smoothed control-plane RTT for this subscription, refreshed by
    * every `rttProbe`, `null` until the first one lands (ticket 18). One value
    * feeds all three viewer-side deadlines - the arm buffer inside the
@@ -378,6 +391,17 @@ export function useScreencastSession(
       if (stream === null) beforeOpen.push(frame);
       else stream.sendClientFrame(frame);
     };
+    // Restate the measured geometry for THIS subscription - see
+    // `lastViewportRef`. Queued first, so it is the first client frame this
+    // subscription sends and the host re-applies the tile's real metrics
+    // within one round trip of attach instead of never. It does NOT beat the
+    // attach itself: capture can still start against the old metrics, which
+    // is fine because `setViewport` re-applies the override on a live capture
+    // and the tab-capture track follows it.
+    const knownViewport = lastViewportRef.current;
+    if (knownViewport !== null) {
+      send({ kind: "viewport", hasBinaryPayload: false, ...knownViewport });
+    }
     const isCurrent = (): boolean =>
       stream !== null && streamRef.current === stream;
 
@@ -624,6 +648,7 @@ export function useScreencastSession(
   ]);
 
   const sendViewport = useCallback((viewport: ScreencastViewportInput) => {
+    lastViewportRef.current = viewport;
     streamRef.current?.sendClientFrame({
       kind: "viewport",
       hasBinaryPayload: false,
@@ -1110,16 +1135,19 @@ function useScreencastViewportBridge(
     const element = ref.current;
     if (element === null) return;
     let timer: number | null = null;
+    const push = (width: number, height: number): void => {
+      sendViewport({
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height)),
+        dpr: window.devicePixelRatio,
+      });
+    };
     const emit = (width: number, height: number): void => {
       if (!visible) return;
       if (timer !== null) window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         timer = null;
-        sendViewport({
-          width: Math.max(1, Math.round(width)),
-          height: Math.max(1, Math.round(height)),
-          dpr: window.devicePixelRatio,
-        });
+        push(width, height);
       }, VIEWPORT_DEBOUNCE_MS);
     };
     const observer = new ResizeObserver((entries) => {
@@ -1129,7 +1157,14 @@ function useScreencastViewportBridge(
       }
     });
     observer.observe(element);
-    emit(element.clientWidth, element.clientHeight);
+    // The FIRST measurement is not resize churn, so it does not wait out the
+    // debounce: the host starts capturing at subscribe, and 200ms of silence
+    // is 200ms of capture against whatever metrics the tab was left on. A tile
+    // with no layout yet has nothing to state - the observer's own first
+    // callback covers that case.
+    if (visible && element.clientWidth > 0 && element.clientHeight > 0) {
+      push(element.clientWidth, element.clientHeight);
+    }
     return () => {
       observer.disconnect();
       if (timer !== null) window.clearTimeout(timer);
