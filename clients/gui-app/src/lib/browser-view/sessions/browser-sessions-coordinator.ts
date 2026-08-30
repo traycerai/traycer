@@ -83,6 +83,8 @@ interface BrowserSessionsCoordinator {
   state: BrowserSessionsState;
   /** Re-reads the machine's login-persistence state and reports any change. */
   refreshPersistenceState: () => void;
+  /** Sends `forgetLogins` if this coordinator's stream is live. */
+  forgetLogins: () => boolean;
   upsertConsumer: (
     consumerId: symbol,
     runtime: BrowserSessionsCoordinatorRuntime,
@@ -179,6 +181,35 @@ export function refreshBrowserSessionsPersistenceState(): void {
   for (const coordinator of browserSessionsCoordinators.values()) {
     coordinator.refreshPersistenceState();
   }
+}
+
+/**
+ * "Forget all browser logins" (spec §6.5, ticket 08). Answers whether any live
+ * stream took it, so a caller can say "not connected" rather than claim a shred
+ * that never happened.
+ *
+ * Sent once per host, not once per coordinator: coordinators are keyed by
+ * {epic, host, identity}, and the frame speaks for the user's whole slice on
+ * that host, so a second one for another epic of the same host would only ask
+ * for the same shred twice. Every host the user has a live browser stream to is
+ * addressed - "all" is the whole point of the action, and each host keeps its
+ * own key and its own slice.
+ *
+ * Module-level, not a tile-scoped action: the trigger is temporary (the shield
+ * popover) and moves to Settings › Browser in ticket 10, which has no tile to
+ * hang it off either.
+ */
+export function forgetAllBrowserLogins(): boolean {
+  const addressedHostIds = new Set<string>();
+  let sent = false;
+  for (const coordinator of browserSessionsCoordinators.values()) {
+    const hostId = coordinator.owner.hostId;
+    if (addressedHostIds.has(hostId)) continue;
+    if (!coordinator.forgetLogins()) continue;
+    addressedHostIds.add(hostId);
+    sent = true;
+  }
+  return sent;
 }
 
 function notifyBrowserSessionsCoordinator(key: string): void {
@@ -533,6 +564,15 @@ function createBrowserSessionsCoordinator(args: {
     refreshPersistenceState: () => {
       publishPersistenceState();
     },
+    forgetLogins: () => {
+      const channel = activeChannel();
+      if (channel === null) return false;
+      channel.sendClientFrame({
+        kind: "forgetLogins",
+        hasBinaryPayload: false,
+      });
+      return true;
+    },
     upsertConsumer: (consumerId, nextRuntime) => {
       runtimes.set(consumerId, nextRuntime);
       if (activeConsumerId !== consumerId) return;
@@ -694,6 +734,22 @@ function handleBrowserSessionsSubsystemFrame(args: {
         sendClientFrame: args.sendClientFrame,
       });
       return;
+    case "primaryProfileForgotten":
+      // The host has already shredded its slice for this user; this is the
+      // desktop's turn. Fire-and-forget: there is no frame to answer with, and
+      // a machine with no bridge (a browser tab) has no jar to clear.
+      void args.browserView?.forgetLogins().catch((cause: unknown) => {
+        appLogger.warn("[browser] clearing the browser partition failed", {
+          cause: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+      return;
+    case "primaryProfileEvict":
+      handlePrimaryProfileEvictFrame({
+        frame,
+        browserView: args.browserView,
+      });
+      return;
     case "storeKeyWrapRequest":
     case "storeKeyUnwrapRequest":
       handleStoreKeyRequestFrame({
@@ -717,6 +773,32 @@ function handleBrowserSessionsSubsystemFrame(args: {
       });
     }
   }
+}
+
+/**
+ * One site's logins were cleared for this user somewhere else (spec §6.5) - on
+ * another desktop, or as a tombstone the host's store recorded. This partition
+ * drops the same site.
+ *
+ * Nothing is sent back: the frame is a fan-out, not a request, and the desktop
+ * deliberately emits no delta for the removal - the store decided these
+ * tombstones before it sent the frame, so an echo would only re-assert them. A
+ * window with no desktop bridge has no jar to evict from.
+ */
+function handlePrimaryProfileEvictFrame(args: {
+  readonly frame: Extract<
+    BrowserSessionsServerFrame,
+    { readonly kind: "primaryProfileEvict" }
+  >;
+  readonly browserView: BrowserViewBridge | null;
+}): void {
+  const browserView = args.browserView;
+  if (browserView === null) return;
+  void browserView.evictSite(args.frame.domain).catch((cause: unknown) => {
+    appLogger.warn("[browser] could not evict a cleared site", {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+  });
 }
 
 function handlePrimaryProfileCaptureFrame(args: {

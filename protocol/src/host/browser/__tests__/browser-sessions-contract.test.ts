@@ -737,3 +737,114 @@ describe("browser.sessions@1.0 store-key handshake", () => {
     ).toBe(false);
   });
 });
+
+describe("browser.sessions@1.0 forget all browser logins (ticket 08)", () => {
+  it("accepts the client trigger and the server fan-out, both payload-free", () => {
+    const forgetLogins = { kind: "forgetLogins", hasBinaryPayload: false };
+    const forgotten = {
+      kind: "primaryProfileForgotten",
+      hasBinaryPayload: false,
+    };
+    expect(
+      browserSessionsClientFrameSchema.safeParse(forgetLogins).success,
+    ).toBe(true);
+    expect(
+      browserSessionsV1.clientFrameSchema.safeParse(forgetLogins).success,
+    ).toBe(true);
+    expect(browserSessionsServerFrameSchema.safeParse(forgotten).success).toBe(
+      true,
+    );
+    expect(
+      browserSessionsV1.serverFrameSchema.safeParse(forgotten).success,
+    ).toBe(true);
+  });
+
+  it("rejects a userId on either frame", () => {
+    // The identity is the stream's authenticated user; a frame that could name
+    // another user would be a cross-user shred request.
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "forgetLogins",
+        hasBinaryPayload: false,
+        userId: "user-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "primaryProfileForgotten",
+        hasBinaryPayload: false,
+        userId: "user-1",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a requestId: neither frame is correlated", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "forgetLogins",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+      }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "primaryProfileForgotten",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("browser.sessions@1.0 clear cookies for one site (ticket 07)", () => {
+  const evict = {
+    kind: "primaryProfileEvict",
+    hasBinaryPayload: false,
+    domain: "example.com",
+  };
+
+  it("accepts the server evict frame carrying one registrable domain", () => {
+    expect(browserSessionsServerFrameSchema.safeParse(evict).success).toBe(
+      true,
+    );
+    expect(browserSessionsV1.serverFrameSchema.safeParse(evict).success).toBe(
+      true,
+    );
+  });
+
+  it("requires the domain: an evict with no scope would clear the whole jar", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        kind: "primaryProfileEvict",
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a userId - the identity is the stream's authenticated user", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...evict,
+        userId: "user-1",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a requestId: the evict is unsolicited and uncorrelated", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...evict,
+        requestId: "request-1",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a binary payload", () => {
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...evict,
+        hasBinaryPayload: true,
+      }).success,
+    ).toBe(false);
+  });
+});

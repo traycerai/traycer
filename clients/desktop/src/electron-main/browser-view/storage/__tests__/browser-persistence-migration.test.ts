@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
 import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
-import { migrateBrowserPersistenceToPersistentPartition } from "../browser-persistence-migration";
+import {
+  forgetBrowserPersistentLogins,
+  migrateBrowserPersistenceToPersistentPartition,
+} from "../browser-persistence-migration";
 import type {
   BrowserEphemeralStorageSession,
+  BrowserForgetLoginsDependencies,
   BrowserPersistenceMigrationDependencies,
 } from "../browser-persistence-migration";
 import { seedBrowserViewCookies } from "../browser-storage-state";
@@ -162,5 +166,112 @@ describe("migrateBrowserPersistenceToPersistentPartition", () => {
       ephemeralCleared: true,
     });
     expect(trace.steps).toContain("recreate-tabs");
+  });
+});
+
+describe("forgetBrowserPersistentLogins", () => {
+  interface ForgetHarness {
+    readonly steps: string[];
+    readonly dependencies: BrowserForgetLoginsDependencies;
+  }
+
+  function makeForgetHarness(input: {
+    readonly persistentOpened: boolean;
+    readonly clearFails: boolean;
+    readonly recreated: readonly string[];
+  }): ForgetHarness {
+    const steps: string[] = [];
+    let suppressed = false;
+    return {
+      steps,
+      dependencies: {
+        suppressDeltas: async (action) => {
+          suppressed = true;
+          steps.push("suppress-enter");
+          try {
+            return await action();
+          } finally {
+            suppressed = false;
+            steps.push("suppress-exit");
+          }
+        },
+        readPersistentSession: () =>
+          input.persistentOpened
+            ? {
+                clearStorageData: () => {
+                  // Every destructive step has to happen with the cookie-delta
+                  // observer muted; recording the flag is how the test proves
+                  // it, since a real delta would only surface much later.
+                  steps.push(
+                    suppressed ? "clear(suppressed)" : "clear(LEAKING)",
+                  );
+                  return input.clearFails
+                    ? Promise.reject(new Error("jar is busy"))
+                    : Promise.resolve();
+                },
+              }
+            : null,
+        resetLocalStorageSnapshots: () => {
+          steps.push(suppressed ? "reset(suppressed)" : "reset(LEAKING)");
+        },
+        recreateTabs: () => {
+          steps.push(suppressed ? "recreate(suppressed)" : "recreate(LEAKING)");
+          return Promise.resolve([...input.recreated]);
+        },
+      },
+    };
+  }
+
+  it("clears the jar, drops the remembered origins, then recreates the tiles - all with deltas muted", async () => {
+    const harness = makeForgetHarness({
+      persistentOpened: true,
+      clearFails: false,
+      recreated: ["guest-1", "guest-2"],
+    });
+
+    const result = await forgetBrowserPersistentLogins(harness.dependencies);
+
+    expect(result).toEqual({ partitionCleared: true, tabsRecreated: 2 });
+    // The order is the contract: a tile recreated before the clear would come
+    // back still signed in, and one recreated before the reset would be
+    // re-seeded from the localStorage just forgotten.
+    expect(harness.steps).toEqual([
+      "suppress-enter",
+      "clear(suppressed)",
+      "reset(suppressed)",
+      "recreate(suppressed)",
+      "suppress-exit",
+    ]);
+  });
+
+  it("does nothing to a machine that never opened the durable partition", async () => {
+    const harness = makeForgetHarness({
+      persistentOpened: false,
+      clearFails: false,
+      recreated: [],
+    });
+
+    const result = await forgetBrowserPersistentLogins(harness.dependencies);
+
+    // Opening `persist:traycer-browser` here would be the first thing on this
+    // machine to reach for the OS keystore - exactly what the lazy-probe
+    // design exists to prevent.
+    expect(result).toEqual({ partitionCleared: false, tabsRecreated: 0 });
+    expect(harness.steps).not.toContain("clear(suppressed)");
+  });
+
+  it("still recreates the tiles when the jar refuses to clear", async () => {
+    const harness = makeForgetHarness({
+      persistentOpened: true,
+      clearFails: true,
+      recreated: ["guest-1"],
+    });
+
+    const result = await forgetBrowserPersistentLogins(harness.dependencies);
+
+    // The host has already shredded its key; leaving live tiles on a jar it
+    // can no longer read is the worse failure.
+    expect(result).toEqual({ partitionCleared: false, tabsRecreated: 1 });
+    expect(harness.steps).toContain("recreate(suppressed)");
   });
 });

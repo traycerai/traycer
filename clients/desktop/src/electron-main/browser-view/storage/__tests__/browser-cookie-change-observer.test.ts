@@ -229,6 +229,112 @@ describe("BrowserCookieChangeObserver coalescing", () => {
     observer.dispose();
   });
 
+  it("suppressAll mutes every domain while the whole jar is cleared", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+    const first = makeCookie({ name: "sid", domain: "example.com" });
+    const second = makeCookie({ name: "sid", domain: "other.test" });
+    source.seed(first);
+    source.seed(second);
+
+    // A window already open on entry describes a jar about to be destroyed.
+    source.set(makeCookie({ name: "pending", domain: "example.com" }));
+
+    await observer.suppressAll(async () => {
+      // What `clearStorageData()` looks like from here: a removal for every
+      // cookie in the jar, across domains the caller could not enumerate.
+      source.remove(first);
+      source.remove(second);
+      await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+      expect(deltas).toHaveLength(0);
+    });
+
+    // Nothing was left armed to fire after the forget either - a delta landing
+    // now would re-create the entry the host just shredded.
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+    expect(deltas).toHaveLength(0);
+
+    // The observer is muted, not broken: the next real change still coalesces.
+    source.set(makeCookie({ name: "fresh", domain: "example.com" }));
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+    expect(deltas.map((delta) => delta.scope)).toEqual([
+      { kind: "domain", domain: "example.com" },
+    ]);
+
+    observer.dispose();
+  });
+
+  it("lets emitDeltaNow speak through per-domain suppression but not through suppressAll", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+    source.seed(makeCookie({ name: "sid", domain: "example.com" }));
+
+    // Ticket 07's clear-site holds the domain muted so its own removals cannot
+    // echo, then says the one true thing about the slice. That has to get out.
+    await observer.suppress("example.com", () =>
+      observer.emitDeltaNow("example.com"),
+    );
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]?.scope).toEqual({ kind: "domain", domain: "example.com" });
+
+    // Ticket 08's forget-all is shredding the whole slice. A clear-site racing
+    // it must not put the site back on the host's side of the wire.
+    await observer.suppressAll(() =>
+      observer.suppress("example.com", () =>
+        observer.emitDeltaNow("example.com"),
+      ),
+    );
+    expect(deltas).toHaveLength(1);
+
+    observer.dispose();
+  });
+
+  it("abandons an in-flight emitDeltaNow when a forget-all starts mid-read", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    let releaseRead = (): void => {};
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    // The jar read is asynchronous in Electron too, so the suppression state
+    // can change under it. Only the gate is fake here.
+    const gated: BrowserCookieChangeSource = {
+      get: async (filter) => {
+        await readGate;
+        return await source.get(filter);
+      },
+      on: (event, listener) => source.on(event, listener),
+      off: (event, listener) => source.off(event, listener),
+    };
+    const observer = new BrowserCookieChangeObserver({
+      cookies: gated,
+      emit: (delta) => deltas.push(delta),
+      now: () => Date.now(),
+      coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+    });
+    observer.attach();
+    source.seed(makeCookie({ name: "sid", domain: "example.com" }));
+
+    const emitting = observer.emitDeltaNow("example.com");
+    let releaseForget = (): void => {};
+    const forgetting = observer.suppressAll(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseForget = resolve;
+        }),
+    );
+    releaseRead();
+    await emitting;
+
+    expect(deltas).toEqual([]);
+    releaseForget();
+    await forgetting;
+
+    observer.dispose();
+  });
+
   it("coalesces separately per registrable domain", async () => {
     const source = new FakeCookieChangeSource();
     const deltas: BrowserPrimaryProfileDelta[] = [];

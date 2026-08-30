@@ -100,3 +100,79 @@ async function clearEphemeralJar(
     return false;
   }
 }
+
+/**
+ * "Forget all browser logins" (spec §6.5, ticket 08), the desktop half. The
+ * host has already crypto-shredded its slice for this user by the time
+ * `primaryProfileForgotten` arrives; what is left is this machine's own copy.
+ *
+ * Same shape as the migration above, and for the same reason: every step is
+ * injected, so the order - which is the whole correctness argument - can be
+ * asserted without Electron.
+ *
+ * 1. Everything runs inside `suppressDeltas`. Clearing the jar fires a removal
+ *    event for every cookie in it; those deltas would arrive at a host that has
+ *    already forgotten the user and re-create an entry for the identity just
+ *    destroyed.
+ * 2. The localStorage coordinator is reset before the tiles come back, so a
+ *    recreated tile cannot be re-seeded from an origin remembered pre-forget.
+ * 3. Tiles are recreated last, at their current URLs, through the same handoff
+ *    path the enable-time migration uses - which skips `isolated` guests, whose
+ *    private jar has nothing to do with the identity being forgotten.
+ */
+export interface BrowserForgetLoginsDependencies {
+  /** Mutes every domain's deltas for the whole routine. */
+  readonly suppressDeltas: <T>(action: () => Promise<T>) => Promise<T>;
+  /**
+   * The durable `primary` jar, or `null` where this process never opened one.
+   * Null is the ordinary answer on a machine with saved logins turned off, and
+   * it must stay a no-op: opening that partition here would be the first thing
+   * to touch the OS keystore.
+   */
+  readonly readPersistentSession: () => BrowserForgettableStorageSession | null;
+  /** Drops the remembered localStorage origins (the snapshot coordinator). */
+  readonly resetLocalStorageSnapshots: () => void;
+  /** `BrowserViewManager.migrateNativeTabsForPersistence`, reused verbatim. */
+  readonly recreateTabs: () => Promise<readonly string[]>;
+}
+
+/** The one destructive call forget-all makes on the durable jar. */
+export interface BrowserForgettableStorageSession {
+  clearStorageData(): Promise<void>;
+}
+
+export interface BrowserForgetLoginsResult {
+  readonly partitionCleared: boolean;
+  readonly tabsRecreated: number;
+}
+
+export async function forgetBrowserPersistentLogins(
+  dependencies: BrowserForgetLoginsDependencies,
+): Promise<BrowserForgetLoginsResult> {
+  const result = await dependencies.suppressDeltas(async () => {
+    const partitionCleared = await clearPersistentJar(dependencies);
+    dependencies.resetLocalStorageSnapshots();
+    const recreatedGuestKeys = await dependencies.recreateTabs();
+    return { partitionCleared, tabsRecreated: recreatedGuestKeys.length };
+  });
+  log.info("[browser-view] forgot the saved browser logins", result);
+  return result;
+}
+
+async function clearPersistentJar(
+  dependencies: BrowserForgetLoginsDependencies,
+): Promise<boolean> {
+  const persistent = dependencies.readPersistentSession();
+  if (persistent === null) return false;
+  try {
+    await persistent.clearStorageData();
+    return true;
+  } catch (error) {
+    // The tiles still have to be recreated: they are sitting on a jar the host
+    // no longer holds a key for, and leaving them there is the worse failure.
+    log.warn("[browser-view] persistent session clear failed", {
+      error: describeLogError(error),
+    });
+    return false;
+  }
+}

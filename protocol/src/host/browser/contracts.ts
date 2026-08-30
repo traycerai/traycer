@@ -399,6 +399,33 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // One site's logins were cleared somewhere else for this user (keychain
+      // refactor ticket 07): another desktop's tile menu, or a tombstone the
+      // store recorded for `domain`. The receiving desktop removes that
+      // registrable domain's cookies and localStorage from its own persistent
+      // partition without echoing a delta back - the store already knows. Sent
+      // to every elected desktop subscriber of the user EXCEPT the one that
+      // reported the change. No `userId`: the identity is the stream's
+      // authenticated user.
+      kind: z.literal("primaryProfileEvict"),
+      ...textFrameFields,
+      domain: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // The user forgot every saved browser login (keychain refactor ticket
+      // 08). The host has already crypto-shredded its slice for this user and
+      // suspended their live `primary` sessions; each connected desktop clears
+      // its own persistent partition on receipt. Sent to every subscriber of
+      // the user, the originator included - it clears the same way the others
+      // do. No `userId`: the identity is the stream's authenticated user.
+      kind: z.literal("primaryProfileForgotten"),
+      ...textFrameFields,
+    })
+    .strict(),
+  z
+    .object({
       // Stream-only action burst; never persisted or replayed.
       kind: z.literal("burstStarted"),
       ...textFrameFields,
@@ -596,6 +623,19 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       kind: z.literal("storeKeyUnwrapped"),
       ...requestFrameFields,
       rawKey: z.base64().nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      // "Forget all browser logins" (keychain refactor ticket 08, decision
+      // #13). Unsolicited and unacknowledged: the host answers by shredding
+      // this user's key and slice and fanning `primaryProfileForgotten` back
+      // out, which is what tells this desktop to clear its own partition. No
+      // `userId` - the identity is the stream's authenticated user, and only
+      // the elected lifecycle subscriber is heard (same gate as
+      // `primaryProfileCaptured`).
+      kind: z.literal("forgetLogins"),
+      ...textFrameFields,
     })
     .strict(),
   z
