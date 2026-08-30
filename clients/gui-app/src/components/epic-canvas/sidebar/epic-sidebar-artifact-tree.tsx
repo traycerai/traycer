@@ -868,6 +868,21 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  // Mount the delete dialog on FIRST open and keep it mounted thereafter,
+  // rather than rendering it for every row unconditionally.
+  //
+  // Radix already keeps the dialog CONTENT unmounted while closed, but
+  // `ConfirmDestructiveDialog` itself still ran on every row render - forty
+  // rows' worth, during bursts nobody clicked, and ~105ms of self time in the
+  // burst profile. The latch is what makes gating safe: unmounting the moment
+  // `open` goes false would tear the dialog out from under Radix's exit
+  // transition. Rows never asked to delete anything - all of them, during a
+  // burst or a cold open - never pay for it.
+  const [deleteDialogEverOpened, setDeleteDialogEverOpened] = useState(false);
+  const changeConfirmDeleteOpen = useCallback((open: boolean) => {
+    if (open) setDeleteDialogEverOpened(true);
+    setConfirmDeleteOpen(open);
+  }, []);
   const deletePending = deleteArtifact.isPending;
 
   // The Epic SESSION's host, not the app-wide pointer: this tree projects the
@@ -1115,13 +1130,13 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
 
   const performDelete = () => {
     if (!canMutate) return;
-    setConfirmDeleteOpen(true);
+    changeConfirmDeleteOpen(true);
   };
 
   const confirmDelete = () => {
     markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
-      setConfirmDeleteOpen(false);
+      changeConfirmDeleteOpen(false);
       const found = findOpenArtifactInTab(tabId, nodeId);
       if (found !== null) {
         navigateNested(epicId, tabId, () =>
@@ -1210,7 +1225,8 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       onPerformDelete={performDelete}
       pendingChildName={pendingChildName}
       confirmDeleteOpen={confirmDeleteOpen}
-      onConfirmDeleteOpenChange={setConfirmDeleteOpen}
+      renderDeleteDialog={confirmDeleteOpen || deleteDialogEverOpened}
+      onConfirmDeleteOpenChange={changeConfirmDeleteOpen}
       cascadeSummary={cascadeSummary}
       deletePending={deletePending}
       onConfirmDelete={confirmDelete}
@@ -1261,6 +1277,8 @@ interface ArtifactNodeShellProps {
   readonly onPerformDelete: () => void;
   readonly pendingChildName: string | null;
   readonly confirmDeleteOpen: boolean;
+  /** First-open latch: see the note beside `deleteDialogEverOpened`. */
+  readonly renderDeleteDialog: boolean;
   readonly onConfirmDeleteOpenChange: (open: boolean) => void;
   readonly cascadeSummary: string | null;
   readonly deletePending: boolean;
@@ -1312,6 +1330,7 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
     onPerformDelete,
     pendingChildName,
     confirmDeleteOpen,
+    renderDeleteDialog,
     onConfirmDeleteOpenChange,
     cascadeSummary,
     deletePending,
@@ -1430,17 +1449,19 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
         selectedIds={selectedIds}
         onToggleSelection={onToggleSelection}
       />
-      <ConfirmDestructiveDialog
-        blockedReason={null}
-        open={confirmDeleteOpen}
-        onOpenChange={onConfirmDeleteOpenChange}
-        title={`Delete ${artifactType} "${nodeName}"?`}
-        description="This action cannot be undone."
-        cascadeSummary={cascadeSummary}
-        actionLabel="Delete"
-        isPending={deletePending}
-        onConfirm={onConfirmDelete}
-      />
+      {renderDeleteDialog ? (
+        <ConfirmDestructiveDialog
+          blockedReason={null}
+          open={confirmDeleteOpen}
+          onOpenChange={onConfirmDeleteOpenChange}
+          title={`Delete ${artifactType} "${nodeName}"?`}
+          description="This action cannot be undone."
+          cascadeSummary={cascadeSummary}
+          actionLabel="Delete"
+          isPending={deletePending}
+          onConfirm={onConfirmDelete}
+        />
+      ) : null}
     </li>
   );
 }
@@ -1984,83 +2005,102 @@ function useArtifactRowMenuEntries(
   props: ArtifactRowMenuEntriesProps,
 ): ReadonlyArray<SidebarRowMenuEntry> {
   const exportArtifacts = useEpicExportArtifacts();
-  const exportOne = (format: "markdown" | "pdf"): void => {
-    exportArtifacts.mutate({
-      artifacts: [{ id: props.nodeId, title: props.nodeName }],
-      format,
-      archive: false,
-      archiveTitle: null,
-    });
-  };
-  const exportIcon = exportArtifacts.isPending ? (
-    <AgentSpinningDots
-      className={undefined}
-      testId={undefined}
-      variant={undefined}
-    />
-  ) : (
-    <FileDown className="size-3.5" />
-  );
-  return [
-    {
-      kind: "item",
-      id: "export-markdown",
-      label: "Export as Markdown",
-      icon: exportIcon,
-      disabled: exportArtifacts.isPending,
-      disabledTooltip: null,
-      variant: "default",
-      testIds: {
-        dropdown: `epic-sidebar-export-markdown-${props.nodeId}`,
-        context: `epic-sidebar-context-export-markdown-${props.nodeId}`,
+  const { canMutate, nodeId, nodeName, onPerformDelete, onStartRename } = props;
+  const exportPending = exportArtifacts.isPending;
+  const exportMutate = exportArtifacts.mutate;
+  // Built once per input change rather than on every row render. This runs for
+  // every row and allocates six entry objects plus their icons and closures;
+  // it was ~74ms of self time in a burst profile back when a stamp re-rendered
+  // all forty rows. Nothing downstream is memoized, so a stable array skips no
+  // render on its own - this is purely the allocation, and it is why this
+  // lands as hygiene rather than as part of the churn fix.
+  return useMemo(() => {
+    const exportOne = (format: "markdown" | "pdf"): void => {
+      exportMutate({
+        artifacts: [{ id: nodeId, title: nodeName }],
+        format,
+        archive: false,
+        archiveTitle: null,
+      });
+    };
+    const exportIcon = exportPending ? (
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    ) : (
+      <FileDown className="size-3.5" />
+    );
+    return [
+      {
+        kind: "item",
+        id: "export-markdown",
+        label: "Export as Markdown",
+        icon: exportIcon,
+        disabled: exportPending,
+        disabledTooltip: null,
+        variant: "default",
+        testIds: {
+          dropdown: `epic-sidebar-export-markdown-${nodeId}`,
+          context: `epic-sidebar-context-export-markdown-${nodeId}`,
+        },
+        onSelect: () => exportOne("markdown"),
       },
-      onSelect: () => exportOne("markdown"),
-    },
-    {
-      kind: "item",
-      id: "export-pdf",
-      label: "Export as PDF",
-      icon: exportIcon,
-      disabled: exportArtifacts.isPending,
-      disabledTooltip: null,
-      variant: "default",
-      testIds: {
-        dropdown: `epic-sidebar-export-pdf-${props.nodeId}`,
-        context: `epic-sidebar-context-export-pdf-${props.nodeId}`,
+      {
+        kind: "item",
+        id: "export-pdf",
+        label: "Export as PDF",
+        icon: exportIcon,
+        disabled: exportPending,
+        disabledTooltip: null,
+        variant: "default",
+        testIds: {
+          dropdown: `epic-sidebar-export-pdf-${nodeId}`,
+          context: `epic-sidebar-context-export-pdf-${nodeId}`,
+        },
+        onSelect: () => exportOne("pdf"),
       },
-      onSelect: () => exportOne("pdf"),
-    },
-    { kind: "separator", id: "after-export" },
-    {
-      kind: "item",
-      id: "rename",
-      label: "Rename",
-      icon: <Pencil className="size-3.5" />,
-      disabled: !props.canMutate,
-      disabledTooltip: null,
-      variant: "default",
-      testIds: {
-        dropdown: `epic-sidebar-rename-${props.nodeId}`,
-        context: `epic-sidebar-context-rename-${props.nodeId}`,
+      { kind: "separator", id: "after-export" },
+      {
+        kind: "item",
+        id: "rename",
+        label: "Rename",
+        icon: <Pencil className="size-3.5" />,
+        disabled: !canMutate,
+        disabledTooltip: null,
+        variant: "default",
+        testIds: {
+          dropdown: `epic-sidebar-rename-${nodeId}`,
+          context: `epic-sidebar-context-rename-${nodeId}`,
+        },
+        onSelect: onStartRename,
       },
-      onSelect: props.onStartRename,
-    },
-    { kind: "separator", id: "before-delete" },
-    {
-      kind: "item",
-      id: "delete",
-      label: "Delete",
-      icon: <Trash2 className="size-3.5" />,
-      disabled: !props.canMutate,
-      disabledTooltip: null,
-      variant: "destructive",
-      testIds: {
-        dropdown: `epic-sidebar-delete-${props.nodeId}`,
-        context: `epic-sidebar-context-delete-${props.nodeId}`,
+      { kind: "separator", id: "before-delete" },
+      {
+        kind: "item",
+        id: "delete",
+        label: "Delete",
+        icon: <Trash2 className="size-3.5" />,
+        disabled: !canMutate,
+        disabledTooltip: null,
+        variant: "destructive",
+        testIds: {
+          dropdown: `epic-sidebar-delete-${nodeId}`,
+          context: `epic-sidebar-context-delete-${nodeId}`,
+        },
+        onSelect: onPerformDelete,
       },
-      onSelect: props.onPerformDelete,
-    },
-  ];
+    ];
+  }, [
+    canMutate,
+    exportMutate,
+    exportPending,
+    nodeId,
+    nodeName,
+    onPerformDelete,
+    onStartRename,
+  ]);
 }
 
 function ArtifactMoreMenu(props: {
