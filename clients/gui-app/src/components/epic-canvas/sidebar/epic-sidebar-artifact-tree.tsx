@@ -144,7 +144,9 @@ import {
   FILTERED_EMPTY_TITLE,
   useArtifactFilterMatchIds,
 } from "./epic-sidebar-panel-filters";
+import { useShallow } from "zustand/react/shallow";
 import { useEpicStore } from "@/hooks/use-epic-store";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import {
   getSidebarNodeDragId,
   getPaneScopedDndId,
@@ -309,17 +311,26 @@ function useArtifactUnreadMarkerVariant(args: {
   readonly isArtifactKind: boolean;
   readonly expanded: boolean;
   readonly selfUpdatedAt: number;
-  readonly tree: TreeSlice;
 }): ArtifactUnreadMarkerVariant | null {
-  const { epicId, nodeId, isArtifactKind, expanded, selfUpdatedAt, tree } =
-    args;
+  const { epicId, nodeId, isArtifactKind, expanded, selfUpdatedAt } = args;
   const visibleIds = useSidebarVisibleIds();
-  const descendantEntries = useMemo(
-    () =>
-      !isArtifactKind || expanded
-        ? EMPTY_DESCENDANT_ENTRIES
-        : collectDescendantArtifactEntries(nodeId, tree, visibleIds),
-    [isArtifactKind, expanded, nodeId, tree, visibleIds],
+  // Subscribed to THIS row's descendants rather than to the whole `tree` slice
+  // the caller used to hand down. The slice re-mints on any record change - the
+  // host stamps `updatedAt` per body write and `TreeNode` carries it - so
+  // taking it as an argument made every row re-render on every stamp.
+  //
+  // A row with no children reads the shared empty array and is equal by
+  // reference, which covers every leaf. A COLLAPSED PARENT still re-renders on
+  // a descendant's stamp, and that is the honest bound rather than an
+  // oversight: its rollup is computed FROM descendant `updatedAt`s, so it has
+  // to look again. That is O(collapsed ancestors of the stamped row), not O(N).
+  const descendantEntries = useEpicStore(
+    useShallow(
+      (state: OpenEpicState): ReadonlyArray<ArtifactDescendantEntry> =>
+        !isArtifactKind || expanded
+          ? EMPTY_DESCENDANT_ENTRIES
+          : collectDescendantArtifactEntries(nodeId, state.tree, visibleIds),
+    ),
   );
   return useArtifactReadStateStore((state) => {
     if (!isArtifactKind) return null;
@@ -678,9 +689,23 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   // Read only what this node needs from the tree projection, NOT the full
   // `useEpicArtifactRecords()` array: that array gets a new identity whenever
   // ANY record changes (e.g. the active chat streaming a token), which used to
-  // re-render every memoized node. The tree index is stable while streaming and
-  // `status` is a per-id scalar.
-  const tree = useEpicTreeIndex();
+  // re-render every memoized node. `status` is a per-id scalar.
+  //
+  // This used to read the whole `tree` slice, on the premise - stated here in
+  // as many words - that "the tree index is stable while streaming". True of
+  // chat tokens, which never touch an artifact node. It was falsified silently
+  // by body writes: the host stamps the artifact's `updatedAt` per write batch
+  // and `TreeNode` carries that field, so the slice re-minted ~4 times a second
+  // and every row re-rendered with it. The optimization outlived its premise.
+  //
+  // `memo` on this component is not a defence and never was - it blocks a
+  // re-render pushed down by a parent, not one this component's own
+  // subscription triggers. So the reads below subscribe to their ANSWERS.
+  const cascadeCounts = useEpicStore(
+    useShallow((state: OpenEpicState) =>
+      computeDescendantCountsFromTree(state.tree, nodeId),
+    ),
+  );
   const statusValue = useEpicArtifactStatus(nodeId);
 
   useEffect(() => {
@@ -718,7 +743,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     isArtifactKind,
     expanded,
     selfUpdatedAt: node?.updatedAt ?? 0,
-    tree,
   });
 
   const Icon = EPIC_NODE_ICONS[artifactType];
@@ -1014,9 +1038,10 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   if (!treeFilter(node.type)) return null;
 
   // Cascade counts feed only the delete-confirm dialog, computed from the
-  // canonical tree structure (stable while streaming) rather than the churning
-  // record list.
-  const cascadeCounts = computeDescendantCountsFromTree(tree, nodeId);
+  // canonical tree structure rather than the churning record list. Subscribed
+  // at the top of this component rather than derived here, because a hook
+  // cannot live below the two early returns above - see the note at the
+  // subscription for why it stopped reading the whole slice.
   const cascadeSummary = formatCascadeSummary(cascadeCounts);
 
   const showStatusDot = computeArtifactNodeStatusDot(artifactType, statusValue);

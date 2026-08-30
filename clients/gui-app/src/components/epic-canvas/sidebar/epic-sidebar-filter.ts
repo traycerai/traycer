@@ -10,8 +10,11 @@
  *
  * A `null` value means "no active filter" - render everything.
  */
-import { createContext, use, useMemo } from "react";
-import { useChildIds, useEpicTreeIndex } from "@/lib/epic-selectors";
+import { createContext, use } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { useChildIds } from "@/lib/epic-selectors";
+import { useEpicStore } from "@/hooks/use-epic-store";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import type { TreeNode } from "@/stores/epics/open-epic/types";
 import { sortNodeIds, type NodeComparator } from "@/lib/epic-sort";
 
@@ -67,27 +70,62 @@ export function mergeForcedExpanded(
  * Child ids of `parentId` that survive both the panel's structural
  * `treeFilter` (chat vs artifact node kinds) and the active visibility filter.
  * Shared by both panel trees so the filtering rule lives in one place.
+ *
+ * ## Subscribed to the ANSWER, not to the tree
+ *
+ * This runs once per ROW in both panels, so what it subscribes to is what every
+ * row subscribes to. It used to read `useEpicTreeIndex()` - the whole `tree`
+ * slice - and derive from it in a `useMemo`. That re-rendered every row
+ * whenever the slice's identity moved, and the slice moves on any record
+ * change: `TreeNode` carries `updatedAt`, and the host stamps it on every body
+ * write batch, so a burst of typing in one artifact re-rendered all forty rows
+ * at ~4 Hz.
+ *
+ * `memo` on the row could never have stopped that. It guards against a
+ * re-render propagated from a parent with equal props; a store subscription
+ * inside the component is an independent trigger. The fix has to be here, at
+ * what the row subscribes to.
+ *
+ * So the derivation moved INSIDE the selector and the result is compared
+ * shallowly: a row re-renders only when its own answer changes. The identity
+ * pass-through for a childless parent is kept and matters more than before -
+ * it is what makes a leaf row, which is most of them, compare equal for free.
+ *
+ * The cost is that the filter and sort now run per notification rather than per
+ * change, which the file next door names as the trade
+ * (`epic-selectors.ts`: "`useShallow` bails the subscriber's re-render but not
+ * the recompute"). That is the right side of it here: the work is a filter over
+ * one row's children, and what it buys is not re-rendering a whole subtree.
  */
 export function useFilteredPanelChildIds(
   parentId: string,
   treeFilter: PanelTreeFilter,
 ): readonly string[] {
-  const tree = useEpicTreeIndex();
   const childIds = useChildIds(parentId);
   const visibleIds = useSidebarVisibleIds();
   const comparator = useSidebarComparator();
-  return useMemo(() => {
-    if (childIds.length === 0) return childIds;
-    const filtered = childIds.filter((childId) => {
-      if (!Object.hasOwn(tree.nodeById, childId)) return false;
-      if (!treeFilter(tree.nodeById[childId].type)) return false;
-      if (visibleIds !== null && !visibleIds.has(childId)) return false;
-      return true;
-    });
-    // `childIds` arrive in projector (default) order; re-sort only when the
-    // panel has a non-default mode (`comparator !== null`).
-    return sortNodeIds(filtered, tree.nodeById, comparator);
-  }, [childIds, tree, treeFilter, visibleIds, comparator]);
+  return useEpicStore(
+    useShallow((state: OpenEpicState): readonly string[] => {
+      // Same identity out as in, so a childless row - the common case, and
+      // every leaf - is shallow-equal to its previous answer by reference.
+      if (childIds.length === 0) return childIds;
+      const nodeById = state.tree.nodeById;
+      const filtered = childIds.filter((childId) => {
+        if (!Object.hasOwn(nodeById, childId)) return false;
+        if (!treeFilter(nodeById[childId].type)) return false;
+        if (visibleIds !== null && !visibleIds.has(childId)) return false;
+        return true;
+      });
+      // `childIds` arrive in projector (default) order; re-sort only when the
+      // panel has a non-default mode (`comparator !== null`).
+      //
+      // A recency comparator reads `updatedAt`, so under one a stamp CAN
+      // legitimately reorder siblings and the rows that moved do re-render.
+      // That is the sort doing its job, not churn, and it is why the pin for
+      // this asserts under the default order.
+      return sortNodeIds(filtered, nodeById, comparator);
+    }),
+  );
 }
 
 /**

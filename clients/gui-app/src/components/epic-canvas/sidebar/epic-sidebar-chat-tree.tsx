@@ -277,6 +277,7 @@ import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-regi
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 import { type IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
 import { useEpicStore } from "@/hooks/use-epic-store";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import {
@@ -478,11 +479,17 @@ function useChatDescendantStatus(args: {
   readonly nodeId: string;
 }): ChatDescendantStatusRollup | null {
   const { epicId, nodeId } = args;
-  const tree = useEpicTreeIndex();
   const visibleIds = useSidebarVisibleIds();
-  const descendants = useMemo(
-    () => collectDescendantChatIds(nodeId, tree, visibleIds),
-    [nodeId, tree, visibleIds],
+  // Subscribed to this row's descendant IDS, not to the whole `tree` slice.
+  // The slice re-mints on any record change (the host stamps `updatedAt` per
+  // body write and `TreeNode` carries it), and this hook runs once per chat
+  // row, so reading the slice re-rendered every row on every stamp. The ids are
+  // strings, so a shallow compare bails exactly when this row's descendant set
+  // is unchanged - which a stamp never alters.
+  const descendants = useEpicStore(
+    useShallow((state: OpenEpicState) =>
+      collectDescendantChatIds(nodeId, state.tree, visibleIds),
+    ),
   );
   const descendantHostIds = useEpicNodeHostIds(descendants);
   const activityTiers = useEpicAgentActivityTiers();

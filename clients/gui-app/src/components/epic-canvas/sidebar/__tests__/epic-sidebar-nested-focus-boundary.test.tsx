@@ -567,6 +567,13 @@ vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
     selector({
       snapshotLoaded: true,
+      // The tree index, because the row-level tree reads subscribe HERE now
+      // rather than through `useEpicTreeIndex`. A row that used to take the
+      // whole slice re-rendered on every record change; it now selects its own
+      // answer out of the store, so this fake has to carry what production
+      // reads. Same object the `epic-selectors` fake hands back, so the two
+      // mocks cannot disagree about the shape of the tree.
+      tree: testState.tree,
       artifacts: {
         allIds: testState.records
           .filter((record) => record.type !== "chat")
