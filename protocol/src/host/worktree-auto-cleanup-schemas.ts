@@ -146,8 +146,16 @@ export type WorktreeGetAutoCleanupPolicyResponse =
  * two devices) editing the same host's policy must not silently overwrite each
  * other, because the loser's setting would keep deleting worktrees. A mismatch
  * is refused with `AUTO_CLEANUP_POLICY_REVISION_CONFLICT`; the client re-reads
- * and re-presents rather than retrying blind. `null` means "no expectation" -
- * used for the very first write on a host that has never had a policy.
+ * and re-presents rather than retrying blind.
+ *
+ * REQUIRED and non-nullable, with no "write unconditionally" lane. A never-set
+ * policy is not a special case - it already has a concrete revision, `0`, which
+ * `getAutoCleanupPolicy` returns - so an unconditional lane would buy nothing
+ * and cost the guarantee: a client that read `0`, went stale while another
+ * surface enabled cleanup at revision `1`, and then wrote without an
+ * expectation would silently re-enable or re-threshold scheduled DELETION with
+ * the host unable to detect the race. Every write states what it believed;
+ * the first one states `0`.
  *
  * `inactivityDays` travels even when `enabled` is false so disabling preserves
  * the user's threshold for the next enable.
@@ -155,7 +163,7 @@ export type WorktreeGetAutoCleanupPolicyResponse =
 export const worktreeSetAutoCleanupPolicyRequestSchema = z.object({
   enabled: z.boolean(),
   inactivityDays: z.number().int().positive(),
-  expectedRevision: z.number().int().nonnegative().nullable(),
+  expectedRevision: z.number().int().nonnegative(),
 });
 export type WorktreeSetAutoCleanupPolicyRequest = z.infer<
   typeof worktreeSetAutoCleanupPolicyRequestSchema
@@ -353,20 +361,37 @@ export type WorktreeGetAutoCleanupRunRequest = z.infer<
 >;
 
 /**
- * One run with its targets. `run: null` (and then always `targets: []`) is the
- * total answer for a run this host does not have - retention GC and a
- * notification that outlives its run both make that an ordinary outcome, not an
- * error.
+ * One run with its targets. `run: null` (and then always `targets: []`, which
+ * the refinement below enforces rather than merely asserting here) is the total
+ * answer for a run this host does not have - retention GC and a notification
+ * that outlives its run both make that an ordinary outcome, not an error.
  *
  * Modeled as an object with a nullable member rather than a nullable ROOT: a
  * union at the root freezes this response against additive growth (every arm is
  * fingerprinted exactly), while an object root can gain optional fields on a
  * minor.
  */
-export const worktreeGetAutoCleanupRunResponseSchema = z.object({
-  run: worktreeAutoCleanupRunSummarySchema.nullable(),
-  targets: z.array(worktreeAutoCleanupTargetSchema),
-});
+export const worktreeGetAutoCleanupRunResponseSchema = z
+  .object({
+    run: worktreeAutoCleanupRunSummarySchema.nullable(),
+    targets: z.array(worktreeAutoCleanupTargetSchema),
+  })
+  // The `targets: []` above is a validated invariant, not prose. Targets
+  // without their run are unrenderable: every count, threshold, and cutoff a
+  // client would explain them with lives on the run summary. Refusing the
+  // combination here means a retention GC that dropped a run mid-read fails
+  // loudly at the contract instead of reaching the GUI as history with no
+  // context.
+  .superRefine((response, ctx) => {
+    if (response.run === null && response.targets.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["targets"],
+        message:
+          "An absent run carries no targets - `targets` must be empty when `run` is null.",
+      });
+    }
+  });
 export type WorktreeGetAutoCleanupRunResponse = z.infer<
   typeof worktreeGetAutoCleanupRunResponseSchema
 >;

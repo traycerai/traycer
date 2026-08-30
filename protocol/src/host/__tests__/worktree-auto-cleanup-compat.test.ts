@@ -138,14 +138,6 @@ describe("auto-cleanup policy schemas", () => {
     expect(
       worktreeSetAutoCleanupPolicyRequestSchema.safeParse(write).success,
     ).toBe(true);
-    // A first write on a host that has never had a policy has nothing to
-    // expect.
-    expect(
-      worktreeSetAutoCleanupPolicyRequestSchema.safeParse({
-        ...write,
-        expectedRevision: null,
-      }).success,
-    ).toBe(true);
     expect(
       worktreeSetAutoCleanupPolicyRequestSchema.safeParse({
         ...write,
@@ -171,6 +163,57 @@ describe("auto-cleanup policy schemas", () => {
 
   it("has a typed revision-conflict code so a stale write is not retried blind", () => {
     expect(RPC_ERROR_CODES).toContain("AUTO_CLEANUP_POLICY_REVISION_CONFLICT");
+  });
+
+  it("admits no unconditional write lane - every write states the revision it believed", () => {
+    const write = { enabled: true, inactivityDays: 30, expectedRevision: 4 };
+    // The race this closes: a client reads the untouched revision 0, another
+    // surface enables cleanup (revision 1), and the first client writes with
+    // "no expectation" - silently re-enabling or re-thresholding scheduled
+    // DELETION with the host unable to detect the overwrite. A never-set
+    // policy is not a special case; it already has a concrete revision.
+    expect(
+      worktreeSetAutoCleanupPolicyRequestSchema.safeParse({
+        ...write,
+        expectedRevision: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      worktreeSetAutoCleanupPolicyRequestSchema.safeParse({
+        enabled: write.enabled,
+        inactivityDays: write.inactivityDays,
+      }).success,
+    ).toBe(false);
+    expect(
+      worktreeSetAutoCleanupPolicyRequestSchema.safeParse({
+        ...write,
+        expectedRevision: -1,
+      }).success,
+    ).toBe(false);
+    expect(
+      worktreeSetAutoCleanupPolicyRequestSchema.safeParse({
+        ...write,
+        expectedRevision: 1.5,
+      }).success,
+    ).toBe(false);
+    // The FIRST write is the case the nullable form existed for, and it is
+    // expressible without it: `getAutoCleanupPolicy` on an untouched host
+    // returns revision 0, and 0 is what that write expects.
+    expect(
+      worktreeSetAutoCleanupPolicyRequestSchema.safeParse({
+        ...write,
+        expectedRevision: 0,
+      }).success,
+    ).toBe(true);
+    expect(
+      worktreeAutoCleanupPolicyStateSchema.parse({
+        ...policyState,
+        enabled: false,
+        revision: 0,
+        updatedAt: null,
+        updatedByUserId: null,
+      }).revision,
+    ).toBe(0);
   });
 });
 
@@ -285,6 +328,20 @@ describe("auto-cleanup history schemas", () => {
     ).toEqual({ run: null, targets: [] });
     expect(
       worktreeGetAutoCleanupRunRequestSchema.safeParse({ runId: "" }).success,
+    ).toBe(false);
+  });
+
+  it("refuses targets orphaned from their run", () => {
+    // The absent-run answer is `{ run: null, targets: [] }` and nothing else.
+    // Targets without their summary are unrenderable - every count, threshold,
+    // and cutoff a client would explain them with lives on the run - so the
+    // contract refuses the pair rather than letting a GC that dropped a run
+    // mid-read reach the GUI as history with no context.
+    expect(
+      worktreeGetAutoCleanupRunResponseSchema.safeParse({
+        run: null,
+        targets: [target],
+      }).success,
     ).toBe(false);
   });
 
