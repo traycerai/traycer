@@ -251,6 +251,25 @@ export function createArtifactBodyLeaseBridge(options: {
       // because no bytes are being handed over. The worker's release is
       // idempotent for exactly the resend case the demote path needs an ack
       // for.
+      //
+      // NO BYTES are stranded by this arm, and that much is verified: on `@1`
+      // main's copy is a relay MIRROR - every local edit is posted through
+      // `body/update` the moment it is made, with no batching between the edit
+      // and the post, and `postMessage` FIFO puts all of them ahead of this
+      // release. By the time this runs the tier already holds what main held.
+      //
+      // But that answers the wrong half of the question, and this comment
+      // said so too confidently before the tests corrected it. Bytes are not
+      // the only reason a room must stay hot: a REMOTE COLLABORATOR pins it
+      // too, and unlike the demote path - where the tier can answer `pinned` -
+      // a release has no refusal channel, so nothing here can be told. A `@1`
+      // room with a peer present is therefore released while the tier still
+      // considers it pinned.
+      //
+      // KNOWN GAP, deliberately left visible rather than papered over: closing
+      // it means giving the release an answer (which makes it a call) or
+      // giving main the pin state another way, and that is a contract change
+      // rather than a fix to make in passing.
       entry.demotingGeneration = null;
       entries.delete(docKey);
       options.releaseForwardOnly(docKey);
@@ -283,7 +302,28 @@ export function createArtifactBodyLeaseBridge(options: {
           // entry pending, so a later resend can settle it - a declined demote
           // that silently dropped the doc is the same data loss as an accepted
           // one that never arrived.
-          if (!answer.accepted) return;
+          if (!answer.accepted) {
+            // REFUSED. The doc stays live - that has always been the contract -
+            // but it must also be RETRIED, or a refusal is a wedge: the entry
+            // sits pending with no timer and nothing ever posts for it again.
+            // That is the leak in the other direction from the one the linger
+            // fixed, and it is reachable by the ordinary case now that `pinned`
+            // is a refusal: a room with a remote collaborator in it refuses
+            // every demote until they leave, which may be hours.
+            //
+            // `demotingGeneration` is deliberately NOT cleared. It is what
+            // keeps this doc in `unacknowledgedDemoteKeys`, and that set is
+            // read by `resendUnacknowledgedDemotes` after a worker respawn -
+            // so clearing it would narrow the died-mid-demote coverage to buy
+            // the retry, when both are wanted and they are not exclusive.
+            //
+            // The two cover different failures and compose safely: the resend
+            // re-posts the SAME generation, while a linger expiry bumps to a
+            // fresh one, and the tier answers whichever it sees last while the
+            // generation check makes the superseded ack a no-op.
+            armLinger(docKey);
+            return;
+          }
           entry.demotingGeneration = null;
           entries.delete(docKey);
           options.budget.settleCold(docKey, answer.settledBytes);
@@ -506,20 +546,33 @@ export function createArtifactBodyLeaseBridge(options: {
       if (entry.demotingGeneration !== null) return;
       // ...nor arm a second linger for a doc already inside one.
       if (entry.lingerTimer !== null) return;
-      entry.lingerTimer = options.scheduler.schedule(options.lingerMs, () => {
-        // Re-read rather than closing over `entry`: the window is long enough
-        // for the doc to have been dropped entirely, and a timer that resolved
-        // against a stale object would post for a body that no longer exists.
-        const current = entries.get(docKey);
-        if (current === undefined) return;
-        current.lingerTimer = null;
-        // A re-acquire inside the window cancels this timer, but a cancel that
-        // raced the fire still lands here - so the lease count decides, not the
-        // fact that the timer ran.
-        if (current.leases > 0) return;
-        postLifecycleEnd(docKey, current);
-      });
+      armLinger(docKey);
     };
+  }
+
+  /**
+   * Start (or restart) one doc's linger window.
+   *
+   * Shared by the last-lease release and by a REFUSED demote, because the two
+   * want exactly the same thing: hold the doc, and look again in a window. A
+   * refusal that did not re-arm would wedge the entry pending for ever.
+   */
+  function armLinger(docKey: string): void {
+    const entry = entries.get(docKey);
+    if (entry === undefined || entry.lingerTimer !== null) return;
+    entry.lingerTimer = options.scheduler.schedule(options.lingerMs, () => {
+      // Re-read rather than closing over `entry`: the window is long enough
+      // for the doc to have been dropped entirely, and a timer that resolved
+      // against a stale object would post for a body that no longer exists.
+      const current = entries.get(docKey);
+      if (current === undefined) return;
+      current.lingerTimer = null;
+      // A re-acquire inside the window cancels this timer, but a cancel that
+      // raced the fire still lands here - so the lease count decides, not the
+      // fact that the timer ran.
+      if (current.leases > 0) return;
+      postLifecycleEnd(docKey, current);
+    });
   }
 }
 

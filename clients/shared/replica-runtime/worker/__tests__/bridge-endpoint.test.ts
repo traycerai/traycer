@@ -32,7 +32,11 @@ import type {
 type BodyDemoteAnswer = RuntimeWorkerCallResponse<"body/demote">;
 import { createFakeBridgePair } from "../test-support/fake-bridge-pair";
 
-const REFUSED: BodyDemoteAnswer = { accepted: false, settledBytes: 0 };
+const REFUSED: BodyDemoteAnswer = {
+  accepted: false,
+  settledBytes: 0,
+  reason: "not-held",
+};
 const DEMOTE_REQUEST = {
   docKey: "doc-1",
   generation: 1,

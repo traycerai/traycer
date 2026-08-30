@@ -122,8 +122,24 @@ export function createInProcessRuntimePort(
         hostStateVector: cold.hostStateVector,
       };
     },
-    "body/demote": (request) =>
-      source.settleColdState(request.docKey, request.update, request.docGuid),
+    "body/demote": (request) => {
+      const settlement = source.settleColdState(
+        request.docKey,
+        request.update,
+        request.docGuid,
+      );
+      // Shaped to the wire answer rather than returned raw: the settlement's
+      // refusal arm carries no `settledBytes`, and the response's does. Kept
+      // in step with the bridge port's own mapping - both ends answer the same
+      // three reasons, and `null` means accepted.
+      return settlement.accepted
+        ? {
+            accepted: true,
+            settledBytes: settlement.settledBytes,
+            reason: null,
+          }
+        : { accepted: false, settledBytes: 0, reason: settlement.reason };
+    },
     "body/update": (request) => ({
       outcome: source.sendBodyUpdate(request.docKey, request.update),
     }),

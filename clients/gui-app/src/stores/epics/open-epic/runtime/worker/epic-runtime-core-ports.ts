@@ -95,7 +95,11 @@ export interface EpicRuntimeCorePortSource {
     expectedDocGuid: string,
   ):
     | { readonly accepted: true; readonly settledBytes: number }
-    | { readonly accepted: false };
+    | {
+        readonly accepted: false;
+        /** WHY. Crosses the bridge so the seam stays readable - see the call. */
+        readonly reason: "not-held" | "newer-generation" | "pinned";
+      };
   sendBodyUpdate(docKey: string, update: Uint8Array): SendOutcome;
   renameArtifact(artifactId: string, nextTitle: string): boolean;
   deleteArtifact(artifactId: string): boolean;
@@ -375,10 +379,13 @@ export function buildEpicRuntimeCorePorts(
           input.update,
           input.docGuid,
         );
-        // The refusal REASON ("not-held" / "newer-generation") stops here: the
-        // response carries the verdict and the bytes, the main thread keeps
-        // the live doc on either refusal, and the in-process port drops it at
-        // the same seam.
+        // The refusal REASON now CROSSES. It stopped here while every refusal
+        // meant the same thing to main; `pinned` does not - it says the room
+        // is still in use and will settle later, where `newer-generation` says
+        // these bytes belong to a body that has been replaced. Main's
+        // behaviour is still identical for all three, so nothing branches on
+        // it; it crosses so the seam is readable when one arrives where
+        // another was expected.
         if (settlement.accepted) {
           detachBodyObserver(input.docKey);
           // Released ONLY on acceptance, and that asymmetry is the contract: a
@@ -390,8 +397,16 @@ export function buildEpicRuntimeCorePorts(
         }
         return Promise.resolve(
           settlement.accepted
-            ? { accepted: true, settledBytes: settlement.settledBytes }
-            : { accepted: false, settledBytes: 0 },
+            ? {
+                accepted: true,
+                settledBytes: settlement.settledBytes,
+                reason: null,
+              }
+            : {
+                accepted: false,
+                settledBytes: 0,
+                reason: settlement.reason,
+              },
         );
       },
       heldDocKeys: () => [...heldLeases.keys()],

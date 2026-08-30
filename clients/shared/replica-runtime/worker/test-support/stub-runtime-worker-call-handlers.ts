@@ -70,7 +70,7 @@ export function stubRuntimeWorkerCallHandlers(
     // a document whose bytes nothing stored.
     "body/demote": () =>
       Promise.resolve({
-        value: { accepted: false, settledBytes: 0 },
+        value: { accepted: false, settledBytes: 0, reason: "not-held" },
         transfer: NO_TRANSFER,
       }),
     "body/update": () =>

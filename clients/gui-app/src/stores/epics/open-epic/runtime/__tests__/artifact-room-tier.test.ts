@@ -994,3 +994,133 @@ describe("applyCoverage — the body lane's own retirement path for local diverg
     leaseOf(leaseGrant).release();
   });
 });
+
+/**
+ * The settle path REFUSES a pinned room — ruling (c).
+ *
+ * The hot doc's lifetime moved to the main thread, but two of the three pin
+ * arms read TIER state (local divergence, remote presence). Rather than copy
+ * the predicate across the bridge — where it would be a stale snapshot of an
+ * output — the predicate stays with the state it reads and reaches main
+ * through the refusal the demote contract already has. One predicate, one
+ * owner.
+ *
+ * The divergence arm is the one with a data-loss cost, and it is still real
+ * after the relocation: `flushPending` reads `replicas.get(artifactRoomId)`
+ * and RETURNS when the entry is absent, so the reconnect reconcile ships only
+ * from a LIVE replica. Settling a divergent room would move exactly those
+ * bytes into cold state, where the reconcile never looks — the edits are not
+ * dropped loudly, they are filed somewhere nothing reads.
+ */
+describe("settleColdState refuses a pinned room", () => {
+  const GUID = "guid-settle";
+
+  function seedRoomWithIdentity(
+    tier: ArtifactRoomTier,
+    artifactRoomId: string,
+  ): void {
+    const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
+    tier.applySnapshot({
+      artifactRoomId,
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: GUID,
+    });
+  }
+
+  it("ACCEPTS for an unpinned room, so the refusals below are not vacuous", () => {
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+    seedRoomWithIdentity(tier, "room-settle-clean");
+    leaseOf(tier.acquireSync("room-settle-clean")).release();
+
+    const settlement = tier.settleColdState(
+      "room-settle-clean",
+      makeSnapshotBytes("hello").bytes,
+      GUID,
+    );
+
+    expect(settlement.accepted).toBe(true);
+  });
+
+  it("refuses with `pinned` while the room holds unacknowledged edits", () => {
+    // THE data-loss pin. Ablate the `isPinnedByTierState` guard in
+    // `settleColdState` and this goes red - and in production those edits go
+    // cold where the reconcile cannot find them.
+    const { tier, session } = createHarness();
+    trackTierDisposal(tier);
+    seedRoomWithIdentity(tier, "room-settle-dirty");
+    const grant = tier.acquireSync("room-settle-dirty");
+    const entry = requireHotEntry(tier, "room-settle-dirty");
+    leaseOf(grant).release(); // divergence is the ONLY remaining arm
+
+    session.state.permissionRole = "owner";
+    entry.doc.getMap("body").set("local-edit", "1");
+    expect(entry.dirtyWatermarkStateVectorBase64).not.toBeNull();
+
+    const settlement = tier.settleColdState(
+      "room-settle-dirty",
+      makeSnapshotBytes("hello").bytes,
+      GUID,
+    );
+
+    expect(settlement.accepted).toBe(false);
+    expect(settlement.accepted === false ? settlement.reason : null).toBe(
+      "pinned",
+    );
+    // And the room is still live, which is what main relies on when it keeps
+    // its own copy and re-arms.
+    expect(tier.peek("room-settle-dirty")).not.toBeNull();
+  });
+
+  it("refuses with `pinned` while a remote collaborator is present", () => {
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+    seedRoomWithIdentity(tier, "room-settle-peer");
+    leaseOf(tier.acquireSync("room-settle-peer")).release();
+
+    tier.applyAwareness("room-settle-peer", remoteAwarenessFrame(555));
+
+    const settlement = tier.settleColdState(
+      "room-settle-peer",
+      makeSnapshotBytes("hello").bytes,
+      GUID,
+    );
+
+    expect(settlement.accepted).toBe(false);
+    expect(settlement.accepted === false ? settlement.reason : null).toBe(
+      "pinned",
+    );
+  });
+
+  it("settles once the pin clears, so a refusal is a delay and not a wedge", () => {
+    // The other half: a refusal that could never resolve would trade the leak
+    // the linger fixed for a doc that is never reclaimed at all.
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+    seedRoomWithIdentity(tier, "room-settle-clears");
+    leaseOf(tier.acquireSync("room-settle-clears")).release();
+
+    tier.applyAwareness("room-settle-clears", remoteAwarenessFrame(556));
+    expect(
+      tier.settleColdState(
+        "room-settle-clears",
+        makeSnapshotBytes("hello").bytes,
+        GUID,
+      ).accepted,
+    ).toBe(false);
+
+    // The peer leaves.
+    const entry = requireHotEntry(tier, "room-settle-clears");
+    entry.awareness.getStates().delete(556);
+
+    expect(
+      tier.settleColdState(
+        "room-settle-clears",
+        makeSnapshotBytes("hello").bytes,
+        GUID,
+      ).accepted,
+    ).toBe(true);
+  });
+});

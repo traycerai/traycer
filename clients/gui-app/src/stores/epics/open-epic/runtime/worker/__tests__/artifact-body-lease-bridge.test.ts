@@ -93,7 +93,14 @@ function createWorkerSide(
         docGuid,
         bytes: [...update],
         settle: (answer) => {
-          respond(answer);
+          // The wire answer carries a REASON now, and the decoder refuses a
+          // response missing it - correctly, since a verdict this side cannot
+          // read is not one to act on. Filled here so the tests keep stating
+          // only what they are about: accepted, or refused and why.
+          respond({
+            ...answer,
+            reason: answer.accepted ? null : "not-held",
+          });
         },
       });
     }
@@ -211,7 +218,7 @@ function setup() {
 
 describe("acquire / materialize", () => {
   it("installs the worker's bytes once and charges the doc hot", async () => {
-    const { leases, docs, budget, scheduler } = setup();
+    const { leases, docs, budget } = setup();
 
     const grant = await leases.acquire("artifact-1");
 

@@ -328,7 +328,7 @@ export type ArtifactRoomColdSettlement =
   | { readonly accepted: true; readonly settledBytes: number }
   | {
       readonly accepted: false;
-      readonly reason: "not-held" | "newer-generation";
+      readonly reason: "not-held" | "newer-generation" | "pinned";
     };
 
 export interface ArtifactRoomSnapshotInput {
@@ -807,16 +807,31 @@ export function createArtifactRoomTier(
    *    happened to move again. Presence is exactly what a shared room is for,
    *    so a room someone else is in is not a room worth reclaiming.
    */
-  function isPinned(artifactRoomId: string): boolean {
-    if (leaseCountOf(artifactRoomId) > 0) return true;
-    const entry = replicas.get(artifactRoomId);
-    if (entry === undefined) return false;
+  /**
+   * The pin arms that survive a RELEASED lease: local divergence and remote
+   * presence.
+   *
+   * Split out because the settle path must not consult the lease arm. A demote
+   * arrives precisely when main has let its lease go, but the worker's own
+   * hold is released only AFTER the settlement is accepted - so asking
+   * `isPinned` there reads a lease that is by construction still held, refuses
+   * every demote, and nothing ever settles again. The lease arm belongs to the
+   * caller's own bookkeeping; these two are the tier's.
+   */
+  function isPinnedByTierState(entry: ArtifactRoomReplicaEntry): boolean {
     if (hasRemotePeers(entry)) return true;
     return (
       entry.dirtyWatermarkStateVectorBase64 !== null ||
       entry.pendingReconcileUpdate !== null ||
       entry.pendingUpdates.length > 0
     );
+  }
+
+  function isPinned(artifactRoomId: string): boolean {
+    if (leaseCountOf(artifactRoomId) > 0) return true;
+    const entry = replicas.get(artifactRoomId);
+    if (entry === undefined) return false;
+    return isPinnedByTierState(entry);
   }
 
   function getOrCreateReplica(
@@ -1375,6 +1390,22 @@ export function createArtifactRoomTier(
         // history shares no ancestor with what is held now, so applying them
         // would splice two documents into one that no later frame can undo.
         return { accepted: false, reason: "newer-generation" };
+      }
+      // PINNED: this room must stay materialized, and settling would cool it.
+      //
+      // The lifetime moved to main, but the two remaining pin arms read TIER
+      // state - local divergence and remote presence - so the predicate stays
+      // with the state it reads and reaches main through this refusal, which
+      // the demote contract already has. Main's answer is the same as for any
+      // other refusal: keep the live doc, and re-arm.
+      //
+      // The divergence arm is the one with a data-loss cost, and it is still
+      // real post-flip: `flushPending` reads `replicas.get(artifactRoomId)` and
+      // RETURNS if the entry is absent, so the reconnect reconcile ships only
+      // from a LIVE replica. Settling a divergent room would put exactly those
+      // bytes into cold state, where the reconcile never looks.
+      if (isPinnedByTierState(entry)) {
+        return { accepted: false, reason: "pinned" };
       }
       Y.applyUpdate(entry.doc, update);
       // Measured from what is STORED, never from the input. A demote's caller

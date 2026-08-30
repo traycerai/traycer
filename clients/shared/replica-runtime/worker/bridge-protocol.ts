@@ -952,6 +952,19 @@ export interface RuntimeWorkerCallMap {
     readonly response: {
       readonly accepted: boolean;
       readonly settledBytes: number;
+      /**
+       * WHY a demote was refused. `null` when it was accepted.
+       *
+       * Main's behaviour is the same for every refusal - keep the live doc,
+       * re-arm the window - so this does not branch anything today. It crosses
+       * because the reasons are not interchangeable to a READER: `pinned` says
+       * the room is still in use and will settle later, `newer-generation`
+       * says these bytes belong to a body that has been replaced, and
+       * `not-held` says the worker has nothing to settle into. A demote
+       * refused for identity where you expected pinned is a real bug, and
+       * without this it is indistinguishable at the seam.
+       */
+      readonly reason: "not-held" | "newer-generation" | "pinned" | null;
     };
   };
   /**
@@ -1494,9 +1507,22 @@ export const CALL_RESPONSE_PARSERS: {
   },
   "body/demote": (value) => {
     if (!isRecord(value)) return null;
-    const { accepted, settledBytes } = value;
+    const { accepted, settledBytes, reason } = value;
     if (typeof accepted !== "boolean") return null;
-    return typeof settledBytes === "number" ? { accepted, settledBytes } : null;
+    if (typeof settledBytes !== "number") return null;
+    // NARROWED, not passed through: the reason is a closed set, and a foreign
+    // string reaching a reader that switches on it would be a silent default
+    // rather than a refusal. An unrecognised value is REFUSED here, because a
+    // demote answer whose verdict we cannot read is not one to act on.
+    if (
+      reason !== null &&
+      reason !== "not-held" &&
+      reason !== "newer-generation" &&
+      reason !== "pinned"
+    ) {
+      return null;
+    }
+    return { accepted, settledBytes, reason };
   },
   "body/update": (value) => {
     if (!isRecord(value)) return null;
