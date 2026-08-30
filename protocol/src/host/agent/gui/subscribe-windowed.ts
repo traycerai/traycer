@@ -676,6 +676,8 @@ export const chatTranscriptWindowSchema = z.object({
    * rows", which is a real and different state.
    */
   rowIds: z.array(z.string()).optional(),
+  /** Rows whose required record set is incomplete in this tail. */
+  incompleteRowIds: z.array(z.string()).optional(),
   messages: z.array(messageSchema),
   events: z.array(chatEventSchema),
   /**
@@ -800,6 +802,8 @@ export const chatRangeResponseSchema = z.object({
    * row - see `row-projection.ts`.
    */
   rowIds: z.array(z.string()),
+  /** Rows whose required record set is incomplete in this response. */
+  incompleteRowIds: z.array(z.string()).optional(),
   /**
    * The DEDUPLICATED union of records the served rows render from - not a
    * parallel array to `rowIds`. A turn's records appear once however many of

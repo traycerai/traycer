@@ -116,6 +116,8 @@ export const runnerMutationKeys = {
   pushPermissionRequest: () => ["runner.pushPermission.request"] as const,
   pushPermissionOpenSettings: () =>
     ["runner.pushPermission.openSettings"] as const,
+  notificationSystemSettingsOpen: () =>
+    ["runner.notifications.systemSettings.open"] as const,
 };
 
 const runnerHostQueryScopeIds = new WeakMap<object, number>();

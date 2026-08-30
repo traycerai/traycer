@@ -1,15 +1,61 @@
 import { useCallback } from "react";
 import { AlertTriangle } from "lucide-react";
+import { ENV_CREDENTIAL_AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { Button } from "@/components/ui/button";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { buildReportIssueDraftContext } from "@/lib/report-issue-draft-context";
 import { capturePersistedAgentError } from "@/lib/report-issue-error-capture";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+
+/**
+ * The remedy for an env-credential auth failure, next to the row that names it.
+ *
+ * The message says which variable authenticated the turn; this is where the user
+ * goes to stop it. The destination is the provider's **Env** tab, where an
+ * explicit "Unset" row for that variable drops it from the harness spawn without
+ * touching the user's shell - the one fix that actually works, and the one no
+ * amount of re-signing-in could substitute for.
+ *
+ * The deep link rides the existing providers-focus intent (the same mechanism
+ * the re-auth banner and the "Add API key" CTA use), so this adds no navigation
+ * plumbing of its own. Without a known harness the intent is skipped and the
+ * user lands on the Providers section root rather than an arbitrary provider's
+ * settings - a shorter trip to the right place beats a confident wrong one.
+ */
+function EnvCredentialSettingsAction({
+  harnessId,
+}: {
+  readonly harnessId: GuiHarnessId | null;
+}) {
+  const { openSettings } = useSystemTabModalActions();
+  const onClick = useCallback(() => {
+    if (harnessId !== null) {
+      const focus = useProvidersFocusStore.getState();
+      focus.setFocusHarnessId(harnessId);
+      focus.setFocusTab("env");
+    }
+    openSettings({ section: "providers", resetToGeneral: false });
+  }, [harnessId, openSettings]);
+  return (
+    <div className="mt-1 flex">
+      <Button size="sm" variant="secondary" onClick={onClick}>
+        Manage environment variables
+      </Button>
+    </div>
+  );
+}
 
 interface ErrorSegmentProps {
   message: string;
   code: string | null;
   recoverable: boolean;
   findUnitId: string | null;
+  /** Harness that ran the turn, so a provider-scoped remedy can deep-link to
+   *  the right provider. `null` on legacy rows with no turn metadata. */
+  harnessId: GuiHarnessId | null;
 }
 
 // Static error row. Auth errors (`code: "auth"`) render here like any other
@@ -20,6 +66,7 @@ export function ErrorSegment({
   findUnitId,
   message,
   recoverable,
+  harnessId,
 }: ErrorSegmentProps) {
   // Built at CLICK time, never at render. This row is durable transcript: it
   // mounts whenever the chat is opened, which is one or more commits BEFORE
@@ -75,6 +122,9 @@ export function ErrorSegment({
           <span className="whitespace-pre-wrap break-words text-foreground/90">
             {message}
           </span>
+          {code === ENV_CREDENTIAL_AUTH_ERROR_CODE ? (
+            <EnvCredentialSettingsAction harnessId={harnessId} />
+          ) : null}
         </div>
         <ReportIssueAction
           context={buildReportContext}

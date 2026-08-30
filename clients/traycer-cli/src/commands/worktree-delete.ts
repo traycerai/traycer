@@ -4,7 +4,7 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import {
-  worktreeDeleteByPathServerFrameSchemaV11,
+  worktreeDeleteByPathServerFrameSchemaV12,
   type WorktreeDeleteOutputChannel,
 } from "@traycer/protocol/host/worktree-delete-stream";
 import type { WorktreeBusyHolders } from "@traycer/protocol/framework/worktree-busy-holders";
@@ -320,15 +320,13 @@ async function runLegacyDeleteStream(
       act();
     };
     session.onServerFrame((envelope) => {
-      // The CANONICAL v1.1 frame, not the v1.0 base schema. v1.1 added
-      // `holders` to the `failed` arm - the typed inventory naming which chats
-      // and terminal agents still hold the worktree. It is declared
-      // `.optional().catch(undefined)` so that adding it could never reject an
-      // older envelope, which also means a v1.0 decode drops it silently
-      // instead of failing: the busy refusal kept its prose `reason` and lost
-      // the one part a caller could act on.
+      // The CANONICAL v1.2 frame, not a frozen earlier schema. v1.1 added
+      // `holders` to the `failed` arm; v1.2 added optional `code` and
+      // `holdersRevision`. Those fields are optional-with-catch so an older
+      // envelope still parses, and a stale v1.1 decode would silently drop
+      // the 1.2 fields instead of failing.
       const parsed =
-        worktreeDeleteByPathServerFrameSchemaV11.safeParse(envelope);
+        worktreeDeleteByPathServerFrameSchemaV12.safeParse(envelope);
       if (!parsed.success) return;
       const frame = parsed.data;
       switch (frame.kind) {

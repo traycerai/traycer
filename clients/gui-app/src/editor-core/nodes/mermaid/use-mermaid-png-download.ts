@@ -8,6 +8,7 @@ import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { appLogger } from "@/lib/logger";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 
 export interface UseMermaidPngDownloadParams {
   readonly svg: string;
@@ -27,6 +28,7 @@ export function useMermaidPngDownload(
   params: UseMermaidPngDownloadParams,
 ): UseMermaidPngDownloadResult {
   const { svg, enabled } = params;
+  const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
   const { mutate, isPending } = useMutation<
     SavedFile | null,
@@ -40,11 +42,11 @@ export function useMermaidPngDownload(
         svg: input.svg,
         backgroundColor: palette.background,
       });
-      return saveBlobToDisk(blob, "mermaid-diagram.png");
+      return saveBlobToDisk(blob, "mermaid-diagram.png", fileSave);
     },
     onSuccess: (saved) => {
       if (saved !== null) {
-        toastSavedFile(saved, openSaved.mutate);
+        toastSavedFile(saved, openSaved.mutate, fileSave);
       }
     },
     onError: (err) => {

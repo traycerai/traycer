@@ -19,7 +19,7 @@ export type UsageChartOption = ComposeOption<
 >;
 
 /**
- * Every color in the option is a `var(--usage-series-N)` / theme-token
+ * Every color in the option is a series/harness CSS variable or theme token
  * REFERENCE, never a resolved value: the chart renders through ECharts' SVG
  * renderer, which writes these strings into DOM attributes and inline
  * styles where Chromium resolves them live against `.usage-chart-root`'s
@@ -154,7 +154,7 @@ export interface UsageTooltipEntry {
  * The axis tooltip's body. Zero-value entries are dropped - a series the
  * legend filter zeroed out (or that simply had no usage that day) must not
  * pad the list, matching the old per-bar tooltip's behavior. The tooltip
- * element mounts INSIDE the chart container, so `var(--usage-series-N)`
+ * element mounts INSIDE the chart container, so usage palette variables
  * marker colors resolve against the same scoped palette as the areas.
  */
 export function buildUsageTooltipHtml(

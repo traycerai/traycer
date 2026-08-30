@@ -294,6 +294,10 @@ export class MockRunnerHost implements IRunnerHost {
     },
     readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
+  // No native save surface to stand in for: this shell runs in a browser tab,
+  // where gui-app's own File System Access / `<a download>` legs are already
+  // the real answer.
+  readonly fileSave: null = null;
   readonly service: null = null;
   readonly traycerCli: ITraycerCli | null;
   readonly migration: null = null;
@@ -805,6 +809,7 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   readonly notifications: INotificationHost = {
+    systemSettings: null,
     show: async (
       title: string,
       body: string,

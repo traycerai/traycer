@@ -175,6 +175,12 @@ export class WebRunnerHost implements IRunnerHost {
     ): Promise<readonly string[]> => paths,
     readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
+  /**
+   * No native save route in a tab, and `null` is not a degradation here: the
+   * File System Access API and `<a download>` are exactly what gui-app falls
+   * back to when a shell reports none.
+   */
+  readonly fileSave: null = null;
   readonly zoom = null;
   readonly service = null;
   readonly traycerCli = null;
@@ -868,6 +874,9 @@ function buildSecureStorage(storage: WebCredentialStorage): ISecureStorage {
 
 function buildNotifications(): INotificationHost {
   return {
+    // Native OS notification preferences are a desktop-app surface; a tab has
+    // no page of its own to open, so the contract's browser answer is `null`.
+    systemSettings: null,
     // `show` is a no-op that reports `presented`, matching the phone shell.
     // v1 wires no Web Notification adapter, so the in-app bell is the alert
     // surface - and `presented` (rather than `undeliverable`) is what stops

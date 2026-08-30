@@ -355,7 +355,7 @@ describe("<EpicUsageDialog />", () => {
     const dot = screen
       .getByTestId("usage-harness-split-row-claude")
       .querySelector("span");
-    expect(dot?.style.backgroundColor).toBe("var(--usage-series-1)");
+    expect(dot?.style.backgroundColor).toBe("var(--usage-harness-claude)");
   });
 
   it("routes an empty window to the empty state, offering only wider windows", async () => {
@@ -667,6 +667,9 @@ describe("<EpicUsageDialog />", () => {
       expect(mocks.saveBlobToDisk).toHaveBeenCalledWith(
         blob,
         "traycer-usage-7d.png",
+        // This harness mounts no runner host, so there is no native save
+        // route and the save falls through to the browser APIs.
+        null,
       );
     });
     expect(mocks.captureUsageExportImageBlob).toHaveBeenCalledWith({

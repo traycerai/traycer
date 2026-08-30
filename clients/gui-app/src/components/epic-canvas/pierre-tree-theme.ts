@@ -43,7 +43,32 @@ export const GIT_PANEL_PIERRE_FILE_TREE_THEME_STYLE = {
   "--trees-selected-fg-override": "var(--accent-foreground)",
 } as CSSProperties;
 
+/**
+ * Pierre detects middle-truncation by asking whether a hidden measurement
+ * container is taller than one line. At fractional browser zoom levels that
+ * measurement can exceed `1lh` by a subpixel even when the name fits, which
+ * makes the library paint both ellipsis markers over otherwise roomy rows.
+ *
+ * Keep the workaround at the library boundary: `unsafeCSS` is injected after
+ * Pierre's own styles, so this repeats its marker rule with a one-physical-px
+ * rounding allowance. A genuinely wrapped name is taller by a full line and
+ * still clears the threshold.
+ */
+export const PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS = `
+[data-truncate-marker] {
+  opacity: 0;
+}
+
+@container measure (height > calc(1lh + 1px)) {
+  [data-truncate-marker] {
+    opacity: 1;
+  }
+}
+`;
+
 export const GIT_PANEL_PIERRE_FILE_TREE_UNSAFE_CSS = `
+${PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS}
+
 [data-item-type="file"] [data-item-section="icon"] {
   opacity: 0.9;
 }

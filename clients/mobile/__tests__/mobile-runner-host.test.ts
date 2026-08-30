@@ -254,6 +254,9 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     deviceDescriber: null,
     linkLoginDeepLinks: null,
     hasAppTabs: true,
+    // The native save leg has its own suite (`file-save.test.ts`); `null` is
+    // the dev-web answer, and keeps the plugin pair out of these tests.
+    fileSave: null,
   });
 }
 
@@ -322,6 +325,7 @@ function phoneRunner(input: {
     deviceDescriber: null,
     linkLoginDeepLinks: null,
     hasAppTabs: true,
+    fileSave: null,
   });
 }
 

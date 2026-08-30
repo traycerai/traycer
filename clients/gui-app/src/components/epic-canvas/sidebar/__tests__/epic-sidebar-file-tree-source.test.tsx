@@ -210,6 +210,7 @@ let capturedOnSelectionChange: ((paths: ReadonlyArray<string>) => void) | null =
 // panel could be asked afterwards.
 let capturedItemHeight: number | undefined = undefined;
 let capturedDensity: string | undefined = undefined;
+let capturedUnsafeCSS: string | undefined = undefined;
 // How many times the model was CONSTRUCTED. The panel used to remount across
 // the breakpoint to rebuild a touch-sized model; with one geometry everywhere
 // there is nothing to rebuild, and this is what tells a surviving tree apart
@@ -363,8 +364,10 @@ vi.mock("@pierre/trees/react", () => ({
     readonly onSelectionChange: (paths: ReadonlyArray<string>) => void;
     readonly itemHeight: number | undefined;
     readonly density: string;
+    readonly unsafeCSS: string | undefined;
   }) => {
     capturedOnSelectionChange = options.onSelectionChange;
+    capturedUnsafeCSS = options.unsafeCSS;
     // Mount-captured, exactly like the real hook's `useState(() => new
     // FileTree(options))`. Recording it per RENDER instead would make the row
     // geometry look reactive here when it is not, and the viewport-transition
@@ -1521,6 +1524,7 @@ describe("file tree on a touch viewport", () => {
     capturedOnSelectionChange = null;
     capturedItemHeight = undefined;
     capturedDensity = undefined;
+    capturedUnsafeCSS = undefined;
     modelConstructionCount = 0;
     installSearchHost({});
     __resetWorkspaceFileListSubscriptionsForTesting();
@@ -1565,6 +1569,12 @@ describe("file tree on a touch viewport", () => {
 
     expect(capturedItemHeight).toBeUndefined();
     expect(capturedDensity).toBe("compact");
+  });
+
+  it("gives Pierre a fractional-zoom tolerance for truncation measurement", () => {
+    renderPanel(new MockWsStreamClient("unknown"));
+
+    expect(capturedUnsafeCSS).toContain("height > calc(1lh + 1px)");
   });
 
   it("recycles the single preview tile for a tapped row rather than accumulating one per file", () => {

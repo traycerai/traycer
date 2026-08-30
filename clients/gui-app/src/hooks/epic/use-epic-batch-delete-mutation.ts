@@ -173,6 +173,7 @@ export function useEpicBatchDelete(): UseMutationResult<
             paths: eligibleWorktreePaths,
             source: "task_cleanup",
             stopOwnersPaths: new Set(),
+            expectedHoldersRevisionByPath: new Map(),
           }).then((outcome) => {
             emitTaskDeleteSummaryToast(epicToast, outcome);
             invalidateWorktreeCachesForHost(queryClient, hostId);

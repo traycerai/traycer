@@ -257,6 +257,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -893,6 +894,9 @@ describe("useRenderedMessages", () => {
       reasoningEffort: "high",
       reasoningEffortLabel: "Resolved high",
       serviceTier: "priority",
+      // Null, not absent: this fixture's record carries no env credential, and
+      // that IS the claim "the profile sign-in ran the turn".
+      envCredentialVar: null,
       costUsd: null,
     });
   });
