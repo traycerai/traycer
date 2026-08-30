@@ -91,8 +91,15 @@ export interface EpicRuntimeCorePorts {
       readonly docGuid: string;
       readonly update: Uint8Array;
     }): Promise<{ readonly accepted: boolean; readonly settledBytes: number }>;
-    /** Relay a local presence frame to the arm's presence mechanism. */
-    applyAwareness(docKey: string, frame: Uint8Array): void;
+    /**
+     * Relay a local presence frame to the arm's presence mechanism, under the
+     * main-side `Awareness.clientID` it speaks for.
+     */
+    applyAwareness(
+      docKey: string,
+      frame: Uint8Array,
+      localClientId: number,
+    ): void;
     /** Hand a local edit to the body lane. The lane's verdict is the answer. */
     sendUpdate(input: {
       readonly docKey: string;
@@ -227,9 +234,9 @@ export function createEpicRuntimeWorkerCore(
       if (!serving) return Promise.resolve({ outcome: "refused" as const });
       return Promise.resolve(ports.commands.enqueueWrite(intent));
     },
-    applyBodyAwareness(docKey, frame): void {
+    applyBodyAwareness(docKey, frame, localClientId): void {
       if (!serving) return;
-      ports.bodies.applyAwareness(docKey, frame);
+      ports.bodies.applyAwareness(docKey, frame, localClientId);
     },
     applyCommand(command): void {
       // Dropped after teardown like every other member. A command applied to a

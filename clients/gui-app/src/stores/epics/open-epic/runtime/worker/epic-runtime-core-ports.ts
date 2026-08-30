@@ -60,9 +60,35 @@ export interface EpicRuntimeCorePortSource {
    * here would be a second thing to keep in step with that one, and the two
    * would drift.
    */
-  observeBodyDoc(docKey: string, onUpdate: (update: Uint8Array) => void): () => void;
-  /** Relay a local presence frame for one body to the arm. */
-  applyBodyAwareness(docKey: string, frame: Uint8Array): void;
+  observeBodyDoc(
+    docKey: string,
+    onUpdate: (update: Uint8Array) => void,
+  ): () => void;
+  /**
+   * Relay a local presence frame for one body to the arm.
+   *
+   * `localClientId` is the main-side `Awareness.clientID` the frame speaks
+   * for; the room excludes it from its remote-peer pin. See the runtime
+   * member and `ArtifactRoomReplicaEntry.relayedLocalClientId`.
+   */
+  applyBodyAwareness(
+    docKey: string,
+    frame: Uint8Array,
+    localClientId: number,
+  ): void;
+  /**
+   * Observe a materialized room's presence. Returns the detach.
+   *
+   * The mirror of {@link observeBodyDoc}, with ONE difference that is not
+   * cosmetic: the source DOES filter here, dropping frames it relayed in
+   * itself. Presence has no equivalent of a Yjs no-op re-apply - handing main
+   * back its own state would resurrect a cursor it had just removed - so that
+   * cut is made where the origin is still known, not left to main.
+   */
+  observeBodyAwareness(
+    docKey: string,
+    onFrame: (frame: Uint8Array) => void,
+  ): () => void;
   settleColdState(
     docKey: string,
     update: Uint8Array,
@@ -155,10 +181,24 @@ function readPendingChatCreation(value: unknown): PendingChatCreation | null {
   return { chatId, hostId, parentChatId, title, ownerUserId };
 }
 
+/**
+ * Where a resident body's return traffic goes: `body/doc-in` to main's live
+ * doc, `body/awareness-in` to main's `Awareness`.
+ *
+ * A NAMED pair rather than two positional callbacks, because the two have the
+ * identical shape `(docKey, Uint8Array) => void` - passing them in the wrong
+ * order compiles clean and silently feeds document updates into a presence
+ * channel, where they decode as garbage or as nothing at all. There is no
+ * type that catches that; a field name is.
+ */
+export interface EpicRuntimeBodyReturnLeg {
+  readonly onDocUpdate: (docKey: string, update: Uint8Array) => void;
+  readonly onAwareness: (docKey: string, frame: Uint8Array) => void;
+}
+
 export function buildEpicRuntimeCorePorts(
   source: EpicRuntimeCorePortSource,
-  /** Where a resident body's updates go: `body/doc-in`, to main's live doc. */
-  onBodyDocUpdate: (docKey: string, update: Uint8Array) => void,
+  returnLeg: EpicRuntimeBodyReturnLeg,
 ): EpicRuntimeCorePorts {
   /**
    * One retained release per resident `docKey`.
@@ -170,22 +210,34 @@ export function buildEpicRuntimeCorePorts(
   const heldLeases = new Map<string, () => void>();
 
   /**
-   * One doc observer per resident docKey, detached at THREE corners: an
-   * accepted demote, a drop, and core dispose. The third is the one that gets
-   * forgotten - a worker tearing down with observers attached is the same
-   * shape as the pending-await park, and this leak is worse to find because
-   * the tier, the projection and the tile all look correct throughout it.
+   * The return-leg observers per resident docKey - doc AND presence, behind
+   * ONE composite detach.
+   *
+   * Kept as a single entry rather than two maps so the two can never be
+   * detached at different corners: they are attached together and released
+   * together, and a room whose doc stopped being watched while its presence
+   * was not is a half-live room no assertion is looking for.
+   *
+   * Detached at THREE corners: an accepted demote, a drop, and core dispose.
+   * The third is the one that gets forgotten - a worker tearing down with
+   * observers attached is the same shape as the pending-await park, and this
+   * leak is worse to find because the tier, the projection and the tile all
+   * look correct throughout it.
    */
   const bodyObservers = new Map<string, () => void>();
 
   function attachBodyObserver(docKey: string): void {
     if (bodyObservers.has(docKey)) return;
-    bodyObservers.set(
-      docKey,
-      source.observeBodyDoc(docKey, (update) => {
-        onBodyDocUpdate(docKey, update);
-      }),
-    );
+    const detachDoc = source.observeBodyDoc(docKey, (update) => {
+      returnLeg.onDocUpdate(docKey, update);
+    });
+    const detachAwareness = source.observeBodyAwareness(docKey, (frame) => {
+      returnLeg.onAwareness(docKey, frame);
+    });
+    bodyObservers.set(docKey, () => {
+      detachDoc();
+      detachAwareness();
+    });
   }
 
   function detachBodyObserver(docKey: string): void {
@@ -278,8 +330,8 @@ export function buildEpicRuntimeCorePorts(
           // other way across now.
           const live = source.encodeForwardOnly(docKey);
           if (live !== null) {
-              attachBodyObserver(docKey);
-          if (heldLeases.has(docKey)) release();
+            attachBodyObserver(docKey);
+            if (heldLeases.has(docKey)) release();
             else heldLeases.set(docKey, release);
             return Promise.resolve({
               docKey,
@@ -342,8 +394,8 @@ export function buildEpicRuntimeCorePorts(
             : { accepted: false, settledBytes: 0 },
         );
       },
-      applyAwareness: (docKey, frame) => {
-        source.applyBodyAwareness(docKey, frame);
+      applyAwareness: (docKey, frame, localClientId) => {
+        source.applyBodyAwareness(docKey, frame, localClientId);
       },
       sendUpdate: (input) =>
         Promise.resolve(source.sendBodyUpdate(input.docKey, input.update)),

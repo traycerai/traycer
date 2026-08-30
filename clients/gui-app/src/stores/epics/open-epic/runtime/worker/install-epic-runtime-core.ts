@@ -53,19 +53,19 @@ export function buildProxiedRuntimeFactories(
   host: EpicRuntimeWorkerHost,
 ): EpicRuntimeStreamFactories {
   return buildProxiedStreamFactories({
-      streams: host.streams.client,
-      support: (method) => {
-        const manifest = host.streams.manifest();
-        if (manifest === null) return "unknown";
-        const entry = manifest.methodSupport.find(
-          (candidate) => candidate.method === method,
-        );
-        // `unknown` for a method the manifest does not name, which is the same
-        // answer the relay's client gives forever and which selection already
-        // treats as "not a selection". Not `unsupported`: that would be a
-        // claim, and this is an absence.
-        return entry === undefined ? "unknown" : entry.support;
-      },
+    streams: host.streams.client,
+    support: (method) => {
+      const manifest = host.streams.manifest();
+      if (manifest === null) return "unknown";
+      const entry = manifest.methodSupport.find(
+        (candidate) => candidate.method === method,
+      );
+      // `unknown` for a method the manifest does not name, which is the same
+      // answer the relay's client gives forever and which selection already
+      // treats as "not a selection". Not `unsupported`: that would be a
+      // claim, and this is an absence.
+      return entry === undefined ? "unknown" : entry.support;
+    },
     subscribeSupport: (listener) => host.streams.subscribeManifest(listener),
   });
 }
@@ -134,86 +134,98 @@ export function installEpicRuntimeCore(
       createEpicRuntimeWorkerCore(
         buildEpicRuntimeCorePorts(
           {
-          hasAttachmentBytes: (hash) => runtime.hasAttachmentBytes(hash),
-          readAttachmentBytes: (hash, signal) =>
-            runtime.readAttachmentBytes(hash, signal),
-          acquireBodyLease: (artifactId) =>
-            runtime.acquireArtifactBodyLease(artifactId),
-          bodyDocKey: (artifactId) => runtime.getArtifactBodyDocKey(artifactId),
-          encodeColdState: (docKey) =>
-            runtime.encodeArtifactBodyColdState(docKey),
-          encodeForwardOnly: (docKey) =>
-            runtime.encodeArtifactBodyForwardOnly(docKey),
-          observeBodyDoc: (docKey, onUpdate) =>
-            runtime.observeArtifactBodyDoc(docKey, onUpdate),
-          applyBodyAwareness: (docKey, frame) => {
-            runtime.sendArtifactBodyAwareness(docKey, frame);
+            hasAttachmentBytes: (hash) => runtime.hasAttachmentBytes(hash),
+            readAttachmentBytes: (hash, signal) =>
+              runtime.readAttachmentBytes(hash, signal),
+            acquireBodyLease: (artifactId) =>
+              runtime.acquireArtifactBodyLease(artifactId),
+            bodyDocKey: (artifactId) =>
+              runtime.getArtifactBodyDocKey(artifactId),
+            encodeColdState: (docKey) =>
+              runtime.encodeArtifactBodyColdState(docKey),
+            encodeForwardOnly: (docKey) =>
+              runtime.encodeArtifactBodyForwardOnly(docKey),
+            observeBodyDoc: (docKey, onUpdate) =>
+              runtime.observeArtifactBodyDoc(docKey, onUpdate),
+            applyBodyAwareness: (docKey, frame, localClientId) => {
+              runtime.sendArtifactBodyAwareness(docKey, frame, localClientId);
+            },
+            observeBodyAwareness: (docKey, onFrame) =>
+              runtime.observeArtifactBodyAwareness(docKey, onFrame),
+            settleColdState: (docKey, update, expectedDocGuid) =>
+              runtime.settleArtifactBodyColdState(
+                docKey,
+                update,
+                expectedDocGuid,
+              ),
+            sendBodyUpdate: (docKey, update) =>
+              runtime.sendArtifactBodyUpdate(docKey, update),
+            renameArtifact: (artifactId, nextTitle) =>
+              runtime.renameArtifact(artifactId, nextTitle),
+            deleteArtifact: (artifactId) => runtime.deleteArtifact(artifactId),
+            reparentArtifact: (artifactId, newParentId) =>
+              runtime.reparentArtifact(artifactId, newParentId),
+            beginRenameMutation: (nodeId, nextTitle) =>
+              runtime.beginRenameMutation(nodeId, nextTitle),
+            beginEpicTitleMutation: (nextTitle) =>
+              runtime.beginEpicTitleMutation(nextTitle),
+            beginReparentMutation: (nodeId, newParentId) =>
+              runtime.beginReparentMutation(nodeId, newParentId),
+            retirePendingMutation: (requestId, outcome) =>
+              runtime.retirePendingMutation(requestId, outcome),
+            isLatestRenameStamp: (nodeId, requestId) =>
+              runtime.isLatestRenameStamp(nodeId, requestId),
+            enqueueWriteCommand: (intent) =>
+              runtime.enqueueWriteCommand(intent)?.commandId ?? null,
+            readWriteCommandIntent: (intent) => readWriteCommandIntent(intent),
+            applyChatRecords: (records, issuedAtSeq) =>
+              runtime.applyChatRecords(records, issuedAtSeq),
+            applyChatRecordDelta: (delta) =>
+              runtime.applyChatRecordDelta(delta),
+            applyTuiAgentRecords: (records, issuedAtSeq) =>
+              runtime.applyTuiAgentRecords(records, issuedAtSeq),
+            applyTuiAgentRecordDelta: (delta) =>
+              runtime.applyTuiAgentRecordDelta(delta),
+            markChatRecordListAuthoritative: () =>
+              runtime.markChatRecordListAuthoritative(),
+            markChatRecordListNotAuthoritative: () =>
+              runtime.markChatRecordListNotAuthoritative(),
+            beginPendingChatCreation: (pending) =>
+              runtime.beginPendingChatCreation(pending),
+            clearPendingChatCreation: (chatId) =>
+              runtime.clearPendingChatCreation(chatId),
+            republishRecordsForCurrentUser: () =>
+              runtime.republishRecordsForCurrentUser(),
+            reprojectForViewerChange: () => runtime.reprojectForViewerChange(),
+            discardUnsyncedEdits: () => runtime.discardUnsyncedEdits(),
+            requestFreshSnapshot: () => runtime.requestFreshSnapshot(),
+            retryMigration: () => runtime.retryMigration(),
+            retryWriteCommand: (commandId) =>
+              runtime.retryWriteCommand(commandId),
+            discardWriteCommand: (commandId) =>
+              runtime.discardWriteCommand(commandId),
+            encodeRootState: () => runtime.encodeRootState(),
+            applyRootUpdate: (update, asLocalEdit) =>
+              runtime.applyRootUpdate(update, asLocalEdit),
+            detachTransport: () => {
+              runtime.detachTransport();
+            },
+            dispose: () => {
+              runtime.dispose();
+            },
           },
-          settleColdState: (docKey, update, expectedDocGuid) =>
-            runtime.settleArtifactBodyColdState(
-              docKey,
-              update,
-              expectedDocGuid,
-            ),
-          sendBodyUpdate: (docKey, update) =>
-            runtime.sendArtifactBodyUpdate(docKey, update),
-          renameArtifact: (artifactId, nextTitle) =>
-            runtime.renameArtifact(artifactId, nextTitle),
-          deleteArtifact: (artifactId) => runtime.deleteArtifact(artifactId),
-          reparentArtifact: (artifactId, newParentId) =>
-            runtime.reparentArtifact(artifactId, newParentId),
-          beginRenameMutation: (nodeId, nextTitle) =>
-            runtime.beginRenameMutation(nodeId, nextTitle),
-          beginEpicTitleMutation: (nextTitle) =>
-            runtime.beginEpicTitleMutation(nextTitle),
-          beginReparentMutation: (nodeId, newParentId) =>
-            runtime.beginReparentMutation(nodeId, newParentId),
-          retirePendingMutation: (requestId, outcome) =>
-            runtime.retirePendingMutation(requestId, outcome),
-          isLatestRenameStamp: (nodeId, requestId) =>
-            runtime.isLatestRenameStamp(nodeId, requestId),
-          enqueueWriteCommand: (intent) =>
-            runtime.enqueueWriteCommand(intent)?.commandId ?? null,
-          readWriteCommandIntent: (intent) => readWriteCommandIntent(intent),
-          applyChatRecords: (records, issuedAtSeq) =>
-            runtime.applyChatRecords(records, issuedAtSeq),
-          applyChatRecordDelta: (delta) => runtime.applyChatRecordDelta(delta),
-          applyTuiAgentRecords: (records, issuedAtSeq) =>
-            runtime.applyTuiAgentRecords(records, issuedAtSeq),
-          applyTuiAgentRecordDelta: (delta) =>
-            runtime.applyTuiAgentRecordDelta(delta),
-          markChatRecordListAuthoritative: () =>
-            runtime.markChatRecordListAuthoritative(),
-          markChatRecordListNotAuthoritative: () =>
-            runtime.markChatRecordListNotAuthoritative(),
-          beginPendingChatCreation: (pending) =>
-            runtime.beginPendingChatCreation(pending),
-          clearPendingChatCreation: (chatId) =>
-            runtime.clearPendingChatCreation(chatId),
-          republishRecordsForCurrentUser: () =>
-            runtime.republishRecordsForCurrentUser(),
-          reprojectForViewerChange: () => runtime.reprojectForViewerChange(),
-          discardUnsyncedEdits: () => runtime.discardUnsyncedEdits(),
-          requestFreshSnapshot: () => runtime.requestFreshSnapshot(),
-          retryMigration: () => runtime.retryMigration(),
-          retryWriteCommand: (commandId) =>
-            runtime.retryWriteCommand(commandId),
-          discardWriteCommand: (commandId) =>
-            runtime.discardWriteCommand(commandId),
-          encodeRootState: () => runtime.encodeRootState(),
-          applyRootUpdate: (update, asLocalEdit) =>
-            runtime.applyRootUpdate(update, asLocalEdit),
-          detachTransport: () => {
-            runtime.detachTransport();
-          },
-          dispose: () => {
-            runtime.dispose();
-          },
-          },
-          (docKey, update) => {
-            // The return leg: a resident body's updates go to main's live doc.
-            // No origin filter on this side - see `observeBodyDoc`'s comment.
-            host.publishBodyDocUpdate(docKey, update);
+          {
+            onDocUpdate: (docKey, update) => {
+              // The return leg: a resident body's updates go to main's live
+              // doc. No origin filter on this side - see `observeBodyDoc`.
+              host.publishBodyDocUpdate(docKey, update);
+            },
+            onAwareness: (docKey, frame) => {
+              // Presence's return leg. The filter that matters here already
+              // ran at the source (`observeBodyAwareness` drops what main
+              // relayed in), so this is a straight forward.
+              host.publishBodyAwareness(docKey, frame);
+            },
           },
         ),
       ),

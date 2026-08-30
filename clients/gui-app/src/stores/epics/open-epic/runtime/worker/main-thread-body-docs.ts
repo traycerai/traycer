@@ -22,14 +22,76 @@
  * applying is correct there whether the bytes are a snapshot or a delta.
  */
 import * as Y from "yjs";
-import { Awareness } from "y-protocols/awareness";
+import {
+  Awareness,
+  applyAwarenessUpdate,
+  encodeAwarenessUpdate,
+} from "y-protocols/awareness";
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
 
 import type { MainThreadBodyDocs } from "./artifact-body-lease-bridge";
 
+/**
+ * The origin every byte this store applies ON BEHALF OF THE WORKER carries.
+ *
+ * Module-private and never exported: its whole purpose is that no other
+ * module can produce it, so "did this change come from the editor?" is
+ * answerable here by identity rather than by convention.
+ *
+ * It does DOUBLE DUTY, and missing either half breaks a different thing:
+ *  - `installRemote`/`applyRemote`, so a collaborator's edit arriving from the
+ *    worker is not observed as local and sent straight back out - an echo the
+ *    far end would apply as a no-op, but which loops for as long as two peers
+ *    are typing;
+ *  - the initial SEED in `install`, which is the half that looks unnecessary.
+ *    Without it, materializing a body emits its entire contents as a local
+ *    edit the instant it becomes resident. Yjs would merge that harmlessly at
+ *    the far end, so nothing breaks visibly - it just ships the whole document
+ *    over the wire on every open, which reads as a slow network rather than as
+ *    a bug.
+ */
+const MAIN_BODY_REMOTE_ORIGIN = Symbol("open-epic/main-body-remote");
+
+/**
+ * The traffic this store produces, going OUT to the worker.
+ *
+ * A named pair rather than positional callbacks: both are
+ * `(docKey, Uint8Array) => void`, so an ordering slip compiles clean and
+ * routes document updates into the presence channel.
+ */
+export interface MainThreadBodyDocSinks {
+  readonly onResidencyChange: () => void;
+  /** A local edit to a resident body: `body/update`. */
+  readonly onLocalDocUpdate: (docKey: string, update: Uint8Array) => void;
+  /**
+   * Local presence for a resident body: `body/awareness-out`.
+   *
+   * `localClientId` is read off the very `Awareness` that produced the frame,
+   * rather than looked up by `docKey` at the call site. A lookup would be a
+   * second path to the same fact, and the two diverge exactly when a body has
+   * just been replaced - the moment the id matters most.
+   */
+  readonly onLocalAwareness: (
+    docKey: string,
+    frame: Uint8Array,
+    localClientId: number,
+  ) => void;
+}
+
 interface LiveBody {
   readonly doc: Y.Doc;
   readonly awareness: Awareness;
+  /**
+   * Retained so teardown can detach them. Held on the entry rather than in a
+   * side map because they are only ever attached and released with the doc
+   * itself, and a listener outliving its document is the leak this whole
+   * module is otherwise careful about.
+   */
+  readonly docHandler: (update: Uint8Array, origin: unknown) => void;
+  readonly awarenessHandler: (
+    changes: { added: number[]; updated: number[]; removed: number[] },
+    origin: unknown,
+  ) => void;
   /**
    * The identity this document's history descends from, or `null` when none
    * was stated.
@@ -76,6 +138,18 @@ export interface MainThreadBodyDocStore extends MainThreadBodyDocs {
    * per-body topology is lost.
    */
   awareness(docKey: string): Awareness | null;
+  /**
+   * A body update from the worker: `body/doc-in`.
+   *
+   * Separate from `install` because the two say different things. `install`
+   * establishes or REPLACES a document and decides lineage; this applies a
+   * delta to one already resident and decides nothing. Folding them would put
+   * the replace rule - the unrecoverable one - on the hot path of every
+   * keystroke a collaborator makes.
+   */
+  applyRemote(docKey: string, update: Uint8Array): void;
+  /** A remote presence frame from the worker: `body/awareness-in`. */
+  applyRemoteAwareness(docKey: string, frame: Uint8Array): void;
   /** Every resident doc key. The main-side answer to `materializedRoomIds`. */
   residentDocKeys(): readonly string[];
   /** Drop every doc. For session teardown, where nothing will be demoted. */
@@ -95,15 +169,55 @@ export interface MainThreadBodyDocStore extends MainThreadBodyDocs {
  * and Yjs notifies its own observers.
  */
 export function createMainThreadBodyDocStore(
-  onResidencyChange: () => void,
+  sinks: MainThreadBodyDocSinks,
 ): MainThreadBodyDocStore {
   const bodies = new Map<string, LiveBody>();
 
   function destroy(body: LiveBody): void {
+    // Detach BEFORE destroying either object. `Awareness.destroy()` removes
+    // this client's state, which emits an update - so a still-attached
+    // handler would send a presence frame for a body that is being torn down,
+    // out of a store that has already stopped tracking it.
+    body.doc.off("update", body.docHandler);
+    body.awareness.off("update", body.awarenessHandler);
     // Awareness first: it holds a listener on the doc, and destroying the doc
     // underneath it leaves that listener firing against a destroyed target.
     body.awareness.destroy();
     body.doc.destroy();
+  }
+
+  function track(docKey: string, doc: Y.Doc, awareness: Awareness): LiveBody {
+    const docHandler = (update: Uint8Array, origin: unknown): void => {
+      // The ONLY filter on this leg - see `observeBodyDoc`'s comment on the
+      // worker side, which defers to this one deliberately.
+      if (origin === MAIN_BODY_REMOTE_ORIGIN) return;
+      sinks.onLocalDocUpdate(docKey, update);
+    };
+    const awarenessHandler = (
+      changes: { added: number[]; updated: number[]; removed: number[] },
+      origin: unknown,
+    ): void => {
+      if (origin === MAIN_BODY_REMOTE_ORIGIN) return;
+      const touched = changes.added
+        .concat(changes.updated)
+        .concat(changes.removed);
+      if (touched.length === 0) return;
+      sinks.onLocalAwareness(
+        docKey,
+        encodeAwarenessUpdate(awareness, touched),
+        awareness.clientID,
+      );
+    };
+    doc.on("update", docHandler);
+    awareness.on("update", awarenessHandler);
+    return {
+      doc,
+      awareness,
+      docHandler,
+      awarenessHandler,
+      docGuid: null,
+      hostStateVector: null,
+    };
   }
 
   return {
@@ -120,7 +234,9 @@ export function createMainThreadBodyDocStore(
         // idempotently, so a re-delivered snapshot is a no-op rather than a
         // duplication - which is why `seedMode` does not need to branch here.
         if (held.docGuid === input.docGuid) {
-          Y.applyUpdate(held.doc, input.update);
+          // Origin-stamped: this is the worker's copy of the body arriving,
+          // not something the editor typed. See MAIN_BODY_REMOTE_ORIGIN.
+          Y.applyUpdate(held.doc, input.update, MAIN_BODY_REMOTE_ORIGIN);
           held.hostStateVector = input.hostStateVector;
           return;
         }
@@ -133,14 +249,31 @@ export function createMainThreadBodyDocStore(
         bodies.delete(input.docKey);
       }
       const doc = new Y.Doc();
-      Y.applyUpdate(doc, input.update);
-      bodies.set(input.docKey, {
-        doc,
-        awareness: new Awareness(doc),
-        docGuid: input.docGuid,
-        hostStateVector: input.hostStateVector,
-      });
-      onResidencyChange();
+      const tracked = track(input.docKey, doc, new Awareness(doc));
+      // Observers are attached BEFORE the seed, and the seed is origin-stamped
+      // so they do not report it as a local edit. Attaching afterwards instead
+      // would look equivalent and quietly lose any update that lands between
+      // the two statements.
+      Y.applyUpdate(doc, input.update, MAIN_BODY_REMOTE_ORIGIN);
+      tracked.docGuid = input.docGuid;
+      tracked.hostStateVector = input.hostStateVector;
+      bodies.set(input.docKey, tracked);
+      sinks.onResidencyChange();
+    },
+
+    applyRemote(docKey, update): void {
+      const held = bodies.get(docKey);
+      // Not resident: drop. A body/doc-in for a key this side never
+      // materialized, or already demoted, has nowhere to land - and the worker
+      // still holds the authoritative copy, so nothing is lost by ignoring it.
+      if (held === undefined) return;
+      Y.applyUpdate(held.doc, update, MAIN_BODY_REMOTE_ORIGIN);
+    },
+
+    applyRemoteAwareness(docKey, frame): void {
+      const held = bodies.get(docKey);
+      if (held === undefined) return;
+      applyAwarenessUpdate(held.awareness, frame, MAIN_BODY_REMOTE_ORIGIN);
     },
 
     encode(docKey): Uint8Array {
@@ -159,7 +292,7 @@ export function createMainThreadBodyDocStore(
       if (held === undefined) return;
       bodies.delete(docKey);
       destroy(held);
-      onResidencyChange();
+      sinks.onResidencyChange();
     },
 
     has(docKey): boolean {
@@ -186,7 +319,7 @@ export function createMainThreadBodyDocStore(
       // sees the post-teardown state rather than a half-emptied map.
       bodies.clear();
       for (const body of held) destroy(body);
-      if (held.length > 0) onResidencyChange();
+      if (held.length > 0) sinks.onResidencyChange();
     },
   };
 }

@@ -63,12 +63,12 @@ import type {
 } from "./types";
 import type { PendingChatCreation } from "./pending-chat-creations";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import type { EpicLaneSelectionSources } from "./runtime/epic-replica-runtime";
 import { appLogger } from "@/lib/logger";
 import { createArtifactBodyLeaseBridge } from "./runtime/worker/artifact-body-lease-bridge";
 import { createHotBodyBudgetAdapter } from "./runtime/worker/hot-body-budget-adapter";
 import { createMainThreadBodyDocStore } from "./runtime/worker/main-thread-body-docs";
 import type { RuntimeProjectionHandlers } from "@traycer-clients/shared/replica-runtime/worker/runtime-projection-subscription";
+import type { EpicRuntimeBodyReturnTarget } from "./runtime/worker/spawn-epic-runtime-worker";
 import {
   NO_TRANSFER,
   takeBytesForTransfer,
@@ -92,9 +92,7 @@ import type {
   SnapshotFetchError,
 } from "./runtime/epic-runtime-projection";
 import type { EpicStreamClientFactory } from "./runtime/legacy-epic-stream-adapter";
-import {
-  type EpicWriteCommandIntent,
-} from "./runtime/epic-write-command";
+import { type EpicWriteCommandIntent } from "./runtime/epic-write-command";
 
 export type { EpicStreamClientFactory };
 export type {
@@ -117,6 +115,15 @@ export interface EpicRuntimeBinding {
   readonly port: RuntimeWorkerPort;
   /** One fire-and-forget command. See `RuntimeCommandMap`. */
   command(command: RuntimeCommand): void;
+  /**
+   * A local presence frame for one body, out to the arm.
+   *
+   * An EVENT, not a call, and deliberately not a `command`: presence is
+   * per-keystroke and self-correcting, so it neither wants an answer nor
+   * belongs in a vocabulary whose members are user gestures. See
+   * `spawn-epic-runtime-worker`'s member of the same name.
+   */
+  awarenessOut(docKey: string, frame: Uint8Array, localClientId: number): void;
   /** Ends the transport while the replica lives on. */
   detach(): void;
   /** Ends the worker. */
@@ -432,7 +439,9 @@ export interface OpenEpicState {
    * No-op when no migration has been observed on this session.
    */
   retryMigration: () => void;
-  enqueueWriteCommand: (intent: EpicWriteCommandIntent) => Promise<string | null>;
+  enqueueWriteCommand: (
+    intent: EpicWriteCommandIntent,
+  ) => Promise<string | null>;
   waitForWriteCommand: (
     commandId: string,
   ) => Promise<CommandRecord<EpicWriteCommandIntent>>;
@@ -633,7 +642,10 @@ export interface OpenEpicState {
   // registry-backed chat or terminal agent has no doc entry, so
   // `renameArtifact` no-ops for it and has done since chats moved off YJS.
   /** Optimistic rename for an artifact, chat, or terminal agent. */
-  beginRenameMutation: (nodeId: string, nextTitle: string) => Promise<string | null>;
+  beginRenameMutation: (
+    nodeId: string,
+    nextTitle: string,
+  ) => Promise<string | null>;
   /** Optimistic epic-header title change. */
   beginEpicTitleMutation: (nextTitle: string) => Promise<string | null>;
   /** Optimistic reparent, validated against the projected tree. */
@@ -669,10 +681,7 @@ export interface OpenEpicState {
    * write of a rename that SUCCEEDED. The tombstone survives the sweep, so
    * the only acks it refuses are ones a newer stamp genuinely superseded.
    */
-  isLatestRenameStamp: (
-    nodeId: string,
-    requestId: string,
-  ) => Promise<boolean>;
+  isLatestRenameStamp: (nodeId: string, requestId: string) => Promise<boolean>;
   /** Returns true when a delete actually happened. Reparents children. */
   deleteArtifact: (artifactId: string) => Promise<boolean>;
   /**
@@ -693,7 +702,6 @@ export interface OpenEpicState {
     newParentId: string | null,
   ) => Promise<boolean>;
   /** Returns true when the title actually changed. */
-
 
   // ── Actions: live-Y escape hatches ───────────────────────────────────
   /**
@@ -800,7 +808,16 @@ export interface OpenEpicStoreHandle {
    * reducer over the same stream is unreachable. The provider wires these into
    * the spawn; nothing else may.
    */
-  readonly projection: RuntimeProjectionHandlers<Partial<EpicRuntimeProjection>>;
+  readonly projection: RuntimeProjectionHandlers<
+    Partial<EpicRuntimeProjection>
+  >;
+  /**
+   * The body plane's return leg, handed OUT for the same reason `projection`
+   * is: the store owns the live docs, and the worker that feeds them is
+   * spawned before this store exists. The provider wires these into the spawn;
+   * nothing else may.
+   */
+  readonly body: EpicRuntimeBodyReturnTarget;
   readonly store: UseBoundStore<StoreApi<OpenEpicState>>;
   readonly dispose: () => void;
   /**
@@ -950,20 +967,31 @@ export function createOpenEpicStore(
   /**
    * One mutation, over the bridge. Callers narrow on their own literal `kind`.
    */
-  const applyMutation = (
-    mutation: EpicMutation,
-  ): Promise<EpicMutationResult> =>
+  const applyMutation = (mutation: EpicMutation): Promise<EpicMutationResult> =>
     runtime.port.call("mutation/apply", mutation, NO_TRANSFER);
 
-  const bodyDocs = createMainThreadBodyDocStore(() => {
-    // Residency is a MAIN-THREAD fact and nothing else publishes it.
-    // Availability comes from the projection and says the room is `ready`;
-    // this says the fragment exists. Without the bump an editor that
-    // re-rendered on availability alone would read `null` at `ready` and never
-    // look again.
-    storeApi?.setState((state) => ({
-      bodyResidencyVersion: state.bodyResidencyVersion + 1,
-    }));
+  const bodyDocs = createMainThreadBodyDocStore({
+    onResidencyChange: () => {
+      // Residency is a MAIN-THREAD fact and nothing else publishes it.
+      // Availability comes from the projection and says the room is `ready`;
+      // this says the fragment exists. Without the bump an editor that
+      // re-rendered on availability alone would read `null` at `ready` and
+      // never look again.
+      storeApi?.setState((state) => ({
+        bodyResidencyVersion: state.bodyResidencyVersion + 1,
+      }));
+    },
+    onLocalDocUpdate: (docKey, update) => {
+      // The lane's verdict is deliberately DISCARDED here. A refused body
+      // update is not a failed user action: the edit is already in main's
+      // live doc, and the bytes reach the host on the next materialize or
+      // demote cycle regardless. Surfacing it would put an error in front of
+      // someone whose typing worked.
+      void runtime.port.call("body/update", { docKey, update }, NO_TRANSFER);
+    },
+    onLocalAwareness: (docKey, frame, localClientId) => {
+      runtime.awarenessOut(docKey, frame, localClientId);
+    },
   });
 
   const bodyLeases = createArtifactBodyLeaseBridge({
@@ -1050,10 +1078,16 @@ export function createOpenEpicStore(
             });
           },
           retryWriteCommand: (commandId) => {
-            runtime.command({ kind: "retry-write-command", payload: { commandId } });
+            runtime.command({
+              kind: "retry-write-command",
+              payload: { commandId },
+            });
           },
           discardWriteCommand: (commandId) => {
-            runtime.command({ kind: "discard-write-command", payload: { commandId } });
+            runtime.command({
+              kind: "discard-write-command",
+              payload: { commandId },
+            });
           },
 
           applyChatRecords: (records, issuedAtSeq) => {
@@ -1070,7 +1104,10 @@ export function createOpenEpicStore(
             });
           },
           applyChatRecordDelta: (delta) => {
-            runtime.command({ kind: "apply-chat-record-delta", payload: { delta } });
+            runtime.command({
+              kind: "apply-chat-record-delta",
+              payload: { delta },
+            });
           },
           applyTuiAgentRecords: (records, issuedAtSeq) => {
             runtime.command({
@@ -1087,9 +1124,9 @@ export function createOpenEpicStore(
           },
           republishChatRecordsForCurrentUser: () => {
             runtime.command({
-      kind: "republish-records-for-current-user",
-      payload: {},
-    });
+              kind: "republish-records-for-current-user",
+              payload: {},
+            });
           },
           beginPendingChatCreation: (pending) => {
             runtime.command({
@@ -1364,6 +1401,14 @@ export function createOpenEpicStore(
   return {
     epicId,
     userId,
+    body: {
+      applyDocUpdate: (docKey, update) => {
+        bodyDocs.applyRemote(docKey, update);
+      },
+      applyAwareness: (docKey, frame) => {
+        bodyDocs.applyRemoteAwareness(docKey, frame);
+      },
+    },
     projection: {
       // A cheap envelope check, which the contract explicitly allows: both
       // ends ship in one bundle graph, so this distinguishes a slice from a

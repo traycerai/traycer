@@ -127,7 +127,11 @@ export interface EpicRuntimeWorkerCore {
    */
   applyCommand(command: RuntimeCommand): void;
   /** Relay a local presence frame for one body to the arm's mechanism. */
-  applyBodyAwareness(docKey: string, frame: Uint8Array): void;
+  applyBodyAwareness(
+    docKey: string,
+    frame: Uint8Array,
+    localClientId: number,
+  ): void;
   /**
    * Enqueue one write command. The QUEUE mints the id and may refuse from its
    * own state, which is why this is a call and not a push.
@@ -138,7 +142,10 @@ export interface EpicRuntimeWorkerCore {
    * Wait for attachment bytes. Settles `null` on cancel or teardown, never on
    * a timeout - "resolves when they land" is the contract.
    */
-  awaitAttachmentBytes(awaitId: number, hash: string): Promise<Uint8Array | null>;
+  awaitAttachmentBytes(
+    awaitId: number,
+    hash: string,
+  ): Promise<Uint8Array | null>;
   /** Stop a wait. `false` when the id was never pending or has settled. */
   cancelAttachmentAwait(awaitId: number): boolean;
   encodeRootState(): Promise<Uint8Array>;
@@ -332,7 +339,8 @@ export function startEpicRuntimeWorkerHost(
         core === null
           ? null
           : await core.awaitAttachmentBytes(request.awaitId, request.hash);
-      if (bytes === null) return { value: { bytes: null }, transfer: NO_TRANSFER };
+      if (bytes === null)
+        return { value: { bytes: null }, transfer: NO_TRANSFER };
       const encoded = takeBytesForTransfer(bytes);
       return { value: { bytes: encoded.bytes }, transfer: encoded.transfer };
     },
@@ -502,7 +510,11 @@ export function startEpicRuntimeWorkerHost(
       case "body/awareness-out": {
         // Dropped without a core, like every other body member: there is no
         // arm to relay presence to, and a frame is self-correcting.
-        core?.applyBodyAwareness(event.docKey, event.frame);
+        core?.applyBodyAwareness(
+          event.docKey,
+          event.frame,
+          event.localClientId,
+        );
         return;
       }
       case "runtime/command": {

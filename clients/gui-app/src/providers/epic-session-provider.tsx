@@ -10,7 +10,10 @@ import {
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { QueryClientContext, type QueryClient } from "@tanstack/react-query";
-import { spawnEpicRuntimeWorker } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
+import {
+  spawnEpicRuntimeWorker,
+  type EpicRuntimeBodyReturnTarget,
+} from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 import { createProcessBackedAccountingPort } from "@/stores/epics/open-epic/runtime/process-backed-accounting-port";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { dispatchEpicWriteCommand } from "@/stores/epics/open-epic/runtime/epic-write-command-dispatch";
@@ -586,6 +589,13 @@ export function EpicSessionProvider(
       let projectionTarget: RuntimeProjectionHandlers<
         Partial<EpicRuntimeProjection>
       > | null = null;
+      /**
+       * The body plane's return leg, filled on the same line as the one above
+       * and `null` for the same window. The store owns the live body docs, so
+       * this is mutually dependent with the spawn in exactly the way the
+       * projection slot is.
+       */
+      let bodyTarget: EpicRuntimeBodyReturnTarget | null = null;
 
       const runtimeWorker = spawnEpicRuntimeWorker<
         Partial<EpicRuntimeProjection>
@@ -666,6 +676,14 @@ export function EpicSessionProvider(
             projectionTarget?.reject(reason, revision);
           },
         },
+        body: {
+          applyDocUpdate: (docKey, update) => {
+            bodyTarget?.applyDocUpdate(docKey, update);
+          },
+          applyAwareness: (docKey, frame) => {
+            bodyTarget?.applyAwareness(docKey, frame);
+          },
+        },
         epicId,
         windowLabel: epicId,
       });
@@ -679,6 +697,9 @@ export function EpicSessionProvider(
           command: (command) => {
             runtimeWorker.command(command);
           },
+          awarenessOut: (docKey, frame, localClientId) => {
+            runtimeWorker.awarenessOut(docKey, frame, localClientId);
+          },
           detach: () => {
             runtimeWorker.detach();
           },
@@ -688,6 +709,7 @@ export function EpicSessionProvider(
         },
       });
       projectionTarget = created.projection;
+      bodyTarget = created.body;
 
       /**
        * The UNAUTHORIZED revalidate, delivered by the PROJECTION rather than by

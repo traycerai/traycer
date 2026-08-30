@@ -73,6 +73,20 @@ export interface RuntimeWorkerLogRelay {
   fatal(message: string, stack: string | null): void;
 }
 
+/**
+ * Where the body plane's RETURN leg lands.
+ *
+ * Named and exported because two modules must agree on it and neither owns
+ * both ends: the spawner RECEIVES it, and the store PROVIDES it (it is the
+ * store that holds the live docs). A structural copy on each side would let
+ * one drift without the other noticing - the same reason `projection` is a
+ * named contract rather than an inline shape.
+ */
+export interface EpicRuntimeBodyReturnTarget {
+  applyDocUpdate(docKey: string, update: Uint8Array): void;
+  applyAwareness(docKey: string, frame: Uint8Array): void;
+}
+
 export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
   readonly createWorker: () => RuntimeWorkerLike;
   /**
@@ -126,17 +140,14 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
    * runtime's own vocabulary and this side names the holders.
    */
   /**
-   * Where the body plane's RETURN leg lands: a collaborator's edit and a
-   * remote presence frame, both for the live doc main holds.
+   * A collaborator's edit and a remote presence frame, both for the live doc
+   * main holds. See {@link EpicRuntimeBodyReturnTarget} for who provides it.
    *
    * An unknown `docKey` is dropped by the implementation, silently - presence
    * and edits for a body main is not holding have nowhere to go, and there is
    * no answer a fire-and-forget sender could act on.
    */
-  readonly body: {
-    applyDocUpdate(docKey: string, update: Uint8Array): void;
-    applyAwareness(docKey: string, frame: Uint8Array): void;
-  };
+  readonly body: EpicRuntimeBodyReturnTarget;
   readonly accounting: EpicRuntimeAccountingPort;
   /** The epic this worker serves for its whole life. */
   readonly epicId: string;
@@ -188,7 +199,7 @@ export interface EpicRuntimeWorkerHandle {
    * per-keystroke-rate channel through a vocabulary whose members are user
    * gestures and record pushes.
    */
-  awarenessOut(docKey: string, frame: Uint8Array): void;
+  awarenessOut(docKey: string, frame: Uint8Array, localClientId: number): void;
   detach(): void;
   /**
    * Re-binds the worker to a NEW transport after a detach - a fresh proxy host,
@@ -351,11 +362,16 @@ export function spawnEpicRuntimeWorker<TProjection>(
   return {
     port: bridge,
     ready,
-    awarenessOut(docKey, frame): void {
+    awarenessOut(docKey, frame, localClientId): void {
       if (disposed) return;
       const encoded = takeBytesForTransfer(frame);
       bridge.emit(
-        { kind: "body/awareness-out", docKey, frame: encoded.bytes },
+        {
+          kind: "body/awareness-out",
+          docKey,
+          frame: encoded.bytes,
+          localClientId,
+        },
         encoded.transfer,
       );
     },

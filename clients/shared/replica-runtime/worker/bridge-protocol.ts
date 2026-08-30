@@ -288,6 +288,16 @@ export type MainToWorkerEvent =
       readonly kind: "body/awareness-out";
       readonly docKey: string;
       readonly frame: Uint8Array;
+      /**
+       * The `clientID` of the main-side `Awareness` this frame speaks for.
+       *
+       * Carried explicitly rather than decoded from `frame` at the far end:
+       * the receiving room has to EXCLUDE this identity from "is a remote peer
+       * present", which is a materialisation pin, and a pin that depends on
+       * parsing an opaque payload fails open - it would hold the room hot
+       * forever. See `ArtifactRoomReplicaEntry.relayedLocalClientId`.
+       */
+      readonly localClientId: number;
     }
   | {
       /**

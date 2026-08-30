@@ -45,6 +45,7 @@ import {
   Awareness,
   applyAwarenessUpdate,
   encodeAwarenessUpdate,
+  removeAwarenessStates,
 } from "y-protocols/awareness";
 import type {
   DocSeedMode,
@@ -82,6 +83,26 @@ import {
 export interface ArtifactRoomReplicaEntry {
   doc: Y.Doc;
   awareness: Awareness;
+  /**
+   * The `clientID` of the main-thread `Awareness` whose presence is RELAYED
+   * into this room, or `null` before any local presence has been relayed.
+   *
+   * After the worker relocation the editor binds to a main-thread `Awareness`
+   * with its own `clientID`, and its frames reach this room through
+   * {@link ArtifactRoomTier.relayLocalAwareness}. That makes this room's local
+   * presence arrive under an id that is NOT `awareness.clientID` - so every
+   * predicate that means "someone other than us" has to know it, or it reads
+   * this client as a stranger.
+   *
+   * Two of them do, and both cost correctness rather than tidiness:
+   * {@link hasRemotePeers}, which is a materialisation PIN and would hold the
+   * room hot forever; and {@link encodePeerAwareness}, which would replay the
+   * editor its own cursor as a peer.
+   *
+   * Recorded rather than inferred from the frame, because the frame is opaque
+   * bytes here and the caller already knows the id it is relaying for.
+   */
+  relayedLocalClientId: number | null;
   docUpdateHandler: (update: Uint8Array, origin: unknown) => void;
   awarenessUpdateHandler: (
     changes: { added: number[]; updated: number[]; removed: number[] },
@@ -186,6 +207,17 @@ interface ColdArtifactRoomEntry {
 
 const BIN_STREAM_ORIGIN = Symbol("open-epic/artifact-room-stream");
 const BIN_AWARENESS_REMOTE_ORIGIN = "artifact-room-stream-remote";
+/**
+ * Origin for presence relayed IN from the main-thread editor.
+ *
+ * Its whole job is to be distinguishable from
+ * {@link BIN_AWARENESS_REMOTE_ORIGIN}: the room's update handler forwards
+ * anything that is not that one, so a local frame stamped with this reaches
+ * the wire and a remote frame does not bounce back out. Named rather than
+ * left as an undefined origin so the emitted-vs-skipped decision is readable
+ * at both ends.
+ */
+const BIN_AWARENESS_RELAYED_LOCAL_ORIGIN = "artifact-room-relayed-local";
 const ROOM_PENDING_COLLAPSE_BYTES = 2 * 1024 * 1024;
 /** Re-encode a hot room for the byte budget after this much unmeasured growth. */
 const HOT_DOC_RESETTLE_BYTES = 256 * 1024;
@@ -462,7 +494,51 @@ export interface ArtifactRoomTier {
     artifactRoomId: string,
     coverageStateVectorBase64: string,
   ): void;
+  /**
+   * INBOUND presence, from the wire. Stamped `BIN_AWARENESS_REMOTE_ORIGIN`,
+   * which is exactly what this room's own update handler skips - so applying a
+   * frame here notifies local observers and sends NOTHING back out.
+   *
+   * That is correct for a remote frame and wrong for a local one. For presence
+   * originating on the main thread use {@link relayLocalAwareness}: routing it
+   * through here would compile, read correctly, and be dropped silently by the
+   * origin guard doing its job.
+   */
   applyAwareness(artifactRoomId: string, awarenessBytes: Uint8Array): void;
+  /**
+   * OUTBOUND presence, from the main-thread editor.
+   *
+   * The counterpart to {@link applyAwareness}, and deliberately not a flag on
+   * it: the two differ in the ORIGIN they stamp, and the origin is what decides
+   * whether this room's update handler forwards the frame to the wire. Applied
+   * with a local origin, so that handler runs its own four guards (role,
+   * transport, non-empty change) and emits - one emitter for local presence,
+   * whichever thread the editor lives on.
+   *
+   * `localClientId` is the main-side `Awareness.clientID` the frame speaks for;
+   * see {@link ArtifactRoomReplicaEntry.relayedLocalClientId} for why this room
+   * has to know it. A no-op when the room is not materialized - there is no
+   * `Awareness` to apply to, and a cold room drops inbound frames for the same
+   * reason.
+   */
+  relayLocalAwareness(
+    artifactRoomId: string,
+    awarenessBytes: Uint8Array,
+    localClientId: number,
+  ): void;
+  /**
+   * Observe this room's presence; returns the detach.
+   *
+   * The return leg of the relocation: remote peers land in this room's
+   * `Awareness`, and the editor that has to render them is on the main thread.
+   * A no-op detach when the room is not materialized, matching
+   * `observeArtifactBodyDoc` - answering with a detach anyway keeps the
+   * caller's lifetime bookkeeping total.
+   */
+  observeAwareness(
+    artifactRoomId: string,
+    onFrame: (frame: Uint8Array) => void,
+  ): () => void;
   /** A room leaving `ready` invalidates both its hot and cold copies. */
   invalidate(artifactRoomId: string): void;
   /**
@@ -668,12 +744,34 @@ export function createArtifactRoomTier(
     return leases.get(artifactRoomId) ?? 0;
   }
 
-  /** Any awareness client other than our own local one. */
+  /**
+   * Is this client one of OUR OWN presence identities in this room?
+   *
+   * There are two after the worker relocation, and both must answer true: this
+   * tier's own `Awareness`, and the main-thread editor's, whose frames are
+   * relayed in under a different `clientID`
+   * (see {@link ArtifactRoomReplicaEntry.relayedLocalClientId}).
+   *
+   * One predicate rather than the test written twice, because the two callers
+   * are a materialisation PIN and a demote replay - they fail in different
+   * directions and would drift apart silently.
+   */
+  function isOwnAwarenessClient(
+    entry: ArtifactRoomReplicaEntry,
+    clientId: number,
+  ): boolean {
+    return (
+      clientId === entry.awareness.clientID ||
+      clientId === entry.relayedLocalClientId
+    );
+  }
+
+  /** Any awareness client other than our own local ones. */
   function hasRemotePeers(entry: ArtifactRoomReplicaEntry): boolean {
-    const states = entry.awareness.getStates();
-    if (states.size === 0) return false;
-    if (states.size > 1) return true;
-    return !states.has(entry.awareness.clientID);
+    for (const clientId of entry.awareness.getStates().keys()) {
+      if (!isOwnAwarenessClient(entry, clientId)) return true;
+    }
+    return false;
   }
 
   /**
@@ -777,6 +875,7 @@ export function createArtifactRoomTier(
     const entry: ArtifactRoomReplicaEntry = {
       doc: replicaDoc,
       awareness: replicaAwareness,
+      relayedLocalClientId: null,
       docUpdateHandler,
       awarenessUpdateHandler,
       pendingUpdates: [],
@@ -803,13 +902,19 @@ export function createArtifactRoomTier(
 
   /**
    * Encode the room's currently-known REMOTE peers as a single awareness
-   * update, for replay after a demote. The local client is excluded: the editor
+   * update, for replay after a demote. Our own clients are excluded: the editor
    * sets its own state when it rebinds, and replaying a stale copy of it would
    * fight that.
+   *
+   * "Our own" is BOTH identities - this tier's and the relayed main-thread one.
+   * The rationale above is what makes the second one belong here: the editor
+   * that rebinds IS the relayed client, so replaying its stale state is the
+   * exact fight this exclusion exists to avoid, just under the id the editor
+   * now uses.
    */
   function encodePeerAwareness(entry: ArtifactRoomReplicaEntry): Uint8Array[] {
     const remote = Array.from(entry.awareness.getStates().keys()).filter(
-      (clientId) => clientId !== entry.awareness.clientID,
+      (clientId) => !isOwnAwarenessClient(entry, clientId),
     );
     if (remote.length === 0) return [];
     return [encodeAwarenessUpdate(entry.awareness, remote)];
@@ -1505,6 +1610,70 @@ export function createArtifactRoomTier(
       // hot, so re-test it here rather than waiting for a doc frame that may
       // never come.
       scheduleCooldown(artifactRoomId);
+    },
+    relayLocalAwareness(artifactRoomId, awarenessBytes, localClientId) {
+      const entry = replicas.get(artifactRoomId);
+      // Cold room: DROP, deliberately, where `applyAwareness` retains. A
+      // retained remote frame answers "who was already here" for a room this
+      // client has never opened; a retained LOCAL frame would replay this
+      // editor's own stale cursor into a room it is no longer bound to. The
+      // editor re-announces when it rebinds, which is the only correct source
+      // for its own presence.
+      if (entry === undefined) return;
+      if (
+        entry.relayedLocalClientId !== null &&
+        entry.relayedLocalClientId !== localClientId
+      ) {
+        // The main-side identity CHANGED - a rematerialize builds a fresh
+        // `Y.Doc`, and `Awareness` takes its `clientID` from the doc. The old
+        // id must be evicted, not just forgotten: leaving its state in place
+        // would strand a peer that no predicate excludes any more (this field
+        // now names the NEW id) and that no teardown will ever remove, which
+        // is precisely the ghost this field exists to prevent - the same leak
+        // one identity later.
+        //
+        // Removal goes out to the wire too, and should: peers watching this
+        // room need to see the old identity leave, or they render a cursor for
+        // a client that no longer exists.
+        removeAwarenessStates(
+          entry.awareness,
+          [entry.relayedLocalClientId],
+          BIN_AWARENESS_RELAYED_LOCAL_ORIGIN,
+        );
+      }
+      entry.relayedLocalClientId = localClientId;
+      // LOCAL origin - see `BIN_AWARENESS_RELAYED_LOCAL_ORIGIN`. This is the
+      // whole difference from `applyAwareness`, and it is what makes the room's
+      // own update handler forward the frame instead of skipping it.
+      applyAwarenessUpdate(
+        entry.awareness,
+        awarenessBytes,
+        BIN_AWARENESS_RELAYED_LOCAL_ORIGIN,
+      );
+    },
+    observeAwareness(artifactRoomId, onFrame) {
+      const entry = replicas.get(artifactRoomId);
+      if (entry === undefined) return () => {};
+      const handler = (
+        changes: { added: number[]; updated: number[]; removed: number[] },
+        origin: unknown,
+      ): void => {
+        // Do not hand the main thread back the presence it just relayed IN.
+        // This is not the same filter as the one main applies with its own
+        // private origin: that one stops main's inbound apply from re-emitting
+        // outward, this one stops the round trip from starting. Two loops, two
+        // cuts - closing either alone still leaves a cycle.
+        if (origin === BIN_AWARENESS_RELAYED_LOCAL_ORIGIN) return;
+        const touched = changes.added
+          .concat(changes.updated)
+          .concat(changes.removed);
+        if (touched.length === 0) return;
+        onFrame(encodeAwarenessUpdate(entry.awareness, touched));
+      };
+      entry.awareness.on("update", handler);
+      return () => {
+        entry.awareness.off("update", handler);
+      };
     },
 
     invalidate(artifactRoomId) {

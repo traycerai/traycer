@@ -366,6 +366,36 @@ export interface EpicReplicaRuntime {
     onUpdate: (update: Uint8Array) => void,
   ): () => void;
   /**
+   * A local presence frame from the main-thread editor, on its way out.
+   *
+   * Not `applyArtifactRoomAwareness`, and the difference is invisible at a
+   * call site: that one is the INBOUND path and stamps the room's remote
+   * origin, which is exactly the origin the room's own update handler skips.
+   * A local frame sent through it would be applied, would notify local
+   * observers, and would never reach the wire - with no error anywhere,
+   * because the guard doing the dropping is working as designed.
+   *
+   * `localClientId` is the main-side `Awareness.clientID`; the room needs it
+   * to keep telling its own presence apart from a collaborator's, which is a
+   * materialisation pin rather than a cosmetic distinction.
+   */
+  sendArtifactBodyAwareness(
+    docKey: string,
+    frame: Uint8Array,
+    localClientId: number,
+  ): void;
+  /**
+   * Observe a materialized body's presence; returns the detach.
+   *
+   * The inbound counterpart: remote peers land in the room's `Awareness`, and
+   * the editor rendering them is on the other thread. No-op detach when the
+   * room is not materialized, matching {@link observeArtifactBodyDoc}.
+   */
+  observeArtifactBodyAwareness(
+    docKey: string,
+    onFrame: (frame: Uint8Array) => void,
+  ): () => void;
+  /**
    * Take a body doc's encoded state back. Refuses a moved identity rather than
    * splicing two histories - see `ArtifactRoomColdSettlement`.
    */
@@ -1336,6 +1366,11 @@ export function createEpicReplicaRuntime(
         entry.doc.off("update", handler);
       };
     },
+    sendArtifactBodyAwareness: (docKey, frame, localClientId) => {
+      tier.relayLocalAwareness(docKey, frame, localClientId);
+    },
+    observeArtifactBodyAwareness: (docKey, onFrame) =>
+      tier.observeAwareness(docKey, onFrame),
     encodeArtifactBodyForwardOnly: (docKey) => {
       // IDENTITY-ABSENT only, checked explicitly rather than inferred from a
       // cold refusal. `encodeColdState` refuses for two reasons, and only one

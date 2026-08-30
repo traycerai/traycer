@@ -109,10 +109,7 @@ export function openStoreForTest(
   // The worker side, in this thread: the real host, given the suite's
   // factories in place of the proxy-built ones.
   const host = startEpicRuntimeWorkerHost(pair.worker);
-  const composedRuntime = installEpicRuntimeCore(
-    host,
-    () => options.factories,
-  );
+  const composedRuntime = installEpicRuntimeCore(host, () => options.factories);
 
   const accounting = createProcessBackedAccountingPort({
     hostId: "test-host",
@@ -121,6 +118,11 @@ export function openStoreForTest(
   });
 
   let projectionTarget: OpenEpicStoreHandle["projection"] | null = null;
+  // Late-bound for the same reason `projectionTarget` is: the worker is
+  // spawned before the store that owns the live body docs exists, so the
+  // return leg cannot be handed over at spawn time. Both latches close on the
+  // next line after `createOpenEpicStore` returns.
+  let bodyTarget: OpenEpicStoreHandle["body"] | null = null;
   const worker = spawnEpicRuntimeWorker<Partial<EpicRuntimeProjection>>({
     createWorker: () => ({
       ...createFakeWorkerTarget(pair),
@@ -175,6 +177,14 @@ export function openStoreForTest(
         projectionTarget?.reject(reason, revision);
       },
     },
+    body: {
+      applyDocUpdate: (docKey, update) => {
+        bodyTarget?.applyDocUpdate(docKey, update);
+      },
+      applyAwareness: (docKey, frame) => {
+        bodyTarget?.applyAwareness(docKey, frame);
+      },
+    },
     epicId: options.epicId,
     windowLabel: "test-window",
   });
@@ -188,6 +198,9 @@ export function openStoreForTest(
       command: (command) => {
         worker.command(command);
       },
+      awarenessOut: (docKey, frame, localClientId) => {
+        worker.awarenessOut(docKey, frame, localClientId);
+      },
       detach: () => {
         worker.detach();
       },
@@ -197,6 +210,7 @@ export function openStoreForTest(
     },
   });
   projectionTarget = handle.projection;
+  bodyTarget = handle.body;
 
   const runtime = composedRuntime();
   if (runtime === null) {
