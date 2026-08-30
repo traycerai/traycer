@@ -1,6 +1,5 @@
 import type { SyntheticEvent } from "react";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
-import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
 
@@ -25,8 +24,8 @@ export interface TileController {
   readonly capabilities: TileChromeCapabilities;
   /**
    * The session's credential-sharing profile. `isolated` is a private
-   * session: the toolbar says so instead of reporting saved-login state, and
-   * offers no action, because there is nothing here to save or clear.
+   * session: the toolbar says so, and offers no action, because there is
+   * nothing here to save or clear.
    */
   readonly profile: BrowserSessionProfileKind;
   readonly url: string;
@@ -36,12 +35,6 @@ export interface TileController {
   readonly zoomPercent: number;
   readonly viewportPreset: BrowserViewViewportPresetId;
   readonly disabled: boolean;
-  /**
-   * Desktop browser-login persistence for this tile's runtime, or null where
-   * there is no desktop to ask (a screencast tile). One shared store backs it,
-   * so every tile's shield reads the same answer.
-   */
-  readonly persistence: BrowserPersistenceController | null;
   readonly zoomLocked: boolean;
   readonly annotation: BrowserAnnotationSessionController | null;
   readonly onNavigate: (

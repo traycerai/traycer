@@ -1,5 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
-import type { ReactNode, SyntheticEvent } from "react";
+import type { SyntheticEvent } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
@@ -10,8 +10,6 @@ import {
 } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
-import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 
 const openExternalLink = vi.hoisted(() => ({
   isPending: false,
@@ -25,36 +23,6 @@ vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({}),
 }));
-
-// The `os-backed` shield links to Settings, and a bare <Link> needs a router.
-// The link is not what these tests are about; its presence is.
-vi.mock("@tanstack/react-router", () => ({
-  Link: (props: { readonly children: ReactNode; readonly to: string }) => (
-    <a href={props.to}>{props.children}</a>
-  ),
-}));
-
-const REAL_COOKIE_STATE: BrowserCookieCryptoState = {
-  mode: "real",
-  persistence: "persistent",
-  reason: "os-backed",
-  storageBackend: null,
-  encryptionAvailable: true,
-};
-
-const ENABLED_PERSISTENCE: BrowserPersistenceController = {
-  state: {
-    decision: { kind: "enabled", decidedAt: 0 },
-    cryptoState: REAL_COOKIE_STATE,
-    promptsOnEnable: false,
-    appName: "Traycer",
-    platform: "darwin",
-  },
-  pending: false,
-  enable: () => undefined,
-  decline: () => undefined,
-  relaunch: () => undefined,
-};
 
 const ANNOTATION: BrowserAnnotationSessionController = {
   isActive: false,
@@ -96,7 +64,6 @@ function makeController(
     zoomPercent: 100,
     viewportPreset: "responsive",
     disabled: false,
-    persistence: ENABLED_PERSISTENCE,
     zoomLocked: annotation?.zoomLocked === true,
     annotation,
     onNavigate: preventNavigate,

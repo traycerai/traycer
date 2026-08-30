@@ -522,28 +522,18 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     browser are kept, and the only place they can be turned off, forgotten, or
     inspected per site. Keychain-refactor spec §7.3; the group renders NOTHING
     without a `browserView` bridge (the web build), because every row is about
-    a machine's keystore.
-    Four rows, in escalating commitment: the toggle, the status, forget-all,
-    then the site list.
-    - **Save website logins on this Mac/PC** is the desktop-local decision
-      (`useBrowserPersistenceState()`), not a settings-store field and not a
-      host value: it is a statement about THIS machine's keystore
-      (decision #18), so it neither syncs nor follows the scoped host. On
-      where a probe would raise an OS dialog (`promptsOnEnable`) opens a
-      confirm carrying the same mocked keychain dialog the first browser tile
-      shows (`BrowserPersistenceMockDialog`), because the real dialog must
-      never be the first time that sentence is read; on a silent platform it
-      enables straight away. Off records `declined` and stops NEW logins being
-      saved - it does not migrate the jar back to ephemeral, and the row's
-      description says so, since silently discarding saved logins behind a
-      plain switch would be a destructive action wearing a non-destructive
-      control. Disabled while a call is in flight, where the machine has no
-      usable keystore (`linux-basic-text` / `encryption-unavailable`), and
-      while a denial is cached for the run.
-    - **Status** reuses `browserPersistenceShieldCopy()` - the tile shield and
-      this row read one table, so they can never describe the same machine
-      differently - and carries the one affordance a cached denial leaves:
-      Restart Traycer (decision #23).
+    a machine's jar.
+    Saving is silent and on by default, Chrome-style - there is no consent
+    step, no status row and nothing to retry - so this group is passive: a
+    toggle, a destructive action, and a list.
+    - **Save website logins on this machine** is the desktop-local pref
+      (`useBrowserSaveLogins()`), not a settings-store field and not a host
+      value: it is a statement about THIS machine (decision #18), so it neither
+      syncs nor follows the scoped host. Off switches new and live `primary`
+      tiles onto a throwaway partition (they reload signed out) and leaves the
+      `persist:` jar on disk untouched - that is what Forget is for - so a
+      confirm stands in front of it and turning it back on returns to the same
+      logins. Nothing is copied in either direction.
     - **Forget all browser logins** (destructive confirm) moved here from the
       tile shield popover, which was ticket 08's temporary home. It calls the
       module-level `forgetAllBrowserLogins()` on the sessions coordinator and

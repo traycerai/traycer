@@ -5,8 +5,6 @@ import {
 } from "../ipc-contracts/ipc-channels";
 import type {
   BrowserViewBridge,
-  BrowserCookieCryptoState,
-  BrowserPersistenceState,
   BrowserPrimaryProfileCaptureResult,
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
@@ -145,26 +143,15 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewReleaseOverlay,
           input,
         ) as Promise<BrowserViewOverlayReleaseResult>,
-      getCookieCryptoState: () =>
+      getSaveLogins: () =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewCookieCryptoStateGet,
-        ) as Promise<BrowserCookieCryptoState>,
-      getPersistenceState: () =>
+          RunnerHostInvoke.browserViewSaveLoginsGet,
+        ) as Promise<boolean>,
+      setSaveLogins: (enabled) =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewPersistenceStateGet,
-        ) as Promise<BrowserPersistenceState>,
-      enablePersistence: () =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewPersistenceEnable,
-        ) as Promise<BrowserPersistenceState>,
-      declinePersistence: () =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewPersistenceDecline,
-        ) as Promise<BrowserPersistenceState>,
-      relaunchForPersistence: () =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewRelaunchForPersistence,
-        ) as Promise<void>,
+          RunnerHostInvoke.browserViewSaveLoginsSet,
+          enabled,
+        ) as Promise<boolean>,
       wrapStoreKey: (rawKey) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewStoreKeyWrap,
@@ -179,11 +166,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewForgetLogins,
         ) as Promise<void>,
-      onPersistenceStateChanged: (handler) =>
-        subscribe<BrowserPersistenceState>(
-          RunnerHostEvent.browserViewPersistenceStateChanged,
-          handler,
-        ),
       onPrimaryProfileDelta: (handler) =>
         subscribe<BrowserPrimaryProfileDelta>(
           RunnerHostEvent.browserViewPrimaryProfileDelta,

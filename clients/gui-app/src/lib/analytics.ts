@@ -279,54 +279,6 @@ export type AnalyticsTheme =
   | "preset:traycer-green"
   | "preset:violet";
 
-/** The install target's OS, as both the registered global and any event that
- * needs to say so in its own payload spell it. */
-export type AnalyticsPlatform =
-  | "android"
-  | "ios"
-  | "linux"
-  | "macos"
-  | "other"
-  | "windows";
-
-/**
- * Browser-login persistence funnel (keychain refactor decision #20). Every
- * value here is a STATE NAME: the funnel is measured in decisions, backends
- * and durations, never in the sites a user is signed into.
- *
- * The desktop's own vocabulary is kebab-cased (`os-backed`); these are the
- * snake_cased analytics spellings of the same terms, so a PostHog breakdown
- * reads like every other property in this file.
- */
-export type AnalyticsBrowserPersistenceSurface = "card" | "settings" | "shield";
-
-export type AnalyticsBrowserPersistenceResult =
-  | "keychain_denied"
-  | "os_backed"
-  | "relaunch_pending"
-  /** Enabling resolved to a machine that simply cannot back a keystore
-   * (Linux basic-text, encryption unavailable) or never answered at all. */
-  | "unavailable";
-
-export type AnalyticsBrowserPersistenceReason =
-  | "encryption_unavailable"
-  | "keychain_denied"
-  | "linux_basic_text"
-  | "not_enabled"
-  | "os_backed"
-  | "unresolved";
-
-/** `none` is the desktop's `null` backend: nothing has been probed on this
- * machine, or the platform has no named backend to report. */
-export type AnalyticsBrowserPersistenceBackend =
-  | "basic_text"
-  | "gnome_libsecret"
-  | "kwallet"
-  | "kwallet5"
-  | "kwallet6"
-  | "none"
-  | "unknown";
-
 export enum AnalyticsEvent {
   AppOpened = "app_opened",
   SignInStarted = "sign_in_started",
@@ -467,13 +419,6 @@ export enum AnalyticsEvent {
   TabCloseBlocked = "tab_close_blocked",
   AppResourceSample = "app_resource_sample",
   AppResourcePressure = "app_resource_pressure",
-  BrowserPersistenceCardShown = "browser_persistence_card_shown",
-  BrowserPersistenceCardAction = "browser_persistence_card_action",
-  BrowserPersistenceEnableResult = "browser_persistence_enable_result",
-  BrowserPersistenceRelaunchClicked = "browser_persistence_relaunch_clicked",
-  BrowserPersistenceStateAtFirstTile = "browser_persistence_state_at_first_tile",
-  BrowserLoginsForgotten = "browser_logins_forgotten",
-  BrowserSiteCleared = "browser_site_cleared",
 }
 
 type SourceProperties = { readonly source: AnalyticsSource };
@@ -954,35 +899,6 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.AppResourcePressure]: ResourceMeasurementProperties & {
     readonly pressure_tier: AnalyticsResourcePressureTier;
   };
-  readonly [AnalyticsEvent.BrowserPersistenceCardShown]: null;
-  readonly [AnalyticsEvent.BrowserPersistenceCardAction]: {
-    readonly action: "enable" | "not_now";
-  };
-  /**
-   * `source` is the surface the gesture came from, NOT an `AnalyticsSource`:
-   * the three places that can enable are product surfaces (the explainer card,
-   * the tile shield, Settings), and collapsing them all to `direct_ui` would
-   * erase the only thing this event is asked.
-   */
-  readonly [AnalyticsEvent.BrowserPersistenceEnableResult]: {
-    readonly result: AnalyticsBrowserPersistenceResult;
-    readonly duration_ms: number;
-    readonly source: AnalyticsBrowserPersistenceSurface;
-  };
-  readonly [AnalyticsEvent.BrowserPersistenceRelaunchClicked]: {
-    readonly source: AnalyticsBrowserPersistenceSurface;
-  };
-  readonly [AnalyticsEvent.BrowserPersistenceStateAtFirstTile]: {
-    readonly reason: AnalyticsBrowserPersistenceReason;
-    readonly backend: AnalyticsBrowserPersistenceBackend;
-    readonly platform: AnalyticsPlatform;
-  };
-  readonly [AnalyticsEvent.BrowserLoginsForgotten]: {
-    readonly source: "settings" | "shield";
-  };
-  readonly [AnalyticsEvent.BrowserSiteCleared]: {
-    readonly source: "settings" | "tile";
-  };
 }
 
 export const POSTHOG_CONFIG = {
@@ -1282,40 +1198,6 @@ const ANALYTICS_RESOURCE_PRESSURE_TIERS = new Set<string>([
   "critical",
 ]);
 
-const ANALYTICS_PLATFORMS = new Set<string>([
-  "android",
-  "ios",
-  "linux",
-  "macos",
-  "other",
-  "windows",
-]);
-
-const ANALYTICS_BROWSER_PERSISTENCE_SURFACES = new Set<string>([
-  "card",
-  "settings",
-  "shield",
-]);
-
-const ANALYTICS_BROWSER_PERSISTENCE_BACKENDS = new Set<string>([
-  "basic_text",
-  "gnome_libsecret",
-  "kwallet",
-  "kwallet5",
-  "kwallet6",
-  "none",
-  "unknown",
-]);
-
-const ANALYTICS_BROWSER_PERSISTENCE_REASONS = new Set<string>([
-  "encryption_unavailable",
-  "keychain_denied",
-  "linux_basic_text",
-  "not_enabled",
-  "os_backed",
-  "unresolved",
-]);
-
 const ANALYTICS_EVENTS = new Set<string>(Object.values(AnalyticsEvent));
 
 function isAnalyticsEvent(event: string): event is AnalyticsEvent {
@@ -1607,23 +1489,6 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
       "open_tabs",
     ],
   ),
-  ...eventKeyEntries([AnalyticsEvent.BrowserPersistenceCardAction], ["action"]),
-  ...eventKeyEntries(
-    [AnalyticsEvent.BrowserPersistenceEnableResult],
-    ["result", "duration_ms", "source"],
-  ),
-  ...eventKeyEntries(
-    [
-      AnalyticsEvent.BrowserPersistenceRelaunchClicked,
-      AnalyticsEvent.BrowserLoginsForgotten,
-      AnalyticsEvent.BrowserSiteCleared,
-    ],
-    ["source"],
-  ),
-  ...eventKeyEntries(
-    [AnalyticsEvent.BrowserPersistenceStateAtFirstTile],
-    ["reason", "backend", "platform"],
-  ),
 ]);
 
 const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
@@ -1649,7 +1514,6 @@ const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
   AnalyticsEvent.VoiceDictationCancelled,
   AnalyticsEvent.UpdateDownloadSucceeded,
   AnalyticsEvent.ReportIssuePublicOpenAttempted,
-  AnalyticsEvent.BrowserPersistenceCardShown,
 ]);
 
 function eventPropertyKeys(
@@ -1679,7 +1543,6 @@ const EXACT_PROPERTY_VALUES: {
   acknowledgment_source: ANALYTICS_NOTIFICATION_ACKNOWLEDGMENT_SOURCES,
   affected_count_bucket: ANALYTICS_COUNT_BUCKETS,
   attention_bucket: ANALYTICS_COUNT_BUCKETS,
-  backend: ANALYTICS_BROWSER_PERSISTENCE_BACKENDS,
   category: ANALYTICS_NOTIFICATION_CATEGORIES,
   command: ANALYTICS_COMMANDS,
   context: new Set(["personal", "team"]),
@@ -1706,7 +1569,6 @@ const EXACT_PROPERTY_VALUES: {
   launch_reason: new Set(["normal", "update_restart"]),
   last_step: ANALYTICS_ONBOARDING_STEPS,
   permission: new Set(["denied", "granted", "unavailable"]),
-  platform: ANALYTICS_PLATFORMS,
   pressure_tier: ANALYTICS_RESOURCE_PRESSURE_TIERS,
   provider: ANALYTICS_PROVIDERS,
   role: new Set(["editor", "owner", "viewer"]),
@@ -1924,46 +1786,6 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     "blocked_action",
     new Set(["send", "open_github_issue", "report_on_github", "save_bundle"]),
   ),
-  ...eventValueEntries(
-    [AnalyticsEvent.BrowserPersistenceCardAction],
-    "action",
-    new Set(["enable", "not_now"]),
-  ),
-  ...eventValueEntries(
-    [AnalyticsEvent.BrowserPersistenceEnableResult],
-    "result",
-    new Set([
-      "keychain_denied",
-      "os_backed",
-      "relaunch_pending",
-      "unavailable",
-    ]),
-  ),
-  // Event-scoped because these surfaces are NOT `AnalyticsSource` gestures -
-  // the shared `source` taxonomy would reject every one of them.
-  ...eventValueEntries(
-    [
-      AnalyticsEvent.BrowserPersistenceEnableResult,
-      AnalyticsEvent.BrowserPersistenceRelaunchClicked,
-    ],
-    "source",
-    ANALYTICS_BROWSER_PERSISTENCE_SURFACES,
-  ),
-  ...eventValueEntries(
-    [AnalyticsEvent.BrowserLoginsForgotten],
-    "source",
-    new Set(["settings", "shield"]),
-  ),
-  ...eventValueEntries(
-    [AnalyticsEvent.BrowserSiteCleared],
-    "source",
-    new Set(["settings", "tile"]),
-  ),
-  ...eventValueEntries(
-    [AnalyticsEvent.BrowserPersistenceStateAtFirstTile],
-    "reason",
-    ANALYTICS_BROWSER_PERSISTENCE_REASONS,
-  ),
 ]);
 
 const BOOLEAN_PROPERTY_KEYS = new Set<string>([
@@ -1999,7 +1821,6 @@ const COUNT_PROPERTY_KEYS = new Set<string>([
  * runtime cannot report it).
  */
 const MEASURE_PROPERTY_KEYS = new Set<string>([
-  "duration_ms",
   "heap_slope_mb_per_h",
   "js_heap_limit_mb",
   "js_heap_mb",
@@ -2252,7 +2073,9 @@ function safeAppGlobals(
     typeof properties.app_surface !== "string" ||
     !new Set(["desktop", "mobile"]).has(properties.app_surface) ||
     typeof properties.platform !== "string" ||
-    !ANALYTICS_PLATFORMS.has(properties.platform) ||
+    !new Set(["android", "ios", "linux", "macos", "other", "windows"]).has(
+      properties.platform,
+    ) ||
     typeof properties.release_channel !== "string" ||
     !new Set(["development", "other", "production"]).has(
       properties.release_channel,
@@ -2608,7 +2431,13 @@ export function analyticsAppSurface(): "desktop" | "mobile" {
   return isMobileApp() ? "mobile" : "desktop";
 }
 
-export function analyticsPlatform(): AnalyticsPlatform {
+export function analyticsPlatform():
+  | "android"
+  | "ios"
+  | "linux"
+  | "macos"
+  | "other"
+  | "windows" {
   if (isMobileApp()) {
     // `navigator.platform` reads "iPhone"/"Linux armv8l" inside the mobile
     // WebViews, which the desktop branches below would misfile as other or

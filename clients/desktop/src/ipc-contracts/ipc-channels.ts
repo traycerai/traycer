@@ -350,17 +350,11 @@ export const RunnerHostInvoke = {
   // elsewhere, and deliberately reports nothing back.
   browserViewClearSite: "runnerHost:browserView:primaryProfile:clearSite",
   browserViewEvictSite: "runnerHost:browserView:primaryProfile:evictSite",
-  browserViewCookieCryptoStateGet:
-    "runnerHost:browserView:cookieCryptoState:get",
-  // Lazy persistence (keychain refactor ticket 01). `...Enable` is the only
-  // channel that may raise an OS keystore prompt.
-  browserViewPersistenceStateGet: "runnerHost:browserView:persistence:get",
-  browserViewPersistenceEnable: "runnerHost:browserView:persistence:enable",
-  browserViewPersistenceDecline: "runnerHost:browserView:persistence:decline",
-  browserViewRelaunchForPersistence:
-    "runnerHost:browserView:persistence:relaunch",
-  // Store-key handshake (keychain refactor ticket 05). Both refuse unless the
-  // keystore is already os-backed, so neither can raise a first OS prompt.
+  // Saved browser logins: on by default, off only if the user says so in
+  // Settings. `...Set` switches the partition and brings the live tiles back.
+  browserViewSaveLoginsGet: "runnerHost:browserView:saveLogins:get",
+  browserViewSaveLoginsSet: "runnerHost:browserView:saveLogins:set",
+  // Store-key handshake (keychain refactor ticket 05).
   browserViewStoreKeyWrap: "runnerHost:browserView:storeKey:wrap",
   browserViewStoreKeyUnwrap: "runnerHost:browserView:storeKey:unwrap",
   // "Forget all browser logins" (keychain refactor ticket 08). Driven by the
@@ -444,10 +438,6 @@ export const RunnerHostEvent = {
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
   browserViewAnnotationAttached:
     "runnerHost:event:browserView:annotationAttached",
-  // Lazy persistence (keychain refactor ticket 02). Fanned out to every window
-  // on boot and after each decision change, so all tiles agree at once.
-  browserViewPersistenceStateChanged:
-    "runnerHost:event:browserView:persistenceStateChanged",
   browserViewPrimaryProfileDelta:
     "runnerHost:event:browserView:primaryProfile:delta",
   // Native-tab PiP capture frames (`started` / `frame` / `stalled`).

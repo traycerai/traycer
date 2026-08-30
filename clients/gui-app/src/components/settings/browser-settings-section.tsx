@@ -1,14 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -19,30 +11,17 @@ import {
 } from "@/components/ui/select";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
-import { BrowserPersistenceMockDialog } from "@/components/epic-canvas/renderers/browser-persistence-mock-dialog";
 import {
-  browserPersistenceShieldCopy,
-  keystoreName,
-} from "@/lib/browser-view/browser-cookie-degraded-message";
-import {
-  useBrowserPersistenceState,
-  type BrowserPersistenceController,
-} from "@/lib/browser-view/use-browser-persistence-state";
+  useBrowserSaveLogins,
+  type BrowserSaveLoginsController,
+} from "@/lib/browser-view/use-browser-save-logins";
 import {
   clearSavedLoginSite,
   forgetAllBrowserLogins,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
-import {
-  trackBrowserLoginsForgotten,
-  trackBrowserPersistence,
-} from "@/lib/browser-view/browser-persistence-analytics";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
-import type {
-  BrowserPersistencePlatform,
-  BrowserPersistenceState,
-} from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserSavedLoginSite,
   BrowserSavedLoginSitesResponse,
@@ -261,44 +240,30 @@ function BrowserDevOriginsControl(props: {
   );
 }
 
-/** "on this Mac" / "on this PC", the way the person's own OS is named. */
-const MACHINE_NOUN: Record<BrowserPersistencePlatform, string> = {
-  darwin: "Mac",
-  win32: "PC",
-  linux: "machine",
-  other: "machine",
-};
-
-/**
- * A machine with no OS keystore Traycer can use. Turning the toggle on there
- * would raise a prompt that cannot succeed, so the row states the reason
- * instead of offering the gesture (spec section 7.1's last two states).
- */
-function isKeystoreUnavailable(state: BrowserPersistenceState): boolean {
-  const reason = state.cryptoState.reason;
-  return reason === "linux-basic-text" || reason === "encryption-unavailable";
-}
-
 /**
  * Settings > Browser's saved-logins group (spec section 7.3, decision #26).
  * The one place a privacy-minded person sees where their website logins are
  * kept, turns them off, forgets them, and sees which sites they cover.
  *
+ * Saving is silent and on by default, Chrome-style: there is nothing to
+ * explain, consent to or retry, so this group is passive - a toggle, a list and
+ * one destructive action.
+ *
  * Host-scoped like every other host read on this page: the site list comes from
  * THIS surface's host, and clearing goes back out to the browser streams of
- * whichever hosts are live. The toggle is the odd one out on purpose - the
- * persistence decision is desktop-local, per machine (decision #18), so it is
- * read from the desktop bridge rather than from any host.
+ * whichever hosts are live. The toggle is the odd one out on purpose - it is
+ * desktop-local, per machine (decision #18), so it is read from the desktop
+ * bridge rather than from any host.
  *
  * Renders nothing without a browser bridge (the web build, a host-less test
- * harness): there is no machine here whose keystore this could be about.
+ * harness): there is no machine here whose jar this could be about.
  */
 function BrowserSavedLoginsGroup(): ReactNode {
   const browserView = useRunnerHostOrNull()?.browserView ?? null;
-  const persistence = useBrowserPersistenceState(browserView);
-  const state = persistence.state;
-  const sites = useBrowserSavedLoginSitesQuery({ enabled: state !== null });
-  if (browserView === null || state === null) return null;
+  const saveLogins = useBrowserSaveLogins(browserView);
+  const enabled = saveLogins.enabled;
+  const sites = useBrowserSavedLoginSitesQuery({ enabled: enabled !== null });
+  if (browserView === null || enabled === null) return null;
   return (
     <SettingsGroup
       title="Saved logins"
@@ -306,8 +271,7 @@ function BrowserSavedLoginsGroup(): ReactNode {
       dataTestId="settings-saved-logins"
       fill={false}
     >
-      <SavedLoginsToggleRow persistence={persistence} state={state} />
-      <SavedLoginsStatusRow persistence={persistence} state={state} />
+      <SavedLoginsToggleRow saveLogins={saveLogins} enabled={enabled} />
       <ForgetAllLoginsRow />
       <SavedLoginSitesRow
         data={sites.data ?? null}
@@ -320,154 +284,50 @@ function BrowserSavedLoginsGroup(): ReactNode {
 }
 
 /**
- * The decision itself. On is the ticket 02 enable flow - the same explainer and
- * the same OS prompt the browser tile raises, because it is literally the same
- * call; off is `declined`.
- *
- * Off does NOT migrate the jar back to ephemeral, and the copy says so: it
- * stops new logins being persisted, and the ones already saved stay until
- * Forget. Quietly discarding them on a toggle would be a destructive action
- * behind a non-destructive control.
+ * Turning saving off moves this machine's browser onto a throwaway jar: open
+ * tabs reload signed out, and nothing new is kept. What is already saved is
+ * left exactly where it is - that is what Forget is for - so turning it back on
+ * returns to the same logins.
  */
 function SavedLoginsToggleRow(props: {
-  readonly persistence: BrowserPersistenceController;
-  readonly state: BrowserPersistenceState;
+  readonly saveLogins: BrowserSaveLoginsController;
+  readonly enabled: boolean;
 }): ReactNode {
   const [confirming, setConfirming] = useState(false);
-  const state = props.state;
-  const unavailable = isKeystoreUnavailable(state);
-  const relaunchPending = state.decision.kind === "relaunch-pending";
-  const enable = (): void => {
-    setConfirming(false);
-    props.persistence.enable("settings");
-  };
   return (
     <>
       <SettingsRow
-        label={`Save website logins on this ${MACHINE_NOUN[state.platform]}`}
-        description={`Traycer keeps cookies and logins in ${keystoreName(state)} so agents can reuse the sites you're signed into. Turning this off stops new logins being saved - the ones already saved stay until you forget them.`}
+        label="Save website logins on this machine"
+        description="Traycer keeps cookies and logins on this machine so agents can reuse the sites you're signed into. Turning this off reloads open browser tabs signed out; the logins already saved stay until you forget them."
         control={
           <Switch
-            checked={state.decision.kind === "enabled"}
-            disabled={
-              props.persistence.pending || unavailable || relaunchPending
-            }
+            checked={props.enabled}
+            disabled={props.saveLogins.pending}
             aria-label="Save website logins"
             onCheckedChange={(next) => {
-              if (!next) {
-                props.persistence.decline();
+              if (next) {
+                props.saveLogins.setEnabled(true);
                 return;
               }
-              // Only where a probe would raise an OS dialog: on a silent
-              // platform there is nothing to warn about, and a confirm step
-              // would invent a ceremony the machine does not have.
-              if (state.promptsOnEnable) {
-                setConfirming(true);
-                return;
-              }
-              props.persistence.enable("settings");
+              setConfirming(true);
             }}
           />
         }
       />
-      <EnableSavedLoginsDialog
+      <ConfirmDestructiveDialog
         open={confirming}
         onOpenChange={setConfirming}
-        state={state}
-        pending={props.persistence.pending}
-        onEnable={enable}
+        title="Stop saving website logins?"
+        description="Open browser tabs reload signed out and nothing new is saved on this machine. The logins already saved are kept - use Forget all browser logins to delete them."
+        cascadeSummary={null}
+        actionLabel="Stop saving"
+        isPending={props.saveLogins.pending}
+        onConfirm={() => {
+          props.saveLogins.setEnabled(false);
+          setConfirming(false);
+        }}
       />
     </>
-  );
-}
-
-/**
- * The same explainer the first browser tile shows (spec section 7.2), as a
- * confirm step: the OS dialog must never be the first time this sentence is
- * read, and Settings is a place the gesture can be started from too.
- */
-function EnableSavedLoginsDialog(props: {
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
-  readonly state: BrowserPersistenceState;
-  readonly pending: boolean;
-  readonly onEnable: () => void;
-}): ReactNode {
-  const state = props.state;
-  return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="w-[min(92vw,30rem)] sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Keep your website logins between sessions?</DialogTitle>
-          <DialogDescription>
-            {`Traycer stores browser logins in ${keystoreName(state)} so agents can use sites you're signed into.${
-              state.platform === "darwin"
-                ? " macOS will show this dialog:"
-                : " Your system will ask for permission once."
-            }`}
-          </DialogDescription>
-        </DialogHeader>
-        {state.platform === "darwin" ? (
-          <BrowserPersistenceMockDialog appName={state.appName} />
-        ) : null}
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              props.onOpenChange(false);
-            }}
-          >
-            Not now
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            disabled={props.pending}
-            onClick={props.onEnable}
-          >
-            Enable saved logins
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * Where the logins actually are, in the shield's own words - the popover and
- * this row read one table (`browserPersistenceShieldCopy`) so they can never
- * describe the same machine differently.
- *
- * A cached OS denial survives the process, so the only honest affordance there
- * is a restart (decision #23); that is the one action this row carries.
- */
-function SavedLoginsStatusRow(props: {
-  readonly persistence: BrowserPersistenceController;
-  readonly state: BrowserPersistenceState;
-}): ReactNode {
-  const copy = browserPersistenceShieldCopy(props.state);
-  const relaunchPending = props.state.decision.kind === "relaunch-pending";
-  return (
-    <SettingsRow
-      label={copy.headline}
-      description={copy.detail}
-      control={
-        relaunchPending ? (
-          <Button
-            type="button"
-            size="sm"
-            disabled={props.persistence.pending}
-            onClick={() => {
-              props.persistence.relaunch("settings");
-            }}
-          >
-            Restart Traycer
-          </Button>
-        ) : null
-      }
-    />
   );
 }
 
@@ -507,7 +367,6 @@ function ForgetAllLoginsRow(): ReactNode {
         isPending={false}
         onConfirm={() => {
           forgetAllBrowserLogins();
-          trackBrowserLoginsForgotten("settings");
           setConfirming(false);
         }}
       />
@@ -552,10 +411,6 @@ function SavedLoginSitesRow(props: {
               )}
               onClear={(domain) => {
                 if (!clearSavedLoginSite(domain)) return;
-                trackBrowserPersistence({
-                  name: "browser_site_cleared",
-                  source: "settings",
-                });
                 setCleared((current) => [...current, domain]);
                 props.onCleared();
               }}

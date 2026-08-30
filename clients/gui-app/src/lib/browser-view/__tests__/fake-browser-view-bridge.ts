@@ -1,6 +1,4 @@
 import type {
-  BrowserCookieCryptoState,
-  BrowserPersistenceState,
   BrowserPrimaryProfileDelta,
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
@@ -24,44 +22,19 @@ import type {
 } from "@traycer-clients/shared/platform/browser-view";
 
 /**
- * Shared test double for the persistence members of `BrowserViewBridge`.
- *
- * It lives outside any one suite because two of them need it now (the hook's
- * own behaviour, and the persistence analytics funnel), and duplicating ~40
- * stubbed members is how two copies drift into disagreeing about the same
- * bridge. Not named `*.test.ts`, so the runner does not collect it.
- */
-export function persistenceState(input: {
-  readonly enabled: boolean;
-}): BrowserPersistenceState {
-  return {
-    decision: input.enabled
-      ? { kind: "enabled", decidedAt: 1 }
-      : { kind: "undecided" },
-    cryptoState: {
-      mode: input.enabled ? "real" : "degraded",
-      persistence: input.enabled ? "persistent" : "ephemeral",
-      reason: input.enabled ? "os-backed" : "not-enabled",
-      storageBackend: null,
-      encryptionAvailable: input.enabled,
-    },
-    promptsOnEnable: true,
-    appName: "Traycer",
-    platform: "darwin",
-  };
-}
-
-/**
- * `BrowserViewBridge` has dozens of members the hook never touches; every one
- * is still stubbed here so the class can `implements` the interface with no
- * cast. Only the five persistence members carry real behaviour.
+ * Shared test double for `BrowserViewBridge`. It lives outside any one suite
+ * because several need it now, and duplicating ~40 stubbed members is how two
+ * copies drift into disagreeing about the same bridge. Not named `*.test.ts`,
+ * so the runner does not collect it.
  */
 export class FakeBrowserViewBridge implements BrowserViewBridge {
-  private readonly persistenceHandlers = new Set<
-    (state: BrowserPersistenceState) => void
-  >();
-  private enableCallCount = 0;
-  private nextEnableState: BrowserPersistenceState | null = null;
+  private saveLoginsValue: boolean;
+  private saveLoginsGetCount = 0;
+  private nextSetSaveLoginsResult: Promise<boolean> | null = null;
+
+  constructor(input?: { readonly saveLogins?: boolean }) {
+    this.saveLoginsValue = input?.saveLogins ?? true;
+  }
 
   updateBounds(): Promise<void> {
     return Promise.resolve();
@@ -145,38 +118,29 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve({ restoredTiles: [] });
   }
 
-  getCookieCryptoState(): Promise<BrowserCookieCryptoState> {
-    return Promise.resolve({
-      mode: "real",
-      persistence: "persistent",
-      reason: "os-backed",
-      storageBackend: null,
-      encryptionAvailable: true,
-    });
+  getSaveLogins(): Promise<boolean> {
+    this.saveLoginsGetCount += 1;
+    return Promise.resolve(this.saveLoginsValue);
   }
 
-  getPersistenceState(): Promise<BrowserPersistenceState> {
-    return Promise.resolve(persistenceState({ enabled: false }));
+  setSaveLogins(enabled: boolean): Promise<boolean> {
+    const forced = this.nextSetSaveLoginsResult;
+    if (forced !== null) {
+      this.nextSetSaveLoginsResult = null;
+      return forced;
+    }
+    this.saveLoginsValue = enabled;
+    return Promise.resolve(enabled);
   }
 
-  enablePersistence(): Promise<BrowserPersistenceState> {
-    this.enableCallCount += 1;
-    const next = this.nextEnableState;
-    return Promise.resolve(next ?? persistenceState({ enabled: true }));
+  /** Forces the NEXT `setSaveLogins` call to settle with this promise instead
+   * - a rejection, or a resolution that disagrees with what was requested. */
+  setNextSetSaveLoginsResult(result: Promise<boolean>): void {
+    this.nextSetSaveLoginsResult = result;
   }
 
-  /** What the NEXT (and every subsequent) enable resolves with - a denial, a
-   * relaunch-pending machine, whatever the funnel under test needs. */
-  setEnableOutcome(state: BrowserPersistenceState): void {
-    this.nextEnableState = state;
-  }
-
-  declinePersistence(): Promise<BrowserPersistenceState> {
-    return Promise.resolve(persistenceState({ enabled: false }));
-  }
-
-  relaunchForPersistence(): Promise<void> {
-    return Promise.resolve();
+  saveLoginsGetCallCount(): number {
+    return this.saveLoginsGetCount;
   }
 
   wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult> {
@@ -189,17 +153,6 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
 
   forgetLogins(): Promise<void> {
     return Promise.resolve();
-  }
-
-  onPersistenceStateChanged(
-    handler: (state: BrowserPersistenceState) => void,
-  ): { dispose: () => void } {
-    this.persistenceHandlers.add(handler);
-    return {
-      dispose: () => {
-        this.persistenceHandlers.delete(handler);
-      },
-    };
   }
 
   onPrimaryProfileDelta(
@@ -325,15 +278,5 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
 
   onElectronTabHandoff() {
     return { dispose: () => undefined };
-  }
-
-  emitPersistenceState(state: BrowserPersistenceState): void {
-    this.persistenceHandlers.forEach((handler) => {
-      handler(state);
-    });
-  }
-
-  persistenceEnableCallCount(): number {
-    return this.enableCallCount;
   }
 }

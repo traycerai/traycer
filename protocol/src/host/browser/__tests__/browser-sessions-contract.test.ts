@@ -459,46 +459,6 @@ describe("browser.sessions@1.0 correlation", () => {
   });
 });
 
-describe("browser.sessions@1.0 persistence state", () => {
-  it("parses every persistence state as a one-way client event", () => {
-    for (const state of ["enabled", "not-enabled", "degraded"]) {
-      const frame = {
-        kind: "persistenceStateChanged",
-        hasBinaryPayload: false,
-        state,
-      };
-      expect(browserSessionsClientFrameSchema.safeParse(frame).success).toBe(
-        true,
-      );
-      expect(browserSessionsV1.clientFrameSchema.safeParse(frame).success).toBe(
-        true,
-      );
-      expect(
-        browserSessionsClientFrameSchema.safeParse({
-          ...frame,
-          requestId: "unsettled-request",
-        }).success,
-      ).toBe(false);
-    }
-  });
-
-  it("rejects an unknown state and a missing one", () => {
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        kind: "persistenceStateChanged",
-        hasBinaryPayload: false,
-        state: "sealed",
-      }).success,
-    ).toBe(false);
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        kind: "persistenceStateChanged",
-        hasBinaryPayload: false,
-      }).success,
-    ).toBe(false);
-  });
-});
-
 describe("browser.sessions@1.0 electron tab handoff", () => {
   const HANDOFF_FRAME = {
     kind: "electronTabHandoff",

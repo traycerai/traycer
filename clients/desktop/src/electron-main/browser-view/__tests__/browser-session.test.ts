@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { Certificate, CertificatePrincipal, Cookie } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
@@ -315,28 +314,6 @@ function requestAllowed(
   return allowed;
 }
 
-function realCookieCryptoState(): BrowserCookieCryptoState {
-  return {
-    mode: "real",
-    persistence: "persistent",
-    reason: "os-backed",
-    storageBackend: null,
-    encryptionAvailable: true,
-  };
-}
-
-function degradedCookieCryptoState(
-  reason: BrowserCookieCryptoState["reason"],
-): BrowserCookieCryptoState {
-  return {
-    mode: "degraded",
-    persistence: "ephemeral",
-    reason,
-    storageBackend: null,
-    encryptionAvailable: reason === "linux-basic-text",
-  };
-}
-
 const PRIMARY: BrowserSessionProfileRequest = {
   profile: "primary",
   sessionId: "session-1",
@@ -365,10 +342,8 @@ describe("browser view session policy", () => {
   });
 
   it("uses a dedicated persistent partition without mutating defaultSession", async () => {
-    const crypto = await import("../storage/browser-cookie-crypto");
-    vi.spyOn(crypto, "ensureBrowserPersistenceForTileOpen").mockReturnValue(
-      realCookieCryptoState(),
-    );
+    const savedLogins = await import("../storage/browser-saved-logins");
+    vi.spyOn(savedLogins, "isBrowserSavedLoginsEnabled").mockReturnValue(true);
     const mod = await import("../browser-session");
 
     const browserSession = mod.ensureBrowserViewSession(PRIMARY);
@@ -395,11 +370,9 @@ describe("browser view session policy", () => {
     expect(electronState.defaultSession?.downloadListeners).toEqual([]);
   });
 
-  it("uses a session-only partition when cookie crypto is degraded", async () => {
-    const crypto = await import("../storage/browser-cookie-crypto");
-    vi.spyOn(crypto, "ensureBrowserPersistenceForTileOpen").mockReturnValue(
-      degradedCookieCryptoState("keychain-denied"),
-    );
+  it("uses the ephemeral partition when saved logins is turned off", async () => {
+    const savedLogins = await import("../storage/browser-saved-logins");
+    vi.spyOn(savedLogins, "isBrowserSavedLoginsEnabled").mockReturnValue(false);
     const mod = await import("../browser-session");
 
     mod.ensureBrowserViewSession(PRIMARY);
@@ -413,6 +386,7 @@ describe("browser view session policy", () => {
         options: { cache: true },
       },
     ]);
+    expect(partition).toBe(mod.BROWSER_VIEW_EPHEMERAL_PARTITION);
     expect(partition.startsWith("persist:")).toBe(false);
     expect(preferences).toMatchObject({
       partition,
@@ -420,10 +394,10 @@ describe("browser view session policy", () => {
   });
 
   it("keeps one hardened session per partition and never re-installs policy", async () => {
-    const crypto = await import("../storage/browser-cookie-crypto");
-    const readState = vi
-      .spyOn(crypto, "ensureBrowserPersistenceForTileOpen")
-      .mockReturnValue(degradedCookieCryptoState("not-enabled"));
+    const savedLogins = await import("../storage/browser-saved-logins");
+    const readEnabled = vi
+      .spyOn(savedLogins, "isBrowserSavedLoginsEnabled")
+      .mockReturnValue(false);
     const mod = await import("../browser-session");
 
     const first = mod.ensureBrowserViewSession(PRIMARY);
@@ -438,9 +412,9 @@ describe("browser view session policy", () => {
       mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
     );
 
-    // Enabling persistence later moves new guests to the durable partition,
-    // which is a different session and gets its own hardening pass.
-    readState.mockReturnValue(realCookieCryptoState());
+    // Turning saved logins on later moves new guests to the durable
+    // partition, which is a different session and gets its own hardening pass.
+    readEnabled.mockReturnValue(true);
     const hardened = new FakePolicySession();
     electronState.browserSession = hardened;
     const persistent = mod.ensureBrowserViewSession(PRIMARY);
@@ -457,44 +431,19 @@ describe("browser view session policy", () => {
     expect(hardened.downloadListeners).toHaveLength(1);
   });
 
-  it("maps decision x probe to a partition for primary guests", async () => {
-    const crypto = await import("../storage/browser-cookie-crypto");
-    const readState = vi.spyOn(crypto, "ensureBrowserPersistenceForTileOpen");
+  it("maps the saved-logins pref to a partition for primary guests", async () => {
+    const savedLogins = await import("../storage/browser-saved-logins");
+    const readEnabled = vi.spyOn(savedLogins, "isBrowserSavedLoginsEnabled");
     const mod = await import("../browser-session");
 
-    const cases: ReadonlyArray<{
-      readonly state: BrowserCookieCryptoState;
-      readonly partition: string;
-    }> = [
-      { state: realCookieCryptoState(), partition: mod.BROWSER_VIEW_PARTITION },
-      {
-        state: degradedCookieCryptoState("not-enabled"),
-        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
-      },
-      {
-        state: degradedCookieCryptoState("keychain-denied"),
-        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
-      },
-      {
-        state: degradedCookieCryptoState("linux-basic-text"),
-        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
-      },
-      {
-        state: degradedCookieCryptoState("encryption-unavailable"),
-        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
-      },
-      {
-        state: degradedCookieCryptoState("unresolved"),
-        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
-      },
-    ];
-
-    for (const testCase of cases) {
-      readState.mockReturnValue(testCase.state);
-      expect(mod.partitionForProfile("primary", "session-1")).toBe(
-        testCase.partition,
-      );
-    }
+    readEnabled.mockReturnValue(true);
+    expect(mod.partitionForProfile("primary", "session-1")).toBe(
+      mod.BROWSER_VIEW_PARTITION,
+    );
+    readEnabled.mockReturnValue(false);
+    expect(mod.partitionForProfile("primary", "session-1")).toBe(
+      mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+    );
     expect(mod.BROWSER_VIEW_PARTITION.startsWith("persist:")).toBe(true);
     expect(mod.BROWSER_VIEW_EPHEMERAL_PARTITION.startsWith("persist:")).toBe(
       false,
@@ -502,12 +451,12 @@ describe("browser view session policy", () => {
   });
 
   it("gives an isolated session its own in-memory partition, hardened alike", async () => {
-    const crypto = await import("../storage/browser-cookie-crypto");
-    // Persistence being fully enabled must not pull an isolated guest onto the
-    // durable jar - the decision is not consulted for this profile at all.
-    const readState = vi
-      .spyOn(crypto, "ensureBrowserPersistenceForTileOpen")
-      .mockReturnValue(realCookieCryptoState());
+    const savedLogins = await import("../storage/browser-saved-logins");
+    // Saved logins being on must not pull an isolated guest onto the durable
+    // jar - the pref is not consulted for this profile at all.
+    const readEnabled = vi
+      .spyOn(savedLogins, "isBrowserSavedLoginsEnabled")
+      .mockReturnValue(true);
     const mod = await import("../browser-session");
     const isolatedSession = new FakePolicySession();
     electronState.browserSession = isolatedSession;
@@ -517,7 +466,7 @@ describe("browser view session policy", () => {
     );
     expect(ISOLATED_PARTITION.startsWith("persist:")).toBe(false);
     expect(ISOLATED_PARTITION).toContain("session-9");
-    expect(readState).not.toHaveBeenCalled();
+    expect(readEnabled).not.toHaveBeenCalled();
 
     mod.ensureBrowserViewSession(ISOLATED);
     const preferences = mod.createBrowserViewWebPreferences(ISOLATED);

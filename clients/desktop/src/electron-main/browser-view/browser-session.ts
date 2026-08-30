@@ -13,7 +13,7 @@ import {
   setBrowserCertificateErrorHandler,
   type CertificateErrorReport,
 } from "../app/cert-trust";
-import { ensureBrowserPersistenceForTileOpen } from "./storage/browser-cookie-crypto";
+import { isBrowserSavedLoginsEnabled } from "./storage/browser-saved-logins";
 import {
   BrowserCookieChangeObserver,
   BROWSER_COOKIE_DELTA_WINDOW_MS,
@@ -169,9 +169,9 @@ const pendingCertificateErrorsById = new Map<
 >();
 
 /**
- * Sessions are memoised per partition name, not globally: enabling persistence
- * mid-process moves new guests from the ephemeral partition to the persistent
- * one, and each partition needs the hardening installed exactly once.
+ * Sessions are memoised per partition name, not globally: toggling saved logins
+ * mid-process moves new guests between the persistent and ephemeral partitions,
+ * and each partition needs the hardening installed exactly once.
  * `session.defaultSession` is never touched here - the app shell owns it.
  */
 const sessionsByPartition = new Map<string, Session>();
@@ -189,11 +189,7 @@ export function ensureBrowserViewSession(
   );
 }
 
-/**
- * The named jar, bypassing the persistence decision. Only the enable-time
- * migration needs this: it has to hold BOTH jars open at once (spec §6.4),
- * which the decision-driven lookup above can never express.
- */
+/** The named jar, bypassing the saved-logins pref. */
 export function ensureBrowserViewSessionForPartition(
   partition: string,
 ): Session {
@@ -209,9 +205,7 @@ export function ensureBrowserViewSessionForPartition(
 /**
  * Cookie deltas come from the durable `primary` jar and nowhere else: the
  * ephemeral jar's logins are gone at quit, and an isolated partition shares
- * nothing by construction (spec §6.1). This is also the single attach point for
- * the enable-time migration - it creates the persistent session through this
- * same function, so the jar it copies into is observed from its first cookie.
+ * nothing by construction (spec §6.1).
  */
 function observePrimaryProfileCookieChanges(
   partition: string,
@@ -272,16 +266,6 @@ export async function suppressAllBrowserPrimaryProfileDeltas<T>(
 }
 
 /**
- * The durable `primary` jar, but only if this process already opened it.
- * Forget-all must never be the call that *creates* it: opening a `persist:`
- * partition is what makes Chromium reach for the OS keystore, and this path can
- * run on a machine where the user never enabled saved logins (spec §6.1).
- */
-export function existingPersistentBrowserViewSession(): Session | null {
-  return sessionsByPartition.get(BROWSER_VIEW_PARTITION) ?? null;
-}
-
-/**
  * Emits exactly one delta for `domain`, now, from the durable `primary` jar.
  * Ticket 07's clear-site is the only caller: it removes the site's cookies with
  * the observer suppressed, then says the one true thing about that slice
@@ -297,7 +281,7 @@ export async function emitBrowserPrimaryProfileDeltaNow(
 
 /**
  * The jar `primary` guests share right now - persistent or ephemeral, whichever
- * the persistence decision currently yields. `sessionId` is read only for an
+ * the saved-logins pref currently yields. `sessionId` is read only for an
  * isolated partition, so it has no bearing here.
  */
 export function currentPrimaryBrowserViewPartition(): string {
@@ -317,9 +301,7 @@ export function createBrowserViewWebPreferences(
 
 /**
  * The single place that decides whether a guest gets a durable jar. `primary`
- * only reaches `persist:` when the user enabled persistence on this machine
- * *and* the keystore probe succeeded in this process - anything else stays
- * in memory, which is what keeps a denied keychain usable rather than fatal.
+ * is durable unless the user turned saved logins off on this machine.
  */
 export function partitionForProfile(
   profile: BrowserSessionProfile,
@@ -327,13 +309,13 @@ export function partitionForProfile(
 ): string {
   // No `persist:` prefix, and the session id in the name: the jar lives in
   // memory only, is shared by nothing else, and is cleared outright when the
-  // session's last tab goes away (spec §6.1, decision #24). The persistence
-  // decision is deliberately not consulted - an isolated session is ephemeral
-  // whether or not the user enabled saved logins.
+  // session's last tab goes away (spec §6.1, decision #24). The saved-logins
+  // pref is deliberately not consulted - an isolated session is ephemeral
+  // whether or not the user saves logins.
   if (profile === "isolated") {
     return `${BROWSER_VIEW_ISOLATED_PARTITION_PREFIX}${sessionId}`;
   }
-  return ensureBrowserPersistenceForTileOpen().persistence === "persistent"
+  return isBrowserSavedLoginsEnabled()
     ? BROWSER_VIEW_PARTITION
     : BROWSER_VIEW_EPHEMERAL_PARTITION;
 }

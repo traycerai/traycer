@@ -12,15 +12,11 @@ import {
   Plus,
   RotateCcw,
   RotateCw,
-  Shield,
-  ShieldAlert,
-  ShieldOff,
   SquareMousePointer,
   Smartphone,
   Tablet,
   VenetianMask,
 } from "lucide-react";
-import { Link } from "@tanstack/react-router";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { Button } from "@/components/ui/button";
@@ -49,15 +45,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  browserCookieDegradedMessage,
-  browserPersistenceShieldCopy,
-  BROWSER_PRIVATE_SESSION_SHIELD_COPY,
-  type BrowserPersistenceShieldAction,
-  type BrowserPersistenceShieldTone,
-} from "@/lib/browser-view/browser-cookie-degraded-message";
-import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
-import { trackBrowserPersistence } from "@/lib/browser-view/browser-persistence-analytics";
-import {
   Popover,
   PopoverContent,
   PopoverDescription,
@@ -65,12 +52,15 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import type {
-  BrowserCookieCryptoState,
-  BrowserViewViewportPresetId,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
 import { registrableDomainForUrl } from "@traycer-clients/shared/platform/registrable-domain";
+
+const BROWSER_PRIVATE_SESSION_SHIELD_COPY = {
+  headline: "Private session",
+  detail:
+    "This session has its own throwaway jar. It starts signed out, shares no cookies with your other tabs, and everything in it is discarded when the session closes.",
+} as const;
 
 export interface BrowserPictureInPictureControl {
   readonly disabled: boolean;
@@ -129,7 +119,6 @@ export function BrowserTileToolbar(props: {
   const showTrailing =
     capabilities.annotate ||
     props.pictureInPicture !== null ||
-    controller.persistence !== null ||
     controller.profile === "isolated" ||
     showAdvanced;
   if (!showNav && !showAddress && !showTrailing) return null;
@@ -251,18 +240,6 @@ function BrowserOpenExternalButton(props: { readonly url: string }) {
   );
 }
 
-/**
- * One shield slot, three outcomes: a private session says so and never claims
- * anything about the shared jar, a primary session shows the persistence
- * shield, and a tile with no persistence answer yet shows nothing.
- */
-function BrowserTileShield(props: { readonly controller: TileController }) {
-  const controller = props.controller;
-  if (controller.profile === "isolated") return <BrowserPrivateSessionShield />;
-  if (controller.persistence === null) return null;
-  return <BrowserPersistenceShield persistence={controller.persistence} />;
-}
-
 function BrowserTileToolbarTrailing(props: {
   readonly controller: TileController;
   readonly pictureInPicture: BrowserPictureInPictureControl | null;
@@ -276,7 +253,9 @@ function BrowserTileToolbarTrailing(props: {
   const clearSite = browserClearSiteAction(controller);
   return (
     <div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
-      <BrowserTileShield controller={controller} />
+      {controller.profile === "isolated" ? (
+        <BrowserPrivateSessionShield />
+      ) : null}
       {capabilities.annotate && controller.annotation !== null ? (
         <BrowserAnnotateToggle controller={controller.annotation} />
       ) : null}
@@ -304,12 +283,6 @@ function BrowserTileToolbarTrailing(props: {
           isPending={false}
           onConfirm={() => {
             setClearSiteConfirmOpen(false);
-            // The event names the surface only - which site was cleared is
-            // exactly what this funnel must never carry.
-            trackBrowserPersistence({
-              name: "browser_site_cleared",
-              source: "tile",
-            });
             clearSite.clear();
           }}
         />
@@ -340,30 +313,11 @@ function browserClearSiteAction(
   return { site, clear };
 }
 
-const SHIELD_ICONS: Record<
-  BrowserPersistenceShieldTone,
-  ComponentType<{
-    readonly className?: string;
-    readonly "aria-hidden"?: boolean;
-  }>
-> = {
-  secure: Shield,
-  off: ShieldOff,
-  warning: ShieldAlert,
-};
-
-const SHIELD_TONE_CLASS: Record<BrowserPersistenceShieldTone, string> = {
-  secure: "text-muted-foreground hover:text-foreground",
-  off: "text-muted-foreground hover:text-foreground",
-  warning: "text-warning hover:text-warning",
-};
-
 /**
- * The isolated profile's shield. It replaces the persistence shield outright
- * rather than adding a state to it: a private session has no saved-login
- * state to report and nothing to enable, retry or clear, so the popover is
- * explanation only. Any clear-site action stays out of this tile for the same
- * reason - closing the session already destroys the jar.
+ * The one shield a tile still shows. Saving logins is silent and always-on for
+ * a `primary` tile - Chrome shows no badge for it either - so the only thing
+ * left worth saying in the toolbar is that THIS session is private: it has
+ * nothing to save, enable or clear, and closing it destroys the jar.
  */
 function BrowserPrivateSessionShield() {
   const [open, setOpen] = useState(false);
@@ -382,10 +336,7 @@ function BrowserPrivateSessionShield() {
             variant="ghost"
             size="icon-sm"
             aria-label={`Saved logins: ${copy.headline}`}
-            className={cn(
-              "shrink-0 aria-expanded:bg-accent aria-expanded:text-accent-foreground",
-              SHIELD_TONE_CLASS[copy.tone],
-            )}
+            className="shrink-0 text-muted-foreground hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
           >
             <VenetianMask aria-hidden />
           </Button>
@@ -400,97 +351,6 @@ function BrowserPrivateSessionShield() {
         </PopoverHeader>
       </PopoverContent>
     </Popover>
-  );
-}
-
-/**
- * Spec §7.1's shield. It is the ONLY always-visible surface that tells the
- * user whether their logins survive, and the one place a denied keychain can
- * be retried - which is why every state here carries its own affordance rather
- * than a shared "see Settings".
- */
-function BrowserPersistenceShield(props: {
-  readonly persistence: BrowserPersistenceController;
-}) {
-  const [open, setOpen] = useState(false);
-  const state = props.persistence.state;
-  // Nothing is claimed before the desktop has answered: an optimistic "saved
-  // securely" here would be a lie about where the user's cookies are.
-  if (state === null) return null;
-  const copy = browserPersistenceShieldCopy(state);
-  const Icon = SHIELD_ICONS[copy.tone];
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <TooltipWrapper
-        label={copy.headline}
-        side="top"
-        sideOffset={6}
-        align="center"
-      >
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Saved logins: ${copy.headline}`}
-            className={cn(
-              "shrink-0 aria-expanded:bg-accent aria-expanded:text-accent-foreground",
-              SHIELD_TONE_CLASS[copy.tone],
-            )}
-          >
-            <Icon aria-hidden />
-          </Button>
-        </PopoverTrigger>
-      </TooltipWrapper>
-      <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
-        <PopoverHeader>
-          <PopoverTitle>{copy.headline}</PopoverTitle>
-          <PopoverDescription className="text-ui-xs">
-            {copy.detail}
-          </PopoverDescription>
-        </PopoverHeader>
-        <BrowserPersistenceShieldAffordance
-          action={copy.action}
-          persistence={props.persistence}
-          onActed={() => setOpen(false)}
-        />
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-function BrowserPersistenceShieldAffordance(props: {
-  readonly action: BrowserPersistenceShieldAction;
-  readonly persistence: BrowserPersistenceController;
-  readonly onActed: () => void;
-}) {
-  const action = props.action;
-  if (action.kind === "none") return null;
-  if (action.kind === "settings") {
-    return (
-      <Link
-        to="/settings/general"
-        className="text-ui-xs font-medium text-primary underline-offset-4 hover:underline"
-        onClick={props.onActed}
-      >
-        {action.label}
-      </Link>
-    );
-  }
-  return (
-    <Button
-      type="button"
-      size="sm"
-      className="self-start"
-      disabled={props.persistence.pending}
-      onClick={() => {
-        if (action.kind === "relaunch") props.persistence.relaunch("shield");
-        else props.persistence.enable("shield");
-        props.onActed();
-      }}
-    >
-      {action.label}
-    </Button>
   );
 }
 
@@ -540,9 +400,6 @@ function BrowserMoreMenu(props: {
           <BrowserSiteInfoMenu
             url={controller.url}
             profile={controller.profile}
-            cookieCryptoState={
-              controller.persistence?.state?.cryptoState ?? null
-            }
           />
         ) : null}
         {clearSite === null ? null : (
@@ -749,30 +606,22 @@ interface BrowserSiteInfoCookieRow {
 }
 
 /**
- * A private session never reports the shared jar's state: its cookies live in a
- * partition of its own and die with the session.
+ * Only a private session has anything to say here. A `primary` tile shares the
+ * one jar the whole app shares, silently, so a row about it would be noise.
  */
 function siteInfoCookieRow(
   profile: BrowserSessionProfileKind,
-  cookieCryptoState: BrowserCookieCryptoState | null,
 ): BrowserSiteInfoCookieRow | null {
-  if (profile === "isolated") {
-    return {
-      title: BROWSER_PRIVATE_SESSION_SHIELD_COPY.headline,
-      detail: BROWSER_PRIVATE_SESSION_SHIELD_COPY.detail,
-    };
-  }
-  if (cookieCryptoState === null) return null;
+  if (profile !== "isolated") return null;
   return {
-    title: cookieCryptoHeadline(cookieCryptoState),
-    detail: cookieCryptoDetail(cookieCryptoState),
+    title: BROWSER_PRIVATE_SESSION_SHIELD_COPY.headline,
+    detail: BROWSER_PRIVATE_SESSION_SHIELD_COPY.detail,
   };
 }
 
 function BrowserSiteInfoMenu(props: {
   readonly url: string;
   readonly profile: BrowserSessionProfileKind;
-  readonly cookieCryptoState: BrowserCookieCryptoState | null;
 }) {
   const [open, setOpen] = useState(false);
   const isWebOrigin = isWebOriginUrl(props.url);
@@ -780,7 +629,7 @@ function BrowserSiteInfoMenu(props: {
   const originDetail = isWebOrigin
     ? "Served over the network from this page's origin."
     : "Not loaded from a web address (for example, a blank tab or an internal page).";
-  const cookieRow = siteInfoCookieRow(props.profile, props.cookieCryptoState);
+  const cookieRow = siteInfoCookieRow(props.profile);
   const cookieDetail =
     cookieRow === null ? null : `${cookieRow.title}. ${cookieRow.detail}`;
   return (
@@ -833,16 +682,4 @@ function isWebOriginUrl(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-function cookieCryptoHeadline(state: BrowserCookieCryptoState): string {
-  if (state.persistence === "ephemeral") return "Logins aren't saved";
-  return "Logins saved securely";
-}
-
-function cookieCryptoDetail(state: BrowserCookieCryptoState): string {
-  if (state.mode === "degraded" || state.persistence === "ephemeral") {
-    return browserCookieDegradedMessage(state);
-  }
-  return "Cookies and saved logins on this page are encrypted by your operating system.";
 }

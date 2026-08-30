@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserPersistenceState } from "@traycer-clients/shared/platform/browser-view";
 import type {
   HostControllerStatus,
   HostRegistryUpdateState,
@@ -15,20 +14,6 @@ import {
   DesktopRunnerHost,
   type DesktopPreloadBridge,
 } from "../desktop-runner-host";
-
-const persistedPersistenceState: BrowserPersistenceState = {
-  decision: { kind: "enabled", decidedAt: 0 },
-  cryptoState: {
-    mode: "real",
-    persistence: "persistent",
-    reason: "os-backed",
-    storageBackend: null,
-    encryptionAvailable: true,
-  },
-  promptsOnEnable: false,
-  appName: "Traycer",
-  platform: "darwin",
-};
 
 // In vitest's jsdom env the `encrypt-storage` UMD wrapper fails to pick up
 // `window.localStorage` correctly; we don't need to exercise the AES path
@@ -594,17 +579,8 @@ function buildFakeBridge(
       }),
       clearSite: async () => ({ status: "refused" as const, reason: "test" }),
       evictSite: async () => undefined,
-      getCookieCryptoState: async () => ({
-        mode: "real" as const,
-        persistence: "persistent" as const,
-        reason: "os-backed" as const,
-        storageBackend: null,
-        encryptionAvailable: true,
-      }),
-      getPersistenceState: async () => persistedPersistenceState,
-      enablePersistence: async () => persistedPersistenceState,
-      declinePersistence: async () => persistedPersistenceState,
-      relaunchForPersistence: async () => undefined,
+      getSaveLogins: async () => true,
+      setSaveLogins: async (enabled) => enabled,
       // This shell test has no OS keystore; the store-key handshake refuses
       // the same way a machine without one does.
       wrapStoreKey: async () => ({
@@ -616,7 +592,6 @@ function buildFakeBridge(
         reason: "no keystore in this test bridge",
       }),
       forgetLogins: async () => undefined,
-      onPersistenceStateChanged: (_handler) => ({ dispose: () => undefined }),
       onPrimaryProfileDelta: (_handler) => ({ dispose: () => undefined }),
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),

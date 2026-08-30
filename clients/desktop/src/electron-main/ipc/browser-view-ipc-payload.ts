@@ -164,6 +164,9 @@ const storeKeyMaterialSchema = z.base64();
  */
 const evictDomainSchema = z.object({ domain: z.string().min(1) });
 
+/** The saved-logins toggle's new value. */
+const saveLoginsSchema = z.boolean();
+
 export const browserViewIpcPayload = {
   annotationAttachResult: annotationAttachResultSchema,
   annotationStart: annotationStartSchema,
@@ -184,6 +187,7 @@ export const browserViewIpcPayload = {
   overlayPaintAck: overlayPaintAckSchema,
   overlayRelease: overlayReleaseSchema,
   pipCaptureStart: pipCaptureStartSchema,
+  saveLogins: saveLoginsSchema,
   storeKeyMaterial: storeKeyMaterialSchema,
   tileKey: tileKeySchema,
 } as const;

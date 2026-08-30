@@ -1,5 +1,4 @@
 import {
-  app,
   BrowserWindow,
   WebContentsView,
   type BrowserWindowConstructorOptions,
@@ -24,7 +23,6 @@ import type {
 } from "../browser-view/browser-view-port";
 import { hostPlatformFromProcessPlatform } from "../browser-view/manager/browser-view-chords";
 import {
-  BROWSER_VIEW_EPHEMERAL_PARTITION,
   BROWSER_VIEW_PARTITION,
   createBrowserViewWebPreferences,
   cancelBrowserViewDownload,
@@ -39,7 +37,6 @@ import {
   partitionForProfile,
   readBrowserViewPendingCertificateError,
   registerBrowserViewWebContents,
-  existingPersistentBrowserViewSession,
   releaseBrowserViewSession,
   suppressAllBrowserPrimaryProfileDeltas,
   suppressBrowserPrimaryProfileDelta,
@@ -47,11 +44,11 @@ import {
 } from "../browser-view/browser-session";
 import { describeLogError, log } from "../app/logger";
 import {
-  declineBrowserPersistence,
-  enableBrowserPersistence,
-  getBrowserCookieCryptoState,
-  getBrowserPersistenceState,
-} from "../browser-view/storage/browser-cookie-crypto";
+  isBrowserSavedLoginsEnabled,
+  setBrowserSavedLoginsEnabled,
+  unwrapStoreKey,
+  wrapStoreKey,
+} from "../browser-view/storage/browser-saved-logins";
 import type { BrowserSiteClearDependencies } from "../browser-view/storage/browser-storage-state";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
@@ -61,18 +58,10 @@ import {
   clearBrowserSite,
   seedBrowserViewCookies,
 } from "../browser-view/storage/browser-storage-state";
-import {
-  forgetBrowserPersistentLogins,
-  migrateBrowserPersistenceToPersistentPartition,
-} from "../browser-view/storage/browser-persistence-migration";
-import {
-  unwrapStoreKey,
-  wrapStoreKey,
-} from "../browser-view/storage/browser-store-key";
+import { forgetBrowserPersistentLogins } from "../browser-view/storage/browser-forget-logins";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import type {
-  BrowserPersistenceState,
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
   BrowserViewClearSiteResult,
@@ -93,7 +82,7 @@ export function registerBrowserViewIpc(
   const primaryProfileSnapshots = new BrowserPrimaryProfileSnapshotCoordinator(
     (origins) =>
       captureBrowserPrimaryProfile(origins, {
-        readCryptoState: getBrowserCookieCryptoState,
+        readSaveLogins: isBrowserSavedLoginsEnabled,
         getSession: () => ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST),
       }),
     captureBrowserOriginLocalStorage,
@@ -467,68 +456,40 @@ export function registerBrowserViewIpc(
     },
   );
 
-  bridge.handleInvoke(RunnerHostInvoke.browserViewCookieCryptoStateGet, () =>
-    getBrowserCookieCryptoState(),
+  bridge.handleInvoke(RunnerHostInvoke.browserViewSaveLoginsGet, () =>
+    isBrowserSavedLoginsEnabled(),
   );
 
-  bridge.handleInvoke(RunnerHostInvoke.browserViewPersistenceStateGet, () =>
-    getBrowserPersistenceState(),
-  );
-
-  // The only invoke allowed to reach the OS keystore. The explainer card
-  // (spec §7.2) is what stands in front of it; on success the live jar and
-  // every open tile move to the durable partition before the state is
-  // published, so nothing observes a half-migrated browser.
+  // Toggling just switches which jar `primary` guests are born into and brings
+  // the live tiles back on it at the same URL. Nothing is copied either way:
+  // turning saving off leaves the `persist:` jar on disk untouched (that is
+  // what "Forget all" is for), and turning it back on drops the in-memory one.
   bridge.handleInvoke(
-    RunnerHostInvoke.browserViewPersistenceEnable,
-    async () => {
-      const cryptoState = await enableBrowserPersistence();
-      if (cryptoState.persistence === "persistent") {
-        // Create the durable partition first: the migration copies into it and
-        // the recreated guests attach to an already-hardened session.
-        ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST);
-        await migrateBrowserPersistenceToPersistentPartition({
-          readEphemeralSession: () =>
-            ensureBrowserViewSessionForPartition(
-              BROWSER_VIEW_EPHEMERAL_PARTITION,
-            ),
-          readPersistentSession: () =>
-            ensureBrowserViewSessionForPartition(BROWSER_VIEW_PARTITION),
-          seedCookies: seedBrowserViewCookies,
-          recreateTabs: () => manager.migrateNativeTabsForPersistence(),
-        });
-      }
-      return publishBrowserPersistenceState(bridge);
+    RunnerHostInvoke.browserViewSaveLoginsSet,
+    async (_event, payload): Promise<boolean> => {
+      const enabled = browserViewIpcPayload.saveLogins.parse(payload);
+      const settled = await setBrowserSavedLoginsEnabled(enabled);
+      // Open the target jar first, so the recreated guests attach to an
+      // already-hardened session.
+      ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST);
+      await manager.recreateNativeTabsOnCurrentPartition();
+      return settled;
     },
   );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewPersistenceDecline,
-    async () => {
-      await declineBrowserPersistence();
-      return publishBrowserPersistenceState(bridge);
-    },
-  );
-
-  // Boot state, so a window that opened before any decision starts from the
-  // same truth the pushes carry rather than from its own first read.
-  publishBrowserPersistenceState(bridge);
 
   // The host's store key, sealed with the same keystore Chromium's own jar
-  // uses (spec §6.2). `browser-store-key.ts` refuses unless that keystore is
-  // already os-backed, so neither call can raise a first, unexplained prompt -
-  // and a refusal is reported as a result, never as a thrown IPC rejection,
-  // because the host has a defined answer for it (stay sealed).
+  // uses (spec §6.2). Attempted whenever the host asks, on every backend; a
+  // refusal is reported as a result rather than a thrown IPC rejection, because
+  // the host has a defined answer for it - stay sealed, and the user signs in
+  // again.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewStoreKeyWrap,
     (_event, payload): BrowserStoreKeyWrapResult => {
       const rawKey = browserViewIpcPayload.storeKeyMaterial.parse(payload);
-      try {
-        return { ok: true, wrappedKey: wrapStoreKey(rawKey) };
-      } catch (err) {
-        log.warn("[browser-view] wrapping the host store key failed", { err });
-        return { ok: false, reason: storeKeyFailureReason(err) };
-      }
+      const wrappedKey = wrapStoreKey(rawKey);
+      return wrappedKey === null
+        ? { ok: false, reason: "keystore unavailable" }
+        : { ok: true, wrappedKey };
     },
   );
 
@@ -536,14 +497,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewStoreKeyUnwrap,
     (_event, payload): BrowserStoreKeyUnwrapResult => {
       const wrappedKey = browserViewIpcPayload.storeKeyMaterial.parse(payload);
-      try {
-        return { ok: true, rawKey: unwrapStoreKey(wrappedKey) };
-      } catch (err) {
-        log.warn("[browser-view] unwrapping the host store key failed", {
-          err,
-        });
-        return { ok: false, reason: storeKeyFailureReason(err) };
-      }
+      const rawKey = unwrapStoreKey(wrappedKey);
+      return rawKey === null
+        ? { ok: false, reason: "keystore unavailable" }
+        : { ok: true, rawKey };
     },
   );
 
@@ -555,26 +512,21 @@ export function registerBrowserViewIpc(
   // a removal for each cookie, and those deltas would re-create the entry the
   // host just deleted.
   bridge.handleInvoke(RunnerHostInvoke.browserViewForgetLogins, async () => {
+    // Opened here, outside the suppression: the durable jar survives the pref,
+    // so it must be cleared even with saved logins off or no tile opened this
+    // run, and opening it is what installs the observer `suppressDeltas` mutes.
+    const persistentSession = ensureBrowserViewSessionForPartition(
+      BROWSER_VIEW_PARTITION,
+    );
     await forgetBrowserPersistentLogins({
       suppressDeltas: suppressAllBrowserPrimaryProfileDeltas,
-      readPersistentSession: existingPersistentBrowserViewSession,
+      persistentSession,
       resetLocalStorageSnapshots: () => {
         primaryProfileSnapshots.reset();
       },
-      recreateTabs: () => manager.migrateNativeTabsForPersistence(),
+      recreateTabs: () => manager.recreateNativeTabsOnCurrentPartition(),
     });
   });
-
-  // Chromium caches the macOS keychain lookup per process, so a denial can
-  // only be re-asked from a fresh one.
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewRelaunchForPersistence,
-    () => {
-      log.info("[browser-view] relaunching to retry browser persistence");
-      app.relaunch();
-      app.exit(0);
-    },
-  );
 
   // Coalesced cookie deltas from the durable `primary` jar (spec §6.3). The
   // renderer that owns the host stream forwards them as `primaryProfileDelta`;
@@ -588,22 +540,6 @@ export function registerBrowserViewIpc(
     manager.dispose();
   });
   return manager;
-}
-
-/**
- * One truth for every window. The shield and the explainer card read this
- * push, so a decision taken in one window is never invisible in another.
- */
-function storeKeyFailureReason(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-function publishBrowserPersistenceState(
-  bridge: RunnerIpcBridge,
-): BrowserPersistenceState {
-  const state = getBrowserPersistenceState();
-  bridge.fanOut(RunnerHostEvent.browserViewPersistenceStateChanged, state);
-  return state;
 }
 
 function createElectronBrowserView(

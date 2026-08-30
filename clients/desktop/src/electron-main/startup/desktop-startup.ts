@@ -121,8 +121,10 @@ import {
   installPowerMonitorListeners,
   trimUnusedChromiumFeatures,
 } from "../app/lifecycle";
-import { initBrowserPersistence } from "../browser-view/storage/browser-cookie-crypto";
-import { browserPersistenceFilePath } from "../browser-view/storage/browser-persistence-decision";
+import {
+  browserSavedLoginsFilePath,
+  initBrowserSavedLogins,
+} from "../browser-view/storage/browser-saved-logins";
 import { installProductionProxyAuthHandler } from "../app/proxy-auth";
 import {
   installCertificateErrorHandler,
@@ -388,18 +390,10 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "user-agent", () => configureUserAgent()),
     timed("on-ready", "host-resolver-doh", () => configureHostResolverDoH()),
     timed("on-ready", "harden-session", () => hardenDefaultSession()),
-    // File read only - deliberately does NOT touch the OS keystore. The
-    // keychain is first reached when the user enables persistence (or, on a
-    // machine that already consented, from inside this call).
-    timed("on-ready", "browser-persistence", async () => {
-      await initBrowserPersistence({
-        decisionFilePath: browserPersistenceFilePath(),
-        platform: process.platform,
-        // `app.setName` already ran in main-process.ts, so this is the exact
-        // name the keychain item (and its ACL dialog) is spelled with.
-        appName: app.getName(),
-      });
-    }),
+    // One file read: whether this machine saves browser logins. On by default.
+    timed("on-ready", "browser-saved-logins", () =>
+      initBrowserSavedLogins(browserSavedLoginsFilePath()),
+    ),
     timed("on-ready", "spell-check", () => enableSpellCheck()),
     timed("on-ready", "notification-handler", () =>
       installNotificationActivationHandler(),

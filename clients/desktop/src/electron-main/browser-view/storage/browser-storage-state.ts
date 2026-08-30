@@ -15,10 +15,7 @@ import {
   type BrowserStorageOrigin,
   type BrowserStorageState as ProtocolStorageState,
 } from "@traycer/protocol/host/browser/contracts";
-import type {
-  BrowserCookieCryptoState,
-  BrowserPrimaryProfileCaptureResult,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserPrimaryProfileCaptureResult } from "@traycer-clients/shared/platform/browser-view";
 import { cookieDomainInScope } from "@traycer-clients/shared/platform/registrable-domain";
 
 type BrowserStorageCookieSameSite = ProtocolStorageCookie["sameSite"];
@@ -128,7 +125,8 @@ export interface BrowserStorageStateCaptureResult {
 }
 
 export interface BrowserPrimaryProfileCaptureDependencies {
-  readonly readCryptoState: () => BrowserCookieCryptoState;
+  /** A machine that is not saving logins has no durable jar worth capturing. */
+  readonly readSaveLogins: () => boolean;
   readonly getSession: () => BrowserStorageSession;
 }
 
@@ -136,12 +134,11 @@ export async function captureBrowserPrimaryProfile(
   origins: readonly BrowserPrimaryProfileOriginSnapshot[],
   dependencies: BrowserPrimaryProfileCaptureDependencies,
 ): Promise<BrowserPrimaryProfileCaptureResult> {
-  const cryptoState = dependencies.readCryptoState();
-  if (cryptoState.mode === "degraded") {
+  if (!dependencies.readSaveLogins()) {
     return {
       status: "unavailable",
       storageState: null,
-      reason: cryptoState.reason,
+      reason: "saved-logins-off",
     };
   }
   const browserSession = dependencies.getSession();

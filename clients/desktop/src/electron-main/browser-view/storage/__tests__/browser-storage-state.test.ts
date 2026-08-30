@@ -1,6 +1,5 @@
 import type { Cookie, CookiesSetDetails } from "electron";
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserPrimaryProfile,
@@ -10,29 +9,6 @@ import {
   type BrowserPrimaryProfileOriginSnapshot,
   type BrowserStorageSession,
 } from "../browser-storage-state";
-
-vi.mock("electron", () => ({
-  safeStorage: {
-    isEncryptionAvailable: () => true,
-    getSelectedStorageBackend: () => "unknown",
-  },
-}));
-
-const realState: BrowserCookieCryptoState = {
-  mode: "real",
-  persistence: "persistent",
-  reason: "os-backed",
-  storageBackend: null,
-  encryptionAvailable: true,
-};
-
-const degradedState: BrowserCookieCryptoState = {
-  mode: "degraded",
-  persistence: "ephemeral",
-  reason: "keychain-denied",
-  storageBackend: null,
-  encryptionAvailable: false,
-};
 
 describe("seedBrowserViewCookies", () => {
   it("seeds supplied cookies without replacing unrelated cookies", async () => {
@@ -267,7 +243,7 @@ describe("captureBrowserPrimaryProfile", () => {
 
     const result = await captureBrowserPrimaryProfile(
       origins,
-      primaryCaptureDependencies(realState, cookieGetFilters, [
+      primaryCaptureDependencies(true, cookieGetFilters, [
         {
           name: "host-only",
           value: "cookie",
@@ -325,7 +301,7 @@ describe("captureBrowserPrimaryProfile", () => {
     });
   });
 
-  it("short-circuits when cookie persistence is unavailable", async () => {
+  it("short-circuits when saved logins is turned off", async () => {
     const getSession = vi.fn();
     const result = await captureBrowserPrimaryProfile(
       [
@@ -335,7 +311,7 @@ describe("captureBrowserPrimaryProfile", () => {
         },
       ],
       {
-        readCryptoState: () => degradedState,
+        readSaveLogins: () => false,
         getSession,
       },
     );
@@ -343,7 +319,7 @@ describe("captureBrowserPrimaryProfile", () => {
     expect(result).toEqual({
       status: "unavailable",
       storageState: null,
-      reason: "keychain-denied",
+      reason: "saved-logins-off",
     });
     expect(getSession).not.toHaveBeenCalled();
   });
@@ -496,12 +472,12 @@ function fakeSession(
 }
 
 function primaryCaptureDependencies(
-  cryptoState: BrowserCookieCryptoState,
+  saveLogins: boolean,
   cookieGetFilters: Array<{ readonly url?: string }>,
   cookies: Cookie[],
 ): BrowserPrimaryProfileCaptureDependencies {
   return {
-    readCryptoState: () => cryptoState,
+    readSaveLogins: () => saveLogins,
     getSession: () => ({
       cookies: {
         get: (filter) => {

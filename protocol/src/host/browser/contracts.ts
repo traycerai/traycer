@@ -474,20 +474,6 @@ export type BrowserElectronTabHandoffSibling = z.infer<
   typeof browserElectronTabHandoffSiblingSchema
 >;
 
-/**
- * Whether the client persists browser logins for this user's partition.
- * `degraded` means persistence was wanted but the OS keystore could not back
- * it; both non-`enabled` states leave a `primary` session signed out.
- */
-export const browserPersistenceStateSchema = z.enum([
-  "enabled",
-  "not-enabled",
-  "degraded",
-]);
-export type BrowserPersistenceState = z.infer<
-  typeof browserPersistenceStateSchema
->;
-
 export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -553,16 +539,6 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Whether the client's browser partition keeps logins across restarts.
-      // Sent right after `electronTabLifecycleReady` and on every change, so
-      // the host can tell an agent why a `primary` session starts signed out.
-      kind: z.literal("persistenceStateChanged"),
-      ...textFrameFields,
-      state: browserPersistenceStateSchema,
-    })
-    .strict(),
-  z
-    .object({
       kind: z.literal("electronTabState"),
       ...textFrameFields,
       registrationId: z.string(),
@@ -599,7 +575,7 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
       // "This machine can reach an OS keystore for you." Sent right after
-      // `persistenceStateChanged: enabled`; the host answers with whichever of
+      // `electronTabLifecycleReady`; the host answers with whichever of
       // the two key requests this user needs. The identity is the stream's
       // authenticated user, so the frame carries no `userId`, and only the
       // elected lifecycle subscriber is heard (same gate as

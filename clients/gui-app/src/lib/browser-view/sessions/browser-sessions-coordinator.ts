@@ -1,5 +1,4 @@
 import type {
-  BrowserPersistenceState,
   BrowserSessionInfo,
   BrowserSessionsClientFrame,
   BrowserSessionsServerFrame,
@@ -10,10 +9,7 @@ import type {
   StreamCloseReason,
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type {
-  BrowserCookieCryptoState,
-  BrowserViewBridge,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { appLogger } from "@/lib/logger";
 import { surfaceAgentTab } from "@/lib/browser-view/tiles/agent-tab-surfacing";
@@ -81,8 +77,6 @@ interface BrowserSessionsActionChannel {
 interface BrowserSessionsCoordinator {
   readonly owner: BrowserSessionsOwner;
   state: BrowserSessionsState;
-  /** Re-reads the machine's login-persistence state and reports any change. */
-  refreshPersistenceState: () => void;
   /** Sends `forgetLogins` if this coordinator's stream is live. */
   forgetLogins: () => boolean;
   /** Sends `clearSite` for one domain if this coordinator's stream is live. */
@@ -175,17 +169,6 @@ export function subscribeToBrowserSessionsCoordinator(
 }
 
 /**
- * Re-publishes the machine's login-persistence state on every live browser
- * stream. The enable/retry flow calls this once the desktop's answer changes;
- * there is no bridge event to subscribe to.
- */
-export function refreshBrowserSessionsPersistenceState(): void {
-  for (const coordinator of browserSessionsCoordinators.values()) {
-    coordinator.refreshPersistenceState();
-  }
-}
-
-/**
  * "Forget all browser logins" (spec §6.5, ticket 08). Answers whether any live
  * stream took it, so a caller can say "not connected" rather than claim a shred
  * that never happened.
@@ -260,7 +243,6 @@ function createBrowserSessionsCoordinator(args: {
   let activeConsumerId: symbol | null = args.consumerId;
   let runtime = args.runtime;
   let actionChannel: BrowserSessionsActionChannel | null = null;
-  let publishPersistenceState = (): void => undefined;
   let stopCurrentStream = (): void => undefined;
   let disposed = false;
   const publish = (state: BrowserSessionsState): void => {
@@ -368,54 +350,6 @@ function createBrowserSessionsCoordinator(args: {
     let snapshotReadyForConnection = false;
     let connectionStatus: StreamConnectionStatus = "connecting";
     let connectionGeneration = 0;
-    let sentPersistenceState: BrowserPersistenceState | null = null;
-    const sendPersistenceState = (): void => {
-      if (
-        actionChannel !== channel ||
-        browserView === null ||
-        connectionStatus !== "open" ||
-        !electronLifecycleReadySentForConnection
-      ) {
-        return;
-      }
-      const generation = connectionGeneration;
-      // Wrapped so a bridge that predates this call rejects instead of
-      // throwing into the stream callback that asked for it.
-      void Promise.resolve()
-        .then(() => browserView.getCookieCryptoState())
-        .then((cryptoState) => {
-          if (
-            actionChannel !== channel ||
-            connectionStatus !== "open" ||
-            connectionGeneration !== generation
-          ) {
-            return;
-          }
-          const next = browserPersistenceState(cryptoState);
-          if (next === sentPersistenceState) return;
-          sentPersistenceState = next;
-          stream?.sendClientFrame({
-            kind: "persistenceStateChanged",
-            hasBinaryPayload: false,
-            state: next,
-          });
-          if (next !== "enabled") return;
-          // This machine can reach an OS keystore, so it can also hold the
-          // host's store key. The host answers with a wrap or an unwrap
-          // request (handled below); it ignores the offer when it already has
-          // the key in memory.
-          stream?.sendClientFrame({
-            kind: "storeKeyOffer",
-            hasBinaryPayload: false,
-          });
-        })
-        .catch((cause: unknown) => {
-          appLogger.warn("[browser] could not read the cookie crypto state", {
-            cause: cause instanceof Error ? cause.message : String(cause),
-          });
-        });
-    };
-    publishPersistenceState = sendPersistenceState;
     // Unsolicited cookie deltas from the durable `primary` jar (spec §6.3).
     // Gated on this connection having sent `electronTabLifecycleReady`: the
     // host only hears the elected lifecycle subscriber, so a second window's
@@ -451,9 +385,14 @@ function createBrowserSessionsCoordinator(args: {
         kind: "electronTabLifecycleReady",
         hasBinaryPayload: false,
       });
-      // The host reads persistence off the elected lifecycle subscriber, so
-      // the first report belongs with the frame that elects this connection.
-      sendPersistenceState();
+      // This machine can hold the host's store key. The host answers with a
+      // wrap or an unwrap request (handled below); it ignores the offer when
+      // it already has the key in memory. It belongs with the frame that
+      // elects this connection: the host only hears the elected subscriber.
+      stream?.sendClientFrame({
+        kind: "storeKeyOffer",
+        hasBinaryPayload: false,
+      });
     };
 
     const onConnectionStatus = (
@@ -474,7 +413,6 @@ function createBrowserSessionsCoordinator(args: {
         electronTabs.disconnect();
         electronLifecycleReadySentForConnection = false;
         snapshotReadyForConnection = false;
-        sentPersistenceState = null;
         rejectPendingRequests(
           pendingCloses,
           new Error("Browser sessions stream closed."),
@@ -551,9 +489,6 @@ function createBrowserSessionsCoordinator(args: {
 
     stopCurrentStream = () => {
       if (actionChannel === channel) actionChannel = null;
-      if (publishPersistenceState === sendPersistenceState) {
-        publishPersistenceState = (): void => undefined;
-      }
       primaryProfileDeltas?.dispose();
       electronTabs.dispose();
       opened.close();
@@ -587,9 +522,6 @@ function createBrowserSessionsCoordinator(args: {
       retry: restart,
       openTab,
       closeTab,
-    },
-    refreshPersistenceState: () => {
-      publishPersistenceState();
     },
     forgetLogins: () => {
       const channel = activeChannel();
@@ -970,18 +902,6 @@ function handleStoreKeyRequestFrame(args: {
         rawKey: null,
       });
     });
-}
-
-/**
- * Defensive read of the desktop's cookie-crypto answer: a partition that
- * persists means saved logins are on; anything else is off, and a degraded
- * keystore is called out so the agent's notice can say so.
- */
-function browserPersistenceState(
-  state: BrowserCookieCryptoState,
-): BrowserPersistenceState {
-  if (state.persistence === "persistent") return "enabled";
-  return state.mode === "degraded" ? "degraded" : "not-enabled";
 }
 
 function browserSessionsError(

@@ -142,28 +142,18 @@ vi.mock("../../browser-view/browser-session", () => ({
   registerBrowserViewWebContents: vi.fn(),
 }));
 
-vi.mock("../../browser-view/storage/browser-cookie-crypto", () => {
-  const cryptoState = {
-    mode: "real",
-    persistence: "persistent",
-    reason: "os-backed",
-    storageBackend: null,
-    encryptionAvailable: true,
-  };
-  const persistenceState = {
-    decision: { kind: "enabled", decidedAt: 0 },
-    cryptoState,
-    promptsOnEnable: false,
-    appName: "Traycer",
-    platform: "darwin",
-  };
-  return {
-    getBrowserCookieCryptoState: vi.fn(() => cryptoState),
-    getBrowserPersistenceState: vi.fn(() => persistenceState),
-    enableBrowserPersistence: vi.fn(() => Promise.resolve(cryptoState)),
-    declineBrowserPersistence: vi.fn(() => Promise.resolve(cryptoState)),
-  };
-});
+vi.mock("../../browser-view/storage/browser-saved-logins", () => ({
+  isBrowserSavedLoginsEnabled: vi.fn(() => true),
+  setBrowserSavedLoginsEnabled: vi.fn(() => Promise.resolve(true)),
+  wrapStoreKey: vi.fn(() => "wrapped"),
+  unwrapStoreKey: vi.fn(() => "unwrapped"),
+}));
+
+vi.mock("../../browser-view/storage/browser-forget-logins", () => ({
+  forgetBrowserPersistentLogins: vi.fn(() =>
+    Promise.resolve({ partitionCleared: false, tabsRecreated: 0 }),
+  ),
+}));
 
 vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   BrowserPrimaryProfileSnapshotCoordinator: class {

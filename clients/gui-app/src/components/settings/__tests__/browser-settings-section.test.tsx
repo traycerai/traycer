@@ -2,43 +2,33 @@ import "../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
-import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
+import type { BrowserSaveLoginsController } from "@/lib/browser-view/use-browser-save-logins";
 import type { BrowserSavedLoginSitesResponse } from "@traycer/protocol/host/browser/contracts";
 
 /**
- * Settings > Browser's saved-logins group (spec section 7.3). What is worth
- * pinning here is what the surface PROMISES: the toggle states the machine's
- * own decision, turning it on runs the ticket 02 enable flow rather than
- * silently probing the keystore, forgetting everything asks first, and the site
- * list carries names and nothing else.
+ * Settings > Browser's saved-logins group. Saving is silent and on by
+ * default, Chrome-style, so what is worth pinning here is what the surface
+ * still promises: the toggle reflects the machine's answer, turning it off
+ * goes behind a destructive confirm, forgetting everything asks first, and
+ * the site list carries names and nothing else.
  */
 
-const persistence = vi.hoisted(
-  (): { current: BrowserPersistenceController } => ({
-    current: {
-      state: null,
-      pending: false,
-      enable: () => undefined,
-      decline: () => undefined,
-      relaunch: () => undefined,
-    },
-  }),
-);
+const saveLogins = vi.hoisted((): { current: BrowserSaveLoginsController } => ({
+  current: { enabled: true, pending: false, setEnabled: () => undefined },
+}));
 const sites = vi.hoisted(
   (): { current: BrowserSavedLoginSitesResponse | null } => ({ current: null }),
 );
 const refetch = vi.hoisted(() => vi.fn());
 const forgetAllBrowserLogins = vi.hoisted(() => vi.fn(() => true));
 const clearSavedLoginSite = vi.hoisted(() => vi.fn(() => true));
-const trackBrowserLoginsForgotten = vi.hoisted(() => vi.fn());
-const trackBrowserPersistence = vi.hoisted(() => vi.fn());
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({ browserView: {} }),
 }));
 
-vi.mock("@/lib/browser-view/use-browser-persistence-state", () => ({
-  useBrowserPersistenceState: () => persistence.current,
+vi.mock("@/lib/browser-view/use-browser-save-logins", () => ({
+  useBrowserSaveLogins: () => saveLogins.current,
 }));
 
 vi.mock("@/hooks/browser/use-browser-saved-login-sites-query", () => ({
@@ -50,41 +40,22 @@ vi.mock("@/lib/browser-view/sessions/browser-sessions-coordinator", () => ({
   clearSavedLoginSite,
 }));
 
-vi.mock("@/lib/browser-view/browser-persistence-analytics", () => ({
-  trackBrowserLoginsForgotten,
-  trackBrowserPersistence,
-}));
-
 function controller(
-  overrides: Partial<BrowserPersistenceController>,
-): BrowserPersistenceController {
+  overrides: Partial<BrowserSaveLoginsController>,
+): BrowserSaveLoginsController {
   return {
-    state: {
-      decision: { kind: "enabled", decidedAt: 0 },
-      cryptoState: {
-        mode: "real",
-        persistence: "persistent",
-        reason: "os-backed",
-        storageBackend: null,
-        encryptionAvailable: true,
-      },
-      promptsOnEnable: false,
-      appName: "Traycer",
-      platform: "darwin",
-    },
+    enabled: true,
     pending: false,
-    enable: vi.fn(),
-    decline: vi.fn(),
-    relaunch: vi.fn(),
+    setEnabled: vi.fn(),
     ...overrides,
   };
 }
 
 function renderSection(
-  current: BrowserPersistenceController,
+  current: BrowserSaveLoginsController,
   data: BrowserSavedLoginSitesResponse | null,
 ): void {
-  persistence.current = current;
+  saveLogins.current = current;
   sites.current = data;
   render(<BrowserSettingsSection />);
 }
@@ -99,138 +70,51 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     forgetAllBrowserLogins.mockClear();
     clearSavedLoginSite.mockClear();
     refetch.mockClear();
-    trackBrowserLoginsForgotten.mockClear();
-    trackBrowserPersistence.mockClear();
   });
 
-  it("reflects the machine's decision, and names the machine the way its OS does", () => {
-    renderSection(controller({}), null);
+  it("reflects the machine's decision", () => {
+    renderSection(controller({ enabled: true }), null);
 
-    expect(screen.getByText("Save website logins on this Mac")).not.toBeNull();
     expect(toggle().getAttribute("data-state")).toBe("checked");
   });
 
-  it("declines rather than migrating the jar back when turned off", () => {
-    const current = controller({});
+  it("renders nothing until the bridge has answered", () => {
+    renderSection(controller({ enabled: null }), null);
+
+    expect(screen.queryByText("Saved logins")).toBeNull();
+    expect(screen.queryByRole("switch")).toBeNull();
+  });
+
+  it("turns saving on immediately, with no confirm", () => {
+    const current = controller({ enabled: false });
     renderSection(current, null);
 
     fireEvent.click(toggle());
 
-    expect(current.decline).toHaveBeenCalledTimes(1);
-    expect(current.enable).not.toHaveBeenCalled();
+    expect(current.setEnabled).toHaveBeenCalledExactlyOnceWith(true);
   });
 
-  it("shows the explainer before the OS prompt, then enables on confirm", () => {
-    const current = controller({
-      state: {
-        decision: { kind: "undecided" },
-        cryptoState: {
-          mode: "degraded",
-          persistence: "ephemeral",
-          reason: "not-enabled",
-          storageBackend: null,
-          encryptionAvailable: false,
-        },
-        // A machine where enabling raises a real keychain dialog.
-        promptsOnEnable: true,
-        appName: "Traycer Staging",
-        platform: "darwin",
-      },
-    });
+  it("turns saving off only after the destructive confirm", () => {
+    const current = controller({ enabled: true });
     renderSection(current, null);
 
     fireEvent.click(toggle());
+    expect(current.setEnabled).not.toHaveBeenCalled();
+    expect(screen.getByText("Stop saving website logins?")).not.toBeNull();
 
-    // The probe is what raises the OS dialog, so nothing may run until the
-    // person has seen the mock of it.
-    expect(current.enable).not.toHaveBeenCalled();
-    expect(
-      screen.getByText(
-        '"Traycer Staging" wants to access key "Traycer Staging Safe Storage" in your keychain.',
-      ),
-    ).not.toBeNull();
+    fireEvent.click(screen.getByTestId("confirm-action"));
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Enable saved logins" }),
-    );
-
-    expect(current.enable).toHaveBeenCalledTimes(1);
-    // The funnel's `enable_result` is emitted inside the hook, so the only
-    // thing this surface owes it is naming itself.
-    expect(current.enable).toHaveBeenCalledWith("settings");
+    expect(current.setEnabled).toHaveBeenCalledExactlyOnceWith(false);
   });
 
-  it("enables straight away where no OS dialog would be raised", () => {
-    const current = controller({
-      state: {
-        decision: { kind: "undecided" },
-        cryptoState: {
-          mode: "degraded",
-          persistence: "ephemeral",
-          reason: "not-enabled",
-          storageBackend: null,
-          encryptionAvailable: false,
-        },
-        promptsOnEnable: false,
-        appName: "Traycer",
-        platform: "win32",
-      },
-    });
+  it("does not turn off when the confirm is cancelled", () => {
+    const current = controller({ enabled: true });
     renderSection(current, null);
-
-    expect(screen.getByText("Save website logins on this PC")).not.toBeNull();
 
     fireEvent.click(toggle());
+    fireEvent.click(screen.getByTestId("confirm-cancel"));
 
-    expect(current.enable).toHaveBeenCalledTimes(1);
-    expect(current.enable).toHaveBeenCalledWith("settings");
-  });
-
-  it("offers a restart, and no toggle, while a denial is cached for this run", () => {
-    const current = controller({
-      state: {
-        decision: { kind: "relaunch-pending", decidedAt: 0 },
-        cryptoState: {
-          mode: "degraded",
-          persistence: "ephemeral",
-          reason: "keychain-denied",
-          storageBackend: null,
-          encryptionAvailable: true,
-        },
-        promptsOnEnable: true,
-        appName: "Traycer",
-        platform: "darwin",
-      },
-    });
-    renderSection(current, null);
-
-    expect(toggle().hasAttribute("disabled")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Restart Traycer" }));
-
-    expect(current.relaunch).toHaveBeenCalledTimes(1);
-    expect(current.relaunch).toHaveBeenCalledWith("settings");
-  });
-
-  it("states the reason and disables the toggle where no keyring exists", () => {
-    const current = controller({
-      state: {
-        decision: { kind: "undecided" },
-        cryptoState: {
-          mode: "degraded",
-          persistence: "ephemeral",
-          reason: "linux-basic-text",
-          storageBackend: "basic_text",
-          encryptionAvailable: true,
-        },
-        promptsOnEnable: false,
-        appName: "Traycer",
-        platform: "linux",
-      },
-    });
-    renderSection(current, null);
-
-    expect(screen.getByText("No secure keyring found")).not.toBeNull();
-    expect(toggle().hasAttribute("disabled")).toBe(true);
+    expect(current.setEnabled).not.toHaveBeenCalled();
   });
 
   it("forgets everything only after the destructive confirm", () => {
@@ -244,7 +128,6 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
-    expect(trackBrowserLoginsForgotten).toHaveBeenCalledWith("settings");
   });
 
   it("lists site names and last-seen times, and never a value", () => {
@@ -295,12 +178,6 @@ describe("<BrowserSettingsSection /> saved logins", () => {
 
     expect(clearSavedLoginSite).toHaveBeenCalledWith("example.com");
     expect(refetch).toHaveBeenCalledTimes(1);
-    // Names only: the event that reports a clear carries the surface, never
-    // the site that was cleared.
-    expect(trackBrowserPersistence).toHaveBeenCalledWith({
-      name: "browser_site_cleared",
-      source: "settings",
-    });
     // The row goes at once: the host merges asynchronously, so the refetch
     // behind this click can still read the pre-clear slice.
     expect(screen.queryByText("example.com")).toBeNull();

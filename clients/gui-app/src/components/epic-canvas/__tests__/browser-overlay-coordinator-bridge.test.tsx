@@ -26,7 +26,6 @@ import type {
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileKey,
   BrowserViewBridge,
-  BrowserPersistenceState,
   BrowserPrimaryProfileDelta,
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
@@ -48,20 +47,6 @@ function registerTestBrowserOverlayTile(input: {
 }): void {
   unregisterTiles.add(registerBrowserOverlayTile(input));
 }
-
-const ENABLED_PERSISTENCE_STATE: BrowserPersistenceState = {
-  decision: { kind: "enabled", decidedAt: 0 },
-  cryptoState: {
-    mode: "real",
-    persistence: "persistent",
-    reason: "os-backed",
-    storageBackend: null,
-    encryptionAvailable: true,
-  },
-  promptsOnEnable: false,
-  appName: "Traycer",
-  platform: "darwin",
-};
 
 class FakeBrowserViewBridge implements BrowserViewBridge {
   readonly occludeCalls: BrowserViewOverlayOcclusion[] = [];
@@ -195,36 +180,12 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve({ restoredTiles: [BASE_KEY] });
   }
 
-  getCookieCryptoState(): Promise<{
-    readonly mode: "real";
-    readonly persistence: "persistent";
-    readonly reason: "os-backed";
-    readonly storageBackend: null;
-    readonly encryptionAvailable: true;
-  }> {
-    return Promise.resolve({
-      mode: "real",
-      persistence: "persistent",
-      reason: "os-backed",
-      storageBackend: null,
-      encryptionAvailable: true,
-    });
+  getSaveLogins(): Promise<boolean> {
+    return Promise.resolve(true);
   }
 
-  getPersistenceState(): Promise<BrowserPersistenceState> {
-    return Promise.resolve(ENABLED_PERSISTENCE_STATE);
-  }
-
-  enablePersistence(): Promise<BrowserPersistenceState> {
-    return Promise.resolve(ENABLED_PERSISTENCE_STATE);
-  }
-
-  declinePersistence(): Promise<BrowserPersistenceState> {
-    return Promise.resolve(ENABLED_PERSISTENCE_STATE);
-  }
-
-  relaunchForPersistence(): Promise<void> {
-    return Promise.resolve();
+  setSaveLogins(enabled: boolean): Promise<boolean> {
+    return Promise.resolve(enabled);
   }
 
   wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult> {
@@ -237,12 +198,6 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
 
   forgetLogins(): Promise<void> {
     return Promise.resolve();
-  }
-
-  onPersistenceStateChanged(
-    _handler: (state: BrowserPersistenceState) => void,
-  ): { dispose: () => void } {
-    return { dispose: () => undefined };
   }
 
   onPrimaryProfileDelta(

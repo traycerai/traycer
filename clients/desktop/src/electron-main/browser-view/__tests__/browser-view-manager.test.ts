@@ -1812,7 +1812,8 @@ describe("BrowserViewManager native tab lifecycle", () => {
     });
     await harness.manager.acceptTab(provisioned);
 
-    const migrated = await harness.manager.migrateNativeTabsForPersistence();
+    const migrated =
+      await harness.manager.recreateNativeTabsOnCurrentPartition();
 
     expect(migrated).toHaveLength(1);
     expect(harness.electronTabHandoffNotifications).toHaveLength(1);

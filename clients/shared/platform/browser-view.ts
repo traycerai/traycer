@@ -245,9 +245,9 @@ export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabC
 
 /**
  * The handoff reasons the wire contract carries to the host, including
- * `persistence-migration` (keychain refactor ticket 02): the tab is torn down
- * so it can come back on the durable partition. The host treats it like any
- * other release - what matters is its "revived; re-snapshot" notice.
+ * `persistence-migration`: the tab is torn down so it can come back on the jar
+ * the saved-logins toggle now names. The host treats it like any other release
+ * - what matters is its "revived; re-snapshot" notice.
  */
 export type BrowserViewHandoffReason = Extract<
   BrowserSessionsClientFrame,
@@ -260,52 +260,6 @@ export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTa
   readonly siblingTabs: readonly BrowserElectronTabHandoffSibling[];
   readonly reason: BrowserViewHandoffReason;
 }
-
-type BrowserCookieCryptoMode = "real" | "degraded";
-type BrowserCookiePersistence = "persistent" | "ephemeral";
-export type BrowserCookieStorageBackend =
-  | "basic_text"
-  | "gnome_libsecret"
-  | "kwallet"
-  | "kwallet5"
-  | "kwallet6"
-  | "unknown"
-  | null;
-export type BrowserCookieCryptoReason =
-  | "os-backed"
-  /** The keystore was never touched: nobody has enabled saved logins here. */
-  | "not-enabled"
-  | "linux-basic-text"
-  | "keychain-denied"
-  | "encryption-unavailable"
-  | "unresolved";
-
-export interface BrowserCookieCryptoState {
-  readonly mode: BrowserCookieCryptoMode;
-  readonly persistence: BrowserCookiePersistence;
-  readonly reason: BrowserCookieCryptoReason;
-  readonly storageBackend: BrowserCookieStorageBackend;
-  readonly encryptionAvailable: boolean;
-}
-
-/**
- * Desktop-local, per-machine record of whether the user let Traycer touch this
- * machine's OS keystore for browser logins. It is a statement about the
- * machine, never about the Traycer account, so it lives in desktop userData
- * (`browser-persistence.json`) and never travels to the host.
- */
-export type BrowserPersistenceDecision =
-  /** Never asked (macOS, and Linux until a backend is known). */
-  | { readonly kind: "undecided" }
-  /** The user clicked Enable, or a silent platform auto-enabled. */
-  | { readonly kind: "enabled"; readonly decidedAt: number }
-  /** The user chose "Not now" on the explainer card. */
-  | { readonly kind: "declined"; readonly decidedAt: number }
-  /** The OS cached a denial; re-probe (and enable) on the next launch. */
-  | { readonly kind: "relaunch-pending"; readonly decidedAt: number };
-
-/** The desktop platforms the persistence copy has to speak about by name. */
-export type BrowserPersistencePlatform = "darwin" | "win32" | "linux" | "other";
 
 /**
  * Answer to one store-key wrap. `ok: false` is an expected outcome, not a bug:
@@ -324,30 +278,6 @@ export type BrowserStoreKeyWrapResult =
 export type BrowserStoreKeyUnwrapResult =
   | { readonly ok: true; readonly rawKey: string }
   | { readonly ok: false; readonly reason: string };
-
-export interface BrowserPersistenceState {
-  readonly decision: BrowserPersistenceDecision;
-  readonly cryptoState: BrowserCookieCryptoState;
-  /**
-   * Would enabling raise an OS keystore dialog on THIS machine? The desktop is
-   * the only side that can answer (macOS always, Linux until a real keyring
-   * backend was recorded, never Windows), and the explainer card exists only
-   * where the answer is yes (spec §6.1 rules, decision #21).
-   */
-  readonly promptsOnEnable: boolean;
-  /**
-   * Product name exactly as the OS keychain dialog spells it ("Traycer",
-   * "Traycer Staging"), so the mocked dialog in the card matches the real one
-   * on staging installs (spec §7.2).
-   */
-  readonly appName: string;
-  /**
-   * Desktop platform, so the renderer can name the keystore the way the user's
-   * OS names it (and mock the right dialog) without guessing from a backend
-   * that is null until something probes.
-   */
-  readonly platform: BrowserPersistencePlatform;
-}
 
 export type BrowserViewConsoleLevel =
   | "log"
@@ -435,14 +365,20 @@ export interface BrowserViewBridge {
   releaseOverlay(
     input: BrowserViewOverlayRelease,
   ): Promise<BrowserViewOverlayReleaseResult>;
-  getCookieCryptoState(): Promise<BrowserCookieCryptoState>;
-  /** Decision + live crypto state, without touching the OS keystore. */
-  getPersistenceState(): Promise<BrowserPersistenceState>;
-  /** Runs the keystore probe (this is what shows the OS prompt). */
-  enablePersistence(): Promise<BrowserPersistenceState>;
-  declinePersistence(): Promise<BrowserPersistenceState>;
-  /** Relaunches the desktop so a cached OS denial can be re-asked. */
-  relaunchForPersistence(): Promise<void>;
+  /**
+   * Does this machine keep browser logins across restarts? On by default,
+   * Chrome-style; the only way it is false is the user turning it off in
+   * Settings, and the answer is per-machine (desktop userData), never per
+   * account.
+   */
+  getSaveLogins(): Promise<boolean>;
+  /**
+   * Turns saving on or off and moves every live `primary` tile onto the jar the
+   * new answer names, at the same URL. Nothing is copied either way: turning it
+   * off leaves the `persist:` jar on disk untouched, turning it on drops the
+   * in-memory one. Returns the settled value.
+   */
+  setSaveLogins(enabled: boolean): Promise<boolean>;
   /**
    * Seals the host's freshly minted primary-profile store key with this
    * machine's OS keystore (spec §6.2). The host keeps the returned blob; it
@@ -462,14 +398,6 @@ export interface BrowserViewBridge {
    * user believes are forgotten.
    */
   forgetLogins(): Promise<void>;
-  /**
-   * Push for every persistence state change (enable / decline / relaunch
-   * pending / boot). One shared truth per window, so every open tile's shield
-   * and card move together instead of polling per tile.
-   */
-  onPersistenceStateChanged(
-    handler: (state: BrowserPersistenceState) => void,
-  ): { dispose: () => void };
   /**
    * Push for every coalesced cookie change in the durable `primary` jar (spec
    * §6.3). Unsolicited and continuous: the renderer holding the host stream

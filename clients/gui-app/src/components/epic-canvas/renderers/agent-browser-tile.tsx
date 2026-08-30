@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type {
   BrowserSessionProfileKind,
@@ -48,13 +41,6 @@ import type {
   ElectronTabSurfaceLease,
 } from "@/lib/browser-view/sessions/electron-tabs";
 import { openBrowserSessionTileFromPage } from "@/lib/browser-view/link-routing/browser-link-routing-core";
-import {
-  useBrowserPersistenceState,
-  type BrowserPersistenceController,
-} from "@/lib/browser-view/use-browser-persistence-state";
-import { trackBrowserPersistenceStateAtFirstTile } from "@/lib/browser-view/browser-persistence-analytics";
-import { BrowserPersistenceExplainerCard } from "@/components/epic-canvas/renderers/browser-persistence-explainer-card";
-import { useBrowserPersistenceExplainerClaim } from "@/components/epic-canvas/renderers/use-browser-persistence-explainer-claim";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -83,29 +69,6 @@ interface SurfaceAttachmentState {
   readonly registrationId: string;
   readonly status: "ready" | "error";
   readonly error: string | null;
-}
-
-/**
- * Renders the explainer card in whichever tile holds the canvas-wide claim, so
- * the copy - and the OS prompt behind its button - appears once rather than
- * once per tile. Its own component so the claim hook and the "do I own it"
- * branch stay out of `ElectronTabSurface`.
- */
-function BrowserPersistenceExplainerSlot(props: {
-  readonly claimId: string;
-  readonly persistence: BrowserPersistenceController;
-  readonly drivenBy: readonly BrowserTabDriver[];
-}): ReactElement | null {
-  const ownsExplainerCard = useBrowserPersistenceExplainerClaim(props.claimId);
-  if (!ownsExplainerCard) return null;
-  // An agent placed this tile if anything is driving the tab (spec §7.2's
-  // agent-initiated placement); the copy changes, the affordances do not.
-  return (
-    <BrowserPersistenceExplainerCard
-      persistence={props.persistence}
-      agentDriven={props.drivenBy.length > 0}
-    />
-  );
 }
 
 interface AgentTileSessionFacts {
@@ -303,15 +266,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     visible,
   });
   const snapshot = useBrowserViewSnapshot(tileKey);
-  const persistence = useBrowserPersistenceState(browserView);
-  // The steady-state census (spec decision #20): what persistence looks like
-  // the first time a tile opens in this session. Latched inside the tracker,
-  // so N tiles - and every re-render of them - still mean one reading.
-  const persistenceState = persistence.state;
-  useEffect(() => {
-    if (persistenceState === null) return;
-    trackBrowserPersistenceStateAtFirstTile(persistenceState);
-  }, [persistenceState]);
   const annotation = useBrowserAnnotationSession({
     browserView: showStartPage ? null : browserView,
     tileKey,
@@ -342,7 +296,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     initialUrl: props.node.url,
     capabilities: chromeCapabilities,
     annotation,
-    persistence,
     statusUrl,
     canGoBack,
     canGoForward,
@@ -401,11 +354,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       <BrowserTileFindAdapterBridge
         browserView={attachedBrowserView}
         tileKey={tileKey}
-      />
-      <BrowserPersistenceExplainerSlot
-        claimId={props.node.instanceId}
-        persistence={persistence}
-        drivenBy={drivenBy}
       />
       <BrowserTileToolbar
         controller={chrome.controller}

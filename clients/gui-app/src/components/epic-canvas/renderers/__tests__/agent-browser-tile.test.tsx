@@ -36,15 +36,6 @@ vi.mock("@/components/epic-canvas/renderers/use-browser-view-snapshot", () => ({
 vi.mock("@/hooks/browser/use-browser-annotation-session", () => ({
   useBrowserAnnotationSession: () => null,
 }));
-vi.mock("@/lib/browser-view/use-browser-persistence-state", () => ({
-  useBrowserPersistenceState: () => ({
-    state: null,
-    pending: false,
-    enable: () => undefined,
-    decline: () => undefined,
-    relaunch: () => undefined,
-  }),
-}));
 vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
   const actual =
     await load<
@@ -108,7 +99,6 @@ const CHROME_CONTROLLER: TileController = {
   zoomPercent: 100,
   viewportPreset: "responsive",
   disabled: false,
-  persistence: null,
   zoomLocked: false,
   annotation: null,
   onNavigate: () => undefined,

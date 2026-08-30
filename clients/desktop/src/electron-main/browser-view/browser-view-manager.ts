@@ -554,17 +554,17 @@ export class BrowserViewManager {
   }
 
   /**
-   * Tears every live guest down through the handoff path so the host revives
-   * it and re-places it - which now lands on the durable partition, since the
-   * decision flipped before this runs (spec §6.4 step 4). Guests that cannot
-   * hand off (still provisioning, or already handed off) are left alone: a
-   * teardown without a handoff would strand the host's route, and the next
-   * tile they open picks the persistent partition anyway.
+   * Tears every live `primary` guest down through the handoff path so the host
+   * revives it and re-places it - on whichever jar the saved-logins pref names
+   * now, since it has already flipped before this runs. Guests that cannot hand
+   * off (still provisioning, or already handed off) are left alone: a teardown
+   * without a handoff would strand the host's route, and the next tile they
+   * open picks the current partition anyway.
    */
-  async migrateNativeTabsForPersistence(): Promise<readonly string[]> {
+  async recreateNativeTabsOnCurrentPartition(): Promise<readonly string[]> {
     const migrating = Array.from(this.entries.guestValues()).filter(
       (entry) =>
-        // Isolated guests have nothing to migrate: their jar is throwaway and
+        // Isolated guests have nothing to move: their jar is throwaway and
         // never reaches the persistent partition. Recreating them would only
         // destroy the private session the user is sitting in.
         entry.profile === "primary" &&
@@ -576,7 +576,7 @@ export class BrowserViewManager {
       migrating.map((entry) =>
         this.closeEntry(entry, "persistence-migration").catch(
           (error: unknown) => {
-            log.warn("[browser-view] persistence migration recreate failed", {
+            log.warn("[browser-view] browser tile recreate failed", {
               error: describeLogError(error),
               guestKey: entry.guestKey,
             });
