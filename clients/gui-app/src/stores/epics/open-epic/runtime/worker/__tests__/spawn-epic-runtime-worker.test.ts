@@ -65,6 +65,7 @@ function spawnOptions<TProjection>(
         },
       }),
     windowLabel: "window-1",
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
   };
   return { ...base, ...overrides };
 }

@@ -22,7 +22,25 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { EpicRuntimeCorePortSource } from "../epic-runtime-core-ports";
-import { buildEpicRuntimeCorePorts } from "../epic-runtime-core-ports";
+import {
+  buildEpicRuntimeCorePorts,
+  type EpicRuntimeCorePorts,
+} from "../epic-runtime-core-ports";
+
+/**
+ * Ports with a no-op return leg.
+ *
+ * The leg carries a resident body's traffic back to main; nothing in this
+ * file asserts on it, and threading two empty callbacks through eighteen call
+ * sites would bury the argument that each test is actually about. A suite
+ * that DOES care about the leg passes its own.
+ */
+function buildPorts(source: EpicRuntimeCorePortSource): EpicRuntimeCorePorts {
+  return buildEpicRuntimeCorePorts(source, {
+    onDocUpdate: () => {},
+    onAwareness: () => {},
+  });
+}
 
 /** Never resolves. The whole point: a park is observable only against this. */
 function neverResolves(): Promise<Uint8Array | null> {
@@ -39,6 +57,9 @@ function createSource(
     bodyDocKey: () => null,
     encodeColdState: () => null,
     encodeForwardOnly: () => null,
+    observeBodyDoc: () => () => {},
+    applyBodyAwareness: () => {},
+    observeBodyAwareness: () => () => {},
     settleColdState: () => ({ accepted: false }),
     sendBodyUpdate: () => ({ kind: "sent" }),
     renameArtifact: () => false,
@@ -77,7 +98,7 @@ function createSource(
 describe("attachments.read", () => {
   it("settles with null for a hash the replica does not hold", async () => {
     const source = createSource({ hasAttachmentBytes: () => false });
-    const ports = buildEpicRuntimeCorePorts(source);
+    const ports = buildPorts(source);
 
     // `await` is the assertion. Against the parking version this line never
     // returns and the test fails on the suite timeout rather than on a value,
@@ -90,7 +111,7 @@ describe("attachments.read", () => {
     // waiting read, not race it. A version that started the read and then
     // resolved null separately would leak a pending promise per miss.
     const readAttachmentBytes = vi.fn(neverResolves);
-    const ports = buildEpicRuntimeCorePorts(
+    const ports = buildPorts(
       createSource({ hasAttachmentBytes: () => false, readAttachmentBytes }),
     );
 
@@ -102,7 +123,7 @@ describe("attachments.read", () => {
     // The other direction, so the pin above cannot be satisfied by a port that
     // answers null for everything.
     const bytes = new Uint8Array([1, 2, 3]);
-    const ports = buildEpicRuntimeCorePorts(
+    const ports = buildPorts(
       createSource({
         hasAttachmentBytes: () => true,
         readAttachmentBytes: () => Promise.resolve(bytes),
@@ -119,7 +140,7 @@ describe("the shutdown order", () => {
     // the runtime's two teardown members the same way round. Disposing before
     // detaching would let a frame arrive for a replica that is going away.
     const order: string[] = [];
-    const ports = buildEpicRuntimeCorePorts(
+    const ports = buildPorts(
       createSource({
         detachTransport: () => order.push("transport"),
         dispose: () => order.push("durable-store"),
@@ -136,7 +157,7 @@ describe("the shutdown order", () => {
 describe("bodies.materialize", () => {
   it("answers null for an artifact with no doc key, without encoding", () => {
     const encodeColdState = vi.fn(() => null);
-    const ports = buildEpicRuntimeCorePorts(
+    const ports = buildPorts(
       createSource({ bodyDocKey: () => null, encodeColdState }),
     );
 
@@ -151,7 +172,7 @@ describe("bodies.materialize", () => {
     // The conflation this arm exists to prevent: a zero-length update applies
     // cleanly and produces an EMPTY body, so answering `{ update: new
     // Uint8Array() }` here would replace a body with nothing.
-    const ports = buildEpicRuntimeCorePorts(
+    const ports = buildPorts(
       createSource({ bodyDocKey: () => "doc-1", encodeColdState: () => null }),
     );
 
@@ -169,7 +190,7 @@ describe("bodies.settle", () => {
       accepted: true as const,
       settledBytes: 42,
     }));
-    const ports = buildEpicRuntimeCorePorts(createSource({ settleColdState }));
+    const ports = buildPorts(createSource({ settleColdState }));
 
     await ports.bodies.settle({
       docKey: "doc-1",
@@ -186,7 +207,7 @@ describe("bodies.settle", () => {
   });
 
   it("reports zero settled bytes on a refusal", async () => {
-    const ports = buildEpicRuntimeCorePorts(
+    const ports = buildPorts(
       createSource({ settleColdState: () => ({ accepted: false }) }),
     );
 
@@ -215,7 +236,7 @@ describe("commands.apply", () => {
           `${member}(${args.map((a) => JSON.stringify(a)).join(",")})`,
         );
       };
-    const ports = buildEpicRuntimeCorePorts(
+    const ports = buildPorts(
       createSource({
         applyChatRecords: record("applyChatRecords"),
         applyChatRecordDelta: record("applyChatRecordDelta"),
@@ -288,7 +309,7 @@ describe("commands.apply", () => {
     // create will ever resolve, so a foreign payload is DROPPED rather than
     // defaulted into existence.
     const begun: unknown[] = [];
-    const ports = buildEpicRuntimeCorePorts(
+    const ports = buildPorts(
       createSource({
         beginPendingChatCreation: (pending) => begun.push(pending),
       }),
@@ -310,7 +331,7 @@ describe("commands.apply", () => {
     // The other direction, so the drop pin above cannot be satisfied by a
     // narrowing that rejects everything.
     const begun: unknown[] = [];
-    const ports = buildEpicRuntimeCorePorts(
+    const ports = buildPorts(
       createSource({
         beginPendingChatCreation: (pending) => begun.push(pending),
       }),
@@ -375,7 +396,7 @@ describe("bodies.materialize — the lease it stands on", () => {
 
   it("takes the runtime lease before encoding, so the body is held at all", async () => {
     const rig = leasedSource({});
-    const ports = buildEpicRuntimeCorePorts(rig.source);
+    const ports = buildPorts(rig.source);
 
     const materialized = await ports.bodies.materialize("art-1");
 
@@ -390,7 +411,7 @@ describe("bodies.materialize — the lease it stands on", () => {
     // demote will ever come back to release this lease. Holding it would keep
     // the body subscribed for the session.
     const rig = leasedSource({ encodeColdState: () => null });
-    const ports = buildEpicRuntimeCorePorts(rig.source);
+    const ports = buildPorts(rig.source);
 
     await expect(ports.bodies.materialize("art-1")).resolves.toBeNull();
 
@@ -403,7 +424,7 @@ describe("bodies.materialize — the lease it stands on", () => {
     // demote per doc - so a second retained release is never called and the
     // body stream stays open for the session.
     const rig = leasedSource({});
-    const ports = buildEpicRuntimeCorePorts(rig.source);
+    const ports = buildPorts(rig.source);
 
     await ports.bodies.materialize("art-1");
     await ports.bodies.materialize("art-1");
@@ -417,7 +438,7 @@ describe("bodies.materialize — the lease it stands on", () => {
     const rig = leasedSource({
       settleColdState: () => ({ accepted: true as const, settledBytes: 12 }),
     });
-    const ports = buildEpicRuntimeCorePorts(rig.source);
+    const ports = buildPorts(rig.source);
     await ports.bodies.materialize("art-1");
 
     await ports.bodies.settle({
@@ -437,7 +458,7 @@ describe("bodies.materialize — the lease it stands on", () => {
     const rig = leasedSource({
       settleColdState: () => ({ accepted: false as const }),
     });
-    const ports = buildEpicRuntimeCorePorts(rig.source);
+    const ports = buildPorts(rig.source);
     await ports.bodies.materialize("art-1");
 
     await ports.bodies.settle({
@@ -475,9 +496,7 @@ describe("bodies.materialize — forward-only vs not-held", () => {
     // The `@1` arm: its adapter states no identity by design, so cold state
     // refuses and the live bytes are the only way across. Refusing here takes
     // the whole arm dark.
-    const ports = buildEpicRuntimeCorePorts(
-      coldRefusingSource(new Uint8Array([7])),
-    );
+    const ports = buildPorts(coldRefusingSource(new Uint8Array([7])));
 
     const materialized = await ports.bodies.materialize("art-1");
 
@@ -496,7 +515,7 @@ describe("bodies.materialize — forward-only vs not-held", () => {
     // (`epic-replica-runtime.ts`), which reads `tier.statedDocGuid`. Ablating
     // that check leaves THIS suite green, which is how the gap was found. Its
     // pin is owed at the runtime level, against a real tier.
-    const ports = buildEpicRuntimeCorePorts(coldRefusingSource(null));
+    const ports = buildPorts(coldRefusingSource(null));
 
     await expect(ports.bodies.materialize("art-1")).resolves.toBeNull();
   });

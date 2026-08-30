@@ -48,6 +48,7 @@ function createPorts(): EpicRuntimeCorePorts & {
       cancel: () => false,
       cancelAll: () => {},
     },
+    detachAllBodyObservers: () => {},
     // The shared fail-closed answer, so this fixture does not become a fifth
     // hand-written switch over the mutation union.
     mutations: { apply: (mutation) => inertMutationResult(mutation) },
@@ -73,6 +74,7 @@ function createPorts(): EpicRuntimeCorePorts & {
         return Promise.resolve({ accepted: true, settledBytes: 7 });
       },
       sendUpdate: () => Promise.resolve({ kind: "sent" }),
+      applyAwareness: () => {},
     },
     transport: {
       close: () => {
