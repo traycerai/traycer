@@ -49,6 +49,20 @@ export interface EpicRuntimeCorePortSource {
   encodeColdState(docKey: string): ArtifactRoomColdState | null;
   /** Live bytes for a room that states no identity. See the runtime member. */
   encodeForwardOnly(docKey: string): Uint8Array | null;
+  /**
+   * Observe a materialized room's doc. Returns the detach.
+   *
+   * Every update is forwarded, with NO origin filter on this side, and that is
+   * deliberate rather than an omission. Main runs the only filter: an update
+   * main itself sent comes back as the arm's echo and re-applies as a Yjs
+   * no-op, while a collaborator's edit is stamped with main's private origin
+   * on arrival so main's observer does not send it back out. A second filter
+   * here would be a second thing to keep in step with that one, and the two
+   * would drift.
+   */
+  observeBodyDoc(docKey: string, onUpdate: (update: Uint8Array) => void): () => void;
+  /** Relay a local presence frame for one body to the arm. */
+  applyBodyAwareness(docKey: string, frame: Uint8Array): void;
   settleColdState(
     docKey: string,
     update: Uint8Array,
@@ -143,6 +157,8 @@ function readPendingChatCreation(value: unknown): PendingChatCreation | null {
 
 export function buildEpicRuntimeCorePorts(
   source: EpicRuntimeCorePortSource,
+  /** Where a resident body's updates go: `body/doc-in`, to main's live doc. */
+  onBodyDocUpdate: (docKey: string, update: Uint8Array) => void,
 ): EpicRuntimeCorePorts {
   /**
    * One retained release per resident `docKey`.
@@ -152,6 +168,32 @@ export function buildEpicRuntimeCorePorts(
    * list.
    */
   const heldLeases = new Map<string, () => void>();
+
+  /**
+   * One doc observer per resident docKey, detached at THREE corners: an
+   * accepted demote, a drop, and core dispose. The third is the one that gets
+   * forgotten - a worker tearing down with observers attached is the same
+   * shape as the pending-await park, and this leak is worse to find because
+   * the tier, the projection and the tile all look correct throughout it.
+   */
+  const bodyObservers = new Map<string, () => void>();
+
+  function attachBodyObserver(docKey: string): void {
+    if (bodyObservers.has(docKey)) return;
+    bodyObservers.set(
+      docKey,
+      source.observeBodyDoc(docKey, (update) => {
+        onBodyDocUpdate(docKey, update);
+      }),
+    );
+  }
+
+  function detachBodyObserver(docKey: string): void {
+    const detach = bodyObservers.get(docKey);
+    if (detach === undefined) return;
+    bodyObservers.delete(docKey);
+    detach();
+  }
 
   /** Cancellable waits, by the caller's id. Closure state, not module state. */
   const pendingAwaits = new Map<number, AbortController>();
@@ -236,7 +278,8 @@ export function buildEpicRuntimeCorePorts(
           // other way across now.
           const live = source.encodeForwardOnly(docKey);
           if (live !== null) {
-            if (heldLeases.has(docKey)) release();
+              attachBodyObserver(docKey);
+          if (heldLeases.has(docKey)) release();
             else heldLeases.set(docKey, release);
             return Promise.resolve({
               docKey,
@@ -255,6 +298,7 @@ export function buildEpicRuntimeCorePorts(
           release();
           return Promise.resolve(null);
         }
+        attachBodyObserver(docKey);
         if (heldLeases.has(docKey)) {
           // Already held for this doc. Drop the SECOND lease rather than
           // stacking it: the main side has one doc per `docKey` and will send
@@ -284,6 +328,7 @@ export function buildEpicRuntimeCorePorts(
         // the live doc on either refusal, and the in-process port drops it at
         // the same seam.
         if (settlement.accepted) {
+          detachBodyObserver(input.docKey);
           // Released ONLY on acceptance, and that asymmetry is the contract: a
           // refusal means the main thread KEEPS its live doc, so the demand and
           // the tier lease that doc stands on are still in use. Releasing on a
@@ -296,6 +341,9 @@ export function buildEpicRuntimeCorePorts(
             ? { accepted: true, settledBytes: settlement.settledBytes }
             : { accepted: false, settledBytes: 0 },
         );
+      },
+      applyAwareness: (docKey, frame) => {
+        source.applyBodyAwareness(docKey, frame);
       },
       sendUpdate: (input) =>
         Promise.resolve(source.sendBodyUpdate(input.docKey, input.update)),
@@ -424,6 +472,13 @@ export function buildEpicRuntimeCorePorts(
         }
         applyArgumentCommand(source, command);
       },
+    },
+    detachAllBodyObservers: () => {
+      const detachers = [...bodyObservers.values()];
+      // Cleared BEFORE detaching, so a detach that re-enters cannot see a
+      // half-emptied map - the same ordering `cancelAll` uses.
+      bodyObservers.clear();
+      for (const detach of detachers) detach();
     },
     root: {
       encode: () => source.encodeRootState(),

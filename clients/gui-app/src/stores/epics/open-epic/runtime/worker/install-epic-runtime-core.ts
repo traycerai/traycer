@@ -132,7 +132,8 @@ export function installEpicRuntimeCore(
 
     host.installCore(
       createEpicRuntimeWorkerCore(
-        buildEpicRuntimeCorePorts({
+        buildEpicRuntimeCorePorts(
+          {
           hasAttachmentBytes: (hash) => runtime.hasAttachmentBytes(hash),
           readAttachmentBytes: (hash, signal) =>
             runtime.readAttachmentBytes(hash, signal),
@@ -143,6 +144,11 @@ export function installEpicRuntimeCore(
             runtime.encodeArtifactBodyColdState(docKey),
           encodeForwardOnly: (docKey) =>
             runtime.encodeArtifactBodyForwardOnly(docKey),
+          observeBodyDoc: (docKey, onUpdate) =>
+            runtime.observeArtifactBodyDoc(docKey, onUpdate),
+          applyBodyAwareness: (docKey, frame) => {
+            runtime.sendArtifactBodyAwareness(docKey, frame);
+          },
           settleColdState: (docKey, update, expectedDocGuid) =>
             runtime.settleArtifactBodyColdState(
               docKey,
@@ -203,7 +209,13 @@ export function installEpicRuntimeCore(
           dispose: () => {
             runtime.dispose();
           },
-        }),
+          },
+          (docKey, update) => {
+            // The return leg: a resident body's updates go to main's live doc.
+            // No origin filter on this side - see `observeBodyDoc`'s comment.
+            host.publishBodyDocUpdate(docKey, update);
+          },
+        ),
       ),
     );
 

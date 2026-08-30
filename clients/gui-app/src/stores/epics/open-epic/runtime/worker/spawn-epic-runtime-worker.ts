@@ -49,7 +49,10 @@ import {
   type RuntimeCommand,
   type WorkerToMainEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
-import { NO_TRANSFER } from "@traycer-clients/shared/replica-runtime/worker/transferable-bytes";
+import {
+  NO_TRANSFER,
+  takeBytesForTransfer,
+} from "@traycer-clients/shared/replica-runtime/worker/transferable-bytes";
 import { createMainAccountingBridge } from "./main-accounting-bridge";
 import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port";
 
@@ -122,6 +125,18 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
    * Nothing about it crosses the bridge - the worker pushes byte facts in the
    * runtime's own vocabulary and this side names the holders.
    */
+  /**
+   * Where the body plane's RETURN leg lands: a collaborator's edit and a
+   * remote presence frame, both for the live doc main holds.
+   *
+   * An unknown `docKey` is dropped by the implementation, silently - presence
+   * and edits for a body main is not holding have nowhere to go, and there is
+   * no answer a fire-and-forget sender could act on.
+   */
+  readonly body: {
+    applyDocUpdate(docKey: string, update: Uint8Array): void;
+    applyAwareness(docKey: string, frame: Uint8Array): void;
+  };
   readonly accounting: EpicRuntimeAccountingPort;
   /** The epic this worker serves for its whole life. */
   readonly epicId: string;
@@ -165,6 +180,15 @@ export interface EpicRuntimeWorkerHandle {
    * `postMessage` FIFO - see `RuntimeCommandMap`.
    */
   command(command: RuntimeCommand): void;
+  /**
+   * Send a local presence frame for one body.
+   *
+   * Its own member rather than a `runtime/command` payload: presence is not a
+   * runtime COMMAND, it is a frame for the arm, and folding it in would put a
+   * per-keystroke-rate channel through a vocabulary whose members are user
+   * gestures and record pushes.
+   */
+  awarenessOut(docKey: string, frame: Uint8Array): void;
   detach(): void;
   /**
    * Re-binds the worker to a NEW transport after a detach - a fresh proxy host,
@@ -264,6 +288,14 @@ export function spawnEpicRuntimeWorker<TProjection>(
         // an unhandled error in a `message` listener with no route back.
         proxy?.handle(event);
         return;
+      case "body/doc-in":
+        // The return leg. Main stamps these with its own private origin on
+        // apply, which is what stops its observer sending them straight back.
+        options.body.applyDocUpdate(event.docKey, event.update);
+        return;
+      case "body/awareness-in":
+        options.body.applyAwareness(event.docKey, event.frame);
+        return;
       case "accounting/books":
       case "accounting/settle":
         accounting.handle(event);
@@ -319,6 +351,14 @@ export function spawnEpicRuntimeWorker<TProjection>(
   return {
     port: bridge,
     ready,
+    awarenessOut(docKey, frame): void {
+      if (disposed) return;
+      const encoded = takeBytesForTransfer(frame);
+      bridge.emit(
+        { kind: "body/awareness-out", docKey, frame: encoded.bytes },
+        encoded.transfer,
+      );
+    },
     command(command): void {
       if (disposed) return;
       bridge.emit({ kind: "runtime/command", command }, NO_TRANSFER);

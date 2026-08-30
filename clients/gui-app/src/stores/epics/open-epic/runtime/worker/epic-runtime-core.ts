@@ -91,6 +91,8 @@ export interface EpicRuntimeCorePorts {
       readonly docGuid: string;
       readonly update: Uint8Array;
     }): Promise<{ readonly accepted: boolean; readonly settledBytes: number }>;
+    /** Relay a local presence frame to the arm's presence mechanism. */
+    applyAwareness(docKey: string, frame: Uint8Array): void;
     /** Hand a local edit to the body lane. The lane's verdict is the answer. */
     sendUpdate(input: {
       readonly docKey: string;
@@ -113,6 +115,15 @@ export interface EpicRuntimeCorePorts {
     /** The queue mints the id and decides the refusal; both come back. */
     enqueueWrite(intent: unknown): EnqueuedWriteCommand;
   };
+  /**
+   * Detach every resident body's doc observer.
+   *
+   * The third corner of the observer lifetime, and the one that gets
+   * forgotten: a worker tearing down with observers attached is the same shape
+   * as a pending await left parked, so it is closed in the same place and for
+   * the same reason.
+   */
+  detachAllBodyObservers(): void;
   /** The root replica's state, in and out, for session-to-session transfers. */
   readonly root: {
     encode(): Promise<Uint8Array>;
@@ -216,6 +227,10 @@ export function createEpicRuntimeWorkerCore(
       if (!serving) return Promise.resolve({ outcome: "refused" as const });
       return Promise.resolve(ports.commands.enqueueWrite(intent));
     },
+    applyBodyAwareness(docKey, frame): void {
+      if (!serving) return;
+      ports.bodies.applyAwareness(docKey, frame);
+    },
     applyCommand(command): void {
       // Dropped after teardown like every other member. A command applied to a
       // replica that is closing would race the durable store's close, and the
@@ -243,6 +258,7 @@ export function createEpicRuntimeWorkerCore(
       // disposed replica is the failure this pair was built to prevent, and
       // teardown is the easiest way to reintroduce it.
       ports.attachments.cancelAll();
+      ports.detachAllBodyObservers();
       ports.transport.close();
       ports.durableStore.close();
     },

@@ -354,6 +354,18 @@ export interface EpicReplicaRuntime {
    */
   encodeArtifactBodyForwardOnly(docKey: string): Uint8Array | null;
   /**
+   * Observe a materialized body doc; returns the detach.
+   *
+   * The tier has no per-room change callback (only `onDivergenceChanged`), so
+   * this is a direct observation of the replica's doc. A no-op detach when the
+   * room is not materialized - there is nothing to watch, and answering with a
+   * detach anyway keeps the caller's lifetime bookkeeping total.
+   */
+  observeArtifactBodyDoc(
+    docKey: string,
+    onUpdate: (update: Uint8Array) => void,
+  ): () => void;
+  /**
    * Take a body doc's encoded state back. Refuses a moved identity rather than
    * splicing two histories - see `ArtifactRoomColdSettlement`.
    */
@@ -1313,6 +1325,17 @@ export function createEpicReplicaRuntime(
     getArtifactBodyDocKey: (artifactId) => artifactBodyDocKey(artifactId),
 
     encodeArtifactBodyColdState: (docKey) => tier.encodeColdState(docKey),
+    observeArtifactBodyDoc: (docKey, onUpdate) => {
+      const entry = tier.peek(docKey);
+      if (entry === null) return () => {};
+      const handler = (update: Uint8Array): void => {
+        onUpdate(update);
+      };
+      entry.doc.on("update", handler);
+      return () => {
+        entry.doc.off("update", handler);
+      };
+    },
     encodeArtifactBodyForwardOnly: (docKey) => {
       // IDENTITY-ABSENT only, checked explicitly rather than inferred from a
       // cold refusal. `encodeColdState` refuses for two reasons, and only one

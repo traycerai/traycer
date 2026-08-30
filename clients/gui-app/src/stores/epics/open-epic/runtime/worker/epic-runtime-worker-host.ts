@@ -126,6 +126,8 @@ export interface EpicRuntimeWorkerCore {
    * caller already expected `void`, and the projection stream is the feedback.
    */
   applyCommand(command: RuntimeCommand): void;
+  /** Relay a local presence frame for one body to the arm's mechanism. */
+  applyBodyAwareness(docKey: string, frame: Uint8Array): void;
   /**
    * Enqueue one write command. The QUEUE mints the id and may refuse from its
    * own state, which is why this is a call and not a push.
@@ -206,6 +208,10 @@ export interface EpicRuntimeWorkerHost {
    * sequences interleave into an order that drops deliveries as stale.
    */
   publishProjection(value: unknown): void;
+  /** Push a resident body's update to main's live doc (`body/doc-in`). */
+  publishBodyDocUpdate(docKey: string, update: Uint8Array): void;
+  /** Push a remote presence frame for one body (`body/awareness-in`). */
+  publishBodyAwareness(docKey: string, frame: Uint8Array): void;
   /**
    * Runs `listener` when the bootstrap lands, BEFORE `ready` is emitted.
    *
@@ -493,6 +499,12 @@ export function startEpicRuntimeWorkerHost(
         currentUserId = event.userId;
         return;
       }
+      case "body/awareness-out": {
+        // Dropped without a core, like every other body member: there is no
+        // arm to relay presence to, and a frame is self-correcting.
+        core?.applyBodyAwareness(event.docKey, event.frame);
+        return;
+      }
       case "runtime/command": {
         // Dropped when no core is installed, and that is the honest answer
         // rather than a queue: these commands are driven by main-side state
@@ -559,6 +571,22 @@ export function startEpicRuntimeWorkerHost(
     accounting: accounting.port,
     bootstrapFacts: () => bootstrap,
     main: bridge,
+    publishBodyDocUpdate(docKey, update): void {
+      if (stopped) return;
+      const encoded = takeBytesForTransfer(update);
+      bridge.emit(
+        { kind: "body/doc-in", docKey, update: encoded.bytes },
+        encoded.transfer,
+      );
+    },
+    publishBodyAwareness(docKey, frame): void {
+      if (stopped) return;
+      const encoded = takeBytesForTransfer(frame);
+      bridge.emit(
+        { kind: "body/awareness-in", docKey, frame: encoded.bytes },
+        encoded.transfer,
+      );
+    },
     publishProjection(value): void {
       if (stopped) return;
       projectionRevision += 1;
