@@ -11,6 +11,7 @@ import {
   worktreeGetAutoCleanupRunResponseSchema,
   worktreeListAutoCleanupRunsRequestSchema,
   worktreeListAutoCleanupRunsResponseSchema,
+  worktreeAutoCleanupPausedReasonSchema,
   worktreeAutoCleanupPolicyStateSchema,
   worktreeSetAutoCleanupPolicyRequestSchema,
   WORKTREE_AUTO_CLEANUP_RUNS_PAGE_LIMIT_DEFAULT,
@@ -108,12 +109,18 @@ describe("auto-cleanup policy schemas", () => {
   });
 
   it("carries each paused reason and rejects an unknown one", () => {
-    for (const pausedReason of [
+    // Pinned as an exact set, not a spot check: this enum sits on the RESPONSE
+    // lane, where a value the negotiated peer has never seen fails its strict
+    // parse outright. Growing it is a deliberate act that has to edit this
+    // list, not something a new arm can slip past.
+    expect(worktreeAutoCleanupPausedReasonSchema.options).toEqual([
       "no_host_credential",
       "needs_reauth",
       "owner_mismatch",
       "startup_reconciliation_failed",
-    ] as const) {
+      "activity_plane_unhealthy",
+    ]);
+    for (const pausedReason of worktreeAutoCleanupPausedReasonSchema.options) {
       expect(
         worktreeAutoCleanupPolicyStateSchema.safeParse({
           ...policyState,
@@ -127,6 +134,35 @@ describe("auto-cleanup policy schemas", () => {
         pausedReason: "vacation",
       }).success,
     ).toBe(false);
+  });
+
+  it("distinguishes a run-time activity-plane failure from a startup failure", () => {
+    // Both are fail-closed pauses over the same missing evidence, and both
+    // clear with no user action - the host retries and resumes. What differs
+    // is what a user is told: `startup_reconciliation_failed` means this host
+    // never got far enough to evaluate, `activity_plane_unhealthy` means it
+    // was evaluating and stopped. Collapsing them would make the second read
+    // as a boot problem on a host that booted fine.
+    for (const pausedReason of [
+      "startup_reconciliation_failed",
+      "activity_plane_unhealthy",
+    ] as const) {
+      const paused = worktreeAutoCleanupPolicyStateSchema.parse({
+        ...policyState,
+        pausedReason,
+        // Paused time does not advance the schedule, and a paused host names
+        // no next check - a client must read `pausedReason` rather than infer
+        // a stall from timestamps.
+        nextEvaluationAt: null,
+      });
+      expect(paused.pausedReason).toBe(pausedReason);
+      expect(paused.nextEvaluationAt).toBeNull();
+      // The policy itself is untouched by a pause: cleanup resumes on the
+      // user's existing setting, so nothing here invites a client to re-write
+      // the policy as a "recovery" action.
+      expect(paused.enabled).toBe(true);
+      expect(paused.revision).toBe(policyState.revision);
+    }
   });
 
   it("rejects a non-positive or fractional threshold without pinning the host's bounds", () => {

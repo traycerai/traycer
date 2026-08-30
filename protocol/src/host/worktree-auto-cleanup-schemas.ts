@@ -57,7 +57,20 @@ export const worktreeAutoCleanupPausedReasonSchema = z.enum([
   "owner_mismatch",
   // Startup reconciliation (holder/lease recovery) did not complete, so the
   // host cannot prove a worktree is unused. Fail closed: delete nothing.
+  // Scoped to startup: a durable-activity failure that appears LATER is
+  // `activity_plane_unhealthy`, below.
   "startup_reconciliation_failed",
+  // The durable worktree-activity plane is unreadable at RUN time - after a
+  // clean startup - so the newest activity input to the inactivity age cannot
+  // be trusted. Fail closed for the same reason as the startup arm: an
+  // unavailable signal is not evidence a worktree is idle.
+  //
+  // Separate from `startup_reconciliation_failed` because the two differ in
+  // what they tell a user: that one means this host never got far enough to
+  // evaluate, this one means it was evaluating and stopped. Both clear
+  // WITHOUT user action - the host retries and resumes on its own - so no
+  // client may offer a repair affordance or schedule anything for either.
+  "activity_plane_unhealthy",
 ]);
 export type WorktreeAutoCleanupPausedReason = z.infer<
   typeof worktreeAutoCleanupPausedReasonSchema
