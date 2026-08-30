@@ -318,6 +318,27 @@ describe("SweepWorktreesFlow", () => {
     expect(lastOpenDialogHostId()).toBe("host-b");
   });
 
+  it("disables a row whose client cannot be built, rather than looping on it", () => {
+    state.connectableHostIds = ["host-a", "host-b"];
+    // `connectable` is a directory fact and stays TRUE here: the client fails
+    // to build for a reason the route knows nothing about (no request context
+    // / no bound user). Without the row asking for itself, the row stays
+    // enabled and every click re-enters the same unresolved pick in silence.
+    state.unresolvableHostIds = ["host-b"];
+    render(flow(new Set(["host-b"])));
+
+    const row = screen.getByTestId("sweep-host-picker-option-host-b");
+    expect(row.hasAttribute("disabled")).toBe(true);
+    // The refusal is ON the row, so the reason arrives before the click.
+    expect(row.textContent).toContain("unavailable");
+    // The host that CAN serve is untouched by its neighbour's refusal.
+    expect(
+      screen
+        .getByTestId("sweep-host-picker-option-host-a")
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
   it("keeps asking rather than telling a person there is nothing to sweep", () => {
     state.connectableHostIds = ["host-a", "host-b"];
     // host-b stops being dialable between the pick and the render that

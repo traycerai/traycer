@@ -11,8 +11,10 @@ import { HostOptionRow } from "@/components/settings/host-scope/host-option-row"
 import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   isHostOptionSelectable,
+  type HostRowSurfaceState,
 } from "@/components/settings/host-scope/host-option-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import {
   buildSweepHostPickerRows,
@@ -252,13 +254,25 @@ function SweepHostPickerOption(props: {
   readonly onPick: (hostId: string) => void;
 }): ReactNode {
   const { row } = props;
+  // Whether this host's client can actually be BUILT, asked per row and by the
+  // same seam the flow resolves the pick through.
+  //
+  // `connectable` is a fact about the DIRECTORY - a dialable endpoint - and it
+  // stays true when the client cannot be built for a reason that has nothing to
+  // do with the route: `buildTransientHostClient` also answers `null` with no
+  // request context or no bound user, which is the whole fleet at once, not one
+  // machine. Judging the row on `connectable` alone therefore left an enabled
+  // row whose every click re-entered the same unresolved pick, silently and
+  // without saying why. Asking here means the refusal lands ON the row that
+  // cannot serve, before a click rather than after it.
+  const rowClient = useHostClientForHostId(row.host.hostId);
+  const surfaceState: HostRowSurfaceState =
+    rowClient === null
+      ? { kind: "refused", word: "unavailable" }
+      : AVAILABLE_HOST_ROW_SURFACE_STATE;
   // The SAME predicate every other picker container asks, so a row that
   // explains why it cannot be picked is also a row that cannot be picked.
-  const selectable = isHostOptionSelectable(
-    row.host,
-    "pin",
-    AVAILABLE_HOST_ROW_SURFACE_STATE,
-  );
+  const selectable = isHostOptionSelectable(row.host, "pin", surfaceState);
   return (
     <li className="min-w-0">
       <button
@@ -289,7 +303,7 @@ function SweepHostPickerOption(props: {
           picked={row.isDefault}
           active={row.host.isActive}
           intent="pin"
-          surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+          surfaceState={surfaceState}
           updateView={null}
         />
         {row.isDefault ? (
