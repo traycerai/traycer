@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { FileDown, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -21,6 +22,7 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
+import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -46,13 +48,20 @@ const RENAME_TITLE: Record<SwitcherRowKind, string> = {
 };
 
 /**
- * The per-row "…" actions for the switcher's flat lists: Rename + Delete for
- * agents/artifacts (delete confirmed), Rename + Close for PTY terminals (Close
- * is immediate, matching desktop parity). Reuses the exact desktop mutation
- * hooks and the shared row-menu item renderer; the whole affordance is
- * editor-gated (a viewer gets no menu at all, so no dead-end mutations). Delete
- * also closes the item's open canvas tile so the mobile view never lands on a
- * dead tile.
+ * The per-row "…" actions for the switcher's flat lists: Export as
+ * Markdown/PDF for artifacts, then Rename + Delete for agents/artifacts
+ * (delete confirmed), Rename + Close for PTY terminals (Close is immediate,
+ * matching desktop parity). Reuses the exact desktop mutation hooks and the
+ * shared row-menu item renderer; the whole affordance is editor-gated (a
+ * viewer gets no menu at all, so no dead-end mutations). Delete also closes
+ * the item's open canvas tile so the mobile view never lands on a dead tile.
+ *
+ * The export pair mirrors the desktop artifact row's own entries, in its
+ * order, wording and disabled semantics - both formats, because desktop
+ * offers both and mounting only one would be a curation this list has no
+ * grounds to make. Desktop's multi-select ZIP export has no counterpart here:
+ * it hangs off a selection model the flat mobile list does not have, so
+ * exporting is per-row, which is exactly what the desktop row menu does too.
  */
 export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const { epicId, tabId, kind, nodeId, name, cascadeSummary } = props;
@@ -61,6 +70,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const rename = useSwitcherRename(epicId);
+  const exportArtifacts = useEpicExportArtifacts();
   const deleteChat = useEpicDeleteChat();
   const deleteTuiAgent = useEpicDeleteTuiAgent();
   const deleteArtifact = useEpicDeleteArtifact();
@@ -86,6 +96,21 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
       prepareCloseCanvasTabFocusTarget(tabId, found.paneId, found.instanceId),
     );
   }, [epicId, nodeId, navigateNested, prepareCloseCanvasTabFocusTarget, tabId]);
+
+  // Single-row export, the same shape the desktop artifact row uses: one
+  // artifact, no archive, so the save lands as `<title>.<ext>` rather than a
+  // ZIP the phone has no second artifact to fill.
+  const exportOne = useCallback(
+    (format: "markdown" | "pdf") => {
+      exportArtifacts.mutate({
+        artifacts: [{ id: nodeId, title: name }],
+        format,
+        archive: false,
+        archiveTitle: null,
+      });
+    },
+    [exportArtifacts, name, nodeId],
+  );
 
   const submitRename = useCallback(
     (title: string) => {
@@ -139,7 +164,54 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
     deleteTuiAgent.isPending ||
     deleteArtifact.isPending;
 
+  const exportIcon = exportArtifacts.isPending ? (
+    <AgentSpinningDots
+      className={undefined}
+      testId={undefined}
+      variant={undefined}
+    />
+  ) : (
+    <FileDown className="size-3.5" />
+  );
+
+  // Artifacts only: a chat or a terminal has no exportable document behind it.
+  const exportEntries: ReadonlyArray<SidebarRowMenuEntry> =
+    kind === "artifact"
+      ? [
+          {
+            kind: "item",
+            id: "export-markdown",
+            label: "Export as Markdown",
+            icon: exportIcon,
+            disabled: exportArtifacts.isPending,
+            disabledTooltip: null,
+            variant: "default",
+            testIds: {
+              dropdown: `switcher-export-markdown-${nodeId}`,
+              context: `switcher-export-markdown-ctx-${nodeId}`,
+            },
+            onSelect: () => exportOne("markdown"),
+          },
+          {
+            kind: "item",
+            id: "export-pdf",
+            label: "Export as PDF",
+            icon: exportIcon,
+            disabled: exportArtifacts.isPending,
+            disabledTooltip: null,
+            variant: "default",
+            testIds: {
+              dropdown: `switcher-export-pdf-${nodeId}`,
+              context: `switcher-export-pdf-ctx-${nodeId}`,
+            },
+            onSelect: () => exportOne("pdf"),
+          },
+          { kind: "separator", id: "after-export" },
+        ]
+      : [];
+
   const entries: ReadonlyArray<SidebarRowMenuEntry> = [
+    ...exportEntries,
     {
       kind: "item",
       id: "rename",
