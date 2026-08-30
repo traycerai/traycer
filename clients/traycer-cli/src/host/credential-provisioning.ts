@@ -355,6 +355,11 @@ export async function provisionInstalledHostCredential(
       endpoint: () => endpoint,
       bearer: () => lease,
       auth: streamAuth,
+      // No tracker wired yet on the CLI side: this is a short-lived
+      // provisioning probe, not a long-lived session a user could rescue by
+      // fixing their clock mid-run, and nothing here yet feeds server-time
+      // samples. `null` keeps the pre-existing behaviour exactly.
+      clock: null,
       hostCredentialMint: (request) => {
         mintInvoked = true;
         const settled = innerMint(request);

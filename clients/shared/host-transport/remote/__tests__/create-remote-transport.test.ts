@@ -29,6 +29,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
     hostPublicKey: VALID_PUBLIC_KEY,
     bearer: () => bearerSource,
     auth: null,
+    clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,
     webSocketFactory: {

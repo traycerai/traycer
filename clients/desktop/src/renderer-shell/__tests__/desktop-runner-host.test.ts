@@ -133,6 +133,7 @@ function buildFakeBridge(
       start: async () => null,
     },
     notifications: {
+      systemSettings: null,
       show: async () => "presented" as const,
       onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: (_handler: (payload: unknown) => void) => ({
@@ -447,6 +448,9 @@ function buildFakeBridge(
       onChange: () => ({ dispose: () => undefined }),
     },
     platform: {
+      crashTelemetry: {
+        persist: () => Promise.resolve(),
+      },
       recentDocuments: { add: async () => undefined },
       window: {
         flashFrame: async () => undefined,

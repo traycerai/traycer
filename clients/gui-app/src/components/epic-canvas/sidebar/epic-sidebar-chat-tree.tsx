@@ -2606,20 +2606,55 @@ function chatRowAriaLabel(input: {
   readonly nodeName: string;
   readonly isArchived: boolean;
   readonly sharedWithTask: boolean;
-  readonly offlineHostLabel: string | null;
+  readonly offlineLock: OfflineRowLock | null;
 }): string {
   const stateSuffix = [
     input.isArchived ? "archived" : null,
     input.sharedWithTask ? "shared with task" : null,
-    input.offlineHostLabel !== null
-      ? `on ${input.offlineHostLabel}, offline, opens read-only`
-      : null,
+    input.offlineLock === null
+      ? null
+      : `on ${input.offlineLock.hostLabel}, offline, ${
+          input.offlineLock.access === "published-copy"
+            ? "opens read-only"
+            : "unavailable until that machine is back"
+        }`,
   ]
     .filter((part): part is string => part !== null)
     .join(", ");
   return stateSuffix.length > 0
     ? `${input.nodeName}, ${stateSuffix}`
     : input.nodeName;
+}
+
+/**
+ * The lock a row shows when its owner host is unreachable, and WHAT IT
+ * PROMISES - which is not the same promise for the two record kinds.
+ *
+ * A CHAT has a published copy: its transcript was replicated to the cloud, so
+ * an unreachable owner still leaves something to read, and the row says so
+ * (`published-copy`). That is a real, distinct access tier.
+ *
+ * A TERMINAL AGENT has no such tier and cannot have one. Its content is a live
+ * PTY and its resume metadata is host-local state that never crosses the cloud
+ * metadata projection - so there is nothing published to fall back to, and
+ * borrowing the chat copy here would promise a read the click cannot deliver.
+ * The honest word is UNAVAILABLE: the agent is intact, on its own machine, and
+ * comes back when that machine does (`unavailable`).
+ *
+ * Carrying the promise on the lock rather than deriving it at each of the two
+ * render sites is what stops the tooltip and the accessible name from telling
+ * a reader two different stories about the same row.
+ */
+type OfflineRowLock = {
+  readonly hostLabel: string;
+  readonly access: "published-copy" | "unavailable";
+};
+
+/** The tooltip for {@link OfflineRowLock}, in that promise's own words. */
+function offlineRowLockTooltip(lock: OfflineRowLock): string {
+  return lock.access === "published-copy"
+    ? `Lives on ${lock.hostLabel}, which is offline. Opens read-only from the last published copy.`
+    : `Lives on ${lock.hostLabel}, which is offline. The agent and its transcript stay on that machine, and it becomes available again when ${lock.hostLabel} is back.`;
 }
 
 // Only chats and terminal-agents own a resource-tracked process tree; other
@@ -2717,12 +2752,36 @@ function ChatRowButton(props: ChatRowButtonProps) {
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
   const rowOwnerUserId = useEpicNodeOwnerUserId(nodeId);
-  const showUnreachableLock = chatOpensPublishedCopy({
-    isChat: artifactType === "chat",
+  const ownerIsUnreachable = ownerReachability.status === "unreachable";
+  const offlineLock = useMemo<OfflineRowLock | null>(() => {
+    if (
+      chatOpensPublishedCopy({
+        isChat: artifactType === "chat",
+        ownerHostId,
+        ownerUserId: rowOwnerUserId,
+        ownerIsUnreachable,
+      })
+    ) {
+      return {
+        hostLabel: ownerReachability.hostLabel,
+        access: "published-copy",
+      };
+    }
+    // The terminal-agent sibling. It needs no owner-user check where the chat
+    // predicate does: that check exists because the published read is keyed by
+    // `(task, owner, chat)` and an incomplete identity could not address one.
+    // There is no published read here, so the only thing the row has to be
+    // able to name is the machine it lives on.
+    if (artifactType !== "terminal-agent") return null;
+    if (ownerHostId === null || !ownerIsUnreachable) return null;
+    return { hostLabel: ownerReachability.hostLabel, access: "unavailable" };
+  }, [
+    artifactType,
     ownerHostId,
-    ownerUserId: rowOwnerUserId,
-    ownerIsUnreachable: ownerReachability.status === "unreachable",
-  });
+    ownerIsUnreachable,
+    ownerReachability.hostLabel,
+    rowOwnerUserId,
+  ]);
   const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
     () =>
       sourceHostId === null
@@ -2830,6 +2889,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
         nodeId={nodeId}
         nodeName={nodeName}
         hostId={null}
+        // No host to be unreachable: this arm passes `hostId: null`, so the
+        // metadata outcome is already out of reach.
+        ownerHostUnreachable={false}
         ownerKind={null}
         roleClaims={roleClaims}
         side="right"
@@ -2849,9 +2911,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         nodeName,
         isArchived,
         sharedWithTask: showSharedIndicator,
-        offlineHostLabel: showUnreachableLock
-          ? ownerReachability.hostLabel
-          : null,
+        offlineLock,
       })}
       data-testid={`epic-sidebar-item-${nodeId}`}
       data-sidebar-node-id={nodeId}
@@ -2896,9 +2956,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
               />
             </TooltipWrapper>
           ) : null}
-          {showUnreachableLock ? (
+          {offlineLock !== null ? (
             <TooltipWrapper
-              label={`Lives on ${ownerReachability.hostLabel}, which is offline. Opens read-only from the last published copy.`}
+              label={offlineRowLockTooltip(offlineLock)}
               side="right"
               sideOffset={undefined}
               align={undefined}
@@ -2954,6 +3014,11 @@ function ChatRowButton(props: ChatRowButtonProps) {
       nodeId={nodeId}
       nodeName={nodeName}
       hostId={ownerHostId}
+      // THE SAME verdict the offline lock above reads, from the same call.
+      // Two subscriptions on one host id could momentarily disagree, and this
+      // row would then show a lock while its hover promised live worktree
+      // metadata from the machine that lock says is gone.
+      ownerHostUnreachable={ownerIsUnreachable}
       ownerKind={ownerKind}
       roleClaims={roleClaims}
       side="right"

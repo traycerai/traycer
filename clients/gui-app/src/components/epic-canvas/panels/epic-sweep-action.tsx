@@ -3,8 +3,11 @@ import { Paintbrush } from "lucide-react";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { SweepWorktreesDialog } from "@/components/epics/sweep-worktrees-dialog";
+import { SweepWorktreesFlow } from "@/components/epics/sweep-worktrees-flow";
+import { namesHostOutsideSurface } from "@/components/epics/sweep-host-model";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useEpicNodeHostIds } from "@/hooks/epic/use-epic-node-host-ids";
 import { useTaskWorktreeMetadataForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import {
   computeTaskMergeRollup,
@@ -55,9 +58,24 @@ function EpicSweepActionBody(props: {
   // not the app-wide one, which already answers B while an A-backed Epic is
   // still rendered through a re-point.
   const sessionHostClient = useEpicSessionHostClient();
+  const sessionHostId = useEpicSessionHostId();
   const metadata = useTaskWorktreeMetadataForClient(sessionHostClient, epicIds);
   const entries = metadata.worktreesByEpicId.get(epicId) ?? EMPTY_ENTRIES;
   const rollup = useMemo(() => computeTaskMergeRollup(entries), [entries]);
+  // Zero-RPC evidence that this Task reaches past the session's host: every
+  // node record in the projection carries the machine it lives on.
+  const nodeHostIds = useEpicNodeHostIds();
+  // The SAME predicate History's row and bulk affordances ask of their own
+  // provenance, so the two surfaces cannot disagree about whether a Task
+  // reaches past the host in front of you.
+  const hasNodesOnOtherHosts = useMemo(
+    () =>
+      namesHostOutsideSurface({
+        hostIds: nodeHostIds,
+        surfaceHostId: sessionHostId,
+      }),
+    [nodeHostIds, sessionHostId],
+  );
   const tabName = useEpicCanvasStore((s) => {
     const tab = s.tabsById[tabId];
     return tab?.epicId === epicId ? tab.name : null;
@@ -68,16 +86,22 @@ function EpicSweepActionBody(props: {
   // the same treatment History's row action and bulk button use. `aria-disabled`
   // rather than `disabled`: a truly disabled button swallows the pointer events
   // the tooltip needs, and the tooltip is where the reason lives.
-  const hasWorktrees = entries.length > 0;
+  //
+  // The metadata half is the SESSION host's, and used to be the whole gate -
+  // which faded the affordance for exactly the Task multi-host Sweep exists
+  // for: agents ran on another machine, this host owns nothing, and the only
+  // route to those worktrees was greyed out. The second clause is the fleet-
+  // shaped question, answered from records already in hand.
+  const canSweep = entries.length > 0 || hasNodesOnOtherHosts;
 
   return (
     <>
       <TooltipWrapper
-        label={
-          hasWorktrees
-            ? sweepTooltip(entries.length, taskMergeRollupLabel(rollup))
-            : "No worktrees to sweep for this task"
-        }
+        label={sweepAffordanceTooltip({
+          entryCount: entries.length,
+          rollupLabel: taskMergeRollupLabel(rollup),
+          hasNodesOnOtherHosts,
+        })}
         side="bottom"
         sideOffset={undefined}
         align="end"
@@ -86,31 +110,31 @@ function EpicSweepActionBody(props: {
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-disabled={hasWorktrees ? undefined : true}
-          aria-label={
-            hasWorktrees ? "Sweep worktrees" : "No worktrees to sweep"
-          }
+          aria-disabled={canSweep ? undefined : true}
+          aria-label={canSweep ? "Sweep worktrees" : "No worktrees to sweep"}
           // Only claimed when the button can actually open the dialog -
           // announcing a popup that cannot appear misdescribes it to AT.
-          aria-haspopup={hasWorktrees ? "dialog" : undefined}
+          aria-haspopup={canSweep ? "dialog" : undefined}
           data-testid="epic-sweep-action"
           className={cn(
             "text-muted-foreground",
-            hasWorktrees
+            canSweep
               ? "hover:text-foreground"
               : "cursor-not-allowed text-muted-foreground/50 hover:text-muted-foreground/50",
           )}
           onClick={() => {
-            if (!hasWorktrees) return;
+            if (!canSweep) return;
             setSweepOpen(true);
           }}
         >
           <Paintbrush className="size-3.5" />
         </Button>
       </TooltipWrapper>
-      <SweepWorktreesDialog
+      <SweepWorktreesFlow
         epicIds={sweepOpen ? epicIds : null}
-        hostClient={sessionHostClient}
+        surfaceHostClient={sessionHostClient}
+        surfaceHostId={sessionHostId}
+        occupiedHostIds={nodeHostIds}
         taskTitle={tabName}
         onOpenChange={(open) => {
           if (!open) setSweepOpen(false);
@@ -123,7 +147,25 @@ function EpicSweepActionBody(props: {
 /**
  * The status the strip used to render permanently now rides the tooltip: how
  * many worktrees this Task owns, and the merge rollup when there is one.
+ *
+ * The counts are the SESSION host's, so a Task whose worktrees live entirely
+ * elsewhere has nothing to count. It still gets a reason rather than the
+ * disabled copy, and deliberately does not guess at a number: "there is
+ * something over there" is the whole of what a zero-RPC read can honestly say.
  */
+function sweepAffordanceTooltip(input: {
+  readonly entryCount: number;
+  readonly rollupLabel: string | null;
+  readonly hasNodesOnOtherHosts: boolean;
+}): string {
+  if (input.entryCount > 0) {
+    return sweepTooltip(input.entryCount, input.rollupLabel);
+  }
+  return input.hasNodesOnOtherHosts
+    ? "Sweep worktrees — this task has agents on other hosts"
+    : "No worktrees to sweep for this task";
+}
+
 function sweepTooltip(count: number, rollupLabel: string | null): string {
   const noun = `${count} worktree${count === 1 ? "" : "s"}`;
   return rollupLabel === null

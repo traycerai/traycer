@@ -1,9 +1,11 @@
 import {
   hostChatRecordsSubscribeServerFrameSchemaV11,
+  hostChatRecordsSubscribeServerFrameSchemaV12,
   type ChatRecordRemovalReason,
   type ChatRecordSummary,
+  type HostChatRecordsSubscribeServerFrameV12,
 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
@@ -44,7 +46,7 @@ export type ChatRecordDelta =
 
 /**
  * One terminal-agent record delta, the `@1.1` addition riding the same
- * host-scoped stream (`tuiUpsert` / `tuiRemove`).
+ * host-scoped stream (`tuiUpsert` / `tuiRemove`), carrying the `@1.2` row.
  *
  * A SEPARATE union rather than two more members on {@link ChatRecordDelta},
  * because the two grammars address different record tables: the consumer's
@@ -62,7 +64,7 @@ export type TuiAgentRecordDelta =
        * frame repeats `tuiAgentId`/`revision` and the contract refuses a frame
        * where they disagree, so only the row's own copy travels here.
        */
-      readonly record: TuiAgentRecordSummary;
+      readonly record: TuiAgentRecordSummaryV12;
     }
   | {
       readonly kind: "tuiRemove";
@@ -72,8 +74,10 @@ export type TuiAgentRecordDelta =
     };
 
 /**
- * Everything `host.chatRecords.subscribe@1.1` can deliver. An old host
- * negotiates @1.0 and simply never sends the terminal-agent kinds.
+ * Everything `host.chatRecords.subscribe@1.2` can deliver. An older host
+ * negotiates down and simply never sends what its minor did not have: @1.0
+ * omits the terminal-agent kinds entirely, @1.1 sends them for its OWN rows
+ * only and never for a cross-host replica.
  */
 export type ChatRecordsStreamDelta = ChatRecordDelta | TuiAgentRecordDelta;
 
@@ -130,6 +134,45 @@ export interface ChatRecordsStreamClientOptions {
  * apply what arrives", and a delta missed while disconnected converges on the
  * next poll rather than on a replay no host retains a log to serve.
  */
+/**
+ * An `@1.1` frame in the shape the `@1.2` consumer below reads.
+ *
+ * Only `tuiUpsert` needs anything: its row is the frozen registry shape, and
+ * the current row is a union tagged by `origin`. The fill is EXACT rather than
+ * a default, on two facts about what a `@1.1` host can emit:
+ *
+ *  - `origin: "registry"` - the cloud arm is `@1.2`, and the host gates its
+ *    emission on the negotiated version, so a `@1.1` session is never sent one.
+ *  - `docResident: false` - the delta plane has only ever had two producers,
+ *    the registry (via the outbox) and the record inbox. A doc-resident row has
+ *    no registry row to emit from and reaches a client through
+ *    `epic.listTuiAgents` alone, never through this stream.
+ *
+ * Every other frame kind is byte-identical across the two minors and passes
+ * through untouched.
+ */
+type ParsedFrame =
+  | {
+      readonly success: true;
+      readonly data: HostChatRecordsSubscribeServerFrameV12;
+    }
+  | { readonly success: false };
+
+function parseV11Frame(envelope: StreamFrameEnvelope): ParsedFrame {
+  const parsed =
+    hostChatRecordsSubscribeServerFrameSchemaV11.safeParse(envelope);
+  if (!parsed.success) return { success: false };
+  const frame = parsed.data;
+  if (frame.kind !== "tuiUpsert") return { success: true, data: frame };
+  return {
+    success: true,
+    data: {
+      ...frame,
+      record: { ...frame.record, docResident: false, origin: "registry" },
+    },
+  };
+}
+
 export class ChatRecordsStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: ChatRecordsStreamCallbacks;
@@ -157,12 +200,27 @@ export class ChatRecordsStreamClient {
   }
 
   private handleServerFrame(envelope: StreamFrameEnvelope): void {
-    // Parsed against the @1.1 superset: the handshake negotiates the method
-    // version per session, and @1.1 accepts every @1.0 frame verbatim, so one
-    // schema serves both negotiated outcomes - an old host just never produces
-    // the terminal-agent kinds.
+    // Parsed against THE NEGOTIATED MINOR, not against the newest schema.
+    //
+    // The tempting shortcut - "each minor accepts the previous one's frames, so
+    // the latest schema serves them all" - is true of every frame here EXCEPT
+    // `tuiUpsert`, and that exception shipped as a regression. `@1.1` froze its
+    // row at the original shape, which has no `origin`; `@1.2` replaced it with
+    // a union DISCRIMINATED on `origin`. So a verbatim `@1.1` upsert cannot
+    // parse against `@1.2`, and a current app talking to a host that only
+    // negotiates `@1.1` silently dropped every terminal-agent upsert it was
+    // sent. Asymmetrically, too: `tuiRemove` is unchanged and kept arriving, so
+    // rows vanished on removal and never came back on creation.
+    //
+    // `null` means the handshake has not settled. Parsing with the OLDER schema
+    // then is the conservative choice: an `@1.1` frame is accepted and
+    // promoted, and a `@1.2` cloud frame is dropped until the version is known
+    // rather than being admitted under a shape nobody has agreed on.
+    const negotiated = this.session.getNegotiatedSchemaVersion();
     const parsed =
-      hostChatRecordsSubscribeServerFrameSchemaV11.safeParse(envelope);
+      negotiated !== null && negotiated.major === 1 && negotiated.minor >= 2
+        ? hostChatRecordsSubscribeServerFrameSchemaV12.safeParse(envelope)
+        : parseV11Frame(envelope);
     // A frame this build cannot parse is dropped rather than guessed at. The
     // removal-reason enum is CLOSED for exactly this reason: a widened reason
     // arrives as an unparseable frame, and the poll - which still sees the row

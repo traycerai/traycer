@@ -22,11 +22,15 @@ import type {
   AuthTokenRefreshResult,
   StoredCredentials,
 } from "../platform/runner-host";
-import type { AuthIdentityValidationResult } from "./auth-validation-types";
+import type {
+  AuthIdentityValidationResult,
+  AuthServerTimeObservation,
+} from "./auth-validation-types";
 
 export type {
   AuthIdentityValidationResult,
   AuthIdentityValidResult,
+  AuthServerTimeObservation,
 } from "./auth-validation-types";
 export type { AuthTokenRefreshResult } from "../platform/runner-host";
 
@@ -146,30 +150,67 @@ export async function validateAuthTokenIdentityAccessOnceAbortable(args: {
     args.token,
     signal,
   );
-  if (result.kind !== "ok") {
-    return result.result;
-  }
-  const parsed = authenticatedUserResponseSchema.safeParse(result.body);
-  if (!parsed.success) {
-    return { kind: "rejected" };
-  }
-  return { kind: "valid", user: parsed.data };
+  return toIdentityValidationResult(result);
 }
 
 async function validateAuthTokenIdentityFetch(
   authnBaseUrl: string,
   token: string,
 ): Promise<AuthIdentityValidationResult> {
-  const result = await fetchUserResponse(authnBaseUrl, token);
-  if (result.kind !== "ok") {
-    return result.result;
-  }
+  return toIdentityValidationResult(
+    await fetchUserResponse(authnBaseUrl, token),
+  );
+}
 
+/**
+ * Projects a `/api/v3/user` fetch onto the caller-facing result, re-attaching
+ * the response's server-time observation to every outcome that had one. The
+ * projection is shared by the retrying and single-attempt validators so the
+ * clock-skew tracker sees the same sample whichever one ran.
+ */
+function toIdentityValidationResult(
+  result: UserFetchResult,
+): AuthIdentityValidationResult {
+  const serverTime = serverTimeFields(result.serverTime);
+  if (result.kind !== "ok") {
+    return result.result.kind === "rejected"
+      ? { kind: "rejected", ...serverTime }
+      : { kind: "network-error" };
+  }
   const parsed = authenticatedUserResponseSchema.safeParse(result.body);
   if (!parsed.success) {
-    return { kind: "rejected" };
+    return { kind: "rejected", ...serverTime };
   }
-  return { kind: "valid", user: parsed.data };
+  return { kind: "valid", user: parsed.data, ...serverTime };
+}
+
+/**
+ * Spreads to nothing when there is no observation, so an absent `Date` header
+ * leaves the property off entirely rather than setting it to `undefined`.
+ */
+function serverTimeFields(serverTime: AuthServerTimeObservation | null): {
+  readonly serverTime?: AuthServerTimeObservation;
+} {
+  return serverTime === null ? {} : { serverTime };
+}
+
+/**
+ * Reads the response's HTTP `Date` header as a server-time sample, paired with
+ * the local clock right now. Opportunistic: an absent or unparseable header
+ * yields `null`, never a guess.
+ */
+function readServerTimeObservation(
+  response: Response,
+): AuthServerTimeObservation | null {
+  const header = response.headers.get("date");
+  if (header === null) {
+    return null;
+  }
+  const serverEpochMs = Date.parse(header);
+  if (Number.isNaN(serverEpochMs)) {
+    return null;
+  }
+  return { serverEpochMs, observedAtMs: Date.now() };
 }
 
 /**
@@ -194,12 +235,19 @@ export function credentialsIdentityFromAuthenticatedUser(
 }
 
 type UserFetchResult =
-  | { readonly kind: "ok"; readonly body: unknown }
+  | {
+      readonly kind: "ok";
+      readonly body: unknown;
+      readonly serverTime: AuthServerTimeObservation | null;
+    }
   | {
       readonly kind: "failed";
       readonly result:
         | { readonly kind: "rejected" }
         | { readonly kind: "network-error" };
+      // `null` whenever no response arrived (transport failure / timeout) or
+      // the response carried no usable `Date`.
+      readonly serverTime: AuthServerTimeObservation | null;
     };
 
 async function fetchUserResponse(
@@ -240,15 +288,24 @@ async function fetchUserResponseOnce(
     // A thrown `fetch` - a transport failure OR the per-attempt
     // `AbortSignal.timeout` firing (a `TimeoutError`) - is transient and
     // retriable, so both collapse to `network-error`.
-    return { kind: "failed", result: { kind: "network-error" } };
+    return {
+      kind: "failed",
+      result: { kind: "network-error" },
+      serverTime: null,
+    };
   }
 
+  // Read BEFORE any status branching: a 401 response is a server-time sample
+  // exactly as good as a 200, and it is the one a badly skewed client actually
+  // gets back.
+  const serverTime = readServerTimeObservation(response);
+
   if (response.status === 401 || response.status === 404) {
-    return { kind: "failed", result: { kind: "rejected" } };
+    return { kind: "failed", result: { kind: "rejected" }, serverTime };
   }
 
   if (response.status < 200 || response.status >= 300) {
-    return { kind: "failed", result: { kind: "network-error" } };
+    return { kind: "failed", result: { kind: "network-error" }, serverTime };
   }
 
   let body: unknown;
@@ -259,11 +316,11 @@ async function fetchUserResponseOnce(
     // dead credential - classify it like a pre-headers abort. A genuinely
     // malformed 2xx body stays `rejected`.
     if (isAbortOrTimeout(error)) {
-      return { kind: "failed", result: { kind: "network-error" } };
+      return { kind: "failed", result: { kind: "network-error" }, serverTime };
     }
-    return { kind: "failed", result: { kind: "rejected" } };
+    return { kind: "failed", result: { kind: "rejected" }, serverTime };
   }
-  return { kind: "ok", body };
+  return { kind: "ok", body, serverTime };
 }
 
 /**

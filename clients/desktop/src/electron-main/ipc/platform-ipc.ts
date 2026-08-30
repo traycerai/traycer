@@ -86,6 +86,8 @@ import type {
   LogLevelsSnapshot,
   FeatureSettingsSnapshot,
 } from "../../ipc-contracts/platform-types";
+import { log, redactCrashComponentStack, redactLogText } from "../app/logger";
+import { parseRendererCrashTelemetryInput } from "../../ipc-contracts/renderer-crash-telemetry";
 
 /**
  * Registers IPC handlers that expose platform-integration primitives to the
@@ -99,6 +101,24 @@ import type {
 export function registerPlatformIpc(
   bridge: Pick<RunnerIpcBridge, "handleInvoke">,
 ): void {
+  bridge.handleInvoke(
+    RunnerHostInvoke.rendererCrashPersist,
+    (_event, input: unknown): void => {
+      const telemetry = parseRendererCrashTelemetryInput(input);
+      log.error("[renderer-crash] RootErrorBoundary captured uncaught error", {
+        appVersion: redactNullableText(telemetry.appVersion),
+        buildRevision: redactNullableText(telemetry.buildRevision),
+        componentStack:
+          telemetry.componentStack === null
+            ? null
+            : redactCrashComponentStack(telemetry.componentStack),
+        correlationId: redactLogText(telemetry.correlationId),
+        fingerprint: redactLogText(telemetry.fingerprint),
+        timestamp: telemetry.timestamp,
+      });
+    },
+  );
+
   bridge.handleInvoke(
     RunnerHostInvoke.fileDropWriteTemporary,
     async (_event, input: unknown): Promise<string> => {
@@ -502,6 +522,10 @@ export function registerPlatformIpc(
   bridge.handleInvoke(RunnerHostInvoke.fontsList, () => {
     return listInstalledFonts();
   });
+}
+
+function redactNullableText(value: string | null): string | null {
+  return value === null ? null : redactLogText(value);
 }
 
 async function readLogLevelsSnapshot(): Promise<LogLevelsSnapshot> {
