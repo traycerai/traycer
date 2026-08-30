@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
@@ -32,14 +32,22 @@ class StubStreamWebSocket implements StreamWebSocketLike {
   onclose: ((event: WebSocketCloseEvent) => void) | null = null;
 
   readonly textSent: string[] = [];
+  failSends = false;
 
   send(data: string | Uint8Array): void {
+    if (this.failSends) throw new Error("socket refused the write");
     if (typeof data === "string") {
       this.textSent.push(data);
     }
   }
 
   close(_code: number, _reason: string): void {}
+
+  fireClose(code: number, reason: string): void {
+    if (this.onclose !== null) {
+      this.onclose({ code, reason, wasClean: false });
+    }
+  }
 
   fireOpen(): void {
     if (this.onopen !== null) {
@@ -156,6 +164,110 @@ describe("BrowserSessionsStreamClient", () => {
     });
 
     expect(kinds).toEqual(["snapshot", "sessionClosed"]);
+    stream.close();
+  });
+
+  it("delivers one pong per application ping and swallows heartbeat pongs", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const kinds: string[] = [];
+    const stream = new BrowserSessionsStreamClient({
+      wsStreamClient: client,
+      epicId: "epic-1",
+      callbacks: {
+        onServerFrame: (frame) => {
+          kinds.push(frame.kind);
+        },
+        onConnectionStatus: () => undefined,
+      },
+    });
+
+    completeHandshake(sockets[0]);
+    // No application ping outstanding: this answers the heartbeat and must
+    // stay inside the transport.
+    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual([]);
+
+    // Two overlapping flushes: two pings, two pongs, two delivered frames.
+    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual(["pong"]);
+    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual(["pong", "pong"]);
+
+    // Both are answered; a later heartbeat pong is swallowed again.
+    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual(["pong", "pong"]);
+    stream.close();
+  });
+
+  it("never credits a pong on a NEW socket to a ping sent on the old one", async () => {
+    // The ping queue is per-socket. A reconnect strands whatever the old
+    // socket never answered, and if that backlog survived, the first pong of
+    // the new connection would settle it - telling a quitting shell that a
+    // capture it never delivered had reached the host.
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const kinds: string[] = [];
+    const stream = new BrowserSessionsStreamClient({
+      wsStreamClient: client,
+      epicId: "epic-1",
+      callbacks: {
+        onServerFrame: (frame) => {
+          kinds.push(frame.kind);
+        },
+        onConnectionStatus: () => undefined,
+      },
+    });
+
+    completeHandshake(sockets[0]);
+    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+    sockets[0].fireClose(1006, "dropped");
+
+    await vi.waitFor(() => {
+      expect(sockets).toHaveLength(2);
+    });
+    completeHandshake(sockets[1]);
+    sockets[1].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual([]);
+
+    // The new socket keeps its own pairing.
+    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+    sockets[1].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual(["pong"]);
+    stream.close();
+  });
+
+  it("never credits a pong to a ping the socket refused to write", async () => {
+    // A refused write tears the socket down; the ping never reached the host,
+    // so nothing may later answer it. Both the `return` after `onSendFailure`
+    // and the per-socket reset above enforce this - the assertion is on the
+    // invariant, not on either line.
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const kinds: string[] = [];
+    const stream = new BrowserSessionsStreamClient({
+      wsStreamClient: client,
+      epicId: "epic-1",
+      callbacks: {
+        onServerFrame: (frame) => {
+          kinds.push(frame.kind);
+        },
+        onConnectionStatus: () => undefined,
+      },
+    });
+
+    completeHandshake(sockets[0]);
+    sockets[0].failSends = true;
+    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+
+    await vi.waitFor(() => {
+      expect(sockets).toHaveLength(2);
+    });
+    completeHandshake(sockets[1]);
+    sockets[1].fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(kinds).toEqual([]);
     stream.close();
   });
 

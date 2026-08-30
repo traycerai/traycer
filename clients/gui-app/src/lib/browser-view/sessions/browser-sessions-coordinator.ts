@@ -116,6 +116,7 @@ interface BrowserSessionsCoordinator {
     runtime: BrowserSessionsCoordinatorRuntime,
   ) => void;
   release: (consumerId: symbol) => number;
+  captureFinalPrimaryProfile: () => Promise<void>;
   dispose: () => void;
 }
 
@@ -141,6 +142,37 @@ export function browserSessionsCoordinatorKey(
 
 export function hasBrowserSessionsCoordinator(key: string): boolean {
   return browserSessionsCoordinators.has(key);
+}
+
+/**
+ * Bound on the round trip that proves the final capture left this renderer.
+ * The whole quit path is already bounded by the shell's own capture timeout;
+ * this one only has to be shorter than that, so a lost socket costs a beat
+ * rather than the shell's full wait.
+ */
+export const FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS = 5_000;
+
+/**
+ * One last primary-profile capture per live `browser.sessions` stream this
+ * renderer owns, before the desktop route goes away (quit, window close).
+ *
+ * When a route disappears the host suspends the session to dormant and
+ * re-materializes it later from the durable tab URLs plus the primary-profile
+ * store, so that store is the only thing carrying login state across the gap.
+ * It must therefore be refreshed while the native tabs are still alive.
+ *
+ * Only co-located coordinators capture: a stream whose host is not this
+ * machine has no Electron partition here to read.
+ *
+ * Never rejects: a stream that cannot answer is reported by not having
+ * refreshed the store, not by stalling the quit.
+ */
+export async function captureFinalPrimaryProfiles(): Promise<void> {
+  await Promise.allSettled(
+    Array.from(browserSessionsCoordinators.values(), (coordinator) =>
+      coordinator.captureFinalPrimaryProfile(),
+    ),
+  );
 }
 
 export function browserSessionsCoordinatorState(
@@ -299,6 +331,7 @@ function createBrowserSessionsCoordinator(args: {
   // resolve after the stream opened.
   let retryLifecycleReady = (): void => undefined;
   let stopCurrentStream = (): void => undefined;
+  let captureFinalPrimaryProfile = (): Promise<void> => Promise.resolve();
   let disposed = false;
   const publish = (state: BrowserSessionsState): void => {
     if (disposed) return;
@@ -427,6 +460,42 @@ function createBrowserSessionsCoordinator(args: {
     let snapshotReadyForConnection = false;
     let connectionStatus: StreamConnectionStatus = "connecting";
     let connectionGeneration = 0;
+    // `ping` / `pong` is the only ordered round trip this stream has, so it is
+    // what "the frame reached the host" means here: the socket has no flush
+    // primitive, and `primaryProfileCaptured` is not acknowledged.
+    //
+    // The queue pairs each pong with the ping it answers BY POSITION: the
+    // transport delivers one `pong` per application `ping`, the Nth pong
+    // answers the Nth ping, so a pong shifts the queue rather than scanning
+    // it. A waiter that timed out stays queued with an inert `settle`, which
+    // is what keeps its late pong from being credited to the next waiter -
+    // removing it would resolve an overlapping capture on a pong that was
+    // already in flight before its own frame went out.
+    const streamFlushWaiters: Array<() => void> = [];
+    const resolveOldestStreamFlushWaiter = (): void => {
+      streamFlushWaiters.shift()?.();
+    };
+    const resolveStreamFlushWaiters = (): void => {
+      for (const settle of streamFlushWaiters.splice(0)) settle();
+    };
+    const awaitStreamFlush = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        if (actionChannel !== channel || connectionStatus !== "open") {
+          resolve();
+          return;
+        }
+        // `resolve` is idempotent, so a queued waiter that already timed out
+        // simply absorbs its own pong.
+        const timer = window.setTimeout(
+          resolve,
+          FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
+        );
+        streamFlushWaiters.push(() => {
+          window.clearTimeout(timer);
+          resolve();
+        });
+        stream?.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+      });
     const sendLifecycleReadyIfReady = (): void => {
       const localHostId = runtime.localHostId;
       if (
@@ -468,6 +537,7 @@ function createBrowserSessionsCoordinator(args: {
         sendLifecycleReadyIfReady();
       } else {
         if (wasOpen) connectionGeneration += 1;
+        resolveStreamFlushWaiters();
         electronTabs.disconnect();
         electronLifecycleReadySentForConnection = false;
         snapshotReadyForConnection = false;
@@ -493,6 +563,7 @@ function createBrowserSessionsCoordinator(args: {
 
     const onServerFrame = (frame: BrowserSessionsServerFrame): void => {
       if (actionChannel !== channel) return;
+      if (frame.kind === "pong") resolveOldestStreamFlushWaiter();
       const frameGeneration = connectionGeneration;
       handleBrowserSessionsFrame({
         frame,
@@ -549,8 +620,29 @@ function createBrowserSessionsCoordinator(args: {
     }
     const opened = stream;
 
+    captureFinalPrimaryProfile = async (): Promise<void> => {
+      if (actionChannel !== channel || connectionStatus !== "open") return;
+      // Only the host this GUI is CO-LOCATED with. `capturePrimaryProfile`
+      // reads THIS machine's Electron partition, and the host stores what
+      // arrives as the whole jar - fanning it to a remote host would overwrite
+      // that host's own, richer jar with a laptop's on every quit. The same
+      // locality rule gates `electronTabLifecycleReady` above.
+      if (runtime.localHostId !== args.owner.hostId) return;
+      await capturePrimaryProfileOnce({
+        requestId: crypto.randomUUID(),
+        browserView,
+        sendClientFrame: (response) => {
+          if (actionChannel !== channel) return;
+          opened.sendClientFrame(response);
+        },
+      });
+      await awaitStreamFlush();
+    };
+
     stopCurrentStream = () => {
       if (actionChannel === channel) actionChannel = null;
+      captureFinalPrimaryProfile = (): Promise<void> => Promise.resolve();
+      resolveStreamFlushWaiters();
       electronTabs.dispose();
       opened.close();
       transport.close();
@@ -599,6 +691,7 @@ function createBrowserSessionsCoordinator(args: {
       if (browserViewChanged) restart();
       else retryLifecycleReady();
     },
+    captureFinalPrimaryProfile: () => captureFinalPrimaryProfile(),
     release: (consumerId) => {
       runtimes.delete(consumerId);
       if (activeConsumerId !== consumerId) return runtimes.size;
@@ -673,9 +766,6 @@ function handleBrowserSessionsFrame(args: {
       args.electronTabs.handleFrame(frame);
       return;
     case "actionAck":
-      // Handoff acks and close acks share one frame kind; the Electron layer
-      // claims only the request ids it registered.
-      if (args.electronTabs.handleFrame(frame)) return;
       handleCloseAck(frame, args.pendingCloses);
       return;
     default:
@@ -786,16 +876,21 @@ function handleBrowserSessionsSubsystemFrame(args: {
   }
 }
 
-function handlePrimaryProfileCaptureFrame(args: {
-  readonly frame: Extract<
-    BrowserSessionsServerFrame,
-    { readonly kind: "capturePrimaryProfile" }
-  >;
+/**
+ * The one code path that answers "what is in the primary profile right now".
+ * Both callers use it: a host-issued `capturePrimaryProfile` request, and the
+ * renderer's own final capture before the desktop route disappears (quit or
+ * window close). It always sends exactly one `primaryProfileCaptured` and
+ * never rejects, so a caller can await it as "the capture is on the wire".
+ */
+async function capturePrimaryProfileOnce(args: {
+  readonly requestId: string;
   readonly browserView: BrowserViewBridge | null;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
-}): void {
-  const requestId = args.frame.requestId;
-  if (args.browserView === null) {
+}): Promise<void> {
+  const requestId = args.requestId;
+  const browserView = args.browserView;
+  if (browserView === null) {
     args.sendClientFrame({
       kind: "primaryProfileCaptured",
       hasBinaryPayload: false,
@@ -806,39 +901,52 @@ function handlePrimaryProfileCaptureFrame(args: {
     });
     return;
   }
-  void args.browserView
-    .capturePrimaryProfile()
-    .then((result) => {
-      if (result.status === "unavailable") {
-        args.sendClientFrame({
-          kind: "primaryProfileCaptured",
-          hasBinaryPayload: false,
-          requestId,
-          storageState: null,
-          status: "unavailable",
-          reason: result.reason,
-        });
-        return;
-      }
-      args.sendClientFrame({
-        kind: "primaryProfileCaptured",
-        hasBinaryPayload: false,
-        requestId,
-        storageState: result.storageState,
-        status: "captured",
-        reason: null,
-      });
-    })
-    .catch((error: unknown) => {
+  try {
+    const result = await browserView.capturePrimaryProfile();
+    if (result.status === "unavailable") {
       args.sendClientFrame({
         kind: "primaryProfileCaptured",
         hasBinaryPayload: false,
         requestId,
         storageState: null,
-        status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
+        status: "unavailable",
+        reason: result.reason,
       });
+      return;
+    }
+    args.sendClientFrame({
+      kind: "primaryProfileCaptured",
+      hasBinaryPayload: false,
+      requestId,
+      storageState: result.storageState,
+      status: "captured",
+      reason: null,
     });
+  } catch (error: unknown) {
+    args.sendClientFrame({
+      kind: "primaryProfileCaptured",
+      hasBinaryPayload: false,
+      requestId,
+      storageState: null,
+      status: "failed",
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function handlePrimaryProfileCaptureFrame(args: {
+  readonly frame: Extract<
+    BrowserSessionsServerFrame,
+    { readonly kind: "capturePrimaryProfile" }
+  >;
+  readonly browserView: BrowserViewBridge | null;
+  readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
+}): void {
+  void capturePrimaryProfileOnce({
+    requestId: args.frame.requestId,
+    browserView: args.browserView,
+    sendClientFrame: args.sendClientFrame,
+  });
 }
 
 function browserSessionsError(

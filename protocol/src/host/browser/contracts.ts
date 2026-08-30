@@ -408,23 +408,6 @@ export type BrowserSessionsServerFrame = z.infer<
   typeof browserSessionsServerFrameSchema
 >;
 
-/**
- * One tab captured alongside the tab being handed off to headless. Storage is
- * not per-tab: the handoff frame carries one partition-wide capture. The
- * `registrationId` is load-bearing - the host rejects a handoff naming a stale
- * native incarnation.
- */
-export const browserElectronTabHandoffSiblingSchema = z
-  .object({
-    tabId: z.string(),
-    registrationId: z.string(),
-    url: z.string(),
-  })
-  .strict();
-export type BrowserElectronTabHandoffSibling = z.infer<
-  typeof browserElectronTabHandoffSiblingSchema
->;
-
 export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -527,24 +510,6 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       storageState: browserStorageStateSchema.nullable(),
       status: z.enum(["captured", "unavailable", "failed"]),
       reason: z.string().nullable(),
-    })
-    .strict(),
-  z
-    .object({
-      // Captures one exact native incarnation before teardown. Siblings are
-      // grouped into the same frame so the host can hand off the session once.
-      // `capturedStorageState` is the whole Electron partition jar shared by
-      // every tab in the session (spec decision #7), not the triggering tab's
-      // slice; null means desktop could not safely capture it.
-      kind: z.literal("electronTabHandoff"),
-      ...requestFrameFields,
-      sessionId: z.string(),
-      tabId: z.string(),
-      registrationId: z.string(),
-      capturedUrl: z.string(),
-      capturedStorageState: browserStorageStateSchema.nullable(),
-      siblingTabs: z.array(browserElectronTabHandoffSiblingSchema),
-      reason: z.enum(["gui-quit", "tab-released", "crash-no-capture"]),
     })
     .strict(),
 ]);
@@ -755,11 +720,12 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .object({
       // Answer to a `ping` that arrived on a video-plane DataChannel (ticket
       // 17's input-path latency probe). Deliberately NOT the `pong` above:
-      // that kind belongs to the stream transport's own heartbeat, which
-      // answers it host-side and swallows it client-side before any contract
-      // handler runs - so a `pong` reply to a DataChannel ping could never
-      // reach the sender. Carries no correlation id because the prober keeps
-      // one ping in flight at a time.
+      // that kind belongs to the stream transport's heartbeat, which answers
+      // it host-side and, client-side, delivers a pong upward only when it
+      // answers an application `ping` the transport itself queued - a pong
+      // arriving for a DataChannel ping matches no queued ping and is
+      // swallowed, so it could never reach the sender. Carries no correlation
+      // id because the prober keeps one ping in flight at a time.
       kind: z.literal("inputPong"),
       ...textFrameFields,
     })
@@ -768,10 +734,10 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .object({
       // Control-plane RTT probe (ticket 18). Its own frame pair rather than
       // the `ping`/`pong` above, which neither end can use for this: the
-      // stream transport answers a client `ping` before any resolver sees it
-      // and swallows `pong` before any client contract handler sees it, so on
-      // this contract nobody can both initiate a round trip and observe its
-      // reply. The viewer answers with `rttProbeAck` carrying the same
+      // stream transport answers a client `ping` before any resolver sees it,
+      // and the pong it sends back is credited to the transport's own ping
+      // queue - so a host-side prober can never observe its reply, and on this
+      // contract nobody can both initiate a round trip and observe it. The viewer answers with `rttProbeAck` carrying the same
       // `probeId`, and reads `controlPlaneRttMs` - the host's smoothed
       // estimate at send time, null before the first completed probe - to size
       // its own deadlines off the same measurement.

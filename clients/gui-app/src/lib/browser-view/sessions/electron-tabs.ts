@@ -17,17 +17,11 @@ import {
   type ElectronTabSurfaceLease,
   nativeTabKey,
   publishElectronTabBinding,
-  registerElectronTabHandoffAck,
-  rejectOwnedElectronTabHandoffAcks,
   removeOwnedElectronTabBinding,
   removeOwnedElectronTabBindings,
-  settleElectronTabHandoffAck,
 } from "./electron-tab-directory";
 
-export {
-  drainElectronTabHandoffs,
-  useElectronTabBindingOnHost,
-} from "./electron-tab-directory";
+export { useElectronTabBindingOnHost } from "./electron-tab-directory";
 export type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
@@ -48,10 +42,6 @@ type ReleaseElectronTabFrame = Extract<
 type CdpRequestFrame = Extract<
   BrowserSessionsServerFrame,
   { readonly kind: "cdpRequest" }
->;
-type ActionAckFrame = Extract<
-  BrowserSessionsServerFrame,
-  { readonly kind: "actionAck" }
 >;
 interface ElectronTabsOptions {
   readonly hostId: string;
@@ -129,14 +119,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
 
   const isCurrentConnection = (generation: number): boolean =>
     !disposed && connected && generation === connectionGeneration;
-
-  const sendOnCurrentConnection = (frame: BrowserSessionsClientFrame): void => {
-    if (!disposed && connected) options.sendFrame(frame);
-  };
-
-  const rejectPendingHandoffs = (message: string): void => {
-    rejectOwnedElectronTabHandoffAcks(owner, message);
-  };
 
   const sendCurrentTabState = (
     birth: ElectronTabBirth,
@@ -227,51 +209,8 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       birth.lastStatus = change;
       sendCurrentTabState(birth, change);
     });
-    const handoffSubscription = native.onElectronTabHandoff((change) => {
-      if (disposed || !connected) return;
-      const birth = findProvisionedBirth(
-        birthByRequestId.values(),
-        change.hostId,
-        change.sessionId,
-        change.tabId,
-      );
-      if (
-        birth === null ||
-        birth.provisioned?.registrationId !== change.registrationId
-      ) {
-        return;
-      }
-      const requestId = crypto.randomUUID();
-      registerElectronTabHandoffAck(requestId, owner);
-      try {
-        sendOnCurrentConnection({
-          kind: "electronTabHandoff",
-          hasBinaryPayload: false,
-          requestId,
-          sessionId: change.sessionId,
-          tabId: change.tabId,
-          registrationId: change.registrationId,
-          capturedUrl: change.capturedUrl,
-          capturedStorageState: change.capturedStorageState,
-          siblingTabs: change.siblingTabs.map((sibling) => ({
-            tabId: sibling.tabId,
-            registrationId: sibling.registrationId,
-            url: sibling.url,
-          })),
-          reason: change.reason,
-        });
-      } catch (cause: unknown) {
-        settleElectronTabHandoffAck(
-          requestId,
-          owner,
-          cause instanceof Error ? cause : new Error(String(cause)),
-        );
-        throw cause;
-      }
-    });
     disposeNativeSubscriptions = () => {
       statusSubscription.dispose();
-      handoffSubscription.dispose();
     };
   };
 
@@ -581,15 +520,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     }
   }
 
-  const handleActionAck = (frame: ActionAckFrame): boolean =>
-    settleElectronTabHandoffAck(
-      frame.requestId,
-      owner,
-      frame.ok
-        ? null
-        : new Error(frame.reason ?? "Electron tab handoff was rejected."),
-    );
-
   const handleAccepted = (frame: ElectronTabAcceptedFrame): void => {
     const birth = birthByRequestId.get(frame.requestId);
     if (
@@ -610,8 +540,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   return {
     handleFrame: (frame) => {
       switch (frame.kind) {
-        case "actionAck":
-          return handleActionAck(frame);
         case "createElectronTab":
           if (connected && !disposed) void acceptCreate(frame);
           return true;
@@ -633,9 +561,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     disconnect: () => {
       connected = false;
       connectionGeneration += 1;
-      rejectPendingHandoffs(
-        "Electron tab handoff stream disconnected before acknowledgement.",
-      );
       for (const birth of birthByRequestId.values()) {
         rollbackUnacceptedBirth(birth);
       }
@@ -651,9 +576,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       disposeNativeSubscriptions?.();
       disposeNativeSubscriptions = null;
       removeOwnedElectronTabBindings(owner);
-      rejectPendingHandoffs(
-        "Electron tab handoff transport closed before acknowledgement.",
-      );
     },
   };
 }

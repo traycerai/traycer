@@ -17,6 +17,18 @@ import type {
 
 type BrowserStorageCookieSameSite = ProtocolStorageCookie["sameSite"];
 const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
+/**
+ * Total origins one captured jar may carry - the origins observed this run
+ * plus the ones carried over from the seed.
+ *
+ * A capture becomes the host's whole jar, and that jar is the next run's seed,
+ * so without a ceiling the origin list (and the localStorage blob re-serialized
+ * over IPC and the wire on every quit) would grow monotonically with every
+ * origin ever visited. Accepted fidelity limit: once the cap is reached the
+ * oldest imported origins age out and those sites ask for a fresh sign-in.
+ * That is a bounded, explainable loss; unbounded growth is not.
+ */
+const PRIMARY_PROFILE_SNAPSHOT_ORIGIN_LIMIT = 32;
 
 const desktopStorageCookieSchema = protocolStorageCookieSchema.transform(
   (cookie) => ({
@@ -79,15 +91,6 @@ export interface BrowserStorageCaptureWebContents {
 
 export type BrowserPrimaryProfileOriginSnapshot = BrowserStorageOrigin;
 
-export interface BrowserStorageStateCaptureResult {
-  readonly storageState: ProtocolStorageState;
-  readonly cookieCount: number;
-  readonly cookieDomains: readonly string[];
-  readonly localStorageCount: number;
-  readonly localStorageAvailable: boolean;
-  readonly localStorageReason: string | null;
-}
-
 export interface BrowserPrimaryProfileCaptureDependencies {
   readonly readCryptoState: () => BrowserCookieCryptoState;
   readonly getSession: () => BrowserStorageSession;
@@ -140,6 +143,17 @@ type SequencedPrimaryProfileOrigin = BrowserPrimaryProfileOriginSnapshot & {
 /** Owns recent localStorage observations and the capture barrier over them. */
 export class BrowserPrimaryProfileSnapshotCoordinator {
   private readonly origins = new Map<string, SequencedPrimaryProfileOrigin>();
+  /**
+   * The origins the host's jar was last SEEDED with. `origins` above only ever
+   * holds what this process run navigated, capped at
+   * {@link PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT} - and the host stores a
+   * capture as the WHOLE jar, replacing what it had. Without carrying the seed
+   * forward, quitting after visiting one site erases the localStorage of every
+   * other origin the host held. Retained rather than re-read: the seed is the
+   * host's own authoritative jar, and no live guest is parked on those origins
+   * to read them from.
+   */
+  private seededOrigins: readonly BrowserPrimaryProfileOriginSnapshot[] = [];
   private readonly observations = new Set<Promise<void>>();
   private sequence = 0;
 
@@ -152,6 +166,18 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
       webContents: BrowserStorageCaptureWebContents,
     ) => Promise<BrowserPrimaryProfileOriginSnapshot | null>,
   ) {}
+
+  /**
+   * Records the origin list of a jar just seeded into this partition. A null
+   * or origin-less seed carries no jar and must not retire what is retained.
+   */
+  retainSeededOrigins(storageState: ProtocolStorageState | null): void {
+    if (storageState === null || storageState.origins.length === 0) return;
+    this.seededOrigins = storageState.origins.map((origin) => ({
+      origin: origin.origin,
+      localStorage: [...origin.localStorage],
+    }));
+  }
 
   observe(url: string, webContents: BrowserStorageCaptureWebContents): void {
     const origin = parseCurrentOrigin(url);
@@ -180,9 +206,20 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
 
   async capture(): Promise<BrowserPrimaryProfileCaptureResult> {
     await Promise.all([...this.observations]);
-    const origins = [...this.origins.values()]
+    const observed = [...this.origins.values()]
       .reverse()
       .map(({ origin, localStorage }) => ({ origin, localStorage }));
+    // A freshly observed origin wins over its seeded copy; seeded origins this
+    // run never visited fill the remainder in seed order, so the capture is a
+    // whole jar rather than "the handful of sites open right now" - bounded by
+    // {@link PRIMARY_PROFILE_SNAPSHOT_ORIGIN_LIMIT}.
+    const observedOrigins = new Set(observed.map((entry) => entry.origin));
+    const origins = [
+      ...observed,
+      ...this.seededOrigins.filter(
+        (entry) => !observedOrigins.has(entry.origin),
+      ),
+    ].slice(0, PRIMARY_PROFILE_SNAPSHOT_ORIGIN_LIMIT);
     return this.captureProfile(origins);
   }
 }
@@ -220,39 +257,6 @@ export async function seedBrowserViewCookies(
     await webContents.session.cookies.set(toElectronCookieSetDetails(details));
   }
   await webContents.session.cookies.flushStore();
-}
-
-export async function captureBrowserViewStorageState(
-  input: { readonly origin: string },
-  webContents: BrowserStorageCaptureWebContents & BrowserStorageSeedWebContents,
-): Promise<BrowserStorageStateCaptureResult> {
-  const origin = parseHttpOrigin(input.origin);
-  const browserSession = webContents.session;
-  await browserSession.cookies.flushStore();
-  const cookies = (await browserSession.cookies.get({ url: origin })).map(
-    toStorageCookie,
-  );
-  const capturedCookies = cookies.map(toProtocolStorageCookie);
-  const localStorage = await captureLocalStorageForOrigin(origin, webContents);
-  // Omit the origin entirely when its localStorage capture was unavailable
-  // (e.g. the tile navigated away from `origin` mid-capture) rather than
-  // reporting `{origin, localStorage: []}` - an absent entry means "unknown",
-  // so a merge downstream cannot mistake it for a genuinely empty origin and
-  // erase a good cached value.
-  const origins = localStorage.available
-    ? [{ origin, localStorage: [...localStorage.entries] }]
-    : [];
-  return {
-    storageState: {
-      cookies: capturedCookies,
-      origins,
-    },
-    cookieCount: cookies.length,
-    cookieDomains: uniqueSorted(cookies.map((cookie) => cookie.domain)),
-    localStorageCount: localStorage.entries.length,
-    localStorageAvailable: localStorage.available,
-    localStorageReason: localStorage.reason,
-  };
 }
 
 function parseStorageState(value: ProtocolStorageState): DesktopStorageState {
@@ -451,10 +455,6 @@ function readCookiePath(value: string | undefined): string {
     throw new Error("Browser storageState cookie path is invalid");
   }
   return path;
-}
-
-function uniqueSorted(values: readonly string[]): readonly string[] {
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
 const URL_SCOPE_SYNTAX_PATTERN = /[@:/\\\s\x00-\x1F\x7F]/u;

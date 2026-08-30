@@ -28,7 +28,7 @@ import type { RunnerIpcBridge } from "./runner-ipc-bridge";
  */
 const UPDATE_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 500;
 
-const browserHandoffsDrainedSchema = z.object({
+const finalBrowserStateCapturedSchema = z.object({
   requestId: z.string().min(1),
 });
 
@@ -196,12 +196,12 @@ export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.browserHandoffsDrained,
+    RunnerHostInvoke.finalBrowserStateCaptured,
     (event, payload: unknown) => {
       const windowId = bridge.resolveSenderWindowId(event);
-      const parsed = browserHandoffsDrainedSchema.safeParse(payload);
+      const parsed = finalBrowserStateCapturedSchema.safeParse(payload);
       if (windowId === null || !parsed.success) return;
-      bridge.acknowledgeBrowserHandoffsDrained(windowId, parsed.data.requestId);
+      bridge.acknowledgeFinalBrowserCapture(windowId, parsed.data.requestId);
     },
   );
 }
