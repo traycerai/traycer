@@ -1733,6 +1733,20 @@ export function createArtifactRoomTier(
         onFrame(encodeAwarenessUpdate(entry.awareness, touched));
       };
       entry.awareness.on("update", handler);
+      // INITIAL STATE, before any delta.
+      //
+      // `Awareness` notifies on CHANGE, so an observer attached to a room that
+      // already has peers in it hears nothing until one of them next moves.
+      // Main's copy is freshly constructed on every materialize, so without
+      // this a re-materialized room shows an EMPTY presence channel - no
+      // carets, no collaborator list - until each peer's next heartbeat
+      // (`outdatedTimeout / 2`, so up to ~15s of looking alone in a room that
+      // is not empty).
+      //
+      // `encodePeerAwareness` and not a hand-rolled encode: it already
+      // excludes both of our own identities, which is exactly the filter this
+      // needs, and duplicating that exclusion is how the two drift.
+      for (const frame of encodePeerAwareness(entry)) onFrame(frame);
       return () => {
         entry.awareness.off("update", handler);
       };
