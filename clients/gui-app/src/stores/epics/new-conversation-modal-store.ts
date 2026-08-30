@@ -188,8 +188,16 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
         folders,
       );
       // A merge that adds nothing (every folder already staged) evicts
-      // nothing either, so there is no work and no patch.
-      if (sameLandingDraftWorkspace(beforeWorkspace, workspace)) return [];
+      // nothing either, so there is no work and no patch - unless the draft
+      // has no workspace of its own yet: the first workspace gesture writes
+      // the seed through, so the mirror carries the folders the user is
+      // looking at rather than `null`.
+      if (
+        current.workspace !== null &&
+        sameLandingDraftWorkspace(beforeWorkspace, workspace)
+      ) {
+        return [];
+      }
       notifyDraftLocalEdit(
         applyNewChatLocalPatch(epicId, { workspace }, false),
       );
@@ -200,7 +208,12 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
       const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
       const before = current.workspace ?? seedWorkspace;
       const workspace = removeLandingDraftWorkspaceFolder(before, folderKey);
-      if (sameLandingDraftWorkspace(before, workspace)) return;
+      if (
+        current.workspace !== null &&
+        sameLandingDraftWorkspace(before, workspace)
+      ) {
+        return;
+      }
       notifyDraftLocalEdit(
         applyNewChatLocalPatch(epicId, { workspace }, false),
       );
@@ -209,7 +222,12 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
       const current = get().draftPatchesByEpicId[epicId] ?? EMPTY_DRAFT_PATCH;
       const before = current.workspace ?? seedWorkspace;
       const workspace = setLandingDraftWorkspacePrimary(before, folderPath);
-      if (sameLandingDraftWorkspace(before, workspace)) return;
+      if (
+        current.workspace !== null &&
+        sameLandingDraftWorkspace(before, workspace)
+      ) {
+        return;
+      }
       notifyDraftLocalEdit(
         applyNewChatLocalPatch(epicId, { workspace }, false),
       );
