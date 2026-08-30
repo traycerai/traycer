@@ -84,9 +84,13 @@ describe("the root-state port", () => {
   it("carries an edit from one session's replica into another's projection", async () => {
     const source = openSession("epic-a");
     const target = openSession("epic-a");
-    await source.handle.store
-      .getState()
-      .beginEpicTitleMutation("edited in source");
+    // A DOC write, not an overlay stamp. This suite transfers root STATE, and
+    // `beginEpicTitleMutation` records an optimistic overlay that the doc does
+    // not carry - so `encodeRootState` would ship bytes without the edit and
+    // the assertion would be about nothing. `setEpicTitle` (which this
+    // replaced during the cohort migration) was a doc write; the port needs
+    // the same.
+    source.handle.doc.getMap("epic").set("title", "edited in source");
 
     const update = await source.handle.encodeRootState();
     const applied = await target.handle.applyRootUpdate(update, false);
@@ -116,9 +120,13 @@ describe("the root-state port", () => {
     const source = openSession("epic-a");
     const asLocal = openSession("epic-a");
     const asPlain = openSession("epic-a");
-    await source.handle.store
-      .getState()
-      .beginEpicTitleMutation("edited in source");
+    // A DOC write, not an overlay stamp. This suite transfers root STATE, and
+    // `beginEpicTitleMutation` records an optimistic overlay that the doc does
+    // not carry - so `encodeRootState` would ship bytes without the edit and
+    // the assertion would be about nothing. `setEpicTitle` (which this
+    // replaced during the cohort migration) was a doc write; the port needs
+    // the same.
+    source.handle.doc.getMap("epic").set("title", "edited in source");
     const update = await source.handle.encodeRootState();
 
     const localOrigins: unknown[] = [];
@@ -149,9 +157,13 @@ describe("the root-state port", () => {
   it("reports NOT applied for a disposed target rather than throwing", async () => {
     const source = openSession("epic-a");
     const target = openSession("epic-a");
-    await source.handle.store
-      .getState()
-      .beginEpicTitleMutation("edited in source");
+    // A DOC write, not an overlay stamp. This suite transfers root STATE, and
+    // `beginEpicTitleMutation` records an optimistic overlay that the doc does
+    // not carry - so `encodeRootState` would ship bytes without the edit and
+    // the assertion would be about nothing. `setEpicTitle` (which this
+    // replaced during the cohort migration) was a doc write; the port needs
+    // the same.
+    source.handle.doc.getMap("epic").set("title", "edited in source");
     const update = await source.handle.encodeRootState();
     target.handle.dispose();
 
@@ -167,14 +179,20 @@ describe("the root-state port", () => {
 
   it("encodes state that survives a round trip through bytes alone", async () => {
     const source = openSession("epic-a");
-    await source.handle.store.getState().beginEpicTitleMutation("round trip");
+    source.handle.doc.getMap("epic").set("title", "round trip");
 
     const update = await source.handle.encodeRootState();
 
     // A real transfer payload: bytes, not a live object. This is what the flip
     // will put on the wire, and a port that answered a `Y.Doc` reference would
     // pass every assertion above while being unshippable.
-    expect(update).toBeInstanceOf(Uint8Array);
+    // `ArrayBuffer.isView`, not `toBeInstanceOf(Uint8Array)`. The bytes cross
+    // the bridge through `structuredClone`, which mints them in the pipe's
+    // realm - so they ARE a `Uint8Array`, just not the one this module's
+    // global names, and an identity check fails on an environment detail
+    // rather than on the claim. The claim is "these are bytes, not a live
+    // object", and `isView` states exactly that in a realm-independent way.
+    expect(ArrayBuffer.isView(update)).toBe(true);
     expect(update.byteLength).toBeGreaterThan(0);
     source.handle.dispose();
   });
