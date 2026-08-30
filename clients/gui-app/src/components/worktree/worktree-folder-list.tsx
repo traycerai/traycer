@@ -13,7 +13,10 @@ import {
 } from "@/components/ui/command";
 import { DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
-import { FilePathTooltip } from "@/components/file-path-tooltip";
+import {
+  FilePathReveal,
+  FilePathRevealProvider,
+} from "@/components/file-path-tooltip";
 import { formatGitWorktreeLabel } from "@/lib/git/worktree-label";
 import { cn } from "@/lib/utils";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
@@ -79,70 +82,72 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
       <DropdownMenuLabel className="px-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/70">
         Workspaces
       </DropdownMenuLabel>
-      <Command className="rounded-none bg-transparent p-0">
-        <CommandInput
-          ref={searchInputRef}
-          placeholder="Search repo, branch, or path…"
-        />
-        <CommandList>
-          <CommandEmpty>{props.emptyMessage}</CommandEmpty>
-          <CommandGroup>
-            {props.rows.map((row) => {
-              const label = formatGitWorktreeLabel(row);
-              const secondary = props.secondaryLabel(row);
-              const badge = props.rowBadge(row);
-              const disabled = badge?.disabled ?? false;
-              const selected =
-                selectedRowKey !== null &&
-                worktreeRowKey(row) === selectedRowKey;
+      <FilePathRevealProvider>
+        <Command className="rounded-none bg-transparent p-0">
+          <CommandInput
+            ref={searchInputRef}
+            placeholder="Search repo, branch, or path…"
+          />
+          <CommandList>
+            <CommandEmpty>{props.emptyMessage}</CommandEmpty>
+            <CommandGroup>
+              {props.rows.map((row) => {
+                const label = formatGitWorktreeLabel(row);
+                const secondary = props.secondaryLabel(row);
+                const badge = props.rowBadge(row);
+                const disabled = badge?.disabled ?? false;
+                const selected =
+                  selectedRowKey !== null &&
+                  worktreeRowKey(row) === selectedRowKey;
 
-              return (
-                <CommandItem
-                  key={worktreeRowKey(row)}
-                  value={`${label} ${secondary} ${row.runningDir}`}
-                  disabled={disabled}
-                  data-checked={selected ? "true" : undefined}
-                  onSelect={() => {
-                    if (disabled) return;
-                    props.onSelect(row);
-                  }}
-                  className={cn(
-                    !disabled &&
-                      "cursor-pointer hover:bg-accent/60 hover:text-foreground data-[selected=true]:border-transparent data-[selected=true]:bg-accent/60 data-[selected=true]:text-foreground data-[selected=true]:shadow-none",
-                  )}
-                >
-                  <div
-                    ref={selected ? selectedRowContentRef : null}
-                    className="min-w-0 flex-1"
+                return (
+                  <CommandItem
+                    key={worktreeRowKey(row)}
+                    value={`${label} ${secondary} ${row.runningDir}`}
+                    disabled={disabled}
+                    data-checked={selected ? "true" : undefined}
+                    onSelect={() => {
+                      if (disabled) return;
+                      props.onSelect(row);
+                    }}
+                    className={cn(
+                      !disabled &&
+                        "cursor-pointer hover:bg-accent/60 hover:text-foreground data-[selected=true]:border-transparent data-[selected=true]:bg-accent/60 data-[selected=true]:text-foreground data-[selected=true]:shadow-none",
+                    )}
                   >
-                    <div className="truncate font-medium">{label}</div>
-                    {/* `pointer-events-auto` re-opens the one hole this row
+                    <div
+                      ref={selected ? selectedRowContentRef : null}
+                      className="min-w-0 flex-1"
+                    >
+                      <div className="truncate font-medium">{label}</div>
+                      {/* `pointer-events-auto` re-opens the one hole this row
                         needs. A disabled CommandItem takes
                         `pointer-events-none` for the whole row, and a
                         `checking`/`missing` worktree - still visible, and the
                         row whose location someone most wants to read - would
                         otherwise have no reachable trigger. Selection stays
                         shut: `onSelect` returns early while disabled. */}
-                    <FilePathTooltip content={secondary} side="bottom">
-                      <StartTruncatedText className="pointer-events-auto block min-w-0 text-ui-xs text-muted-foreground">
-                        {secondary}
-                      </StartTruncatedText>
-                    </FilePathTooltip>
-                  </div>
-                  {badge === null ? null : (
-                    <WorktreeRowStatusBadge
-                      label={badge.label}
-                      pending={badge.pending}
-                      tone={badge.tone}
-                      detail={badge.detail}
-                    />
-                  )}
-                </CommandItem>
-              );
-            })}
-          </CommandGroup>
-        </CommandList>
-      </Command>
+                      <FilePathReveal content={secondary} side="bottom">
+                        <StartTruncatedText className="pointer-events-auto block min-w-0 text-ui-xs text-muted-foreground">
+                          {secondary}
+                        </StartTruncatedText>
+                      </FilePathReveal>
+                    </div>
+                    {badge === null ? null : (
+                      <WorktreeRowStatusBadge
+                        label={badge.label}
+                        pending={badge.pending}
+                        tone={badge.tone}
+                        detail={badge.detail}
+                      />
+                    )}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </FilePathRevealProvider>
     </section>
   );
 }
