@@ -90,9 +90,7 @@ describe("SessionImportSettingsRow (via GeneralSettingsPanel)", () => {
 
     renderPanel();
 
-    expect(
-      screen.queryByRole("button", { name: "Import" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Import" })).toBeNull();
     // The row's label too, not just its control: the whole row is gone.
     expect(screen.queryByText("Import your work")).toBeNull();
   });
@@ -102,9 +100,7 @@ describe("SessionImportSettingsRow (via GeneralSettingsPanel)", () => {
 
     renderPanel();
 
-    expect(
-      screen.getByRole("button", { name: "Import" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Import" })).toBeTruthy();
     expect(
       screen.getByText(
         "Bring work you already started in Claude Code, Codex, or OpenCode into Traycer as tasks.",

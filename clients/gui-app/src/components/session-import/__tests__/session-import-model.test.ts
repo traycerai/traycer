@@ -105,9 +105,9 @@ describe("sessionImportWizardReducer - selection defaults as groups stream in", 
     );
     // The already-imported row is not merely unticked - it never enters the
     // state at all (older hosts still send it; current ones hide it).
-    expect(
-      state.groups[0]?.sessions.map((one) => one.nativeSessionId),
-    ).toEqual(["s1", "s2", "s4"]);
+    expect(state.groups[0]?.sessions.map((one) => one.nativeSessionId)).toEqual(
+      ["s1", "s2", "s4"],
+    );
   });
 
   it("pre-selects importable candidates in a missing_folder group too", () => {
@@ -351,9 +351,7 @@ describe("buildSessionImportView - group header counts and tri-state", () => {
   // of pills popping in with results.
   it("pills every provider the scan covers from scanStarted, before any group arrives", () => {
     const view = buildSessionImportView(
-      applyActions([
-        { kind: "scanStarted", providers: ["claude", "codex"] },
-      ]),
+      applyActions([{ kind: "scanStarted", providers: ["claude", "codex"] }]),
     );
 
     expect(view.providers).toEqual([

@@ -10,6 +10,7 @@ import {
   sessionImportRunV10,
 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
+import { sessionImportFailureReasonSchema } from "@traycer/protocol/host/session-import/candidate";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -438,13 +439,8 @@ describe("sessionImport.run@1.0 server frames", () => {
   });
 
   it("parses every closed failure reason", () => {
-    const reasons = [
-      "source_unreadable",
-      "source_empty",
-      "workspace_bind_failed",
-      "creation_failed",
-      "internal_error",
-    ] as const;
+    const reasons = sessionImportFailureReasonSchema.options;
+    expect(reasons.length).toBeGreaterThan(0);
 
     for (const reason of reasons) {
       const parsed = sessionImportRunServerFrameSchema.parse({

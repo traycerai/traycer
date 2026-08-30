@@ -19,7 +19,8 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
  * mounting is the one funnel every open path goes through).
  */
 interface ImportedUnseenState {
-  readonly unseen: Readonly<Record<string, GuiHarnessId>>;
+  // Sparse by nature: most epics have no entry, so indexed reads are undefined.
+  readonly unseen: Readonly<Record<string, GuiHarnessId | undefined>>;
   readonly markImported: (epicId: string, harness: GuiHarnessId) => void;
   readonly markSeen: (epicId: string) => void;
 }

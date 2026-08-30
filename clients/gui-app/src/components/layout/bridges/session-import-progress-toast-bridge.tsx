@@ -52,6 +52,11 @@ export function SessionImportProgressToastBridge(): null {
     if (run.status === "starting" || run.status === "running") {
       if (tourOpen) return;
       const runKey = run.runId ?? "starting";
+      // A dismissal during "starting" was aimed at this same run; carry it
+      // over when the host's `started` frame swaps the key to the real id.
+      if (dismissedRunRef.current === "starting" && run.runId !== null) {
+        dismissedRunRef.current = run.runId;
+      }
       if (dismissedRunRef.current === runKey) return;
       progressVisibleRef.current = true;
       progressToast(

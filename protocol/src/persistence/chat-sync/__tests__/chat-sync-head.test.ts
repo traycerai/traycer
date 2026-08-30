@@ -235,7 +235,7 @@ describe("chat-head section graduation", () => {
 });
 
 describe("chat-head minReaderVersion coherence", () => {
-  it("accepts a 1.2 head that still stamps the 1.1 reader floor", () => {
+  it("accepts a current-version head that still stamps the 1.1 reader floor", () => {
     expect(parse(wireHead).minReaderVersion).toEqual(
       CHAT_SYNC_1_1_READER_FLOOR,
     );

@@ -317,23 +317,7 @@ function applyUserAction(
       return { ...state, selected };
     }
     case "groupSelectionSet": {
-      const group = state.groups.find(
-        (candidate) =>
-          sessionImportGroupKey(candidate.location) === action.groupKey,
-      );
-      if (group === undefined) return state;
-      const selected = new Set(state.selected);
-      for (const candidate of group.sessions) {
-        if (!isImportable(candidate)) continue;
-        if (state.disabledHarnesses.has(candidate.harness)) continue;
-        const key = sessionImportSelectionKey(
-          candidate.harness,
-          candidate.nativeSessionId,
-        );
-        if (action.selected) selected.add(key);
-        else selected.delete(key);
-      }
-      return { ...state, selected };
+      return applyGroupSelectionSet(state, action.groupKey, action.selected);
     }
     case "groupExpansionToggled": {
       const expandedGroups = new Set(state.expandedGroups);
@@ -364,6 +348,29 @@ function applyUserAction(
       return { ...state, scanWindow: action.window };
     }
   }
+}
+
+function applyGroupSelectionSet(
+  state: SessionImportWizardState,
+  groupKey: string,
+  select: boolean,
+): SessionImportWizardState {
+  const group = state.groups.find(
+    (candidate) => sessionImportGroupKey(candidate.location) === groupKey,
+  );
+  if (group === undefined) return state;
+  const selected = new Set(state.selected);
+  for (const candidate of group.sessions) {
+    if (!isImportable(candidate)) continue;
+    if (state.disabledHarnesses.has(candidate.harness)) continue;
+    const key = sessionImportSelectionKey(
+      candidate.harness,
+      candidate.nativeSessionId,
+    );
+    if (select) selected.add(key);
+    else selected.delete(key);
+  }
+  return { ...state, selected };
 }
 
 /**
@@ -673,12 +680,9 @@ export function buildSessionImportView(
         selectedCount,
         selectionState: selectionStateFor(selectable.length, selectedCount),
       },
-      tier: missingFolder ? 2 : group.gitBacked ? 0 : 1,
+      tier: groupSortTier(missingFolder, group.gitBacked),
       count: inScope.length,
-      latest: Math.max(
-        0,
-        ...inScope.map((candidate) => candidate.updatedAt),
-      ),
+      latest: Math.max(0, ...inScope.map((candidate) => candidate.updatedAt)),
     });
   }
 
@@ -703,6 +707,12 @@ export function buildSessionImportView(
     visibleSelectionKeys,
     visibleSelectedCount,
   };
+}
+
+/** Repos sort above loose folders, which sort above missing ones. */
+function groupSortTier(missingFolder: boolean, gitBacked: boolean): number {
+  if (missingFolder) return 2;
+  return gitBacked ? 0 : 1;
 }
 
 export interface SessionImportFailureEntryView {

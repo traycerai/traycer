@@ -35,7 +35,6 @@ export function useSessionImportScan(active: boolean): SessionImportScanHandle {
     sessionImportWizardReducer,
     SESSION_IMPORT_INITIAL_STATE,
   );
-  const clientRef = useRef<SessionImportScanClient | null>(null);
   // What the live subscription is reading - the machine AND the scan window -
   // or `null` while there is no subscription. It is what tells the two
   // restarts apart, and both halves are load-bearing: a replacement client
@@ -56,9 +55,7 @@ export function useSessionImportScan(active: boolean): SessionImportScanHandle {
     if (wsStreamClient === null) return;
 
     const scanKey =
-      streamHostId === null
-        ? null
-        : `${streamHostId}::${scanWindow ?? "all"}`;
+      streamHostId === null ? null : `${streamHostId}::${scanWindow ?? "all"}`;
     const sameScan = scanKey !== null && scanKey === scannedKeyRef.current;
     dispatch({
       kind: "scanRestarted",
@@ -92,10 +89,7 @@ export function useSessionImportScan(active: boolean): SessionImportScanHandle {
         },
       },
     });
-    clientRef.current = client;
-
     return () => {
-      clientRef.current = null;
       client.close();
     };
   }, [active, wsStreamClient, streamHostId, scanWindow]);

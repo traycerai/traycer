@@ -481,12 +481,7 @@ function ProviderPill(props: {
   // No number while the scan could still change it - a mid-scan zero means
   // "not yet", not "nothing". Once the scan settles, 0 is the honest answer;
   // the old "—" placeholder read as a minus control inside a clickable pill.
-  const count =
-    provider.count > 0
-      ? provider.count.toLocaleString()
-      : pending
-        ? null
-        : "0";
+  const count = pillCountLabel(provider.count, pending);
   return (
     <button
       type="button"
@@ -523,6 +518,11 @@ function ProviderPill(props: {
  * repos". The selections are the source of truth rather than `state.selected`,
  * so this cannot drift from whatever the submission decided to send.
  */
+function pillCountLabel(count: number, pending: boolean): string | null {
+  if (count > 0) return count.toLocaleString();
+  return pending ? null : "0";
+}
+
 function submittedGroupCount(
   groups: ReadonlyArray<SessionImportGroup>,
   selections: ReadonlyArray<SessionImportSelection>,

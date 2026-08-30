@@ -11,9 +11,7 @@ import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-
  * by the title that disappears the first time the task is opened.
  */
 export function ImportedUnseenDot(props: { readonly epicId: string }) {
-  const harness = useImportedUnseenStore(
-    (state) => state.unseen[props.epicId],
-  );
+  const harness = useImportedUnseenStore((state) => state.unseen[props.epicId]);
   if (harness === undefined) return null;
   return (
     <TooltipWrapper

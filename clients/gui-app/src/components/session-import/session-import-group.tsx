@@ -63,6 +63,22 @@ function SessionRowTimestamp(props: {
   );
 }
 
+/**
+ * One number, not a fraction: a fully picked folder reads as its count alone.
+ * "All" counts what is actually submitted (the selectable rows), because
+ * unavailable rows never import; an untouched or cleared folder shows
+ * everything it holds.
+ */
+function groupCountLabel(group: SessionImportGroupView): string {
+  if (group.selectionState === "partial") {
+    return `${group.selectedCount.toLocaleString()} of ${group.selectableCount.toLocaleString()}`;
+  }
+  if (group.selectionState === "all") {
+    return group.selectableCount.toLocaleString();
+  }
+  return group.totalCount.toLocaleString();
+}
+
 function SessionRow(props: {
   readonly row: SessionImportRowView;
   readonly tone: SessionImportTone;
@@ -132,8 +148,13 @@ export function SessionImportGroupItem(props: {
   readonly onSetGroupSelection: (groupKey: string, selected: boolean) => void;
   readonly onToggleSession: (selectionKey: string) => void;
 }) {
-  const { group, tone, onToggleExpanded, onSetGroupSelection, onToggleSession } =
-    props;
+  const {
+    group,
+    tone,
+    onToggleExpanded,
+    onSetGroupSelection,
+    onToggleSession,
+  } = props;
 
   return (
     <div
@@ -239,9 +260,7 @@ export function SessionImportGroupItem(props: {
             data-testid="session-import-group-count"
             className={cn("shrink-0 text-ui-xs tabular-nums", tone.muted)}
           >
-            {group.selectionState === "partial"
-              ? `${group.selectedCount.toLocaleString()} of ${group.selectableCount.toLocaleString()}`
-              : group.totalCount.toLocaleString()}
+            {groupCountLabel(group)}
           </span>
         </button>
       </div>

@@ -29,7 +29,10 @@ import type {
   SessionImportScanClientOptions,
 } from "@traycer-clients/shared/host-transport/session-import-scan-client";
 import type { SessionImportRunRequest } from "@/components/session-import/session-import-run-handle";
-import { sessionImportGroupKey } from "@/components/session-import/session-import-model";
+import {
+  SESSION_IMPORT_DEFAULT_SCAN_WINDOW,
+  sessionImportGroupKey,
+} from "@/components/session-import/session-import-model";
 
 /**
  * Captures the callbacks the REAL `useSessionImportScan` hook hands to
@@ -477,18 +480,22 @@ describe("<SessionImportWizard />", () => {
     expect(screen.queryByText("In Traycer")).toBeNull();
   });
 
-  it("opens the scan bounded to the default two-week window", () => {
+  it("opens the scan bounded to the default window", () => {
     const before = Date.now();
     renderWizard(vi.fn());
     const after = Date.now();
 
-    const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+    const windowDays = SESSION_IMPORT_DEFAULT_SCAN_WINDOW;
+    if (windowDays === null) {
+      throw new Error("the default scan window is expected to be bounded");
+    }
+    const windowMs = windowDays * 24 * 60 * 60 * 1000;
     const bound = scanClient.updatedAfter;
     if (typeof bound !== "number") {
       throw new Error("scan opened with no updatedAfter bound");
     }
-    expect(bound).toBeGreaterThanOrEqual(before - twoWeeksMs);
-    expect(bound).toBeLessThanOrEqual(after - twoWeeksMs);
+    expect(bound).toBeGreaterThanOrEqual(before - windowMs);
+    expect(bound).toBeLessThanOrEqual(after - windowMs);
   });
 
   it("counts only pickable sessions in the footer's denominator", () => {
