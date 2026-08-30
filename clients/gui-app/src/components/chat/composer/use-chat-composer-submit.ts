@@ -22,6 +22,7 @@ import {
   resolveSubmitDeliveryPolicy,
   type ChatComposerSubmitSource,
 } from "@/lib/chats/resolve-steer-submit";
+import { splitLeadingSideChatCommand } from "@/lib/chats/side-chat-command";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { Attachment } from "@/lib/composer/types";
@@ -79,6 +80,14 @@ interface UseChatComposerSubmitArgs {
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
+  /**
+   * Handles a prompt that leads with `/btw` / `/side`
+   * (`lib/chats/side-chat-command.ts`): fork the chat and ask the remainder
+   * there, instead of sending it here. Returning `false` keeps the composer
+   * text, exactly like a refused `onSubmitMessage`. `null` where there is no
+   * chat to fork; the prompt then goes through the ordinary send untouched.
+   */
+  readonly onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
 }
 
 interface ChatComposerSubmitInput {
@@ -87,6 +96,12 @@ interface ChatComposerSubmitInput {
   readonly attachments: ReadonlyArray<Attachment>;
   readonly settings: ChatRunSettings;
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+}
+
+export interface ChatComposerSideChatInput {
+  /** The prompt with the command token stripped; may be empty (bare `/btw`). */
+  readonly content: JsonContent;
+  readonly settings: ChatRunSettings;
 }
 
 interface PendingSteerConflict {
@@ -144,11 +159,25 @@ export function useChatComposerSubmit(
     imagesUnsupported,
     attachmentPreparationPending,
     onSubmitMessage,
+    onSideChat,
   } = args;
   const appendMessage = useChatStore((state) => state.appendMessage);
   const clearDraftInStore = useComposerDraftStore((state) => state.clearDraft);
   const [pendingConflict, setPendingConflict] =
     useState<PendingSteerConflict | null>(null);
+
+  // Everything an ACCEPTED submit does to the composer, shared by the send and
+  // the side-chat paths so a refused one leaves the text in place on both.
+  const clearAcceptedDraft = useCallback((): void => {
+    clearDraftInStore(taskId);
+    pickerStore.getState().reset();
+    editorRef.current?.clear();
+    // A rejected send leaves the text in place, and dropping the keyboard
+    // there would take the user away from the message they still have to fix.
+    // On a phone the keyboard covers most of the screen, so holding it open
+    // after a send hides the reply the send was for.
+    if (isMobileApp()) blurTextEntry();
+  }, [clearDraftInStore, editorRef, pickerStore, taskId]);
 
   const finalizeSend = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
@@ -164,25 +193,10 @@ export function useChatComposerSubmit(
             }),
             true);
       if (!accepted) return false;
-      clearDraftInStore(taskId);
-      pickerStore.getState().reset();
-      editorRef.current?.clear();
-      // Gated on ACCEPTANCE, which is why it sits below the early return: a
-      // rejected send leaves the text in place, and dropping the keyboard there
-      // would take the user away from the message they still have to fix. On a
-      // phone the keyboard covers most of the screen, so holding it open after
-      // a send hides the reply the send was for.
-      if (isMobileApp()) blurTextEntry();
+      clearAcceptedDraft();
       return true;
     },
-    [
-      appendMessage,
-      clearDraftInStore,
-      editorRef,
-      onSubmitMessage,
-      pickerStore,
-      taskId,
-    ],
+    [appendMessage, clearAcceptedDraft, onSubmitMessage, taskId],
   );
 
   // The conditions that block a live submit, shared verbatim between the live
@@ -243,6 +257,22 @@ export function useChatComposerSubmit(
         pickerStore.getState().knownSlashCommands,
       );
       const attachments = buildAttachmentsFromJSONContent(submittedContent);
+
+      // A `/btw` prompt never reaches this chat: the remainder is asked in a
+      // fork instead. Decided AFTER chip conversion (so a typed `/btw` and a
+      // picked chip read the same) and BEFORE the steer logic below (a side
+      // question mid-turn is the whole point, and it must not steer or queue).
+      // Same guards as a send, above: a composer that cannot send cannot fork.
+      if (onSideChat !== null) {
+        const sideChat = splitLeadingSideChatCommand(submittedContent);
+        if (sideChat !== null) {
+          if (onSideChat({ content: sideChat.rest, settings })) {
+            clearAcceptedDraft();
+          }
+          return;
+        }
+      }
+
       const deliveryPolicy = resolveSubmitDeliveryPolicy({
         source,
         activeTurnStatus,
@@ -285,8 +315,10 @@ export function useChatComposerSubmit(
     },
     [
       activeTurnStatus,
+      clearAcceptedDraft,
       editorRef,
       finalizeSend,
+      onSideChat,
       pickerStore,
       getActiveTurnForSteer,
       steerCapable,

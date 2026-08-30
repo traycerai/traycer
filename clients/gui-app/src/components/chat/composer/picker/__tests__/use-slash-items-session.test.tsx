@@ -69,6 +69,7 @@ function renderItems(store: ComposerPickerStore) {
       hostClient: null,
       harnessId: "claude",
       workingDirectories: [],
+      localCommands: [],
     }),
   );
 }

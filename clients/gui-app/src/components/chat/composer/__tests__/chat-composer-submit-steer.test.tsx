@@ -673,6 +673,7 @@ function mountSubmit(input: MountSubmitInput): {
         imagesUnsupported: false,
         attachmentPreparationPending: false,
         onSubmitMessage: props.onSubmitMessage,
+        onSideChat: null,
       }),
     {
       initialProps: toHookProps(input),
