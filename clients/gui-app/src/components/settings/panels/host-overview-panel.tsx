@@ -26,6 +26,7 @@ import {
   HostOverviewNotice,
   HostOverviewUpdateProgress,
 } from "@/components/settings/panels/host-overview-status-card";
+import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
 import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
 import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
 import { useOverviewOsService } from "@/components/settings/panels/host-overview-os-service";
@@ -73,6 +74,13 @@ import {
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
+  holdsLifecycleGate,
+  projectFleetUpdateView,
+  UNKNOWN_FLEET_UPDATE_VIEW,
+} from "@/lib/host/fleet-update/fleet-update-view";
+import { observationFromCanonicalRead } from "@/lib/host/fleet-update/canonical-status-observation";
+import { useActiveUpdatePollAccelerator } from "@/hooks/host/use-active-update-poll-accelerator";
+import {
   toastHostRestartDeclined,
   toastHostRestartRequested,
 } from "@/lib/host-restart-toast";
@@ -91,6 +99,7 @@ import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/ho
 import type {
   HostBusyBreakdown,
   HostStatusUpdateProgress,
+  HostStatusUpdateOperation,
 } from "@traycer/protocol/host/status/index";
 
 // Matches the RPC Doctor card's own tail size, so a report read over the
@@ -495,7 +504,93 @@ export function HostOverviewPanel(props: {
   // `updating` is the only state that means "still going". `failed` is terminal
   // and deliberately leaves the controls live, because that is exactly when
   // someone needs to retry.
-  const updateInFlight = view.updateProgress?.state === "updating";
+  // ONE projection, used by both the lifecycle gate below and the card that
+  // renders it — deriving these separately is how a page ends up locked for a
+  // state it is simultaneously describing as parked.
+  //
+  // ⚠ THE FRESHNESS HERE IS DERIVED, NOT ASSERTED, and the previous version of
+  // these lines is why that is worth a paragraph. It built the observation with
+  // `freshUntilMs: Number.POSITIVE_INFINITY` and `connected: true`, and read
+  // `nowMs` from `dataUpdatedAt` — three ways of saying "assume this reading is
+  // current" — on the theory that the page's own live-source helpers already
+  // demoted a retained read. They demoted the BUSY snapshot. Nothing applied
+  // them here, so the two projections read one retained response and disagreed
+  // about it.
+  //
+  // What that cost: a host that reported `downloading` and then went
+  // unreachable kept projecting `downloading` forever. `holdsLifecycleGate`
+  // stayed true, an open restart confirmation closed itself, the Doctor card's
+  // bridge restart stayed refused — on a host whose only way back was the
+  // restart being blocked. Same class as the parked-attempt gate this page
+  // already fixed: a fact consumed outside the conditions that keep it true.
+  //
+  // `observationFromCanonicalRead` now carries those conditions with the fact,
+  // and it is the same function the landing banner and the fleet's coalesced
+  // reads use, so a fourth staleness rule cannot appear here by accident.
+  const operationObservation =
+    view.updateOperation === null || statusQuery.data === undefined
+      ? null
+      : observationFromCanonicalRead({
+          hostId: scope.hostId ?? "",
+          status: statusQuery.data,
+          dataUpdatedAt: statusQuery.dataUpdatedAt,
+          health: {
+            isError: statusQuery.isError,
+            fetchStatus: statusQuery.fetchStatus,
+            isStale: statusQuery.isStale,
+            hasLiveSource: usable,
+          },
+          source: "selected",
+        });
+  const operationView =
+    operationObservation === null
+      ? null
+      : projectFleetUpdateView({
+          observation: operationObservation,
+          // `dataUpdatedAt` rather than a clock: the demotion this page needs
+          // travels in the deadline, which `observationFromCanonicalRead`
+          // derives from the query's own health and stamps as already expired
+          // for a retained, failed, paused or aged read. `nowMs` only has to be
+          // a finite instant at or after the observation for that to apply, and
+          // a render-time clock would be both impure and less reactive — it
+          // advances only when something else re-renders this page, whereas the
+          // health signals move the query's state and notify on their own.
+          nowMs: statusQuery.dataUpdatedAt,
+          connected: usable,
+        });
+  // The same 2s acceleration the landing banner runs, for the same attempt.
+  // Not a correctness mechanism — freshness is settled above — but a
+  // CONSISTENCY one: without it this card renders the identical operation off
+  // the 10s baseline while the banner shows it at 2s, so the same download
+  // advances at two different rates depending on which surface you are looking
+  // at, and the slower one reads as stalled. `warrantsFastPoll` bounds it to
+  // operations that are genuinely moving.
+  useActiveUpdatePollAccelerator({
+    hostId: scope.hostId,
+    view: operationView ?? UNKNOWN_FLEET_UPDATE_VIEW,
+  });
+  // ATTEMPT-AWARE, with the coarse field as the fallback — and the difference
+  // is a lockout bug, not a refinement.
+  //
+  // Ticket 04's coarse derivation maps a PARKED attempt
+  // (`waiting-for-work`/`waiting-to-activate`) to `{state:"updating"}`, which is
+  // right for what that field means. But this gate reads "updating" as "a
+  // mutation is in flight, lock the page", and `waiting-to-activate` is designed
+  // to survive a reboot and sit for days waiting for a restart. Read off the
+  // coarse field alone, a parked update would close the restart confirmation
+  // (below), refuse the Doctor card's bridge restart, and lock the service verbs
+  // — for as long as the park lasted, with the restart it is waiting for being
+  // the very thing it blocked.
+  //
+  // `holdsLifecycleGate` answers the narrower question (`execution === "active"`)
+  // that this gate actually wants. For a pre-@1.3 peer `updateOperation` is
+  // `null`, the projection is `unknown`, and we fall back to the coarse field —
+  // which is exactly the behaviour those hosts ship with today, so no host
+  // regresses and only the ones that CAN tell us more get the fix.
+  const updateInFlight =
+    operationView === null
+      ? view.updateProgress?.state === "updating"
+      : holdsLifecycleGate(operationView);
   const corePending =
     restart.isPending ||
     // Unscoped on purpose: the forced bridge respawn replaces the LOCAL host
@@ -830,7 +925,24 @@ export function HostOverviewPanel(props: {
           <HostUpdateRequiredSlot host={host} canManageHost={canManageHost} />
         }
       >
-        {view.updateProgress === null ? null : (
+        {/* The ATTEMPT, when this peer speaks it. Supersedes the coarse notice
+            below rather than sitting beside it — two update lines describing one
+            operation in different vocabularies is the drift the shared
+            projection exists to prevent. A pre-@1.3 peer has no attempt to
+            show and keeps the coarse notice unchanged. */}
+        {operationView === null ? null : (
+          <HostOverviewOperationCard
+            view={operationView}
+            hostName={displayName}
+            onForceRestart={() => {
+              // Same route as the overflow Restart: re-ask the host about live
+              // work, then the EXISTING confirmation. This never restarts on
+              // the first click and never consumes update-force authorization.
+              setRestartConfirmOpen(true);
+            }}
+          />
+        )}
+        {operationView !== null || view.updateProgress === null ? null : (
           <HostOverviewUpdateProgress
             state={view.updateProgress.state}
             error={view.updateProgress.error}
@@ -1418,6 +1530,13 @@ interface OverviewDisplay {
   readonly hostVersion: string | null;
   readonly updateProgress: HostStatusUpdateProgress | null;
   /**
+   * The rich attempt projection when this peer speaks `host.status@1.3`, `null`
+   * otherwise. Distinct from `updateProgress`: the coarse field cannot tell a
+   * PARKED attempt from an executing one, which is the difference between
+   * informing the user and locking them out of their own host.
+   */
+  readonly updateOperation: HostStatusUpdateOperation | null;
+  /**
    * Live busy total from `host.status`, or `null` when this client has no live
    * read of the host. `null` is not zero — see `deriveUpdateAffordance`.
    *
@@ -1466,6 +1585,7 @@ function useOverviewDisplay(input: {
     // answers a question the buttons below actually depend on.
     hostVersion: status?.hostVersion ?? null,
     updateProgress: status?.updateProgress ?? null,
+    updateOperation: status?.updateOperation ?? null,
     ...busy,
   };
 }

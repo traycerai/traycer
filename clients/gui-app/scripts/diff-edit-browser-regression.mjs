@@ -1,23 +1,26 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { constants } from "node:fs";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer as createTcpServer } from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import {
+  findChrome,
+  launchChromeWithDevTools,
+  terminateProcessTree,
+} from "./chrome-launcher.mjs";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
 const fixtureUrlPath = "/src/__tests__/browser/diff-edit-focus.html";
-const chromePath = await findChrome();
-const profilePath = await mkdtemp(path.join(tmpdir(), "traycer-diff-edit-"));
+const chromePath = await findChrome("the diff edit browser regression");
 const vitePort = await freePort();
 let chrome;
+let chromeProfilePath;
 let client;
 let viteProcess;
 
@@ -52,46 +55,18 @@ try {
   });
   await waitForHttp(pageUrl, viteProcess, () => viteError, "Vite");
 
-  const chromeEnv = { ...process.env };
-  delete chromeEnv.DBUS_SESSION_BUS_ADDRESS;
-  chrome = spawn(
+  const launched = await launchChromeWithDevTools(
     chromePath,
-    [
-      "--headless=new",
-      "--disable-background-networking",
-      "--disable-component-update",
-      "--disable-default-apps",
-      "--disable-extensions",
-      "--disable-features=Translate",
-      "--disable-sync",
-      "--no-default-browser-check",
-      "--no-first-run",
-      "--no-sandbox",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profilePath}`,
-      "about:blank",
-    ],
-    { env: chromeEnv, stdio: ["ignore", "ignore", "pipe"] },
+    "traycer-diff-edit-",
   );
-  let chromeError = "";
-  chrome.stderr.setEncoding("utf8");
-  chrome.stderr.on("data", (chunk) => {
-    chromeError += chunk;
-  });
-
-  const devtoolsWebSocketUrl = await waitForDevToolsUrl(
-    chrome,
-    () => chromeError,
-  );
-  const devtoolsUrl = new URL(devtoolsWebSocketUrl);
-  devtoolsUrl.protocol = "http:";
-  devtoolsUrl.pathname = "";
-  devtoolsUrl.search = "";
-  devtoolsUrl.hash = "";
+  chrome = launched.chrome;
+  chromeProfilePath = launched.profilePath;
+  const readChromeError = launched.readError;
+  const devtoolsUrl = launched.devtoolsHttpUrl;
   await waitForHttp(
     new URL("/json/version", devtoolsUrl).href,
     chrome,
-    () => chromeError,
+    readChromeError,
     "Chrome DevTools",
   );
   const targetResponse = await fetch(
@@ -440,32 +415,17 @@ try {
   console.log("diff edit browser regression passed");
 } finally {
   client?.close();
-  chrome?.kill("SIGTERM");
-  viteProcess?.kill("SIGTERM");
-  await rm(profilePath, { recursive: true, force: true, maxRetries: 3 });
-}
-
-async function findChrome() {
-  const candidates = [
-    process.env.CHROME_BIN,
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-  ].filter((candidate) => candidate !== undefined);
-  for (const candidate of candidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      // Try the next platform-standard location.
-    }
+  if (chrome !== undefined) {
+    await terminateProcessTree(chrome);
   }
-  throw new Error(
-    "Chrome is required for the diff edit browser regression. Set CHROME_BIN to its executable.",
-  );
+  viteProcess?.kill("SIGTERM");
+  if (chromeProfilePath !== undefined) {
+    await rm(chromeProfilePath, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+    });
+  }
 }
 
 async function freePort() {
@@ -500,23 +460,6 @@ async function waitForHttp(url, process, readError, label) {
     await delay(50);
   }
   throw new Error(`Timed out waiting for ${label}:\n${readError()}`);
-}
-
-async function waitForDevToolsUrl(process, readError) {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    if (process.exitCode !== null) {
-      throw new Error(
-        `Chrome exited before DevTools was ready:\n${readError()}`,
-      );
-    }
-    const match = readError().match(
-      /DevTools listening on (ws:\/\/[^\s]+\/devtools\/browser\/[^\s]+)/,
-    );
-    if (match !== null) return match[1];
-    await delay(50);
-  }
-  throw new Error(`Timed out waiting for Chrome DevTools:\n${readError()}`);
 }
 
 async function connectCdp(url) {

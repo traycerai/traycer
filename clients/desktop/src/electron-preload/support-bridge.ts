@@ -4,6 +4,7 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  DesktopRuntimePlatform,
   SupportBuildPublicDraftResult,
   SupportFingerprintOccurrence,
   SupportFreezeEvidenceInput,
@@ -87,6 +88,7 @@ export interface SupportBridgeSurface {
   requestMicrophoneAccess(): Promise<"granted" | "denied">;
   openMicrophoneSettings(): Promise<void>;
   notifications: {
+    readonly systemSettings: { open(): Promise<void> } | null;
     show(
       title: string,
       body: string,
@@ -133,7 +135,9 @@ export interface SupportBridgeSurface {
   };
 }
 
-export function buildSupportBridge(): SupportBridgeSurface {
+export function buildSupportBridge(
+  platform: DesktopRuntimePlatform,
+): SupportBridgeSurface {
   const foregroundNotificationDisplays =
     createForegroundNotificationDisplayChannel();
   return {
@@ -155,6 +159,15 @@ export function buildSupportBridge(): SupportBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.openMicrophoneSettings),
 
     notifications: {
+      systemSettings:
+        platform === "darwin" || platform === "win32"
+          ? {
+              open: () =>
+                ipcRenderer.invoke(
+                  RunnerHostInvoke.notificationOpenSystemSettings,
+                ),
+            }
+          : null,
       show: (
         title,
         body,

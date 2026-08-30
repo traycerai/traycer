@@ -1,16 +1,31 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type {
   ChatActiveTurn,
-  ChatQueueDeliveryPolicy,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 import { blurTextEntry } from "@/components/layout/shell/shell-gestures";
 import { isMobileApp } from "@/lib/mobile-app";
 import { useChatStore } from "@/stores/composer/chat-store";
-import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import { containsImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
+import { appLogger } from "@/lib/logger";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  appendImageAttachmentAtoms,
+  containsImageAtoms,
+} from "@/lib/composer/image-atoms";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
+import {
+  getImageBytes,
+  sessionImageBytes,
+} from "@/lib/composer/landing-image-store";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
+import { v4 as uuidv4 } from "uuid";
 import {
   buildAttachmentsFromJSONContent,
   buildSubmittedChatJSONContent,
@@ -28,6 +43,7 @@ import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-st
 import type { Attachment } from "@/lib/composer/types";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
+import type { ChatComposerSubmitInput } from "./chat-composer";
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 
 interface UseChatComposerSubmitArgs {
@@ -90,14 +106,6 @@ interface UseChatComposerSubmitArgs {
   readonly onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
 }
 
-interface ChatComposerSubmitInput {
-  readonly content: JsonContent;
-  readonly contentText: string;
-  readonly attachments: ReadonlyArray<Attachment>;
-  readonly settings: ChatRunSettings;
-  readonly deliveryPolicy: ChatQueueDeliveryPolicy;
-}
-
 export interface ChatComposerSideChatInput {
   /** The prompt with the command token stripped; may be empty (bare `/btw`). */
   readonly content: JsonContent;
@@ -113,6 +121,7 @@ interface PendingSteerConflict {
   readonly content: JsonContent;
   readonly contentText: string;
   readonly attachments: ReadonlyArray<Attachment>;
+  readonly restore: ChatSendRestore;
   readonly settings: ChatRunSettings;
   readonly changed: ReadonlyArray<string>;
   // The turnId this consent was DISPLAYED for. The composer persists across turn
@@ -126,6 +135,7 @@ interface PendingSteerConflict {
 
 export interface ChatComposerSubmitResult {
   readonly submitDraft: (source: ChatComposerSubmitSource) => void;
+  readonly annotationPreparationPending: boolean;
   /**
    * Confirm-dialog state for a `Mod-Enter` steer whose settings differ from the
    * running turn's baked settings (decision 6). Open means the send is staged
@@ -165,6 +175,9 @@ export function useChatComposerSubmit(
   const clearDraftInStore = useComposerDraftStore((state) => state.clearDraft);
   const [pendingConflict, setPendingConflict] =
     useState<PendingSteerConflict | null>(null);
+  const [annotationPreparationPending, setAnnotationPreparationPending] =
+    useState(false);
+  const annotationPrepFlight = useRef(false);
 
   // Everything an ACCEPTED submit does to the composer, shared by the send and
   // the side-chat paths so a refused one leaves the text in place on both.
@@ -232,86 +245,149 @@ export function useChatComposerSubmit(
       // and clear nothing, letting the just-submitted text resurrect once the
       // editor finishes initializing from that same stale initial content.
       if (editor === null || !editor.isReady()) return;
+      if (annotationPrepFlight.current) return;
+      const { annotationRecords } = readDraftSidecars(taskId);
       const editorContent = editor.getJSON();
       const contentText =
         extractPlainTextFromComposerJSONContent(editorContent);
-      const trimmed = contentText.trim();
-      const hasImages = containsImageAtoms(editorContent);
-      if (trimmed.length === 0 && !hasImages) return;
+      if (
+        isEmptyComposerSubmit({
+          contentText,
+          editorContent,
+          annotationRecords,
+        })
+      ) {
+        return;
+      }
 
-      // `toolbar.serviceTier` is already clamped to the selected model in the
-      // toolbar store (the single site shared with the picker display), so a tier
-      // the model doesn't advertise never reaches the wire or the recorded turn.
-      // The raw preference stays sticky in the store's `values` for a later model
-      // that honors it, and the codex-adapter still re-filters against the
-      // model's authoritative supportedServiceTiers at thread/start.
-      const settings = buildChatRunSettings({
-        selection: toolbar.selection,
-        permission: toolbar.permission,
-        reasoning: toolbar.reasoning,
-        serviceTier: toolbar.serviceTier,
-      });
+      const submitPreparedDraft = (
+        annotationImages: ReadonlyArray<AnnotationImageAtom>,
+      ): void => {
+        if (submitBlocked()) return;
+        // Re-read the document rather than comparing the `revision` captured
+        // before the async annotation-image read. `revision` bumps on every
+        // keystroke, so a single character typed during that read dropped the
+        // send silently; and the pre-flight capture is not what the user is
+        // looking at by the time we clear the editor, so sending it would
+        // discard those keystrokes. The live document is both.
+        const liveContent = editor.getJSON();
+        const liveContentText =
+          extractPlainTextFromComposerJSONContent(liveContent);
+        // Re-read the sidecar array for the same reason the document is
+        // re-read: an annotation attached while the crop bytes resolved is
+        // what the user is looking at, and the `clearDraft` below wipes it -
+        // the pre-flight capture would drop it silently. `annotationImages`
+        // still covers only the records captured BEFORE that read, so a late
+        // annotation sends its record without an inlined crop atom rather
+        // than not being sent at all.
+        const { annotationRecords: liveAnnotationRecords } =
+          readDraftSidecars(taskId);
+        const settings = buildChatRunSettings({
+          selection: toolbar.selection,
+          permission: toolbar.permission,
+          reasoning: toolbar.reasoning,
+          serviceTier: toolbar.serviceTier,
+        });
+        const submittedContent = appendImageAttachmentAtoms(
+          buildSubmittedChatJSONContent(
+            liveContent,
+            pickerStore.getState().knownSlashCommands,
+          ),
+          annotationImages,
+        );
+        const attachments: ReadonlyArray<Attachment> = [
+          ...buildAttachmentsFromJSONContent(submittedContent),
+          ...liveAnnotationRecords,
+        ];
 
-      const submittedContent = buildSubmittedChatJSONContent(
-        editorContent,
-        pickerStore.getState().knownSlashCommands,
-      );
-      const attachments = buildAttachmentsFromJSONContent(submittedContent);
-
-      // A `/btw` prompt never reaches this chat: the remainder is asked in a
-      // fork instead. Decided AFTER chip conversion (so a typed `/btw` and a
-      // picked chip read the same) and BEFORE the steer logic below (a side
-      // question mid-turn is the whole point, and it must not steer or queue).
-      // Same guards as a send, above: a composer that cannot send cannot fork.
-      if (onSideChat !== null) {
-        const sideChat = splitLeadingSideChatCommand(submittedContent);
-        if (sideChat !== null) {
-          if (onSideChat({ content: sideChat.rest, settings })) {
-            clearAcceptedDraft();
+        // A `/btw` prompt never reaches this chat: the remainder is asked in a
+        // fork instead. Decided AFTER chip conversion (so a typed `/btw` and a
+        // picked chip read the same) and BEFORE the delivery/steer decision
+        // below - a side question asked mid-turn is the whole point, and it
+        // must neither steer nor queue. It sits inside the prepared-draft path
+        // so it reads the same live document the send would, and the annotation
+        // atoms appended above are transparent to the leading-token scan.
+        if (onSideChat !== null) {
+          const sideChat = splitLeadingSideChatCommand(submittedContent);
+          if (sideChat !== null) {
+            if (onSideChat({ content: sideChat.rest, settings })) {
+              clearAcceptedDraft();
+            }
+            return;
           }
-          return;
         }
+
+        const deliveryPolicy = resolveSubmitDeliveryPolicy({
+          source,
+          activeTurnStatus,
+          steerEnabled,
+          steerProtocolSupported,
+        });
+        const sendInput: ChatComposerSubmitInput = {
+          content: submittedContent,
+          contentText: liveContentText,
+          attachments,
+          settings,
+          deliveryPolicy,
+          restore: {
+            content: liveContent,
+            browserAnnotations: liveAnnotationRecords,
+          },
+        };
+        if (deliveryPolicy === "after_safe_point" && steerCapable) {
+          const originTurn = getActiveTurnForSteer();
+          const decision = decideSteerSettings(originTurn, settings);
+          if (decision.kind === "interrupt_restart") {
+            setPendingConflict({
+              content: submittedContent,
+              contentText: liveContentText,
+              attachments,
+              restore: {
+                content: liveContent,
+                browserAnnotations: liveAnnotationRecords,
+              },
+              settings: decision.newSettings,
+              changed: decision.changed,
+              originTurnId: originTurn?.turnId ?? null,
+            });
+            return;
+          }
+        }
+        finalizeSend(sendInput);
+      };
+
+      if (annotationRecords.length === 0) {
+        submitPreparedDraft([]);
+        return;
       }
 
-      const deliveryPolicy = resolveSubmitDeliveryPolicy({
-        source,
-        activeTurnStatus,
-        steerEnabled,
-        steerProtocolSupported,
-      });
-
-      // The drift confirmation is a capability-gated affordance: only a
-      // steer-capable harness can actually restart-under-new-settings, so only it
-      // asks. On an unsupported harness the `after_safe_point` send goes straight
-      // through and the host records the benign fallback ("After turn") row.
-      if (deliveryPolicy === "after_safe_point" && steerCapable) {
-        // A turn-start-baked setting (harness/model/reasoning/tier/agent-mode/
-        // profile - never permissionMode) differing from the running turn can't
-        // fold in silently: confirm ending the turn first (decision 6). The host
-        // owns the actual safe-point-vs-interrupt-restart promotion; this is the
-        // renderer's consent gate. Keep the composer text until the user acts.
-        const originTurn = getActiveTurnForSteer();
-        const decision = decideSteerSettings(originTurn, settings);
-        if (decision.kind === "interrupt_restart") {
-          setPendingConflict({
-            content: submittedContent,
-            contentText,
-            attachments,
-            settings: decision.newSettings,
-            changed: decision.changed,
-            originTurnId: originTurn?.turnId ?? null,
-          });
-          return;
+      annotationPrepFlight.current = true;
+      setAnnotationPreparationPending(true);
+      void (async () => {
+        try {
+          const annotationImages =
+            await resolveAnnotationImageAtoms(annotationRecords);
+          if (annotationImages === null) {
+            reportableErrorToast(
+              "Couldn't attach the annotation image.",
+              {
+                description: "The crop is missing. Try attaching again.",
+              },
+              {
+                title: "Annotation image missing",
+                message: null,
+                code: null,
+                source: "Chat composer",
+              },
+            );
+            return;
+          }
+          submitPreparedDraft(annotationImages);
+        } finally {
+          annotationPrepFlight.current = false;
+          setAnnotationPreparationPending(false);
         }
-      }
-
-      finalizeSend({
-        content: submittedContent,
-        contentText,
-        attachments,
-        settings,
-        deliveryPolicy,
-      });
+      })();
     },
     [
       activeTurnStatus,
@@ -325,6 +401,7 @@ export function useChatComposerSubmit(
       steerEnabled,
       steerProtocolSupported,
       submitBlocked,
+      taskId,
       toolbarStore,
     ],
   );
@@ -367,6 +444,7 @@ export function useChatComposerSubmit(
         attachments: pendingConflict.attachments,
         settings: pendingConflict.settings,
         deliveryPolicy,
+        restore: pendingConflict.restore,
       })
     ) {
       setPendingConflict(null);
@@ -388,6 +466,7 @@ export function useChatComposerSubmit(
 
   return {
     submitDraft,
+    annotationPreparationPending,
     steerConflict: {
       open: pendingConflict !== null,
       changed: pendingConflict?.changed ?? [],
@@ -395,4 +474,72 @@ export function useChatComposerSubmit(
       onRestart,
     },
   };
+}
+
+interface ComposerDraftSidecars {
+  readonly annotationRecords: ReadonlyArray<BrowserAnnotationRecord>;
+}
+
+/**
+ * The draft's non-document sidecar array, read live. Both the pre-flight read
+ * and the post-async finalize go through here so they can never diverge.
+ */
+function readDraftSidecars(taskId: string): ComposerDraftSidecars {
+  const draft = readComposerDraftSnapshot(taskId);
+  return { annotationRecords: draft.browserAnnotations };
+}
+
+function isEmptyComposerSubmit(input: {
+  readonly contentText: string;
+  readonly editorContent: JsonContent;
+  readonly annotationRecords: ReadonlyArray<BrowserAnnotationRecord>;
+}): boolean {
+  return (
+    input.contentText.trim().length === 0 &&
+    !containsImageAtoms(input.editorContent) &&
+    input.annotationRecords.length === 0
+  );
+}
+
+type AnnotationImageAtom = {
+  readonly id: string;
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly size: number | null;
+  readonly b64content: string;
+  readonly hash: string;
+};
+
+async function resolveAnnotationImageAtoms(
+  records: ReadonlyArray<BrowserAnnotationRecord>,
+): Promise<ReadonlyArray<AnnotationImageAtom> | null> {
+  const atoms: AnnotationImageAtom[] = [];
+  for (const record of records) {
+    const sessionBytes = sessionImageBytes(record.imageHash);
+    const bytes =
+      sessionBytes ??
+      // An IndexedDB open/transaction failure is "the crop is not available",
+      // the same outcome as a missing key - and it must reach the caller as
+      // `null` rather than a rejection, which nothing above awaits with a
+      // `catch` and which would silently abandon the submit with no toast.
+      (await getImageBytes(record.imageHash).catch((error: unknown) => {
+        appLogger.error(
+          "[chat-composer] annotation image read failed",
+          { imageHash: record.imageHash },
+          error,
+        );
+        return undefined;
+      })) ??
+      null;
+    if (bytes === null) return null;
+    atoms.push({
+      id: uuidv4(),
+      fileName: record.imageFileName,
+      mimeType: "image/png",
+      size: bytes.byteLength,
+      b64content: bytesToBase64(bytes),
+      hash: record.imageHash,
+    });
+  }
+  return atoms;
 }

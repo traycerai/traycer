@@ -44,6 +44,7 @@ function renderEmpty(props: {
       isLoading={props.isLoading}
       listsFailed={props.listsFailed}
       onRetryLists={props.onRetryLists ?? (() => undefined)}
+      updateViewForHost={null}
     />,
   );
 }
@@ -113,6 +114,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         isLoading={false}
         listsFailed
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
 
@@ -145,6 +147,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         isLoading={false}
         listsFailed
         onRetryLists={onRetryLists}
+        updateViewForHost={null}
       />,
     );
 
@@ -202,6 +205,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
 
@@ -231,6 +235,7 @@ describe("<HostSwitcher /> trigger status", () => {
       isLoading: false,
       listsFailed: false,
       onRetryLists: () => undefined,
+      updateViewForHost: null,
     };
     const { rerender } = render(
       <HostSwitcher hosts={[healthy]} selected={healthy} {...common} />,
@@ -285,6 +290,7 @@ describe("<HostSwitcher /> trailing action", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
 
@@ -320,6 +326,7 @@ describe("<HostSwitcher /> trailing action", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
 
@@ -364,6 +371,7 @@ describe("<HostSwitcher /> setting-up status word (M5)", () => {
         isLoading={false}
         listsFailed={false}
         onRetryLists={() => undefined}
+        updateViewForHost={null}
       />,
     );
 

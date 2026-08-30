@@ -1,8 +1,10 @@
 import type { CSSProperties } from "react";
 import { describe, expect, it } from "vitest";
 import {
+  GIT_PANEL_PIERRE_FILE_TREE_UNSAFE_CSS,
   GIT_PANEL_PIERRE_FILE_TREE_THEME_STYLE,
   PIERRE_FILE_TREE_THEME_STYLE,
+  PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS,
 } from "@/components/epic-canvas/pierre-tree-theme";
 
 /**
@@ -46,6 +48,23 @@ describe("Pierre file-tree theme surface", () => {
     // colour here would reintroduce the slab on that mount alone.
     expect(read(GIT_PANEL_PIERRE_FILE_TREE_THEME_STYLE)).toBe(
       read(PIERRE_FILE_TREE_THEME_STYLE),
+    );
+  });
+});
+
+describe("Pierre file-tree truncation tolerance", () => {
+  it("raises Pierre's one-line overflow threshold by one pixel", () => {
+    expect(PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS).toContain(
+      "height > calc(1lh + 1px)",
+    );
+    expect(PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS).toContain(
+      "[data-truncate-marker]",
+    );
+  });
+
+  it("carries the shared tolerance into the git panel custom styles", () => {
+    expect(GIT_PANEL_PIERRE_FILE_TREE_UNSAFE_CSS).toContain(
+      PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS,
     );
   });
 });

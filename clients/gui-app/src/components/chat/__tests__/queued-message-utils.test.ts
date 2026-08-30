@@ -150,6 +150,7 @@ function queuedItem(input: {
           },
         ],
       },
+      browserAnnotations: [],
     },
     sender: input.sender,
     settings: TEST_SETTINGS,

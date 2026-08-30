@@ -1,27 +1,33 @@
-import type { ChatAccumulatedFileChange } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import type { ResolvedSnapshotDiff } from "@/lib/chat/resolve-snapshot-diff-content";
 import type { SnapshotUnifiedPatchEntry } from "@/lib/diff/snapshot-diff-patch";
 
 export interface SnapshotBundleSectionEntry extends SnapshotUnifiedPatchEntry {
-  readonly operation: ChatAccumulatedFileChange["operation"];
-  readonly reason: ChatAccumulatedFileChange["reason"];
+  readonly operation: AccumulatedChangeRow["operation"];
+  readonly reason: AccumulatedChangeRow["reason"];
 }
 
+/**
+ * Per-file section headers for a bundle tile, taken from the accumulated-change
+ * ROWS rather than from the content-bearing changes.
+ *
+ * Only `operation` and `reason` are read, and both are metadata every line
+ * carries - so this works unchanged on the windowed line, where the contents
+ * these used to travel with do not arrive.
+ */
 export function snapshotBundleSectionEntries(
   resolved: ReadonlyArray<ResolvedSnapshotDiff>,
-  changes: ReadonlyArray<ChatAccumulatedFileChange>,
+  rows: ReadonlyArray<AccumulatedChangeRow>,
 ): ReadonlyArray<SnapshotBundleSectionEntry> {
-  const changesByPath = new Map(
-    changes.map((change) => [change.filePath, change]),
-  );
+  const rowsByPath = new Map(rows.map((row) => [row.filePath, row]));
   return resolved.flatMap((entry) => {
-    const change = changesByPath.get(entry.filePath);
-    if (change === undefined) return [];
+    const row = rowsByPath.get(entry.filePath);
+    if (row === undefined) return [];
     return [
       {
         ...entry,
-        operation: change.operation,
-        reason: change.reason,
+        operation: row.operation,
+        reason: row.reason,
       },
     ];
   });

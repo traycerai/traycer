@@ -4,7 +4,7 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -53,7 +53,8 @@ export function buildAgentArchiveCommand(opts: {
     ).catch((err: unknown) => {
       throw remapArchiveError(err, opts.agentId);
     });
-    const { updated } = parseHostResponse(
+    const { updated } = parseCanonicalHostResponse(
+      "epic.setChatArchived",
       setChatArchivedResponseSchema,
       result,
     );

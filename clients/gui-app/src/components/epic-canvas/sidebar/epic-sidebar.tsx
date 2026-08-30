@@ -217,6 +217,10 @@ import {
 } from "@/lib/worktree/bindings-failure";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  BrowsersPanelActions,
+  BrowsersPanelBody,
+} from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
 const CHATS_PANEL_SKELETON = <ChatsPanelSkeleton />;
 const ARTIFACTS_PANEL_SKELETON = <ArtifactsPanelSkeleton />;
 const COMMENTS_PANEL_SKELETON = <CommentsPanelSkeleton />;
@@ -485,6 +489,14 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
       Subtitle: null,
     },
     loading: emptyLoadingSlots(TerminalsLoadingPanelBody),
+  },
+  browsers: {
+    live: {
+      Body: BrowsersPanelBody,
+      Actions: BrowsersPanelActions,
+      Subtitle: null,
+    },
+    loading: emptyLoadingSlots(GenericLoadingPanelBody),
   },
   artifacts: {
     live: {
@@ -2105,6 +2117,7 @@ function ChatHeaderMoreMenu(props: {
   const connectionStatus = useEpicConnectionStatus();
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
   const menu = useExpandableHeaderMenu(props.tabId, "chats", props.collapsed);
+  const searchSelectedRef = useRef(false);
   const selectionEnabled = selection.canSelect && connectionStatus !== "closed";
 
   return (
@@ -2119,10 +2132,20 @@ function ChatHeaderMoreMenu(props: {
         sideOffset={8}
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-56"
+        onCloseAutoFocus={(event) => {
+          if (!searchSelectedRef.current) return;
+          searchSelectedRef.current = false;
+          // Search owns the next focus target. Radix otherwise restores focus
+          // to the now-secondary overflow trigger after the input has mounted.
+          event.preventDefault();
+        }}
       >
         {props.searching ? null : (
           <DropdownMenuItem
-            onSelect={() => openSearch(props.tabId, "chats", "")}
+            onSelect={() => {
+              searchSelectedRef.current = true;
+              openSearch(props.tabId, "chats", "");
+            }}
             data-testid="epic-sidebar-more-search-chats"
           >
             <Search className="size-4" />
@@ -2157,6 +2180,7 @@ function ArtifactHeaderMoreMenu(props: {
   const selection = useSidebarBulkSelection();
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
   const searchAvailable = useArtifactSearchAvailable();
+  const searchSelectedRef = useRef(false);
   const menu = useExpandableHeaderMenu(
     props.tabId,
     "artifacts",
@@ -2175,13 +2199,23 @@ function ArtifactHeaderMoreMenu(props: {
         sideOffset={8}
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
+        onCloseAutoFocus={(event) => {
+          if (!searchSelectedRef.current) return;
+          searchSelectedRef.current = false;
+          // Keep the caret in the search input instead of returning it to the
+          // overflow trigger when the selection closes this menu.
+          event.preventDefault();
+        }}
       >
         {/* Hidden when the Epic has NO artifacts or is open read-only - see
             `useArtifactSearchAvailable` for why emptiness and write access gate
             this and a size threshold does not. */}
         {searchAvailable && !props.searching ? (
           <DropdownMenuItem
-            onSelect={() => openSearch(props.tabId, "artifacts", "")}
+            onSelect={() => {
+              searchSelectedRef.current = true;
+              openSearch(props.tabId, "artifacts", "");
+            }}
             data-testid="epic-sidebar-more-search-artifacts"
           >
             <Search className="size-4" />

@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 
 const testState = vi.hoisted(() => ({
-  refresh: vi.fn(() => Promise.resolve()),
+  refresh: vi.fn(() => Promise.resolve([])),
   isPending: false,
   isError: false,
   checkedAt: Date.now(),
@@ -20,6 +20,7 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
         disabled: false,
         note: null,
         holders: [],
+        holdersStatus: "none" as const,
       },
     ],
     isPending: testState.isPending,
@@ -40,6 +41,14 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
 
 vi.mock("@/components/worktree/worktree-pr-metadata", () => ({
   WorktreePrPills: () => null,
+}));
+
+vi.mock("@/lib/worktree/teardown-agent-names", () => ({
+  useTeardownAgentNames: () => new Map<string, string>(),
+}));
+
+vi.mock("@/components/settings/panels/use-worktree-task-titles", () => ({
+  useWorktreeTaskTitles: () => new Map<string, string>(),
 }));
 
 import { SweepWorktreesDialog } from "@/components/epics/sweep-worktrees-dialog";

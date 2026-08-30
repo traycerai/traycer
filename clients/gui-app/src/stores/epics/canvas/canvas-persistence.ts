@@ -9,7 +9,7 @@ import {
   isEpicNodeKind,
   type EpicNodeRecord,
 } from "@/lib/artifacts/node-display";
-import type { EpicCanvasState, EpicViewTab } from "./types";
+import type { EpicCanvasState, EpicPipGeometry, EpicViewTab } from "./types";
 import { createEmptyCanvas } from "./canvas-state";
 import { parseEpicCanvasState } from "./migrate-canvas";
 
@@ -31,6 +31,9 @@ export interface PersistedCanvasStatePatch {
   >;
   readonly artifactTreeByEpicId: Readonly<
     Record<string, ReadonlyArray<EpicNodeRecord> | undefined>
+  >;
+  readonly pipGeometryByEpicId: Readonly<
+    Record<string, EpicPipGeometry | undefined>
   >;
 }
 
@@ -55,6 +58,9 @@ export function sanitizePersistedCanvasState(
     artifactTreeByEpicId: readPersistedArtifactTreeByEpicId(
       value.artifactTreeByEpicId,
     ),
+    pipGeometryByEpicId: readPersistedPipGeometryByEpicId(
+      value.pipGeometryByEpicId,
+    ),
   };
 }
 
@@ -66,6 +72,7 @@ function emptyPersistedCanvasStatePatch(): PersistedCanvasStatePatch {
     activeTabId: null,
     mostRecentTabIdByEpicId: {},
     artifactTreeByEpicId: EMPTY_TREES,
+    pipGeometryByEpicId: {},
   };
 }
 
@@ -219,4 +226,48 @@ function parsePersistedEpicNodeRecord(value: unknown): EpicNodeRecord | null {
     type: value.type,
     hostId: value.hostId,
   };
+}
+
+function readPersistedPipGeometryByEpicId(
+  value: unknown,
+): Readonly<Record<string, EpicPipGeometry | undefined>> {
+  if (!isRecord(value)) return {};
+  const out: Record<string, EpicPipGeometry> = {};
+  for (const [epicId, raw] of Object.entries(value)) {
+    const geometry = parsePersistedPipGeometry(raw);
+    if (geometry !== null) out[epicId] = geometry;
+  }
+  return out;
+}
+
+function parsePersistedPipGeometry(value: unknown): EpicPipGeometry | null {
+  if (!isRecord(value)) return null;
+  const anchored = readFourFiniteNumbers([
+    value.anchorX,
+    value.anchorY,
+    value.previewWidth,
+    value.previewHeight,
+  ]);
+  if (anchored === null) return null;
+  return {
+    anchorX: anchored[0],
+    anchorY: anchored[1],
+    previewWidth: anchored[2],
+    previewHeight: anchored[3],
+  };
+}
+
+function readFourFiniteNumbers(
+  values: readonly [unknown, unknown, unknown, unknown],
+): readonly [number, number, number, number] | null {
+  const [first, second, third, fourth] = values;
+  if (!isFiniteNumber(first)) return null;
+  if (!isFiniteNumber(second)) return null;
+  if (!isFiniteNumber(third)) return null;
+  if (!isFiniteNumber(fourth)) return null;
+  return [first, second, third, fourth];
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }

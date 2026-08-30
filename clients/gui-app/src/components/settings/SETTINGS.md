@@ -494,6 +494,29 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     chord's mid-turn-steering semantics - stays out of Keybindings, which is
     for rebinding), Pin context usage breakdown (global toggle for the
     always-visible agent context-window breakdown, default off).
+  - **Browser**: the in-app browser has no toggle - it is always on, and the
+    group carries no master switch.
+    Web link default + per-kind terminal/markdown link open-mode selects are
+    always active (no `disabled` state).
+    Agent tab surfacing (`agentTabSurfacingMode`: `pip` | `tile` | `off`,
+    default `off` - what the GUI does when the AGENT opens a browser tab via
+    its REPL `openTab` tool) governs suppressing host-driven opens that
+    previously always split the canvas.
+    `pip` floats the tab picture-in-picture unless a user-converted PiP is
+    showing or the epic surface is hidden; `tile` places a canvas tile
+    grouped by session - same-session opens become tabs of one pane - even
+    in hidden epics; `off` answers electron foreground creates with a hidden
+    off-screen view so the agent's open still succeeds, and leaves headless
+    tabs in the sidebar.
+    Disposition decisions live in `lib/browser-view/agent-tab-surfacing.ts`;
+    headless-origin tabs are diffed from `browser.sessions` lifecycle frames
+    in the dock, seeded snapshot-only so surfacing stays ephemeral across
+    reloads.
+    A conditional Detected dev origins row follows.
+    There is no standing risk disclosure in this group - the master toggle
+    row that carried one was deleted along with the toggle, and the
+    `SettingsRow` `risk` prop it was the sole consumer of was deleted with
+    it.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions"), Show global resources button, Show
@@ -709,7 +732,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       what the rename fixes.
       **`usage`'s label is PER-PROVIDER** (`providerTabLabel`): that tab holds
       managed profiles and usage limits, but managed profiles exist for
-      `claude-code` and `codex` only — so on the other ten providers the fixed
+      `claude-code`, `codex`, and `grok` only — so on the other providers the fixed
       label promised a section that is not there. Elsewhere it reads
       **"Usage limits"**, which is the panel's own words for what remains (the
       section inside is headed exactly that). The ID never varies; this is

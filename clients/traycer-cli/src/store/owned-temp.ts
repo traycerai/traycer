@@ -16,6 +16,7 @@ import {
   verifyProcessIdentity,
   type ProcessIdentityToken,
 } from "./process-identity";
+import { legacyMutationVerifier } from "../installer/aside-dirs";
 
 // Owner-tokened temp dirs under the host staging root
 // (`~/.traycer/host[/<env>]/install-staging/`) - Host Update Layer
@@ -107,7 +108,12 @@ async function dirAgeMs(dirPath: string): Promise<number | null> {
   }
 }
 
-async function removeTempDir(dirPath: string, logger: ILogger): Promise<void> {
+async function removeTempDir(
+  dirPath: string,
+  logger: ILogger,
+  verifyMutationCapability: () => Promise<void>,
+): Promise<void> {
+  await verifyMutationCapability();
   await rm(dirPath, { recursive: true, force: true }).catch((err) => {
     logger.warn("Stage reconcile failed to sweep a temp dir", {
       dirPath,
@@ -138,6 +144,13 @@ async function removeTempDir(dirPath: string, logger: ILogger): Promise<void> {
 export async function sweepOwnedTempDirs(
   environment: Environment,
 ): Promise<readonly string[]> {
+  return sweepOwnedTempDirsWithVerifier(environment, legacyMutationVerifier);
+}
+
+export async function sweepOwnedTempDirsWithVerifier(
+  environment: Environment,
+  verifyMutationCapability: () => Promise<void>,
+): Promise<readonly string[]> {
   const logger = createCliLogger(environment);
   const root = hostStagingRoot(environment);
   let entries;
@@ -155,7 +168,7 @@ export async function sweepOwnedTempDirs(
       const verdict = verifyProcessIdentity(token);
       if (verdict === "alive-same") continue;
       if (verdict === "dead" || verdict === "alive-different") {
-        await removeTempDir(dirPath, logger);
+        await removeTempDir(dirPath, logger, verifyMutationCapability);
         swept.push(dirPath);
         continue;
       }
@@ -163,7 +176,7 @@ export async function sweepOwnedTempDirs(
     }
     const ageMs = await dirAgeMs(dirPath);
     if (ageMs !== null && ageMs >= UNVERIFIABLE_TEMP_AGE_FALLBACK_MS) {
-      await removeTempDir(dirPath, logger);
+      await removeTempDir(dirPath, logger, verifyMutationCapability);
       swept.push(dirPath);
     }
   }

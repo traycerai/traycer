@@ -12,6 +12,7 @@ import {
   TraycerApp,
   hostRpcRegistry,
   setMobileApp,
+  setMobileAppPlatform,
 } from "@traycer-clients/gui-app";
 import type {
   RemoteHostFetcher,
@@ -24,6 +25,7 @@ import {
 import "./index.css";
 import { MobileRunnerHost } from "../mobile-runner-host";
 import { MobileDeviceDescriber } from "../device-describer";
+import { MobileFileSave } from "../file-save";
 import { MobileLinkCodeScanner } from "../link-code-scanner";
 import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
 import {
@@ -159,6 +161,16 @@ function bootstrap(): void {
   // inherit phone-only affordances like "Scan from desktop", which on the
   // desktop side of that loop is a nonsense offer.
   setMobileApp(Capacitor.isNativePlatform());
+  // The shell's platform, for copy that must name the right update channel
+  // (TestFlight / the App Store vs Google Play). Gated on the same native
+  // check as the flag above: the dev browser tab reports platform "web" and
+  // stays `null`, which gui-app answers with store-neutral copy.
+  const nativePlatform = Capacitor.getPlatform();
+  setMobileAppPlatform(
+    nativePlatform === "ios" || nativePlatform === "android"
+      ? nativePlatform
+      : null,
+  );
   // APNs addressing follows code signing, not the backend set: staging and
   // production both ship distribution-signed (TestFlight / App Store rewrite
   // `aps-environment` to "production" at export), so only `dev` - the one
@@ -215,6 +227,11 @@ function bootstrap(): void {
       ? new MobileDeviceDescriber()
       : null,
     linkLoginDeepLinks,
+    // Native-only, like the two above: the share sheet is the OS surface a
+    // phone user saves through, and neither plugin has a web implementation
+    // worth preferring over the browser save APIs gui-app already falls back
+    // to in a tab.
+    fileSave: Capacitor.isNativePlatform() ? new MobileFileSave() : null,
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a

@@ -253,6 +253,9 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     linkCodeScanner: null,
     deviceDescriber: null,
     linkLoginDeepLinks: null,
+    // The native save leg has its own suite (`file-save.test.ts`); `null` is
+    // the dev-web answer, and keeps the plugin pair out of these tests.
+    fileSave: null,
   });
 }
 
@@ -320,6 +323,7 @@ function phoneRunner(input: {
     linkCodeScanner: null,
     deviceDescriber: null,
     linkLoginDeepLinks: null,
+    fileSave: null,
   });
 }
 

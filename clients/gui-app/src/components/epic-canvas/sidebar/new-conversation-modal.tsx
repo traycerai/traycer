@@ -444,7 +444,7 @@ export function NewConversationModalBody(props: {
   readonly tabId: string;
   readonly placement: ConversationTilePlacement;
   readonly parentId: string | null;
-  /** Host to create on; `null` follows the app-wide active host. */
+  /** Caller-named host to create on; `null` lets this Epic own placement. */
   readonly hostId: string | null;
   readonly dismissPickerRef: RefObject<(() => boolean) | null>;
   readonly onSubmitted: () => void;
@@ -748,10 +748,16 @@ export function NewConversationModalBody(props: {
   // request field would leave every unnamed request on the app-wide host while
   // the create went to the Epic's: the user could pick a folder that does not
   // exist over there, and the latest-workspace seed below would be skipped.
-  const workspaceHostScope = useMemo<HostWorkspaceControlsHostScope>(
-    () => modalWorkspaceHostScope(resolvedHostId, hostClient),
-    [hostClient, resolvedHostId],
-  );
+  // Only a CALLER-NAMED host is fixed. An ordinary new-chat request owns its
+  // placement, so the selected scope keeps the picker live and records a pick
+  // in this Epic's last-created-host memory rather than moving the window.
+  const workspaceHostScope: HostWorkspaceControlsHostScope =
+    modalWorkspaceHostScope({
+      resolvedHostId,
+      hostClient,
+      callerNamedHost: hostId !== null,
+      onSelect: recordPlacement,
+    });
   const workspaceControls = (
     <ActiveHostWorkspaceControls
       disabled={false}
@@ -1257,6 +1263,13 @@ function useLatestConversationSettingsSeed(): {
       };
     }
     const agent = projection.tuiAgents.byId[latest.id];
+    if (agent.harnessId === null) {
+      // Nothing to seed FROM. A cross-host replica whose cloud row predates
+      // `runSettingsSummary` cannot say what it runs, and a composer seeded
+      // with a guessed harness would create the next agent under it. Fall back
+      // to the same "no memory yet" answer an epic with no prior agent gives.
+      return { settings: null, composerMode: fallbackComposerMode };
+    }
     return {
       settings: {
         harnessId: agent.harnessId,

@@ -88,7 +88,8 @@ function main() {
 
   child.on("exit", (code, signal) => {
     if (signal !== null) {
-      process.kill(process.pid, signal);
+      console.error(`[dev-stack] dev stack exited due to ${signal}`);
+      process.exitCode = 1;
       return;
     }
     process.exit(code ?? 0);

@@ -31,6 +31,7 @@ import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import { makeMessage } from "./chat-message-fixtures";
 import { installLegendListViewportMetrics } from "./legend-list-test-environment";
 
@@ -141,7 +142,10 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       render(
         <div style={{ height: 700, width: 800 }}>
           <ChatTimeline
-            messages={[makeMessage(0, "user")]}
+            rows={transcriptListRows({
+              window: null,
+              rendered: [makeMessage(0, "user")],
+            })}
             taskTitle="Overlay regression transcript"
             backgroundToolBlockIds={new Set()}
             getMessageActions={() => null}
@@ -476,6 +480,8 @@ function emptyRestore(): ChatRestoreContextValue {
     restoreActionPending: false,
     restoreCheckpoint: vi.fn().mockReturnValue(null),
     accumulatedFileChanges: [],
+    undeliveredChangeCount: 0,
+    accumulatedSetComplete: true,
     revertFileChanges: vi.fn().mockReturnValue(null),
   };
 }

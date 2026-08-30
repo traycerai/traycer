@@ -18,7 +18,7 @@ import {
   type HostUpdateCheckRequestV11,
   type HostUpdateCheckResponseV11,
   type HostUpdateInstallRequest,
-  type HostUpdateInstallResponse,
+  type HostUpdateInstallResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { appLogger } from "@/lib/logger";
@@ -131,10 +131,39 @@ function isFallbackMethod(
  */
 export function mapInstallVersionOutcome(
   outcome: MutationOutcome<InstallVersionOk>,
-): HostUpdateInstallResponse {
+): HostUpdateInstallResponseV11 {
   switch (outcome.kind) {
     case "ok":
-      return { outcome: "accepted" };
+      // `attemptId: null`, and structurally so rather than by omission: this
+      // whole fallback exists for pre-1.2.0 hosts that do not serve the
+      // maintenance RPCs at all. The install runs through the desktop
+      // controller's mutation lane, which predates the durable attempt and
+      // writes no schema-v2 record — so there is genuinely no attempt to name
+      // here. `null` is exactly that statement.
+      //
+      // ⚠ THIS NULL IS PERMANENT. DO NOT FLIP IT AT THE TICKET-07 CUTOVER.
+      //
+      // There are two unrelated `attemptId: null`s in this codebase and they
+      // are one refactor apart from being confused:
+      //
+      //  - the HOST RESOLVER's `accepted → null`
+      //    (`host-maintenance-resolvers.ts`) is a PRE-CUTOVER placeholder. It
+      //    exists because the executor cohort gate is `shadow` and the
+      //    detached spawn has no adoption acknowledgement to await yet.
+      //    Ticket 07 wires that acknowledgement through and that null becomes
+      //    a real id.
+      //  - THIS null is a permanent property of the lane. It is not waiting on
+      //    anything. This decorator serves hosts that predate the maintenance
+      //    RPCs, its install goes through a mutation lane that will never write
+      //    an attempt record, and the moment such a host CAN write one it has
+      //    been updated past v1.2.0 and stops being served here at all (see the
+      //    SUNSET note above — this module is deleted when the fleet floor
+      //    reaches v1.2.0).
+      //
+      // So a cutover sweep that "fills in the nulls" must skip this site. The
+      // only correct change to it is deletion, along with the rest of the
+      // module.
+      return { outcome: "accepted", attemptId: null };
     case "busy":
     case "deferred":
       throw new HostRpcError({
@@ -210,7 +239,7 @@ export interface MaintenanceFallbackServeMap {
   ) => Promise<HostUpdateCheckResponseV11>;
   readonly "host.update.install": (
     params: HostUpdateInstallRequest,
-  ) => Promise<HostUpdateInstallResponse>;
+  ) => Promise<HostUpdateInstallResponseV11>;
   readonly "host.doctor": () => Promise<HostDoctorResponse>;
   readonly "host.getInstallationInfo": () => Promise<HostGetInstallationInfoResponse>;
 }
@@ -275,7 +304,11 @@ export function buildMaintenanceFallbackServeMap(
         // `host.status.updateProgress` — a field these hosts never publish,
         // and which an unrelated operation would not populate in any case.
         if (dispatch.updateInFlight) {
-          return { outcome: "already-updating" };
+          // Same `null` as the `accepted` arm above, for the same reason and
+          // with the same permanence: the lane is busy with an update this
+          // client cannot name, and never will be able to. See that arm's note
+          // before touching this at the ticket-07 cutover.
+          return { outcome: "already-updating", attemptId: null };
         }
         // Transient contention, reported the same way this map already
         // reports the controller's own `busy` and `deferred`: a refusal the
@@ -315,7 +348,7 @@ function serveFallbackRequest<Method extends keyof HostRpcRegistry & string>(
   const request: unknown = params;
   const answer = ((): Promise<
     | HostUpdateCheckResponseV11
-    | HostUpdateInstallResponse
+    | HostUpdateInstallResponseV11
     | HostDoctorResponse
     | HostGetInstallationInfoResponse
   > => {

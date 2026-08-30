@@ -32,7 +32,10 @@ import {
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
+import {
+  landingTerminalRightActionsKey,
+  useMobileHeaderStore,
+} from "@/stores/layout/mobile-header-store";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
@@ -1652,27 +1655,41 @@ function LandingTerminalHeaderToggle(props: {
 }
 
 /**
- * Publishes the reveal toggle into the mobile header while the landing terminal
- * panel is mounted, and clears it on unmount so it cannot leak into History,
- * Settings or the epic view. Rendered from the panel contents, so it inherits
- * the availability guard above - no toggle appears where no terminal can run.
+ * Registers the panel toggle in the mobile header's right-actions registry
+ * while the panel is mounted. Rendered from the panel contents, so it inherits
+ * the availability guard above - no toggle is registered where no terminal can
+ * run.
+ *
+ * Registration is availability, not presentation: the panel deliberately
+ * OUTLIVES its page's activation (it stays mounted behind an epic tab, History
+ * or Settings to keep its PTYs warm), and whether the toggle is SHOWN is the
+ * header's resolution from the presented surface. So the entry stays put while
+ * the landing surface is backgrounded - invisible there by resolution - and is
+ * showing again the moment the landing surface is presented, with no event on
+ * this side.
  */
 function MobileLandingTerminalActionBinder(props: {
   readonly landingPageId: string;
 }): ReactNode {
-  const setRightActions = useMobileHeaderStore(
-    (state) => state.setRightActions,
+  const registerRightActions = useMobileHeaderStore(
+    (state) => state.registerRightActions,
+  );
+  const unregisterRightActions = useMobileHeaderStore(
+    (state) => state.unregisterRightActions,
   );
   useEffect(() => {
-    // Re-baked whenever the focused landing page changes, so the slotted node
-    // always toggles the layout of the page actually on screen.
-    setRightActions(
+    // Keyed and re-baked by the hosting landing page, so the entry both names
+    // and toggles the page that hosts the panel - a hosting move retires the
+    // old page's entry with its own key before registering the new one.
+    const key = landingTerminalRightActionsKey(props.landingPageId);
+    registerRightActions(
+      key,
       <LandingTerminalHeaderToggle landingPageId={props.landingPageId} />,
     );
     return () => {
-      setRightActions(null);
+      unregisterRightActions(key);
     };
-  }, [setRightActions, props.landingPageId]);
+  }, [registerRightActions, unregisterRightActions, props.landingPageId]);
   return null;
 }
 

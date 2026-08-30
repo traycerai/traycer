@@ -6,6 +6,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import { pathContainsDirectory as pathIsUnderRoot } from "@/lib/path/cross-platform-path";
+import { displayTitle } from "@/lib/display-title";
 
 /**
  * Phase-1 (client-local) owner-scoped teardown snapshot.
@@ -102,6 +103,24 @@ export function runDirectoryOfFolderIntent(
 }
 
 /**
+ * The committed binding's run directory per workspace folder — the shared
+ * "previous" side of both draft predicates below. `worktreeDraftCommitsRebind`
+ * GATES the send disclosure and `droppedRunDirectoriesFromDraft` SCOPES it,
+ * so the two must read the binding identically; building the map here makes
+ * an edit to one an edit to both.
+ */
+function bindingRunDirectoriesByWorkspace(
+  binding: WorktreeBinding | null,
+): ReadonlyMap<string, string> {
+  return new Map(
+    (binding?.entries ?? []).map((entry) => [
+      entry.workspacePath,
+      runDirectoryOfBindingEntry(entry),
+    ]),
+  );
+}
+
+/**
  * Run directories the draft would leave: each staged folder whose next run
  * directory differs from the live binding, plus each pending-removed folder's
  * current run directory. Staged intent is a sparse overlay (changed folders
@@ -113,12 +132,7 @@ export function droppedRunDirectoriesFromDraft(input: {
   readonly draft: WorktreeIntent | null;
   readonly removedWorkspacePaths: readonly string[];
 }): readonly string[] {
-  const previousByWorkspace = new Map(
-    (input.binding?.entries ?? []).map((entry) => [
-      entry.workspacePath,
-      runDirectoryOfBindingEntry(entry),
-    ]),
-  );
+  const previousByWorkspace = bindingRunDirectoriesByWorkspace(input.binding);
   const dropped: string[] = [];
   const seen = new Set<string>();
   const pushDropped = (path: string): void => {
@@ -141,6 +155,37 @@ export function droppedRunDirectoriesFromDraft(input: {
     pushDropped(previous);
   }
   return dropped;
+}
+
+/**
+ * Whether committing this draft at send would actually change the owner's
+ * binding: a staged folder whose next run directory differs from the bound
+ * one (a staged `worktree` create always does — its run directory does not
+ * exist yet), a staged folder the binding does not carry, or a pending
+ * removal of a bound folder. A draft that merely restates the committed
+ * binding — or no draft at all — commits nothing, so a send with one is not
+ * a rebind gesture and must not be gated on teardown disclosure: the
+ * disclosure exists to confirm "switch folders and stop what runs there",
+ * and with nothing switching there is nothing to confirm.
+ */
+export function worktreeDraftCommitsRebind(input: {
+  readonly binding: WorktreeBinding | null;
+  readonly draft: WorktreeIntent | null;
+  readonly removedWorkspacePaths: readonly string[];
+}): boolean {
+  const previousByWorkspace = bindingRunDirectoriesByWorkspace(input.binding);
+  if (
+    input.removedWorkspacePaths.some((path) => previousByWorkspace.has(path))
+  ) {
+    return true;
+  }
+  if (input.draft === null) return false;
+  return input.draft.entries.some((entry) => {
+    const previous = previousByWorkspace.get(entry.workspacePath);
+    if (previous === undefined) return true;
+    const next = runDirectoryOfFolderIntent(entry);
+    return next === null || next !== previous;
+  });
 }
 
 export function pathContainsDirectory(
@@ -177,7 +222,7 @@ export function snapshotOwnerTeardown(
         ownerRef: input.ownerRef,
         holdKind: "terminal-agent-pty",
         activity: "working",
-        label: `${input.ownerLabel} will restart in the new folder`,
+        label: `${teardownOwnerDisplayName(input.ownerLabel)} will restart in the new folder`,
       }),
     );
   }
@@ -231,11 +276,29 @@ function chatTurnWillCallAgentStop(input: OwnerTeardownSnapshotInput): boolean {
   return input.hasActiveTurn && input.ownerRef.ownerKind === "chat";
 }
 
+/**
+ * Evidence-naming fallback for a holder row. Untitled chats/agents use the
+ * short "This agent" so the tab-strip's empty-title state doesn't overflow
+ * the disclosure as "Untitled agent is working…".
+ */
+export function teardownOwnerDisplayName(ownerLabel: string): string {
+  const trimmed = ownerLabel.trim();
+  if (
+    trimmed.length === 0 ||
+    trimmed === displayTitle("", "agent") ||
+    trimmed === displayTitle("", "chat") ||
+    trimmed === displayTitle("", "terminal-agent")
+  ) {
+    return "This agent";
+  }
+  return trimmed;
+}
+
 function chatTurnHolderLabel(
   input: OwnerTeardownSnapshotInput,
   agentStopClearsOwner: boolean,
 ): string {
-  const base = `${input.ownerLabel} is working`;
+  const base = `${teardownOwnerDisplayName(input.ownerLabel)} is working`;
   if (!agentStopClearsOwner) return base;
   const named: string[] = [];
   if (input.queuedMessageCount === 1) named.push("1 queued message");

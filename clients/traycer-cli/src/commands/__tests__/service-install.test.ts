@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `traycer host service install` (the deferred half of the documented
@@ -29,6 +32,28 @@ const mocks = vi.hoisted(() => ({
   windowsTaskNameMock: vi.fn(),
   attestInstallRuntimeMock: vi.fn(),
 }));
+
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
+let testHome = "";
+
+vi.mock("../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/paths")>();
+  return {
+    ...actual,
+    hostHomeDir: (environment: "dev" | "production") =>
+      join(osHome.current, "host", environment),
+    ensureHostHomeDir: async (environment: "dev" | "production") => {
+      mkdirSync(join(osHome.current, "host", environment), {
+        recursive: true,
+      });
+    },
+  };
+});
 
 vi.mock("../../host/install-auth", async (importOriginal) => {
   const actual =
@@ -79,6 +104,16 @@ vi.mock("../../host/attested-install-runtime", () => ({
   },
 }));
 
+// Command wiring does not spawn a real service child. Resolve the adoption
+// acknowledgement immediately while still exercising label publication at
+// the contender-aware service edge.
+vi.mock("../../host/host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => {},
+    cancel: async () => {},
+  }),
+}));
+
 vi.mock("../../store/cli-lock", () => ({
   withCliLock: async (
     _opts: unknown,
@@ -112,6 +147,9 @@ function baseArgs(overrides: Partial<ServiceInstallArgs>): ServiceInstallArgs {
     enableLinger: true,
     allowSelfInvocation: false,
     takeover: false,
+    // No parent segment: every existing case is a solo invocation, which is
+    // exactly the acquire-or-refuse path these tests already assert.
+    attemptAdoption: null,
     ...overrides,
   };
 }
@@ -153,9 +191,12 @@ function unauthenticatedPreflight(): HostInstallAuthPreflight {
 
 describe("buildServiceInstallCommand", () => {
   beforeEach(() => {
+    testHome = mkdtempSync(join(tmpdir(), "traycer-service-install-test-"));
+    osHome.current = testHome;
     mocks.createServiceControllerMock.mockReturnValue({
       install: vi.fn().mockResolvedValue(undefined),
       takeoverDesktopRegistration: vi.fn(),
+      hostStartAdoptionLabel: vi.fn(async (label) => label.id),
     });
     mocks.resolveServiceCliInvocationMock.mockResolvedValue({
       command: "/usr/local/bin/traycer",
@@ -183,6 +224,7 @@ describe("buildServiceInstallCommand", () => {
   afterEach(() => {
     vi.resetAllMocks();
     mocks.callOrder = [];
+    rmSync(testHome, { recursive: true, force: true });
   });
 
   it("runs the sign-in pre-flight before the lock is acquired, attests inside it, and provisions only after it releases", async () => {

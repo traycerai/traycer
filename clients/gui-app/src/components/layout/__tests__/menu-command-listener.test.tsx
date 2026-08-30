@@ -607,6 +607,7 @@ describe("<MenuCommandListener />", () => {
       updateReady: true,
       activation: "activated",
       reachable: true,
+      localAttempt: null,
       removedByUser: false,
       checkedAt: "2026-05-15T00:00:00Z",
     };
@@ -658,6 +659,7 @@ describe("<MenuCommandListener />", () => {
       updateReady: false,
       activation: "activationUnknown",
       reachable: true,
+      localAttempt: null,
       removedByUser: false,
       checkedAt: "2026-05-15T00:00:00Z",
     };
@@ -709,6 +711,7 @@ describe("<MenuCommandListener />", () => {
       updateReady: false,
       activation: "unavailable",
       reachable: false,
+      localAttempt: null,
       removedByUser: false,
       checkedAt: "2026-05-15T00:00:00Z",
     };
@@ -756,6 +759,7 @@ describe("<MenuCommandListener />", () => {
       updateReady: false,
       activation: "activated",
       reachable: true,
+      localAttempt: null,
       removedByUser: false,
       checkedAt: "2026-08-12T00:00:00Z",
     });

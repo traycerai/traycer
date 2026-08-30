@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { TeardownDisclosure } from "@/components/worktree/teardown-disclosure";
+import { useTeardownAgentNames } from "@/lib/worktree/teardown-agent-names";
 
 export type TeardownCommitChoice = "commit" | "submit" | "blocked" | "remove";
 
@@ -39,6 +40,7 @@ export function TeardownCommitDialog(props: {
   const description = dialogDescription(props.choice, deferContext);
   const deferLabel = deferButtonLabel(props.choice, deferContext);
   const immediateLabel = immediateButtonLabel(props.choice);
+  const agentNames = useTeardownAgentNames(props.holders);
   return (
     <Dialog
       open={props.open}
@@ -65,13 +67,14 @@ export function TeardownCommitDialog(props: {
             </p>
           )}
         </DialogHeader>
-        <div className="px-6 py-2">
+        <div className="min-w-0 w-full overflow-hidden px-6 py-2">
           <TeardownDisclosure
             holders={props.holders}
             failures={props.failures}
+            agentNames={agentNames}
           />
         </div>
-        <DialogFooter className="mx-0 mb-0 mt-2 gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4">
+        <DialogFooter className="mx-0 mb-0 mt-2 w-full min-w-0 flex-wrap gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4">
           <Button
             type="button"
             variant="ghost"

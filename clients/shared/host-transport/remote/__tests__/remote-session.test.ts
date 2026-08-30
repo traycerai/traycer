@@ -57,6 +57,11 @@ import {
 } from "@traycer/protocol/host-transport/mux";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
+  clockCanMakeValidBearersLookExpired,
+  type ServerClockSkewSignal,
+  type ServerClockState,
+} from "@traycer-clients/shared/clock/server-time-offset-tracker";
+import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
@@ -96,6 +101,8 @@ import {
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
   RECONNECT_STABLE_RESET_MS,
+  RESTORE_STALL_LOG_AFTER_MS,
+  REASSEMBLY_PROGRESS_TIMEOUT_MS,
 } from "../config";
 import type {
   StreamCloseReason,
@@ -989,6 +996,7 @@ function buildSessionOptions(
       }),
     bearer: () => lease,
     auth,
+    clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,
     webSocketFactory: relay.factory,
@@ -1533,6 +1541,7 @@ describe("RemoteSession plan-restricted entitlement denial", () => {
         },
         bearer: () => lease,
         auth: { revalidateForReconnect: revalidate },
+        clock: null,
         rpcRegistry: emptyRpcRegistry,
         streamRegistry: emptyStreamRegistry,
         webSocketFactory: relay.factory,
@@ -4643,6 +4652,628 @@ describe("RemoteSession concurrent inbound chunk-sequence reassembly (C3, client
   );
 });
 
+/** One two-chunk stream message: enough to observe the in-flight interval. */
+const buildChunkFrames = (
+  streamId: number,
+): [EncodeMuxFrameInput, EncodeMuxFrameInput] => {
+  const json = {
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    label: `resync-${"x".repeat(256)}`,
+  };
+  const body = encodeMuxMessageBody(json, null);
+  const split = Math.ceil(body.length / 2);
+  const shared = {
+    type: MuxFrameType.STREAM_FRAME,
+    streamId,
+    qos: QosClass.INTERACTIVE,
+    chunked: true,
+    compressed: false,
+    json: null,
+  } as const;
+  return [
+    {
+      ...shared,
+      seq: 0,
+      chunkFirst: true,
+      chunkLast: false,
+      binary: body.subarray(0, split),
+    },
+    {
+      ...shared,
+      seq: 1,
+      chunkFirst: false,
+      chunkLast: true,
+      binary: body.subarray(split),
+    },
+  ];
+};
+
+describe("RemoteSession ready boundary under an in-flight snapshot restore", () => {
+  it(
+    "counts a replayed stream as restored on its FIRST accepted chunk - a large snapshot mid-transfer does not hold the session not-ready",
+    async () => {
+      // The failure this pins: a reconnect's resubscribe answers with a
+      // multi-chunk snapshot, and the session read "restored" only off the
+      // COMPLETED message - so for the whole transfer (minutes for a
+      // tens-of-MB snapshot through the relay) `isReady()` was false, the
+      // connectivity surfaces reported an outage on a link that was
+      // demonstrably carrying frames, and the retry they invited restarted
+      // the transfer from zero.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const delivered: StreamFrameEnvelope[] = [];
+      stream.onServerFrame((envelope) => {
+        delivered.push(envelope);
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        // Establish the baseline: the first attach's boundary waits on this
+        // stream's snapshot exactly as a reconnect's does, so deliver it
+        // whole and reach ready once.
+        const [seedFirst, seedLast] = buildChunkFrames(
+          relay.subscribeStreamIds[0],
+        );
+        relay.deliverToClient(await relay.encryptFrame(seedFirst));
+        relay.deliverToClient(await relay.encryptFrame(seedLast));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(() => expect(delivered).toHaveLength(1), WAIT);
+
+        session.forceReconnect("test-resume");
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        // The discriminating control: the subscribe replay is on the wire but
+        // no restore evidence has arrived, so the boundary is still blocked.
+        expect(session.isReady()).toBe(false);
+
+        const [firstChunk, lastChunk] = buildChunkFrames(
+          relay.subscribeStreamIds[1],
+        );
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        // One accepted chunk IS restore evidence: ready flips while the
+        // message is still in flight...
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        // ...and provably BEFORE the consumer saw anything - the stream's own
+        // delivery still waits for the completed message.
+        expect(delivered).toHaveLength(1);
+
+        relay.deliverToClient(await relay.encryptFrame(lastChunk));
+        await vi.waitFor(() => expect(delivered).toHaveLength(2), WAIT);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "arms the restore-stall diagnostic only for a blocked boundary, and its report names the silent stream",
+    async () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const stallArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === RESTORE_STALL_LOG_AFTER_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        // Reach ready once so the reconnect below exercises the RESTORE path.
+        // The first attach arms its own diagnostic (its boundary waits on
+        // this stream's snapshot too); the boundary then clears it, so only
+        // the CALL record remains - count relatively from here.
+        const [seedFirst, seedLast] = buildChunkFrames(
+          relay.subscribeStreamIds[0],
+        );
+        relay.deliverToClient(await relay.encryptFrame(seedFirst));
+        relay.deliverToClient(await relay.encryptFrame(seedLast));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const armsAtBaseline = stallArms().length;
+
+        session.forceReconnect("test-resume");
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        // The reattach completed with the boundary blocked: exactly one more
+        // diagnostic armed, on its own distinct delay.
+        await vi.waitFor(
+          () => expect(stallArms()).toHaveLength(armsAtBaseline + 1),
+          WAIT,
+        );
+        const armedStall = stallArms()[armsAtBaseline][0] as () => void;
+
+        // Fire the armed callback directly (the suite's idiom for timers too
+        // long to wait out): still blocked, so it reports - naming the method.
+        // Counted from a clean slate: the forced drop above legitimately
+        // warns through other components (the dial-failure log), and this
+        // assertion is about the STALL line only.
+        warnSpy.mockClear();
+        armedStall();
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const line = String(warnSpy.mock.calls[0][0]);
+        expect(line).toContain("not ready");
+        expect(line).toContain(
+          `cursor.subscribe#${relay.subscribeStreamIds[1]}`,
+        );
+
+        // Restore evidence ends the episode: once a chunk flips the boundary,
+        // the same callback is inert - the diagnostic cannot cry wolf about a
+        // session that recovered.
+        warnSpy.mockClear();
+        const [firstChunk] = buildChunkFrames(relay.subscribeStreamIds[1]);
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        armedStall();
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "releases the COLD attach's boundary on first-chunk progress too - a subscribe racing the first dial does not wait out its snapshot",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        // The first attach's boundary is blocked by this stream's snapshot.
+        expect(session.isReady()).toBe(false);
+        const [firstChunk] = buildChunkFrames(relay.subscribeStreamIds[0]);
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession reassembly progress watchdog", () => {
+  it(
+    "reopens a stream whose transfer stops after its first chunk - stream-local, on a fresh id, with the session staying ready",
+    async () => {
+      // The state this pins: first-chunk evidence published ready, then no
+      // further chunk ever arrives. No other deadline can see it - any
+      // inbound frame clears the socket's awaiting state, and a relay that
+      // keeps answering pings feeds the idle deadline forever - so the
+      // watchdog's expiry is the only verdict, and it must stay stream-local.
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const watchdogArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === REASSEMBLY_PROGRESS_TIMEOUT_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const staleId = relay.subscribeStreamIds[0];
+        const [firstChunk] = buildChunkFrames(staleId);
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(1), WAIT);
+        const dialsBefore = relay.openBearers.length;
+
+        // Fire the armed deadline (suite idiom for long timers). The verdict:
+        // abandon + tombstone the old id, CLOSE it host-side, resubscribe
+        // fresh - and the SESSION stays ready throughout, because the rest of
+        // the mux is provably fine.
+        (watchdogArms()[0][0] as () => void)();
+        expect(session.isReady()).toBe(true);
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(staleId),
+          WAIT,
+        );
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const replacementId = relay.subscribeStreamIds[1];
+        expect(replacementId).not.toBe(staleId);
+        // Stream-local means NO session churn: no redial happened.
+        expect(relay.openBearers).toHaveLength(dialsBefore);
+        expect(
+          warnSpy.mock.calls.some((call) =>
+            String(call[0]).includes("no reassembly progress"),
+          ),
+        ).toBe(true);
+
+        // The recovery must be a LOOP, not a single shot: the replacement
+        // subscribe armed a first-evidence deadline of its own at send time,
+        // so an upstream stall that answers the fresh id with NOTHING gets
+        // judged again - another CLOSE, another fresh id - with the session
+        // ready and free of redial churn throughout.
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(2), WAIT);
+        (watchdogArms()[1][0] as () => void)();
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(replacementId),
+          WAIT,
+        );
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(3),
+          WAIT,
+        );
+        expect(relay.subscribeStreamIds[2]).not.toBe(staleId);
+        expect(relay.subscribeStreamIds[2]).not.toBe(replacementId);
+        expect(session.isReady()).toBe(true);
+        expect(relay.openBearers).toHaveLength(dialsBefore);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "leaves a retryable-FATAL reopen unarmed - an event-only method is never churned through zero-evidence CLOSE/resubscribe cycles",
+    async () => {
+      // The first-evidence deadline's license is STALL provenance (the
+      // resolver provably emitted, then stopped mid-message). A stream that
+      // reaches the reopen regime through a retryable FATAL has no such
+      // proof - its method may legitimately emit nothing on subscribe - so
+      // its replacement subscribe must not be judged for silence, or a
+      // healthy event-only stream would CLOSE/resubscribe forever.
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const watchdogArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === REASSEMBLY_PROGRESS_TIMEOUT_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let delivered = 0;
+      stream.onServerFrame(() => {
+        delivered += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const originalId = relay.subscribeStreamIds[0];
+        const [seedFirst, seedLast] = buildChunkFrames(originalId);
+        relay.deliverToClient(await relay.encryptFrame(seedFirst));
+        relay.deliverToClient(await relay.encryptFrame(seedLast));
+        await vi.waitFor(() => expect(delivered).toBe(1), WAIT);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const armsAfterDelivery = watchdogArms().length;
+
+        // A retryable per-stream FATAL re-keys the stream and re-subscribes
+        // it on the reopen backoff - a host that ANSWERS, not one that
+        // stalled.
+        await relay.sendStreamFatal(originalId, retryableDropDetails());
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        expect(relay.subscribeStreamIds[1]).not.toBe(originalId);
+        // The replacement subscribe armed NO first-evidence deadline...
+        expect(watchdogArms()).toHaveLength(armsAfterDelivery);
+        // ...and firing every arm recorded so far judges nothing: no CLOSE,
+        // no churned third subscribe, the quiet stream simply waits.
+        for (const call of watchdogArms()) {
+          (call[0] as () => void)();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(relay.closesSent).toEqual([]);
+        expect(relay.subscribeStreamIds).toHaveLength(2);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "moves the stall license through a retryable-FATAL re-key - the verdict answers one attempt, not the stream's proven stall",
+    async () => {
+      // stall -> licensed replacement B -> host answers B with a retryable
+      // FATAL -> replacement C. The FATAL proves attempt B was heard; it
+      // says nothing about C, and the stream's stall provenance (its
+      // resolver emitted, then stopped) is the stronger prior fact - so C's
+      // subscribe must still carry the first-evidence deadline, and zero
+      // evidence on C is judged like any other stall hop.
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const watchdogArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === REASSEMBLY_PROGRESS_TIMEOUT_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const originalId = relay.subscribeStreamIds[0];
+        const [firstChunk] = buildChunkFrames(originalId);
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(1), WAIT);
+        const dialsBefore = relay.openBearers.length;
+
+        // Stall verdict: original id -> licensed replacement B.
+        (watchdogArms()[0][0] as () => void)();
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const idB = relay.subscribeStreamIds[1];
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(2), WAIT);
+
+        // The host ANSWERS B with a retryable FATAL: re-key to C, license
+        // moving with it - C's subscribe arms.
+        await relay.sendStreamFatal(idB, retryableDropDetails());
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(3),
+          WAIT,
+        );
+        const idC = relay.subscribeStreamIds[2];
+        expect(idC).not.toBe(idB);
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(3), WAIT);
+
+        // Zero evidence on C: judged - CLOSE(C), fresh D - session ready and
+        // undialed throughout.
+        (watchdogArms()[2][0] as () => void)();
+        await vi.waitFor(() => expect(relay.closesSent).toContain(idC), WAIT);
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(4),
+          WAIT,
+        );
+        expect(relay.subscribeStreamIds[3]).not.toBe(idC);
+        expect(session.isReady()).toBe(true);
+        expect(relay.openBearers).toHaveLength(dialsBefore);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "judges only the silent stream - a sibling's completed transfer retires its arm, and firing that stale arm is inert",
+    async () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const watchdogArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === REASSEMBLY_PROGRESS_TIMEOUT_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamA = session.subscribe("cursor.subscribe", { cursor: null });
+      const streamB = session.subscribe("cursor.subscribe", { cursor: null });
+      let deliveredA = 0;
+      streamA.onServerFrame(() => {
+        deliveredA += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const [idA, idB] = relay.subscribeStreamIds;
+        // A completes (arm raised by chunk 1, retired by chunk 2); B stalls
+        // after its first chunk (arm stays).
+        const [aFirst, aLast] = buildChunkFrames(idA);
+        relay.deliverToClient(await relay.encryptFrame(aFirst));
+        const [bFirst] = buildChunkFrames(idB);
+        relay.deliverToClient(await relay.encryptFrame(bFirst));
+        relay.deliverToClient(await relay.encryptFrame(aLast));
+        await vi.waitFor(() => expect(deliveredA).toBe(1), WAIT);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(2), WAIT);
+
+        // Fire EVERY recorded arm, in order. A's is retired (its message
+        // completed) and must do nothing; B's is live and must reopen B only.
+        for (const call of watchdogArms()) {
+          (call[0] as () => void)();
+        }
+        await vi.waitFor(() => expect(relay.closesSent).toContain(idB), WAIT);
+        expect(relay.closesSent).not.toContain(idA);
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(3),
+          WAIT,
+        );
+        expect(relay.subscribeStreamIds[2]).not.toBe(idA);
+        expect(relay.subscribeStreamIds[2]).not.toBe(idB);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        streamA.close();
+        streamB.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "a forced reconnect mid-partial retires the old generation's arm - the next attach earns its own evidence and no stale verdict fires",
+    async () => {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => undefined);
+      const watchdogArms = () =>
+        setTimeoutSpy.mock.calls.filter(
+          (call) => call[1] === REASSEMBLY_PROGRESS_TIMEOUT_MS,
+        );
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let delivered = 0;
+      stream.onServerFrame(() => {
+        delivered += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        // Chunk 1 arms the watchdog mid-partial...
+        const [firstChunk] = buildChunkFrames(relay.subscribeStreamIds[0]);
+        relay.deliverToClient(await relay.encryptFrame(firstChunk));
+        await vi.waitFor(() => expect(watchdogArms()).toHaveLength(1), WAIT);
+
+        // ...and the forced drop retires it with the connection.
+        session.forceReconnect("test-resume");
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const replayId = relay.subscribeStreamIds[1];
+        const [replayFirst, replayLast] = buildChunkFrames(replayId);
+        relay.deliverToClient(await relay.encryptFrame(replayFirst));
+        relay.deliverToClient(await relay.encryptFrame(replayLast));
+        await vi.waitFor(() => expect(delivered).toBe(1), WAIT);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        // Fire every recorded arm from BOTH generations: all retired or
+        // completed, so none may close a stream or force a resubscribe.
+        const subscribesBefore = relay.subscribeStreamIds.length;
+        for (const call of watchdogArms()) {
+          (call[0] as () => void)();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(relay.closesSent).toEqual([]);
+        expect(relay.subscribeStreamIds).toHaveLength(subscribesBefore);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
 describe("RemoteSession per-stream inbound error routing", () => {
   it(
     "fails only the corrupted stream on a chunk-sequence mismatch - the session stays ready and an untouched sibling stream keeps working",
@@ -6443,6 +7074,347 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         });
       } finally {
         session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * Clock-skew park on the RELAY transport (Clock-skew detection and self-healing
+ * recovery, §2 — extended to remote sessions).
+ *
+ * A wrong wall clock is a property of the MACHINE, so a user whose clock is
+ * hours off wedges identically against a remote host: authn (correct clock)
+ * keeps answering "valid" while the host keeps FATAL-ing the same bearer, and
+ * the no-progress bound walks the session terminal. The remote user is also the
+ * one least able to guess why — hence the same park here.
+ *
+ * One structural difference from the local transport, and it is the reason
+ * there is a single park site rather than two: this session has no pre-dial
+ * expiry gate, so it always spends one full attach+reject round trip before the
+ * verdict is consulted.
+ */
+describe("RemoteSession clock-skew park", () => {
+  /**
+   * A hand-driven `ServerClockSkewSignal`. The transport's contract is with the
+   * verdict, its DIRECTION, and the recovery edge; keeping the double dumb
+   * makes these tests statements about the session, not about the tracker
+   * (which has its own suite).
+   *
+   * `skewed-ahead` is the incident: a local clock running FAST, so
+   * `server − local` is NEGATIVE. `skewed-behind` is the equal-and-opposite
+   * clock - just as wrong, just as banner-worthy, and incapable of being why
+   * the relay rejected a bearer. The predicate is computed exactly as the real
+   * tracker computes it rather than hardcoded per case, so the double cannot
+   * drift from the sign convention.
+   */
+  function makeClockSignal(initial: "ok" | "skewed-ahead" | "skewed-behind"): {
+    readonly signal: ServerClockSkewSignal;
+    readonly recover: () => void;
+    readonly recoverySubscribers: () => number;
+  } {
+    const SEVEN_HOURS_MS = 7 * 3_600_000;
+    let state: ServerClockState;
+    if (initial === "skewed-ahead") {
+      state = { verdict: "skewed", offsetMs: -SEVEN_HOURS_MS };
+    } else if (initial === "skewed-behind") {
+      state = { verdict: "skewed", offsetMs: SEVEN_HOURS_MS };
+    } else {
+      state = { verdict: "ok", offsetMs: 0 };
+    }
+    const recoveryListeners = new Set<() => void>();
+    return {
+      recoverySubscribers: () => recoveryListeners.size,
+      recover: () => {
+        state = { verdict: "ok", offsetMs: 0 };
+        for (const listener of [...recoveryListeners]) {
+          listener();
+        }
+      },
+      signal: {
+        currentState: () => state,
+        canMakeValidBearersLookExpired: () =>
+          clockCanMakeValidBearersLookExpired(state),
+        subscribe: () => () => undefined,
+        subscribeToRecovery: (listener) => {
+          recoveryListeners.add(listener);
+          return () => {
+            recoveryListeners.delete(listener);
+          };
+        },
+      },
+    };
+  }
+
+  /** Always UNAUTHORIZED, and a revalidator that never rotates: no progress. */
+  function buildNoProgressSession(
+    relay: FakeRelayHost,
+    lease: MutableBearerLease,
+    clock: ServerClockSkewSignal,
+  ): RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry> {
+    relay.decideOpen = () => ({
+      kind: "fatal",
+      details: unauthorizedDetails(),
+    });
+    return new RemoteSession({
+      ...buildSessionOptions(relay, lease, {
+        revalidateForReconnect: () => Promise.resolve("rotated" as const),
+      }),
+      clock,
+    });
+  }
+
+  it(
+    "parks instead of walking the no-progress bound to a terminal close",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        // One attach, one rejection, one revalidation - then the park.
+        await vi.waitFor(
+          () => expect(clock.recoverySubscribers()).toBe(1),
+          WAIT,
+        );
+        // Far longer than the three backoff rungs the bound would have burned.
+        // A session that counted this cycle would be closed by now; a parked
+        // one has not re-attached even once.
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        expect(session.isClosed()).toBe(false);
+        expect(relay.openBearers).toEqual(["clock-skewed-token"]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "re-attaches on the clock-corrected edge, with no reload and no new credential",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      relay.decideOpen = (_bearer, openIndex) =>
+        openIndex === 0
+          ? { kind: "fatal", details: unauthorizedDetails() }
+          : { kind: "ack" };
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+        clock: clock.signal,
+      });
+      try {
+        session.start();
+        await vi.waitFor(
+          () => expect(clock.recoverySubscribers()).toBe(1),
+          WAIT,
+        );
+        expect(session.isReady()).toBe(false);
+
+        // The user fixes the clock. Nothing else happens - no retry tap, no
+        // wake, no new bearer.
+        clock.recover();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openBearers).toEqual([
+          "clock-skewed-token",
+          "clock-skewed-token",
+        ]);
+        // The park released its handle on the way back out.
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "still reaches the terminal bound for a host config mismatch, which looks identical on the wire",
+    async () => {
+      // The reason the park keys on the tracker's verdict and never on the
+      // rejection shape: a misconfigured host produces the very same
+      // no-progress streak, and retrying that forever helps nobody.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("mismatched-token", "user-1");
+      const clock = makeClockSignal("ok");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does NOT park on a clock running BEHIND, and still reaches the terminal bound",
+    async () => {
+      // The mirror of the incident, and the failure this feature would
+      // otherwise have reintroduced in the opposite direction. A SLOW clock
+      // makes a bearer look more valid, never expired, and the relay validates
+      // against its own clock - so it cannot be why this bearer was rejected.
+      // Whatever is (host config mismatch, revocation) is exactly what the
+      // bound exists to diagnose, and a remote user stranded behind "fix your
+      // clock" has no way at all to discover the real cause.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("mismatched-token", "user-1");
+      const clock = makeClockSignal("skewed-behind");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "leaves the transient network-error arm untouched under skew",
+    async () => {
+      // A revalidation that cannot reach authn says nothing about the clock -
+      // the bearer is untouched, the streak resets, and the ordinary backoff
+      // rides. Parking here would strand a session whose only problem was a
+      // wake-time blip.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("stale-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      relay.decideOpen = (_bearer, openIndex) =>
+        openIndex === 0
+          ? { kind: "fatal", details: unauthorizedDetails() }
+          : { kind: "ack" };
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () =>
+            Promise.resolve("network-error" as const),
+        }),
+        clock: clock.signal,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+        expect(session.isClosed()).toBe(false);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "releases the recovery subscription on close, so a later clock fix cannot revive a dead session",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      session.start();
+      await vi.waitFor(() => expect(clock.recoverySubscribers()).toBe(1), WAIT);
+
+      session.close();
+      expect(clock.recoverySubscribers()).toBe(0);
+
+      clock.recover();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(relay.openBearers).toEqual(["clock-skewed-token"]);
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "degrades to the pre-existing terminal bound with no tracker wired",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const session = new RemoteSession(
+        buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+      );
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * The remote twin of the local park's status-emit hazard. Here the external
+ * callback inside the park is `reportEvidenceOutcome`, which hands control to
+ * the selection authority - a component whose entire job is to react to
+ * transport evidence, and which can retire this host (closing this session)
+ * before the call returns.
+ */
+describe("RemoteSession clock-skew park re-entrancy", () => {
+  it(
+    "leaves NO subscription behind when the evidence sink closes the session re-entrantly",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const recoveryListeners = new Set<() => void>();
+      const clock: ServerClockSkewSignal = {
+        currentState: (): ServerClockState => ({
+          verdict: "skewed",
+          offsetMs: -7 * 3_600_000,
+        }),
+        canMakeValidBearersLookExpired: () => true,
+        subscribe: () => () => undefined,
+        subscribeToRecovery: (listener) => {
+          recoveryListeners.add(listener);
+          return () => {
+            recoveryListeners.delete(listener);
+          };
+        },
+      };
+      let session: RemoteSession<
+        VersionedRpcRegistry,
+        VersionedStreamRpcRegistry
+      > | null = null;
+      const closingEvidence: TransportEvidenceReporter = {
+        ...NO_TRANSPORT_EVIDENCE,
+        reportDialIndeterminate: () => {
+          session?.close();
+        },
+      };
+      session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+        clock,
+        evidence: closingEvidence,
+      });
+      const live = session;
+      try {
+        live.start();
+        // The park reports `indeterminate`, the sink closes the session inside
+        // that call, and the park must still own a handle to release.
+        await vi.waitFor(() => expect(live.isClosed()).toBe(true), WAIT);
+        expect(recoveryListeners.size).toBe(0);
+      } finally {
+        live.close();
       }
     },
     TEST_BUDGET_MS,

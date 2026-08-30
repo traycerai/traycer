@@ -140,6 +140,7 @@ const ANCHORED_PRIMITIVES = [
 const AVOID_COLLISIONS_ALLOWLIST = [
   "components/epic-canvas/sidebar/epic-sidebar.tsx",
   "components/epic-canvas/sidebar/epic-sidebar-filter-menu.tsx",
+  "components/epic-canvas/sidebar/epic-browser-sidebar-header.tsx",
   "components/epic-canvas/git-diff/git-diff-panel-actions.tsx",
 ];
 

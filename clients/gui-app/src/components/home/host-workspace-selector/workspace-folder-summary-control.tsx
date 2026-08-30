@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { FolderPlus } from "lucide-react";
+import { Slot } from "radix-ui";
 import {
   Popover,
   PopoverContent,
@@ -31,6 +32,8 @@ import {
   WorkspaceFolderRows,
 } from "./workspace-folder-rows";
 import { WorkspaceFolderHoverList } from "./workspace-folder-hover-list";
+import { WorkspaceFolderPreviewSheet } from "./workspace-folder-preview-sheet";
+import { useWorkspaceFolderPreviewReveal } from "./use-workspace-folder-preview-reveal";
 import { WorkspaceSummaryTrigger } from "./workspace-summary-trigger";
 import type { WorkspaceRunItem } from "./workspace-run-item";
 
@@ -148,6 +151,8 @@ export function WorkspaceFolderSummaryControl(props: {
   /** Uncommitted workspace draft on the summary chip. */
   readonly draftPending?: boolean;
   readonly onDiscardStaged: (() => void) | null;
+  /** True while a captured Update/teardown run is in flight. */
+  readonly discardDisabled: boolean;
   readonly onEditEnvironment: (workspacePath: string) => void;
   /**
    * Re-derives these folders from disk, or `null` on a surface with no host to
@@ -168,6 +173,7 @@ export function WorkspaceFolderSummaryControl(props: {
     workspacePopoverOpen: false,
     summaryHoverOpen: false,
   });
+  const preview = useWorkspaceFolderPreviewReveal();
   const refreshUi = useWorkspaceRefreshUi(props.refresh);
   const triggerRefresh = refreshUi.triggerRefresh;
   const canRefresh = refreshUi.canRefresh;
@@ -337,11 +343,16 @@ export function WorkspaceFolderSummaryControl(props: {
         });
       }}
     >
-      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverTrigger asChild>
+        {/* Innermost, so the press guard runs BEFORE the popover's own open
+            handler and can prevent it - `Slot` composes a child's handler
+            ahead of the slot's. */}
+        <Slot.Root {...preview.triggerProps}>{trigger}</Slot.Root>
+      </PopoverTrigger>
     </HoverPreviewCard>
   );
 
-  return (
+  const picker = (
     <Popover
       open={overlayState.workspacePopoverOpen}
       onOpenChange={(open) => {
@@ -368,9 +379,6 @@ export function WorkspaceFolderSummaryControl(props: {
         // folder details" - an error toast the user never asked for, next to a
         // Refresh button correctly rendered disabled.
         if (open && canRefresh) triggerRefresh();
-        if (!open && props.onDiscardStaged !== null) {
-          props.onDiscardStaged();
-        }
       }}
     >
       {popoverTrigger}
@@ -405,6 +413,9 @@ export function WorkspaceFolderSummaryControl(props: {
             onUpdate={props.onUpdate === null ? null : handleUpdate}
             updateEnabled={props.updateEnabled}
             updatePending={props.updatePending}
+            onDiscardStaged={props.onDiscardStaged}
+            discardDisabled={props.discardDisabled}
+            draftPending={props.draftPending === true}
             onEditEnvironment={props.onEditEnvironment}
             readOnly={false}
             nestedInPopover={dialogBoundaryEl !== null}
@@ -425,6 +436,16 @@ export function WorkspaceFolderSummaryControl(props: {
         )}
       </PopoverContent>
     </Popover>
+  );
+  return (
+    <>
+      {picker}
+      <WorkspaceFolderPreviewSheet
+        items={props.items}
+        open={preview.open}
+        onClose={preview.close}
+      />
+    </>
   );
 }
 

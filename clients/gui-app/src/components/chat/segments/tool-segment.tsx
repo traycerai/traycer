@@ -1,4 +1,4 @@
-import { SendHorizontal, Wrench } from "lucide-react";
+import { Globe2, SendHorizontal, Wrench } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -51,6 +51,7 @@ import { ElapsedTime } from "./segment-elapsed";
 import { ImageGenerationCard } from "./image-generation-card";
 import { ManagedCommandRestartSegment } from "./managed-command-restart-segment";
 import { ManagedCommandStartSegment } from "./managed-command-start-segment";
+import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
 
 interface ToolSegmentProps {
   id: string;
@@ -446,6 +447,9 @@ function GenericToolSegment(props: ToolSegmentProps) {
 }
 
 function GenericToolHeader(props: GenericToolHeaderProps) {
+  const browser = isTraycerBrowserReplToolName(props.toolName);
+  const Icon = browser ? Globe2 : Wrench;
+  const label = browser ? "Browser" : props.toolName;
   const status = (
     <span className="ml-auto flex shrink-0 items-center gap-1.5">
       <ToolHeaderElapsedLabel elapsed={props.elapsed} />
@@ -457,14 +461,14 @@ function GenericToolHeader(props: GenericToolHeaderProps) {
     const runningLine = runningToolLine(props.summary, props.progress);
     return (
       <>
-        <Wrench
+        <Icon
           className="mt-[0.2rem] size-3.5 shrink-0 text-muted-foreground/80"
           aria-hidden
         />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5 self-stretch">
           <span className="flex w-full min-w-0 items-center gap-1.5">
             <span className="min-w-0 truncate font-mono text-code-sm font-medium text-foreground/85">
-              {props.toolName}
+              {label}
             </span>
             {status}
           </span>
@@ -484,12 +488,12 @@ function GenericToolHeader(props: GenericToolHeaderProps) {
 
   return (
     <>
-      <Wrench
+      <Icon
         className="size-3.5 shrink-0 text-muted-foreground/80"
         aria-hidden
       />
       <span className="shrink-0 font-mono text-code-sm font-medium text-foreground/85">
-        {props.toolName}
+        {label}
       </span>
       {props.summary !== null ? (
         <>

@@ -11,11 +11,19 @@ import {
 /**
  * The mobile "Switch tab" sheet exposes the desktop left-panel categories as a
  * horizontally-scrollable tab bar: Agents (`chats`), Artifacts, File tree, Git
- * diff, Pull requests, Terminals, Sharing and Comments. `pull-requests` sits
- * directly after `git-diff`, and `comments` sits last behind `sharing`, exactly
- * as they do in the desktop rail, so the two surfaces read in the same order.
- * Identity (title + icon) is reused verbatim from `LEFT_PANEL_DEFINITIONS` so
- * mobile never forks the category copy.
+ * diff, Pull requests, Terminals, Browsers, Sharing and Comments.
+ *
+ * The bar's order is its OWN, not the rail's - the rail runs chats, terminals,
+ * browsers, artifacts, git-diff, pull-requests, file-tree - and only the local
+ * adjacencies are shared: `pull-requests` sits directly after `git-diff`, and
+ * `browsers` directly after `terminals`, so a category is found beside the one
+ * it is found beside on the desktop. Identity (title + icon) is reused verbatim
+ * from `LEFT_PANEL_DEFINITIONS` so mobile never forks the category copy.
+ *
+ * Every panel the rail carries is on this bar. A category left off would be
+ * unreachable on a phone rather than merely tidier: an agent can open a
+ * terminal or a browser tab the user never asked for, and the sheet is the only
+ * surface that lists them.
  */
 const CURATED_ORDER: readonly LeftPanelId[] = [
   "chats",
@@ -24,6 +32,7 @@ const CURATED_ORDER: readonly LeftPanelId[] = [
   "git-diff",
   "pull-requests",
   "terminals",
+  "browsers",
   "sharing",
   "comments",
 ];

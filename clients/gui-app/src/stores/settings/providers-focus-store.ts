@@ -28,7 +28,7 @@ interface ProvidersFocusState {
   setFocusHarnessId: (harnessId: GuiHarnessId) => void;
   setProfileFocus: (input: {
     readonly harnessId: GuiHarnessId;
-    readonly hostId: string;
+    readonly hostId: string | null;
     readonly profileId: string;
     readonly startSignIn: boolean;
   }) => void;

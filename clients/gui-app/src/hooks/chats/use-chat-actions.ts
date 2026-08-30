@@ -12,6 +12,7 @@ import type {
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type {
+  ChatSendRestore,
   ChatSessionStoreHandle,
   EditUserMessageInput,
   InterviewDeliveryRetryIdentity,
@@ -19,6 +20,16 @@ import type {
 } from "@/stores/chats/chat-session-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import type { Attachment } from "@/lib/composer/types";
+
+interface SendChatMessageInput {
+  readonly content: JsonContent;
+  readonly sender: UserMessageSender;
+  readonly settings: ChatRunSettings;
+  readonly attachments: ReadonlyArray<Attachment>;
+  readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+  readonly restore: ChatSendRestore;
+}
 
 /**
  * Memoised stable callbacks bound to a `ChatSessionStoreHandle`.
@@ -35,10 +46,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
  */
 export interface ChatActions {
   readonly sendMessage: (
-    content: JsonContent,
-    sender: UserMessageSender,
-    settings: ChatRunSettings,
-    deliveryPolicy: ChatQueueDeliveryPolicy,
+    input: SendChatMessageInput,
   ) => SentChatMessageAction | null;
   readonly deleteMessageSuffix: (fromMessageId: string) => string | null;
   readonly editUserMessage: (
@@ -132,17 +140,12 @@ function tracked<Result>(
 export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
   return useMemo<ChatActions>(
     () => ({
-      sendMessage: (content, sender, settings, deliveryPolicy) =>
-        tracked(
-          handle.store
-            .getState()
-            .sendMessage(content, sender, settings, deliveryPolicy),
-          () => {
-            Analytics.getInstance().track(AnalyticsEvent.ChatMessageSent, {
-              harness: settings.harnessId,
-            });
-          },
-        ),
+      sendMessage: (input) =>
+        tracked(handle.store.getState().sendMessage(input), () => {
+          Analytics.getInstance().track(AnalyticsEvent.ChatMessageSent, {
+            harness: input.settings.harnessId,
+          });
+        }),
       deleteMessageSuffix: (fromMessageId) =>
         tracked(
           handle.store.getState().deleteMessageSuffix(fromMessageId),

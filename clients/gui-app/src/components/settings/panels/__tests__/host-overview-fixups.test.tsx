@@ -552,7 +552,7 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
         "host.update.install": async () => {
           await gate;
           armedHostCalls += 1;
-          return { outcome: "accepted" as const };
+          return { outcome: "accepted" as const, attemptId: null };
         },
       },
     });
@@ -562,7 +562,10 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
       overrideHandlers: {
         "host.update.install": () => {
           otherHostCalls += 1;
-          return Promise.resolve({ outcome: "accepted" as const });
+          return Promise.resolve({
+            outcome: "accepted" as const,
+            attemptId: null,
+          });
         },
       },
     });

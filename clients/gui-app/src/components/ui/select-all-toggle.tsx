@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Check, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +12,13 @@ export function SelectAllToggle(props: {
   readonly disabled: boolean;
   readonly testId: string | undefined;
   readonly onToggle: () => void;
+  /**
+   * Visible button text. Settings keeps the default "Select all"; Sweep
+   * swaps to "Deselect all" when the bulk scope is fully selected.
+   */
+  readonly actionLabel?: string;
+  /** Optional keyboard hint shown after the label (Sweep: `A`). */
+  readonly shortcut?: string;
 }): ReactNode {
   const allSelected =
     props.selectableCount > 0 && props.selectedCount === props.selectableCount;
@@ -59,7 +67,10 @@ export function SelectAllToggle(props: {
           >
             {indicator}
           </span>
-          <span>Select all</span>
+          <span>{props.actionLabel ?? "Select all"}</span>
+          {props.shortcut === undefined ? null : (
+            <Kbd className="ml-0.5 font-mono">{props.shortcut}</Kbd>
+          )}
         </Button>
       </span>
     </TooltipWrapper>
