@@ -11,6 +11,7 @@ import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-snapshot";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
+import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
@@ -71,6 +72,10 @@ export function AppShell(props: AppShellProps) {
               {...{ [SWIPE_NAV_SCREEN_ATTRIBUTE]: "" }}
             >
               <AppHeader variant="app" />
+              {/* Above the session strip: a wrong clock is the CAUSE of the
+                interruption the strip reports, so if both are showing the
+                actionable one has to be read first. */}
+              <ClockSkewBanner />
               <SessionConnectivityStrip />
               <main className="relative flex min-h-0 flex-1 flex-col">
                 {/* The app's edge-to-edge content viewport. Individual surfaces
