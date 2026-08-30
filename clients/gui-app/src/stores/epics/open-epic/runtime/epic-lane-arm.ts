@@ -470,6 +470,13 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
         // have moved" - and it is also the lane that is always attached, since
         // the probe opens it alone.
         workspaceContext.noteTransportStatus(status.connection);
+        // The body lanes read the same fact for a different reason: a
+        // reconnect ends the transport session a `terminal` body refusal was
+        // scoped to, so it is the edge on which a refused body may be dialled
+        // again. Off THIS lane for the reason named just above - one reconnect
+        // is one fact - and off this lane in particular because a terminally
+        // refused body has no lane of its own left to report anything.
+        bodies.noteTransportStatus(status.connection);
         onControlEvent({
           kind: "transport-status",
           status: status.connection,

@@ -44,6 +44,7 @@ import { createArtifactLaneAdapter } from "@traycer-clients/shared/epic-lanes";
 import type { ArtifactSubscribeSeedOffer } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type { EpicRoomEvent } from "./epic-runtime-events";
 import { isMethodIncompatibleClose } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { laneBodyTranslationOf } from "./lane-body-translation";
 
 export interface EpicArtifactBodyLanesSources {
@@ -110,6 +111,21 @@ export interface EpicArtifactBodyLanes {
    * detect the change itself.
    */
   syncToAuthorityEpoch(): void;
+  /**
+   * The control lane's transport status, for the reconnect EDGE.
+   *
+   * A terminal refusal is honored only for the world it was issued in, and a
+   * reconnect ends that world - see the `refused` set. Taken as a status rather
+   * than a bare `onReconnected()` because the edge is a TRANSITION and only
+   * this module knows what it did with the previous one; a caller deciding
+   * "this is a reconnect" would be a second place that has to agree.
+   *
+   * The control lane's status and not each body's own, deliberately: the arm
+   * already names it "the policy's reconnect trigger is one fact and two lanes
+   * reporting the same reconnect would be two", and a refused body has no lane
+   * left to report anything.
+   */
+  noteTransportStatus(status: StreamConnectionStatus): void;
   /** Ids with a live subscription right now - for assertions and diagnostics. */
   attachedArtifactIds(): readonly string[];
   /**
@@ -166,6 +182,46 @@ export function createEpicArtifactBodyLanes(
    */
   const demand = new Map<string, number>();
   const open = new Map<string, OpenBodyLane>();
+  /**
+   * Bodies the host refused TERMINALLY, in the world the refusal was issued in.
+   *
+   * `terminal` means "no further frames on THIS subscription" - a fact about
+   * one subscription, in one transport session, at one authority epoch. It is
+   * not a verdict about the body for all time, and treating it as one is how a
+   * tile stayed `"unavailable"` for the life of a session that would have
+   * served it.
+   *
+   * So the refusal is honored exactly that far. While an id is in here nothing
+   * re-dials it - not a projection push, not a control frame, not an
+   * availability flap, because none of those is new information ABOUT THE
+   * REFUSAL and re-asking on one turns a steady no into a dial per push. The
+   * set is cleared by the events that genuinely end the world it describes: a
+   * transport reconnect, an authority-epoch change, and a detach. A NEW DEMAND
+   * clears its own id, because a fresh mount is a person asking.
+   *
+   * Disjoint from {@link open} by construction: the terminal frame forgets the
+   * lane in the same step as it records the refusal. That eager forget is the
+   * other half of the fix - a finished adapter left in `open` makes every later
+   * `ensureAttached` a no-op at an unchanged epoch, so even a permitted
+   * stimulus could not reattach.
+   */
+  const refused = new Set<string>();
+  /**
+   * The epoch the last reconcile ran under, for change detection.
+   *
+   * `syncToAuthorityEpoch` is called on EVERY control frame - that is what its
+   * doc means by "cheap and idempotent when nothing moved" - so the epoch
+   * having changed cannot be read off the fact that it ran.
+   */
+  let lastSyncedEpoch: string | null = null;
+  /**
+   * The control lane's last reported transport status, for the reconnect EDGE.
+   *
+   * `null` until the first report, which makes a first `"open"` deliberately
+   * NOT an edge: nothing has been refused yet, and counting it would be the
+   * initial attach happening twice.
+   */
+  let lastTransportStatus: StreamConnectionStatus | null = null;
 
   function closeLane(artifactId: string, reason: AdapterDetachReason): void {
     const lane = open.get(artifactId);
@@ -202,6 +258,33 @@ export function createEpicArtifactBodyLanes(
           return;
         }
         onRoomEvent(translated.event);
+        // THE EAGER FORGET, and it comes AFTER the room event on purpose: the
+        // availability this frame carries has to reach the projection, and
+        // retiring the lane first would be doing the bookkeeping before
+        // delivering the news.
+        //
+        // The adapter says it plainly - "the consumer reattaches with a new
+        // adapter if it still wants the body" - and this module IS the
+        // consumer. Left in `open`, the finished adapter is a corpse that
+        // answers `existing.authorityEpoch === authorityEpoch` to every later
+        // reconcile, so nothing can ever dial again at this epoch. Forgetting
+        // it here is what makes the permitted stimuli reachable at all; the
+        // `refused` set is what keeps the forbidden ones out.
+        //
+        // Only the TERMINAL case. A retrying refusal keeps its subscription -
+        // a later `doc` frame on it re-announces readiness - so tearing that
+        // one down would replace a recovery the host is already running with a
+        // redial it did not ask for.
+        if (event.kind === "doc-unavailable" && event.terminal) {
+          refused.add(artifactId);
+          // `"superseded"` because that is what happens next: this lane object
+          // is retired while its DEMAND outlives it, and the reconcile after
+          // the next edge builds its replacement. The adapter ignores the
+          // reason, so this is documentation - but it is the same word
+          // `ensureAttached` and `syncToAuthorityEpoch` already use for a lane
+          // retired under a live demand.
+          closeLane(artifactId, "superseded");
+        }
       },
       // A body has no cursor - its resume state is "which document, and how
       // much of it do I hold", which rides `readDocSeed` on the open request
@@ -225,10 +308,37 @@ export function createEpicArtifactBodyLanes(
     });
   }
 
+  /**
+   * Open every demanded body that is not already open at this epoch.
+   *
+   * The one reconcile, shared by the two edges that may re-drive a refusal, so
+   * "which bodies should be open" is answered once. Refused ids are skipped
+   * here rather than at each call site: an edge clears the set FIRST and then
+   * reconciles, which is what makes "one re-drive per edge" a property of the
+   * structure instead of a rule each caller has to remember.
+   */
+  function reopenDemandedBodies(authorityEpoch: string): void {
+    for (const artifactId of demand.keys()) {
+      if (refused.has(artifactId)) continue;
+      const existing = open.get(artifactId);
+      if (existing !== undefined) {
+        if (existing.authorityEpoch === authorityEpoch) continue;
+        closeLane(artifactId, "superseded");
+      }
+      openLane(artifactId, authorityEpoch);
+    }
+  }
+
   return {
     ensureAttached(artifactId): void {
       if (isDisposed()) return;
       demand.set(artifactId, (demand.get(artifactId) ?? 0) + 1);
+      // A NEW DEMAND is a person asking, which is the one stimulus that beats a
+      // standing refusal without waiting for an edge: it is the adapter's
+      // "reattaches ... if it still wants the body" being exercised by an
+      // actual consumer, and it is rate-limited by mounts rather than by
+      // frames. Only this id - a mount says nothing about the other bodies.
+      refused.delete(artifactId);
       const authorityEpoch = readAuthorityEpoch();
       // No epoch yet: the demand is recorded and `syncToAuthorityEpoch` opens
       // this body when the first status snapshot names one.
@@ -260,14 +370,40 @@ export function createEpicArtifactBodyLanes(
       if (isDisposed()) return;
       const authorityEpoch = readAuthorityEpoch();
       if (authorityEpoch === null) return;
-      for (const artifactId of demand.keys()) {
-        const existing = open.get(artifactId);
-        if (existing !== undefined) {
-          if (existing.authorityEpoch === authorityEpoch) continue;
-          closeLane(artifactId, "superseded");
-        }
-        openLane(artifactId, authorityEpoch);
+      if (authorityEpoch !== lastSyncedEpoch) {
+        lastSyncedEpoch = authorityEpoch;
+        // NEW WORLD. Every standing refusal was issued against a subscription
+        // built under an epoch the authority has moved off, so none of them
+        // says anything about this one.
+        //
+        // The change has to be DETECTED rather than assumed from the call: the
+        // arm runs this on every control frame, and a permission or migration
+        // frame at an unchanged epoch is the same world - clearing there would
+        // re-dial a refusing host once per frame, which is the storm the
+        // refused set exists to prevent.
+        refused.clear();
       }
+      reopenDemandedBodies(authorityEpoch);
+    },
+
+    noteTransportStatus(status): void {
+      const previous = lastTransportStatus;
+      lastTransportStatus = status;
+      if (status !== "open") return;
+      // A RECONNECT, not a first connect: only a transition from a known
+      // not-open counts. The first `"open"` of a session has no refusals
+      // behind it and no lanes to rebuild.
+      if (previous === null || previous === "open") return;
+      // NEW WORLD. The transport session those subscriptions lived in is gone,
+      // so a `terminal` that promised "no further frames on THIS subscription"
+      // has been kept in full - there is no such subscription any more.
+      refused.clear();
+      if (isDisposed()) return;
+      const authorityEpoch = readAuthorityEpoch();
+      // No epoch to attach under yet. The refusals are already cleared, so the
+      // status snapshot that names one reconciles them in.
+      if (authorityEpoch === null) return;
+      reopenDemandedBodies(authorityEpoch);
     },
 
     attachedArtifactIds: () => Array.from(open.keys()),
@@ -312,6 +448,17 @@ export function createEpicArtifactBodyLanes(
       // detach and a replacement both tear the sockets down, and both are
       // followed by a reopen that must restore the same bodies. Only
       // `release` - the lease actually going away - forgets one.
+      //
+      // REFUSALS do not survive, for the same reason and read the other way:
+      // the reopen is supposed to restore the same bodies, and a refusal held
+      // across it would silently exclude some of them from that promise. Both
+      // callers are a world ending - a socket teardown or a replacement - which
+      // is exactly the condition a terminal refusal was scoped to.
+      refused.clear();
+      // ...and the next `"open"` is a first connect again rather than an edge.
+      // Not a detail: the refusals it would clear are already gone, so leaving
+      // a stale status here would only buy a redundant reconcile.
+      lastTransportStatus = null;
     },
 
     closeTransport(): void {
