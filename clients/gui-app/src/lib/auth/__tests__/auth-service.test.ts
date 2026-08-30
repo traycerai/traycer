@@ -12,6 +12,12 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
 import {
+  DEFAULT_SKEW_ENTER_MS,
+  DEFAULT_SKEW_EXIT_MS,
+  ServerTimeOffsetTracker,
+} from "@traycer-clients/shared/clock/server-time-offset-tracker";
+import { appServerClock } from "@/lib/clock/app-server-clock";
+import {
   AuthService,
   type AuthSessionSnapshot,
   type ExternalSession,
@@ -3484,6 +3490,94 @@ describe("AuthService", () => {
 
       expect(host.secureStorageEntries.get("unrelated.key")).toBe("keep-me");
       expect(useAuthStore.getState().status).toBe("signed-out");
+    });
+  });
+
+  /**
+   * Which bearers may be read as a SERVER-TIME sample (clock-skew tracker,
+   * `iat` input).
+   *
+   * An `iat` is a reading of authn's clock only while the token's age is
+   * bounded by the round trip that just minted it. For anything else it is the
+   * token's AGE, and feeding that to the tracker reports a skew that does not
+   * exist - an app-wide false banner, plus every transport made eligible to
+   * park on the next unrelated auth failure.
+   */
+  describe("server-time sampling from adopted bearers", () => {
+    /** A JWT issued `agoMs` in the past and still valid for an hour. */
+    function jwtIssuedAgo(agoMs: number): string {
+      const nowSeconds = Math.trunc(Date.now() / 1000);
+      const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+      const payload = base64url(
+        JSON.stringify({
+          id: "user-1",
+          iat: nowSeconds - Math.trunc(agoMs / 1000),
+          exp: nowSeconds + 3_600,
+        }),
+      );
+      return `${header}.${payload}.signature`;
+    }
+
+    /** Parks the app-wide tracker on a known-good verdict. */
+    function resetAppClockToOk(): void {
+      const now = Date.now();
+      appServerClock.recordServerTimeMs(now, now);
+      expect(appServerClock.currentState().verdict).toBe("ok");
+    }
+
+    it("does NOT sample a stale-but-valid bearer adopted from the credentials file", async () => {
+      // The scenario, and it is an ordinary one on a CORRECT clock: window B
+      // mints a token; window A sits backgrounded past the 5-minute threshold,
+      // reconciles, and adopts it. The adopted token's `iat` is legitimately
+      // that old.
+      resetAppClockToOk();
+      const staleButValid = jwtIssuedAgo(30 * 60_000);
+
+      // POSITIVE CONTROL, on a throwaway tracker so the singleton stays clean:
+      // this token IS old enough to move a verdict if anything samples it, so
+      // the assertion below cannot pass merely because the fixture was too
+      // fresh to matter.
+      const control = new ServerTimeOffsetTracker({
+        nowMs: () => Date.now(),
+        monotonicNowMs: () => performance.now(),
+        enterSkewMs: DEFAULT_SKEW_ENTER_MS,
+        exitSkewMs: DEFAULT_SKEW_EXIT_MS,
+      });
+      control.recordFreshlyIssuedToken(staleButValid);
+      expect(control.currentState().verdict).toBe("skewed");
+
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+
+      // External same-user rotation: a sibling window's committed pair, which
+      // reconcile adopts through `rotateLiveBearer`.
+      host.tokenStoreEntries.set("traycer.token", {
+        token: staleButValid,
+        refreshToken: "external-rotated-refresh",
+        savedAt: new Date().toISOString(),
+        user: DEFAULT_IDENTITY,
+      });
+      restoreFetch();
+      restoreFetch = installFetch((input, init) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (
+          url === VALIDATION_URL &&
+          init?.headers?.Authorization === `Bearer ${staleButValid}`
+        ) {
+          return okWithProfile();
+        }
+        return status(500);
+      });
+      host.notifyTokenStoreChanged();
+
+      await vi.waitFor(() => {
+        expect(service.getCurrentSessionSnapshot().token).toBe(staleButValid);
+      });
+      // The adoption happened; the verdict did not move.
+      expect(appServerClock.currentState().verdict).toBe("ok");
+
+      resetAppClockToOk();
     });
   });
 });

@@ -221,6 +221,11 @@ export function accumulatedSummarySetComplete(input: {
    * `ChatSessionState.accumulatedSummaryGenerationSeated`.
    */
   readonly generationSeated: boolean;
+  /**
+   * Whether a replacement generation is assembling off-screen right now - see
+   * `ChatSessionState.accumulatedSummaryAssemblyStarted`.
+   */
+  readonly assemblyStarted: boolean;
 }): boolean {
   // The legacy line ships the whole set on the snapshot; there is no stream to
   // be mid-way through.
@@ -234,7 +239,23 @@ export function accumulatedSummarySetComplete(input: {
   // then returns `stale`, and no length-based check can distinguish it from a
   // finished delivery. Certain, not incidental, whenever the whole set fits one
   // chunk and that chunk is the one dropped.
-  if (!input.generationSeated && input.hostChangeCount > 0) return false;
+  //
+  // The assembly is the other half of that clause and cannot be folded into
+  // the count, because the count is the thing that fails: it is aux, and aux
+  // is last-write-wins, so a delayed same-epoch snapshot can rewind it to zero
+  // while a generation is still arriving. `hostChangeCount > 0` is then false
+  // and the equality below reads `0 === 0` over a published array that is
+  // still EMPTY - complete, over a set no chunk of this generation has
+  // delivered. Consumers act on that: a bundle path absent from the published
+  // array reads as reverted rather than as not-yet-arrived. The store's own
+  // `chunkedDeliveryIncomplete` opens on this same clause, over this same
+  // state, for the same reason.
+  if (
+    !input.generationSeated &&
+    (input.assemblyStarted || input.hostChangeCount > 0)
+  ) {
+    return false;
+  }
   return input.hostChangeCount === input.deliveredSummaryCount;
 }
 
