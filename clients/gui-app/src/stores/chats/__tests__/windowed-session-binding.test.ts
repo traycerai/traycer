@@ -8,13 +8,16 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
+import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
   createChatSessionStore,
+  STREAM_COMPLETION_TIMEOUT_MS,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import {
   isTailHydrated,
+  spanMessages,
   TRANSCRIPT_WINDOW_MAX_BYTES,
 } from "@/stores/chats/transcript-window";
 
@@ -343,6 +346,13 @@ function windowedSnapshot(input: {
   readonly tailFromOrdinal: number;
   readonly tailMessages: readonly Message[];
   readonly accumulatedFileChangeCount: number;
+  /**
+   * Defaults to `null` - "the host holds no index for this subscriber and is
+   * rebuilding one", which resets the summary generation. Pass a live revision
+   * for an AUX-ONLY re-broadcast, the case that carries no chunks and so must
+   * leave a generation mid-assembly alone.
+   */
+  readonly indexRevision?: number | null;
 }): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
   return {
     kind: "snapshot",
@@ -380,7 +390,7 @@ function windowedSnapshot(input: {
       heldUpdates: [],
       transcriptEpoch: input.epoch,
       rowCount: input.rowCount,
-      indexRevision: null,
+      indexRevision: input.indexRevision ?? null,
       tail: {
         fromOrdinal: input.tailFromOrdinal,
         messages: [...input.tailMessages],
@@ -830,13 +840,18 @@ describe("windowed snapshot whose tail arrived empty", () => {
     }
   });
 
-  it("clears the previous epoch's rows instead of leaving them on screen", () => {
+  it("carries the previous epoch's rows as placed stale bodies while the new tail loads", () => {
     // A reconnect or reindex rebases the transcript into a new coordinate
-    // space, and `applyWindowedSnapshot` returns an empty window for it. The
-    // fold is held until the new tail lands - but the rows the reader is
-    // looking at belong to the epoch that just ended, and holding them means
-    // the row merge treats them as unplaced rows of a space they were never
-    // numbered in. If the tail is slow or lost, that is what stays on screen.
+    // space. The rows the reader is looking at almost always still exist in
+    // the replacement space under the same row ids, so the fold carries their
+    // spans as STALE display state instead of blanking the transcript for the
+    // length of the resnapshot round trip - the completion "flash". What must
+    // NOT happen is the original hazard this test was written for: those rows
+    // being re-published as unplaced rows of a space they were never numbered
+    // in. They stay ordinal-bound (their old ordinals, yielding to the
+    // replacement skeleton), which `transcriptListRows` owns and its own
+    // suite pins; here the store-level halves are pinned - retention for
+    // display, and a fresh-epoch re-request either way.
     const harness = createWindowedHarness();
     try {
       harness.callbacks().onWindowedSnapshot(
@@ -853,6 +868,37 @@ describe("windowed snapshot whose tail arrived empty", () => {
           .getState()
           .messages.map((message) => message.messageId),
       ).toEqual(["old-0", "old-1"]);
+      // The skeleton stream adopts the positionally-seated tail's row ids, as
+      // it does on every real session before a rebase can arrive - the carry
+      // below preserves ROW IDENTITY, which unadopted empty-string ids cannot
+      // express.
+      harness.callbacks().onSkeletonChunk({
+        kind: "skeletonChunk",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromOrdinal: 0,
+          entries: [
+            {
+              rowId: "old-0",
+              createdAt: 1,
+              role: "user",
+              byteLength: 10,
+              bodyDigest: "d0",
+            },
+            {
+              rowId: "old-1",
+              createdAt: 2,
+              role: "user",
+              byteLength: 10,
+              bodyDigest: "d1",
+            },
+          ],
+          isFinal: true,
+        },
+      });
 
       harness.callbacks().onWindowedSnapshot(
         windowedSnapshot({
@@ -872,8 +918,17 @@ describe("windowed snapshot whose tail arrived empty", () => {
       // true on the first snapshot and a deferral does not clear it.)
       expect(isTailHydrated(state.transcriptWindow)).toBe(false);
       expect(harness.rangeRequests.at(-1)?.epoch).toBe(5);
-      // And nothing from epoch 4 survived into it.
-      expect(state.messages).toEqual([]);
+      // Epoch 4's bodies survive as display-only stale spans - no FRESH span
+      // claims an ordinal of the new space, so nothing can seat a body under
+      // a wrong row id.
+      expect(state.transcriptWindow.spans).toEqual([]);
+      expect(
+        state.transcriptWindow.staleSpans.flatMap((span) => span.rowIds),
+      ).toEqual(["old-0", "old-1"]);
+      expect(state.messages.map((message) => message.messageId)).toEqual([
+        "old-0",
+        "old-1",
+      ]);
       expect(state.events).toEqual([]);
     } finally {
       harness.handle.dispose();
@@ -1353,6 +1408,423 @@ describe("index deltas", () => {
       vi.useRealTimers();
     }
   });
+
+  /**
+   * The resnapshot entry's dedup is keyed on the THREE boundary cases (a
+   * rebuild announcement, a rebase, a voided index), never on "a snapshot
+   * arrived" - an aux-only re-broadcast (a queue change, an approval) rides
+   * the same `onWindowedSnapshot` handler at a HELD revision and must leave
+   * the entry standing, or a steady drip of aux traffic would close it once
+   * per frame while the real answer is still in flight and re-send a
+   * resnapshot for every approval.
+   */
+  it("survives an aux-only re-broadcast while void, but a later void reopens it", () => {
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      harness.callbacks().onIndexChanged({
+        kind: "indexChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        epoch: 5,
+        rowCount: 2,
+        indexRevision: 1,
+        changes: [{ type: "reindexed" }],
+      });
+      expect(harness.resnapshotCount()).toBe(1);
+
+      // An aux-only re-broadcast at the SAME epoch, with a concrete revision
+      // and no rebuild announcement - none of the three boundary cases. The
+      // pending resnapshot entry is what asked for the repair; closing it
+      // here is the shape that looks conservative and destroys the answer -
+      // the entry's dedup would release, and a re-plan could mint a second
+      // request for a repair already travelling on the wire.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 5,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          accumulatedFileChangeCount: 0,
+          indexRevision: 1,
+        }),
+      );
+      // No second resnapshot: the entry survived the aux frame.
+      expect(harness.resnapshotCount()).toBe(1);
+
+      // The rebuild-announcing snapshot IS a boundary case - `indexRevision:
+      // null` - and closes the entry.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 5,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      expect(harness.resnapshotCount()).toBe(1);
+
+      // A LATER void can now reopen the entry and ask again - proof the close
+      // above actually happened rather than merely reading as inert.
+      harness.callbacks().onIndexChanged({
+        kind: "indexChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        epoch: 6,
+        rowCount: 2,
+        indexRevision: 1,
+        changes: [{ type: "reindexed" }],
+      });
+      expect(harness.resnapshotCount()).toBe(2);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
+/**
+ * The store-level half of {@link isActiveTurnStreamingEcho}: an `indexChanged`
+ * naming only the active turn's own row must not treat an in-flight hydration
+ * request as stale, or a chat dominated by one long-running turn starves every
+ * scrollback fetch for as long as the turn streams.
+ */
+describe("the active turn's streaming echo does not starve in-flight hydration", () => {
+  type IndexChangedFrame = Parameters<ChatStreamCallbacks["onIndexChanged"]>[0];
+
+  function indexChangedFrame(input: {
+    readonly epoch: number;
+    readonly rowCount: number;
+    readonly indexRevision: number;
+    readonly changes: IndexChangedFrame["changes"];
+  }): IndexChangedFrame {
+    return {
+      kind: "indexChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      epoch: input.epoch,
+      rowCount: input.rowCount,
+      indexRevision: input.indexRevision,
+      changes: [...input.changes],
+    };
+  }
+
+  type RangeFrame = Parameters<ChatStreamCallbacks["onRange"]>[0];
+
+  function rangeFrame(input: {
+    readonly requestId: string;
+    readonly epoch: number;
+    readonly fromOrdinal: number;
+    readonly rowIds: readonly string[];
+    readonly messages: readonly Message[];
+  }): RangeFrame {
+    return {
+      kind: "range",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      range: {
+        requestId: input.requestId,
+        epoch: input.epoch,
+        fromOrdinal: input.fromOrdinal,
+        rowIds: [...input.rowIds],
+        messages: [...input.messages],
+        events: [],
+        rowContext: {},
+        reachedStart: input.fromOrdinal === 0,
+        reachedEnd: false,
+      },
+    };
+  }
+
+  function seatedTail(harness: WindowedHarness): void {
+    harness.callbacks().onWindowedSnapshot(
+      windowedSnapshot({
+        epoch: 1,
+        rowCount: 40,
+        tailFromOrdinal: 20,
+        tailMessages: [userMessage("tail", 20)],
+        accumulatedFileChangeCount: 0,
+      }),
+    );
+  }
+
+  /** A tail whose span HOLDS the active turn's streaming assistant message. */
+  function seatedTailHoldingTurn(
+    harness: WindowedHarness,
+    turnId: string,
+  ): void {
+    harness.callbacks().onWindowedSnapshot(
+      windowedSnapshot({
+        epoch: 1,
+        rowCount: 40,
+        tailFromOrdinal: 20,
+        tailMessages: [
+          userMessage("tail", 20),
+          assistantWithBlocks("assistant-live", 21, turnId, []),
+        ],
+        accumulatedFileChangeCount: 0,
+      }),
+    );
+  }
+
+  it("a streaming echo does not supersede in-flight hydration", () => {
+    const harness = createWindowedHarness();
+    try {
+      // The tail span holds the streaming turn's record - the ordinary state
+      // mid-turn, and the precondition for the echo exemption: only a HELD
+      // copy is being rewritten in place by the delta stream.
+      seatedTailHoldingTurn(harness, "t-9");
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+
+      // The index's own echo of the turn already streaming: the deltas that
+      // produced it rewrote the held records in place, so there is nothing
+      // stale about an answer still in flight for this row.
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 10,
+                  entry: {
+                    rowId: assistantRowId("t-9"),
+                    createdAt: 10,
+                    role: "assistant",
+                    byteLength: 4096,
+                    bodyDigest: "d10-echo",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [assistantWithBlocks("assistant-10", 10, "t-9", [])],
+        }),
+      );
+
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a frame naming a DIFFERENT turn's row still supersedes, and the discarded answer is re-planned", () => {
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+      expect(harness.rangeRequests).toHaveLength(1);
+
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 10,
+                  entry: {
+                    rowId: assistantRowId("other-turn"),
+                    createdAt: 10,
+                    role: "assistant",
+                    byteLength: 4096,
+                    bodyDigest: "d10-other",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("other-turn")],
+          messages: [assistantWithBlocks("assistant-10", 10, "other-turn", [])],
+        }),
+      );
+
+      // Discarded: the pre-update body must not seat.
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
+      // And re-planned, because ordinal 10 is still a gap.
+      expect(harness.rangeRequests.length).toBeGreaterThan(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not supersede in-flight hydration for a frame the window REJECTS", () => {
+    // `supersedeInFlightHydration` ran before `applyIndexChange` had judged the
+    // frame. A duplicated or reordered same-epoch straggler is dropped on
+    // `indexRevision <= window.indexRevision` and changes nothing - but the
+    // ledger had already marked the in-flight request, so its valid answer was
+    // discarded and re-asked, extending exactly the placeholders it would have
+    // filled. Repeated stragglers can keep a range from settling at all.
+    const harness = createWindowedHarness();
+    try {
+      // A concrete revision, so `indexRevisionRebuilding` is disarmed and the
+      // revision checks actually apply - the default `null` suspends them.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 1,
+          rowCount: 40,
+          tailFromOrdinal: 20,
+          tailMessages: [userMessage("tail", 20)],
+          accumulatedFileChangeCount: 0,
+          indexRevision: 5,
+        }),
+      );
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+
+      // Names a DIFFERENT turn, so the streaming-echo exemption cannot be what
+      // saves the request - only the rejection can.
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 5,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 10,
+                  entry: {
+                    rowId: assistantRowId("other-turn"),
+                    createdAt: 10,
+                    role: "assistant",
+                    byteLength: 4096,
+                    bodyDigest: "d10-straggler",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("other-turn")],
+          messages: [assistantWithBlocks("assistant-10", 10, "other-turn", [])],
+        }),
+      );
+
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("a streaming echo still supersedes when the turn's record is not held", () => {
+    // The cold-row boundary of the exemption: a copy the window does not
+    // hold is not being rewritten - its deltas are dropped - so an answer
+    // generated before them carries blocks the client can never recover.
+    // Accepting it would seat the older body permanently; it must be
+    // discarded and re-asked exactly as before the exemption existed.
+    const harness = createWindowedHarness();
+    try {
+      seatedTail(harness);
+      raiseActiveTurn(harness.callbacks(), "t-9");
+
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 11 });
+      const requestId = harness.lastRangeRequestId();
+
+      harness.callbacks().onIndexChanged(
+        indexChangedFrame({
+          epoch: 1,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [
+            {
+              type: "updated",
+              entries: [
+                {
+                  ordinal: 10,
+                  entry: {
+                    rowId: assistantRowId("t-9"),
+                    createdAt: 10,
+                    role: "assistant",
+                    byteLength: 4096,
+                    bodyDigest: "d10-cold",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      );
+
+      harness.callbacks().onRange(
+        rangeFrame({
+          requestId,
+          epoch: 1,
+          fromOrdinal: 10,
+          rowIds: [assistantRowId("t-9")],
+          messages: [assistantWithBlocks("assistant-10", 10, "t-9", [])],
+        }),
+      );
+
+      const window = harness.handle.store.getState().transcriptWindow;
+      expect(window.spans.some((span) => span.fromOrdinal === 10)).toBe(false);
+      expect(harness.rangeRequests.length).toBeGreaterThan(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
 });
 
 describe("accumulated-change chunks", () => {
@@ -1516,15 +1988,19 @@ describe("accumulated-change chunks", () => {
       });
 
       const state = harness.handle.store.getState();
-      // "d.ts" is NOT seated at index 1 wearing "b.ts"'s position.
+      // "d.ts" is NOT seated at index 1 wearing "b.ts"'s position - and the
+      // partial assembly ("a.ts" alone, 1 of 4) is never published either: a
+      // generation is assembled off-screen and swaps in only once whole, so
+      // the panel shows the previous complete set (here: nothing) rather than
+      // flashing a partial replacement.
       expect(
         state.accumulatedFileChangeSummaries.map((entry) => entry.filePath),
-      ).toEqual(["a.ts"]);
+      ).toEqual([]);
       // And the shortfall stays visible, which is what holds "Review all" back.
       expect(
         state.accumulatedFileChangeCount -
           state.accumulatedFileChangeSummaries.length,
-      ).toBe(3);
+      ).toBe(4);
       // Dropping alone would strand the panel: the host records the set it
       // just sent, so a chunk lost in transit leaves it believing this
       // subscriber holds that generation - ordinary traffic over an unchanged
@@ -1532,6 +2008,402 @@ describe("accumulated-change chunks", () => {
       expect(harness.resnapshotCount()).toBe(1);
     } finally {
       harness.handle.dispose();
+    }
+  });
+
+  /**
+   * A replacement generation assembles off-screen and swaps in atomically.
+   * Publishing its first chunk repainted the panel with a partial set - the
+   * "2 files changed" flash mid-restream over a complete 6-file set - so the
+   * previous complete generation stays published until the replacement
+   * reaches the authoritative count.
+   */
+  it("holds the previous complete summary set until the replacement generation is whole", () => {
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 3,
+        }),
+      );
+      // Generation 1 completes and publishes.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [summary("a.ts"), summary("b.ts"), summary("c.ts")],
+          isFinal: true,
+        },
+      });
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
+
+      // Generation 2's first chunk covers 1 of 3: the published set must not
+      // move, and the un-seated flag is what keeps the completion watchdog
+      // measuring the assembly rather than the retained array.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 2,
+          summaries: [summary("x.ts")],
+          isFinal: false,
+        },
+      });
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(false);
+
+      // The generation completes to the authoritative count: the set swaps
+      // atomically.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 1,
+          generation: 2,
+          summaries: [summary("y.ts"), summary("z.ts")],
+          isFinal: true,
+        },
+      });
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["x.ts", "y.ts", "z.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  /**
+   * The un-seat this store used to skip. A chunk of a LATER generation whose
+   * `fromIndex` is not 0 cannot itself seat - its predecessors, including that
+   * generation's own first chunk, were dropped - but the generation WAS
+   * observed on the ledger, so the trust flags must publish that a
+   * replacement is running. The previous shape returned before publishing,
+   * leaving `accumulatedSummaryGenerationSeated` vouching for the SUPERSEDED
+   * generation while its replacement was already known to be in flight.
+   */
+  it("un-seats when a later generation's chunk cannot itself seat", () => {
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 3,
+        }),
+      );
+      // Generation 1 completes and seats.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [summary("a.ts"), summary("b.ts"), summary("c.ts")],
+          isFinal: true,
+        },
+      });
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
+
+      const before = harness.resnapshotCount();
+
+      // Generation 2's first OBSERVED chunk is not index 0: everything before
+      // it in that generation - including its real first chunk - was dropped.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 1,
+          generation: 2,
+          summaries: [summary("y.ts")],
+          isFinal: false,
+        },
+      });
+
+      // The published set is unchanged - the chunk cannot seat at the wrong
+      // offset - but the trust flags must stop vouching for it as settled.
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(false);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryAssemblyStarted,
+      ).toBe(true);
+      // And the restream is what recovers the dropped predecessor.
+      expect(harness.resnapshotCount()).toBe(before + 1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not seat a non-final chunk whose length matches a transiently stale count", () => {
+    // `accumulatedFileChangeCount` is an aux field and aux is
+    // last-write-wins, so a delayed same-epoch snapshot restores an older,
+    // smaller count for a frame. A non-final prefix of the generation being
+    // assembled can have exactly that length - and publishing on the
+    // coincidence seats the generation permanently: later chunks push the
+    // assembly past the count, it never matches again, the flag is never
+    // cleared, and the completion watchdog then measures the published prefix
+    // against the stale count, agrees, and disarms. The rest of the summaries
+    // are hidden for the life of the connection.
+    const harness = createWindowedHarness();
+    try {
+      const summary = (filePath: string): ChatAccumulatedFileChangeSummary => ({
+        filePath,
+        operation: "edit",
+        diffSource: "snapshot",
+        reason: "snapshot",
+        undoable: true,
+        hasContents: true,
+        digest: `d-${filePath}`,
+        counts: { additions: 1, deletions: 0 },
+      });
+      const snapshotWithCount = (count: number): void => {
+        harness.callbacks().onWindowedSnapshot(
+          windowedSnapshot({
+            epoch: 4,
+            rowCount: 1,
+            tailFromOrdinal: 0,
+            tailMessages: [userMessage("m-0", 0)],
+            accumulatedFileChangeCount: count,
+          }),
+        );
+      };
+      const chunk = (
+        fromIndex: number,
+        summaries: readonly ChatAccumulatedFileChangeSummary[],
+        isFinal: boolean,
+      ): void => {
+        harness.callbacks().onAccumulatedChanges({
+          kind: "accumulatedChanges",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          chunk: {
+            epoch: 4,
+            fromIndex,
+            generation: 2,
+            summaries: [...summaries],
+            isFinal,
+          },
+        });
+      };
+
+      snapshotWithCount(3);
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [summary("a.ts"), summary("b.ts"), summary("c.ts")],
+          isFinal: true,
+        },
+      });
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
+
+      // The delayed snapshot rewinds the count to a length the next prefix
+      // happens to match.
+      snapshotWithCount(1);
+      chunk(0, [summary("x.ts")], false);
+
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["a.ts", "b.ts", "c.ts"]);
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(false);
+
+      // The gate blocks a coincidence, not a completion. The count is STILL
+      // the stale `1` here and the assembly is now two entries long, and the
+      // final chunk publishes anyway: `isFinal` is the host declaring the
+      // generation whole, which is the one thing an aux field cannot say.
+      //
+      // Refusing here instead would strand a complete generation the client
+      // already holds behind a transient value - the previous set rendering
+      // indefinitely with no route back, since the host believes this
+      // subscriber was already sent this generation and re-sends nothing.
+      chunk(1, [summary("y.ts")], true);
+
+      expect(
+        harness.handle.store.getState().accumulatedSummaryGenerationSeated,
+      ).toBe(true);
+      expect(
+        harness.handle.store
+          .getState()
+          .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
+      ).toEqual(["x.ts", "y.ts"]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("keeps the watchdog armed when an aux re-broadcast rewinds the count mid-assembly", () => {
+    // The count is aux and aux is last-write-wins, so an aux-only re-broadcast
+    // can restore an older, smaller value for a frame - zero, before the first
+    // generation has published anything. Measuring completeness against THAT
+    // agrees with the still-empty published array (`0 !== 0` is false) and
+    // disarms the stall watchdog on a generation that delivered nothing, so
+    // the summaries stay hidden for the rest of the connection.
+    //
+    // What proves a delivery is owed is holding an assembly no chunk has
+    // vouched for, and that is true whatever the count currently says.
+    vi.useFakeTimers();
+    const harness = createWindowedHarness();
+    try {
+      const snapshotWithCount = (
+        count: number,
+        indexRevision: number | null,
+      ): void => {
+        harness.callbacks().onWindowedSnapshot(
+          windowedSnapshot({
+            epoch: 6,
+            rowCount: 1,
+            tailFromOrdinal: 0,
+            tailMessages: [userMessage("m-0", 0)],
+            accumulatedFileChangeCount: count,
+            indexRevision,
+          }),
+        );
+      };
+
+      snapshotWithCount(3, null);
+      harness.callbacks().onSkeletonChunk({
+        kind: "skeletonChunk",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 6,
+          fromOrdinal: 0,
+          entries: [
+            {
+              rowId: "row-0",
+              createdAt: 1,
+              role: "user",
+              byteLength: 10,
+              bodyDigest: "d0",
+            },
+          ],
+          isFinal: true,
+        },
+      });
+      const before = harness.resnapshotCount();
+
+      // The first generation opens and then STOPS - its last frame is lost.
+      harness.callbacks().onAccumulatedChanges({
+        kind: "accumulatedChanges",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 6,
+          fromIndex: 0,
+          generation: 1,
+          summaries: [
+            {
+              filePath: "a.ts",
+              operation: "edit",
+              diffSource: "snapshot",
+              reason: "snapshot",
+              undoable: true,
+              hasContents: true,
+              digest: "d-a.ts",
+              counts: { additions: 1, deletions: 0 },
+            },
+          ],
+          isFinal: false,
+        },
+      });
+
+      // At a LIVE revision, so it carries no chunks and leaves the assembly in
+      // place - the one shape that can rewind the count without also
+      // announcing the re-stream that would repair it.
+      snapshotWithCount(0, 1);
+
+      // Exactly one idle window. The watchdog re-arms behind its own
+      // resnapshot, so a longer advance would count the retries too and say
+      // nothing about whether the FIRST deadline survived the rewind.
+      vi.advanceTimersByTime(STREAM_COMPLETION_TIMEOUT_MS + 1);
+
+      expect(harness.resnapshotCount()).toBe(before + 1);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
     }
   });
 
@@ -2419,8 +3291,11 @@ describe("a row-targeted delta on the windowed line", () => {
     const harness = createWindowedHarness();
     try {
       seedAndResolve(harness);
-      const span = harness.handle.store.getState().transcriptWindow.spans[0];
-      const row = span.messages.find((message) => message.messageId === "a-1");
+      const window = harness.handle.store.getState().transcriptWindow;
+      const span = window.spans[0];
+      const row = spanMessages(window, span).find(
+        (message) => message.messageId === "a-1",
+      );
       expect(
         row?.role === "assistant" ? row.imageResolutions : [],
       ).toHaveLength(1);
