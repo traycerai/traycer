@@ -209,7 +209,18 @@ export function openStoreForTest(
   return {
     ...handle,
     flush: () => pair.flush(),
-    doc: runtime.doc,
-    awareness: runtime.awareness,
+    // GETTERS, not captured values. `epic-session-provider.tsx` states the
+    // cost of getting this wrong: freezing them "leaves every consumer holding
+    // a DESTROYED `Y.Doc` and `Awareness` while the live ones are unreachable"
+    // - and a replica replacement (a viewer downgrade, a fresh snapshot, an
+    // authority-epoch change) is exactly what these suites drive. The runtime
+    // declares them as getters for this reason; re-declaring them here is what
+    // carries that through the harness.
+    get doc(): Y.Doc {
+      return runtime.doc;
+    },
+    get awareness(): Awareness {
+      return runtime.awareness;
+    },
   };
 }
