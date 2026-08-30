@@ -120,6 +120,43 @@ function emptySnapshot(): Uint8Array {
   return Y.encodeStateAsUpdate(new Y.Doc());
 }
 
+/**
+ * Settle the worker pipe under FAKE timers.
+ *
+ * `flush()` waits a MACROTASK per round, and says so in its own comment: "The
+ * one thing it assumes is REAL timers. No suite driving this harness installs
+ * fake ones; one that did would hang here." These lease tests install fake
+ * ones - they have to, because the linger window they drive is a real timer
+ * inside the worker - so that assumption stopped holding the moment the
+ * runtime moved across the bridge.
+ *
+ * Rather than weaken the pipe (a shared harness that quietly special-cased
+ * vitest would hide the boundary from every other suite), the two regimes are
+ * interleaved HERE, where both are visible: start the flush, then be the thing
+ * that fires its macrotask.
+ *
+ * `advanceTimersByTimeAsync(0)` advances the clock by ZERO, so only
+ * already-due callbacks run - the linger window is milliseconds away and is
+ * not disturbed by settling the pipe. The loop is bounded by the pipe's own
+ * round cap, so a pipe that never settles fails as `flush()`'s explicit error
+ * rather than as a hang here.
+ */
+async function settle(opened: OpenedStoreForTest): Promise<void> {
+  // Real timers: the pipe's own assumption holds and `flush()` is sufficient.
+  // Branching on the REGIME rather than making every test declare which one it
+  // is in - the pipe's requirement is a fact about the clock, and asking each
+  // call site to restate it is how the two drift.
+  if (!vi.isFakeTimers()) {
+    await opened.flush();
+    return;
+  }
+  const flushed = opened.flush();
+  for (let round = 0; round < 24; round += 1) {
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  await flushed;
+}
+
 function expectBytesEqual(actual: Uint8Array, expected: Uint8Array): void {
   expect(Array.from(actual)).toEqual(Array.from(expected));
 }
@@ -2381,14 +2418,14 @@ describe("createOpenEpicStore", () => {
     it("starts idle and transitions to running on migrationStarted + progress", () => {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-a",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       expect(opened.store.getState().migration.status).toBe("idle");
 
@@ -2415,14 +2452,14 @@ describe("createOpenEpicStore", () => {
     it("resets to idle once the post-migration snapshot lands", () => {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-a",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       handle().callbacks.onMigrationStarted();
       handle().callbacks.onMigrationProgress("upload", 5, 5);
@@ -2437,14 +2474,14 @@ describe("createOpenEpicStore", () => {
     it("transitions to error on onMigrationFailed and retries in-stream", () => {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-a",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       // The host's `migrationFailed` path keeps the WS open, so the
       // renderer's `currentStatus` is still "open". The retryMigration
@@ -2471,14 +2508,14 @@ describe("createOpenEpicStore", () => {
     it("transitions to not-allowed on onMigrationNotAllowed (terminal, not retryable)", () => {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-a",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       handle().callbacks.onConnectionStatus("open", null);
       handle().callbacks.onMigrationNotAllowed();
@@ -2502,14 +2539,14 @@ describe("createOpenEpicStore", () => {
     it("transitions to error on a fatal close after migration started", () => {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-a",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       handle().callbacks.onMigrationStarted();
       handle().callbacks.onConnectionStatus("closed", {
@@ -2538,15 +2575,15 @@ describe("createOpenEpicStore", () => {
       // UNAUTHORIZED - which trapped the user behind the modal instead of
       // letting the re-auth flow take over.
       const { factory, handle } = fakeFactory();
-        const opened = openStoreForTest({
-      epicId: "epic-mid-migration-unauth",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+      const opened = openStoreForTest({
+        epicId: "epic-mid-migration-unauth",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       handle().callbacks.onMigrationStarted();
       handle().callbacks.onConnectionStatus("closed", {
@@ -2560,8 +2597,8 @@ describe("createOpenEpicStore", () => {
       });
 
       expect(opened.store.getState().snapshotFetchError?.code).toBe(
-      "UNAUTHORIZED",
-    );
+        "UNAUTHORIZED",
+      );
       // Migration must NOT be flipped into the error modal - it stays in
       // the running state the modal already showed, and the auth flow owns
       // recovery from here.
@@ -2573,14 +2610,14 @@ describe("createOpenEpicStore", () => {
     it("ignores fatal close when no migration ever started", () => {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-a",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       handle().callbacks.onConnectionStatus("closed", {
         kind: "fatalError",
@@ -2604,14 +2641,14 @@ describe("createOpenEpicStore", () => {
       // requestFreshSnapshot (close + reopen) instead of in-stream retry.
       const { factory, handle, handles } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-a",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       const initialStream = handle();
       handle().callbacks.onMigrationStarted();
@@ -2646,14 +2683,14 @@ describe("createOpenEpicStore", () => {
     it("retryMigration is a no-op when migration is not in error", () => {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-a",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       opened.store.getState().retryMigration();
       expect(handle().retryMigrationCount).toBe(0);
@@ -2739,14 +2776,14 @@ describe("createOpenEpicStore", () => {
     it("keeps the optimistic cloud display value separate from fresh cloud proof", () => {
       const { factory } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-legs-construct",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-legs-construct",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       const state = opened.store.getState();
       expect(state.cloudSyncStatus).toBe("connected");
@@ -2761,14 +2798,14 @@ describe("createOpenEpicStore", () => {
     it("publishes raw transport, cloud, and freshness legs across each open cycle", () => {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-legs-lifecycle",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-legs-lifecycle",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       // Transport opens before a current-cycle cloud status arrives. Preserve
       // the historical functional `open` blend, but freshness remains false
@@ -2822,14 +2859,14 @@ describe("createOpenEpicStore", () => {
     it("requestFreshSnapshot invalidates cloud acknowledgement for its new cycle", () => {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-legs-refresh",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-legs-refresh",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
 
       handle().callbacks.onConnectionStatus("open", null);
       handle().callbacks.onCloudSyncStatus("connected");
@@ -2861,13 +2898,13 @@ describe("createOpenEpicStore", () => {
      * with it instead of hard-coding a room count. */
     const MAX_HOT_ARTIFACT_ROOMS_FOR_TESTS = 32;
 
-    function openWithReadyRoom(
+    async function openWithReadyRoom(
       epicId: string,
       bodyText: string,
-    ): {
+    ): Promise<{
       readonly opened: OpenedStoreForTest;
       readonly handle: () => FakeStreamHandle;
-    } {
+    }> {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
         epicId,
@@ -2892,11 +2929,24 @@ describe("createOpenEpicStore", () => {
         Y.encodeStateAsUpdate(artifactRoomDoc),
         stateVectorBase64(artifactRoomDoc),
       );
+      // The room's snapshot is a round trip now; hand back a store whose
+      // setup has actually landed rather than one still in flight.
+      await settle(opened);
       return { opened, handle };
     }
 
-    it("reports a snapshotted room ready without materializing a doc for it", () => {
-      const { opened } = openWithReadyRoom("epic-lease-cold", "cold body");
+    it("reports a snapshotted room ready without materializing a doc for it", async () => {
+      const { opened } = await openWithReadyRoom(
+        "epic-lease-cold",
+        "cold body",
+      );
+      // SETTLE BEFORE the negative assertion, not after the acquire only. One
+      // microtask early, nothing has happened either way and
+      // `hotArtifactRoomIdsForTests()` is empty against every implementation -
+      // the assertion would pass without proving anything. Giving the
+      // materialize its chance to happen and THEN finding it did not is the
+      // claim this test is making.
+      await settle(opened);
 
       // Ready is about the host having the room open, not about this renderer
       // holding a replica - the tile needs the former to stop showing its
@@ -2911,6 +2961,10 @@ describe("createOpenEpicStore", () => {
       expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
 
       const release = opened.store.getState().acquireArtifactBodyLease("art-1");
+      await settle(opened);
+      // The materialize is a ROUND TRIP now: the lease posts `body/materialize`
+      // and the doc lands on main only when the response does.
+      await settle(opened);
       const fragment = opened.store.getState().getArtifactFragment("art-1");
       expect(fragment).not.toBeNull();
       expect(fragment?.toJSON()).toContain("cold body");
@@ -2920,10 +2974,10 @@ describe("createOpenEpicStore", () => {
       opened.dispose();
     });
 
-    it("replays updates that arrived while a room was cold", () => {
+    it("replays updates that arrived while a room was cold", async () => {
       vi.useFakeTimers();
       try {
-        const { opened, handle } = openWithReadyRoom(
+        const { opened, handle } = await openWithReadyRoom(
           "epic-lease-cold-updates",
           "first",
         );
@@ -2934,6 +2988,7 @@ describe("createOpenEpicStore", () => {
         const leaseForBytes = opened.store
           .getState()
           .acquireArtifactBodyLease("art-1");
+        await settle(opened);
         const liveFragment = opened.store
           .getState()
           .getArtifactFragment("art-1");
@@ -2946,6 +3001,9 @@ describe("createOpenEpicStore", () => {
         // the cold path.
         leaseForBytes();
         vi.advanceTimersByTime(61_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
         expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
 
         const before = Y.encodeStateVector(donorRoom);
@@ -2964,6 +3022,7 @@ describe("createOpenEpicStore", () => {
         const release = opened.store
           .getState()
           .acquireArtifactBodyLease("art-1");
+        await settle(opened);
         const rematerialized = opened.store
           .getState()
           .getArtifactFragment("art-1");
@@ -2977,14 +3036,18 @@ describe("createOpenEpicStore", () => {
       }
     });
 
-    it("demotes a room once its last lease is released and the linger window elapses", () => {
+    it("demotes a room once its last lease is released and the linger window elapses", async () => {
       vi.useFakeTimers();
       try {
-        const { opened } = openWithReadyRoom("epic-lease-linger", "lingering");
+        const { opened } = await openWithReadyRoom(
+          "epic-lease-linger",
+          "lingering",
+        );
 
         const release = opened.store
           .getState()
           .acquireArtifactBodyLease("art-1");
+        await settle(opened);
         expect(
           opened.store.getState().getArtifactFragment("art-1"),
         ).not.toBeNull();
@@ -2993,17 +3056,24 @@ describe("createOpenEpicStore", () => {
         // Still hot through the linger window: a tab switch that remounts the
         // tile must not pay to re-materialize the body.
         vi.advanceTimersByTime(59_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
         expect(opened.hotArtifactRoomIdsForTests()).toEqual([
           "artifact-room-0",
         ]);
 
         vi.advanceTimersByTime(2_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
         expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
 
         // …and the content survives the round trip through encoded bytes.
         const reacquired = opened.store
           .getState()
           .acquireArtifactBodyLease("art-1");
+        await settle(opened);
         expect(
           opened.store.getState().getArtifactFragment("art-1")?.toJSON(),
         ).toContain("lingering");
@@ -3014,16 +3084,17 @@ describe("createOpenEpicStore", () => {
       }
     });
 
-    it("keeps a room materialized while it holds edits the host has not acknowledged", () => {
+    it("keeps a room materialized while it holds edits the host has not acknowledged", async () => {
       vi.useFakeTimers();
       try {
-        const { opened, handle } = openWithReadyRoom(
+        const { opened, handle } = await openWithReadyRoom(
           "epic-lease-dirty",
           "dirty body",
         );
         const release = opened.store
           .getState()
           .acquireArtifactBodyLease("art-1");
+        await settle(opened);
         const fragment = opened.store.getState().getArtifactFragment("art-1");
         if (fragment === null) throw new Error("missing fragment");
         const docBefore = fragment.doc;
@@ -3038,6 +3109,9 @@ describe("createOpenEpicStore", () => {
 
         release();
         vi.advanceTimersByTime(10 * 60_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
 
         // Cooling here would encode the replica down and drop the queued
         // update with it - the edit would be lost with no outbound path.
@@ -3052,7 +3126,7 @@ describe("createOpenEpicStore", () => {
       }
     });
 
-    it("leaves the fragment accessor pure - reading never materializes", () => {
+    it("leaves the fragment accessor pure - reading never materializes", async () => {
       // These accessors run inside Zustand selectors. Materializing there let
       // an unrelated store update extend a room's lifetime, and let cap
       // enforcement destroy an unpinned `Y.Doc` while a component rendered
@@ -3060,7 +3134,7 @@ describe("createOpenEpicStore", () => {
       // belongs to the lease path.
       vi.useFakeTimers();
       try {
-        const { opened } = openWithReadyRoom("epic-pure-read", "read me");
+        const { opened } = await openWithReadyRoom("epic-pure-read", "read me");
 
         expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
         expect(
@@ -3070,11 +3144,15 @@ describe("createOpenEpicStore", () => {
 
         // Repeated reads must not touch cooldown or LRU state either.
         vi.advanceTimersByTime(120_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
         expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
 
         const release = opened.store
           .getState()
           .acquireArtifactBodyLease("art-1");
+        await settle(opened);
         expect(
           opened.store.getState().getArtifactFragment("art-1")?.toJSON(),
         ).toContain("read me");
@@ -3086,7 +3164,7 @@ describe("createOpenEpicStore", () => {
       }
     });
 
-    it("never hands out a fragment for a room that is ready but unseeded", () => {
+    it("never hands out a fragment for a room that is ready but unseeded", async () => {
       // `artifactRoomState` reports `ready` on first observation and on every
       // recovery transition, independently of `artifactRoomSnapshot`, so there
       // is a window where the room is ready with no bytes anywhere. Handing
@@ -3094,14 +3172,14 @@ describe("createOpenEpicStore", () => {
       // export skips its "still loading" guard and writes an empty file.
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-lease-unseeded",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-lease-unseeded",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
       const donor = new Y.Doc();
       seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
       handle().callbacks.onConnectionStatus("open", null);
@@ -3121,22 +3199,24 @@ describe("createOpenEpicStore", () => {
       ).toBeNull();
       // Taking a lease must not conjure one either.
       opened.store.getState().acquireArtifactBodyLease("art-1");
+      await settle(opened);
       expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
       expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
 
       opened.dispose();
     });
 
-    it("re-arms the linger when discarding unsynced edits clears a room's dirty pin", () => {
+    it("re-arms the linger when discarding unsynced edits clears a room's dirty pin", async () => {
       vi.useFakeTimers();
       try {
-        const { opened, handle } = openWithReadyRoom(
+        const { opened, handle } = await openWithReadyRoom(
           "epic-lease-discard",
           "discard me",
         );
         const release = opened.store
           .getState()
           .acquireArtifactBodyLease("art-1");
+        await settle(opened);
         const fragment = opened.store.getState().getArtifactFragment("art-1");
         if (fragment === null) throw new Error("missing fragment");
 
@@ -3148,6 +3228,9 @@ describe("createOpenEpicStore", () => {
 
         // Dirty, so the linger correctly refuses to cool it.
         vi.advanceTimersByTime(10 * 60_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
         expect(opened.hotArtifactRoomIdsForTests()).toEqual([
           "artifact-room-0",
         ]);
@@ -3157,6 +3240,9 @@ describe("createOpenEpicStore", () => {
         // - the ones holding the most Yjs structs - stay hot forever.
         opened.store.getState().discardUnsyncedEdits();
         vi.advanceTimersByTime(61_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
         expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
 
         opened.dispose();
@@ -3172,7 +3258,7 @@ describe("createOpenEpicStore", () => {
       // renewal (y-protocols refreshes local state every outdatedTimeout/2).
       const { Awareness: PeerAwareness, encodeAwarenessUpdate } =
         await import("y-protocols/awareness");
-      const { opened, handle } = openWithReadyRoom(
+      const { opened, handle } = await openWithReadyRoom(
         "epic-cold-presence",
         "shared body",
       );
@@ -3190,6 +3276,7 @@ describe("createOpenEpicStore", () => {
       expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
 
       const release = opened.store.getState().acquireArtifactBodyLease("art-1");
+      await settle(opened);
       const awareness = opened.store
         .getState()
         .getArtifactBodyAwareness("art-1");
@@ -3212,13 +3299,14 @@ describe("createOpenEpicStore", () => {
         await import("y-protocols/awareness");
       vi.useFakeTimers();
       try {
-        const { opened, handle } = openWithReadyRoom(
+        const { opened, handle } = await openWithReadyRoom(
           "epic-lease-presence",
           "shared body",
         );
         const release = opened.store
           .getState()
           .acquireArtifactBodyLease("art-1");
+        await settle(opened);
         const awareness = opened.store
           .getState()
           .getArtifactBodyAwareness("art-1");
@@ -3235,6 +3323,9 @@ describe("createOpenEpicStore", () => {
 
         release();
         vi.advanceTimersByTime(10 * 60_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
         // Cooling would destroy this room's Awareness, and inbound awareness
         // frames are dropped while cold with no way to ask for a resync - the
         // peer's caret and avatar would simply vanish until they moved again.
@@ -3250,17 +3341,17 @@ describe("createOpenEpicStore", () => {
       }
     });
 
-    it("evicts the least recently leased room once more rooms are hot than the cap", () => {
+    it("evicts the least recently leased room once more rooms are hot than the cap", async () => {
       const { factory, handle } = fakeFactory();
       const opened = openStoreForTest({
-      epicId: "epic-lease-cap",
-      userId: null,
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
-      },
-      writeCommand: null,
-    });
+        epicId: "epic-lease-cap",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
       const roomCount = MAX_HOT_ARTIFACT_ROOMS_FOR_TESTS + 1;
       const donor = new Y.Doc();
       for (let index = 0; index < roomCount; index += 1) {
@@ -3289,6 +3380,7 @@ describe("createOpenEpicStore", () => {
       // timer, so without the cap every one of them would stay materialized.
       for (let index = 0; index < roomCount; index += 1) {
         opened.store.getState().acquireArtifactBodyLease(`art-${index}`)();
+        await settle(opened);
       }
 
       // The cap holds, and it evicted the least recently leased room: the
