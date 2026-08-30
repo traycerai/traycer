@@ -669,9 +669,7 @@ export class MobileRunnerHost implements IRunnerHost {
 // labeling. When the production authn accepts "mobile", this collapses back
 // to the unconditional kind.
 const DEVICE_FLOW_CLIENT_ID: DeviceClientId =
-  __TRAYCER_MOBILE_CONFIG__.environment === "production"
-    ? "desktop"
-    : "mobile";
+  __TRAYCER_MOBILE_CONFIG__.environment === "production" ? "desktop" : "mobile";
 
 class MobileDeviceFlowHost implements IDeviceFlowHost {
   constructor(
