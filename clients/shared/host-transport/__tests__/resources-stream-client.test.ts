@@ -96,6 +96,7 @@ function makeWsStreamClient(
     endpoint: () => mockLocalHostEntry,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,

@@ -14,6 +14,7 @@ import { HostSettingsPanel } from "@/components/settings/panels/host-settings-pa
 import { DevicesSessionsPanel } from "@/components/settings/panels/devices-sessions-panel";
 import { LinkPhonePanel } from "@/components/settings/panels/link-phone-panel";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
+import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
@@ -70,6 +71,8 @@ export function SettingsPanelForSection(props: {
       return <GeneralSettingsPanel />;
     case "appearance":
       return <AppearanceSettingsPanel />;
+    case "app-notifications":
+      return <AppNotificationsSettingsPanel />;
     case "providers":
       return <ProvidersSettingsPanel />;
     case "notifications":

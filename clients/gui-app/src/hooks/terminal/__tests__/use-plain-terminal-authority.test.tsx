@@ -204,6 +204,7 @@ class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       webSocketFactory: {
@@ -284,6 +285,7 @@ class LogicalOrderingStreamClient extends WsStreamClient<HostStreamRpcRegistry> 
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       webSocketFactory: {

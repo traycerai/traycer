@@ -1940,6 +1940,35 @@ describe("epic sidebar selection mode", () => {
     ).toBeNull();
   });
 
+  it("moves focus from the Agents overflow menu into chat search", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Search agents" }));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Search agents" }),
+      );
+    });
+  });
+
+  it("moves focus from the Artifacts overflow menu into artifact search", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Search artifacts" }));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("combobox", { name: "Search artifacts" }),
+      );
+    });
+  });
+
   it("hides artifact selection when there are no artifacts to select", () => {
     testState.activePanelId = "artifacts";
 

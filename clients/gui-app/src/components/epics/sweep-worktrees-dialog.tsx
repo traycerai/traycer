@@ -221,7 +221,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const bulkSelectedCount = bulkRows.filter(isRowChecked).length;
   const allBulkSelected =
     bulkRows.length > 0 && bulkSelectedCount === bulkRows.length;
-  const inUseRowCount = rows.filter((row) => row.note === "in-use").length;
   const claimSelectAllKey = useBareKeyClaimer("a", (event) => {
     if (isEditableEventTarget(event.target)) return;
     event.preventDefault();
@@ -342,7 +341,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             bulkSelectedCount={bulkSelectedCount}
             allBulkSelected={allBulkSelected}
             selectedCount={checkedRows.length}
-            inUseRowCount={inUseRowCount}
             checkedAt={checkedAt}
             refreshing={refresh.refreshing}
             canRefresh={canRefresh}
@@ -673,7 +671,6 @@ function SweepWorktreesChoose(props: {
   readonly bulkSelectedCount: number;
   readonly allBulkSelected: boolean;
   readonly selectedCount: number;
-  readonly inUseRowCount: number;
   readonly checkedAt: number | null;
   readonly refreshing: boolean;
   readonly canRefresh: boolean;
@@ -734,7 +731,6 @@ function SweepWorktreesChoose(props: {
               {selectAllCountCopy({
                 selected: props.selectedCount,
                 total: props.rows.length,
-                inUse: props.inUseRowCount,
               })}
             </span>
           </div>
@@ -1208,7 +1204,7 @@ function SweepRowHint(props: {
       detail = formatUncheckedInUseKnown(row.holders.length);
     }
   } else if (row.note === "in-use" && props.checked) {
-    detail = "In use · selected individually for this review";
+    detail = "In use · selected for this review";
   }
   const cautious = row.note === "not-landed" || row.note === "shared";
   return (

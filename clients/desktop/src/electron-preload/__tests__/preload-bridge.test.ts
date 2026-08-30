@@ -153,6 +153,7 @@ interface PreloadBridge {
     dispose: () => void;
   };
   notifications: {
+    readonly systemSettings: { open(): Promise<void> } | null;
     onForegroundDisplay(
       handler: (display: DesktopNotificationForegroundDisplay) => void,
     ): { dispose: () => void };
@@ -498,6 +499,32 @@ describe("preload new-capability wiring", () => {
     });
 
     expect(bridge.initialRoute).toBe("/epics/epic-a/tab-a");
+  });
+
+  it("routes native notification settings through dedicated IPC", async () => {
+    const platform = vi
+      .spyOn(process, "platform", "get")
+      .mockReturnValue("darwin");
+    const calls: Array<{ readonly channel: string; readonly args: unknown[] }> =
+      [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel, ...args) => {
+        calls.push({ channel, args });
+        return Promise.resolve(undefined);
+      },
+      sendSyncFn: undefined,
+    });
+
+    await bridge.notifications.systemSettings?.open();
+
+    expect(calls).toContainEqual({
+      channel: RunnerHostInvoke.notificationOpenSystemSettings,
+      args: [],
+    });
+    platform.mockRestore();
   });
 
   it("forwards Windows top-level menu popup requests with their anchor", async () => {

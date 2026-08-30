@@ -375,7 +375,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     );
   });
 
-  it("select-all includes unproven rows, excludes in-use, and deselect-all clears in-use", () => {
+  it("select-all includes unproven and in-use rows, expands disclosures, and deselect-all clears in-use", () => {
     testState.rows = [
       {
         entry: worktreeEntry({
@@ -419,17 +419,52 @@ describe("SweepWorktreesDialog ergonomics", () => {
         holdersStatus: "ready",
         holdersRevision: REV_A,
       },
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/octopus",
+          branch: "feat-octopus",
+          inUse: true,
+        }),
+        tier: "in-use",
+        defaultChecked: false,
+        disabled: false,
+        note: "in-use",
+        holders: [],
+        holdersStatus: "unknown",
+      },
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/loading",
+          branch: "feat-loading",
+          inUse: true,
+        }),
+        tier: "in-use",
+        defaultChecked: false,
+        disabled: true,
+        note: "in-use",
+        holders: [],
+        holdersStatus: "loading",
+      },
     ];
     renderDialog();
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
+    const selectAll = screen.getByRole("checkbox", { name: "Select all" });
+    expect(selectAll.getAttribute("aria-checked")).toBe("mixed");
+    expect(screen.getByTestId("sweep-worktrees-count").textContent).toBe(
+      "1 of 5 selected",
+    );
+    expect(screen.getByTestId("sweep-worktrees-count").textContent).not.toMatch(
+      /require individual selection/,
     );
     expect(
       screen
         .getByRole("checkbox", { name: "Sweep worktree feat-busy" })
         .getAttribute("aria-checked"),
-    ).toBe("true");
-    fireEvent.click(screen.getByTestId("sweep-worktrees-select-all"));
+    ).toBe("false");
+    expect(screen.queryByTestId("teardown-disclosure-inline")).toBeNull();
+    expect(screen.getAllByText(/Check to review/).length).toBeGreaterThan(0);
+    fireEvent.click(selectAll);
+    expect(selectAll.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("checkbox", { name: "Deselect all" })).toBeTruthy();
     expect(
       screen
         .getByRole("checkbox", { name: "Sweep worktree feat-review" })
@@ -440,12 +475,111 @@ describe("SweepWorktreesDialog ergonomics", () => {
         .getByRole("checkbox", { name: "Sweep worktree feat-busy" })
         .getAttribute("aria-checked"),
     ).toBe("true");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Sweep worktree feat-octopus" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Sweep worktree feat-loading" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    const disclosures = screen.getAllByTestId("teardown-disclosure-inline");
+    expect(disclosures).toHaveLength(2);
+    expect(disclosures[0]?.textContent).toContain(
+      "Terminal agent “Claude Code agent polite-ocelot” is working — will be stopped",
+    );
+    expect(disclosures[1]?.textContent).toContain(
+      formatUnknownHolderConsequence("feat-octopus"),
+    );
+    expect(screen.getByTestId("sweep-worktrees-count").textContent).toBe(
+      "4 of 5 selected",
+    );
+    expect(
+      screen.getByRole("button", { name: "Review consequences" }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("checkbox", { name: "Deselect all" }));
     expect(
       screen
         .getByRole("checkbox", { name: "Sweep worktree feat-busy" })
         .getAttribute("aria-checked"),
     ).toBe("false");
+    expect(screen.queryByTestId("teardown-disclosure-inline")).toBeNull();
+  });
+
+  it("bulk-selected in-use rows produce the same review entries and request consent as individually selected ones", async () => {
+    const mixed = [
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/idle",
+          branch: "feat-idle",
+          inUse: false,
+        }),
+        tier: "merged" as const,
+        defaultChecked: true,
+        disabled: false,
+        note: null,
+        holders: [] as const,
+        holdersStatus: "none" as const,
+      },
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/busy",
+          branch: "feat-busy",
+          inUse: true,
+        }),
+        tier: "in-use" as const,
+        defaultChecked: false,
+        disabled: false,
+        note: "in-use" as const,
+        holders: HOLDERS,
+        holdersStatus: "ready" as const,
+        holdersRevision: REV_A,
+      },
+    ];
+    testState.rows = mixed;
+    renderDialog();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review consequences" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Review this sweep")).toBeTruthy();
+    });
+    const individualStops =
+      screen.getByTestId("sweep-review-stops").textContent;
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
+    const individualRequest = testState.lastVariables;
+
+    cleanup();
+    testState.mutate.mockReset();
+    testState.lastVariables = { worktrees: [] };
+    testState.rows = mixed;
+    renderDialog();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review consequences" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Review this sweep")).toBeTruthy();
+    });
+    expect(screen.getByTestId("sweep-review-stops").textContent).toBe(
+      individualStops,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
+    expect(testState.lastVariables).toEqual(individualRequest);
+    expect(testState.lastVariables.worktrees).toEqual(
+      expect.arrayContaining([
+        {
+          worktreePath: "/wt/busy",
+          stopOwners: true,
+          expectedHoldersRevision: REV_A,
+        },
+      ]),
+    );
   });
 
   it("drops a checked override when an idle row refreshes to in-use", async () => {

@@ -130,6 +130,7 @@ async function runWorktreeDelete(
     endpoint: () => endpoint,
     bearer: () => lease,
     auth: null,
+    clock: null,
     // Provisioning rides along here too. It used to be opted out because a
     // one-shot command must not interrupt with an email-OTP challenge; now that
     // the mint is silent there is nothing to interrupt, and only a host that

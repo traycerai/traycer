@@ -19,6 +19,7 @@ import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
 import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
 import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
+import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.app-notifications";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
@@ -84,6 +85,12 @@ const SettingsAppDiagnosticsRoute = SettingsAppDiagnosticsRouteImport.update({
   path: "/app-diagnostics",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsAppNotificationsRoute =
+  SettingsAppNotificationsRouteImport.update({
+    id: "/app-notifications",
+    path: "/app-notifications",
+    getParentRoute: () => SettingsRoute,
+  } as any);
 const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   id: "/appearance",
   path: "/appearance",
@@ -164,6 +171,7 @@ export interface FileRoutesByFullPath {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
+  "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
@@ -188,6 +196,7 @@ export interface FileRoutesByTo {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
+  "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
@@ -215,6 +224,7 @@ export interface FileRoutesById {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
+  "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
@@ -243,6 +253,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/app-diagnostics"
+    | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/devices"
     | "/settings/diagnostics"
@@ -267,6 +278,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/app-diagnostics"
+    | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/devices"
     | "/settings/diagnostics"
@@ -293,6 +305,7 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/app-diagnostics"
+    | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/devices"
     | "/settings/diagnostics"
@@ -390,6 +403,13 @@ declare module "@tanstack/react-router" {
       path: "/app-diagnostics";
       fullPath: "/settings/app-diagnostics";
       preLoaderRoute: typeof SettingsAppDiagnosticsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/app-notifications": {
+      id: "/settings/app-notifications";
+      path: "/app-notifications";
+      fullPath: "/settings/app-notifications";
+      preLoaderRoute: typeof SettingsAppNotificationsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/appearance": {
@@ -508,6 +528,7 @@ const EpicsRouteWithChildren = EpicsRoute._addFileChildren(EpicsRouteChildren);
 interface SettingsRouteChildren {
   SettingsAgentsRoute: typeof SettingsAgentsRoute;
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
+  SettingsAppNotificationsRoute: typeof SettingsAppNotificationsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
@@ -527,6 +548,7 @@ interface SettingsRouteChildren {
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
+  SettingsAppNotificationsRoute: SettingsAppNotificationsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,

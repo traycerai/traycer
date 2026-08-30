@@ -213,6 +213,7 @@ function SnapshotDiffTileResolved(props: {
         readonly snapshotLoaded: boolean;
         readonly accumulatedFileChangeSummaries: ChatSessionState["accumulatedFileChangeSummaries"];
         readonly accumulatedSummaryGenerationSeated: ChatSessionState["accumulatedSummaryGenerationSeated"];
+        readonly accumulatedSummaryAssemblyStarted: ChatSessionState["accumulatedSummaryAssemblyStarted"];
         readonly accumulatedFileChangeCount: number;
         readonly windowed: boolean;
       } => ({
@@ -230,6 +231,7 @@ function SnapshotDiffTileResolved(props: {
         accumulatedFileChangeSummaries: s.accumulatedFileChangeSummaries,
         accumulatedSummaryGenerationSeated:
           s.accumulatedSummaryGenerationSeated,
+        accumulatedSummaryAssemblyStarted: s.accumulatedSummaryAssemblyStarted,
         windowed: isWindowedTranscript(s),
       }),
     ),
@@ -239,6 +241,7 @@ function SnapshotDiffTileResolved(props: {
     accumulatedFileChangeCount,
     accumulatedFileChangeSummaries,
     accumulatedSummaryGenerationSeated,
+    accumulatedSummaryAssemblyStarted,
     liveAssistantBlocks,
     messages,
     snapshotLoaded,
@@ -254,6 +257,7 @@ function SnapshotDiffTileResolved(props: {
     hostChangeCount: accumulatedFileChangeCount,
     deliveredSummaryCount: accumulatedFileChangeSummaries.length,
     generationSeated: accumulatedSummaryGenerationSeated,
+    assemblyStarted: accumulatedSummaryAssemblyStarted,
   });
   // How the cumulative kinds address their contents: on the windowed line a
   // row's `digest` is what fetches the file bodies the snapshot no longer
