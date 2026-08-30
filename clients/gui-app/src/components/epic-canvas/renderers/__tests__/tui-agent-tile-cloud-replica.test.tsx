@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
+import type { RenderResult } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
@@ -56,6 +59,8 @@ const tileMocks = vi.hoisted(() => ({
   retryCalls: 0,
   /** What the owner host reports about a running PTY for this agent. */
   hostHasSession: false as boolean | null,
+  /** Every `terminal.kill` the tile dispatched, by session id. */
+  killCalls: [] as { readonly sessionId: string }[],
 }));
 
 vi.mock("@/lib/host", () => {
@@ -98,8 +103,34 @@ vi.mock("@/lib/host-error-toast", () => ({
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
   () => ({
-    HostWorkspaceSelector: () => (
-      <div data-testid="host-workspace-selector">Local</div>
+    // A BUTTON named the way the REAL control is named, not a bare div: these
+    // tests assert the affordance's presence and absence by role, so the
+    // stand-in has to expose the same handle production does.
+    //
+    // `WorkspaceSummaryTrigger` is a `<button>` whose accessible name is its
+    // CONTENT - the binding it renders, "Local" for a local one. That name is
+    // a contract elsewhere (the home suite queries it with anchored regexes
+    // like `/^beta/`), so it is reproduced here rather than improved here.
+    HostWorkspaceSelector: (props: {
+      surface: {
+        onBindingCommitted:
+          | ((changedWorkspacePaths: ReadonlyArray<string>) => void)
+          | null;
+      };
+    }) => (
+      <>
+        <button type="button" data-testid="host-workspace-selector">
+          Local
+        </button>
+        {/* The real control commits a folder change from inside its popover;
+            this is that commit, reduced to the one call the tile sees. */}
+        <button
+          type="button"
+          onClick={() => props.surface.onBindingCommitted?.([])}
+        >
+          Commit workspace binding
+        </button>
+      </>
     ),
     ActiveHostWorkspaceControls: () => null,
   }),
@@ -197,7 +228,16 @@ vi.mock("@/hooks/agent/use-prepare-tui-launch-mutation", () => ({
 
 vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
   useTerminalKillFor: () => ({
-    mutate: vi.fn(),
+    // Recorded on a STABLE spy rather than a fresh `vi.fn()` per render: the
+    // restart path is what the deferred-revalidation case turns on, and a
+    // per-render mock forgets the call the moment the tile re-renders.
+    mutate: (
+      input: { readonly sessionId: string },
+      options: { readonly onSettled: () => void } | undefined,
+    ) => {
+      tileMocks.killCalls.push(input);
+      options?.onSettled();
+    },
   }),
 }));
 
@@ -295,23 +335,25 @@ function withQueryClient(node: ReactNode): ReactNode {
   );
 }
 
-function renderTile(): void {
-  render(
-    withQueryClient(
-      <TuiAgentTile
-        viewTabId="tab-test"
-        node={{
-          id: "agent-1",
-          instanceId: "inst-agent-1",
-          type: "terminal-agent",
-          name: "claude",
-          hostId: "test-host",
-        }}
-        tileId="tile-1"
-        isActive
-      />,
-    ),
+function tileElement(): ReactNode {
+  return (
+    <TuiAgentTile
+      viewTabId="tab-test"
+      node={{
+        id: "agent-1",
+        instanceId: "inst-agent-1",
+        type: "terminal-agent",
+        name: "claude",
+        hostId: "test-host",
+      }}
+      tileId="tile-1"
+      isActive
+    />
   );
+}
+
+function renderTile(): RenderResult {
+  return render(withQueryClient(tileElement()));
 }
 
 /**
@@ -340,6 +382,7 @@ describe("<TuiAgentTile /> cross-host replica", () => {
     tileMocks.hostHasSession = false;
     tileMocks.adoptOnly = null;
     tileMocks.retryCalls = 0;
+    tileMocks.killCalls.length = 0;
     tileMocks.openProps.length = 0;
     tileMocks.prepareCalls.length = 0;
     tileMocks.createCalls.length = 0;
@@ -383,7 +426,7 @@ describe("<TuiAgentTile /> cross-host replica", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId("terminal-agent-pre-launch-toolbar"),
+        screen.getByRole("toolbar", { name: "Terminal agent controls" }),
       ).toBeDefined();
     });
     expect(tileMocks.adoptOnly).toBe(false);
@@ -412,7 +455,7 @@ describe("<TuiAgentTile /> cross-host replica", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId("terminal-agent-pre-launch-toolbar"),
+        screen.getByRole("toolbar", { name: "Terminal agent controls" }),
       ).toBeDefined();
     });
     // Keyed on the COPY, not the test id: the shell and the banner share
@@ -440,7 +483,7 @@ describe("<TuiAgentTile /> cross-host replica", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId("terminal-agent-pre-launch-toolbar"),
+        screen.getByRole("toolbar", { name: "Terminal agent controls" }),
       ).toBeDefined();
     });
     expect(screen.queryByRole("group", { name: "Fork actions" })).toBeNull();
@@ -473,10 +516,74 @@ describe("<TuiAgentTile /> cross-host replica", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId("terminal-agent-pre-launch-toolbar"),
+        screen.getByRole("toolbar", { name: "Terminal agent controls" }),
       ).toBeDefined();
     });
-    expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Local" })).toBeNull();
+  });
+
+  /**
+   * The deferred restart revalidates the origin when it FIRES, not only when
+   * it was armed.
+   *
+   * A rebind committed while the session list is still settling records the
+   * intent and waits; the kill happens later, when `hostHasSession` resolves
+   * to `true`. Those two moments are a round trip apart, and the projection
+   * can be replaced in between - so the row the intent was recorded for is not
+   * necessarily the row the kill would land on.
+   */
+  it("drops a pending restart when the row became a replica before it could fire", async () => {
+    tileMocks.origin = "registry";
+    // `null` - the list is still settling - is what defers rather than kills.
+    tileMocks.hostHasSession = null;
+    const view = renderTile();
+
+    const commit = await screen.findByRole("button", {
+      name: "Commit workspace binding",
+    });
+    fireEvent.click(commit);
+    expect(tileMocks.killCalls).toEqual([]);
+
+    // The row is replaced by a replica before the list settles.
+    tileMocks.origin = "cloud";
+    tileMocks.hostHasSession = true;
+    await act(async () => {
+      view.rerender(withQueryClient(tileElement()));
+      await Promise.resolve();
+    });
+
+    expect(tileMocks.killCalls).toEqual([]);
+
+    // And the intent was CLEARED, not merely skipped: a row that becomes
+    // local again must not inherit a restart nobody asked for a second time.
+    tileMocks.origin = "registry";
+    await act(async () => {
+      view.rerender(withQueryClient(tileElement()));
+      await Promise.resolve();
+    });
+    expect(tileMocks.killCalls).toEqual([]);
+  });
+
+  it("still fires a deferred restart for a row that stayed local", async () => {
+    // The control for the case above: the deferral itself must keep working,
+    // or a rebind committed mid-settle silently loses its restart and the PTY
+    // keeps the old folders.
+    tileMocks.origin = "registry";
+    tileMocks.hostHasSession = null;
+    const view = renderTile();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Commit workspace binding" }),
+    );
+    expect(tileMocks.killCalls).toEqual([]);
+
+    tileMocks.hostHasSession = true;
+    await act(async () => {
+      view.rerender(withQueryClient(tileElement()));
+      await Promise.resolve();
+    });
+
+    expect(tileMocks.killCalls).toEqual([{ sessionId: "agent-1" }]);
   });
 
   it("keeps the workspace affordance on a running registry-origin agent", async () => {
@@ -486,7 +593,7 @@ describe("<TuiAgentTile /> cross-host replica", () => {
     renderTile();
 
     await waitFor(() => {
-      expect(screen.getByTestId("host-workspace-selector")).toBeDefined();
+      expect(screen.getByRole("button", { name: "Local" })).toBeDefined();
     });
   });
 });

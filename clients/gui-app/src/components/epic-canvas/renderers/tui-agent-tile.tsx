@@ -622,6 +622,23 @@ function TuiAgentTileLive(
   }, [agent?.origin, hostHasSession, performRestartKill, retryTerminal]);
   useEffect(() => {
     if (!pendingRestartRef.current) return;
+    // REVALIDATED HERE, not just where the intent was armed. The arm and the
+    // fire are separated by a round trip (`terminal.list` settling), and the
+    // projection can be replaced in between - so an intent recorded while this
+    // row was local must not fire against a row that is now a replica, whose
+    // PTY belongs to another machine.
+    //
+    // Today the ref can only be armed for a non-cloud row and a live
+    // registry row does not become a replica (the list union suppresses a
+    // cloud copy of an id this host holds), so this is unreachable in the
+    // shipped app. It is here because the invariant belongs at the point of
+    // EXECUTION: the arming guard protects the decision, this one protects the
+    // act, and only the second one is still true if a later edit moves the
+    // arming.
+    if (!mayRestartAfterWorkspaceBindingChange(agent?.origin ?? null)) {
+      pendingRestartRef.current = false;
+      return;
+    }
     if (hostHasSession === true) {
       // Session confirmed live → kill + recreate against the new binding.
       pendingRestartRef.current = false;
@@ -632,7 +649,7 @@ function TuiAgentTileLive(
       pendingRestartRef.current = false;
     }
     // `null`: list still settling, keep waiting.
-  }, [hostHasSession, performRestartKill]);
+  }, [agent?.origin, hostHasSession, performRestartKill]);
   // Lift the suppression once the recreated PTY is back (`hostHasSession`
   // cycles false → true), or the relaunch errored (the body then renders the
   // inline error, not the live host). Ref assignments only - no setState - so a
@@ -1072,6 +1089,8 @@ function TerminalAgentPreLaunchToolbar(
     <div
       className="flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-canvas-border/70 px-3 py-1.5"
       data-testid="terminal-agent-pre-launch-toolbar"
+      role="toolbar"
+      aria-label="Terminal agent controls"
     >
       {/* NO WORKSPACE AFFORDANCE for a cross-host replica, on the same
           reasoning as the fork block below - absent, not disabled.
