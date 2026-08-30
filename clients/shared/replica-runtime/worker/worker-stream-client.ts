@@ -25,7 +25,7 @@ import type {
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
-import type { WorkerToMainEvent } from "./bridge-protocol";
+import type { StreamProxyWorkerEvent } from "./bridge-protocol";
 import {
   parseStreamProxyFrame,
   type StreamProxyFrame,
@@ -33,9 +33,17 @@ import {
 } from "./stream-proxy-protocol";
 import { takeBytesForTransfer, NO_TRANSFER } from "./transferable-bytes";
 
-/** What the client needs from its owner to put an event on the wire. */
+/**
+ * What the client needs from its owner to put an event on the wire.
+ *
+ * The NARROWED family, not the whole worker->main union. This client produces
+ * exactly the five `stream/*` kinds and nothing else, so the wide type was
+ * over-declaration - and not harmless: it is what let an owner hand the
+ * proxy host un-narrowed events, which is the reason that host carried a
+ * `default` arm swallowing anything it did not recognise.
+ */
 export type StreamProxyEmit = (
-  event: WorkerToMainEvent,
+  event: StreamProxyWorkerEvent,
   transfer: readonly ArrayBuffer[],
 ) => void;
 

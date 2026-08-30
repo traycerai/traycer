@@ -21,7 +21,10 @@
 import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
 import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { MainToWorkerEvent, WorkerToMainEvent } from "./bridge-protocol";
+import type {
+  MainToWorkerEvent,
+  StreamProxyWorkerEvent,
+} from "./bridge-protocol";
 import {
   EPIC_WORKER_STREAM_METHODS,
   OPEN_PARAMS_PARSERS,
@@ -37,8 +40,28 @@ export type StreamProxyPush = (
 ) => void;
 
 export interface StreamProxyHost {
-  /** Applies one worker->main stream event. Unknown ids are dropped. */
-  handle(event: WorkerToMainEvent): boolean;
+  /**
+   * Applies one worker->main stream event. Unknown ids are dropped.
+   *
+   * Takes the NARROWED family rather than the whole union, and answers
+   * nothing. Both halves are load-bearing and were both wrong before:
+   *
+   * The parameter is the type-level guarantee. With the full union this switch
+   * needed a `default` arm, which absorbed any future `stream/*` member
+   * silently - the opposite of the main->worker direction, where every kind is
+   * named and `assertNever` makes an unhandled one a COMPILE error. Now a new
+   * member fails here until it is handled, and "is this event mine" is
+   * answered by {@link isStreamProxyEvent} at the one place that peels.
+   *
+   * `void` because the old `boolean` was a lie by omission: it reported
+   * handled/dropped and its only caller discarded it, so a dropped event was
+   * indistinguishable from a delivered one anywhere it mattered - on the same
+   * boundary whose `onReject` is documented as required precisely because a
+   * silent drop reads as a quiet host. The remaining drops are the ones that
+   * are correct by construction (an id this host no longer holds, a frame
+   * after disposal), and a rejected FRAME still goes to `onReject`.
+   */
+  handle(event: StreamProxyWorkerEvent): void;
   /** Closes every real session this host opened. Idempotent. */
   dispose(): void;
   /** How many real sessions are open. For the leak pin. */
@@ -136,14 +159,14 @@ export function createStreamProxyHost(
   }
 
   return {
-    handle(event): boolean {
-      if (disposed) return false;
+    handle(event): void {
+      if (disposed) return;
       switch (event.kind) {
         case "stream/open": {
           const { streamId, method, params, withParamsProvider } = event.open;
           if (!isCarriedMethod(method)) {
             refuseUnknownMethod(streamId, method);
-            return true;
+            return;
           }
           // Raw is held, parsed is handed over: the provider re-parses each
           // time, so a pushed params value is validated on the same path as the
@@ -160,45 +183,45 @@ export function createStreamProxyHost(
             : streams.subscribe(method, OPEN_PARAMS_PARSERS[method](params));
           sessions.set(streamId, session);
           wire(streamId, session);
-          return true;
+          return;
         }
         case "stream/params": {
           // A params push for a stream this host no longer holds is dropped -
           // the worker closed it, or an older generation is still draining.
-          if (!sessions.has(event.params.streamId)) return false;
+          if (!sessions.has(event.params.streamId)) return;
           heldParams.set(event.params.streamId, event.params.params);
-          return true;
+          return;
         }
         case "stream/send": {
           const parsed = parseStreamProxyFrame(event.frame);
           if (!parsed.ok) {
             onReject(`stream/send rejected: ${parsed.reason}`);
-            return false;
+            return;
           }
           const session = sessions.get(parsed.frame.streamId);
-          if (session === undefined) return false;
+          if (session === undefined) return;
           session.sendClientFrame(
             parsed.frame.envelope,
             parsed.frame.binaryPayload,
           );
-          return true;
+          return;
         }
         case "stream/reconnect": {
           const session = sessions.get(event.stream.streamId);
-          if (session === undefined) return false;
+          if (session === undefined) return;
           session.requestReconnect();
-          return true;
+          return;
         }
         case "stream/close": {
           const session = sessions.get(event.stream.streamId);
-          if (session === undefined) return false;
+          if (session === undefined) return;
           sessions.delete(event.stream.streamId);
           heldParams.delete(event.stream.streamId);
           session.close();
-          return true;
+          return;
         }
         default:
-          return false;
+          assertNever(event);
       }
     },
     dispose(): void {
@@ -230,4 +253,17 @@ export function createStreamProxyHost(
     },
     openCount: () => sessions.size,
   };
+}
+
+/**
+ * The unhandled-member throw behind the switch's `default`.
+ *
+ * Unreachable in production rather than merely unlikely: both ends of this
+ * bridge ship in ONE module graph, so a peer cannot construct a `stream/*`
+ * kind this build does not know. Its job is at compile time - the parameter
+ * `never` is what turns an unhandled member into a type error - and the throw
+ * exists only so the arm is not empty.
+ */
+function assertNever(value: never): never {
+  throw new Error(`Unhandled stream proxy event ${JSON.stringify(value)}`);
 }

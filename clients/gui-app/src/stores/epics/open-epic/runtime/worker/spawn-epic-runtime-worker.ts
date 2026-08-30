@@ -48,6 +48,7 @@ import {
   type RuntimeWorkerLogEntry,
   type RuntimeCommand,
   type WorkerToMainEvent,
+  isStreamProxyEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import {
   NO_TRANSFER,
@@ -301,20 +302,18 @@ export function spawnEpicRuntimeWorker<TProjection>(
     },
   });
 
-  /**
-   * The stream-proxy family, recognised as ONE thing.
-   *
-   * Lifted out of the switch below because `complexity` counts case labels:
-   * five of them sharing a single one-line body pushed that dispatch over the
-   * cap while adding no decision a reader has to follow. A named predicate
-   * says what the five have in common, which the labels never did.
-   */
-  const isStreamProxyEvent = (
-    event: WorkerToMainEvent,
-  ): event is Extract<WorkerToMainEvent, { kind: `stream/${string}` }> =>
-    event.kind.startsWith("stream/");
-
   const unsubscribeEvents = bridge.onEvent((event: WorkerToMainEvent) => {
+    // The stream-proxy family, recognised as ONE thing, and peeled here rather
+    // than given five labels in the switch below: `complexity` counts case
+    // labels, and five sharing a one-line body pushed this dispatch over the
+    // cap while adding no decision a reader has to follow.
+    //
+    // The predicate is IMPORTED rather than declared here, and that is the
+    // whole point of this peel now: it is the same rule the proxy host's
+    // parameter type states, so the two cannot disagree. It used to live here
+    // as a local `Extract`, which meant main decided the family by prefix while
+    // the host decided it by five case labels plus a `default` that swallowed
+    // everything else - two lists, one of them checked.
     if (isStreamProxyEvent(event)) {
       // Every unknown id is dropped inside the host, silently and on purpose:
       // a frame can be in flight when a session closes, and a throw here is an

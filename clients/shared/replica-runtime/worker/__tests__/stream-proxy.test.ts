@@ -25,6 +25,7 @@ import {
 } from "../bridge-endpoint";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
+  isStreamProxyEvent,
   isWorkerToMainFrame,
   MAIN_CALL_KINDS,
   RUNTIME_WORKER_CALL_KINDS,
@@ -74,7 +75,13 @@ function connect() {
   );
 
   mainBridge.onEvent((event) => {
-    host.handle(event);
+    // The SAME peel main does in `spawn-epic-runtime-worker.ts`, through the
+    // same imported predicate. This rig used to forward the whole worker->main
+    // union and lean on the host's `default` arm to ignore what was not its
+    // own - so it exercised `handle` on inputs production never delivers, and
+    // it is the reason that arm looked load-bearing. The host now takes the
+    // narrowed family, and this line is where the rig earns it.
+    if (isStreamProxyEvent(event)) host.handle(event);
   });
   workerBridge.onEvent((event) => {
     switch (event.kind) {
@@ -486,7 +493,14 @@ describe("stream proxy — messages for something that is gone", () => {
     const { recording, host } = connect();
 
     // Never opened on this host - an older worker generation still draining.
-    expect(
+    //
+    // Asserted on what is OBSERVABLE, now that `handle` answers nothing. The
+    // retired `toBe(false)` looked like the stronger pin and was the weaker
+    // one: its failure mode was "returned true", which no caller read. What
+    // production actually requires is that an unknown id neither throws - a
+    // throw here is an unhandled error inside a `message` listener, with no
+    // route back to anyone - nor mints a session.
+    expect(() => {
       host.handle({
         kind: "stream/send",
         frame: {
@@ -494,11 +508,9 @@ describe("stream proxy — messages for something that is gone", () => {
           envelope: { kind: "update", hasBinaryPayload: false },
           binaryPayload: null,
         },
-      }),
-    ).toBe(false);
-    expect(
-      host.handle({ kind: "stream/close", stream: { streamId: 99 } }),
-    ).toBe(false);
+      });
+      host.handle({ kind: "stream/close", stream: { streamId: 99 } });
+    }).not.toThrow();
     expect(recording.opened()).toHaveLength(0);
   });
 });
@@ -593,8 +605,12 @@ describe("stream proxy — disposal", () => {
         event.kind === "stream/status" && event.status.status === "closed",
     );
     expect(closes).toHaveLength(3);
-    // A frame arriving after disposal hits the same drop rule.
-    expect(
+    // A frame arriving after disposal hits the same drop rule. With `handle`
+    // answering nothing, the observable claim is stronger than the retired
+    // `toBe(false)`: a post-disposal frame must reach neither a session nor
+    // the worker, so NOTHING new may appear on the outbound queue.
+    const settled = toWorker.length;
+    expect(() =>
       host.handle({
         kind: "stream/send",
         frame: {
@@ -603,7 +619,8 @@ describe("stream proxy — disposal", () => {
           binaryPayload: null,
         },
       }),
-    ).toBe(false);
+    ).not.toThrow();
+    expect(toWorker).toHaveLength(settled);
   });
 
   it("closes the worker's own sessions and tells main about each", () => {

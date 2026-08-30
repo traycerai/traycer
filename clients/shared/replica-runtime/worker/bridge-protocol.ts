@@ -775,6 +775,40 @@ export const WORKER_TO_MAIN_EVENT_KINDS: readonly WorkerToMainEvent["kind"][] =
   );
 
 /**
+ * The stream-proxy family of worker->main events, as ONE type.
+ *
+ * These five are the only members `stream-proxy-host` serves, and the only
+ * ones `worker-stream-client` produces. Naming the family is what lets both
+ * ends declare it instead of taking the whole union and sorting at runtime -
+ * and taking the whole union is how the gap below opened.
+ */
+export type StreamProxyWorkerEvent = Extract<
+  WorkerToMainEvent,
+  { kind: `stream/${string}` }
+>;
+
+/**
+ * Recognises the family, ONE definition for every consumer.
+ *
+ * It lives here rather than beside either end because both ends need it and a
+ * second copy is the "two lists, one checked" shape: main peeling by prefix
+ * while the host switched on five labels meant the two could disagree with
+ * nothing to catch it.
+ *
+ * Why a prefix test rather than a membership check against a coverage record:
+ * the family is defined BY the prefix at type level ({@link
+ * StreamProxyWorkerEvent} is a template-literal `Extract`), so the runtime test
+ * and the type-level one are the same rule stated twice in the same place. A
+ * new `stream/*` member joins both at once - and now, unlike before, it also
+ * fails to compile in the host's exhaustive switch until it is handled.
+ */
+export function isStreamProxyEvent(
+  event: WorkerToMainEvent,
+): event is StreamProxyWorkerEvent {
+  return event.kind.startsWith("stream/");
+}
+
+/**
  * Every call the main thread may issue, paired with its answer.
  *
  * One map rather than two parallel unions so a request and its response cannot
