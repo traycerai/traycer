@@ -190,12 +190,13 @@ export type RuntimeAccountingSettlement =
  *
  * Deliberately scalar, and deliberately minimal. `hostId`/`userId` rode here
  * while the plan was to move the socket; with the transport on main nothing in
- * the worker reads either, and a field nobody reads is the design-by-accident
+ * the worker read either, and a field nobody reads is the design-by-accident
  * this bridge keeps deleting. The rule that replaced them is the one `epicId`
- * below satisfies: a field returns WITH a reader, named at the field.
+ * and `hostId` below satisfy: a field returns WITH a reader, named at the
+ * field.
  *
- * `hostId` remains absent and remains without a reader - 4e moved holder-id
- * composition to main, so nothing in the worker names a holder.
+ * `hostId` is back under exactly that rule; its reader is named at the field.
+ * `userId` remains absent and remains without a reader.
  */
 export interface RuntimeWorkerBootstrap {
   readonly protocolVersion: number;
@@ -208,11 +209,30 @@ export interface RuntimeWorkerBootstrap {
    * later because the composition is what every subsequent frame is answered
    * by. One worker serves one epic, so this is a constant of the worker rather
    * than a parameter of its traffic.
-   *
-   * `hostId` is still absent and still has no reader: 4e moved holder-id
-   * composition to main, so nothing in here names a holder.
    */
   readonly epicId: string;
+  /**
+   * The host this session is bound to, for its whole life.
+   *
+   * Back, WITH a reader, under the condition this interface's doc set when
+   * `hostId` was removed. **The reader is the write-command send gate**:
+   * `epic-replica-runtime.ts`'s queue reads `writeCommandSender.currentHostId()`
+   * and refuses with `EpicWriteCommandTransportUnavailableError` when it is
+   * null, BEFORE calling `send`. While the worker had no host id it answered
+   * null unconditionally, so every write command a worker-hosted runtime
+   * enqueued stalled in `queued` forever - rename, delete, reparent, epic
+   * title, all of them. That is the reader, and it is why the field is not
+   * optional.
+   *
+   * It is also the attribution key: the queue records
+   * `attemptedHostByCommandId` from this value, which is what a retry reads to
+   * know where the previous attempt went.
+   *
+   * A BOOTSTRAP fact rather than a per-call parameter because it is a session
+   * constant - a tab is bound to its `hostId` for life, and cross-host
+   * continuation is clone-not-migrate, so a worker never serves two hosts.
+   */
+  readonly hostId: string;
   /**
    * Identifies this renderer window in log lines the worker emits.
    *

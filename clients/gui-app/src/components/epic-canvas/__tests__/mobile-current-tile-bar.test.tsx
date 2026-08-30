@@ -1,5 +1,11 @@
 import "../../../../__tests__/test-browser-apis";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
@@ -227,12 +233,16 @@ describe("<MobileCurrentTileBar />", () => {
     );
   });
 
-  it("commits an edited title through the rename mutation, keyed to the tile kind", () => {
+  it("commits an edited title through the rename mutation, keyed to the tile kind", async () => {
     render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
     const input = openEdit();
     fireEvent.change(input, { target: { value: "New title" } });
     fireEvent.blur(input);
-    expect(mutateSpies.renameChat).toHaveBeenCalledTimes(1);
+    // AWAITED: the commit stamps the overlay through the worker's queue first,
+    // so the mutation fires a round trip after the blur rather than inside it.
+    await waitFor(() =>
+      expect(mutateSpies.renameChat).toHaveBeenCalledTimes(1),
+    );
     expect(mutateSpies.renameChat).toHaveBeenCalledWith({
       epicId: "epic-1",
       chatId: "chat-1",

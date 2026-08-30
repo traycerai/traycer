@@ -3938,7 +3938,7 @@ describe("chat row archive", () => {
 
   // --- rename settles the editor on COMMIT, not on the ack ----------------
 
-  it("closes the rename input on commit while the rename RPC is still in flight", () => {
+  it("closes the rename input on commit while the rename RPC is still in flight", async () => {
     seedChatTree();
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
@@ -3956,8 +3956,15 @@ describe("chat row archive", () => {
       "chat-root",
       "Renamed while in flight",
     );
-    expect(testState.renameChatMutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Renamed while in flight" }),
+    // AWAITED: `beginRenameMutation` is a bridge round trip, so the RPC it
+    // gates is issued a microtask after the key event rather than inside it.
+    // The stamp assertion above still reads synchronously - that call IS made
+    // on the event - which is what makes this a delivery boundary rather than
+    // a wholesale change of when the commit starts.
+    await waitFor(() =>
+      expect(testState.renameChatMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Renamed while in flight" }),
+      ),
     );
     expect(testState.retirePendingMutation).not.toHaveBeenCalled();
     expect(
@@ -3965,7 +3972,7 @@ describe("chat row archive", () => {
     ).toBeNull();
   });
 
-  it("issues a second rename committed while the first is still in flight", () => {
+  it("issues a second rename committed while the first is still in flight", async () => {
     seedChatTree();
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
@@ -3998,7 +4005,10 @@ describe("chat row archive", () => {
       "chat-root",
       "Second title",
     );
-    expect(testState.renameChatMutateAsync).toHaveBeenCalledTimes(2);
+    // AWAITED for the reason the in-flight pin above states.
+    await waitFor(() =>
+      expect(testState.renameChatMutateAsync).toHaveBeenCalledTimes(2),
+    );
     expect(testState.renameChatMutateAsync).toHaveBeenLastCalledWith(
       expect.objectContaining({ title: "Second title" }),
     );

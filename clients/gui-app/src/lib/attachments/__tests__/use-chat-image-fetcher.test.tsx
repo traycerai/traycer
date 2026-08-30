@@ -180,10 +180,11 @@ describe("useChatImageFetcher", () => {
     await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
       DOC_BYTES,
     );
-    expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(
-      HASH,
-      expect.any(AbortSignal),
-    );
+    // ONE argument, no signal. `readHeldEpicAttachmentBytes` says why at its
+    // own site: "there is nothing to abort. The waiting is what a signal
+    // bounded, and this leg does not wait." A pin still demanding a signal is
+    // asserting the pre-relocation shape of a call that deliberately lost it.
+    expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(HASH);
   });
 
   it("never calls the indefinitely-waiting doc read without a presence hit", async () => {
@@ -193,8 +194,19 @@ describe("useChatImageFetcher", () => {
     await expect(bytesOnce(scopeValue("host-1", true))).rejects.toThrow(
       /unavailable/,
     );
-    expect(docMocks.hasAttachmentBytes).toHaveBeenCalledWith(HASH);
-    expect(docMocks.readAttachmentBytes).not.toHaveBeenCalled();
+    // The PROPERTY survives; the mechanism it used to name does not. This leg
+    // was guarded by a separate `hasAttachmentBytes` pre-check, and the guard
+    // moved INTO the worker - `readAttachmentBytes` answers `null` for a hash
+    // the replica does not hold rather than waiting for one to arrive, so
+    // there is one call where there were two, and main no longer calls the
+    // predicate at all. Asserting the old pre-check here would pin a
+    // construction that was deleted on purpose.
+    //
+    // What must stay true is what the test's NAME claims: the caller never
+    // parks. The rejection above is that, and this is the read that answered
+    // null to produce it.
+    expect(docMocks.hasAttachmentBytes).not.toHaveBeenCalled();
+    expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(HASH);
   });
 
   it("propagates a transient RPC failure so the blob cache retries it", async () => {

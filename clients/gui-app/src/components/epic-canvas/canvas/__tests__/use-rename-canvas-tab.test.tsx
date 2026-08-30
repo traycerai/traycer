@@ -1109,8 +1109,13 @@ describe("useRenameCanvasTab", () => {
     });
 
     // Confirms the chain actually died: nothing left to retire.
+    //
+    // AWAITED: `retirePendingMutation` is a bridge round trip now, so the bare
+    // call is a `Promise` - and a promise is not `false`, which is exactly what
+    // this read asserts. Left unawaited the assertion compares a Promise to
+    // `false` and can only fail.
     expect(
-      handle.store.getState().retirePendingMutation(requestId, "landed"),
+      await handle.store.getState().retirePendingMutation(requestId, "landed"),
     ).toBe(false);
 
     // The RPC's own success arm runs now. Under the old CHAIN-based guard
@@ -1191,8 +1196,13 @@ describe("useRenameCanvasTab", () => {
     });
 
     // Confirms the chain actually died: nothing left to retire.
+    //
+    // AWAITED: `retirePendingMutation` is a bridge round trip now, so the bare
+    // call is a `Promise` - and a promise is not `false`, which is exactly what
+    // this read asserts. Left unawaited the assertion compares a Promise to
+    // `false` and can only fail.
     expect(
-      handle.store.getState().retirePendingMutation(requestId, "landed"),
+      await handle.store.getState().retirePendingMutation(requestId, "landed"),
     ).toBe(false);
 
     await act(async () => {

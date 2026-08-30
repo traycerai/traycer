@@ -698,6 +698,11 @@ export function EpicSessionProvider(
           },
         },
         epicId,
+        // The host this session was established against, which is the same
+        // value the accounting port is built with above. The worker's
+        // write-command queue reads it as its send gate - see
+        // `RuntimeWorkerBootstrap.hostId`.
+        hostId: targetHostId,
         windowLabel: epicId,
       });
 

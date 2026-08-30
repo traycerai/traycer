@@ -151,6 +151,14 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
   readonly accounting: EpicRuntimeAccountingPort;
   /** The epic this worker serves for its whole life. */
   readonly epicId: string;
+  /**
+   * The host this session is bound to, for its whole life.
+   *
+   * Rides the bootstrap because the write-command send gate reads it - see
+   * `RuntimeWorkerBootstrap.hostId`, which names that reader and the defect
+   * its absence caused.
+   */
+  readonly hostId: string;
   readonly windowLabel: string;
 }
 
@@ -362,6 +370,7 @@ export function spawnEpicRuntimeWorker<TProjection>(
       bootstrap: {
         protocolVersion: RUNTIME_BRIDGE_PROTOCOL_VERSION,
         epicId: options.epicId,
+        hostId: options.hostId,
         windowLabel: options.windowLabel,
       },
     },

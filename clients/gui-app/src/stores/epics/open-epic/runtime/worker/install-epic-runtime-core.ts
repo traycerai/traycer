@@ -206,10 +206,23 @@ export function installEpicRuntimeCore(
       onAuthError: null,
       commandIdFactory: { next: () => crypto.randomUUID() },
       writeCommandSender: {
-        // The worker does not know which host is active - 4e left host
-        // identity on main. `null` is the honest answer, and the send below is
-        // what actually fails or succeeds.
-        currentHostId: () => null,
+        // The BOOTSTRAP's host id, which this session is bound to for life.
+        //
+        // This returned `null` unconditionally, under the comment "`null` is
+        // the honest answer, and the send below is what actually fails or
+        // succeeds." The second half was false, and it is the whole defect:
+        // `epic-replica-runtime.ts`'s send gate reads this value and throws
+        // `EpicWriteCommandTransportUnavailableError` when it is null BEFORE
+        // reaching `send`, so "the send below" was unreachable and every write
+        // command a worker-hosted runtime enqueued - rename, delete, reparent,
+        // epic title - sat in `queued` forever.
+        //
+        // Worth naming as a shape rather than a one-off: the comment reasoned
+        // correctly about its OWN module (the worker genuinely did not know the
+        // host) and was wrong about the consequence, because the code that
+        // decides lives one layer up. A claim about what happens NEXT cannot be
+        // verified from inside the module that makes it.
+        currentHostId: () => facts.hostId,
         async send(commandId, intent) {
           const outcome = await host.main.call("main/write-command", {
             commandId,

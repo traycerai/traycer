@@ -222,6 +222,11 @@ export function openStoreForTest(
       },
     },
     epicId: options.epicId,
+    // The SAME host id the accounting port above is built with, not a second
+    // literal: the worker's write-command queue reads this as its send gate,
+    // and a harness whose two halves named different hosts would attribute
+    // commands to a host its own books never charged.
+    hostId: "test-host",
     windowLabel: "test-window",
   });
 

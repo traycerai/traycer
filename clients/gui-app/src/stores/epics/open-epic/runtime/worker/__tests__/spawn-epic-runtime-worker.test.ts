@@ -64,6 +64,7 @@ function spawnOptions<TProjection>(
           boundedRetry: false,
         },
       }),
+    hostId: "host-1",
     windowLabel: "window-1",
     body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
   };

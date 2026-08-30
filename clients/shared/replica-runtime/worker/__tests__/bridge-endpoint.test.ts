@@ -266,7 +266,15 @@ describe("the body calls, with nothing behind them", () => {
         },
         NO_TRANSFER,
       ),
-    ).resolves.toEqual({ accepted: false, settledBytes: 0 });
+      // `reason` is a REQUIRED field of the demote response and the stub has
+      // answered `"not-held"` since the pinned-refusal ruling; this assertion
+      // was never moved with it. `toEqual` is exact on extra keys, so the pin
+      // has been red since that commit - production was right the whole time.
+    ).resolves.toEqual({
+      accepted: false,
+      settledBytes: 0,
+      reason: "not-held",
+    });
   });
 
   it("answers a materialize with no body as a null doc key", async () => {
@@ -282,6 +290,11 @@ describe("the body calls, with nothing behind them", () => {
       docGuid: null,
       seedMode: "full",
       hostStateVector: null,
+      // Same staleness as the demote pin above: peer presence started riding
+      // the materialize response in `f49810ed` and the stub carries it, so the
+      // not-held arm answers an empty list rather than omitting the field.
+      // Empty, not absent - there is no body here, so there is nobody in it.
+      awarenessFrames: [],
     });
   });
 });

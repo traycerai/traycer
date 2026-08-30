@@ -106,6 +106,7 @@ function bootstrapFrame(protocolVersion: number): unknown {
       bootstrap: {
         protocolVersion,
         epicId: "boot-probe-epic",
+        hostId: "boot-probe-host",
         windowLabel: "boot-probe",
       },
     },

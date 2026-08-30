@@ -204,6 +204,15 @@ describe("the bridge vocabulary and its version", () => {
     expect(RUNTIME_WORKER_CALL_KINDS).toEqual([
       "attachment/read",
       "body/materialize",
+      // `body/release` reached the vocabulary in `38b903ca` ("body/release
+      // forward-only lifecycle both sides") and this pin was not moved with it.
+      // It stayed red from that commit until the gate ran the shared suites
+      // again - the pin worked exactly as designed and nobody was reading it,
+      // which is the same failure mode as the `mutation/apply` gap the comment
+      // above records. The rule the pin exists to enforce is that BOTH pins
+      // move on every vocabulary change; the rule that was actually missing is
+      // that the shared suite gets run.
+      "body/release",
       "body/demote",
       "body/update",
       "mutation/apply",

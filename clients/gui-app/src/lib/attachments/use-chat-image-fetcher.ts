@@ -136,12 +136,15 @@ async function readChatAttachmentFromHost(
 /**
  * The legacy leg: the epic Y.Doc's content-addressed `attachments` map.
  *
- * Guarded by `hasAttachmentBytes`, and the guard is not optional.
- * `readAttachmentBytes` waits INDEFINITELY for a hash the local replica does
- * not hold - it is built for a doc-resident image that is still syncing - so
- * calling it unguarded here would park the chain forever on exactly the case
- * the chat-plane leg above is supposed to own, and the blob cache would never
- * retry the leg that could actually succeed.
+ * Guarded, and the guard is not optional - but it is no longer a separate
+ * `hasAttachmentBytes` pre-check on this side. The guard moved INTO the worker
+ * (`epic-replica-reads.ts`'s `readHeldEpicAttachmentBytes`), which answers
+ * `null` for a hash the replica does not hold rather than waiting for one to
+ * arrive. Before that, an unguarded read parked the chain forever on exactly
+ * the case the chat-plane leg above is supposed to own, and the blob cache
+ * never retried the leg that could actually succeed. One call now carries both
+ * halves, which is why the predicate stopped being a thing a caller can
+ * forget.
  *
  * Answers `mediaType: null`: the doc map holds raw bytes with no sniffed
  * header, so this leg has no verdict of its own and the caller's declared type

@@ -50,6 +50,7 @@ function bootstrap(protocolVersion: number): {
     bootstrap: {
       protocolVersion,
       epicId: "epic-under-test",
+      hostId: "host-under-test",
       windowLabel: "test-window",
     },
   };

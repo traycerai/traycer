@@ -418,14 +418,18 @@ describe("useSwitcherRename", () => {
     unmount();
   });
 
-  it("routes a chat rename through beginRenameMutation and the chat mutation", () => {
+  it("routes a chat rename through beginRenameMutation and the chat mutation", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
     const chatId = createArtifactInDocForTests(handle.doc, "chat", null);
     const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
 
-    act(() => {
+    // AWAITED: the overlay stamp is minted by the worker's queue, so the
+    // mutation fires only after that round trip resolves. A synchronous `act`
+    // here asserts on a chain still in flight and reads an empty call list.
+    await act(async () => {
       result.current("chat", chatId, "New chat name");
+      await flushMicrotasks();
     });
 
     expect(mocks.chatCalls).toEqual([{ chatId, title: "New chat name" }]);
@@ -434,7 +438,7 @@ describe("useSwitcherRename", () => {
     unmount();
   });
 
-  it("a REGISTRY-backed terminal-agent rename routes through beginRenameMutation and the tui-agent mutation", () => {
+  it("a REGISTRY-backed terminal-agent rename routes through beginRenameMutation and the tui-agent mutation", async () => {
     const handle = newSession();
     mocks.handle.current = handle;
     // A registry row (docResident: false) is what routes to the RPC; a
@@ -472,8 +476,10 @@ describe("useSwitcherRename", () => {
     );
     const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
 
-    act(() => {
+    // AWAITED for the same reason the chat arm above is.
+    await act(async () => {
       result.current("terminal-agent", "agent-1", "New agent name");
+      await flushMicrotasks();
     });
 
     expect(mocks.tuiCalls).toEqual([
