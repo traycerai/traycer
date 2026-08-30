@@ -139,6 +139,27 @@ interface AvailabilityArm {
   /** Drop and restore the sockets, keeping the replica - the retained handle. */
   cycleTransport(): void;
   /**
+   * Put this arm back in a position to be told a GIVEN-UP body is serving.
+   *
+   * The one place the two arms legitimately differ, so it is named here rather
+   * than smuggled into a row. On `@1` nothing is needed - a room that went
+   * `unavailable` announces itself `ready` again on the same stream, and the
+   * legacy driver's implementation is an explicit no-op saying exactly that.
+   *
+   * A body LANE cannot do that, and not because of any choice this client
+   * made: `terminal: true` means "no later frame arrives on this subscription"
+   * (`artifact-subscribe.ts`), so the announcement has to come from a NEW
+   * subscription. Only a control-plane edge may open one - see
+   * `lane-body-terminal-refusal-recovery.test.ts` for why a projection push
+   * must not.
+   *
+   * This asymmetry is the equivalence table doing its job. Before the terminal
+   * refusal was scoped, the lanes layer kept routing frames from a subscription
+   * the wire had declared dead, and this row passed by relying on that - a
+   * sequence no host could ever produce.
+   */
+  reopenAfterGivingUp(): void;
+  /**
    * The host refuses a lane this arm requires, or `null` when the arm has no
    * such lane to refuse.
    *
@@ -211,6 +232,12 @@ function createLegacyArm(): AvailabilityArm {
       live().onConnectionStatus("reconnecting", null);
       live().onConnectionStatus("open", null);
     },
+    // NOTHING, and deliberately not "unimplemented". A `@1` room that went
+    // unavailable can be called ready again on the same stream, with no
+    // precondition at all - so the honest legacy implementation of "put this
+    // arm back in a position to be told" is to do nothing, and the row below
+    // runs the identical call sequence it always has.
+    reopenAfterGivingUp: () => {},
     // `@1` has no lanes, so nothing to refuse. See the field's own doc.
     refuseRequiredLane: null,
     legacyOpenCount: () => 1,
@@ -240,6 +267,8 @@ function statusSnapshot(): EpicStatusSnapshotFrame {
 function createLaneArm(): AvailabilityArm {
   let statusCallbacks: EpicStatusStreamCallbacks | null = null;
   let bodyCallbacks: ArtifactStreamCallbacks | null = null;
+  /** How many `artifact.subscribe` opens this arm has made, ever. */
+  let bodySubscribes = 0;
   let releaseLease: (() => void) | null = null;
   let legacyMayOpen = false;
   let legacyOpens = 0;
@@ -252,6 +281,12 @@ function createLaneArm(): AvailabilityArm {
     close: () => undefined,
   });
   const artifactFactory: ArtifactStreamClientFactory = ({ callbacks: cbs }) => {
+    bodySubscribes += 1;
+    // RE-CAPTURED on every open, not latched on the first. A reattach hands the
+    // arm a fresh subscription, and the previous callbacks belong to a
+    // generation the adapter now drops - so a driver holding the first set
+    // would drive frames into a void and read the resulting stale value as the
+    // system's answer.
     bodyCallbacks = cbs;
     return {
       applyUpdate: () => undefined,
@@ -353,9 +388,42 @@ function createLaneArm(): AvailabilityArm {
     reportGivenUp: () => unavailable(true),
     reportRetrying: () => unavailable(false),
     cycleTransport(): void {
+      // The BODY lane's own socket, which is what the row using this is about:
+      // the retained handle across a drop. Deliberately not the control lane -
+      // that is a different stimulus with a different meaning, and it has its
+      // own member below.
       liveBody().onConnectionStatus("reconnecting", null);
       liveBody().onConnectionStatus("open", null);
       if (releaseLease === null) throw new Error("no lease was taken");
+    },
+    reopenAfterGivingUp(): void {
+      if (statusCallbacks === null) throw new Error("no status client");
+      // THE CONTROL LANE, and it has to be this one. The body's subscription is
+      // terminal, so its callbacks are a detached generation the adapter drops
+      // on the floor - driving them would prove nothing while looking like it
+      // proved something. The control lane is the one still standing, which is
+      // also why the arm reads the reconnect edge off it.
+      //
+      // Two calls because the edge is a TRANSITION: only a move into `"open"`
+      // from a known not-open ends the world a terminal refusal was scoped to,
+      // and a first `"open"` is not a reconnect.
+      const before = bodySubscribes;
+      statusCallbacks.onConnectionStatus("reconnecting", null);
+      statusCallbacks.onConnectionStatus("open", null);
+      // The lease is still held, so the reattach has a demand to satisfy - if
+      // it did not, this would pass for the wrong reason.
+      if (releaseLease === null) throw new Error("no lease was taken");
+      // AND THE REATTACH REALLY HAPPENED. Asserted in the driver rather than
+      // left to the row, because it is arm-specific and because without it the
+      // row can pass vacuously: if no new subscription opened, `liveBody()`
+      // would hand back the terminal generation's callbacks, the `doc` frame
+      // that follows would be dropped unseen, and the row would fail with a
+      // stale availability rather than naming the reattach that never came.
+      if (bodySubscribes <= before) {
+        throw new Error(
+          `the reconnect edge opened no new body subscription (still ${String(bodySubscribes)})`,
+        );
+      }
     },
     refuseRequiredLane(): void {
       // Falling back to `@1` IS the accepted answer here, so the guard is
@@ -447,6 +515,14 @@ describe.each(ARMS)("body availability is identical on $name", ({ build }) => {
     // Transitions, not just resting values. The `@1` host emits on
     // TRANSITION and the body lane emits on recovery, so an arm that latched
     // its first answer would pass all three rows above and fail here.
+    //
+    // `reopenAfterGivingUp` is the ONE asymmetric step, and the equivalence
+    // claim survives it intact: what is asserted is still that both arms end
+    // where they started, and what differs is only what each arm needs before
+    // it can be told. On `@1` that is nothing. On lanes a terminal refusal
+    // ended the subscription, so the next `ready` has to arrive on a new one.
+    // See the member's own doc - and note this row used to drive the recovery
+    // through the DEAD subscription, which no host can do.
     const arm = armUnderTest();
 
     arm.reportServing();
@@ -455,6 +531,7 @@ describe.each(ARMS)("body availability is identical on $name", ({ build }) => {
     arm.reportGivenUp();
     expect(availabilityAsTileSeesIt(arm.handle).derived).toBe("unavailable");
 
+    arm.reopenAfterGivingUp();
     arm.reportServing();
     expect(availabilityAsTileSeesIt(arm.handle).derived).toBe("ready");
   });
