@@ -8,6 +8,7 @@
  * breaking semantics require a separately served major.
  */
 import { z } from "zod";
+import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   browserCdpCommandSchema,
@@ -627,6 +628,22 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
+      // "Clear" on one row of Settings > Browser > Sites with saved logins
+      // (keychain refactor ticket 10, decision #13). Unsolicited and
+      // unacknowledged: the host tombstones that registrable domain in the
+      // user's slice and fans `primaryProfileEvict` out for it - to EVERY
+      // elected desktop of the user, the sender included, because the request
+      // came from a settings page rather than from a jar that already cleared
+      // itself. No `userId` - the identity is the stream's authenticated user,
+      // and only the elected lifecycle subscriber is heard (same gate as
+      // `primaryProfileDelta`).
+      kind: z.literal("clearSite"),
+      ...textFrameFields,
+      domain: z.string(),
+    })
+    .strict(),
+  z
+    .object({
       // "Forget all browser logins" (keychain refactor ticket 08, decision
       // #13). Unsolicited and unacknowledged: the host answers by shredding
       // this user's key and slice and fanning `primaryProfileForgotten` back
@@ -674,6 +691,59 @@ export const browserSessionsV1 = defineStreamRpcContract({
   openRequestSchema: browserSessionsOpenRequestSchema,
   serverFrameSchema: browserSessionsServerFrameSchema,
   clientFrameSchema: browserSessionsClientFrameSchema,
+});
+
+/** One site the user's stored primary profile still holds cookies for. */
+export const browserSavedLoginSiteSchema = z
+  .object({
+    /** Registrable domain (eTLD+1) - never a cookie name, never a value. */
+    domain: z.string(),
+    /** Newest observation of any live cookie under that domain, host clock. */
+    lastSeen: z.number(),
+  })
+  .strict();
+export type BrowserSavedLoginSite = z.infer<typeof browserSavedLoginSiteSchema>;
+
+/** No input: the slice read is the caller's own, from the request identity. */
+export const browserSavedLoginSitesRequestSchema = z.object({}).strict();
+export type BrowserSavedLoginSitesRequest = z.infer<
+  typeof browserSavedLoginSitesRequestSchema
+>;
+
+/**
+ * `sealed` is not "no sites": it is "this host holds no key for you yet", and
+ * the two must never render the same way - one is an empty jar, the other is a
+ * jar nobody here can open (spec section 6.2). Keeping them separate arms is
+ * what lets Settings offer "Connect this desktop to unlock saved logins"
+ * instead of claiming the user has no saved logins at all.
+ */
+export const browserSavedLoginSitesResponseSchema = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({ kind: z.literal("sealed") }).strict(),
+    z
+      .object({
+        kind: z.literal("sites"),
+        sites: z.array(browserSavedLoginSiteSchema),
+      })
+      .strict(),
+  ],
+);
+export type BrowserSavedLoginSitesResponse = z.infer<
+  typeof browserSavedLoginSitesResponseSchema
+>;
+
+/**
+ * Names only, never values (spec section 7.3, decision #26). The host projects
+ * the registrable domains of the live cookie keys in the caller's own slice;
+ * the cookies themselves never leave the host on this path, so a compromised
+ * renderer learns which sites the user is signed into and nothing more.
+ */
+export const browserSavedLoginSitesV10 = defineRpcContract({
+  method: "browser.savedLoginSites",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: browserSavedLoginSitesRequestSchema,
+  responseSchema: browserSavedLoginSitesResponseSchema,
 });
 
 const browserScreencastFormatSchema = z.enum(["jpeg"]);

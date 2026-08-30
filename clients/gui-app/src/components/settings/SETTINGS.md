@@ -517,6 +517,49 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     row that carried one was deleted along with the toggle, and the
     `SettingsRow` `risk` prop it was the sole consumer of was deleted with
     it.
+  - **Saved logins** (`browser-settings-section.tsx`'s second group,
+    `data-testid="settings-saved-logins"`): where website logins in the in-app
+    browser are kept, and the only place they can be turned off, forgotten, or
+    inspected per site. Keychain-refactor spec §7.3; the group renders NOTHING
+    without a `browserView` bridge (the web build), because every row is about
+    a machine's keystore.
+    Four rows, in escalating commitment: the toggle, the status, forget-all,
+    then the site list.
+    - **Save website logins on this Mac/PC** is the desktop-local decision
+      (`useBrowserPersistenceState()`), not a settings-store field and not a
+      host value: it is a statement about THIS machine's keystore
+      (decision #18), so it neither syncs nor follows the scoped host. On
+      where a probe would raise an OS dialog (`promptsOnEnable`) opens a
+      confirm carrying the same mocked keychain dialog the first browser tile
+      shows (`BrowserPersistenceMockDialog`), because the real dialog must
+      never be the first time that sentence is read; on a silent platform it
+      enables straight away. Off records `declined` and stops NEW logins being
+      saved - it does not migrate the jar back to ephemeral, and the row's
+      description says so, since silently discarding saved logins behind a
+      plain switch would be a destructive action wearing a non-destructive
+      control. Disabled while a call is in flight, where the machine has no
+      usable keystore (`linux-basic-text` / `encryption-unavailable`), and
+      while a denial is cached for the run.
+    - **Status** reuses `browserPersistenceShieldCopy()` - the tile shield and
+      this row read one table, so they can never describe the same machine
+      differently - and carries the one affordance a cached denial leaves:
+      Restart Traycer (decision #23).
+    - **Forget all browser logins** (destructive confirm) moved here from the
+      tile shield popover, which was ticket 08's temporary home. It calls the
+      module-level `forgetAllBrowserLogins()` on the sessions coordinator and
+      so speaks for EVERY host the user has a live browser stream to; that is
+      what "all" means, and it is why the action is not tile-scoped.
+    - **Sites with saved logins** reads `browser.savedLoginSites` from the
+      surface's host (`useBrowserSavedLoginSitesQuery`) - registrable domains
+      and a relative last-seen, never values. The method is optional
+      (non-floor), so the query is gated on `useHostSupportsMethod` and a host
+      that never answered renders no list rather than an empty one. `sealed`
+      is NOT "no sites": it says the logins exist but this host cannot open
+      them until the desktop that wrapped its key connects, and it renders its
+      own hint. Per-row **Clear** sends the `clearSite { domain }` frame
+      (`clearSavedLoginSite()`) and refetches; the row is hidden optimistically
+      because the host merges asynchronously and the refetch behind the click
+      can still read the pre-clear slice.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions"), Show global resources button, Show

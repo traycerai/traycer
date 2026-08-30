@@ -1,5 +1,15 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -9,6 +19,34 @@ import {
 } from "@/components/ui/select";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { BrowserPersistenceMockDialog } from "@/components/epic-canvas/renderers/browser-persistence-mock-dialog";
+import {
+  browserPersistenceShieldCopy,
+  keystoreName,
+} from "@/lib/browser-view/browser-cookie-degraded-message";
+import {
+  useBrowserPersistenceState,
+  type BrowserPersistenceController,
+} from "@/lib/browser-view/use-browser-persistence-state";
+import {
+  clearSavedLoginSite,
+  forgetAllBrowserLogins,
+} from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import {
+  trackBrowserLoginsForgotten,
+  trackBrowserPersistence,
+} from "@/lib/browser-view/browser-persistence-analytics";
+import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
+import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import type {
+  BrowserPersistencePlatform,
+  BrowserPersistenceState,
+} from "@traycer-clients/shared/platform/browser-view";
+import type {
+  BrowserSavedLoginSite,
+  BrowserSavedLoginSitesResponse,
+} from "@traycer/protocol/host/browser/contracts";
 import {
   isAgentTabSurfacingMode,
   isBrowserLinkDefaultMode,
@@ -66,85 +104,88 @@ export function BrowserSettingsSection(): ReactNode {
   );
 
   return (
-    <SettingsGroup
-      title="Browser"
-      tone="default"
-      dataTestId={undefined}
-      fill={false}
-    >
-      <SettingsRow
-        label="Web link default"
-        description="Choose where http and https links open."
-        control={
-          <EnumSelect
-            labels={BROWSER_LINK_DEFAULT_MODE_LABELS}
-            isValue={isBrowserLinkDefaultMode}
-            value={browserLinkDefaultMode}
-            onValueChange={setBrowserLinkDefaultMode}
-            ariaLabel="Web link default"
-            triggerClassName="w-[min(42vw,11rem)]"
-          />
-        }
-      />
-      {browserLinkDefaultMode === "per-kind" ? (
-        <>
-          <SettingsRow
-            label="Terminal links"
-            description="Applies to plain terminal URLs and OSC-8 hyperlinks."
-            control={
-              <EnumSelect
-                labels={BROWSER_LINK_OPEN_MODE_LABELS}
-                isValue={isBrowserLinkOpenMode}
-                value={terminalBrowserLinkOpenMode}
-                onValueChange={setTerminalBrowserLinkOpenMode}
-                ariaLabel="Link open mode"
-                triggerClassName="w-[min(42vw,10rem)]"
-              />
-            }
-          />
-          <SettingsRow
-            label="Markdown links"
-            description="Applies to rendered markdown http and https anchors."
-            control={
-              <EnumSelect
-                labels={BROWSER_LINK_OPEN_MODE_LABELS}
-                isValue={isBrowserLinkOpenMode}
-                value={markdownBrowserLinkOpenMode}
-                onValueChange={setMarkdownBrowserLinkOpenMode}
-                ariaLabel="Link open mode"
-                triggerClassName="w-[min(42vw,10rem)]"
-              />
-            }
-          />
-        </>
-      ) : null}
-      <SettingsRow
-        label="Agent tab surfacing"
-        description="Choose what happens on your canvas when the agent opens a browser tab: float it picture-in-picture, place a tile, or keep it in the background (sidebar only)."
-        control={
-          <EnumSelect
-            labels={AGENT_TAB_SURFACING_LABELS}
-            isValue={isAgentTabSurfacingMode}
-            value={agentTabSurfacingMode}
-            onValueChange={setAgentTabSurfacingMode}
-            ariaLabel="Agent tab surfacing"
-            triggerClassName="w-[min(42vw,11rem)]"
-          />
-        }
-      />
-      {browserDevOrigins.length > 0 ? (
+    <>
+      <SettingsGroup
+        title="Browser"
+        tone="default"
+        dataTestId={undefined}
+        fill={false}
+      >
         <SettingsRow
-          label="Detected dev origins"
-          description="Terminal URLs with local hosts or explicit ports are kept for browser-origin classification."
+          label="Web link default"
+          description="Choose where http and https links open."
           control={
-            <BrowserDevOriginsControl
-              origins={browserDevOrigins}
-              onRemove={removeBrowserDevOrigin}
+            <EnumSelect
+              labels={BROWSER_LINK_DEFAULT_MODE_LABELS}
+              isValue={isBrowserLinkDefaultMode}
+              value={browserLinkDefaultMode}
+              onValueChange={setBrowserLinkDefaultMode}
+              ariaLabel="Web link default"
+              triggerClassName="w-[min(42vw,11rem)]"
             />
           }
         />
-      ) : null}
-    </SettingsGroup>
+        {browserLinkDefaultMode === "per-kind" ? (
+          <>
+            <SettingsRow
+              label="Terminal links"
+              description="Applies to plain terminal URLs and OSC-8 hyperlinks."
+              control={
+                <EnumSelect
+                  labels={BROWSER_LINK_OPEN_MODE_LABELS}
+                  isValue={isBrowserLinkOpenMode}
+                  value={terminalBrowserLinkOpenMode}
+                  onValueChange={setTerminalBrowserLinkOpenMode}
+                  ariaLabel="Link open mode"
+                  triggerClassName="w-[min(42vw,10rem)]"
+                />
+              }
+            />
+            <SettingsRow
+              label="Markdown links"
+              description="Applies to rendered markdown http and https anchors."
+              control={
+                <EnumSelect
+                  labels={BROWSER_LINK_OPEN_MODE_LABELS}
+                  isValue={isBrowserLinkOpenMode}
+                  value={markdownBrowserLinkOpenMode}
+                  onValueChange={setMarkdownBrowserLinkOpenMode}
+                  ariaLabel="Link open mode"
+                  triggerClassName="w-[min(42vw,10rem)]"
+                />
+              }
+            />
+          </>
+        ) : null}
+        <SettingsRow
+          label="Agent tab surfacing"
+          description="Choose what happens on your canvas when the agent opens a browser tab: float it picture-in-picture, place a tile, or keep it in the background (sidebar only)."
+          control={
+            <EnumSelect
+              labels={AGENT_TAB_SURFACING_LABELS}
+              isValue={isAgentTabSurfacingMode}
+              value={agentTabSurfacingMode}
+              onValueChange={setAgentTabSurfacingMode}
+              ariaLabel="Agent tab surfacing"
+              triggerClassName="w-[min(42vw,11rem)]"
+            />
+          }
+        />
+        {browserDevOrigins.length > 0 ? (
+          <SettingsRow
+            label="Detected dev origins"
+            description="Terminal URLs with local hosts or explicit ports are kept for browser-origin classification."
+            control={
+              <BrowserDevOriginsControl
+                origins={browserDevOrigins}
+                onRemove={removeBrowserDevOrigin}
+              />
+            }
+          />
+        ) : null}
+      </SettingsGroup>
+      <BrowserSavedLoginsGroup />
+    </>
   );
 }
 
@@ -217,5 +258,351 @@ function BrowserDevOriginsControl(props: {
         </div>
       ))}
     </div>
+  );
+}
+
+/** "on this Mac" / "on this PC", the way the person's own OS is named. */
+const MACHINE_NOUN: Record<BrowserPersistencePlatform, string> = {
+  darwin: "Mac",
+  win32: "PC",
+  linux: "machine",
+  other: "machine",
+};
+
+/**
+ * A machine with no OS keystore Traycer can use. Turning the toggle on there
+ * would raise a prompt that cannot succeed, so the row states the reason
+ * instead of offering the gesture (spec section 7.1's last two states).
+ */
+function isKeystoreUnavailable(state: BrowserPersistenceState): boolean {
+  const reason = state.cryptoState.reason;
+  return reason === "linux-basic-text" || reason === "encryption-unavailable";
+}
+
+/**
+ * Settings > Browser's saved-logins group (spec section 7.3, decision #26).
+ * The one place a privacy-minded person sees where their website logins are
+ * kept, turns them off, forgets them, and sees which sites they cover.
+ *
+ * Host-scoped like every other host read on this page: the site list comes from
+ * THIS surface's host, and clearing goes back out to the browser streams of
+ * whichever hosts are live. The toggle is the odd one out on purpose - the
+ * persistence decision is desktop-local, per machine (decision #18), so it is
+ * read from the desktop bridge rather than from any host.
+ *
+ * Renders nothing without a browser bridge (the web build, a host-less test
+ * harness): there is no machine here whose keystore this could be about.
+ */
+function BrowserSavedLoginsGroup(): ReactNode {
+  const browserView = useRunnerHostOrNull()?.browserView ?? null;
+  const persistence = useBrowserPersistenceState(browserView);
+  const state = persistence.state;
+  const sites = useBrowserSavedLoginSitesQuery({ enabled: state !== null });
+  if (browserView === null || state === null) return null;
+  return (
+    <SettingsGroup
+      title="Saved logins"
+      tone="default"
+      dataTestId="settings-saved-logins"
+      fill={false}
+    >
+      <SavedLoginsToggleRow persistence={persistence} state={state} />
+      <SavedLoginsStatusRow persistence={persistence} state={state} />
+      <ForgetAllLoginsRow />
+      <SavedLoginSitesRow
+        data={sites.data ?? null}
+        onCleared={() => {
+          void sites.refetch();
+        }}
+      />
+    </SettingsGroup>
+  );
+}
+
+/**
+ * The decision itself. On is the ticket 02 enable flow - the same explainer and
+ * the same OS prompt the browser tile raises, because it is literally the same
+ * call; off is `declined`.
+ *
+ * Off does NOT migrate the jar back to ephemeral, and the copy says so: it
+ * stops new logins being persisted, and the ones already saved stay until
+ * Forget. Quietly discarding them on a toggle would be a destructive action
+ * behind a non-destructive control.
+ */
+function SavedLoginsToggleRow(props: {
+  readonly persistence: BrowserPersistenceController;
+  readonly state: BrowserPersistenceState;
+}): ReactNode {
+  const [confirming, setConfirming] = useState(false);
+  const state = props.state;
+  const unavailable = isKeystoreUnavailable(state);
+  const relaunchPending = state.decision.kind === "relaunch-pending";
+  const enable = (): void => {
+    setConfirming(false);
+    props.persistence.enable("settings");
+  };
+  return (
+    <>
+      <SettingsRow
+        label={`Save website logins on this ${MACHINE_NOUN[state.platform]}`}
+        description={`Traycer keeps cookies and logins in ${keystoreName(state)} so agents can reuse the sites you're signed into. Turning this off stops new logins being saved - the ones already saved stay until you forget them.`}
+        control={
+          <Switch
+            checked={state.decision.kind === "enabled"}
+            disabled={
+              props.persistence.pending || unavailable || relaunchPending
+            }
+            aria-label="Save website logins"
+            onCheckedChange={(next) => {
+              if (!next) {
+                props.persistence.decline();
+                return;
+              }
+              // Only where a probe would raise an OS dialog: on a silent
+              // platform there is nothing to warn about, and a confirm step
+              // would invent a ceremony the machine does not have.
+              if (state.promptsOnEnable) {
+                setConfirming(true);
+                return;
+              }
+              props.persistence.enable("settings");
+            }}
+          />
+        }
+      />
+      <EnableSavedLoginsDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        state={state}
+        pending={props.persistence.pending}
+        onEnable={enable}
+      />
+    </>
+  );
+}
+
+/**
+ * The same explainer the first browser tile shows (spec section 7.2), as a
+ * confirm step: the OS dialog must never be the first time this sentence is
+ * read, and Settings is a place the gesture can be started from too.
+ */
+function EnableSavedLoginsDialog(props: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly state: BrowserPersistenceState;
+  readonly pending: boolean;
+  readonly onEnable: () => void;
+}): ReactNode {
+  const state = props.state;
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="w-[min(92vw,30rem)] sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Keep your website logins between sessions?</DialogTitle>
+          <DialogDescription>
+            {`Traycer stores browser logins in ${keystoreName(state)} so agents can use sites you're signed into.${
+              state.platform === "darwin"
+                ? " macOS will show this dialog:"
+                : " Your system will ask for permission once."
+            }`}
+          </DialogDescription>
+        </DialogHeader>
+        {state.platform === "darwin" ? (
+          <BrowserPersistenceMockDialog appName={state.appName} />
+        ) : null}
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              props.onOpenChange(false);
+            }}
+          >
+            Not now
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={props.pending}
+            onClick={props.onEnable}
+          >
+            Enable saved logins
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Where the logins actually are, in the shield's own words - the popover and
+ * this row read one table (`browserPersistenceShieldCopy`) so they can never
+ * describe the same machine differently.
+ *
+ * A cached OS denial survives the process, so the only honest affordance there
+ * is a restart (decision #23); that is the one action this row carries.
+ */
+function SavedLoginsStatusRow(props: {
+  readonly persistence: BrowserPersistenceController;
+  readonly state: BrowserPersistenceState;
+}): ReactNode {
+  const copy = browserPersistenceShieldCopy(props.state);
+  const relaunchPending = props.state.decision.kind === "relaunch-pending";
+  return (
+    <SettingsRow
+      label={copy.headline}
+      description={copy.detail}
+      control={
+        relaunchPending ? (
+          <Button
+            type="button"
+            size="sm"
+            disabled={props.persistence.pending}
+            onClick={() => {
+              props.persistence.relaunch("settings");
+            }}
+          >
+            Restart Traycer
+          </Button>
+        ) : null
+      }
+    />
+  );
+}
+
+/**
+ * The destructive one, moved here from the tile shield (ticket 08's temporary
+ * home). It speaks for every host the user has a live browser stream to, which
+ * is what "all" means and why it is not tile-scoped.
+ */
+function ForgetAllLoginsRow(): ReactNode {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <>
+      <SettingsRow
+        label="Forget all browser logins"
+        description="Deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out and agent sessions using them are suspended."
+        control={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="text-destructive hover:text-destructive"
+            onClick={() => {
+              setConfirming(true);
+            }}
+          >
+            Forget all browser logins…
+          </Button>
+        }
+      />
+      <ConfirmDestructiveDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title="Forget all browser logins?"
+        description="Traycer deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out, and agent sessions using them are suspended. This cannot be undone."
+        cascadeSummary={null}
+        actionLabel="Forget logins"
+        isPending={false}
+        onConfirm={() => {
+          forgetAllBrowserLogins();
+          trackBrowserLoginsForgotten("settings");
+          setConfirming(false);
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * Which sites the host still holds logins for - names and times only, never a
+ * value (spec section 7.3). `sealed` is deliberately not rendered as "none":
+ * the logins exist, this host just cannot open them until the desktop that
+ * wrapped its key connects.
+ *
+ * `null` data means the host never answered - it predates the method, or the
+ * query has not settled - and the row renders nothing at all rather than
+ * claiming an empty jar.
+ */
+function SavedLoginSitesRow(props: {
+  readonly data: BrowserSavedLoginSitesResponse | null;
+  readonly onCleared: () => void;
+}): ReactNode {
+  // Optimistic, and only for a frame that actually went out: the host merges
+  // asynchronously, so the refetch right behind a clear can still read the
+  // pre-merge slice and put the row back for a beat.
+  const [cleared, setCleared] = useState<readonly string[]>([]);
+  const data = props.data;
+  if (data === null) return null;
+  return (
+    <SettingsRow
+      label="Sites with saved logins"
+      description="Site names only - Traycer never shows the saved values."
+      control={
+        <div className="flex w-full min-w-0 max-w-[min(48vw,26rem)] flex-col gap-1.5 text-ui-sm">
+          {data.kind === "sealed" ? (
+            <p className="text-muted-foreground">
+              Connect this desktop to unlock saved logins.
+            </p>
+          ) : (
+            <SavedLoginSiteList
+              sites={data.sites.filter(
+                (site) => !cleared.includes(site.domain),
+              )}
+              onClear={(domain) => {
+                if (!clearSavedLoginSite(domain)) return;
+                trackBrowserPersistence({
+                  name: "browser_site_cleared",
+                  source: "settings",
+                });
+                setCleared((current) => [...current, domain]);
+                props.onCleared();
+              }}
+            />
+          )}
+        </div>
+      }
+    />
+  );
+}
+
+function SavedLoginSiteList(props: {
+  readonly sites: readonly BrowserSavedLoginSite[];
+  readonly onClear: (domain: string) => void;
+}): ReactNode {
+  // The shared 60s clock, not `Date.now()`: reading the wall clock during a
+  // render is impure, and the sampled one repaints these labels on its tick.
+  const now = useSampledNow();
+  if (props.sites.length === 0) {
+    return <p className="text-muted-foreground">No saved logins yet.</p>;
+  }
+  return (
+    <ul className="flex w-full min-w-0 flex-col gap-1">
+      {props.sites.map((site) => (
+        <li
+          key={site.domain}
+          className="flex min-w-0 items-center gap-2 text-ui-sm"
+        >
+          <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+            {site.domain}
+          </span>
+          <span className="shrink-0 text-muted-foreground">
+            {formatRelativeTimestamp(site.lastSeen, now)}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            aria-label={`Clear saved logins for ${site.domain}`}
+            onClick={() => {
+              props.onClear(site.domain);
+            }}
+          >
+            Clear
+          </Button>
+        </li>
+      ))}
+    </ul>
   );
 }

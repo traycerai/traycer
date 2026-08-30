@@ -34,12 +34,6 @@ vi.mock("@tanstack/react-router", () => ({
   ),
 }));
 
-const forgetAllBrowserLogins = vi.hoisted(() => vi.fn(() => true));
-
-vi.mock("@/lib/browser-view/sessions/browser-sessions-coordinator", () => ({
-  forgetAllBrowserLogins,
-}));
-
 const REAL_COOKIE_STATE: BrowserCookieCryptoState = {
   mode: "real",
   persistence: "persistent",
@@ -173,7 +167,6 @@ describe("<BrowserTileToolbar /> capability gating", () => {
   afterEach(() => {
     cleanup();
     openExternalLink.mutate.mockClear();
-    forgetAllBrowserLogins.mockClear();
   });
 
   it("renders every chrome control when all capabilities are true", () => {
@@ -201,65 +194,6 @@ describe("<BrowserTileToolbar /> capability gating", () => {
     expect(screen.getByRole("menuitem", { name: "Zoom out" })).not.toBeNull();
     expect(screen.getByRole("menuitem", { name: "Reset zoom" })).not.toBeNull();
     expect(screen.getByRole("menuitem", { name: "Zoom in" })).not.toBeNull();
-  });
-
-  it("sends forgetLogins from the shield only after the destructive confirm", () => {
-    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION);
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Saved logins: Logins saved securely",
-      }),
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Forget all browser logins…" }),
-    );
-    // Nothing is shredded by opening the dialog: the frame goes out on confirm
-    // and nowhere else.
-    expect(forgetAllBrowserLogins).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId("confirm-action"));
-
-    expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
-  });
-
-  it("offers nothing to forget where this machine saves no logins", () => {
-    const controller: TileController = {
-      ...makeController(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION),
-      persistence: {
-        ...ENABLED_PERSISTENCE,
-        state: {
-          decision: { kind: "undecided" },
-          // Exactly what `resolveBrowserCookieCryptoStateFromInputs` yields
-          // when nothing was ever asked of the OS keystore.
-          cryptoState: {
-            mode: "degraded",
-            persistence: "ephemeral",
-            reason: "not-enabled",
-            storageBackend: null,
-            encryptionAvailable: false,
-          },
-          promptsOnEnable: true,
-          appName: "Traycer",
-          platform: "darwin",
-        },
-      },
-    };
-    render(
-      <TooltipProvider>
-        <BrowserTileToolbar controller={controller} pictureInPicture={null} />
-      </TooltipProvider>,
-    );
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Saved logins: Logins aren't saved yet",
-      }),
-    );
-
-    expect(
-      screen.queryByRole("button", { name: "Forget all browser logins…" }),
-    ).toBeNull();
   });
 
   it("shows a private-session shield with no action for an isolated session", () => {

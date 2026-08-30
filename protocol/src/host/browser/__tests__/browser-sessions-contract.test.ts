@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   browserPrimaryProfileDeltaSchema,
+  browserSavedLoginSitesRequestSchema,
+  browserSavedLoginSitesResponseSchema,
+  browserSavedLoginSitesV10,
   browserSessionsClientFrameSchema,
   browserSessionsOpenRequestSchema,
   browserSessionsServerFrameSchema,
@@ -844,6 +847,121 @@ describe("browser.sessions@1.0 clear cookies for one site (ticket 07)", () => {
       browserSessionsServerFrameSchema.safeParse({
         ...evict,
         hasBinaryPayload: true,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("browser.sessions@1.0 clear one site from Settings (ticket 10)", () => {
+  const clearSite = {
+    kind: "clearSite",
+    hasBinaryPayload: false,
+    domain: "example.com",
+  };
+
+  it("accepts the client frame carrying one registrable domain", () => {
+    expect(browserSessionsClientFrameSchema.safeParse(clearSite).success).toBe(
+      true,
+    );
+    expect(
+      browserSessionsV1.clientFrameSchema.safeParse(clearSite).success,
+    ).toBe(true);
+  });
+
+  it("requires the domain: a clear with no scope would empty the whole jar", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        kind: "clearSite",
+        hasBinaryPayload: false,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a userId - the identity is the stream's authenticated user", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...clearSite,
+        userId: "user-1",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a requestId: the clear is unsolicited and uncorrelated", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...clearSite,
+        requestId: "request-1",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a binary payload", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...clearSite,
+        hasBinaryPayload: true,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("browser.savedLoginSites@1.0 (ticket 10)", () => {
+  it("takes no input: the slice read is the caller's own", () => {
+    expect(browserSavedLoginSitesRequestSchema.safeParse({}).success).toBe(
+      true,
+    );
+    expect(
+      browserSavedLoginSitesRequestSchema.safeParse({ userId: "user-1" })
+        .success,
+    ).toBe(false);
+    expect(browserSavedLoginSitesV10.requestSchema.safeParse({}).success).toBe(
+      true,
+    );
+  });
+
+  it("separates a sealed host from a genuinely empty jar", () => {
+    expect(
+      browserSavedLoginSitesResponseSchema.safeParse({ kind: "sealed" })
+        .success,
+    ).toBe(true);
+    expect(
+      browserSavedLoginSitesResponseSchema.safeParse({
+        kind: "sites",
+        sites: [],
+      }).success,
+    ).toBe(true);
+    // `sealed` carries nothing else: it is the absence of a readable slice.
+    expect(
+      browserSavedLoginSitesResponseSchema.safeParse({
+        kind: "sealed",
+        sites: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("carries names and times only - never a cookie value", () => {
+    const sites = {
+      kind: "sites",
+      sites: [{ domain: "example.com", lastSeen: 1_700_000_000_000 }],
+    };
+    expect(browserSavedLoginSitesResponseSchema.safeParse(sites).success).toBe(
+      true,
+    );
+    expect(
+      browserSavedLoginSitesV10.responseSchema.safeParse(sites).success,
+    ).toBe(true);
+    // A row that could carry a value is the one shape this surface must never
+    // be able to express (spec section 7.3).
+    expect(
+      browserSavedLoginSitesResponseSchema.safeParse({
+        kind: "sites",
+        sites: [
+          {
+            domain: "example.com",
+            lastSeen: 1,
+            value: "session-cookie",
+          },
+        ],
       }).success,
     ).toBe(false);
   });

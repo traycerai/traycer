@@ -85,6 +85,8 @@ interface BrowserSessionsCoordinator {
   refreshPersistenceState: () => void;
   /** Sends `forgetLogins` if this coordinator's stream is live. */
   forgetLogins: () => boolean;
+  /** Sends `clearSite` for one domain if this coordinator's stream is live. */
+  clearSite: (domain: string) => boolean;
   upsertConsumer: (
     consumerId: symbol,
     runtime: BrowserSessionsCoordinatorRuntime,
@@ -206,6 +208,31 @@ export function forgetAllBrowserLogins(): boolean {
     const hostId = coordinator.owner.hostId;
     if (addressedHostIds.has(hostId)) continue;
     if (!coordinator.forgetLogins()) continue;
+    addressedHostIds.add(hostId);
+    sent = true;
+  }
+  return sent;
+}
+
+/**
+ * "Clear" on one row of Settings > Browser (spec section 7.3, ticket 10).
+ * Answers whether any live stream took it.
+ *
+ * Deduped per host and addressed to every host the same way
+ * {@link forgetAllBrowserLogins} is, and for the same reason: each host keeps
+ * its own slice, and a site the user asked to forget is not one they meant to
+ * keep on the machine they happen not to be looking at. The frame carries the
+ * domain rather than a tile key - unlike the tile menu's clear-site, there is
+ * no tile here whose URL could name the site, and the domain came from the
+ * host's own list in the first place.
+ */
+export function clearSavedLoginSite(domain: string): boolean {
+  const addressedHostIds = new Set<string>();
+  let sent = false;
+  for (const coordinator of browserSessionsCoordinators.values()) {
+    const hostId = coordinator.owner.hostId;
+    if (addressedHostIds.has(hostId)) continue;
+    if (!coordinator.clearSite(domain)) continue;
     addressedHostIds.add(hostId);
     sent = true;
   }
@@ -570,6 +597,16 @@ function createBrowserSessionsCoordinator(args: {
       channel.sendClientFrame({
         kind: "forgetLogins",
         hasBinaryPayload: false,
+      });
+      return true;
+    },
+    clearSite: (domain) => {
+      const channel = activeChannel();
+      if (channel === null) return false;
+      channel.sendClientFrame({
+        kind: "clearSite",
+        hasBinaryPayload: false,
+        domain,
       });
       return true;
     },

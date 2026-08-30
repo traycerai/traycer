@@ -345,6 +345,11 @@ const LATEST_SCHEDULING = {
 } as const;
 
 export const HOST_METHOD_POLL_TABLE = {
+  // Settings > Browser's saved-logins list. A bounded read that can coalesce,
+  // and no cadence: the list changes only when the person on this screen
+  // clears a row or a site writes a cookie, and the group refetches on the
+  // former. Polling it would keep a settings page waking the host store.
+  "browser.savedLoginSites": { ...LATEST_SCHEDULING, poll: null },
   // Opt-in polling (`poll: true`), for one caller: the Overview's drain
   // affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
   // — ends 2 agents and 1 terminal" (or "ends N sessions" on a @1.1 host)

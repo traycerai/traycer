@@ -56,6 +56,7 @@ import {
   type BrowserPersistenceShieldTone,
 } from "@/lib/browser-view/browser-cookie-degraded-message";
 import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
+import { trackBrowserPersistence } from "@/lib/browser-view/browser-persistence-analytics";
 import {
   Popover,
   PopoverContent,
@@ -64,7 +65,6 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { forgetAllBrowserLogins } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type {
   BrowserCookieCryptoState,
   BrowserViewViewportPresetId,
@@ -304,6 +304,12 @@ function BrowserTileToolbarTrailing(props: {
           isPending={false}
           onConfirm={() => {
             setClearSiteConfirmOpen(false);
+            // The event names the surface only - which site was cleared is
+            // exactly what this funnel must never carry.
+            trackBrowserPersistence({
+              name: "browser_site_cleared",
+              source: "tile",
+            });
             clearSite.clear();
           }}
         />
@@ -407,7 +413,6 @@ function BrowserPersistenceShield(props: {
   readonly persistence: BrowserPersistenceController;
 }) {
   const [open, setOpen] = useState(false);
-  const [confirmingForget, setConfirmingForget] = useState(false);
   const state = props.persistence.state;
   // Nothing is claimed before the desktop has answered: an optimistic "saved
   // securely" here would be a lie about where the user's cookies are.
@@ -415,77 +420,42 @@ function BrowserPersistenceShield(props: {
   const copy = browserPersistenceShieldCopy(state);
   const Icon = SHIELD_ICONS[copy.tone];
   return (
-    <>
-      <Popover open={open} onOpenChange={setOpen}>
-        <TooltipWrapper
-          label={copy.headline}
-          side="top"
-          sideOffset={6}
-          align="center"
-        >
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Saved logins: ${copy.headline}`}
-              className={cn(
-                "shrink-0 aria-expanded:bg-accent aria-expanded:text-accent-foreground",
-                SHIELD_TONE_CLASS[copy.tone],
-              )}
-            >
-              <Icon aria-hidden />
-            </Button>
-          </PopoverTrigger>
-        </TooltipWrapper>
-        <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
-          <PopoverHeader>
-            <PopoverTitle>{copy.headline}</PopoverTitle>
-            <PopoverDescription className="text-ui-xs">
-              {copy.detail}
-            </PopoverDescription>
-          </PopoverHeader>
-          <BrowserPersistenceShieldAffordance
-            action={copy.action}
-            persistence={props.persistence}
-            onActed={() => setOpen(false)}
-          />
-          {state.cryptoState.reason === "os-backed" ? (
-            // Only where there is something to forget: on every other state this
-            // machine holds no durable jar, and the button would promise a shred
-            // of nothing.
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="self-start px-0 text-ui-xs font-medium text-destructive hover:bg-transparent hover:text-destructive"
-              onClick={() => {
-                // The popover closes first: the dialog is rendered as its
-                // sibling, so a popover that stayed open would only be something
-                // for the dialog's focus trap to fight with.
-                setOpen(false);
-                setConfirmingForget(true);
-              }}
-            >
-              Forget all browser logins…
-            </Button>
-          ) : null}
-        </PopoverContent>
-      </Popover>
-      <ConfirmDestructiveDialog
-        open={confirmingForget}
-        onOpenChange={setConfirmingForget}
-        title="Forget all browser logins?"
-        description="Traycer deletes every saved cookie and login - on this machine and on the host that stores them. Open browser tabs reload signed out, and agent sessions using them are suspended. This cannot be undone."
-        cascadeSummary={null}
-        actionLabel="Forget logins"
-        isPending={false}
-        onConfirm={() => {
-          forgetAllBrowserLogins();
-          setConfirmingForget(false);
-        }}
-      />
-    </>
+    <Popover open={open} onOpenChange={setOpen}>
+      <TooltipWrapper
+        label={copy.headline}
+        side="top"
+        sideOffset={6}
+        align="center"
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Saved logins: ${copy.headline}`}
+            className={cn(
+              "shrink-0 aria-expanded:bg-accent aria-expanded:text-accent-foreground",
+              SHIELD_TONE_CLASS[copy.tone],
+            )}
+          >
+            <Icon aria-hidden />
+          </Button>
+        </PopoverTrigger>
+      </TooltipWrapper>
+      <PopoverContent align="end" className="w-[min(80vw,20rem)] min-w-0">
+        <PopoverHeader>
+          <PopoverTitle>{copy.headline}</PopoverTitle>
+          <PopoverDescription className="text-ui-xs">
+            {copy.detail}
+          </PopoverDescription>
+        </PopoverHeader>
+        <BrowserPersistenceShieldAffordance
+          action={copy.action}
+          persistence={props.persistence}
+          onActed={() => setOpen(false)}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -514,8 +484,8 @@ function BrowserPersistenceShieldAffordance(props: {
       className="self-start"
       disabled={props.persistence.pending}
       onClick={() => {
-        if (action.kind === "relaunch") props.persistence.relaunch();
-        else props.persistence.enable();
+        if (action.kind === "relaunch") props.persistence.relaunch("shield");
+        else props.persistence.enable("shield");
         props.onActed();
       }}
     >

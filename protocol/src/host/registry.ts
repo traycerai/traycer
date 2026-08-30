@@ -481,6 +481,7 @@ import {
   terminalSubscribeV16,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
+  browserSavedLoginSitesV10,
   browserScreencastV1,
   browserSessionsV1,
 } from "@traycer/protocol/host/browser/contracts";
@@ -3970,6 +3971,27 @@ export const epicCreateTuiAgentUpgradeV10ToV11 = defineUpgradePath<
 });
 
 const HOST_RPC_REGISTRY_BASE_DEFINITION = {
+  "browser.savedLoginSites": {
+    // Settings > Browser's "Sites with saved logins" list (keychain refactor
+    // ticket 10). Brand-new v1.0 and not part of `RELEASED_FLOOR_METHOD_NAMES`
+    // - the whole saved-logins surface is unreleased - so it rides the
+    // optional-capability channel: a host that predates it advertises nothing,
+    // and the client renders the group without the list rather than failing the
+    // connection. Read-only and names-only; the clearing half is the
+    // `clearSite` frame on `browser.sessions`, which needs the elected-desktop
+    // gate a unary RPC has no notion of.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: browserSavedLoginSitesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // Machine-user-global config store capabilities. None were part of the
   // released method floor, so a peer that predates them advertises neither
   // handler nor capability; clients feature-detect and render their explicit
