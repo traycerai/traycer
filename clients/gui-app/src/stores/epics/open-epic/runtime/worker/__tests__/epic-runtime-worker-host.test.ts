@@ -1,3 +1,4 @@
+import { inertMutationResult } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import { stubMainCallHandlers } from "@traycer-clients/shared/replica-runtime/worker/test-support/stub-main-call-handlers";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -76,6 +77,7 @@ function stubCore(
       Promise.resolve({
         outcome: { kind: "dropped", reason: "no lane in this fixture" },
       }),
+    applyMutation: (mutation) => Promise.resolve(inertMutationResult(mutation)),
     dispose: () => {},
   };
   return { ...base, ...overrides };

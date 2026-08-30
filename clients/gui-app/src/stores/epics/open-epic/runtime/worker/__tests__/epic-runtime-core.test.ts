@@ -3,6 +3,7 @@
  * stopped serving, and the order it tears down in.
  */
 import { describe, expect, it } from "vitest";
+import { inertMutationResult } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import type { RuntimeWorkerCallRequest } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import { createEpicRuntimeWorkerCore } from "../epic-runtime-core";
 import type { EpicRuntimeCorePorts } from "../epic-runtime-core";
@@ -42,6 +43,9 @@ function createPorts(): EpicRuntimeCorePorts & {
     closed,
     settles,
     attachments: { read: () => Promise.resolve(Uint8Array.from([1])) },
+    // The shared fail-closed answer, so this fixture does not become a fifth
+    // hand-written switch over the mutation union.
+    mutations: { apply: (mutation) => inertMutationResult(mutation) },
     bodies: {
       materialize: (artifactId) =>
         Promise.resolve({

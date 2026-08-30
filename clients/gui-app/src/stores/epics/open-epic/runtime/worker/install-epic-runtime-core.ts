@@ -21,7 +21,8 @@ import {
   buildProxiedStreamFactories,
   createEpicRuntimeComposition,
 } from "./epic-runtime-composition";
-import { createEpicRuntimeWorkerCore } from "./epic-runtime-worker-core";
+import { createEpicRuntimeWorkerCore } from "./epic-runtime-core";
+import { buildEpicRuntimeCorePorts } from "./epic-runtime-core-ports";
 import type { EpicRuntimeWorkerHost } from "./epic-runtime-worker-host";
 
 /**
@@ -93,36 +94,45 @@ export function installEpicRuntimeCore(host: EpicRuntimeWorkerHost): void {
     });
 
     host.installCore(
-      createEpicRuntimeWorkerCore({
-        bodyDocKey: (artifactId) => runtime.getArtifactBodyDocKey(artifactId),
-        encodeColdState: (docKey) =>
-          runtime.encodeArtifactBodyColdState(docKey),
-        settleColdState: (docKey, update, expectedDocGuid) => {
-          const settlement = runtime.settleArtifactBodyColdState(
-            docKey,
-            update,
-            expectedDocGuid,
-          );
-          // The refusal REASON ("not-held" / "newer-generation") stops here,
-          // because `body/demote`'s response carries only the verdict and the
-          // bytes - and the in-process port drops it at the same seam, so both
-          // arms tell the main thread the same thing. What the main thread does
-          // with a refusal does not depend on which one it was: it keeps the
-          // live doc either way. The reason is worth having in a log line if
-          // this ever needs diagnosing; it is not worth a protocol member that
-          // only one side would read.
-          return settlement.accepted
-            ? { accepted: true, settledBytes: settlement.settledBytes }
-            : { accepted: false, settledBytes: 0 };
-        },
-        sendBodyUpdate: (docKey, update) =>
-          runtime.sendArtifactBodyUpdate(docKey, update),
-        readAttachmentBytes: (hash, signal) =>
-          runtime.readAttachmentBytes(hash, signal),
-        dispose: () => {
-          runtime.dispose();
-        },
-      }),
+      createEpicRuntimeWorkerCore(
+        buildEpicRuntimeCorePorts({
+          hasAttachmentBytes: (hash) => runtime.hasAttachmentBytes(hash),
+          readAttachmentBytes: (hash, signal) =>
+            runtime.readAttachmentBytes(hash, signal),
+          bodyDocKey: (artifactId) => runtime.getArtifactBodyDocKey(artifactId),
+          encodeColdState: (docKey) =>
+            runtime.encodeArtifactBodyColdState(docKey),
+          settleColdState: (docKey, update, expectedDocGuid) =>
+            runtime.settleArtifactBodyColdState(
+              docKey,
+              update,
+              expectedDocGuid,
+            ),
+          sendBodyUpdate: (docKey, update) =>
+            runtime.sendArtifactBodyUpdate(docKey, update),
+          renameArtifact: (artifactId, nextTitle) =>
+            runtime.renameArtifact(artifactId, nextTitle),
+          deleteArtifact: (artifactId) => runtime.deleteArtifact(artifactId),
+          reparentArtifact: (artifactId, newParentId) =>
+            runtime.reparentArtifact(artifactId, newParentId),
+          beginRenameMutation: (nodeId, nextTitle) =>
+            runtime.beginRenameMutation(nodeId, nextTitle),
+          beginEpicTitleMutation: (nextTitle) =>
+            runtime.beginEpicTitleMutation(nextTitle),
+          beginReparentMutation: (nodeId, newParentId) =>
+            runtime.beginReparentMutation(nodeId, newParentId),
+          retirePendingMutation: (requestId, outcome) =>
+            runtime.retirePendingMutation(requestId, outcome),
+          isLatestRenameStamp: (nodeId, requestId) =>
+            runtime.isLatestRenameStamp(nodeId, requestId),
+          detachTransport: () => {
+            runtime.detachTransport();
+          },
+          dispose: () => {
+            runtime.dispose();
+          },
+        }),
+      ),
     );
 
     // Last, exactly as the store does it: the first projection must land after

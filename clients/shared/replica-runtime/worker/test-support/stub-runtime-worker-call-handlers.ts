@@ -13,12 +13,22 @@
  * for every suite that reached for this helper.
  */
 import type { RuntimeWorkerCallHandlers } from "../bridge-endpoint";
+import { inertMutationResult } from "../bridge-protocol";
 import { NO_TRANSFER } from "../transferable-bytes";
 
 export function stubRuntimeWorkerCallHandlers(
   overrides: Partial<RuntimeWorkerCallHandlers>,
 ): RuntimeWorkerCallHandlers {
   const base: RuntimeWorkerCallHandlers = {
+    // FAIL-CLOSED, like every other default here: nothing changed, nothing was
+    // stamped, nothing retired, and no stamp is the latest. A stub that
+    // answered `changed: true` would let a caller's follow-on write run
+    // against a mutation that never happened.
+    "mutation/apply": (request) =>
+      Promise.resolve({
+        value: inertMutationResult(request),
+        transfer: NO_TRANSFER,
+      }),
     "attachment/read": () =>
       Promise.resolve({ value: { bytes: null }, transfer: NO_TRANSFER }),
     "body/materialize": () =>

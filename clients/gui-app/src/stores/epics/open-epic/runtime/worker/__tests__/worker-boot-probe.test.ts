@@ -105,7 +105,7 @@ describe("the runtime worker host in a worker realm", () => {
       // the handshake is what makes this a test of the version negotiation
       // rather than of module loading, and a worker that loads but disagrees
       // on the version answers `fatal` here instead.
-      worker.postMessage(bootstrapFrame(5));
+      worker.postMessage(bootstrapFrame(6));
       const received = await frames;
 
       // Asserted as the whole frame rather than by reaching into it: the shape
@@ -113,7 +113,7 @@ describe("the runtime worker host in a worker realm", () => {
       // `protocolVersion` out would still pass if the envelope changed.
       expect(received.at(-1)).toEqual({
         frame: "event",
-        event: { kind: "ready", protocolVersion: 5 },
+        event: { kind: "ready", protocolVersion: 6 },
       });
     } finally {
       worker.terminate();
@@ -130,7 +130,7 @@ describe("the runtime worker host in a worker realm", () => {
 
     try {
       const frames = framesUntil(worker, "ready");
-      worker.postMessage(bootstrapFrame(5));
+      worker.postMessage(bootstrapFrame(6));
       const kinds = (await frames).map((frame) => frame.event.kind);
 
       expect(kinds).toContain("accounting/books");
@@ -151,7 +151,7 @@ describe("the runtime worker host in a worker realm", () => {
 
     try {
       const frames = framesUntil(worker, "fatal");
-      worker.postMessage(bootstrapFrame(4));
+      worker.postMessage(bootstrapFrame(5));
       const received = await frames;
 
       expect(received.at(-1)).toMatchObject({

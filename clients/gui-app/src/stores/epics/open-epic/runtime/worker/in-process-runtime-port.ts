@@ -13,6 +13,7 @@
  */
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
 import type { RuntimeWorkerPort } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
+import { inertMutationResult } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import type {
   ArtifactBodySeedMode,
   RuntimeWorkerCallKind,
@@ -89,6 +90,13 @@ export function createInProcessRuntimePort(
     // treats as a skip. A member on the source for a call this port does not
     // serve would be dead surface pretending to be a seam.
     "attachment/read": () => ({ bytes: null }),
+    // Inert for the same reason `attachment/read` is: this port serves the
+    // BODY calls, which is what the lease bridge needed pinned before a worker
+    // existed. Every arm answers "nothing happened", so a suite driving Arm A
+    // through this port cannot mistake it for a replica that applied a
+    // mutation. Adding eight source members for calls this port does not serve
+    // would be dead surface pretending to be a seam.
+    "mutation/apply": (request) => inertMutationResult(request),
     "body/materialize": (request) => {
       const docKey = source.bodyDocKey(request.artifactId);
       if (docKey === null) return BODY_NOT_HELD;

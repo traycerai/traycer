@@ -29,6 +29,11 @@
  * a guarantee the store already owns and stating it in a second, weaker place.
  */
 import type { SendOutcome } from "@traycer-clients/shared/replica-runtime/adapter";
+import {
+  inertMutationResult,
+  type EpicMutation,
+  type EpicMutationResult,
+} from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import type {
   ArtifactBodyMaterialization,
   EpicRuntimeWorkerCore,
@@ -69,6 +74,14 @@ export interface EpicRuntimeCorePorts {
     settle(input: {
       readonly docKey: string;
       readonly generation: number;
+      /**
+       * The identity the caller materialized at. The tier refuses a settle
+       * whose guid has moved, which is a DIFFERENT refusal from the generation
+       * check above it: generation is the main thread's lifetime counter, guid
+       * is the doc's own identity, and a body replaced underneath a live
+       * editor moves the second without moving the first.
+       */
+      readonly docGuid: string;
       readonly update: Uint8Array;
     }): Promise<{ readonly accepted: boolean; readonly settledBytes: number }>;
     /** Hand a local edit to the body lane. The lane's verdict is the answer. */
@@ -76,6 +89,16 @@ export interface EpicRuntimeCorePorts {
       readonly docKey: string;
       readonly update: Uint8Array;
     }): Promise<SendOutcome>;
+  };
+  /**
+   * The replica's metadata mutations and its optimistic overlay.
+   *
+   * Synchronous here: the replica answers synchronously and the overlay is the
+   * projector's fold input, so an async port would put a tick between a stamp
+   * and the publish that folds it.
+   */
+  readonly mutations: {
+    apply(mutation: EpicMutation): EpicMutationResult;
   };
   /** The one durable transport this session owns (T12's ruling, worker-side). */
   readonly transport: { close(): void };
@@ -140,6 +163,14 @@ export function createEpicRuntimeWorkerCore(
         answer,
       });
       return answer;
+    },
+    async applyMutation(mutation) {
+      // Gated on `serving` like every other member, and the no-core answers
+      // are the host's - this arm exists for the window between `dispose()`
+      // and the host noticing, where a mutation must not reach a replica that
+      // is tearing down.
+      if (!serving) return inertMutationResult(mutation);
+      return ports.mutations.apply(mutation);
     },
     async updateBody(input) {
       if (!serving) {

@@ -27,6 +27,7 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   isWorkerToMainFrame,
   MAIN_CALL_KINDS,
+  RUNTIME_WORKER_CALL_KINDS,
   MAIN_TO_WORKER_EVENT_KINDS,
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
   WORKER_TO_MAIN_EVENT_KINDS,
@@ -168,7 +169,7 @@ describe("the bridge vocabulary and its version", () => {
     // the two: editing either union reddens this test, and the comment the
     // reader lands on is the one telling them to bump. That is a prompt, not a
     // proof, and it is named as such rather than dressed up as coverage.
-    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(5);
+    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(6);
     expect(MAIN_TO_WORKER_EVENT_KINDS).toEqual([
       "bootstrap",
       "current-user",
@@ -191,6 +192,17 @@ describe("the bridge vocabulary and its version", () => {
       "fatal",
       "accounting/books",
       "accounting/settle",
+    ]);
+    // CALLS too, which this pin did not cover until `mutation/apply` was added
+    // without the version moving. Events were coupled to the version and calls
+    // were not, so the one direction that can silently do nothing was the one
+    // direction nothing watched.
+    expect(RUNTIME_WORKER_CALL_KINDS).toEqual([
+      "attachment/read",
+      "body/materialize",
+      "body/demote",
+      "body/update",
+      "mutation/apply",
     ]);
   });
 });

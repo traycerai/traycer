@@ -547,6 +547,17 @@ async function serve(
           transfer: reply.transfer,
         };
       }
+      case "mutation/apply": {
+        // A handler that THROWS is expected here and is not an anomaly:
+        // `reparent-artifact` rejects an illegal move by throwing, and the
+        // catch below turns that into `{ outcome: "error", name, message }` so
+        // the caller can still tell one rejection from another by `name`.
+        const reply = await handlers["mutation/apply"](call.request);
+        return {
+          result: { outcome: "ok", value: reply.value },
+          transfer: reply.transfer,
+        };
+      }
       default:
         return unservedCall(call);
     }

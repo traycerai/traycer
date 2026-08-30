@@ -57,6 +57,12 @@ import type { ProtectedBytes } from "../memory-accountant";
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
+ * **6** since `mutation/apply`: the main thread asks the replica to perform
+ * metadata mutations and to stamp its optimistic overlay. A v5 worker has no
+ * handler for the call and answers `unserved`, so every rename, delete and
+ * reparent silently does nothing while the UI shows its optimistic result -
+ * the worst arm of this failure mode, because it looks like it worked.
+ *
  * **5** since the accounting vocabulary: the worker reports its bytes rather
  * than reaching a process accountant it would have COPIED, so a v4 worker
  * pushes no settlements and a v4 main answers no demote request. Both sides
@@ -84,7 +90,7 @@ import type { ProtectedBytes } from "../memory-accountant";
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 5;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 6;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -339,6 +345,153 @@ export type WorkerToMainEvent =
     };
 
 /**
+ * The metadata mutations the main thread asks the worker to perform.
+ *
+ * ONE call kind (`mutation/apply`) carries all of them, for the same reason the
+ * accounting settlements are one nested union rather than six events: the
+ * top-level vocabulary stays small while the per-member typing stays exact.
+ *
+ * The exactness is not decoration. `EpicMutationResponse<K>` resolves through
+ * this map, and the worker's handler table is
+ * `{ [K in EpicMutationKind]: (request) => response }` - so a kind added here
+ * WITHOUT its `response` half fails to compile at that table rather than
+ * shipping with a widened or defaulted answer. That is the whole point of
+ * declaring request and response together instead of as two unions that happen
+ * to have matching arms.
+ *
+ * Why these eight and not the four doc writes alone: the optimistic overlay
+ * (`begin-*`, `retire-pending`, `is-latest-rename-stamp`) is the projector's
+ * FOLD INPUT - read at projection time, inside the worker - so it cannot move
+ * to main without moving the projector with it. None of its members is read
+ * during render, so crossing them is a call-shape change and nothing more.
+ */
+export interface EpicMutationMap {
+  "rename-artifact": {
+    request: { readonly artifactId: string; readonly title: string };
+    /** Whether the doc actually changed. Drives the caller's follow-on write. */
+    response: { readonly changed: boolean };
+  };
+  "delete-artifact": {
+    request: { readonly artifactId: string };
+    response: { readonly changed: boolean };
+  };
+  "reparent-artifact": {
+    request: {
+      readonly artifactId: string;
+      readonly newParentId: string | null;
+    };
+    response: { readonly changed: boolean };
+  };
+  "begin-rename": {
+    request: { readonly nodeId: string; readonly title: string };
+    /** `null` when nothing was stamped - the caller skips its retire. */
+    response: { readonly requestId: string | null };
+  };
+  "begin-epic-title": {
+    request: { readonly title: string };
+    response: { readonly requestId: string | null };
+  };
+  "begin-reparent": {
+    request: {
+      readonly nodeId: string;
+      readonly newParentId: string | null;
+    };
+    response: { readonly requestId: string | null };
+  };
+  "retire-pending": {
+    request: {
+      readonly requestId: string;
+      readonly outcome: "landed" | "failed";
+    };
+    response: { readonly retired: boolean };
+  };
+  "is-latest-rename-stamp": {
+    request: { readonly nodeId: string; readonly requestId: string };
+    response: { readonly latest: boolean };
+  };
+}
+
+export type EpicMutationKind = keyof EpicMutationMap;
+export type EpicMutationRequest<K extends EpicMutationKind> =
+  EpicMutationMap[K]["request"];
+export type EpicMutationResponse<K extends EpicMutationKind> =
+  EpicMutationMap[K]["response"];
+
+/** One mutation, discriminated - what crosses as the call request. */
+export type EpicMutation = {
+  [K in EpicMutationKind]: {
+    readonly kind: K;
+    readonly request: EpicMutationRequest<K>;
+  };
+}[EpicMutationKind];
+
+/**
+ * One answer, carrying its kind back.
+ *
+ * The kind rides the response so a CALLER can narrow with a literal check
+ * rather than an assertion: `result.kind === "begin-rename"` gives it
+ * `{ requestId: string | null }` and nothing wider.
+ */
+export type EpicMutationResult = {
+  [K in EpicMutationKind]: {
+    readonly kind: K;
+    readonly value: EpicMutationResponse<K>;
+  };
+}[EpicMutationKind];
+
+/**
+ * The "nothing happened" answer for any mutation kind.
+ *
+ * ONE source, because four places need it and they must agree: the host before
+ * a core is installed, the core after it stops serving, the in-process port
+ * that serves body calls only, and the stub handlers. Four hand-written
+ * switches over the same union is four places for a new kind to be given a
+ * DIFFERENT default, and the dangerous default is the optimistic one - a
+ * `changed: true` from a replica that did nothing lets the caller's follow-on
+ * view write run against a mutation that never happened.
+ *
+ * Every arm fails closed: nothing changed, nothing stamped, nothing retired,
+ * no stamp is the latest.
+ */
+export function inertMutationResult(
+  mutation: EpicMutation,
+): EpicMutationResult {
+  switch (mutation.kind) {
+    case "rename-artifact":
+    case "delete-artifact":
+    case "reparent-artifact":
+      return { kind: mutation.kind, value: { changed: false } };
+    case "begin-rename":
+    case "begin-epic-title":
+    case "begin-reparent":
+      return { kind: mutation.kind, value: { requestId: null } };
+    case "retire-pending":
+      return { kind: mutation.kind, value: { retired: false } };
+    case "is-latest-rename-stamp":
+      return { kind: mutation.kind, value: { latest: false } };
+  }
+}
+
+const EPIC_MUTATION_KIND_COVERAGE: {
+  readonly [K in EpicMutationKind]: true;
+} = {
+  "rename-artifact": true,
+  "delete-artifact": true,
+  "reparent-artifact": true,
+  "begin-rename": true,
+  "begin-epic-title": true,
+  "begin-reparent": true,
+  "retire-pending": true,
+  "is-latest-rename-stamp": true,
+};
+
+export const EPIC_MUTATION_KINDS: readonly EpicMutationKind[] = Object.keys(
+  EPIC_MUTATION_KIND_COVERAGE,
+).filter((key): key is EpicMutationKind =>
+  Object.hasOwn(EPIC_MUTATION_KIND_COVERAGE, key),
+);
+
+/**
  * The event vocabulary, as values.
  *
  * Derived from mapped coverage records so a member added to either union fails
@@ -398,6 +551,19 @@ export const WORKER_TO_MAIN_EVENT_KINDS: readonly WorkerToMainEvent["kind"][] =
  * member without its response arm does not compile.
  */
 export interface RuntimeWorkerCallMap {
+  /**
+   * One metadata mutation, applied by the replica.
+   *
+   * A single member carrying {@link EpicMutation} rather than eight members,
+   * so the call vocabulary does not grow by eight for one relocation. The
+   * per-kind typing lives in {@link EpicMutationMap}, and callers narrow on the
+   * `kind` the answer carries back.
+   */
+  "mutation/apply": {
+    request: EpicMutation;
+    response: EpicMutationResult;
+  };
+
   /**
    * Content-addressed attachment bytes out of the worker-held root replica.
    *
@@ -704,6 +870,31 @@ function parseCommandResolution(value: unknown): CommandResolution | null {
 
 export type RuntimeWorkerCallKind = keyof RuntimeWorkerCallMap;
 
+/**
+ * The main->worker call vocabulary, as values.
+ *
+ * The same job {@link MAIN_TO_WORKER_EVENT_KINDS} does for events, and it did
+ * not exist until a call was added without the version moving. Events were
+ * coupled to the version and calls were not, so `mutation/apply` could have
+ * shipped against a stale worker that answers `ready` and then `unserved` for
+ * every mutation - which presents as renames that silently do nothing.
+ */
+const RUNTIME_WORKER_CALL_COVERAGE: {
+  readonly [K in RuntimeWorkerCallKind]: true;
+} = {
+  "attachment/read": true,
+  "body/materialize": true,
+  "body/demote": true,
+  "body/update": true,
+  "mutation/apply": true,
+};
+
+export const RUNTIME_WORKER_CALL_KINDS: readonly RuntimeWorkerCallKind[] =
+  Object.keys(RUNTIME_WORKER_CALL_COVERAGE).filter(
+    (key): key is RuntimeWorkerCallKind =>
+      Object.hasOwn(RUNTIME_WORKER_CALL_COVERAGE, key),
+  );
+
 export type RuntimeWorkerCallRequest<K extends RuntimeWorkerCallKind> =
   RuntimeWorkerCallMap[K]["request"];
 
@@ -759,6 +950,7 @@ const CALL_BUILDERS: {
   "body/materialize": (request) => ({ kind: "body/materialize", request }),
   "body/demote": (request) => ({ kind: "body/demote", request }),
   "body/update": (request) => ({ kind: "body/update", request }),
+  "mutation/apply": (request) => ({ kind: "mutation/apply", request }),
 };
 
 /** Builds the envelope for one call, with its kind and request correlated. */
@@ -887,6 +1079,45 @@ export const CALL_RESPONSE_PARSERS: {
     value: unknown,
   ) => RuntimeWorkerCallResponse<K> | null;
 } = {
+  "mutation/apply": (value) => {
+    if (!isRecord(value)) return null;
+    const { kind, value: answer } = value;
+    if (typeof kind !== "string" || !isRecord(answer)) return null;
+    // Validated per kind against the SAME map the types come from, so a
+    // response whose shape does not match its kind is rejected rather than
+    // handed on as a widened record. The three answer shapes are the three
+    // this vocabulary has; a fourth arrives with its own line.
+    if (
+      kind === "rename-artifact" ||
+      kind === "delete-artifact" ||
+      kind === "reparent-artifact"
+    ) {
+      return typeof answer.changed === "boolean"
+        ? { kind, value: { changed: answer.changed } }
+        : null;
+    }
+    if (
+      kind === "begin-rename" ||
+      kind === "begin-epic-title" ||
+      kind === "begin-reparent"
+    ) {
+      const requestId = answer.requestId;
+      if (requestId !== null && typeof requestId !== "string") return null;
+      return { kind, value: { requestId } };
+    }
+    if (kind === "retire-pending") {
+      return typeof answer.retired === "boolean"
+        ? { kind, value: { retired: answer.retired } }
+        : null;
+    }
+    if (kind === "is-latest-rename-stamp") {
+      return typeof answer.latest === "boolean"
+        ? { kind, value: { latest: answer.latest } }
+        : null;
+    }
+    return null;
+  },
+
   "attachment/read": (value) => {
     if (!isRecord(value)) return null;
     if (value.bytes === null) return { bytes: null };

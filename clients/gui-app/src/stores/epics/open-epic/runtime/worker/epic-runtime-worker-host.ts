@@ -29,8 +29,11 @@ import {
   type WorkerBridgeEndpoint,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
 import {
+  inertMutationResult,
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
   type ArtifactBodySeedMode,
+  type EpicMutation,
+  type EpicMutationResult,
   type MainToWorkerEvent,
   type RuntimeWorkerBootstrap,
   type RuntimeWorkerLogEntry,
@@ -100,6 +103,19 @@ export interface EpicRuntimeWorkerCore {
     readonly docKey: string;
     readonly update: Uint8Array;
   }): Promise<{ readonly outcome: SendOutcome }>;
+  /**
+   * One metadata mutation against the replica and its optimistic overlay.
+   *
+   * Async like the rest of this interface even though the replica answers
+   * synchronously: the caller is across a bridge either way, and a synchronous
+   * member here would be a promise the host has to make on the replica's
+   * behalf that the bridge cannot keep.
+   *
+   * MAY THROW. `reparent-artifact` rejects an illegal move by throwing, and
+   * the endpoint turns that into an `error` result carrying the error's own
+   * `name` - which is how the caller still tells a cycle from a missing node.
+   */
+  applyMutation(mutation: EpicMutation): Promise<EpicMutationResult>;
   dispose(): void;
 }
 
@@ -266,6 +282,18 @@ export function startEpicRuntimeWorkerHost(
       }
       return {
         value: await core.updateBody(request),
+        transfer: NO_TRANSFER,
+      };
+    },
+    "mutation/apply": async (request) => {
+      if (core === null) {
+        // Fail-closed, and each arm says the same thing three ways: nothing
+        // happened. A no-core `changed: true` would let the caller's follow-on
+        // view write run against a mutation the replica never made.
+        return { value: inertMutationResult(request), transfer: NO_TRANSFER };
+      }
+      return {
+        value: await core.applyMutation(request),
         transfer: NO_TRANSFER,
       };
     },
