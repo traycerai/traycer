@@ -10,6 +10,7 @@ describe("notification activation envelope", () => {
     const envelope = buildNotificationActivationEnvelope({
       route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
       feed: { source: "host", id: "n-1" },
+      chimeEventType: "needs_action",
       originHostId: "host-a",
     });
 
@@ -18,6 +19,7 @@ describe("notification activation envelope", () => {
       version: 1,
       route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
       feed: { source: "host", id: "n-1" },
+      chimeEventType: "needs_action",
       originHostId: "host-a",
     });
     expect(feedIdFromEnvelopeFeed(envelope.feed)).toBe("host:n-1");
@@ -31,6 +33,7 @@ describe("notification activation envelope", () => {
     const envelope = buildNotificationActivationEnvelope({
       route: { kind: "epic", epicId: "epic-2" },
       feed: { source: "app-local", id: "local-1" },
+      chimeEventType: "failure",
       originHostId: null,
     });
 
@@ -41,10 +44,27 @@ describe("notification activation envelope", () => {
     expect(feedIdFromEnvelopeFeed(envelope.feed)).toBe("app-local:local-1");
   });
 
+  it("migrates the former collaboration chime lane in an in-flight envelope", () => {
+    const legacyEnvelope = {
+      kind: "notificationActivation",
+      version: 1,
+      route: { kind: "epic", epicId: "epic-2" },
+      feed: { source: "global", id: "global-1" },
+      chimeEventType: "collaboration",
+      originHostId: null,
+    };
+
+    expect(parseNotificationActivationPayload(legacyEnvelope)).toEqual({
+      kind: "v1",
+      envelope: { ...legacyEnvelope, chimeEventType: "info" },
+    });
+  });
+
   it("keys a cloud feed identity by notification id alone, independent of origin host", () => {
     const envelope = buildNotificationActivationEnvelope({
       route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
       feed: { source: "cloud", id: "notification/1" },
+      chimeEventType: "done",
       originHostId: "host/a",
     });
 

@@ -13,7 +13,11 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
+import type {
+  TuiAgentProjection,
+  TuiAgentProjectionOrigin,
+} from "@/stores/epics/open-epic/types";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -169,8 +173,41 @@ function resolveDialogAdmission(input: {
  */
 export type TerminalAgentForkIntent = "fork" | "continue";
 
+/**
+ * A terminal agent that CAN be forked, narrowed at the type level.
+ *
+ * A projection's `harnessId` is nullable because a cross-host replica whose
+ * cloud row predates `runSettingsSummary` cannot say what it runs. Such a row
+ * belongs in the roster (the protocol contract says so) but has no dispatchable
+ * harness - and forking needs one for the provider lookup, the create call, the
+ * settings seed and the analytics event alike.
+ *
+ * Narrowed HERE, once, rather than null-checked at each of those four: the
+ * toolbar that builds a target is the party that knows, and every consumer
+ * downstream then reads a harness that is present by type.
+ */
+export type ForkableTuiAgent = TuiAgentProjection & {
+  readonly harnessId: TuiHarnessId;
+  /**
+   * And it must not be a CLOUD REPLICA. Narrowing `harnessId` alone was not
+   * enough: a replica whose row does carry a harness satisfied that half, so
+   * the dialog would open for one and sit at `canSubmit === false` forever -
+   * the fork needs a `harnessSessionId`, which never leaves the machine
+   * running the provider CLI.
+   *
+   * Structural rather than another runtime check because the no-fork rule for
+   * replicas is a type-level fact (decision 2), and the toolbar that builds a
+   * target is where it can be proven once.
+   *
+   * `harnessSessionId` is deliberately NOT narrowed here as well: a Codex
+   * source can legitimately reach this dialog before `thread/started` has
+   * back-filled its id, and the submit gate already handles that.
+   */
+  readonly origin: Exclude<TuiAgentProjectionOrigin, "cloud">;
+};
+
 export interface TerminalAgentForkDialogTarget {
-  readonly sourceAgent: TuiAgentProjection;
+  readonly sourceAgent: ForkableTuiAgent;
   readonly workspaceSeed: ForkWorkspaceSeed;
   readonly intent: TerminalAgentForkIntent;
 }
@@ -852,7 +889,7 @@ function terminalForkButtonLabel(intent: TerminalAgentForkIntent): string {
   return intent === "continue" ? "Continue" : "Fork";
 }
 
-function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
+function terminalForkSettingsSeed(agent: ForkableTuiAgent): ChatRunSettings {
   return {
     harnessId: agent.harnessId,
     model: agent.model ?? "",
@@ -878,7 +915,7 @@ function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
  * "no change" - it never independently re-derives that comparison.
  */
 function terminalForkDefaultTitle(input: {
-  readonly sourceAgent: TuiAgentProjection;
+  readonly sourceAgent: ForkableTuiAgent;
   readonly profileLabel: string | null;
 }): string {
   const sourceTitle = displayTitle(input.sourceAgent.title, "agent");

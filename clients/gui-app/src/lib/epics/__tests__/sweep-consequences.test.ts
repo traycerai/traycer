@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   distinctExternalEpicIds,
   finalSweepButtonLabel,
+  isBulkScopeRow,
   mergeSessionOutcomes,
   reconcileSessionOutcomes,
   selectAllCountCopy,
@@ -70,10 +71,14 @@ describe("sweep consequence copy", () => {
     ).toBe("Confirm sweep");
   });
 
-  it("keeps the in-use caveat on the select-all count", () => {
-    expect(selectAllCountCopy({ selected: 5, total: 7, inUse: 2 })).toBe(
-      "5 of 7 selected · 2 in-use worktrees require individual selection",
+  it("renders the select-all count without an in-use qualifier", () => {
+    expect(selectAllCountCopy({ selected: 5, total: 7 })).toBe(
+      "5 of 7 selected",
     );
+    expect(isBulkScopeRow(row({ note: "in-use" }))).toBe(true);
+    expect(isBulkScopeRow(row({ note: "in-use", disabled: true }))).toBe(false);
+    expect(isBulkScopeRow(row({ note: "not-landed" }))).toBe(true);
+    expect(isBulkScopeRow(row({ note: null }))).toBe(true);
   });
 
   it("counts distinct external Tasks, not bindings", () => {

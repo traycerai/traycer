@@ -57,6 +57,11 @@ import {
 } from "@traycer/protocol/host-transport/mux";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
+  clockCanMakeValidBearersLookExpired,
+  type ServerClockSkewSignal,
+  type ServerClockState,
+} from "@traycer-clients/shared/clock/server-time-offset-tracker";
+import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
@@ -991,6 +996,7 @@ function buildSessionOptions(
       }),
     bearer: () => lease,
     auth,
+    clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,
     webSocketFactory: relay.factory,
@@ -1535,6 +1541,7 @@ describe("RemoteSession plan-restricted entitlement denial", () => {
         },
         bearer: () => lease,
         auth: { revalidateForReconnect: revalidate },
+        clock: null,
         rpcRegistry: emptyRpcRegistry,
         streamRegistry: emptyStreamRegistry,
         webSocketFactory: relay.factory,
@@ -7067,6 +7074,347 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         });
       } finally {
         session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * Clock-skew park on the RELAY transport (Clock-skew detection and self-healing
+ * recovery, §2 — extended to remote sessions).
+ *
+ * A wrong wall clock is a property of the MACHINE, so a user whose clock is
+ * hours off wedges identically against a remote host: authn (correct clock)
+ * keeps answering "valid" while the host keeps FATAL-ing the same bearer, and
+ * the no-progress bound walks the session terminal. The remote user is also the
+ * one least able to guess why — hence the same park here.
+ *
+ * One structural difference from the local transport, and it is the reason
+ * there is a single park site rather than two: this session has no pre-dial
+ * expiry gate, so it always spends one full attach+reject round trip before the
+ * verdict is consulted.
+ */
+describe("RemoteSession clock-skew park", () => {
+  /**
+   * A hand-driven `ServerClockSkewSignal`. The transport's contract is with the
+   * verdict, its DIRECTION, and the recovery edge; keeping the double dumb
+   * makes these tests statements about the session, not about the tracker
+   * (which has its own suite).
+   *
+   * `skewed-ahead` is the incident: a local clock running FAST, so
+   * `server − local` is NEGATIVE. `skewed-behind` is the equal-and-opposite
+   * clock - just as wrong, just as banner-worthy, and incapable of being why
+   * the relay rejected a bearer. The predicate is computed exactly as the real
+   * tracker computes it rather than hardcoded per case, so the double cannot
+   * drift from the sign convention.
+   */
+  function makeClockSignal(initial: "ok" | "skewed-ahead" | "skewed-behind"): {
+    readonly signal: ServerClockSkewSignal;
+    readonly recover: () => void;
+    readonly recoverySubscribers: () => number;
+  } {
+    const SEVEN_HOURS_MS = 7 * 3_600_000;
+    let state: ServerClockState;
+    if (initial === "skewed-ahead") {
+      state = { verdict: "skewed", offsetMs: -SEVEN_HOURS_MS };
+    } else if (initial === "skewed-behind") {
+      state = { verdict: "skewed", offsetMs: SEVEN_HOURS_MS };
+    } else {
+      state = { verdict: "ok", offsetMs: 0 };
+    }
+    const recoveryListeners = new Set<() => void>();
+    return {
+      recoverySubscribers: () => recoveryListeners.size,
+      recover: () => {
+        state = { verdict: "ok", offsetMs: 0 };
+        for (const listener of [...recoveryListeners]) {
+          listener();
+        }
+      },
+      signal: {
+        currentState: () => state,
+        canMakeValidBearersLookExpired: () =>
+          clockCanMakeValidBearersLookExpired(state),
+        subscribe: () => () => undefined,
+        subscribeToRecovery: (listener) => {
+          recoveryListeners.add(listener);
+          return () => {
+            recoveryListeners.delete(listener);
+          };
+        },
+      },
+    };
+  }
+
+  /** Always UNAUTHORIZED, and a revalidator that never rotates: no progress. */
+  function buildNoProgressSession(
+    relay: FakeRelayHost,
+    lease: MutableBearerLease,
+    clock: ServerClockSkewSignal,
+  ): RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry> {
+    relay.decideOpen = () => ({
+      kind: "fatal",
+      details: unauthorizedDetails(),
+    });
+    return new RemoteSession({
+      ...buildSessionOptions(relay, lease, {
+        revalidateForReconnect: () => Promise.resolve("rotated" as const),
+      }),
+      clock,
+    });
+  }
+
+  it(
+    "parks instead of walking the no-progress bound to a terminal close",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        // One attach, one rejection, one revalidation - then the park.
+        await vi.waitFor(
+          () => expect(clock.recoverySubscribers()).toBe(1),
+          WAIT,
+        );
+        // Far longer than the three backoff rungs the bound would have burned.
+        // A session that counted this cycle would be closed by now; a parked
+        // one has not re-attached even once.
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        expect(session.isClosed()).toBe(false);
+        expect(relay.openBearers).toEqual(["clock-skewed-token"]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "re-attaches on the clock-corrected edge, with no reload and no new credential",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      relay.decideOpen = (_bearer, openIndex) =>
+        openIndex === 0
+          ? { kind: "fatal", details: unauthorizedDetails() }
+          : { kind: "ack" };
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+        clock: clock.signal,
+      });
+      try {
+        session.start();
+        await vi.waitFor(
+          () => expect(clock.recoverySubscribers()).toBe(1),
+          WAIT,
+        );
+        expect(session.isReady()).toBe(false);
+
+        // The user fixes the clock. Nothing else happens - no retry tap, no
+        // wake, no new bearer.
+        clock.recover();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openBearers).toEqual([
+          "clock-skewed-token",
+          "clock-skewed-token",
+        ]);
+        // The park released its handle on the way back out.
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "still reaches the terminal bound for a host config mismatch, which looks identical on the wire",
+    async () => {
+      // The reason the park keys on the tracker's verdict and never on the
+      // rejection shape: a misconfigured host produces the very same
+      // no-progress streak, and retrying that forever helps nobody.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("mismatched-token", "user-1");
+      const clock = makeClockSignal("ok");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does NOT park on a clock running BEHIND, and still reaches the terminal bound",
+    async () => {
+      // The mirror of the incident, and the failure this feature would
+      // otherwise have reintroduced in the opposite direction. A SLOW clock
+      // makes a bearer look more valid, never expired, and the relay validates
+      // against its own clock - so it cannot be why this bearer was rejected.
+      // Whatever is (host config mismatch, revocation) is exactly what the
+      // bound exists to diagnose, and a remote user stranded behind "fix your
+      // clock" has no way at all to discover the real cause.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("mismatched-token", "user-1");
+      const clock = makeClockSignal("skewed-behind");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "leaves the transient network-error arm untouched under skew",
+    async () => {
+      // A revalidation that cannot reach authn says nothing about the clock -
+      // the bearer is untouched, the streak resets, and the ordinary backoff
+      // rides. Parking here would strand a session whose only problem was a
+      // wake-time blip.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("stale-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      relay.decideOpen = (_bearer, openIndex) =>
+        openIndex === 0
+          ? { kind: "fatal", details: unauthorizedDetails() }
+          : { kind: "ack" };
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () =>
+            Promise.resolve("network-error" as const),
+        }),
+        clock: clock.signal,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(clock.recoverySubscribers()).toBe(0);
+        expect(session.isClosed()).toBe(false);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "releases the recovery subscription on close, so a later clock fix cannot revive a dead session",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      const clock = makeClockSignal("skewed-ahead");
+      const session = buildNoProgressSession(relay, lease, clock.signal);
+      session.start();
+      await vi.waitFor(() => expect(clock.recoverySubscribers()).toBe(1), WAIT);
+
+      session.close();
+      expect(clock.recoverySubscribers()).toBe(0);
+
+      clock.recover();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(relay.openBearers).toEqual(["clock-skewed-token"]);
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "degrades to the pre-existing terminal bound with no tracker wired",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const session = new RemoteSession(
+        buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+      );
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * The remote twin of the local park's status-emit hazard. Here the external
+ * callback inside the park is `reportEvidenceOutcome`, which hands control to
+ * the selection authority - a component whose entire job is to react to
+ * transport evidence, and which can retire this host (closing this session)
+ * before the call returns.
+ */
+describe("RemoteSession clock-skew park re-entrancy", () => {
+  it(
+    "leaves NO subscription behind when the evidence sink closes the session re-entrantly",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("clock-skewed-token", "user-1");
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const recoveryListeners = new Set<() => void>();
+      const clock: ServerClockSkewSignal = {
+        currentState: (): ServerClockState => ({
+          verdict: "skewed",
+          offsetMs: -7 * 3_600_000,
+        }),
+        canMakeValidBearersLookExpired: () => true,
+        subscribe: () => () => undefined,
+        subscribeToRecovery: (listener) => {
+          recoveryListeners.add(listener);
+          return () => {
+            recoveryListeners.delete(listener);
+          };
+        },
+      };
+      let session: RemoteSession<
+        VersionedRpcRegistry,
+        VersionedStreamRpcRegistry
+      > | null = null;
+      const closingEvidence: TransportEvidenceReporter = {
+        ...NO_TRANSPORT_EVIDENCE,
+        reportDialIndeterminate: () => {
+          session?.close();
+        },
+      };
+      session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+        clock,
+        evidence: closingEvidence,
+      });
+      const live = session;
+      try {
+        live.start();
+        // The park reports `indeterminate`, the sink closes the session inside
+        // that call, and the park must still own a handle to release.
+        await vi.waitFor(() => expect(live.isClosed()).toBe(true), WAIT);
+        expect(recoveryListeners.size).toBe(0);
+      } finally {
+        live.close();
       }
     },
     TEST_BUDGET_MS,

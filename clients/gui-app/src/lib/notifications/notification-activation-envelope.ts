@@ -9,6 +9,7 @@ import {
   parseNotificationPayload,
   type NotificationPayload,
 } from "@/lib/notifications/payload";
+import type { NotificationChimeEventType } from "@/lib/notifications/notification-chime";
 
 const ENVELOPE_KIND = "notificationActivation";
 const ENVELOPE_VERSION = 1;
@@ -29,6 +30,7 @@ export interface NotificationActivationEnvelopeV1 {
   readonly version: typeof ENVELOPE_VERSION;
   readonly route: NotificationPayload;
   readonly feed: NotificationActivationEnvelopeFeed;
+  readonly chimeEventType: NotificationChimeEventType;
   /** Active host id captured at emission time for a host-sourced row; `null`
    * for app-local/global rows, which carry no host binding. */
   readonly originHostId: string | null;
@@ -37,6 +39,7 @@ export interface NotificationActivationEnvelopeV1 {
 export function buildNotificationActivationEnvelope(input: {
   readonly route: NotificationPayload;
   readonly feed: NotificationActivationEnvelopeFeed;
+  readonly chimeEventType: NotificationChimeEventType;
   readonly originHostId: string | null;
 }): NotificationActivationEnvelopeV1 {
   return {
@@ -44,6 +47,7 @@ export function buildNotificationActivationEnvelope(input: {
     version: ENVELOPE_VERSION,
     route: input.route,
     feed: input.feed,
+    chimeEventType: input.chimeEventType,
     originHostId: input.originHostId,
   };
 }
@@ -102,6 +106,7 @@ function parseEnvelopeV1(
   if (route === null) return null;
   const feed = parseEnvelopeFeed(value.feed);
   if (feed === null) return null;
+  const chimeEventType = parseChimeEventType(value.chimeEventType);
   const originHostId = value.originHostId;
   if (originHostId !== null && typeof originHostId !== "string") {
     return null;
@@ -111,8 +116,27 @@ function parseEnvelopeV1(
     version: ENVELOPE_VERSION,
     route,
     feed,
+    chimeEventType,
     originHostId,
   };
+}
+
+function parseChimeEventType(value: unknown): NotificationChimeEventType {
+  // The short-lived per-event chime schema called this lane
+  // `collaboration`. Preserve in-flight native notification envelopes created
+  // by that version while exposing only the broader `info` identity now.
+  if (value === "collaboration") return "info";
+  if (
+    value === "needs_action" ||
+    value === "failure" ||
+    value === "done" ||
+    value === "info"
+  ) {
+    return value;
+  }
+  // Older V1 envelopes did not carry cue identity. Treat their one in-flight
+  // relay as the least urgent configured sound while preserving click routing.
+  return "done";
 }
 
 /**
