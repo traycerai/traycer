@@ -45,18 +45,27 @@
  * | --- | --- |
  * | `epic-runtime-core.ts` `demoteBody` drops the settle for a non-empty update | **RED**, both tests — `hotSettled` diverges at the `settled` checkpoint and `settlement.accepted` diverges with it |
  * | `epic-runtime-worker-host.ts` `body/materialize` materializes twice | green, and correctly so: `holdResidentLease` drops the second lease, so a repeated materialize charges once by design |
- * | `main-accounting-bridge.ts` `hot-doc` settles twice | **green — and this is a real limit on what this pin covers** |
+ * | `main-accounting-bridge.ts` `hot-doc` settles twice | **green here — and COVERED elsewhere**, see below |
  *
- * That last row is the honest boundary. BOTH arms compose their runtime with
- * `host.accounting`, so the worker→main accounting seam is common to them and a
- * defect inside it moves both totals by the same amount. This pin therefore
- * covers the CALL path (dispatch, clone/transfer, the host handlers, the core's
- * gate and its idempotence cache) and NOT the accounting seam itself, which is
- * `accounting-seam.test.ts`'s subject. Making the seam the variable would mean
- * building Arm A on a directly-constructed `createProcessBackedAccountingPort`
- * rather than on the harness — a different construction, not an assertion this
- * suite is missing. Recorded here rather than left for someone to discover by
- * writing the ablation a second time.
+ * That last row is the honest boundary, and it is a boundary rather than a hole.
+ * BOTH arms compose their runtime with `host.accounting`, so the worker→main
+ * accounting seam is common to them and a defect inside it moves both totals by
+ * the same amount. This pin therefore covers the CALL path (dispatch,
+ * clone/transfer, the host handlers, the core's gate and its idempotence cache)
+ * and NOT the seam itself.
+ *
+ * The seam has its own owner, and the same ablation was run against it: a
+ * doubled `hot-doc` settle turns **`accounting-seam.test.ts`'s "routes each of
+ * the six reporting members to its own book call"** RED (8 recorded book calls
+ * against the expected 7). So the double-count property IS pinned — at the layer
+ * that owns it, which is where it belongs. Making it observable from here would
+ * mean building Arm A on a directly-constructed
+ * `createProcessBackedAccountingPort` rather than on the harness, forking
+ * `open-store-for-test.ts` against its own "one helper, not a pattern to copy"
+ * rule to re-pin a property that is already pinned.
+ *
+ * Recorded rather than left implicit, so nobody writes either ablation a second
+ * time to rediscover this.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";

@@ -1065,9 +1065,17 @@ describe("createOpenEpicStore", () => {
    *
    * The `await` is the boundary, in one place. A lease now starts a
    * `body/materialize` call across the bridge, so the doc is installed a few
-   * microtasks later even in-process - `createInProcessRuntimePort` resolves
-   * through a promise deliberately, so no caller can depend on synchronous
-   * delivery the worker will never provide.
+   * microtasks later. This suite runs on `openStoreForTest`, which spawns
+   * through `spawnEpicRuntimeWorker` over a `structuredClone`-ing pipe, so the
+   * boundary here is the REAL one - not a local port lifting a synchronous
+   * answer into a promise.
+   *
+   * That distinction is why this paragraph was corrected. It used to name
+   * `createInProcessRuntimePort` as what these leases resolve through. Its
+   * substance was right (a lease is async) and its subject was wrong, and it
+   * read - in the suite a reader is most likely to check - as evidence that the
+   * in-process port was live. That port has since been deleted, so the name
+   * pointed at nothing at all.
    *
    * Drained by POLLING microtasks rather than by `setTimeout` (suites running
    * fake timers would never fire it) or a fixed number of `await`s (a guess
