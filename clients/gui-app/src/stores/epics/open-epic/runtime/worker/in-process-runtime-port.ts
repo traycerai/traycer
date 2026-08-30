@@ -97,6 +97,14 @@ export function createInProcessRuntimePort(
     // mutation. Adding eight source members for calls this port does not serve
     // would be dead surface pretending to be a seam.
     "mutation/apply": (request) => inertMutationResult(request),
+    // Inert for the same reason `attachment/read` is: this port serves the
+    // BODY calls. Every arm answers "nothing", so a suite driving Arm A
+    // through it cannot mistake it for a replica that did something.
+    "attachment/await": () => ({ bytes: null }),
+    "attachment/cancel": () => ({ cancelled: false }),
+    "command/enqueue": () => ({ outcome: "refused" }),
+    "root/encode": () => ({ update: new Uint8Array() }),
+    "root/apply": () => ({ applied: false }),
     "body/materialize": (request) => {
       const docKey = source.bodyDocKey(request.artifactId);
       if (docKey === null) return BODY_NOT_HELD;

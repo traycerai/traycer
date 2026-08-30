@@ -63,6 +63,11 @@ import type {
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
+ * **10** since `attachment/await` / `attachment/cancel`: the WAITING half of
+ * the attachment class, which `attachment/read` alone could not serve without
+ * turning "still replicating" into "missing". One bump for the pair - they
+ * land together, so a peer is either before both or after both.
+ *
  * **9** since `root/encode` / `root/apply`: the root-state transfer the merge
  * sites depend on. A v8 worker answers `unserved`, so a session replacement
  * silently transfers nothing - the failure the `applied` boolean exists to
@@ -112,7 +117,7 @@ import type {
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 9;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 10;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -682,6 +687,42 @@ export const WORKER_TO_MAIN_EVENT_KINDS: readonly WorkerToMainEvent["kind"][] =
  */
 export interface RuntimeWorkerCallMap {
   /**
+   * Attachment bytes, WAITING for a hash that has not replicated yet.
+   *
+   * The other half of the attachment class, and not a flag on
+   * `attachment/read`: `lib/epic-replica-reads.ts`'s header says outright that
+   * the two "look like one function with a flag and they are not - collapsing
+   * them is a regression one way and a hang the other". Guarding the waiting
+   * leg turns "still replicating" into "missing" for exactly the images the
+   * design expects to be late; dropping the guard on the other parks the chat
+   * chain forever.
+   *
+   * `awaitId` is the CALLER's, minted per read, because the wait has to be
+   * cancellable and a call in flight has no other name. Without cancellation
+   * this is the indefinite park that `attachment/read` was fixed to avoid - a
+   * call slot held for the life of the worker.
+   */
+  "attachment/await": {
+    request: { readonly awaitId: number; readonly hash: string };
+    /** `null` when cancelled or when the runtime tore down. */
+    response: { readonly bytes: Uint8Array | null };
+  };
+  /**
+   * Stop waiting. The pending `attachment/await` settles `null`.
+   *
+   * Its own CALL rather than a `runtime/command` push, and the difference is
+   * delivery: a dropped push leaves the worker holding a wait forever, which
+   * is the exact leak this pair exists to prevent, while a call has an answer
+   * that says it arrived. `cancelled: false` for an id that was never pending
+   * or has already settled - that race is inherent (bytes can land while the
+   * cancel is in flight) and is a no-op, not a fault.
+   */
+  "attachment/cancel": {
+    request: { readonly awaitId: number };
+    response: { readonly cancelled: boolean };
+  };
+
+  /**
    * The root replica's encoded state, for a transfer into another session.
    *
    * The two callers are the merge sites - the provider's replacement path and
@@ -1083,6 +1124,8 @@ const RUNTIME_WORKER_CALL_COVERAGE: {
   "command/enqueue": true,
   "root/encode": true,
   "root/apply": true,
+  "attachment/await": true,
+  "attachment/cancel": true,
 };
 
 export const RUNTIME_WORKER_CALL_KINDS: readonly RuntimeWorkerCallKind[] =
@@ -1150,6 +1193,11 @@ const CALL_BUILDERS: {
   "command/enqueue": (request) => ({ kind: "command/enqueue", request }),
   "root/encode": (request) => ({ kind: "root/encode", request }),
   "root/apply": (request) => ({ kind: "root/apply", request }),
+  "attachment/await": (request) => ({ kind: "attachment/await", request }),
+  "attachment/cancel": (request) => ({
+    kind: "attachment/cancel",
+    request,
+  }),
 };
 
 /** Builds the envelope for one call, with its kind and request correlated. */
@@ -1278,6 +1326,17 @@ export const CALL_RESPONSE_PARSERS: {
     value: unknown,
   ) => RuntimeWorkerCallResponse<K> | null;
 } = {
+  "attachment/await": (value) => {
+    if (!isRecord(value)) return null;
+    if (value.bytes === null) return { bytes: null };
+    return isUint8Array(value.bytes) ? { bytes: value.bytes } : null;
+  },
+  "attachment/cancel": (value) => {
+    if (!isRecord(value)) return null;
+    return typeof value.cancelled === "boolean"
+      ? { cancelled: value.cancelled }
+      : null;
+  },
   "root/encode": (value) => {
     if (!isRecord(value)) return null;
     return isUint8Array(value.update) ? { update: value.update } : null;

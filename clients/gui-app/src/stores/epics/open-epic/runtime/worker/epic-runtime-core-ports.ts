@@ -151,8 +151,49 @@ export function buildEpicRuntimeCorePorts(
    */
   const heldLeases = new Map<string, () => void>();
 
+  /** Cancellable waits, by the caller's id. Closure state, not module state. */
+  const pendingAwaits = new Map<number, AbortController>();
+
   return {
     attachments: {
+      /**
+       * The WAITING read, keyed by the caller's id so it can be cancelled.
+       *
+       * Built on the runtime's own signal-shaped read rather than beside it:
+       * that machinery already holds in-flight waits outside the doc and
+       * re-points them across a replica swap, which is the hard part and is
+       * already tested. What the bridge adds is a NAME for the wait, because
+       * an `AbortSignal` cannot cross a `postMessage` and a call in flight has
+       * no other handle.
+       */
+      await: (awaitId, hash) => {
+        const controller = new AbortController();
+        pendingAwaits.set(awaitId, controller);
+        return source
+          .readAttachmentBytes(hash, controller.signal)
+          .then((bytes) => {
+            pendingAwaits.delete(awaitId);
+            return bytes;
+          });
+      },
+      cancel: (awaitId) => {
+        const controller = pendingAwaits.get(awaitId);
+        // `false` for an id that was never pending or has already settled.
+        // Bytes can land while a cancel is in flight, so that race is
+        // inherent - a no-op, not a fault.
+        if (controller === undefined) return false;
+        pendingAwaits.delete(awaitId);
+        controller.abort();
+        return true;
+      },
+      cancelAll: () => {
+        const pending = [...pendingAwaits.values()];
+        // Cleared BEFORE aborting: each abort settles a promise whose `.then`
+        // deletes its own entry, and mutating the map mid-iteration is how a
+        // wait gets skipped and left parked.
+        pendingAwaits.clear();
+        for (const controller of pending) controller.abort();
+      },
       /**
        * NON-WAITING, which is this port's whole contract.
        *

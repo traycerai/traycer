@@ -67,6 +67,11 @@ export interface EpicRuntimeCorePorts {
    */
   readonly attachments: {
     read(hash: string): Promise<Uint8Array | null>;
+    /** Waits. Settles `null` on cancel or on {@link cancelAll}. */
+    await(awaitId: number, hash: string): Promise<Uint8Array | null>;
+    cancel(awaitId: number): boolean;
+    /** Settle every pending wait `null`. Teardown must not park callers. */
+    cancelAll(): void;
   };
   /** The cold-byte tier: encoded bodies in, encoded bodies out. */
   readonly bodies: {
@@ -187,6 +192,13 @@ export function createEpicRuntimeWorkerCore(
       if (!serving) return Promise.resolve(inertMutationResult(mutation));
       return Promise.resolve(ports.mutations.apply(mutation));
     },
+    awaitAttachmentBytes(awaitId, hash) {
+      if (!serving) return Promise.resolve(null);
+      return ports.attachments.await(awaitId, hash);
+    },
+    cancelAttachmentAwait(awaitId) {
+      return ports.attachments.cancel(awaitId);
+    },
     encodeRootState() {
       // Empty rather than a throw while shutting down: the caller is a
       // transfer, and its `applied` check is what decides whether the source
@@ -226,6 +238,11 @@ export function createEpicRuntimeWorkerCore(
       if (!serving) return;
       serving = false;
       settledDemotes.clear();
+      // BEFORE the transport closes. A pending wait settles `null` rather than
+      // outliving the runtime it was waiting on - a caller parked on a
+      // disposed replica is the failure this pair was built to prevent, and
+      // teardown is the easiest way to reintroduce it.
+      ports.attachments.cancelAll();
       ports.transport.close();
       ports.durableStore.close();
     },

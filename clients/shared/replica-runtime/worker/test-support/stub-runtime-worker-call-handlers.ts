@@ -40,6 +40,12 @@ export function stubRuntimeWorkerCallHandlers(
     // Fail-closed for the same reason `command/enqueue` is: `applied: true`
     // from a stub would let a retention decision retire the only copy of a
     // document.
+    // Fail-closed: never resolves bytes, and reports nothing cancelled. A stub
+    // that resolved would let a caller believe a wait completed.
+    "attachment/await": () =>
+      Promise.resolve({ value: { bytes: null }, transfer: NO_TRANSFER }),
+    "attachment/cancel": () =>
+      Promise.resolve({ value: { cancelled: false }, transfer: NO_TRANSFER }),
     "root/encode": () =>
       Promise.resolve({
         value: { update: new Uint8Array() },

@@ -42,11 +42,23 @@ function createPorts(): EpicRuntimeCorePorts & {
   return {
     closed,
     settles,
-    attachments: { read: () => Promise.resolve(Uint8Array.from([1])) },
+    attachments: {
+      read: () => Promise.resolve(Uint8Array.from([1])),
+      await: () => Promise.resolve(null),
+      cancel: () => false,
+      cancelAll: () => {},
+    },
     // The shared fail-closed answer, so this fixture does not become a fifth
     // hand-written switch over the mutation union.
     mutations: { apply: (mutation) => inertMutationResult(mutation) },
-    commands: { apply: () => {} },
+    commands: {
+      apply: () => {},
+      enqueueWrite: () => ({ outcome: "refused" as const }),
+    },
+    root: {
+      encode: () => Promise.resolve(new Uint8Array()),
+      apply: () => Promise.resolve(false),
+    },
     bodies: {
       materialize: (artifactId) =>
         Promise.resolve({

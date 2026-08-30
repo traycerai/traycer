@@ -54,7 +54,9 @@ function framesUntil(worker: Worker, kind: string): Promise<WorkerFrame[]> {
           `no ${kind} frame within ${String(BOOT_TIMEOUT_MS)}ms; saw ${
             seen.length === 0
               ? "nothing"
-              : seen.map((frame) => frame.event.kind).join(", ")
+              : seen
+                .map((frame) => describeFrame(frame))
+                .join(", ")
           }`,
         ),
       );
@@ -72,6 +74,19 @@ function framesUntil(worker: Worker, kind: string): Promise<WorkerFrame[]> {
       reject(new Error(`worker failed to load: ${event.message}`));
     });
   });
+}
+
+/**
+ * A frame's kind, plus a `fatal`'s message.
+ *
+ * Without the message a composition failure reads as "saw fatal" and the
+ * diagnosis costs a round trip. The fatal IS the diagnosis - it carries what
+ * threw inside the worker, where no stack reaches the suite.
+ */
+function describeFrame(frame: WorkerFrame): string {
+  if (frame.event.kind !== "fatal") return frame.event.kind;
+  const message: unknown = Reflect.get(frame.event, "message");
+  return `fatal(${typeof message === "string" ? message : "?"})`;
 }
 
 function bootProbeWorker(): Worker {
@@ -105,7 +120,7 @@ describe("the runtime worker host in a worker realm", () => {
       // the handshake is what makes this a test of the version negotiation
       // rather than of module loading, and a worker that loads but disagrees
       // on the version answers `fatal` here instead.
-      worker.postMessage(bootstrapFrame(7));
+      worker.postMessage(bootstrapFrame(10));
       const received = await frames;
 
       // Asserted as the whole frame rather than by reaching into it: the shape
@@ -113,7 +128,7 @@ describe("the runtime worker host in a worker realm", () => {
       // `protocolVersion` out would still pass if the envelope changed.
       expect(received.at(-1)).toEqual({
         frame: "event",
-        event: { kind: "ready", protocolVersion: 7 },
+        event: { kind: "ready", protocolVersion: 10 },
       });
     } finally {
       worker.terminate();
@@ -130,7 +145,7 @@ describe("the runtime worker host in a worker realm", () => {
 
     try {
       const frames = framesUntil(worker, "ready");
-      worker.postMessage(bootstrapFrame(7));
+      worker.postMessage(bootstrapFrame(10));
       const kinds = (await frames).map((frame) => frame.event.kind);
 
       expect(kinds).toContain("accounting/books");
@@ -151,7 +166,7 @@ describe("the runtime worker host in a worker realm", () => {
 
     try {
       const frames = framesUntil(worker, "fatal");
-      worker.postMessage(bootstrapFrame(6));
+      worker.postMessage(bootstrapFrame(9));
       const received = await frames;
 
       expect(received.at(-1)).toMatchObject({

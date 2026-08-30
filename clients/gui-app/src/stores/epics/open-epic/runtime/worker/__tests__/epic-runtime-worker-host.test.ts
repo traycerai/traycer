@@ -79,6 +79,11 @@ function stubCore(
       }),
     applyMutation: (mutation) => Promise.resolve(inertMutationResult(mutation)),
     applyCommand: () => {},
+    enqueueWriteCommand: () => Promise.resolve({ outcome: "refused" as const }),
+    awaitAttachmentBytes: () => Promise.resolve(null),
+    cancelAttachmentAwait: () => false,
+    encodeRootState: () => Promise.resolve(new Uint8Array()),
+    applyRootUpdate: () => Promise.resolve(false),
     dispose: () => {},
   };
   return { ...base, ...overrides };

@@ -132,6 +132,13 @@ export interface EpicRuntimeWorkerCore {
    */
   enqueueWriteCommand(intent: unknown): Promise<EnqueuedWriteCommand>;
   /** The root replica's encoded state, for a transfer into another session. */
+  /**
+   * Wait for attachment bytes. Settles `null` on cancel or teardown, never on
+   * a timeout - "resolves when they land" is the contract.
+   */
+  awaitAttachmentBytes(awaitId: number, hash: string): Promise<Uint8Array | null>;
+  /** Stop a wait. `false` when the id was never pending or has settled. */
+  cancelAttachmentAwait(awaitId: number): boolean;
   encodeRootState(): Promise<Uint8Array>;
   /** Take a root state in. `applied` is a data-loss guard, never optimistic. */
   applyRootUpdate(update: Uint8Array, asLocalEdit: boolean): Promise<boolean>;
@@ -304,13 +311,31 @@ export function startEpicRuntimeWorkerHost(
         transfer: NO_TRANSFER,
       };
     },
+    "attachment/await": async (request) => {
+      // `null` without a core, immediately: there is no replica to wait on, and
+      // a wait that never settles is the park this pair exists to avoid.
+      const bytes =
+        core === null
+          ? null
+          : await core.awaitAttachmentBytes(request.awaitId, request.hash);
+      if (bytes === null) return { value: { bytes: null }, transfer: NO_TRANSFER };
+      const encoded = takeBytesForTransfer(bytes);
+      return { value: { bytes: encoded.bytes }, transfer: encoded.transfer };
+    },
+    "attachment/cancel": (request) => {
+      const cancelled =
+        core === null ? false : core.cancelAttachmentAwait(request.awaitId);
+      return Promise.resolve({ value: { cancelled }, transfer: NO_TRANSFER });
+    },
     "root/encode": async () => {
       // Empty bytes without a core, and the caller's `applied` guard is what
       // makes that safe: an empty update applies as nothing rather than as a
       // document, and the transfer site checks the answer before retiring the
       // source.
-      const update = core === null ? new Uint8Array() : await core.encodeRootState();
-      return { value: { update }, transfer: takeBytesForTransfer(update) };
+      const update =
+        core === null ? new Uint8Array() : await core.encodeRootState();
+      const encoded = takeBytesForTransfer(update);
+      return { value: { update: encoded.bytes }, transfer: encoded.transfer };
     },
     "root/apply": async (request) => {
       // FALSE without a core. A `true` here would tell a retention decision

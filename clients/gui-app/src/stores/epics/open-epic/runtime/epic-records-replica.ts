@@ -114,7 +114,7 @@ export interface EpicRecordsReplicaSources {
    * is not a record. Same split `installedArm` documents in the other
    * direction.
    */
-  readonly onHeldAttachmentsChanged: () => void;
+  readonly onHeldAttachmentsChanged: (hashes: readonly string[]) => void;
 
   readonly environment: RuntimeEnvironment;
   readonly session: EpicSessionFacts;
@@ -372,8 +372,19 @@ export function createEpicRecordsReplica(
    * nothing and never says so.
    */
   let heldAttachmentsObservedMap: Y.Map<unknown> | null = null;
+  const heldAttachmentHashesNow = (): readonly string[] => {
+    const held: string[] = [];
+    for (const [hash, value] of doc.getMap("attachments").entries()) {
+      if (value instanceof Uint8Array) held.push(hash);
+    }
+    return held;
+  };
   const onHeldAttachmentsChanged = (): void => {
-    sources.onHeldAttachmentsChanged();
+    // The VALUE is pushed, not fetched. An earlier cut had the runtime call
+    // back into `records.heldAttachmentHashes()`, which is a temporal dead
+    // zone: this fires during `bindCurrentReplica()`, while the `records`
+    // const is still being assigned from this very factory call.
+    sources.onHeldAttachmentsChanged(heldAttachmentHashesNow());
   };
   const bindHeldAttachmentsObserver = (): void => {
     if (heldAttachmentsObservedMap !== null) {
@@ -1440,13 +1451,7 @@ export function createEpicRecordsReplica(
     hasAttachmentBytes: (hash) =>
       doc.getMap("attachments").get(hash) instanceof Uint8Array,
 
-    heldAttachmentHashes: () => {
-      const held: string[] = [];
-      for (const [hash, value] of doc.getMap("attachments").entries()) {
-        if (value instanceof Uint8Array) held.push(hash);
-      }
-      return held;
-    },
+    heldAttachmentHashes: () => heldAttachmentHashesNow(),
 
     readAttachmentBytes(hash, signal): Promise<Uint8Array | null> {
       if (signal.aborted) return Promise.resolve(null);

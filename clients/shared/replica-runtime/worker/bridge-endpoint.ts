@@ -547,6 +547,20 @@ async function serve(
           transfer: reply.transfer,
         };
       }
+      case "attachment/await": {
+        const reply = await handlers["attachment/await"](call.request);
+        return {
+          result: { outcome: "ok", value: reply.value },
+          transfer: reply.transfer,
+        };
+      }
+      case "attachment/cancel": {
+        const reply = await handlers["attachment/cancel"](call.request);
+        return {
+          result: { outcome: "ok", value: reply.value },
+          transfer: reply.transfer,
+        };
+      }
       case "root/encode": {
         const reply = await handlers["root/encode"](call.request);
         return {
