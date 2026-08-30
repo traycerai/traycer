@@ -34,7 +34,12 @@ const { CATALOG } = vi.hoisted(
 // The catalog is deliberately constant across renders: the bug under test is
 // about the hook not re-running, so any per-render identity change would mask
 // it by re-triggering the effect for the wrong reason.
-vi.mock("@/hooks/composer/use-slash-commands", () => ({
+vi.mock("@/hooks/composer/use-slash-commands", async (importOriginal) => ({
+  // Spread the real module rather than listing exports, so an export added
+  // later (e.g. `NO_LOCAL_SLASH_COMMANDS`) cannot silently break this suite.
+  ...(await importOriginal<
+    typeof import("@/hooks/composer/use-slash-commands")
+  >()),
   useSlashCommands: () => ({
     data: CATALOG,
     isLoading: false,
@@ -69,6 +74,7 @@ function renderItems(store: ComposerPickerStore) {
       hostClient: null,
       harnessId: "claude",
       workingDirectories: [],
+      localCommands: [],
     }),
   );
 }

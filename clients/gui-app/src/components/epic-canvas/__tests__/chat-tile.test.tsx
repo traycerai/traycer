@@ -129,7 +129,13 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 // catalog would stay loading forever and every `$` prompt would (correctly) be
 // left as prose. Serve one skill so the gated conversion has something to
 // resolve; unknown names still fall through to the ungated `/` fallback.
-vi.mock("@/hooks/composer/use-slash-commands", () => ({
+vi.mock("@/hooks/composer/use-slash-commands", async (importOriginal) => ({
+  // Spread the real module rather than listing exports: the tile also imports
+  // `NO_LOCAL_SLASH_COMMANDS` from here, and a hand-listed factory silently
+  // breaks every test in this file the next time an export is added.
+  ...(await importOriginal<
+    typeof import("@/hooks/composer/use-slash-commands")
+  >()),
   useSlashCommands: () => ({
     data: [
       {

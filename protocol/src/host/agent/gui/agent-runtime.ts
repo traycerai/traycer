@@ -29,6 +29,7 @@ import {
   imageGenerationResultSchema,
   providerNoticeDetailSchema,
   providerNoticeKindSchema,
+  providerNoticeKindSchemaPreHarnessMessage,
   providerNoticeNormalizedMetadataSchema,
   providerNoticeToneSchema,
   toolCallManagedCommandSchema,
@@ -859,11 +860,18 @@ export type ProviderNoticeUpsertEvent = z.infer<
 // the released `chat.subscribe@1.0`/`@1.3`/`@1.4`/`@1.5`/`@1.6` blockDelta frames
 // (`1.1`/`1.2` predate `provider_notice.upsert` entirely). Hand-frozen, not
 // derived from the live shape.
+//
+// `noticeKind` carries a second, later freeze the name does not record: those
+// lines shipped three kinds and strict-decode the value, so `harness_message`
+// must never ride one. Freezing the schema is only half of it - the host also
+// has to stop EMITTING the new kind to a pre-`1.7` peer, since nothing
+// reparses an outgoing frame through this copy
+// (`chat-frame-projection.ts`, `projectHarnessMessageNoticeForPreV17`).
 const providerNoticeUpsertEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("provider_notice.upsert"),
   harnessId: guiHarnessIdSchemaPreReasonix,
-  noticeKind: providerNoticeKindSchema,
+  noticeKind: providerNoticeKindSchemaPreHarnessMessage,
   tone: providerNoticeToneSchema,
   status: z.enum(["streaming", "completed"]),
   title: z.string(),

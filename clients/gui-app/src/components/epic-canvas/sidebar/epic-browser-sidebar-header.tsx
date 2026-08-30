@@ -87,7 +87,11 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
   const [hostMenuOpen, setHostMenuOpen] = useState(false);
   const resolvedHost = useHostDirectoryEntryForHostId(hostPin.resolvedHostId);
-  const addBrowser = useAddBrowserAction(props.epicId, props.tabId);
+  const { add: addBrowser, isAdding } = useAddBrowserAction(
+    props.epicId,
+    props.tabId,
+    null,
+  );
   const handleAdd = useCallback(() => {
     if (collapsed) setPanelSectionCollapsed("browsers", false);
     addBrowser();
@@ -131,6 +135,7 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
         aria-label="Add browser"
         data-testid="epic-browsers-panel-add"
         className="text-muted-foreground hover:text-foreground"
+        disabled={isAdding}
         onClick={handleAdd}
       >
         <Plus className="size-4" aria-hidden />
@@ -204,7 +209,14 @@ function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
   );
 }
 
-function BrowserHostFilterChoices(props: { readonly surfaceKey: string }) {
+/**
+ * The radio list behind the panel's host filter: follow the active host, or pin
+ * a specific one. Exported because the mobile switcher's Browsers category
+ * mounts the same choices in its own menu shell rather than restating them.
+ */
+export function BrowserHostFilterChoices(props: {
+  readonly surfaceKey: string;
+}) {
   const options = useHostOptions();
   const hostPin = useSurfaceHostPin(props.surfaceKey);
   const value = hostPin.selection ?? FOLLOW_ACTIVE_HOST_VALUE;

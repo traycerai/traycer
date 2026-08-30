@@ -1,14 +1,6 @@
 import { useDraggable } from "@dnd-kit/core";
 import { Bot, Moon, TriangleAlert, X } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { toast } from "sonner";
+import { useMemo } from "react";
 import type {
   BrowserSessionInfo,
   BrowserTabDriver,
@@ -24,35 +16,20 @@ import {
   getPaneScopedDndId,
   type EpicCanvasBrowserTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { browserTabDriverNames } from "@/components/epic-canvas/sidebar/browser-driver-coalescing";
+import { useCoalescedBrowserTabDrivers } from "@/components/epic-canvas/sidebar/use-coalesced-browser-tab-drivers";
 import {
-  browserTabDriverChatSignature,
-  cancelCoalesceTimer,
-  restartCoalesceTimer,
-  type CoalesceTimer,
-} from "@/components/epic-canvas/sidebar/browser-driver-coalescing";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+  browserTabCloseLabel,
+  useBrowserTabClose,
+} from "@/components/epic-canvas/sidebar/use-browser-tab-close";
 import {
-  BROWSER_TAB_AGENT_ACTIVITY_MS,
   browserTabOrigin,
   type SettledTabIdentity,
 } from "@/lib/browser-view/browser-tab-display";
 import { cn } from "@/lib/utils";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import {
-  findOpenTileInTab,
-  useEpicCanvasStore,
-} from "@/stores/epics/canvas/store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
-
-function resolveCloseAriaLabel(
-  tabId: string,
-  title: string,
-  secondaryLabel: string | null,
-  isDuplicateTitle: boolean,
-): string {
-  if (!isDuplicateTitle) return `Close ${title}`;
-  return `Close ${title} (${secondaryLabel ?? tabId})`;
-}
 
 interface BrowserTabRowProps {
   readonly epicId: string;
@@ -103,15 +80,24 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
   } = props;
   const title = identity.title;
   const isFailed = tab.status === "crashed";
-  const [closePending, setClosePending] = useState(false);
-  const isClosing = tab.status === "closing" || closePending;
   const visibleDrivers = useCoalescedBrowserTabDrivers(tab.drivenBy);
-  const closeAriaLabel = resolveCloseAriaLabel(
-    tab.tabId,
+  const { isClosing, close: handleClose } = useBrowserTabClose({
+    epicId,
+    viewTabId,
+    hostId: session.hostId,
+    sessionId: session.sessionId,
+    tabId: tab.tabId,
+    title,
+    status: tab.status,
+    onCloseTab,
+  });
+  const closeAriaLabel = browserTabCloseLabel({
+    tabId: tab.tabId,
     title,
     secondaryLabel,
-    duplicateTitles.has(title),
-  );
+    isDuplicateTitle: duplicateTitles.has(title),
+    isClosing,
+  });
   const tile = useMemo(
     () =>
       makeBrowserSessionTileRef({
@@ -121,40 +107,6 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
       }),
     [session.hostId, session.sessionId, tab.tabId],
   );
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareClose = useEpicCanvasStore(
-    (state) => state.prepareCloseCanvasTabFocusTarget,
-  );
-  const handleClose = useCallback(() => {
-    if (isClosing) return;
-    setClosePending(true);
-    void onCloseTab(session.sessionId, tab.tabId)
-      .then(() => {
-        const pointer = findOpenTileInTab(viewTabId, tile);
-        if (pointer !== null) {
-          navigateNested(epicId, viewTabId, () =>
-            prepareClose(viewTabId, pointer.paneId, pointer.instanceId),
-          );
-        }
-      })
-      .catch(() => {
-        toast.error(`Couldn't close ${title}. Try again.`, {
-          duration: Infinity,
-        });
-        setClosePending(false);
-      });
-  }, [
-    epicId,
-    isClosing,
-    navigateNested,
-    onCloseTab,
-    prepareClose,
-    session.sessionId,
-    tab.tabId,
-    tile,
-    title,
-    viewTabId,
-  ]);
   const isActive = useEpicCanvasStore((state) => {
     const canvas = state.canvasByTabId[viewTabId];
     if (canvas === undefined || canvas.activePaneId === null) return false;
@@ -255,11 +207,7 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
           variant="ghost"
           size="icon-xs"
           disabled={isClosing}
-          aria-label={
-            isClosing
-              ? closeAriaLabel.replace("Close ", "Closing ")
-              : closeAriaLabel
-          }
+          aria-label={closeAriaLabel}
           data-testid={`epic-browser-sidebar-close-${tab.tabId}`}
           className={cn(
             "size-6 cursor-pointer justify-self-center text-muted-foreground opacity-0 transition-opacity duration-100 pointer-events-none motion-reduce:transition-none",
@@ -318,14 +266,7 @@ function BrowserTabStateSlot(props: {
   if (props.isClosing) return null;
   if (props.drivers.length > 0) {
     const driver = props.drivers[0];
-    const names = [
-      ...new Set(
-        props.drivers.map(
-          (candidate) =>
-            props.chatById.get(candidate.chatId)?.title ?? candidate.chatId,
-        ),
-      ),
-    ];
+    const names = browserTabDriverNames(props.drivers, props.chatById);
     const label = `Driven by ${names.join(", ")}`;
     return (
       <TooltipWrapper
@@ -363,88 +304,4 @@ function BrowserTabStateSlot(props: {
     );
   }
   return null;
-}
-
-const NO_VISIBLE_DRIVERS: readonly BrowserTabDriver[] = [];
-
-/**
- * Delays the driven-by glyph in both directions (see
- * `browser-driver-coalescing.ts`), except when the drivers change WITHIN the
- * chat set already on screen - that is the same agent still working, so it
- * shows through immediately.
- *
- * The immediate half runs during render (React's documented "storing
- * information from previous renders" pattern, so no cascading setState in an
- * effect); the effect owns only the pending timer. `useEffectEvent` is what
- * keeps `drivenBy`/`visible` out of the dependency array without mirroring
- * either into a ref: the effect re-runs on the driver signatures alone and
- * still reads the committed values.
- */
-function useCoalescedBrowserTabDrivers(
-  drivenBy: readonly BrowserTabDriver[],
-): readonly BrowserTabDriver[] {
-  const [visible, setVisible] =
-    useState<readonly BrowserTabDriver[]>(NO_VISIBLE_DRIVERS);
-  const timerRef = useRef<CoalesceTimer | null>(null);
-  const chatSignature = browserTabDriverChatSignature(drivenBy);
-  const driverSignature = drivenBy
-    .map((driver) => `${driver.chatId}\0${driver.requestId}`)
-    .join("\x01");
-  const [settledSignature, setSettledSignature] = useState(driverSignature);
-
-  if (settledSignature !== driverSignature) {
-    setSettledSignature(driverSignature);
-    if (visible.length > 0 && drivenBy.length > 0) {
-      const visibleChats = new Set(visible.map((driver) => driver.chatId));
-      setVisible(
-        drivenBy.every((driver) => visibleChats.has(driver.chatId))
-          ? drivenBy
-          : NO_VISIBLE_DRIVERS,
-      );
-    }
-  }
-
-  const scheduleVisibleDrivers = useEffectEvent(() => {
-    if (drivenBy.length === 0) {
-      timerRef.current =
-        visible.length === 0
-          ? cancelCoalesceTimer(timerRef.current)
-          : restartCoalesceTimer(
-              timerRef.current,
-              chatSignature,
-              BROWSER_TAB_AGENT_ACTIVITY_MS,
-              () => {
-                timerRef.current = null;
-                setVisible(NO_VISIBLE_DRIVERS);
-              },
-            );
-      return;
-    }
-    if (visible.length > 0) {
-      timerRef.current = cancelCoalesceTimer(timerRef.current);
-      return;
-    }
-    timerRef.current = restartCoalesceTimer(
-      timerRef.current,
-      chatSignature,
-      BROWSER_TAB_AGENT_ACTIVITY_MS,
-      () => {
-        timerRef.current = null;
-        setVisible(drivenBy);
-      },
-    );
-  });
-
-  useEffect(() => {
-    scheduleVisibleDrivers();
-  }, [chatSignature, driverSignature]);
-
-  useEffect(
-    () => () => {
-      timerRef.current = cancelCoalesceTimer(timerRef.current);
-    },
-    [],
-  );
-
-  return visible;
 }
