@@ -134,6 +134,37 @@ export const RELAY_PING_INTERVAL_MS = 25_000;
 export const RELAY_PONG_TIMEOUT_MS = 60_000;
 
 /**
+ * How many keepalive round trips a liveness window must be able to hold ON
+ * THE MEASURED PATH before silence counts as death (ticket 24, A8). Applies
+ * to both windows below; each keeps its own constant as the FLOOR, so this
+ * can only ever lengthen one - a fast path behaves exactly as it did before
+ * the estimator existed, and a jittery relayed one stops being read as dead
+ * (F11: ~20 false-positive `relay-missed-pongs` teardowns in 10.5h).
+ *
+ * Three, because neither window was ever sized to a single round trip: the
+ * idle one spans more than two ping intervals, and the awaiting one is a
+ * detection window that must survive a couple of retransmits. A path where
+ * three consecutive round trips cannot complete is one no keepalive can tell
+ * apart from a dead socket.
+ */
+export const RELAY_PONG_DEADLINE_ROUND_TRIPS = 3;
+
+/**
+ * Ceiling on how far measurement may stretch the AWAITING window, as a
+ * multiple of {@link RELAY_AWAITING_PONG_TIMEOUT_MS}.
+ *
+ * One estimator sizes both windows, and they are not the same kind of window.
+ * The idle one can absorb whatever a slow path needs - it is already a
+ * minute. The awaiting one is a DETECTION window whose entire value is being
+ * fast, and it is armed exactly when the user is waiting on an answer; a
+ * single stalled sample near the estimator's clamp would push 12s past a
+ * minute and hand the loss back to the idle detector this window exists to
+ * pre-empt. Three keeps a genuinely slow path measurable (36s) while keeping
+ * the fast lane fast.
+ */
+export const RELAY_AWAITING_DEADLINE_CAP_MULTIPLE = 3;
+
+/**
  * Deadline for the answer to a WAKE-time ping (`RelaySocket.pokeKeepalive`),
  * as opposed to the 60s the scheduled keepalive allows.
  *

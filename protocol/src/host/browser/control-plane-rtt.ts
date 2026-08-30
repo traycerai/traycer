@@ -44,7 +44,43 @@ export function deriveDeadlineMs(
   rttMs: number | null,
   floorMs: number,
 ): number {
-  if (rttMs === null) return floorMs;
-  const clamped = Math.min(Math.max(rttMs, 0), MAX_CONTROL_PLANE_RTT_MS);
-  return Math.max(floorMs, Math.round(spec.roundTrips * clamped));
+  return deriveRttDeadlineMs({
+    floorMs,
+    roundTrips: spec.roundTrips,
+    rttMs,
+    // The screencast probe keeps no variance term: its windows are budgets
+    // for work that must fit, not liveness verdicts on silence, and one
+    // outlier lengthening a budget is a cost with nothing bought.
+    varianceMs: 0,
+    maxRttMs: MAX_CONTROL_PLANE_RTT_MS,
+  });
+}
+
+/**
+ * `max(floorMs, roundTrips x (rtt + 4 x rttvar))` - the general form
+ * {@link deriveDeadlineMs} is the variance-free case of, and the one the relay
+ * keepalive uses (ticket 24, A8).
+ *
+ * The variance term is RFC 6298's: a deadline that decides whether silence
+ * means DEATH has to cover the path's jitter tail, not just its median, or a
+ * link measured at 105ms with a 523ms p99 gets torn down for being itself.
+ *
+ * `maxRttMs` is a parameter rather than a constant because the two callers
+ * clamp different things: a screencast probe over an established subscription
+ * (3s) and a relay keepalive that also spans device sleep (10s).
+ */
+export function deriveRttDeadlineMs(input: {
+  readonly floorMs: number;
+  readonly roundTrips: number;
+  readonly rttMs: number | null;
+  readonly varianceMs: number;
+  readonly maxRttMs: number;
+}): number {
+  if (input.rttMs === null) return input.floorMs;
+  const clamped = Math.min(Math.max(input.rttMs, 0), input.maxRttMs);
+  const variance = Math.min(Math.max(input.varianceMs, 0), input.maxRttMs);
+  return Math.max(
+    input.floorMs,
+    Math.round(input.roundTrips * (clamped + 4 * variance)),
+  );
 }
