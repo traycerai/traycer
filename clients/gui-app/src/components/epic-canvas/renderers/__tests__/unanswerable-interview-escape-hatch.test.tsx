@@ -55,6 +55,8 @@ const RESTORE_CONTEXT: ChatRestoreContextValue = {
   restoreActionPending: false,
   restoreCheckpoint: () => null,
   accumulatedFileChanges: [],
+  undeliveredChangeCount: 0,
+  accumulatedSetComplete: true,
   revertFileChanges: () => null,
 };
 
@@ -136,6 +138,7 @@ function props(
       fallbackToGlobalMentionRoots: true,
       currentEpicId: "epic-1",
       onSubmitMessage: () => false,
+      onSideChat: () => false,
       onSettingsChange: null,
       workspaceControls: null,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,

@@ -131,7 +131,11 @@ export function providerTabInputs(state: ProviderCliState): ProviderTabInputs {
  * second source of truth for it.
  */
 function providerSupportsManagedProfiles(providerId: ProviderId): boolean {
-  return providerId === "claude-code" || providerId === "codex";
+  return (
+    providerId === "claude-code" ||
+    providerId === "codex" ||
+    providerId === "grok"
+  );
 }
 
 /**

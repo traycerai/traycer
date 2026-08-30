@@ -1,7 +1,8 @@
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
+import { HOLDERS_REVISION_DIGEST_PATTERN } from "@traycer/protocol/host/worktree-schemas";
 import {
-  worktreeDeleteByPathServerFrameSchemaV11,
-  type WorktreeDeleteByPathServerFrameV11,
+  worktreeDeleteByPathServerFrameSchemaV12,
+  type WorktreeDeleteByPathServerFrameV12,
   type WorktreeDeleteOutputChannel,
   type WorktreeDeletePhase,
 } from "@traycer/protocol/host/worktree-delete-stream";
@@ -32,12 +33,17 @@ export interface WorktreeDeleteStreamCallbacks {
   readonly onComplete: (deleted: boolean) => void;
   /**
    * Terminal: the host declined (busy / unexpected error). `holders` is the
-   * T2 inventory on a 1.1 busy `failed` frame; `undefined` when the host
-   * omitted it (old host / non-busy failure).
+   * T2 inventory on a 1.1+ busy `failed` frame; `undefined` when the host
+   * omitted it (old host / non-busy failure). `code` is the @1.2 refusal
+   * (`WORKTREE_BUSY` / `WORKTREE_HOLDERS_CHANGED`); `undefined` on 1.1.
+   * `holdersRevision` is the host digest on a 1.2 frame; `undefined` when
+   * omitted.
    */
   readonly onFailed: (
     reason: string,
     holders: readonly WorktreeBusyHolder[] | undefined,
+    code: "WORKTREE_BUSY" | "WORKTREE_HOLDERS_CHANGED" | undefined,
+    holdersRevision: string | undefined,
   ) => void;
   /**
    * Connection-status changes. `reason` is non-null only on the `closed`
@@ -59,11 +65,17 @@ export interface WorktreeDeleteStreamClientOptions {
    * host strips the field).
    */
   readonly stopOwners: boolean;
+  /**
+   * `worktree.deleteByPath@1.2` v2 consent. Present with `stopOwners:
+   * true` is a digest compare against the fresh inventory before
+   * teardown. Absent reproduces @1.1 (a 1.1 host strips the field).
+   */
+  readonly expectedHoldersRevision: string | undefined;
   readonly callbacks: WorktreeDeleteStreamCallbacks;
 }
 
 /**
- * Typed wrapper over `WsStreamClient` for `worktree.deleteByPath@1.1`.
+ * Typed wrapper over `WsStreamClient` for `worktree.deleteByPath@1.2`.
  *
  * Subscribing kicks off the host-side delete pipeline for `worktreePath`.
  * The wrapper Zod-parses each inbound envelope and dispatches to the typed
@@ -85,6 +97,11 @@ export class WorktreeDeleteStreamClient {
       worktreePath: options.worktreePath,
       scripts: options.scripts,
       ...(options.stopOwners ? { stopOwners: true } : {}),
+      ...(options.stopOwners &&
+      options.expectedHoldersRevision !== undefined &&
+      HOLDERS_REVISION_DIGEST_PATTERN.test(options.expectedHoldersRevision)
+        ? { expectedHoldersRevision: options.expectedHoldersRevision }
+        : {}),
     });
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
@@ -109,11 +126,11 @@ export class WorktreeDeleteStreamClient {
     envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    const parsed = worktreeDeleteByPathServerFrameSchemaV11.safeParse(envelope);
+    const parsed = worktreeDeleteByPathServerFrameSchemaV12.safeParse(envelope);
     if (!parsed.success) {
       return;
     }
-    const frame: WorktreeDeleteByPathServerFrameV11 = parsed.data;
+    const frame: WorktreeDeleteByPathServerFrameV12 = parsed.data;
     switch (frame.kind) {
       case "started": {
         this.callbacks.onStarted(frame.hasTeardown);
@@ -132,7 +149,12 @@ export class WorktreeDeleteStreamClient {
         return;
       }
       case "failed": {
-        this.callbacks.onFailed(frame.reason, frame.holders);
+        this.callbacks.onFailed(
+          frame.reason,
+          frame.holders,
+          frame.code,
+          frame.holdersRevision,
+        );
         return;
       }
       case "pong": {

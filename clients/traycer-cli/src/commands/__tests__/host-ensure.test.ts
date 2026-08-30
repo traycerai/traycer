@@ -108,6 +108,9 @@ function baseArgs(overrides: Partial<HostEnsureArgs>): HostEnsureArgs {
     allowSelfInvocation: false,
     noServiceRegister: false,
     force: false,
+    // Every existing case is a solo invocation - the acquire-or-refuse path
+    // these tests already assert.
+    attemptAdoption: null,
     ...overrides,
   };
 }

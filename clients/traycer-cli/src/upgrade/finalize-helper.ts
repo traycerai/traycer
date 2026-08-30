@@ -589,6 +589,12 @@ export type ReconcileOutcome =
   | {
       readonly status: "applied-swap-failed";
       readonly errorMessage: string;
+      // Why the host is still stopped, when the finalizer's own attempt
+      // to restart the service also failed. The marker is deleted as it
+      // is read, so dropping this here would destroy the only durable
+      // record of that - leaving the next invocation able to report the
+      // failed swap but not the down host it caused.
+      readonly serviceStartError: string | null;
     }
   | { readonly status: "applied-parent-still-alive" }
   // The marker on disk describes a DIFFERENT staged upgrade than the one the
@@ -670,6 +676,7 @@ export async function reconcilePostFinalizeMarker(opts: {
       ? {
           status: "applied-swap-failed",
           errorMessage: parsed.errorMessage ?? "swap failed (no error message)",
+          serviceStartError: parsed.serviceStartError ?? null,
         }
       : { status: "applied-parent-still-alive" };
   }
@@ -754,10 +761,14 @@ export async function reconcilePostFinalizeMarker(opts: {
   if (parsed.status === "swap-failed") {
     // Helper tried and the swap itself failed. Leave pendingUpgrade
     // in place so Doctor still surfaces it; consume the marker.
+    // `serviceStartError` rides along because consuming the marker
+    // destroys it - and on this path it is the only thing that explains
+    // a host that is still down rather than merely un-upgraded.
     await safeUnlink(markerPath);
     return {
       status: "applied-swap-failed",
       errorMessage: parsed.errorMessage ?? "swap failed (no error message)",
+      serviceStartError: parsed.serviceStartError ?? null,
     };
   }
   // parent-still-alive - helper gave up waiting. Manifest unchanged.

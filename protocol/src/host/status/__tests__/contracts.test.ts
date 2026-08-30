@@ -4,9 +4,11 @@ import {
   hostBusyBreakdownSchema,
   hostStatusUpgradeV10ToV11,
   hostStatusUpgradeV11ToV12,
+  hostStatusUpgradeV12ToV13,
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
+  hostStatusV13,
 } from "../contracts";
 
 const V10_RESPONSE = {
@@ -179,15 +181,19 @@ describe("host.status@1.2 busyBreakdown", () => {
 });
 
 describe("host.status registry membership", () => {
-  it("installs @1.0, @1.1, and @1.2 on the unary registry at major 1", () => {
+  it("installs @1.0 through @1.3 on the unary registry at major 1", () => {
     const entry = hostRpcRegistry["host.status"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(2);
+    expect(entry[1].latestMinor).toBe(3);
     expect(entry[1].versions[0].contract).toBe(hostStatusV10);
     expect(entry[1].versions[1].contract).toBe(hostStatusV11);
     expect(entry[1].versions[2].contract).toBe(hostStatusV12);
     expect(entry[1].versions[2].upgradeFromPreviousVersion).toBe(
       hostStatusUpgradeV11ToV12,
+    );
+    expect(entry[1].versions[3].contract).toBe(hostStatusV13);
+    expect(entry[1].versions[3].upgradeFromPreviousVersion).toBe(
+      hostStatusUpgradeV12ToV13,
     );
   });
 });

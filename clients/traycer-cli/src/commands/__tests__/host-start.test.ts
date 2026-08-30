@@ -40,6 +40,11 @@ import type { StopIntentIdentity } from "../../host/stop-intent";
 import { hostHomeDir } from "../../store/paths";
 import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 import type { ProbeMarker } from "@traycer-clients/shared/host-lifecycle";
+import type {
+  HostUpdateAttemptRecord,
+  UpdateContenderAdmission,
+  UpdateContenderOutcome,
+} from "@traycer-clients/shared/host-update";
 
 // `traycer host start --environment <ch>` is the single supervisor entry
 // point. There is one launch path: read the environment's
@@ -64,6 +69,7 @@ function sampleRecord(executablePath: string): HostInstallRecord {
     signatureKeyId: "test-key",
     sizeBytes: 1234,
     executablePath,
+    executableSha256: null,
   };
 }
 
@@ -334,6 +340,12 @@ function makeRunStubs(
     // actual `~/.traycer/host/pid.json` and probes whatever host is live on
     // this machine. Every test below would then decline instead of spawning.
     findIncumbentHost: async () => null,
+    // Keep the legacy launch-path fixtures focused on host-start behavior;
+    // relaunch admission itself is covered by the dedicated table below.
+    admitHostStartSpawn: async (_environment, run) => ({
+      kind: "ran",
+      result: await run(),
+    }),
     // Same hazard class as `findIncumbentHost` above, now for the relaunch
     // loop:
     //   - unset, `hasStopIntent` falls through to the real implementation and
@@ -1688,6 +1700,238 @@ function startingAttemptIds(recorded: Recorded): string[] {
     .map((m) => String(m.fields.attemptId));
 }
 
+function hostStartAttemptRecord(
+  phase: HostUpdateAttemptRecord["phase"],
+  execution: HostUpdateAttemptRecord["execution"],
+): HostUpdateAttemptRecord {
+  return {
+    schemaVersion: 2,
+    attemptId: "attempt-host-start",
+    generation: 1,
+    sequence: 1,
+    trigger: "automatic",
+    targetVersion: "2.0.0",
+    phase,
+    execution,
+    continuation: phase === "waiting-to-activate" ? "activate" : null,
+    progress: null,
+    startedAt: "2026-08-25T00:00:00.000Z",
+    updatedAt: "2026-08-25T00:00:00.000Z",
+    completedAt: execution === "terminal" ? "2026-08-25T00:01:00.000Z" : null,
+    error: null,
+  };
+}
+
+function refusedHostStartAdmission(
+  admission: UpdateContenderAdmission,
+  record: HostUpdateAttemptRecord,
+): UpdateContenderOutcome<ChildProcess> {
+  return {
+    kind: "nonterminal-attempt",
+    disposition: "yield",
+    admission,
+    record,
+  };
+}
+
+function corruptHostStartAdmission(
+  admission: UpdateContenderAdmission,
+): UpdateContenderOutcome<ChildProcess> {
+  return {
+    kind: "record-fail-closed",
+    admission,
+    record: { kind: "corrupt" },
+  };
+}
+
+describe("runHostStart - attempt admission on every relaunch", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it.each([
+    [
+      "parked waiting-to-activate",
+      refusedHostStartAdmission(
+        "runtime-repair-maintenance",
+        hostStartAttemptRecord("waiting-to-activate", "parked"),
+      ),
+    ],
+    [
+      "corrupt attempt evidence",
+      corruptHostStartAdmission("runtime-repair-maintenance"),
+    ],
+  ] as const)(
+    "refuses a crash relaunch with %s evidence",
+    async (_name, refusal) => {
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined)
+        throw new Error("test spawn dependency missing");
+      let spawnCount = 0;
+      let admissionCount = 0;
+      const admittedThenRefused: Partial<RunHostStartDeps> = {
+        ...deps,
+        maxRelaunches: 1,
+        spawn: (command, args, options) => {
+          const spawned = originalSpawn(command, args, options);
+          const code = spawnCount === 0 ? 7 : 0;
+          spawnCount += 1;
+          setImmediate(() => child.emit("exit", code, null));
+          return spawned;
+        },
+        admitHostStartSpawn: async (_environment, run) => {
+          admissionCount += 1;
+          if (admissionCount === 1) {
+            return { kind: "ran", result: await run() };
+          }
+          return refusal;
+        },
+      };
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            admittedThenRefused,
+          ),
+        recorded,
+      );
+
+      expect(admissionCount).toBe(2);
+      expect(recorded.spawnCalls).toHaveLength(1);
+      expect(recorded.exited).toBe(0);
+      expect(
+        recorded.markers.some(
+          (marker) =>
+            marker.phase === "failed-to-spawn" &&
+            /attempt evidence|attempt-host-start is/.test(
+              String(marker.fields.error),
+            ),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("allows a terminal record to participate in an ordinary crash relaunch", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined)
+      throw new Error("test spawn dependency missing");
+    let spawnCount = 0;
+    let admissionCount = 0;
+    const terminalAllowed: Partial<RunHostStartDeps> = {
+      ...deps,
+      maxRelaunches: 1,
+      spawn: (command, args, options) => {
+        const spawned = originalSpawn(command, args, options);
+        const code = spawnCount === 0 ? 7 : 0;
+        spawnCount += 1;
+        setImmediate(() => child.emit("exit", code, null));
+        return spawned;
+      },
+      admitHostStartSpawn: async (_environment, run) => {
+        admissionCount += 1;
+        return { kind: "ran", result: await run() };
+      },
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart({ environment: "production", cwd: null }, terminalAllowed),
+      recorded,
+    );
+
+    expect(admissionCount).toBe(2);
+    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(recorded.exited).toBe(0);
+  });
+});
+
+describe("runHostStart - a child ending during admission's own post-spawn await", () => {
+  // `admitHostStartSpawn` owns real awaits AFTER `run()` returns the spawned
+  // child - an adoption grant's `acknowledgeSpawn()`, or
+  // `withUpdateContender`'s post-callback capability verification. The
+  // child's terminal-evidence listeners are attached synchronously inside
+  // `run()`, at the spawn site itself, precisely so an ending emitted in
+  // that window is not lost: an `error` used to be an uncaught event that
+  // crashed the supervisor, and an `exit` here left `await childEnding`
+  // pending forever with the attempt lock held.
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("settles a spawn-error emitted during admission's post-spawn await as a normal spawn failure", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const admitWithPostSpawnGap: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async (_environment, run) => {
+        const spawned = await run();
+        // The simulated round trip: the child is already spawned and
+        // listened to, but admission has not returned yet.
+        await new Promise<void>((resolve) => {
+          setImmediate(() => {
+            child.emit("error", new Error("ENOENT: spawn traycer-host"));
+            resolve();
+          });
+        });
+        return { kind: "ran", result: spawned };
+      },
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          admitWithPostSpawnGap,
+        ),
+      recorded,
+    );
+
+    // Reaches the normal async-spawn-failure path - a marker and a stable
+    // exit code - instead of hanging or taking the test process down with
+    // an uncaught exception.
+    expect(recorded.exited).toBe(66);
+    expect(
+      recorded.markers.some(
+        (marker) =>
+          marker.phase === "failed-to-spawn" &&
+          String(marker.fields.error).includes("ENOENT"),
+      ),
+    ).toBe(true);
+  });
+
+  it("settles an exit emitted during admission's post-spawn await instead of hanging forever", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const admitWithPostSpawnGap: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async (_environment, run) => {
+        const spawned = await run();
+        await new Promise<void>((resolve) => {
+          setImmediate(() => {
+            child.emit("exit", 0, null);
+            resolve();
+          });
+        });
+        return { kind: "ran", result: spawned };
+      },
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          admitWithPostSpawnGap,
+        ),
+      recorded,
+    );
+
+    // A clean exit recorded before `childEnding` even had listeners of its
+    // own must still reach the terminal-marker path, not strand the
+    // supervisor waiting on an ending it will never observe again.
+    expect(recorded.exited).toBe(0);
+    expect(recorded.markers.some((marker) => marker.phase === "exited")).toBe(
+      true,
+    );
+  });
+});
+
 describe("runHostStart - crash relaunch loop", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
 
@@ -2527,7 +2771,7 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(recorded.exited).toBe(0);
   });
 
-  it("re-resolves the install target on every attempt", async () => {
+  it("re-resolves the install target before each attempt and inside admission", async () => {
     // An install swap renames `install/` aside mid-life. A supervisor holding
     // the first attempt's path would relaunch a binary that has moved - today a
     // fresh launchd-spawned supervisor re-resolves, and the loop must keep that.
@@ -2548,7 +2792,7 @@ describe("runHostStart - crash relaunch loop", () => {
             maxRelaunches: 5,
             readInstallRecord: async () => {
               reads += 1;
-              return sampleRecord(reads === 1 ? exec : moved);
+              return sampleRecord(reads <= 2 ? exec : moved);
             },
             pathExists: async () => true,
           },
@@ -2556,7 +2800,10 @@ describe("runHostStart - crash relaunch loop", () => {
       recorded,
     );
 
-    expect(reads).toBe(2);
+    // The outer setup resolves once for diagnostics, then the admitted
+    // callback resolves again before each spawn to bind the selected binary
+    // to the live contender boundary.
+    expect(reads).toBe(4);
     expect(recorded.spawnCalls[0]?.command).toBe(exec);
     expect(recorded.spawnCalls[1]?.command).toBe(moved);
   });
@@ -3800,5 +4047,100 @@ describe("runHostStart - per-attempt setup failures stay inside the budget", () 
     expect(recorded.markers.some((m) => m.phase === "failed-to-spawn")).toBe(
       true,
     );
+  });
+});
+
+describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it is retried", () => {
+  // Codex round 3, P1 (download-stage). `host download` holds the update-attempt
+  // execution segment across its whole transfer, and mutual exclusion on that
+  // lock is unconditional on admission - decided before `dispositionFor` is
+  // consulted. So a host child that crashes mid-transfer gets its relaunch
+  // refused `busy` at `waitMs: 0`.
+  //
+  // The launchd half is the load-bearing part, and it is not hypothetical here:
+  // the shipped LaunchAgent sets `KeepAlive.SuccessfulExit = false`, which means
+  // a non-zero exit IS relaunched and a clean one deliberately is NOT. This
+  // suite already documents the same mechanism from the other side ("exited 69,
+  // which `KeepAlive.SuccessfulExit = false` treats as restartable, so launchd
+  // relaunched the job into a throttled crash loop"). Exiting 0 on a busy
+  // service refusal therefore left the host down with nothing to bring it back,
+  // because `host download` only promotes staged bytes and never restarts the
+  // service.
+  const exec = "/opt/traycer/host/install/traycer-host";
+  const busy = { kind: "busy" as const, holder: null };
+
+  it("service-manager launch + busy -> exit 76 (launchd relaunches a non-zero exit)", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const refused: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async () => busy,
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.agent",
+          },
+          refused,
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(76);
+    expect(recorded.spawnCalls).toHaveLength(0);
+  });
+
+  it("INTERACTIVE launch + busy -> still exit 0, unchanged", async () => {
+    // The scoping half. An interactive or Desktop-driven start has a caller
+    // watching that can decide for itself, so its exit semantics must not move;
+    // turning every busy refusal non-zero was the fleet-wide change this was
+    // deliberately narrowed away from.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const refused: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async () => busy,
+    };
+
+    await runUntilExit(
+      () => runHostStart({ environment: "production", cwd: null }, refused),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(0);
+  });
+
+  it("service launch refused for a NON-busy reason -> still exit 0", async () => {
+    // Only `busy` is transient. `lock-not-live`, `nonterminal-attempt`,
+    // `record-fail-closed` and `held-in-process` are states a relaunch cannot
+    // clear, so retrying them would be a throttled crash loop rather than a
+    // recovery - the exact failure this suite already records for exit 69.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const refused: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async () => ({
+        kind: "lock-not-live" as const,
+        verdict: { kind: "lost" as const, observed: null },
+      }),
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.agent",
+          },
+          refused,
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(0);
   });
 });

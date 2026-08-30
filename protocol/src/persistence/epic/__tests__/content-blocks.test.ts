@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   contentBlockSchema,
+  contentBlockSchemaPreImage,
+  contentBlockSchemaPreSettlement,
   decodeAutonomousResumeBlock,
   encodeAutonomousResumeBlock,
   providerNoticeMetadataSchema,
@@ -925,6 +927,58 @@ describe("textBlockSchema providerNotice (no new persisted block type)", () => {
     // The enrichment is not retained by the older reader - the base text
     // field is the faithful degradation.
     expect("providerNotice" in parsed).toBe(false);
+  });
+
+  const harnessMessageBlock = {
+    type: "text",
+    blockId: "notice-hm-1",
+    status: "completed",
+    timestamp: 1002,
+    text: "UserPromptSubmit operation blocked by hook: no secrets in prompts",
+    providerNotice: {
+      harnessId: "claude",
+      noticeKind: "harness_message",
+      tone: "warning",
+      title: "Claude Code warning",
+      message:
+        "UserPromptSubmit operation blocked by hook: no secrets in prompts",
+      details: [],
+      metadata: null,
+    },
+  };
+
+  it("round-trips a harness_message provider notice text block", () => {
+    const parsed = contentBlockSchema.parse(harnessMessageBlock) as TextBlock;
+    expect(parsed.type).toBe("text");
+    expect(parsed.providerNotice?.noticeKind).toBe("harness_message");
+    // The generic kind is deliberately metadata-less: it carries prose the
+    // harness wrote, not structured facts.
+    expect(parsed.providerNotice?.metadata).toBeNull();
+  });
+
+  it("keeps harness_message off every released line: the pre-Reasonix freeze rejects it", () => {
+    // `contentBlockSchemaPreImage` / `PreSettlement` are bound to the released
+    // `chat.subscribe@1.0`-`1.6` lines and the epic `2.0` record. A released
+    // peer strict-decodes the kind, so the freeze must reject the value rather
+    // than strip it - the host's frame projection is what keeps it from ever
+    // being sent (`chat-frame-projection.ts`).
+    expect(
+      contentBlockSchemaPreImage.safeParse(harnessMessageBlock).success,
+    ).toBe(false);
+    expect(
+      contentBlockSchemaPreSettlement.safeParse(harnessMessageBlock).success,
+    ).toBe(false);
+    // The same block minus the new kind still parses on those lines, so the
+    // rejection is the enum value and not the block shape.
+    expect(
+      contentBlockSchemaPreSettlement.safeParse({
+        ...harnessMessageBlock,
+        providerNotice: {
+          ...harnessMessageBlock.providerNotice,
+          noticeKind: "safety_buffering",
+        },
+      }).success,
+    ).toBe(true);
   });
 
   it("rejects an unknown normalized-metadata discriminant", () => {

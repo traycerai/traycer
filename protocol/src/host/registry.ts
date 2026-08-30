@@ -218,6 +218,7 @@ import {
   chatSubscribeV15,
   chatSubscribeV16,
   chatSubscribeV17,
+  chatSubscribeV18,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -242,8 +243,10 @@ import {
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
+  hostStatusV13,
   hostStatusUpgradeV10ToV11,
   hostStatusUpgradeV11ToV12,
+  hostStatusUpgradeV12ToV13,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -258,7 +261,9 @@ import {
 } from "@traycer/protocol/host/identity/contracts";
 import {
   hostDoctorV10,
+  hostGetInstallationInfoUpgradeV10ToV11,
   hostGetInstallationInfoV10,
+  hostGetInstallationInfoV11,
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
@@ -266,6 +271,8 @@ import {
   hostUpdateCheckV10,
   hostUpdateCheckV11,
   hostUpdateInstallV10,
+  hostUpdateInstallV11,
+  hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
   lifecycleClaimShutdownUpgradeV10ToV11,
@@ -304,6 +311,10 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
+import {
+  chatLocateRowV10,
+  chatReadAccumulatedFileChangeV10,
+} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -413,8 +424,10 @@ import {
 } from "@traycer/protocol/host/epic/contracts";
 import {
   epicListTuiAgentsUpgradeV10ToV11,
+  epicListTuiAgentsUpgradeV11ToV12,
   epicListTuiAgentsV10,
   epicListTuiAgentsV11,
+  epicListTuiAgentsV12,
 } from "@traycer/protocol/host/epic/tui-agent-records";
 import {
   workspaceBrowseFoldersV10,
@@ -561,6 +574,7 @@ import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/workt
 import {
   worktreeDeleteByPathStreamV10,
   worktreeDeleteByPathStreamV11,
+  worktreeDeleteByPathStreamV12,
 } from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
 import { providersChangedV10 } from "@traycer/protocol/host/providers-changed-stream";
@@ -571,6 +585,7 @@ import {
 import {
   hostChatRecordsSubscribeV10,
   hostChatRecordsSubscribeV11,
+  hostChatRecordsSubscribeV12,
 } from "@traycer/protocol/host/epic/chat-records";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
@@ -607,6 +622,7 @@ import {
   worktreeCreatePathsResponseSchema,
   worktreeDeleteRequestSchema,
   worktreeDeleteRequestSchemaV11,
+  worktreeDeleteRequestSchemaV12,
   worktreeDeleteResponseSchema,
   worktreeListHoldersRequestSchema,
   worktreeListHoldersResponseSchema,
@@ -1131,6 +1147,31 @@ export const worktreeDeleteUpgradeV10ToV11 = defineUpgradePath<
   upgradeRequest: (request) => ({
     ...request,
     stopOwners: false,
+  }),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `worktree.delete@1.2` - optional `expectedHoldersRevision`. Absent
+ * reproduces @1.1 (stop whatever the fresh inventory finds). Present
+ * with `stopOwners: true` is a digest-equality compare before teardown.
+ */
+export const worktreeDeleteV12 = defineRpcContract({
+  method: "worktree.delete",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: worktreeDeleteRequestSchemaV12,
+  responseSchema: worktreeDeleteResponseSchema,
+});
+
+export const worktreeDeleteUpgradeV11ToV12 = defineUpgradePath<
+  typeof worktreeDeleteV11,
+  typeof worktreeDeleteV12
+>({
+  from: worktreeDeleteV11.schemaVersion,
+  to: worktreeDeleteV12.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    expectedHoldersRevision: undefined,
   }),
   upgradeResponse: (response) => response,
 });
@@ -4140,7 +4181,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -4153,6 +4194,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: hostStatusV12,
           upgradeFromPreviousVersion: hostStatusUpgradeV11ToV12,
+        },
+        3: {
+          contract: hostStatusV13,
+          upgradeFromPreviousVersion: hostStatusUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -4253,11 +4298,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateInstallV11,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV10ToV11,
+          // The `dispatch-indeterminate` arm is response VALUE growth: a `@1.0`
+          // peer parses with its own schema, and a discriminated union refuses
+          // an unknown discriminator outright rather than ignoring it. So the
+          // arm is only safe if the host never sends it to such a peer, and
+          // this annotation is the reviewed claim that it does not.
+          //
+          // ⚠ TODAY THE CLAIM IS TRIVIALLY TRUE AND TOMORROW IT IS AN
+          // OBLIGATION. Nothing emits this arm yet — Ticket 06 added the
+          // decoder only, so that no `@1.1` peer generation exists that knows
+          // `attemptId` and cannot decode "there is no attempt id for this
+          // dispatch". When Ticket 07 wires the executor ACK and starts
+          // EMITTING it, that resolver must derive the arm from the version the
+          // caller negotiated and emit `cli-failed` (or whatever the ruling
+          // settles) to a `@1.0` caller. A post-hoc filter is not sufficient
+          // and neither is "we only call it from new clients": the validator
+          // cannot check this, which is exactly why it is written down here.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -4266,11 +4332,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.getInstallationInfo": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostGetInstallationInfoV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostGetInstallationInfoV11,
+          upgradeFromPreviousVersion: hostGetInstallationInfoUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -4796,6 +4866,45 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: { contract: chatForkGetV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The contents behind an accumulated-change summary on the windowed
+  // `chat.subscribe` line, which ships summaries and leaves the file bodies to
+  // be fetched on demand. Off-floor, so a GUI meeting an older host falls back
+  // to its legacy full-contents-in-snapshot path instead of losing the diff.
+  //
+  // Registered AHEAD of `chatSubscribeV18`, and that ordering was not an
+  // oversight: a stream minor negotiates to the highest the peers share, so
+  // registering that one IS the switch to windowed frames - it waited until
+  // the renderer could draw placeholder rows and drive viewport hydration. A
+  // unary method flips no negotiation - a client that never calls it cannot
+  // tell it exists.
+  "chat.readAccumulatedFileChange": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatReadAccumulatedFileChangeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Where a cross-tile jump target sits, for the two target kinds a client
+  // identifies by walking rendered models - which a COLD row does not have.
+  // Off-floor for the same reason as the read above: a GUI meeting an older
+  // host degrades to waiting for the row, which on a non-windowed host always
+  // arrives because that host serves the whole transcript.
+  "chat.locateRow": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatLocateRowV10, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
@@ -6578,7 +6687,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // surface of its own. Never on the unary released floor.
   "epic.listTuiAgents": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicListTuiAgentsV10,
@@ -6616,6 +6725,33 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           // IMPORT, so the registry throws for every consumer - the app, not
           // just a test. `bun run compile` passes clean through that, because
           // it is a runtime assertion over registry values, not a type.
+        },
+        2: {
+          contract: epicListTuiAgentsV12,
+          upgradeFromPreviousVersion: epicListTuiAgentsUpgradeV11ToV12,
+          // 1.2 DOES declare it, and the contrast with 1.1 above is the
+          // whole rule rather than an inconsistency.
+          //
+          // 1.1 added a plain object KEY (`docResident`), which zod strips
+          // unconditionally - nothing an older peer's schema refuses, so
+          // there was no growth to gate and declaring it would have thrown.
+          //
+          // 1.2 replaces the row OBJECT with a discriminated `origin` union
+          // whose third arm (`cloud`) is NARROW: it carries no
+          // `workspaceFolders` and no `agentMode`, both required on the 1.0
+          // row a 1.1 peer validates against. That is exactly the response
+          // VALUE GROWTH an older peer actively refuses, and the annotation
+          // is the reviewed claim that its emission is gated: the resolver
+          // serves cloud replicas only when `ctx.schemaVersion` is at least
+          // 1.2, so a 1.1 caller receives none and keeps parsing every row
+          // it is handed. The `registry` / `doc` arms are the 1.1 row plus
+          // one added key, which is why the older shape still projects.
+          //
+          // The gate is the NEGOTIATED VERSION here, unlike 1.1's, because
+          // the question is what the caller can PARSE rather than what it
+          // already holds - `hasDocReplica` answers the second and is
+          // untouched by this minor.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -7154,7 +7290,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.delete": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: worktreeDeleteV10,
@@ -7163,6 +7299,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: worktreeDeleteV11,
           upgradeFromPreviousVersion: worktreeDeleteUpgradeV10ToV11,
+        },
+        2: {
+          contract: worktreeDeleteV12,
+          upgradeFromPreviousVersion: worktreeDeleteUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -8803,15 +8943,23 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // @1.0 stays installed and FROZEN: a client that negotiated it never
   // receives the new kinds, and the host gates emission on the negotiated
   // version.
+  // @1.2 keeps the same four frame kinds and widens the row `tuiUpsert`
+  // carries to the three-arm `origin` union, so a delta about a terminal agent
+  // owned by ANOTHER of the viewer's hosts can be pushed. @1.1 stays installed
+  // and FROZEN on its registry-shaped row; the host gates the narrow `cloud`
+  // arm on the negotiated version exactly as it gates the @1.1 kinds.
   "host.chatRecords.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostChatRecordsSubscribeV10,
         },
         1: {
           contract: hostChatRecordsSubscribeV11,
+        },
+        2: {
+          contract: hostChatRecordsSubscribeV12,
         },
       },
     },
@@ -8853,13 +9001,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "worktree.deleteByPath": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: worktreeDeleteByPathStreamV10,
         },
         1: {
           contract: worktreeDeleteByPathStreamV11,
+        },
+        2: {
+          contract: worktreeDeleteByPathStreamV12,
         },
       },
     },
@@ -8937,7 +9088,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -8962,6 +9113,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         7: {
           contract: chatSubscribeV17,
+        },
+        8: {
+          contract: chatSubscribeV18,
         },
       },
     },

@@ -7,6 +7,7 @@ import {
 import { isFastModeEnabled } from "@/components/home/data/landing-options";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
   AssistantTurnMeta,
   ChatMessageRunState,
@@ -220,6 +221,13 @@ export function AssistantMessageBody({
             nextStepActions={nextStepActions}
             forkAction={forkAction}
             interviewDeliveryRetry={interviewDeliveryRetry}
+            // The turn's OWN harness, for an error row that offers to open that
+            // provider's settings. Taken from the row rather than from ambient
+            // app state so the link points at the provider that actually failed,
+            // even when the transcript is scrolled back to a turn from a harness
+            // the chat has since switched away from. `null` on legacy turns with
+            // no metadata; the affordance then falls back to the section root.
+            harnessId={meta?.provider ?? null}
           />
         );
       })}
@@ -515,8 +523,18 @@ function AssistantMetaTooltip({
             Agent
           </div>
           <AssistantMetaRow label="Provider" value={meta.providerLabel} />
-          {meta.profileLabel === null ? null : (
-            <AssistantMetaRow label="Profile" value={meta.profileLabel} />
+          {/* Either field alone is enough to justify the row. Gating on
+              `profileLabel` alone silently dropped the credential disclosure
+              on exactly the turns that most need it: a turn whose session
+              anchor is missing or harness-mismatched has no label, and if an
+              env credential ALSO won there, the bypass notice vanished with
+              the row. */}
+          {meta.profileLabel === null &&
+          meta.envCredentialVar === null ? null : (
+            <AssistantMetaRow
+              label="Profile"
+              value={assistantProfileMetaValue(meta)}
+            />
           )}
           {meta.modelLabel === null ? null : (
             <AssistantMetaRow label="Model" value={meta.modelLabel} />
@@ -580,6 +598,34 @@ function formatUsd(value: number): string {
   // "1.0000") should read "$1.00", not the misleading "$1.0000".
   const rounded = value.toFixed(4);
   return Number(rounded) >= 1 ? `$${value.toFixed(2)}` : `$${rounded}`;
+}
+
+/**
+ * The Profile row's value, annotated when an environment variable - not the
+ * named profile - is what actually authenticated the turn:
+ * `Terminal account (bypassed — env: ANTHROPIC_API_KEY)`.
+ *
+ * The bare label alone answers "which account ran this?" WRONG in that case,
+ * because a provider CLI prefers an env key/token over its own signed-in store.
+ * Annotating in place rather than adding a separate row keeps the correction
+ * attached to the claim it corrects - a reader who skims one line still gets the
+ * true answer.
+ *
+ * Rendered ONLY for a positive `envCredentialVar`. Absence is a real claim (the
+ * profile sign-in was used), so it needs no badge of its own - and a turn
+ * persisted before the field existed reads as absent, so a "signed in normally"
+ * marker here would be asserting something those rows never recorded.
+ *
+ * With no profile label (an anchor-less or harness-mismatched turn) the value
+ * still has to carry the disclosure, so it states the credential directly
+ * rather than prefixing an empty string and leaking a leading space.
+ */
+function assistantProfileMetaValue(meta: AssistantTurnMeta): string {
+  if (meta.envCredentialVar === null) return meta.profileLabel ?? "";
+  if (meta.profileLabel === null) {
+    return `env: ${meta.envCredentialVar} (sign-in bypassed)`;
+  }
+  return `${meta.profileLabel} (bypassed — env: ${meta.envCredentialVar})`;
 }
 
 function AssistantMetaRow({ label, value }: { label: string; value: string }) {
@@ -760,6 +806,8 @@ interface AssistantSegmentProps {
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
   interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
+  /** Harness that ran this turn, for provider-targeted error affordances. */
+  harnessId: GuiHarnessId | null;
 }
 
 function ApprovalSegmentCard({
@@ -796,6 +844,7 @@ function AssistantSegment({
   nextStepActions,
   forkAction,
   interviewDeliveryRetry,
+  harnessId,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -935,6 +984,7 @@ function AssistantSegment({
           code={segment.code}
           recoverable={segment.recoverable}
           findUnitId={findUnitId}
+          harnessId={harnessId}
         />
       );
     case "compaction":

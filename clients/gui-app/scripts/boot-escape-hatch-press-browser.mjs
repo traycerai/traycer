@@ -16,14 +16,17 @@
 //   bun scripts/boot-escape-hatch-press-browser.mjs
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { constants } from "node:fs";
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer as createTcpServer } from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import {
+  findChrome,
+  launchChromeWithDevTools,
+  terminateProcessTree,
+} from "./chrome-launcher.mjs";
 
 const projectRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -31,12 +34,10 @@ const projectRoot = path.resolve(
 );
 const fixtureUrlPath = "/src/__tests__/browser/boot-escape-hatch-press.html";
 const BUTTON = '[data-testid="host-boot-open-settings"]';
-const chromePath = await findChrome();
-const profilePath = await mkdtemp(path.join(tmpdir(), "traycer-boot-press-"));
+const chromePath = await findChrome("the boot escape hatch press regression");
 const vitePort = await freePort();
-let devtoolsPort = await freePort();
-while (devtoolsPort === vitePort) devtoolsPort = await freePort();
 let chrome;
+let chromeProfilePath;
 let client;
 let viteProcess;
 
@@ -70,38 +71,21 @@ try {
   });
   await waitForHttp(pageUrl, viteProcess, () => viteError, "Vite");
 
-  chrome = spawn(
+  const launched = await launchChromeWithDevTools(
     chromePath,
-    [
-      "--headless=new",
-      "--disable-background-networking",
-      "--disable-component-update",
-      "--disable-default-apps",
-      "--disable-extensions",
-      "--disable-features=Translate",
-      "--disable-sync",
-      "--no-default-browser-check",
-      "--no-first-run",
-      "--no-sandbox",
-      `--remote-debugging-port=${devtoolsPort}`,
-      `--user-data-dir=${profilePath}`,
-      "about:blank",
-    ],
-    { stdio: ["ignore", "ignore", "pipe"] },
+    "traycer-boot-press-",
   );
-  let chromeError = "";
-  chrome.stderr.setEncoding("utf8");
-  chrome.stderr.on("data", (chunk) => {
-    chromeError += chunk;
-  });
+  chrome = launched.chrome;
+  chromeProfilePath = launched.profilePath;
+  const devtoolsUrl = launched.devtoolsHttpUrl;
   await waitForHttp(
-    `http://127.0.0.1:${devtoolsPort}/json/version`,
+    new URL("/json/version", devtoolsUrl).href,
     chrome,
-    () => chromeError,
+    launched.readError,
     "Chrome DevTools",
   );
   const targetResponse = await fetch(
-    `http://127.0.0.1:${devtoolsPort}/json/new?about:blank`,
+    new URL("/json/new?about:blank", devtoolsUrl),
     { method: "PUT" },
   );
   if (!targetResponse.ok) {
@@ -195,13 +179,20 @@ try {
   process.exitCode = 1;
 } finally {
   client?.close();
-  chrome?.kill("SIGKILL");
-  viteProcess?.kill("SIGKILL");
-  await delay(300);
-  try {
-    await rm(profilePath, { recursive: true, force: true });
-  } catch {
-    // A leftover temp profile is not a test result.
+  // `terminateProcessTree` replaces the old `chrome.kill("SIGKILL")` plus a
+  // 300ms sleep: it takes down the whole process GROUP and verifies it is
+  // gone, so the profile below is removed from under a browser that is
+  // provably finished writing rather than one that has probably stopped.
+  if (chrome !== undefined) {
+    await terminateProcessTree(chrome);
+  }
+  viteProcess?.kill("SIGTERM");
+  if (chromeProfilePath !== undefined) {
+    await rm(chromeProfilePath, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+    });
   }
 }
 
@@ -263,24 +254,6 @@ async function rectCentre(client, selector) {
 
 function settle(client) {
   return evaluate(client, `new Promise((r) => setTimeout(r, 250))`);
-}
-
-async function findChrome() {
-  const candidates = [
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium",
-  ];
-  for (const candidate of candidates) {
-    try {
-      await access(candidate, constants.X_OK);
-      return candidate;
-    } catch {
-      continue;
-    }
-  }
-  throw new Error("No Chrome/Chromium binary found");
 }
 
 function freePort() {

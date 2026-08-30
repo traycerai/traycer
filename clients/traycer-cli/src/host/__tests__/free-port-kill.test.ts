@@ -18,6 +18,8 @@ import {
   PORT_RELEASE_VERIFY_TIMEOUT_MS,
 } from "../free-port-kill";
 
+const testMutationVerifier = async (): Promise<void> => undefined;
+
 type SpawnOverride = (command: string, args: readonly string[]) => ChildProcess;
 
 const mocks = vi.hoisted(() => ({
@@ -93,6 +95,7 @@ describe.skipIf(process.platform === "win32")(
             pid: process.pid,
             port: 65535,
             commandName: "host free-port",
+            verifyMutationCapability: testMutationVerifier,
           }),
         ).rejects.toMatchObject({
           details: { probe: "timeout" },
@@ -118,6 +121,7 @@ describe.skipIf(process.platform === "win32")(
             pid: process.pid,
             port: 65535,
             commandName: "host free-port",
+            verifyMutationCapability: testMutationVerifier,
           }),
         ).rejects.toMatchObject({
           details: { probe: "output-overflow" },
@@ -243,6 +247,7 @@ describe.skipIf(process.platform === "win32")(
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
+        verifyMutationCapability: testMutationVerifier,
       });
       await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS);
       const result = await pending;
@@ -264,6 +269,7 @@ describe.skipIf(process.platform === "win32")(
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
+        verifyMutationCapability: testMutationVerifier,
       });
       await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
       const result = await pending;
@@ -285,6 +291,7 @@ describe.skipIf(process.platform === "win32")(
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
+        verifyMutationCapability: testMutationVerifier,
       });
       await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS);
       const result = await pending;
@@ -306,6 +313,7 @@ describe.skipIf(process.platform === "win32")(
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
+        verifyMutationCapability: testMutationVerifier,
       });
       await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
       const result = await pending;
@@ -338,6 +346,7 @@ describe.skipIf(process.platform === "win32")(
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
+        verifyMutationCapability: testMutationVerifier,
       });
       await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS);
       const result = await pending;
@@ -364,6 +373,7 @@ describe.skipIf(process.platform === "win32")(
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
+        verifyMutationCapability: testMutationVerifier,
       });
       await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
       const result = await pending;
@@ -389,6 +399,7 @@ describe.skipIf(process.platform === "win32")(
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
+        verifyMutationCapability: testMutationVerifier,
       });
       await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
       const result = await pending;
@@ -418,6 +429,7 @@ describe.skipIf(process.platform === "win32")(
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
+        verifyMutationCapability: testMutationVerifier,
       });
       await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
       const result = await pending;
@@ -434,6 +446,7 @@ describe.skipIf(process.platform === "win32")(
         pid: TARGET_PID,
         port: PORT,
         commandName: "host free-port",
+        verifyMutationCapability: testMutationVerifier,
       });
       await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
       const result = await pending;
@@ -456,6 +469,7 @@ describe.skipIf(process.platform === "win32")(
           pid: TARGET_PID,
           port: PORT,
           commandName: "host free-port",
+          verifyMutationCapability: testMutationVerifier,
         });
         await vi.advanceTimersByTimeAsync(
           PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000,

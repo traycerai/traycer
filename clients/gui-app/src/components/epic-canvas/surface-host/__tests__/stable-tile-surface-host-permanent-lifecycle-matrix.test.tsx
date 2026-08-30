@@ -20,7 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { ChatStreamClientHandle } from "@/stores/chats/chat-session-store";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   __getChatSessionRegistryForTests,
@@ -456,6 +456,7 @@ function buildAssistantSnapshotMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -545,12 +546,11 @@ function installChatStreamFactory(
         emitChatSnapshot(chat, callbacks, messagesStore.get(chat.id));
       }
     }, 0);
-    const client: Pick<
-      ChatStreamClient,
-      "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
-    > = {
+    const client: ChatStreamClientHandle = {
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => true,
+      requestTranscriptRange: () => undefined,
+      requestResnapshot: () => undefined,
       close: () => {
         if (callbacksByChatId.get(chatId) === callbacks) {
           callbacksByChatId.delete(chatId);

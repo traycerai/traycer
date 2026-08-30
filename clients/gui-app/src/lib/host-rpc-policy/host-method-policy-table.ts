@@ -523,6 +523,17 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The on-demand body behind a windowed chat's accumulated-change summary.
+  // Latest-wins is safe because a newer click for the same summary supersedes
+  // an older one, and it is deliberately never polled: the live
+  // `chat.subscribe` snapshot pushes summary freshness while the UI fetches
+  // bodies only for the file the person opens.
+  "chat.readAccumulatedFileChange": { ...LATEST_SCHEDULING, poll: null },
+  // Where a cross-tile jump target sits, asked once when the target row is
+  // cold. Latest-wins for the same reason as the read above - a newer jump
+  // supersedes an older one - and never polled: the answer is a position in a
+  // transcript the live subscription is already reporting changes to.
+  "chat.locateRow": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.getLocalStorageSize": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.readSnapshotDiff": { ...LATEST_SCHEDULING, poll: null },
   // Clearing snapshots destructively removes locally retained data.

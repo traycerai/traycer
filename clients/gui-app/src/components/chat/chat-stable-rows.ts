@@ -1,4 +1,5 @@
 import type { ChatMessage } from "@/stores/composer/chat-store";
+import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 
 /**
  * Structural-sharing state for the chat timeline: the last row array handed
@@ -143,4 +144,95 @@ function isChatMessageUnchanged(a: ChatMessage, b: ChatMessage): boolean {
   return CHAT_MESSAGE_FIELD_CHECKS.every((isFieldUnchanged) =>
     isFieldUnchanged(a, b),
   );
+}
+
+// ---------------------------------------------------------------------------
+// The windowed line: the same structural sharing over rows that may be
+// placeholders.
+//
+// Added ALONGSIDE the `ChatMessage` functions above rather than replacing
+// them. The field table is the part that must not be disturbed - it is
+// compile-time exhaustive, and its whole purpose is that a missed field
+// freezes a row's content mid-stream. So the hydrated case still runs through
+// `isChatMessageUnchanged` unchanged, and this layer only decides which rows
+// are comparable in the first place.
+// ---------------------------------------------------------------------------
+
+export interface StableTranscriptListRowsState {
+  readonly byKey: ReadonlyMap<string, TranscriptListRow>;
+  readonly result: ReadonlyArray<TranscriptListRow>;
+}
+
+export const EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE: StableTranscriptListRowsState =
+  {
+    byKey: new Map(),
+    result: [],
+  };
+
+/** The row keys in order, as the list will see them. */
+export function transcriptListKeySequence(
+  rows: ReadonlyArray<TranscriptListRow>,
+): ReadonlyArray<string> {
+  return rows.map((row) => row.key);
+}
+
+/** {@link didChatTimelineKeySequenceChange} for the windowed row union. */
+export function didTranscriptListKeySequenceChange(
+  committed: ReadonlyArray<string> | undefined,
+  rows: ReadonlyArray<TranscriptListRow>,
+): boolean {
+  if (committed === undefined || committed.length === 0) return false;
+  if (committed.length !== rows.length) return true;
+  return rows.some((row, index) => committed[index] !== row.key);
+}
+
+/**
+ * Whether two rows under the same key describe the same thing.
+ *
+ * The `kind` check is the load-bearing one and it comes first: a placeholder
+ * that hydrated is NEVER unchanged, however its fields compare. That is the
+ * whole reason a placeholder is its own row type - the alternative, a
+ * `ChatMessage` whose content merely filled in, is a row the field table can
+ * legitimately call unchanged, and LegendList would keep rendering the empty
+ * one.
+ */
+function isTranscriptListRowUnchanged(
+  a: TranscriptListRow,
+  b: TranscriptListRow,
+): boolean {
+  if (a === b) return true;
+  if (a.ordinal !== b.ordinal) return false;
+  if (a.kind === "hydrated") {
+    if (b.kind !== "hydrated") return false;
+    return isChatMessageUnchanged(a.model, b.model);
+  }
+  if (b.kind !== "placeholder") return false;
+  // Skeleton entries arrive whole and are never mutated in place, so reference
+  // equality is the right test - and a redelivered chunk that genuinely
+  // replaces an entry SHOULD re-render the row it describes.
+  return a.entry === b.entry;
+}
+
+/** {@link computeStableChatTimelineRows} for the windowed row union. */
+export function computeStableTranscriptListRows(
+  rows: ReadonlyArray<TranscriptListRow>,
+  previous: StableTranscriptListRowsState,
+): StableTranscriptListRowsState {
+  const next = new Map<string, TranscriptListRow>();
+  let anyChanged = rows.length !== previous.byKey.size;
+
+  const result = rows.map((row, index) => {
+    const prevRow = previous.byKey.get(row.key);
+    const nextRow =
+      prevRow !== undefined && isTranscriptListRowUnchanged(prevRow, row)
+        ? prevRow
+        : row;
+    next.set(row.key, nextRow);
+    if (!anyChanged && previous.result[index] !== nextRow) {
+      anyChanged = true;
+    }
+    return nextRow;
+  });
+
+  return anyChanged ? { byKey: next, result } : previous;
 }

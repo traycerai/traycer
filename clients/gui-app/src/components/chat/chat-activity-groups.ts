@@ -4,7 +4,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/interview-tools";
 import { filePathFromInputDetail } from "@/lib/segment-summary";
 import { formatClockDuration } from "@/lib/format-duration";
-import { formatSingleLine } from "@/lib/utils";
+import { formatSingleLine } from "@/lib/text/format-single-line";
 import type {
   ApprovalSegment,
   CommandSegment,

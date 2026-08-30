@@ -110,10 +110,9 @@ export type { EpicTreeNodeType };
  * has a label. Identity-stable via `recordForArtifact` / `recordForChat`
  * caches keyed by source projection identity.
  *
- * `hostId` is the host hosting the artifact (per CLAUDE.md
- * tab-bound-to-host-for-life). Tui-agent rows pull it from the
- * `TuiAgentProjection` that already carries it; chat / artifact rows
- * inherit it from the host hosting the open-epic projection.
+ * `hostId` is the host the opened tile binds to for life. Chat and tui-agent
+ * rows preserve their projected owner host; artifacts and legacy / optimistic
+ * chats inherit the host serving the open-epic projection.
  */
 export interface EpicTreeRecord {
   readonly id: string;
@@ -409,7 +408,11 @@ function recordForArtifact(
   return record;
 }
 
-function recordForChat(c: ChatProjection, hostId: string): EpicTreeRecord {
+function recordForChat(
+  c: ChatProjection,
+  fallbackHostId: string,
+): EpicTreeRecord {
+  const hostId = c.hostId ?? fallbackHostId;
   const cached = chatRecordCache.get(c);
   if (cached !== undefined && cached.hostId === hostId) return cached;
   const record: EpicTreeRecord = {
@@ -479,14 +482,10 @@ export function epicNodeRefForNodeId(
 
 export function useEpicArtifactRecords(): ReadonlyArray<EpicTreeRecord> {
   const handle = useOpenEpicHandle();
-  // Chat / artifact projections do not yet carry a hostId (only tui-agents
-  // do). The host that SERVES this projection is the Epic session's host - the
-  // one `handle` was acquired against - not the app-wide addressable host:
-  // during an A→B re-point the A-backed Epic stays rendered while the
-  // addressable host already answers B, and every record stamped here is
-  // copied by its consumers (`AgentReferenceChip`, the route-focus opener) into
-  // a tile ref that is bound for life. Tui-agent rows override with their
-  // projected hostId.
+  // Artifacts and legacy / optimistic chats fall back to the host that SERVES
+  // this projection: the Epic session's, not the app-wide addressable host.
+  // Persisted chats keep their own immutable owner host, just like tui-agents;
+  // consumers copy this field into tile refs that are bound for life.
   const fallbackHostId =
     getEpicSessionHandleHostId(handle) ?? UNKNOWN_HOST_PLACEHOLDER;
   return useStore(

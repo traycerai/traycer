@@ -516,6 +516,8 @@ describe("composer draft store browserAnnotations", () => {
       streamClientFactory: () => ({
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       }),
     });

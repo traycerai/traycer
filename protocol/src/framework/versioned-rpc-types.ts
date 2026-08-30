@@ -20,6 +20,7 @@ export const RPC_ERROR_CODES = [
   "FORBIDDEN",
   "E_HOST_UNSUPPORTED",
   "WORKTREE_BUSY",
+  "WORKTREE_HOLDERS_CHANGED",
   "WORKTREE_REBIND_BLOCKED",
   "WORKTREE_SETUP_FAILED",
   "WORKTREE_SETUP_CANCELLED",
@@ -84,11 +85,17 @@ export type RpcErrorDetails = {
   code: RpcErrorCode;
   message: string;
   /**
-   * Typed `WORKTREE_BUSY` holder inventory. Optional: omitted on every other
-   * code, and omitted by hosts that predate the holders minor. See
+   * Typed holder inventory on `WORKTREE_BUSY` and
+   * `WORKTREE_HOLDERS_CHANGED`. Optional: omitted on every other code, and
+   * omitted by hosts that predate the holders minor. See
    * `worktreeBusyHolderSchema`.
    */
   holders?: readonly WorktreeBusyHolder[];
+  /**
+   * Host-computed digest of `holders`. Present on `WORKTREE_BUSY` and
+   * `WORKTREE_HOLDERS_CHANGED` from a current host; omitted otherwise.
+   */
+  holdersRevision?: string;
 };
 
 export type RpcContract<

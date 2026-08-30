@@ -39,9 +39,22 @@ vi.mock("../../service", async (importOriginal) => {
       restart: async () => {
         mocks.controllerCalls.push("restart");
       },
+      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
   };
 });
+
+// The real `publishHostStartAdoption` waits (up to 30s) for a service-
+// manager child to ack a spawn that never happens under a stubbed
+// controller. This suite pins the genuine cli-lock contention regression,
+// not the adoption handshake (that's `host-start-adoption.test.ts`), so
+// replace it with an immediately-satisfied lease.
+vi.mock("../../host/host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => undefined,
+    cancel: async () => undefined,
+  }),
+}));
 
 vi.mock("../../host/free-port-kill", () => ({
   killConflictingPortOwner: async (opts: {
@@ -182,6 +195,7 @@ describe.skipIf(process.platform === "win32")(
         const command = buildHostFreePortAndRestartCommand({
           pid: 4242,
           port: 51820,
+          deferIfParked: false,
         });
         const pending = command(fakeCtx());
 
@@ -194,7 +208,12 @@ describe.skipIf(process.platform === "win32")(
         writeFileSync(join(holdBarrierDir, "release"), "");
         const result = await pending;
         expect(mocks.killCalls).toEqual([
-          { pid: 4242, port: 51820, commandName: "host free-port-and-restart" },
+          {
+            pid: 4242,
+            port: 51820,
+            commandName: "host free-port-and-restart",
+            verifyMutationCapability: expect.any(Function),
+          },
         ]);
         expect(mocks.controllerCalls).toEqual(["restart"]);
         expect(result.data).toMatchObject({ killed: true });

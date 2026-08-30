@@ -889,13 +889,12 @@ export type { EdgeDropPosition } from "@/stores/epics/canvas/types";
  * the five zones.
  */
 /**
- * Corridor-aware pane-body resolution for TILE sources.
+ * Optional corridor-aware pane-body resolution.
  *
  * Unlike `getEdgeDropPositionFromPoint`, this can answer "no target": the
- * neutral corridor is inert, so a tile crossing a pane arms and commits
- * nothing there. Scoped to tile sources deliberately - a sidebar or rail drag
- * has no transit requirement across a pane and keeps its immediate positional
- * preview.
+ * neutral corridor is inert. The in-task tile interaction does not opt into
+ * this geometry: its split feedback and commit remain immediate across the
+ * full pane.
  */
 export function getPaneCorridorPositionFromPoint(
   point: PointLike,
@@ -1021,8 +1020,9 @@ export function getEpicCanvasDropPreview(
   rect: RectLike | null,
   point: PointLike,
   /**
-   * Tile sources resolve a pane body through the neutral corridor, which can
-   * answer "no target". Everything else keeps the five-position fallback.
+   * Opt-in corridor geometry can answer "no target". The production in-task
+   * tile interaction passes `false` to retain the immediate five-position
+   * pane split affordance.
    *
    * Required rather than defaulted: repo convention bans default parameters
    * (`fn(x = 1)`), and a silent `false` here is the difference between the

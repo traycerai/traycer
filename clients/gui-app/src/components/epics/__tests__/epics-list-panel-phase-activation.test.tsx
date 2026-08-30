@@ -1,3 +1,5 @@
+import "./stub-sweep-dialog-host-hooks";
+
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },
@@ -127,16 +129,6 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle" as const,
 }));
 
-// Worktree sweep reaches the host runtime; this suite renders the panel
-// without a <HostRuntimeProvider>, so stub both hooks the way the sibling
-// epics-list-panel suite does.
-// The list panel hands the sweep dialog the app-wide following client; the
-// panel renders outside a HostRuntimeProvider here, and the sweep query is
-// mocked below anyway.
-vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
-}));
-
 // The session-import prompt row sits above the list and reads the same host
 // runtime this file renders without. An unadvertised capability is what a host
 // that predates session import reports, and it draws no row at all - which is
@@ -147,26 +139,6 @@ vi.mock("@/hooks/session-import/use-session-import-available", () => ({
 
 vi.mock("@/hooks/session-import/use-session-import-status-query", () => ({
   useSessionImportStatus: () => ({ data: undefined }),
-}));
-
-vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
-  useEpicSweepWorktreeCandidatesForClient: () => ({
-    hostId: "host-test",
-    rows: [],
-    isPending: false,
-    isError: false,
-    checkedAt: null,
-    canRefresh: true,
-    refresh: () => Promise.resolve(),
-  }),
-}));
-
-vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
-  useEpicSweepWorktrees: () => ({
-    isPending: false,
-    mutate: () => {},
-  }),
-  useSweepingWorktreePaths: () => new Set<string>(),
 }));
 
 const PHASE_EPIC_ID = "phase-open-target";

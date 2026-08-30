@@ -26,6 +26,10 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import {
+  FilePathReveal,
+  FilePathRevealProvider,
+} from "@/components/file-path-tooltip";
+import {
   worktreeImportRows,
   type UnifiedPickerWorktreeRow,
 } from "@/components/home/worktree/worktree-unified-picker-model";
@@ -338,7 +342,7 @@ function ExistingWorktreeList(props: {
   };
 
   return (
-    <>
+    <FilePathRevealProvider>
       {showSearch ? (
         <div className="pb-1">
           <InputGroup className="h-8! rounded-lg border-input/40 bg-input/25 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
@@ -402,9 +406,11 @@ function ExistingWorktreeList(props: {
                   <span className="truncate">
                     {row.branch ?? workspaceFolderName(row.worktreePath)}
                   </span>
-                  <StartTruncatedText className="block text-ui-xs text-muted-foreground">
-                    {row.worktreePath}
-                  </StartTruncatedText>
+                  <FilePathReveal content={row.worktreePath} side="bottom">
+                    <StartTruncatedText className="block text-ui-xs text-muted-foreground">
+                      {row.worktreePath}
+                    </StartTruncatedText>
+                  </FilePathReveal>
                 </span>
                 {uncommitted !== undefined && uncommitted > 0 ? (
                   <span className="shrink-0 text-ui-xs text-muted-foreground">
@@ -419,6 +425,6 @@ function ExistingWorktreeList(props: {
           })
         )}
       </div>
-    </>
+    </FilePathRevealProvider>
   );
 }

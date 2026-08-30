@@ -119,6 +119,11 @@ const assistantMessage: JsonObject = {
   usage: null,
   reasoningEffort: null,
   serviceTier: null,
+  // Present because canonical form is the schema-NORMALIZED encoding, not a
+  // byte echo: a `.default(...)` field materializes on the way through, so the
+  // canonical fixture carries it exactly as `minReaderVersion` and the run
+  // settings do. What the round-trip guarantees is idempotence, not omission.
+  envCredentialVar: null,
   imageResolutions: [],
 };
 

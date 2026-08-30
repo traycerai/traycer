@@ -34,6 +34,7 @@ function terminalAgent(
     // An ordinary registry-backed agent - this suite exercises workspace-seed
     // ordering, not doc residency.
     docResident: false,
+    origin: "registry",
     harnessId: "claude",
     title: id,
     parentId: null,

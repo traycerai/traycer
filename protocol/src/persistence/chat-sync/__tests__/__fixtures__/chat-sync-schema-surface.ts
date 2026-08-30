@@ -1959,11 +1959,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                     },
                                                     "noticeKind": {
                                                       "type": "string",
-                                                      "enum": [
-                                                        "model_rerouted",
-                                                        "model_verification",
-                                                        "safety_buffering"
-                                                      ]
+                                                      "minLength": 1
                                                     },
                                                     "tone": {
                                                       "type": "string",
@@ -5039,6 +5035,17 @@ export const chatSyncSchemaSurfaceBaseline = {
                               }
                             ]
                           },
+                          "envCredentialVar": {
+                            "default": null,
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "imageResolutions": {
                             "default": [],
                             "type": "array",
@@ -5188,6 +5195,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                           "usage",
                           "reasoningEffort",
                           "serviceTier",
+                          "envCredentialVar",
                           "imageResolutions"
                         ],
                         "additionalProperties": false

@@ -1,4 +1,8 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  isServiceMutationAuthorityError,
+  verifyServiceMutationAuthority,
+} from "../mutation-authority";
 import { dirname, isAbsolute } from "node:path";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
@@ -37,7 +41,11 @@ import type {
 export function createLinuxController(
   runner: ProcessRunner | null,
 ): ServiceController {
-  const run = runner ?? runCommand;
+  const unverifiedRun: ProcessRunner = runner ?? runCommand;
+  const run: ProcessRunner = async (command, args, options) => {
+    await verifyServiceMutationAuthority();
+    return unverifiedRun(command, args, options);
+  };
   return {
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
@@ -45,6 +53,7 @@ export function createLinuxController(
     stop: (label, options) => stopService(label, run, options.force, "stop"),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
+    hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
     // There is no Desktop/SMAppService split on Linux, so the restart halves
     // are exactly the stop and start the command already performed - the
     // named seam only exists so `host restart` has one shape on every
@@ -93,6 +102,7 @@ async function assertSystemdUserReachable(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message:
@@ -111,7 +121,9 @@ async function installService(
 ): Promise<void> {
   await assertSystemdUserReachable(options.label, run);
   const manifestPath = serviceManifestPath(options.label);
+  await verifyServiceMutationAuthority();
   await mkdir(dirname(manifestPath), { recursive: true });
+  await verifyServiceMutationAuthority();
   await writeFile(
     manifestPath,
     buildUnit({ label: options.label, cli: options.cli }),
@@ -137,6 +149,7 @@ async function installService(
       },
     );
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     // Roll the write back: a unit file systemd was never told about (or
     // refused to enable) must not outlive the failed install - it would sit
     // in ~/.config/systemd/user as an orphan that a later daemon-reload
@@ -157,14 +170,19 @@ async function installService(
         timeoutMs: 10_000,
         tolerateNonZeroExit: true,
       },
-    ).catch(() => undefined);
+    ).catch((cause) => {
+      if (isServiceMutationAuthorityError(cause)) throw cause;
+    });
+    await verifyServiceMutationAuthority();
     await rm(manifestPath, { force: true }).catch(() => undefined);
     await run("systemctl", ["--user", "daemon-reload"], {
       env: undefined,
       cwd: undefined,
       timeoutMs: 10_000,
       tolerateNonZeroExit: true,
-    }).catch(() => undefined);
+    }).catch((cleanupCause) => {
+      if (isServiceMutationAuthorityError(cleanupCause)) throw cleanupCause;
+    });
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message: `systemd registration failed for ${unitName(options.label)}: ${describeCause(cause)} (the partially-written unit file was removed)`,
@@ -204,6 +222,7 @@ async function uninstallService(
       tolerateNonZeroExit: true,
     },
   );
+  await verifyServiceMutationAuthority();
   await rm(serviceManifestPath(options.label), { force: true });
   await run("systemctl", ["--user", "daemon-reload"], {
     env: undefined,
@@ -220,7 +239,9 @@ async function uninstallService(
     cwd: undefined,
     timeoutMs: 10_000,
     tolerateNonZeroExit: true,
-  }).catch(() => undefined);
+  }).catch((cause) => {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+  });
 }
 
 async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
@@ -325,7 +346,8 @@ async function cancelScheduledAutoRestart(
       timeoutMs: 15_000,
       tolerateNonZeroExit: true,
     });
-  } catch {
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     // The runner itself failing must not fail a stop the poll confirmed.
   }
 }
@@ -426,7 +448,8 @@ async function probeUnitSettled(
       timeoutMs: 10_000,
       tolerateNonZeroExit: true,
     });
-  } catch {
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     return false;
   }
   const state = result.stdout.trim();
@@ -456,6 +479,7 @@ async function startService(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `systemctl start failed for ${unitName(label)}: ${describeCause(cause)}`,
@@ -477,6 +501,7 @@ async function restartService(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `systemctl restart failed for ${unitName(label)}: ${describeCause(cause)}`,

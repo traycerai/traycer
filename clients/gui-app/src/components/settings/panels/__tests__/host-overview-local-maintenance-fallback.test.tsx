@@ -64,7 +64,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
   HostDoctorIssue,
-  HostGetInstallationInfoResponse,
+  HostGetInstallationInfoResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
@@ -212,7 +212,7 @@ function healedHandshake(): void {
 
 function managedInstallationInfo(
   version: string,
-): HostGetInstallationInfoResponse {
+): HostGetInstallationInfoResponseV11 {
   return {
     status: "managed",
     installRecord: {
@@ -228,6 +228,7 @@ function managedInstallationInfo(
       signatureKeyId: "key-1",
       sizeBytes: 2048,
       executablePath: `/tmp/traycer/${version}/host`,
+      executableSha256: null,
     },
     stagedRecord: null,
     cliManifest: null,

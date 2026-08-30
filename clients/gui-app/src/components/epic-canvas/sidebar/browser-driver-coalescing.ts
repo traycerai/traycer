@@ -44,3 +44,21 @@ export function cancelCoalesceTimer(current: CoalesceTimer | null): null {
   if (current !== null) window.clearTimeout(current.handle);
   return null;
 }
+
+/**
+ * The chats a driven tab names, deduplicated and in driver order. A chat the
+ * epic's records cannot resolve is named by its id rather than dropped - the
+ * tab IS being driven by it, and a shorter list would understate that.
+ */
+export function browserTabDriverNames(
+  drivers: readonly { readonly chatId: string }[],
+  chatById: ReadonlyMap<string, { readonly title: string }>,
+): readonly string[] {
+  return [
+    ...new Set(
+      drivers.map(
+        (driver) => chatById.get(driver.chatId)?.title ?? driver.chatId,
+      ),
+    ),
+  ];
+}

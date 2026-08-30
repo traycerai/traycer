@@ -57,6 +57,7 @@ function makeWsStreamClient(
     endpoint: () => null,
     bearer: () => null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,

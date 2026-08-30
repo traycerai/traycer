@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
 import { useChatMessageActions } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
@@ -17,10 +18,8 @@ import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-qu
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
 import type {
   InterviewAnswer,
-  Message,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
-import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import { importedProvenance } from "@traycer/protocol/persistence/epic/chat-events";
 import type {
   BackgroundItem,
@@ -62,11 +61,18 @@ import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
+import {
+  accumulatedChangeRows,
+  hostAccumulatedChangeRows,
+  accumulatedSummarySetComplete,
+  undeliveredHostChangeCount,
+} from "@/lib/chat/accumulated-change-rows";
 import { TeardownCommitDialog } from "@/components/worktree/teardown-commit-dialog";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
   droppedRunDirectoriesFromDraft,
   teardownHolderSetDrifted,
+  worktreeDraftCommitsRebind,
 } from "@/lib/worktree/owner-teardown-snapshot";
 import {
   takeArmedTeardownSubmit,
@@ -80,12 +86,21 @@ import {
   stagedWorktreeIntentRevision,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
-import { accumulatedFileChangesFromMessages } from "@/lib/chat/accumulated-file-changes-from-messages";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
 import type { ChatMessageActions } from "@/components/chat/chat-message";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
-import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
+import type {
+  ChatComposerSideChatInput,
+  ChatComposerSubmitInput,
+} from "@/components/chat/composer/chat-composer";
+import {
+  sideChatPlacementForTile,
+  startSideChat,
+} from "@/lib/commands/actions/start-side-chat";
+import type { CancelFn } from "@/lib/commands/actions/new-chat";
+import { visibleWorktreeIntent } from "@/lib/worktree/fork-workspace-seed";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   useChatById,
   useEpicLiveArtifactTitle,
@@ -102,14 +117,16 @@ import {
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import type {
-  ChatMessage as ChatMessageModel,
-  MessageSegment,
-} from "@/stores/composer/chat-store";
-import type {
-  ChatSessionState,
-  ChatSessionStoreHandle,
+import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import {
+  isWindowedTranscript,
+  type ChatSessionState,
+  type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import type {
+  OrdinalRange,
+  TranscriptWindow,
+} from "@/stores/chats/transcript-window";
 import {
   chatTranscriptEventRowId,
   chatTranscriptJumpKey,
@@ -124,6 +141,15 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import {
+  coldJumpOrdinal,
+  hostLocatorForJumpTarget,
+  messageIdForBlock,
+  messageIdForTranscriptTarget,
+  sentMessageAnchorId,
+} from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
+import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { useHostBinding } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -133,7 +159,10 @@ import {
 } from "@/hooks/agent/use-host-reachability";
 import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { TileHostLoadState } from "./tile-host-load-state";
-import { useEpicUpdateChatRunSettings } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  useEpicCreateChatForHost,
+  useEpicUpdateChatRunSettings,
+} from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatCloneOnHostSwitch } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
 import { CloneProfileRecovery } from "@/components/epic-canvas/renderers/clone-profile-recovery";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
@@ -141,7 +170,10 @@ import {
   findManualCompactCommand,
   promoteQueuedMessageToFront,
 } from "@/lib/chats/compact-conversation";
-import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
+import {
+  NO_LOCAL_SLASH_COMMANDS,
+  useSlashCommands,
+} from "@/hooks/composer/use-slash-commands";
 import { chatTileActivationQueryPolicy } from "./chat-tile-activation-query-policy";
 import {
   ChatDeadTileBanner,
@@ -237,7 +269,9 @@ import {
   chatTileCanAct,
   findPendingInterview,
   findUnanswerableInterviews,
+  forkableAssistantMessageIdAfter,
   latestForkableAssistantMessageId,
+  selectContextUsage,
 } from "./chat-tile-session-state";
 import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
@@ -251,6 +285,14 @@ const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 // click. Not tied to the send settling - just long enough that a double-click
 // or double-tap can't fire the compaction twice.
 const COMPACT_ACTION_LOCK_MS = 1500;
+
+/**
+ * Stable identity for the legacy line's "no whole-log partition".
+ *
+ * A fresh `[]` per render would change the identity of a `useMemo` dependency
+ * every time and re-partition the setup lifecycle on every streamed token.
+ */
+const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
 
 /** Per-chat compact-conversation state, keyed by `handle.chatId` - see the comment on `compactConversation`. */
 interface CompactChatState {
@@ -653,138 +695,6 @@ function chatTileAccessFlags(
   };
 }
 
-type BackgroundBlockSearchNode =
-  | MessageSegment
-  | {
-      readonly id: string;
-      readonly children: ReadonlyArray<BackgroundBlockSearchNode>;
-    }
-  | {
-      readonly id: string;
-      readonly files: ReadonlyArray<BackgroundBlockSearchNode>;
-    }
-  | {
-      readonly id: string;
-      readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
-    }
-  | {
-      readonly id: string;
-      readonly group: {
-        readonly segments: ReadonlyArray<BackgroundBlockSearchNode>;
-      };
-    };
-
-function segmentContainsBackgroundBlock(
-  segment: BackgroundBlockSearchNode,
-  blockId: string,
-): boolean {
-  if (segment.id === blockId) return true;
-  return backgroundBlockSearchChildren(segment).some((child) =>
-    segmentContainsBackgroundBlock(child, blockId),
-  );
-}
-
-function backgroundBlockSearchChildren(
-  segment: BackgroundBlockSearchNode,
-): ReadonlyArray<BackgroundBlockSearchNode> {
-  if ("children" in segment) return segment.children;
-  if ("files" in segment) return segment.files;
-  if ("segments" in segment) return segment.segments;
-  if ("group" in segment) return segment.group.segments;
-  return [];
-}
-
-function messageIdForBlock(
-  messages: ReadonlyArray<ChatMessageModel>,
-  blockId: string,
-): string | null {
-  const owner = messages.find((message) =>
-    message.segments.some((segment) =>
-      segmentContainsBackgroundBlock(segment, blockId),
-    ),
-  );
-  return owner?.id ?? null;
-}
-
-/**
- * Resolve a durable protocol message id to the row id used by the rendered
- * transcript. User rows keep their protocol id, while assistant records are
- * projected into turn-keyed rows (`assistant:<turnId>`) and retain the
- * protocol id only as `persistentMessageId`. Terminal notifications point at
- * that durable id, so an id-only lookup silently waits forever for a row that
- * can never exist.
- *
- * Prefer an exact rendered id. When projection split one assistant turn into
- * several rows, choose the trailing matching slice: completion and failure
- * notifications describe the terminal edge of that persisted assistant
- * record, and the completion marker is stamped on the final assistant slice
- * in the current transcript projection.
- */
-function messageIdForTranscriptTarget(
-  messages: ReadonlyArray<ChatMessageModel>,
-  messageId: string,
-): string | null {
-  const exact = messages.find((message) => message.id === messageId);
-  if (exact !== undefined) return exact.id;
-
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.persistentMessageId === messageId) return message.id;
-  }
-  return null;
-}
-
-/**
- * Resolves a `sent-message` transcript jump: the message holding this chat's
- * own "Sent message" card for one A2A exchange. Matched on receiver + the
- * VERBATIM text because those are the only identifiers the send block and the
- * comm-event row durably share - the sender's block id never reaches the
- * host's capture (origin refs are receiver-side). When the same text went to
- * the same receiver more than once, the send whose start time is nearest the
- * event's capture time wins; both clocks are the same host's.
- */
-function sentMessageAnchorId(
-  messages: ReadonlyArray<ChatMessageModel>,
-  target: {
-    readonly receiverAgentId: string;
-    readonly messageText: string;
-    readonly timestamp: number;
-  },
-): string | null {
-  const candidates: Array<{
-    readonly messageId: string;
-    readonly distance: number;
-  }> = [];
-  const visit = (messageId: string, node: BackgroundBlockSearchNode): void => {
-    if (
-      "kind" in node &&
-      node.kind === "tool" &&
-      node.agentMessageSend !== null &&
-      node.agentMessageSend.receiverAgentId === target.receiverAgentId &&
-      node.agentMessageSend.message === target.messageText
-    ) {
-      candidates.push({
-        messageId,
-        distance: Math.abs(node.startedAt - target.timestamp),
-      });
-    }
-    for (const child of backgroundBlockSearchChildren(node)) {
-      visit(messageId, child);
-    }
-  };
-  for (const message of messages) {
-    for (const segment of message.segments) {
-      visit(message.id, segment);
-    }
-  }
-  let best: { readonly messageId: string; readonly distance: number } | null =
-    null;
-  for (const candidate of candidates) {
-    if (best === null || candidate.distance < best.distance) best = candidate;
-  }
-  return best?.messageId ?? null;
-}
-
 interface BackgroundClickTarget {
   readonly blockId: string;
   readonly card: ChatScrollCardKind;
@@ -855,6 +765,16 @@ function transcriptJumpCardKind(
 
 export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const view = useChatTileSessionViewModel(props);
+  // Viewport → hydration bridge: `ChatMessages` computes which ordinals the
+  // reader is looking at; the session store turns that into range requests.
+  // Keyed on the handle so a reconnected store keeps receiving reports.
+  const viewHandle = view.handle;
+  const onVisibleOrdinalRangeChange = useCallback(
+    (range: OrdinalRange | null): void => {
+      viewHandle.store.getState().reportVisibleTranscriptRange(range);
+    },
+    [viewHandle],
+  );
   const hostId = useTabHostId();
   // Chat image byte reads are scoped here, once per tile, rather than per
   // rendered image: resolving the routed client is a directory-query
@@ -966,6 +886,45 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const consumeTranscriptJump = useChatTranscriptJumpStore(
     (s) => s.consumeJump,
   );
+  // Reached through the handle's store rather than the `view` projection: this
+  // is an ACTION, stable for the store's life, so routing it through the
+  // reactive selection would put a new identity in the effect's deps on every
+  // frame.
+  const requestTranscriptOrdinal = useStore(
+    viewHandle.store,
+    (s) => s.requestTranscriptOrdinal,
+  );
+  // A jump target this client cannot place on its own, once it is clear it
+  // cannot. Failing to match here does not mean "not delivered yet" the way it
+  // does elsewhere - it means "not hydrated, and hydration is exactly what the
+  // jump is blocked on" - so the host is asked where the row is. The per-kind
+  // rule is {@link hostLocatorForJumpTarget}'s.
+  const hostLocatorTarget = useMemo<TranscriptRowLocator | null>(() => {
+    if (transcriptJump === undefined) return null;
+    if (!view.snapshotLoaded) return null;
+    return hostLocatorForJumpTarget({
+      target: transcriptJump.target,
+      transcriptWindow: view.transcriptWindow,
+      messages: view.messages,
+    });
+  }, [
+    transcriptJump,
+    view.messages,
+    view.snapshotLoaded,
+    view.transcriptWindow,
+  ]);
+  const hostLocatedOrdinal = useChatLocateRow({
+    client: attachmentHostClient,
+    epicId: view.currentEpicId,
+    chatId: view.node.id,
+    target: hostLocatorTarget,
+    // The coordinate space this tile is in. An ordinal numbered in another one
+    // is discarded rather than jumped to - see the hook's own doc. `null` is
+    // the legacy line, which has no ordinal space at all - and no cold rows
+    // either, so `hostLocatorTarget` is never non-null there and the query
+    // never runs. The epoch is then only ever part of a disabled query's key.
+    epoch: view.transcriptWindow?.epoch ?? 0,
+  });
   // HOLD UNTIL THE TARGET RESOLVES, not merely until the snapshot loaded. The
   // chat transcript streams independently of the graph stream, so a warm tile
   // routinely learns about a message from the timeline BEFORE its own stream
@@ -981,6 +940,15 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     if (target.kind === "end") {
       scrollToTranscriptEnd();
       consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+      // Same release as the resolved-target path below, and it returns before
+      // reaching it. An `end` jump that REPLACED a parked request is the case:
+      // changing `pendingTranscriptJumpId` clears the previous request's TTL
+      // timer, and this pass consumes the new one, so the TTL effect returns
+      // early and never runs its release either. The ordinal then stays in
+      // `requiredHydrationOrdinalsOf` for the session - the planner re-fetches
+      // a row nothing is waiting for, and the budget holds that span against
+      // eviction.
+      requestTranscriptOrdinal(null);
       return;
     }
     const resolveTargetMessageId = (): string | null => {
@@ -997,12 +965,46 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         return sentMessageAnchorId(view.messages, target);
       }
       if (target.kind === "first-message") {
-        return view.messages[0]?.id ?? null;
+        // Ordinal 0 of the WHOLE transcript, not the first row this client
+        // happens to hold. On the windowed line `view.messages` is a bounded
+        // slice, so `messages[0]` is the top of the hydrated tail - and "jump
+        // to the first message" then navigated confidently to the middle of
+        // the chat, which is worse than not moving at all.
+        //
+        // Resolved through the skeleton, which is whole-chat: its entry at
+        // ordinal 0 names the real first row. If that row is not hydrated yet
+        // this returns null and the effect re-runs when it is, which is the
+        // same retry every other target kind relies on.
+        const firstRowId =
+          view.transcriptWindow === null
+            ? (view.messages[0]?.id ?? null)
+            : (view.transcriptWindow.skeleton[0]?.rowId ?? null);
+        if (firstRowId === null) return null;
+        return (
+          view.messages.find((message) => message.id === firstRowId)?.id ?? null
+        );
       }
       return messageIdForBlock(view.messages, target.blockId);
     };
     const messageId = resolveTargetMessageId();
-    if (messageId === null) return;
+    if (messageId === null) {
+      // Unresolved, and on the windowed line that is routinely because the
+      // target row is COLD rather than because it does not exist yet. Waiting
+      // alone deadlocks: the scroll is what moves the viewport, the viewport is
+      // what drives hydration, and the scroll is what we are holding back. So
+      // name the ordinal and let the planner fetch it; this effect re-runs when
+      // the row lands.
+      //
+      // Only for a target whose ROW ID is derivable client-side - a user
+      // message and an event anchor, whose row ids are the message id and
+      // `chatTranscriptEventRowId`. A block or a sent-message anchor is
+      // identified by walking rendered models, which a cold row has none of,
+      // and resolving those needs the host to locate the row.
+      requestTranscriptOrdinal(
+        coldJumpOrdinal(view.transcriptWindow, target, hostLocatedOrdinal),
+      );
+      return;
+    }
     if (target.kind === "block") {
       scrollToBlock(
         target.blockId,
@@ -1017,10 +1019,19 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       scrollToMessage(messageId);
     }
     consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+    // The jump is done, so the ordinal it was holding open is released. Doing
+    // this AFTER the consume rather than beside the resolve keeps the request
+    // alive across the beat between the two.
+    requestTranscriptOrdinal(null);
   }, [
     consumeTranscriptJump,
     hostId,
+    // The host's answer arrives asynchronously, so it is the retry signal for
+    // the two target kinds that need it - exactly as `view.messages` is for
+    // every other kind.
+    hostLocatedOrdinal,
     props.node.id,
+    requestTranscriptOrdinal,
     scrollToBlock,
     scrollToMessage,
     scrollToTranscriptEnd,
@@ -1028,6 +1039,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     view.lower.backgroundItems,
     view.messages,
     view.snapshotLoaded,
+    view.transcriptWindow,
   ]);
   // ...but a target that never arrives must not wait forever. One timer per
   // request id (transcript churn does not restart it): if the row has not shown
@@ -1041,11 +1053,31 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     const chatId = props.node.id;
     const timer = setTimeout(() => {
       consumeTranscriptJump(hostId, chatId, pendingTranscriptJumpId);
+      // The ordinal goes with it, and this is the ONLY place that can release
+      // it on this path. The effect above releases it after consuming - but it
+      // opens with `if (transcriptJump === undefined) return`, and consuming is
+      // exactly what makes that true, so the release there is unreachable once
+      // the TTL has fired. Left set, the ordinal stays in
+      // `requiredHydrationOrdinalsOf`: the planner re-requests a row nobody is
+      // waiting for on every pass, and the budget protects its span from
+      // eviction for the life of the session.
+      //
+      // Safe without an id check of its own. This timer is keyed on
+      // `pendingTranscriptJumpId`, so a newer jump replaces the effect and
+      // clears it before it can fire - the request-id guard is the dependency
+      // array, and `consumeTranscriptJump` carries the same id anyway.
+      requestTranscriptOrdinal(null);
     }, TRANSCRIPT_JUMP_TTL_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [consumeTranscriptJump, hostId, pendingTranscriptJumpId, props.node.id]);
+  }, [
+    consumeTranscriptJump,
+    hostId,
+    pendingTranscriptJumpId,
+    props.node.id,
+    requestTranscriptOrdinal,
+  ]);
   // Canvas-owned implementation of the chat file-change click contract. The
   // chat components receive only inert row handlers; they do not know about
   // canvas stores, tab ids, or tile factories.
@@ -1057,6 +1089,8 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
           chatId: view.node.id,
           sourceBlockIds: request.sourceBlockIds,
           filePath: request.filePath,
+          beforeHash: request.beforeHash,
+          afterHash: request.afterHash,
         });
         return {
           onClick: () =>
@@ -1135,7 +1169,12 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 tabHostId={view.tabHostId}
                 workspaceRoots={view.linkResolutionRoots}
                 messages={view.messages}
+                activeTurnId={view.activeTurnId}
+                transcriptWindow={view.transcriptWindow}
+                onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
                 baselineEpoch={view.transcriptBaselineEpoch}
+                hydrationSequence={view.transcriptHydrationSequence}
+                coldRewrittenMessageIds={view.coldRewrittenMessageIds}
                 backgroundItems={view.lower.backgroundItems}
                 scrollRequest={backgroundScrollRequest}
                 surfaceVisible={view.surfaceVisible}
@@ -1255,6 +1294,28 @@ function teardownSendRefusalReason(
   return undefined;
 }
 
+/**
+ * A send held by the rebind-consent dialog: the input to re-dispatch on
+ * confirm, the PATH-SPECIFIC dispatch that must run it — a confirmed
+ * compaction still needs its lock and queue promotion, not the composer's
+ * title bookkeeping — and the path's LIVE eligibility recheck. The values a
+ * path examined at click time may be a whole open dialog older by the time
+ * the user confirms (a blocking approval can arrive, the turn can start
+ * stopping), so `refusal` reads current state and returns the sentence to
+ * surface instead of dispatching, or `null` when the send is still
+ * eligible. Never a silent no-op: an ineligible confirm states why.
+ */
+type GatedChatSend = {
+  readonly submit: ChatComposerSubmitInput;
+  readonly dispatch: (input: ChatComposerSubmitInput) => boolean;
+  readonly refusal: () => string | null;
+};
+
+// The composer submit's own eligibility (access + sign-in) is re-checked
+// live by the dialog's confirm handler itself, so its slot carries the
+// always-eligible refusal. Module scope for a stable identity.
+const NO_LIVE_SEND_REFUSAL = (): string | null => null;
+
 // eslint-disable-next-line complexity
 function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const { handle, node, viewTabId, tileId, isActive, currentEpicId } = props;
@@ -1318,6 +1379,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const profile = useAuthStore((state) => state.profile);
   const activeHostId = useTabHostId();
   const currentUserId = profile?.userId ?? null;
+  // The `/btw` side chat's create, on this tab's own host client: the fork is
+  // bound to the source's host for life, like the source itself.
+  const createSideChat = useEpicCreateChatForHost();
   const localSnapshotClearMarker = useLocalSnapshotClearStore((store) =>
     localSnapshotsClearedAt(
       store.clearedAtByScope,
@@ -1384,10 +1448,22 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       fatalClose: s.fatalClose,
       snapshotLoaded: s.snapshotLoaded,
       transcriptBaselineEpoch: s.transcriptBaselineEpoch,
+      transcriptHydrationSequence: s.transcriptHydrationSequence,
+      coldRewrittenMessageIds: s.coldRewrittenMessageIds,
       chat: s.chat,
       access: s.access,
       messages: s.messages,
       events: s.events,
+      // Written in the same `set` as the two arrays above, so subscribing costs
+      // no extra render and no frame can render rows against the previous
+      // hydration's context.
+      transcriptRowContext: s.transcriptRowContext,
+      // Both already change identity on every windowed frame (they are rebuilt
+      // from the window), so subscribing to the window itself costs no extra
+      // render. The revert-scope resolution needs it to know whether the two
+      // arrays are the whole transcript or a slice of one.
+      transcriptWindow: s.transcriptWindow,
+      transcriptDerived: s.transcriptDerived,
       queue: s.queue,
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
@@ -1399,6 +1475,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingFileEditApprovals: s.pendingFileEditApprovals,
       pendingInterviews: s.pendingInterviews,
       accumulatedFileChanges: s.accumulatedFileChanges,
+      accumulatedFileChangeSummaries: s.accumulatedFileChangeSummaries,
+      accumulatedSummaryGenerationSeated: s.accumulatedSummaryGenerationSeated,
+      accumulatedSummaryAssemblyStarted: s.accumulatedSummaryAssemblyStarted,
+      accumulatedFileChangeCount: s.accumulatedFileChangeCount,
       backgroundItems: s.backgroundItems,
       pendingBackgroundStops: s.pendingBackgroundStops,
       pendingBackgroundStopAll: s.pendingBackgroundStopAll,
@@ -1568,6 +1648,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     {
       messages: state.messages,
       events: state.events,
+      // Published in the same `set` as `messages`, so the rows and what they
+      // render WITH can never be a frame apart - see `row-context.ts`.
+      rowContext: state.transcriptRowContext,
+      // Chat-level rather than per-row, and that is forced: a setup card's row
+      // id contains the window index, so a client that renumbered cannot look
+      // its own correction up by row id. See `adoptWholeLogIdentity`.
+      setupCardWindows:
+        state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
       pendingUserMessages: state.pendingUserMessages,
       liveAssistantMessage: state.liveAssistantMessage,
       activeTurn: state.activeTurn,
@@ -1680,15 +1768,46 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       ),
     [state.pendingActions],
   );
+  const windowedTranscript = isWindowedTranscript(state);
+  const accumulatedHostRows = useMemo(
+    () =>
+      hostAccumulatedChangeRows({
+        windowed: windowedTranscript,
+        changes: state.accumulatedFileChanges,
+        summaries: state.accumulatedFileChangeSummaries,
+      }),
+    [
+      state.accumulatedFileChangeSummaries,
+      state.accumulatedFileChanges,
+      windowedTranscript,
+    ],
+  );
   const accumulatedFileChanges = useMemo(
     () =>
-      accumulatedFileChangesFromMessages(
+      accumulatedChangeRows(
         renderedMessages,
-        state.accumulatedFileChanges,
+        accumulatedHostRows,
         activeTurnId,
       ),
-    [activeTurnId, renderedMessages, state.accumulatedFileChanges],
+    [accumulatedHostRows, activeTurnId, renderedMessages],
   );
+  const undeliveredChangeCount = undeliveredHostChangeCount({
+    windowed: windowedTranscript,
+    hostChangeCount: state.accumulatedFileChangeCount,
+    deliveredSummaryCount: state.accumulatedFileChangeSummaries.length,
+  });
+  // Carried BESIDE the count rather than derived from it downstream, because
+  // the two answer different questions and differ in exactly the case that
+  // matters. `undeliveredChangeCount` clamps at zero, so an OVERSHOOT - a
+  // revert lowering the host's count while the client still holds the previous
+  // summary array - reports `0`, which every gate reads as "complete".
+  const accumulatedSetComplete = accumulatedSummarySetComplete({
+    windowed: windowedTranscript,
+    hostChangeCount: state.accumulatedFileChangeCount,
+    deliveredSummaryCount: state.accumulatedFileChangeSummaries.length,
+    generationSeated: state.accumulatedSummaryGenerationSeated,
+    assemblyStarted: state.accumulatedSummaryAssemblyStarted,
+  });
   const restoreContext = useMemo(
     () => ({
       accessRole: state.access?.role ?? null,
@@ -1708,10 +1827,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       restoreActionPending,
       restoreCheckpoint: chatActions.restoreCheckpoint,
       accumulatedFileChanges,
+      undeliveredChangeCount,
+      accumulatedSetComplete,
       revertFileChanges: chatActions.revertFileChanges,
     }),
     [
       accumulatedFileChanges,
+      undeliveredChangeCount,
+      accumulatedSetComplete,
       activeHostId,
       composerActiveTurnStatus,
       chatActions.restoreCheckpoint,
@@ -1769,6 +1892,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     // and resolving against a catalog the composer never saw.
     workingDirectories: resolvedComposerMentionRoots,
     enabled: activationQueries.discoverActionSlashCommands,
+    localCommands: NO_LOCAL_SLASH_COMMANDS,
   });
   // Null until loaded, which makes a `$` prompt stay plain text rather than
   // chip against a catalog we have not seen yet.
@@ -1815,11 +1939,27 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     }
     return [...renderedMessages, activeInlineEdit.originalMessage];
   }, [activeInlineEdit, renderedMessages]);
-  // The rendered rows are the full history, so the pinned snapshot and the
-  // inline todo/task-tool stripping derive from the same walk.
+  // On the legacy line the rendered rows are the full history, so the pinned
+  // snapshot derives from the same walk that strips the inline segments. On
+  // the windowed line the rows are the HYDRATED SUBSET and the fold's answer
+  // comes from the host's whole-transcript copy instead - a todo created
+  // outside the hydrated spans would otherwise vanish from the dock. The
+  // discriminator is `transcriptDerived` itself (null exactly on the legacy
+  // line), the same rule `isWindowedTranscript` names.
   const pinnedTodoRenderState = useMemo(
-    () => buildPinnedTodoRenderState(displayedMessages),
-    [displayedMessages],
+    () =>
+      buildPinnedTodoRenderState(
+        displayedMessages,
+        state.transcriptDerived === null
+          ? { kind: "derive" }
+          : {
+              kind: "host",
+              todo: state.transcriptDerived.pinnedTodo,
+              taskItems: state.transcriptDerived.pinnedTaskTodoItems,
+              activeTurnId,
+            },
+      ),
+    [displayedMessages, state.transcriptDerived, activeTurnId],
   );
   const hostPendingInterviewIds = useMemo(
     () =>
@@ -1858,9 +1998,20 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // Host-pending blocks this transcript renders no card for. Yields a stable
   // empty array whenever nothing is stuck, so the composer memo chain below
   // does not churn per streaming token.
+  //
+  // On the windowed line the rendered scan is a scan of a SUBSET, so the host's
+  // judgement decides which of its misses are real - see the function's own
+  // doc. `null` is the legacy line, where absence in the transcript is proof.
   const unanswerableInterviews = useMemo(
-    () => findUnanswerableInterviews(renderedMessages, state.pendingInterviews),
-    [renderedMessages, state.pendingInterviews],
+    () =>
+      findUnanswerableInterviews(
+        renderedMessages,
+        state.pendingInterviews,
+        state.transcriptDerived === null
+          ? null
+          : state.transcriptDerived.interviewAnswerability,
+      ),
+    [renderedMessages, state.pendingInterviews, state.transcriptDerived],
   );
   const unanswerableInterviewsBusy = unanswerableInterviews.some((interview) =>
     interviewActionBlockIds.has(interview.blockId),
@@ -1915,6 +2066,13 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       chatParentId: state.chat?.parentId ?? null,
       messages: state.messages,
       events: state.events,
+      // `transcriptDerived !== null` is the line discriminator: on the legacy
+      // line the window is an inert empty value and `messages`/`events` are
+      // already whole, so handing it over would make the revert scan think it
+      // was looking at an empty transcript and answer "unknown" forever.
+      transcriptWindow: isWindowedTranscript(state)
+        ? state.transcriptWindow
+        : null,
       profile,
       chatActions,
       pendingActions: state.pendingActions,
@@ -1931,10 +2089,30 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // composer selector below once per flush. The latest completed boundary ID
   // is stable across flushes (a streaming row is never forkable), so the
   // gesture handler hanging off this stays quiet while a turn streams.
-  const latestForkBoundaryId = useMemo(
-    () => latestForkableAssistantMessageId(renderedMessages),
-    [renderedMessages],
-  );
+  //
+  // On the windowed line the scan cannot run here - `renderedMessages` is the
+  // hydrated subset, and the latest completed boundary is routinely outside
+  // it (scrolled cold, or evicted). The host derives it from the whole
+  // transcript and ships it on every snapshot; `null` from it is the real
+  // "no boundary yet", never "not hydrated".
+  //
+  // But "on every snapshot" is the whole problem, because the GATE in front of
+  // the gesture below is cleared by a live `turnStateChanged` frame. A turn
+  // completes, the gate opens immediately, and the derived boundary still names
+  // the previous turn until a snapshot lands - so the fork the user asks for
+  // omits the turn they just watched finish, silently and plausibly. Two
+  // clocks. `forkableAssistantMessageIdAfter` is the second hand: it looks only
+  // PAST the host's answer, in the live tail where a just-completed turn always
+  // is, so it can move the boundary forward and never backward.
+  const latestForkBoundaryId = useMemo(() => {
+    if (state.transcriptDerived === null) {
+      return latestForkableAssistantMessageId(renderedMessages);
+    }
+    const derived = state.transcriptDerived.latestForkableAssistantMessageId;
+    return (
+      forkableAssistantMessageIdAfter(renderedMessages, derived) ?? derived
+    );
+  }, [state.transcriptDerived, renderedMessages]);
   // The composer host picker's "switch host" gesture. Chats are host-bound for
   // life (clone-not-migrate), so switching means FORKING onto the picked
   // machine — through the same dialog the per-message fork buttons open,
@@ -1973,8 +2151,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly holders: readonly WorktreeBusyHolder[];
   } | null>(null);
-  const pendingSubmitRef =
-    useRef<ArmedTeardownSubmit<ChatComposerSubmitInput> | null>(null);
+  const pendingSubmitRef = useRef<ArmedTeardownSubmit<GatedChatSend> | null>(
+    null,
+  );
   const [teardownOwnerId, setTeardownOwnerId] = useState(node.id);
   if (node.id !== teardownOwnerId) {
     setTeardownOwnerId(node.id);
@@ -1993,11 +2172,19 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         userId: profile.userId,
       };
       const expectedTitle = state.chat?.title ?? node.name;
+      // Read whole from the store rather than from the tile's `useShallow`
+      // selection. The transcript window changes on every windowed frame, so
+      // subscribing the tile to it would widen a hot render path for a value
+      // only this handler reads - and reading it at SUBMIT time is what the
+      // question is about anyway.
+      const titleState = handle.store.getState();
       const shouldMarkTitlePending = shouldGenerateChatTitleForSubmittedMessage(
         {
-          chat: state.chat,
-          messages: state.messages,
-          pendingUserMessages: state.pendingUserMessages,
+          chat: titleState.chat,
+          messages: titleState.messages,
+          pendingUserMessages: titleState.pendingUserMessages,
+          transcriptWindow: titleState.transcriptWindow,
+          transcriptDerived: titleState.transcriptDerived,
           content: input.content,
         },
       );
@@ -2020,12 +2207,73 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [
       canAct,
       chatActions,
+      handle.store,
       node.id,
       node.name,
       profile,
       state.chat,
-      state.messages,
-      state.pendingUserMessages,
+    ],
+  );
+
+  // The one rebind-consent gate for every send-shaped path this tile owns —
+  // composer submits, next-step clicks, implement-plan, compaction. A path
+  // that calls `chatActions.sendMessage` without passing through here
+  // reopens one of two holes: a phantom disclosure on a no-op draft, or a
+  // staged rebind committing silently.
+  const submitThroughRebindGate = useCallback(
+    (send: GatedChatSend): boolean => {
+      const { submit, dispatch } = send;
+      const stagedKey: WorktreeStagingKey = {
+        surface: "owner",
+        hostId: activeHostId,
+        epicId: currentEpicId,
+        ownerKind: "chat",
+        ownerId: node.id,
+      };
+      // The disclosure is consent for the rebind a send would commit. A send
+      // whose draft commits nothing (none staged, or one that restates the
+      // committed binding) has no rebind to consent to — gating it would put
+      // "Send in the new folder?" in front of every steer of a busy agent.
+      if (
+        !worktreeDraftCommitsRebind({
+          binding: state.worktreeBinding,
+          draft: readStagedWorktreeIntent(stagedKey),
+          removedWorkspacePaths: [],
+        })
+      ) {
+        return dispatch(submit);
+      }
+      const snapshot = snapshotTeardownHolders(
+        droppedRunDirectoriesFromDraft({
+          binding: state.worktreeBinding,
+          draft: readStagedWorktreeIntent(stagedKey),
+          removedWorkspacePaths: [],
+        }),
+      );
+      const capture: WorktreeCommitCapture = {
+        draft: readStagedWorktreeIntent(stagedKey),
+        revision: stagedWorktreeIntentRevision(stagedKey),
+        binding: state.worktreeBinding,
+        removedWorkspacePaths: [],
+        stopTargets: snapshot.stopTargets,
+      };
+      if (snapshot.holders.length > 0) {
+        pendingSubmitRef.current = {
+          input: send,
+          capture,
+          ownerId: node.id,
+        };
+        setTeardownDialog({ holders: snapshot.holders });
+        return false;
+      }
+      return dispatch(submit);
+    },
+    [
+      activeHostId,
+      currentEpicId,
+      node.id,
+      snapshotTeardownHolders,
+      state.worktreeBinding,
     ],
   );
 
@@ -2063,6 +2311,38 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
         return true;
       }
+      return submitThroughRebindGate({
+        submit: input,
+        dispatch: dispatchUserSend,
+        refusal: NO_LIVE_SEND_REFUSAL,
+      });
+    },
+    [
+      activeEditingQueueItemId,
+      canAct,
+      chatActions,
+      dispatchUi,
+      dispatchUserSend,
+      profile,
+      submitThroughRebindGate,
+    ],
+  );
+  // `/btw` / `/side`: fork this chat and ask there. The tile contributes what
+  // only it knows about its own chat - owner, title, lineage, workspace, pane -
+  // and `startSideChat` owns the create, its recovery, and the open. Deliberately
+  // not gated on `canAct`: a viewer of someone else's chat can still fork it
+  // (the fork dialog allows exactly that), and the side chat is the viewer's own.
+  const sideChatCancelsRef = useRef(new Set<CancelFn>());
+  useEffect(() => {
+    const cancels = sideChatCancelsRef.current;
+    return () => {
+      for (const cancel of cancels) cancel();
+      cancels.clear();
+    };
+  }, []);
+  const startSideChatFromComposer = useCallback(
+    (input: ChatComposerSideChatInput): boolean => {
+      if (profile === null) return false;
       const stagedKey: WorktreeStagingKey = {
         surface: "owner",
         hostId: activeHostId,
@@ -2070,43 +2350,46 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         ownerKind: "chat",
         ownerId: node.id,
       };
-      const snapshot = snapshotTeardownHolders(
-        droppedRunDirectoriesFromDraft({
-          binding: state.worktreeBinding,
-          draft: readStagedWorktreeIntent(stagedKey),
-          removedWorkspacePaths: [],
-        }),
-      );
-      const capture: WorktreeCommitCapture = {
-        draft: readStagedWorktreeIntent(stagedKey),
-        revision: stagedWorktreeIntentRevision(stagedKey),
-        binding: state.worktreeBinding,
-        removedWorkspacePaths: [],
-        stopTargets: snapshot.stopTargets,
-      };
-      if (snapshot.holders.length > 0) {
-        pendingSubmitRef.current = {
-          input,
-          capture,
-          ownerId: node.id,
-        };
-        setTeardownDialog({ holders: snapshot.holders });
-        return false;
-      }
-      return dispatchUserSend(input);
+      const cancel = startSideChat({
+        epicId: currentEpicId,
+        tabId: viewTabId,
+        hostId: activeHostId,
+        userId: profile.userId,
+        sourceChatId: node.id,
+        sourceChatTitle: state.chat?.title ?? "",
+        sourceOwnerUserId: state.chat?.userId ?? null,
+        content: input.content,
+        settings: input.settings,
+        accountContext: useAccountContextStore.getState().accountContext,
+        // The source's visible workspace - its binding overlaid with any unsent
+        // staged pick - so the fork works where the source's composer shows.
+        worktreeIntent: visibleWorktreeIntent(
+          state.worktreeBinding,
+          readStagedWorktreeIntent(stagedKey),
+        ),
+        placement: sideChatPlacementForTile(viewTabId, node.id),
+        createChat: (request, callbacks) =>
+          createSideChat.mutate(request, callbacks),
+        onHistoryUnavailable: (reason) => {
+          toast(
+            reason === "no-checkpoint"
+              ? "This agent hasn't replied yet, so the side chat starts without its history."
+              : "This host can't fork chat history yet, so the side chat starts without it.",
+          );
+        },
+      });
+      sideChatCancelsRef.current.add(cancel);
+      return true;
     },
     [
-      activeEditingQueueItemId,
       activeHostId,
-      canAct,
-      chatActions,
+      createSideChat,
       currentEpicId,
-      dispatchUi,
-      dispatchUserSend,
       node.id,
       profile,
-      snapshotTeardownHolders,
+      state.chat,
       state.worktreeBinding,
+      viewTabId,
     ],
   );
   const canSendNextStep =
@@ -2116,27 +2399,71 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       state.pendingApprovals,
       state.pendingFileEditApprovals.length,
     );
+  // `canSendNextStep`, re-derived from LIVE store state for the consent
+  // dialog's deferred dispatch. The render-scope boolean above is what the
+  // click checked, and it can be a whole open dialog stale by confirm time —
+  // reading the stores imperatively is the point, not a shortcut.
+  const nextStepSendRefusal = useCallback((): string | null => {
+    const live = handle.store.getState();
+    if (
+      !chatTileCanAct(
+        live.connectionStatus,
+        live.access?.canAct === true,
+        useAuthStore.getState().profile !== null,
+      )
+    ) {
+      return "You don't have permission to send.";
+    }
+    const liveStopPending = Object.values(live.pendingActions).some(
+      (action) => action.action === "stop",
+    );
+    if (
+      liveStopPending ||
+      resolvedTurnStatus(live, composerTurnStatus(live.runStatus)) ===
+        "stopping"
+    ) {
+      return "The agent is stopping — send again once it settles.";
+    }
+    if (
+      composerHasBlockingApprovals(
+        live.pendingApprovals,
+        live.pendingFileEditApprovals.length,
+      )
+    ) {
+      return "Resolve the pending approval before sending.";
+    }
+    return null;
+  }, [handle.store]);
   const sendNextStep = useCallback(
     (option: TraycerNextStepOption): boolean => {
       if (!canSendNextStep) return false;
-      const sender = userMessageSenderForProfile(profile);
-      if (sender === null) return false;
+      if (userMessageSenderForProfile(profile) === null) return false;
       const content = buildSubmittedChatJSONContent(
         plainTextPromptContent(option.prompt),
         slashCatalog,
       );
-      return (
-        chatActions.sendMessage({
+      return submitThroughRebindGate({
+        submit: {
           content,
-          sender,
-          settings: nextStepSettings,
+          contentText: option.prompt,
           attachments: [],
+          settings: nextStepSettings,
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
-        }) !== null
-      );
+        },
+        dispatch: dispatchUserSend,
+        refusal: nextStepSendRefusal,
+      });
     },
-    [canSendNextStep, chatActions, nextStepSettings, profile, slashCatalog],
+    [
+      canSendNextStep,
+      dispatchUserSend,
+      nextStepSendRefusal,
+      nextStepSettings,
+      profile,
+      slashCatalog,
+      submitThroughRebindGate,
+    ],
   );
   // Runs the harness's own compaction from the context-usage chip. Never
   // interrupts: with a turn running (or work already queued) the compact
@@ -2168,18 +2495,18 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     [],
   );
-  const compactConversation = useCallback(
-    (commandName: string): void => {
-      if (!canSendNextStep) return;
+  // The compaction's own dispatch behind the rebind gate: the lock, the
+  // queue-or-run-now policy, and the promotion belong to the moment the send
+  // actually leaves — a consent dialog may sit between the click and this, so
+  // deciding them at click time would act on stale turn/queue state (and take
+  // the double-click lock for a compaction that never fired).
+  const dispatchCompactSend = useCallback(
+    (input: ChatComposerSubmitInput): boolean => {
       const states = compactStateByChatIdRef.current;
       const existing = states.get(handle.chatId);
-      if (existing?.locked === true) return;
+      if (existing?.locked === true) return false;
       const sender = userMessageSenderForProfile(profile);
-      if (sender === null) return;
-      const content = buildSubmittedChatJSONContent(
-        plainTextPromptContent(`/${commandName}`),
-        slashCatalog,
-      );
+      if (sender === null) return false;
       // A cheap re-entrancy guard against a double-click firing two real
       // compactions: the optimistic-queue dedupe only suppresses the second
       // row's on-screen echo, not the frame that already went to the host.
@@ -2196,29 +2523,60 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       const { activeTurn, queue } = handle.store.getState();
       const runNow = activeTurn === null && queue.items.length === 0;
       const sent = chatActions.sendMessage({
-        content,
+        content: input.content,
         sender,
-        settings: nextStepSettings,
-        attachments: [],
+        settings: input.settings,
+        attachments: input.attachments,
         deliveryPolicy: runNow ? "auto" : "after_turn",
-        restore: { content, browserAnnotations: [] },
+        restore: input.restore,
       });
-      if (sent === null || runNow) return;
+      if (sent === null) return false;
+      if (runNow) return true;
       state.cancelPromotion?.();
       state.cancelPromotion = promoteQueuedMessageToFront({
         store: handle.store,
         messageId: sent.messageId,
         reorder: chatActions.queueReorder,
       });
+      return true;
+    },
+    [chatActions, handle.chatId, handle.store, profile],
+  );
+  const compactConversation = useCallback(
+    (commandName: string): void => {
+      if (!canSendNextStep) return;
+      if (compactStateByChatIdRef.current.get(handle.chatId)?.locked === true) {
+        return;
+      }
+      if (userMessageSenderForProfile(profile) === null) return;
+      const content = buildSubmittedChatJSONContent(
+        plainTextPromptContent(`/${commandName}`),
+        slashCatalog,
+      );
+      submitThroughRebindGate({
+        submit: {
+          content,
+          contentText: `/${commandName}`,
+          attachments: [],
+          settings: nextStepSettings,
+          // Placeholder only: `dispatchCompactSend` decides queue-or-run-now
+          // from live turn/queue state at actual dispatch.
+          deliveryPolicy: "auto",
+          restore: { content, browserAnnotations: [] },
+        },
+        dispatch: dispatchCompactSend,
+        refusal: nextStepSendRefusal,
+      });
     },
     [
       canSendNextStep,
-      chatActions,
+      dispatchCompactSend,
       handle.chatId,
-      handle.store,
+      nextStepSendRefusal,
       nextStepSettings,
       profile,
       slashCatalog,
+      submitThroughRebindGate,
     ],
   );
   const nextStepActions = useMemo(
@@ -2228,36 +2586,52 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     }),
     [canSendNextStep, sendNextStep],
   );
+  // Implement-plan is a submit like any next-step, so it takes the SAME
+  // eligibility rule at every point: the button (`canSend` below), this click
+  // gate, and the consent dialog's deferred confirm (`nextStepSendRefusal`).
+  // A bare `canAct` here once let a click send over a blocking file-edit/tool
+  // approval that the composer and every next-step correctly refuse - and
+  // worse, made the deferred confirm refuse a send the immediate path
+  // allowed: one click, two behaviors.
   const sendImplementPlanMessage = useCallback((): boolean => {
-    if (!canAct) return false;
-    const sender = userMessageSenderForProfile(profile);
-    if (sender === null) return false;
+    if (!canSendNextStep) return false;
+    if (userMessageSenderForProfile(profile) === null) return false;
     const content = buildSubmittedChatJSONContent(
       plainTextPromptContent("Implement the plan above."),
       slashCatalog,
     );
-    return (
-      chatActions.sendMessage({
+    return submitThroughRebindGate({
+      submit: {
         content,
-        sender,
-        settings: nextStepSettings,
+        contentText: "Implement the plan above.",
         attachments: [],
+        settings: nextStepSettings,
         deliveryPolicy: "auto",
         restore: { content, browserAnnotations: [] },
-      }) !== null
-    );
-  }, [canAct, chatActions, nextStepSettings, profile, slashCatalog]);
+      },
+      dispatch: dispatchUserSend,
+      refusal: nextStepSendRefusal,
+    });
+  }, [
+    canSendNextStep,
+    dispatchUserSend,
+    nextStepSendRefusal,
+    nextStepSettings,
+    profile,
+    slashCatalog,
+    submitThroughRebindGate,
+  ]);
   const planActions = useMemo<ChatPlanActionsContextValue>(
     () => ({
       epicId: currentEpicId,
       chatId: node.id,
-      canAct,
+      canSend: canSendNextStep,
       pending: approvalDecisionPending,
       onImplement: sendImplementPlanMessage,
     }),
     [
       approvalDecisionPending,
-      canAct,
+      canSendNextStep,
       currentEpicId,
       node.id,
       sendImplementPlanMessage,
@@ -2572,6 +2946,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       onSubmitMessage: submitMessage,
+      onSideChat: startSideChatFromComposer,
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -2586,6 +2961,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       isFolderlessWorkspace,
       currentEpicId,
       submitMessage,
+      startSideChatFromComposer,
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -2613,10 +2989,17 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     currentEpicId,
     snapshotLoaded: state.snapshotLoaded,
     transcriptBaselineEpoch: state.transcriptBaselineEpoch,
+    transcriptHydrationSequence: state.transcriptHydrationSequence,
+    coldRewrittenMessageIds: state.coldRewrittenMessageIds,
     fatalClose: state.fatalClose,
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
+    activeTurnId,
+    // Same line discriminator as the revert-scope resolution above: on the
+    // legacy line the window is an inert empty value whose `rowCount` of 0
+    // would make the merge treat every rendered row as an unplaced tail row.
+    transcriptWindow: windowedTranscript ? state.transcriptWindow : null,
     surfaceVisible,
     surfaceFocused,
     getMessageActions: messageActionsFor,
@@ -2655,6 +3038,17 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           toast("Sign in to send this message.");
           return;
         }
+        // The armed path's OWN eligibility, re-read from live state: a
+        // blocking approval or a stopping turn can arrive while the dialog
+        // sits open, and the click-time check cannot see it. Peeked before
+        // taking the armed submit so a refusal keeps the dialog and its
+        // armed send (and the staged draft — consent was for a send that
+        // did not happen), matching the access refusals above.
+        const armedRefusal = pendingSubmitRef.current?.input.refusal() ?? null;
+        if (armedRefusal !== null) {
+          toast(armedRefusal);
+          return;
+        }
         const armed = takeArmedTeardownSubmit(pendingSubmitRef);
         if (armed === null) return;
         if (armed.ownerId !== node.id) {
@@ -2686,7 +3080,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         const drifted =
           worktreeCommitCaptureIsStale(armed.capture, live) ||
           teardownHolderSetDrifted(disclosedHolders, liveSnapshot.holders);
-        if (drifted && liveSnapshot.holders.length > 0) {
+        // Same bar as arming the dialog: a live draft that commits no rebind
+        // has nothing left to re-consent to, so a drift that CLEARED the
+        // rebind sends rather than re-disclosing holders forever.
+        const liveCommitsRebind = worktreeDraftCommitsRebind({
+          binding: live.binding,
+          draft: live.draft,
+          removedWorkspacePaths: live.removedWorkspacePaths,
+        });
+        if (drifted && liveCommitsRebind && liveSnapshot.holders.length > 0) {
           pendingSubmitRef.current = {
             input: armed.input,
             capture: live,
@@ -2696,7 +3098,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           return;
         }
         setTeardownDialog(null);
-        dispatchUserSend(armed.input);
+        armed.input.dispatch(armed.input.submit);
       },
       onDismiss: () => {
         pendingSubmitRef.current = null;
@@ -2723,8 +3125,22 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  /**
+   * The running turn's id, or `null`. Seeds the "thinking" verb - see the pick
+   * below for why it is the turn and not a count over `messages`.
+   */
+  readonly activeTurnId: string | null;
+  /** The transcript index on the windowed line; `null` on the legacy line.
+   *  See `ChatMessagesProps.transcriptWindow`. */
+  readonly transcriptWindow: TranscriptWindow | null;
+  /** Viewport-driven hydration report; see `ChatMessagesProps`. */
+  readonly onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
   /** Which connection's snapshot established `messages`; see `ChatMessages`. */
   readonly baselineEpoch: number;
+  /** Whether a range seated these rows; see `ChatMessages`. */
+  readonly hydrationSequence: number;
+  /** Rows rewritten while cold; see `ChatMessages`. */
+  readonly coldRewrittenMessageIds: ReadonlySet<string>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
@@ -2736,32 +3152,6 @@ interface ChatSessionMessagesSurfaceProps {
   readonly planActions: ChatPlanActionsContextValue;
   /** Measured height of the overlaid composer/queue/pinned/agents dock. */
   readonly composerOverlayHeight: number;
-}
-
-/**
- * Subscribes directly to the chat store for the chip's two inputs
- * (`liveTurnUsage` and the last assistant message's persisted usage) so
- * that ONLY the chip re-renders on `usage.updated` and streaming text
- * deltas - the surrounding tile (composer, message list, host picker,
- * banners) stays unaffected. liveTurnUsage takes precedence over the
- * persisted fallback so the chip shows live in-flight numbers during a
- * turn and carries the final usage forward across the gap between
- * turn.completed and the next snapshot.
- */
-function selectContextUsage(s: ChatSessionState): TokenUsage | null {
-  return s.liveTurnUsage ?? findLastAssistantUsage(s.messages);
-}
-
-function findLastAssistantUsage(
-  messages: ReadonlyArray<Message>,
-): TokenUsage | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.role === "assistant" && message.usage !== null) {
-      return message.usage;
-    }
-  }
-  return null;
 }
 
 function ContextUsageChipForChat(props: {
@@ -2785,6 +3175,7 @@ function ContextUsageChipForChat(props: {
     harnessId: props.harnessId,
     workingDirectories: props.workingDirectories,
     enabled: props.commandsEnabled,
+    localCommands: NO_LOCAL_SLASH_COMMANDS,
   });
   const compactCommand = findManualCompactCommand(commands);
   const requestCompact = props.onCompact;
@@ -2812,14 +3203,20 @@ function ChatSessionMessagesSurface(
   // message + real turn state in one transition; there is no optimistic seed.
   if (!props.snapshotLoaded) return <ChatTileLoading />;
   // Pick the in-progress "thinking" verb once per turn, seeded on the chat plus
-  // its completed-turn count - NOT the indicator row id, which flips from
+  // the RUNNING TURN's id - NOT the indicator row id, which flips from
   // `assistant:live` to `assistant:<turnId>` mid-turn and would otherwise
-  // reshuffle the word. The count only advances when a turn finishes, so it
-  // stays fixed for the whole run while still varying turn-to-turn.
-  const completedTurnCount = props.messages.filter(
-    (message) => message.role === "assistant" && message.completedAt !== null,
-  ).length;
-  const workingVerb = pickWorkingVerb(`${props.node.id}:${completedTurnCount}`);
+  // reshuffle the word.
+  //
+  // And not a completed-turn count over `messages` either, which is what this
+  // was. On the windowed line `messages` is a bounded, evictable slice rather
+  // than the transcript, so that count moved as the reader scrolled through
+  // cold history and the verb changed underneath a running turn - against this
+  // component's own stability guarantee, and visibly. The turn id is stable
+  // for the turn by construction, needs no latch, and keeps the
+  // "different verb per turn" property the count was there to provide.
+  const workingVerb = pickWorkingVerb(
+    `${props.node.id}:${props.activeTurnId ?? ""}`,
+  );
   return (
     <ChatRestoreProvider value={props.restoreContext}>
       <ChatPlanActionsContext.Provider value={props.planActions}>
@@ -2834,7 +3231,11 @@ function ChatSessionMessagesSurface(
               epicId={props.epicId}
               hostId={props.tabHostId}
               messages={props.messages}
+              transcriptWindow={props.transcriptWindow}
+              onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
               baselineEpoch={props.baselineEpoch}
+              hydrationSequence={props.hydrationSequence}
+              coldRewrittenMessageIds={props.coldRewrittenMessageIds}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
               getMessageActions={props.getMessageActions}
