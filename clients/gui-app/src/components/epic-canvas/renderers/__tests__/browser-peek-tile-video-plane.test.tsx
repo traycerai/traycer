@@ -259,6 +259,37 @@ function giveSurfaceABox(element: HTMLElement): void {
   element.getBoundingClientRect = () => new DOMRect(0, 0, 800, 600);
 }
 
+/**
+ * An occluded window, which is what a backgrounded desktop app is: the page
+ * keeps running and keeps receiving, it just stops presenting.
+ */
+function setVisibility(state: DocumentVisibilityState): void {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: state,
+  });
+  act(() => {
+    fireEvent(document, new Event("visibilitychange"));
+  });
+}
+
+function restoreVisibility(): void {
+  // Deleting the own property hands `visibilityState` back to the prototype.
+  Reflect.deleteProperty(document, "visibilityState");
+}
+
+/**
+ * jsdom loads no resources, so an `<img>` never completes on its own - which
+ * is exactly the state a frame decoded inside a hidden window leaves behind:
+ * pixels are there, the load event the tile listens for is not.
+ */
+function markImageComplete(image: HTMLImageElement): void {
+  Object.defineProperty(image, "complete", {
+    configurable: true,
+    value: true,
+  });
+}
+
 function loaderShown(): boolean {
   return screen.queryByTestId("screencast-connecting") !== null;
 }
@@ -360,6 +391,7 @@ describe("BrowserPeekTile video plane", () => {
     vi.useRealTimers();
     clearLastBrowserPeekFrame(browserPeekFrameKey(peekNode));
     restoreCanvasPrototype();
+    restoreVisibility();
   });
 
   it("holds the connecting loader through negotiation, then paints video with no JPEG underneath", async () => {
@@ -603,5 +635,142 @@ describe("BrowserPeekTile video plane", () => {
     await offer(2);
 
     expect(peers).toHaveLength(1);
+  });
+
+  it("does not condemn a live round while the window cannot see it", async () => {
+    vi.useFakeTimers();
+    renderTile();
+    const stream = liveStream();
+    await offer(1);
+    const video = attachTrack(0);
+    decodeFrame(video);
+    expect(planeStates(stream)).toHaveLength(1);
+
+    // Occluded: frame presentation stops on a track that is still arriving and
+    // still decoding, so the only liveness signal this side has goes quiet for
+    // reasons that say nothing about the stream. Judging it here tears down a
+    // healthy round and strands the viewer on a plane it must renegotiate.
+    setVisibility("hidden");
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(planeStates(stream)).toHaveLength(1);
+    expect(screen.queryByText("Stale")).toBeNull();
+    expect(screen.getByText("Live")).toBeTruthy();
+
+    // Back on screen, still frozen: the clock restarts from the return, so a
+    // round that really is dead is caught one window later - never on the
+    // strength of the hidden stretch alone.
+    setVisibility("visible");
+    act(() => {
+      vi.advanceTimersByTime(4_000);
+    });
+    expect(planeStates(stream)).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(12_000);
+    });
+    expect(planeStates(stream).at(-1)).toEqual({
+      kind: "videoPlaneState",
+      hasBinaryPayload: false,
+      negotiationId: 1,
+      state: "failed",
+      reason: "video frames stopped",
+    });
+  });
+
+  it("still calls a JPEG tile stale while the window is hidden", () => {
+    vi.useFakeTimers();
+    renderTile();
+    paintJpeg(1, [1, 2, 3]);
+
+    // JPEG liveness is stamped when a frame ARRIVES, not when it paints, so
+    // it carries the same meaning to a hidden window: frames that stopped
+    // coming stopped for a reason nobody is looking away from.
+    setVisibility("hidden");
+    act(() => {
+      vi.advanceTimersByTime(12_000);
+    });
+
+    expect(screen.getByText("Stale")).toBeTruthy();
+  });
+
+  it("gives a round a full window of observable time after the window returns", async () => {
+    vi.useFakeTimers();
+    renderTile();
+    const stream = liveStream();
+    await offer(1);
+    // A round whose channels opened but whose media never flows: only the
+    // first-frame deadline bounds it, and it is fed by frame presentation.
+    attachTrack(0);
+
+    setVisibility("hidden");
+    act(() => {
+      vi.advanceTimersByTime(29_000);
+    });
+    expect(planeStates(stream)).toEqual([]);
+
+    // Back on screen almost two windows in. Restarting the clock blind while
+    // hidden would leave one about to expire, condemning the round seconds
+    // after the viewer could first have seen anything - on a first-attempt
+    // round that is a bare loader, with the JPEG cast stopped underneath.
+    setVisibility("visible");
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    expect(planeStates(stream)).toEqual([]);
+
+    // The window is measured from the return, and a round that still has not
+    // painted by the end of it is still judged.
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(planeStates(stream).at(-1)).toEqual({
+      kind: "videoPlaneState",
+      hasBinaryPayload: false,
+      negotiationId: 1,
+      state: "failed",
+      reason: "no decoded video frame before deadline",
+    });
+  });
+
+  it("restores JPEG input after a fallback whose frame landed while hidden", async () => {
+    vi.useFakeTimers();
+    renderTile();
+    await offer(1);
+    const video = attachTrack(0);
+    decodeFrame(video);
+    const button = armTile();
+    giveSurfaceABox(button);
+
+    // The round dies and the host turns its JPEG pump back on. By the time the
+    // frame that follows arrives the window is occluded, so it decodes with no
+    // `<img>` load event reaching the tile - and a resting page sends no second
+    // frame to try again with.
+    act(() => {
+      vi.advanceTimersByTime(12_000);
+    });
+    expect(screen.queryByTestId("browser-screencast-video")).toBeNull();
+    setVisibility("hidden");
+    emitCaptureMode("jpeg");
+    paintJpeg(37, [1, 2, 3]);
+    const image = screencastImage();
+    if (image === null) throw new Error("expected the JPEG plane to paint");
+    giveSurfaceABox(image);
+    markImageComplete(image);
+
+    // The field symptom: the host still holds the arm, and every click is
+    // dropped here with nothing to correlate it against.
+    clickTile(button);
+    expect(pointerFrames()).toEqual([]);
+
+    // Coming back reads the sequence off the element that already decoded,
+    // rather than waiting on a load event that has been and gone.
+    setVisibility("visible");
+    clickTile(button);
+
+    expect(pointerFrames().map((frame) => frame.type)).toEqual(["down", "up"]);
+    expect(pointerFrames()[0]?.castSequence).toBe(37);
   });
 });

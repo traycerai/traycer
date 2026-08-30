@@ -6,6 +6,8 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type {
   IStreamSession,
+  StatusChangeHandler,
+  StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useScreencastSession } from "@/lib/browser-view/sessions/use-screencast-session";
@@ -15,22 +17,31 @@ function unusedClientMethod(): never {
 }
 
 /**
- * A fake `browser.screencast` client, same shape as
- * `pip-headless-stream.test.ts`'s harness: a bare `IStreamSession` whose
- * `sendClientFrame` records the envelope, and an `IHostStreamClient` whose
- * `subscribe` hands that session back.
+ * A fake `browser.screencast` client with the REAL transport's send contract:
+ * `WsStreamSession.sendClientFrame` silently drops every frame whose phase is
+ * not `subscribed`, so this session records one only while it is open. A
+ * fixture that recorded regardless is what let a viewport bridge that only ever
+ * wrote into the pre-subscribe window pass its test and state nothing in the
+ * field.
  */
 function createScreencastClientHarness(id: string): {
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
   readonly sentClientFrames: StreamFrameEnvelope[];
+  readonly setStatus: (status: StreamConnectionStatus) => void;
 } {
   const sentClientFrames: StreamFrameEnvelope[] = [];
+  let status: StreamConnectionStatus = "connecting";
+  let statusHandler: StatusChangeHandler | null = null;
   const session: IStreamSession = {
     sendClientFrame(envelope) {
+      if (status !== "open") return;
       sentClientFrames.push(envelope);
     },
     onServerFrame() {},
-    onStatusChange() {},
+    onStatusChange(handler) {
+      statusHandler = handler;
+      handler(status, null);
+    },
     getNegotiatedSchemaVersion: () => null,
     requestReconnect() {},
     close() {},
@@ -53,7 +64,14 @@ function createScreencastClientHarness(id: string): {
     onClosed: () => () => {},
     instanceId: `use-screencast-session-viewport-test-client-${id}`,
   };
-  return { client, sentClientFrames };
+  return {
+    client,
+    sentClientFrames,
+    setStatus: (next) => {
+      status = next;
+      statusHandler?.(next, null);
+    },
+  };
 }
 
 function viewportFrames(
@@ -123,12 +141,22 @@ function Harness(props: {
   );
 }
 
+const MEASURED_VIEWPORT_FRAME = {
+  kind: "viewport",
+  hasBinaryPayload: false,
+  width: 1272,
+  height: 800,
+  get dpr() {
+    return window.devicePixelRatio;
+  },
+} as const;
+
 describe("useScreencastSession viewport bridge", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("sends the measured viewport on mount without waiting out the debounce", () => {
+  it("states the measured viewport as soon as the stream opens", () => {
     vi.useFakeTimers();
     const harnessA = createScreencastClientHarness("a");
 
@@ -136,16 +164,44 @@ describe("useScreencastSession viewport bridge", () => {
       render(<Harness client={harnessA.client} />);
     });
 
+    // The bridge measures in the same tick as the subscribe, when the real
+    // transport is still dialing and drops everything it is handed.
+    expect(viewportFrames(harnessA.sentClientFrames)).toHaveLength(0);
+
+    act(() => {
+      harnessA.setStatus("open");
+    });
+
     // No `vi.advanceTimersByTime` call: the first measurement is not resize
-    // churn, so it must not wait out VIEWPORT_DEBOUNCE_MS (200ms).
+    // churn, so it must not wait out VIEWPORT_DEBOUNCE_MS (200ms) on top of the
+    // handshake it already waited for.
     expect(viewportFrames(harnessA.sentClientFrames)).toEqual([
-      {
-        kind: "viewport",
-        hasBinaryPayload: false,
-        width: 1272,
-        height: 800,
-        dpr: window.devicePixelRatio,
-      },
+      { ...MEASURED_VIEWPORT_FRAME },
+    ]);
+  });
+
+  it("restates the measured viewport when the same stream reconnects", () => {
+    vi.useFakeTimers();
+    const harnessA = createScreencastClientHarness("a");
+
+    act(() => {
+      render(<Harness client={harnessA.client} />);
+    });
+    act(() => {
+      harnessA.setStatus("open");
+    });
+    // A reconnect never re-runs the subscription effect - the host, however,
+    // has re-attached the tab on default metrics.
+    act(() => {
+      harnessA.setStatus("reconnecting");
+    });
+    act(() => {
+      harnessA.setStatus("open");
+    });
+
+    expect(viewportFrames(harnessA.sentClientFrames)).toEqual([
+      { ...MEASURED_VIEWPORT_FRAME },
+      { ...MEASURED_VIEWPORT_FRAME },
     ]);
   });
 
@@ -169,6 +225,9 @@ describe("useScreencastSession viewport bridge", () => {
     }
 
     const view = render(<Root />);
+    act(() => {
+      harnessA.setStatus("open");
+    });
     expect(viewportFrames(harnessA.sentClientFrames)).toHaveLength(1);
     expect(viewportFrames(harnessB.sentClientFrames)).toHaveLength(0);
 
@@ -177,17 +236,14 @@ describe("useScreencastSession viewport bridge", () => {
     act(() => {
       view.getByTestId("swap").click();
     });
+    act(() => {
+      harnessB.setStatus("open");
+    });
 
     // The fix: the new stream still gets the tile's real geometry, not the
     // host's default metrics.
     expect(viewportFrames(harnessB.sentClientFrames)).toEqual([
-      {
-        kind: "viewport",
-        hasBinaryPayload: false,
-        width: 1272,
-        height: 800,
-        dpr: window.devicePixelRatio,
-      },
+      { ...MEASURED_VIEWPORT_FRAME },
     ]);
   });
 });

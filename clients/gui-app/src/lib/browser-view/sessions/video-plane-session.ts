@@ -125,6 +125,53 @@ export function createVideoPlaneSession(options: {
     deadlineRound = null;
   };
 
+  /**
+   * How long a round may hold a peer connection without producing a decoded
+   * frame. The host's own negotiation deadline stops at "answered" - a
+   * connection that never carries pixels (ICE settles, media does not flow)
+   * is only visible from this end. Derived from the host's reported
+   * control-plane RTT (ticket 18), with the old 15s literal as its floor.
+   *
+   * "Decoded frame" is observed through `requestVideoFrameCallback`, which a
+   * hidden window never fires: an occluded viewer would otherwise fail every
+   * round it negotiates in the background and retry forever. Expiring while
+   * hidden therefore parks the window on the return instead of restarting it
+   * blind - a re-armed timer would let a viewer that comes back a moment
+   * later wait out most of a second window on a bare loader (a first-attempt
+   * round has the JPEG cast stopped, so there is no plane underneath), and
+   * nothing else bounds a round whose DataChannels opened but whose media
+   * never flowed.
+   */
+  const armDeadline = (): void => {
+    const onVisible = (): void => {
+      cancelDeadline = null;
+      armDeadline();
+    };
+    const timer = window.setTimeout(
+      () => {
+        cancelDeadline = null;
+        if (document.visibilityState !== "visible") {
+          document.addEventListener("visibilitychange", onVisible, {
+            once: true,
+          });
+          cancelDeadline = () => {
+            document.removeEventListener("visibilitychange", onVisible);
+          };
+          return;
+        }
+        deadlineRound = null;
+        entry.reportFailure("no decoded video frame before deadline");
+      },
+      deriveViewerDeadlineMs(
+        VIEWER_CONTROL_PLANE_DEADLINES.firstFrame,
+        options.readControlPlaneRttMs(),
+      ),
+    );
+    cancelDeadline = () => {
+      window.clearTimeout(timer);
+    };
+  };
+
   const syncDeadline = (snapshot: BrowserMediaSnapshot): void => {
     const pending =
       (snapshot.phase === "negotiating" || snapshot.phase === "streaming") &&
@@ -137,25 +184,7 @@ export function createVideoPlaneSession(options: {
     if (deadlineRound === snapshot.negotiationId) return;
     clearDeadline();
     deadlineRound = snapshot.negotiationId;
-    // How long a round may hold a peer connection without producing a decoded
-    // frame. The host's own negotiation deadline stops at "answered" - a
-    // connection that never carries pixels (ICE settles, media does not flow)
-    // is only visible from this end. Derived from the host's reported
-    // control-plane RTT (ticket 18), with the old 15s literal as its floor.
-    const timer = window.setTimeout(
-      () => {
-        cancelDeadline = null;
-        deadlineRound = null;
-        entry.reportFailure("no decoded video frame before deadline");
-      },
-      deriveViewerDeadlineMs(
-        VIEWER_CONTROL_PLANE_DEADLINES.firstFrame,
-        options.readControlPlaneRttMs(),
-      ),
-    );
-    cancelDeadline = () => {
-      window.clearTimeout(timer);
-    };
+    armDeadline();
   };
 
   const stopStatsTimer = (): void => {

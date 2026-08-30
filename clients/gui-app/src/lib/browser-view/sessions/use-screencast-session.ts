@@ -185,16 +185,22 @@ export function useScreencastSession(
   const streamRef = useRef<BrowserScreencastStreamClient | null>(null);
   const videoPlaneRef = useRef<VideoPlaneSession | null>(null);
   /**
-   * The last geometry the viewport bridge measured, restated on every
-   * subscription below.
+   * The last geometry the viewport bridge measured, restated whenever the
+   * transport reports `open` below.
    *
-   * A subscription is re-established far more often than the tile is resized
-   * (client change, tab switch, reconnect), and the bridge only mints on a
-   * RESIZE - so a re-subscribe of an already-laid-out tile carried no
-   * `viewport` frame at all, leaving the host on the default metrics it falls
-   * back to when the last tile closes. Field evidence: a live round whose most
-   * recent `viewport_override` was `last-tile-close` 1280x720 and which never
-   * saw a `tile-resize`, while the tile had been measuring 1272x800@2 all along.
+   * A subscription is re-established (and reconnected) far more often than the
+   * tile is resized, and the bridge only mints on a RESIZE - so an
+   * already-laid-out tile carried no `viewport` frame at all, leaving the host
+   * on the default metrics it falls back to when the last tile closes.
+   *
+   * The restatement has to wait for `open`, not for the subscribe CALL: the
+   * transport drops every client frame while its phase is not `subscribed`
+   * (`WsStreamSession.sendClientFrame`), silently. Anything minted in the same
+   * tick as the subscribe - the bridge's own first measurement, or a
+   * restatement queued at effect entry - is written into that window and lost,
+   * which is exactly what the field showed: a whole session whose only
+   * `viewport_override` records were `last-tile-close` 1280x720 while the tile
+   * had been measuring 1272x800@2 since mount.
    */
   const lastViewportRef = useRef<ScreencastViewportInput | null>(null);
   /**
@@ -227,6 +233,24 @@ export function useScreencastSession(
   const imageRef = useRef<HTMLImageElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const imeInputRef = useRef<HTMLInputElement | null>(null);
+  /**
+   * When this document last became visible, or `null` while it is hidden.
+   *
+   * An occluded window stops presenting frames: `requestVideoFrameCallback`
+   * never fires and images do not paint, so every deadline fed by a PAINT is
+   * measuring the compositor, not the stream. Both planes read this - the
+   * video staleness clock below, and the presented-sequence resync - so a
+   * round is never judged over a window nobody could see, and the clock
+   * restarts from the moment the pixels became observable again rather than
+   * from a frame timestamp that predates the whole hidden stretch.
+   */
+  const visibleSinceRef = useRef<number | null>(null);
+  /**
+   * The painted JPEG frame, as a latest-value ref: a new one lands ~25x/s
+   * while the plane runs, and keying the visibility listener on the state
+   * would tear down and re-register it at that rate.
+   */
+  const presentedImageRef = useRef<ScreencastImage | null>(null);
 
   const [armedState, setArmedState] = useState<{
     readonly client: IHostStreamClient<HostStreamRpcRegistry>;
@@ -391,17 +415,6 @@ export function useScreencastSession(
       if (stream === null) beforeOpen.push(frame);
       else stream.sendClientFrame(frame);
     };
-    // Restate the measured geometry for THIS subscription - see
-    // `lastViewportRef`. Queued first, so it is the first client frame this
-    // subscription sends and the host re-applies the tile's real metrics
-    // within one round trip of attach instead of never. It does NOT beat the
-    // attach itself: capture can still start against the old metrics, which
-    // is fine because `setViewport` re-applies the override on a live capture
-    // and the tab-capture track follows it.
-    const knownViewport = lastViewportRef.current;
-    if (knownViewport !== null) {
-      send({ kind: "viewport", hasBinaryPayload: false, ...knownViewport });
-    }
     const isCurrent = (): boolean =>
       stream !== null && streamRef.current === stream;
 
@@ -499,14 +512,24 @@ export function useScreencastSession(
         captureMode = "jpeg";
         controller.setCaptureMode("jpeg");
         controller.clearLocalArm(false);
-      } else if (
-        viewportRef.current?.contains(document.activeElement) === true
-      ) {
-        send({
-          kind: "arm",
-          hasBinaryPayload: false,
-          armEpoch: controller.startArmEpoch(),
-        });
+      } else {
+        // Restate the measured geometry for THIS round - see `lastViewportRef`.
+        // On `open`, because that is the first moment the transport stops
+        // dropping what it is handed; every earlier attempt (the bridge's own
+        // first measurement included) went into the pre-subscribe window. Also
+        // covers a RECONNECT, which re-opens the same stream without re-running
+        // this effect at all.
+        const knownViewport = lastViewportRef.current;
+        if (knownViewport !== null) {
+          send({ kind: "viewport", hasBinaryPayload: false, ...knownViewport });
+        }
+        if (viewportRef.current?.contains(document.activeElement) === true) {
+          send({
+            kind: "arm",
+            hasBinaryPayload: false,
+            armEpoch: controller.startArmEpoch(),
+          });
+        }
       }
       handleStreamStatus(status, reason, setLifecycle, setDetails);
     };
@@ -678,6 +701,7 @@ export function useScreencastSession(
   useEffect(() => {
     videoActiveRef.current = videoActive;
     clientRef.current = client;
+    presentedImageRef.current = image;
     captureDormantSnapshotRef.current = options.captureDormantSnapshot;
   });
 
@@ -751,12 +775,28 @@ export function useScreencastSession(
         VIEWER_CONTROL_PLANE_DEADLINES.staleWithoutFrame,
         controlPlaneRttRef.current,
       );
-      if (Date.now() - lastFrameAt < staleAfterMs) return;
-      // A track that connected, painted, then froze is the one failure no
-      // deadline covers (the first-frame one is disarmed by then) and the
-      // registry cannot see. Reporting it is what turns the host's JPEG pump
-      // back on instead of leaving a frozen tile with no plane at all.
-      if (videoFrameAt !== null) {
+      if (videoFrameAt === null) {
+        // JPEG liveness is stamped on ARRIVAL, not on paint, so it means the
+        // same whether or not anyone is looking: no visibility gate belongs
+        // on this branch.
+        if (Date.now() - lastFrameAt < staleAfterMs) return;
+      } else {
+        // A hidden window presents nothing, so `requestVideoFrameCallback`
+        // stops firing on a perfectly healthy track (packets still arriving,
+        // decoder still decoding). Judging that silence tears a live round
+        // down and leaves the viewer on a plane it has to renegotiate; the
+        // clock resumes from the moment the pixels became observable again,
+        // so a stream that really did die is still caught one window after
+        // the return.
+        const visibleSince = visibleSinceRef.current;
+        if (visibleSince === null) return;
+        if (Date.now() - Math.max(videoFrameAt, visibleSince) < staleAfterMs) {
+          return;
+        }
+        // A track that connected, painted, then froze is the one failure no
+        // deadline covers (the first-frame one is disarmed by then) and the
+        // registry cannot see. Reporting it is what turns the host's JPEG
+        // pump back on instead of leaving a frozen tile with no plane at all.
         videoPlaneRef.current?.fail("video frames stopped");
       }
       setLifecycle((current) =>
@@ -823,6 +863,49 @@ export function useScreencastSession(
     },
     [controller, setDetails, setLifecycle],
   );
+
+  /**
+   * The visibility seam both planes depend on.
+   *
+   * Going hidden stops the staleness clock above (an unobservable round must
+   * not be torn down). Coming back re-stamps it AND republishes the JPEG
+   * plane's presented sequence, because `<img onLoad>` is the only thing that
+   * ever publishes one and a load that completed while the window was
+   * occluded may never have fired a paint the tile could observe. Without
+   * this the tile returns with `presentedSequence === null`, which is not a
+   * degraded correlation but NO correlation: `buildScreencastPointerFrame`
+   * drops every click and scroll silently, and nothing re-arms it, because a
+   * resting page produces no further frame to load. That is exactly the
+   * post-fallback dead tile - the host still holds the arm, the client simply
+   * never sends. The element has already decoded by the time we read it, so
+   * `complete` is the signal the load event failed to deliver.
+   */
+  useEffect(() => {
+    // Stamped once per hidden->visible edge and left alone while visible: a
+    // re-stamp on every commit would keep pushing the staleness clock forward
+    // and a frozen tile would never be judged at all.
+    const stamp = (): boolean => {
+      if (document.visibilityState !== "visible") {
+        visibleSinceRef.current = null;
+        return false;
+      }
+      const returned = visibleSinceRef.current === null;
+      visibleSinceRef.current ??= Date.now();
+      return returned;
+    };
+    const onVisibilityChange = (): void => {
+      if (!stamp()) return;
+      const presented = presentedImageRef.current;
+      const element = imageRef.current;
+      if (presented === null || element === null || !element.complete) return;
+      notePresented(presented.sequence);
+    };
+    stamp();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [notePresented]);
 
   return {
     refs,

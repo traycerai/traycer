@@ -879,4 +879,52 @@ describe("BrowserPeekTile", () => {
       vi.useRealTimers();
     }
   });
+
+  it("restates the measured viewport once a stream that was still dialing opens", async () => {
+    vi.useFakeTimers();
+    try {
+      // The field case: the tile is laid out and measured while the transport
+      // is still completing its subscribe handshake, which drops everything it
+      // is handed. Nothing resizes afterwards, so without a restatement at
+      // `open` the host serves the whole round on its last-tile-close defaults.
+      hookState.streamClient = new FakeStreamClient(false);
+      render(
+        <BrowserPeekTile
+          viewTabId="view-tab-1"
+          paneId="pane-1"
+          epicId="epic-1"
+          node={PEEK_NODE}
+        />,
+      );
+      const stream = liveStream();
+      const observer = controllableResizeObservers.at(-1);
+      if (observer === undefined) throw new Error("expected resize observer");
+
+      observer.emit(1272, 800);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(
+        stream.sentFrames.filter((frame) => frame.kind === "viewport"),
+      ).toEqual([]);
+
+      act(() => {
+        stream.emitStatus("open");
+      });
+
+      expect(
+        stream.sentFrames.filter((frame) => frame.kind === "viewport"),
+      ).toEqual([
+        {
+          kind: "viewport",
+          hasBinaryPayload: false,
+          width: 1272,
+          height: 800,
+          dpr: window.devicePixelRatio,
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
