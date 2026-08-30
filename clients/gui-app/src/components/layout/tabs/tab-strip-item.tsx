@@ -333,7 +333,11 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     // "Untitled task" fallback into the input and persist it as a real title.
     value: resolvedTabName,
     canEdit: canEditTitle,
-    onCommit: commitEpicTitle,
+    // Wrapped: the property is declared void-returning and the commit is a
+    // round trip now. `void` states the fire-and-forget explicitly.
+    onCommit: (next: string) => {
+      void commitEpicTitle(next);
+    },
   });
 
   const activateTab = useCallback(() => {

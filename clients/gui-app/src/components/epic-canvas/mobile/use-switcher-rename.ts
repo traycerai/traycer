@@ -69,8 +69,12 @@ export function useSwitcherRename(
   const renameArtifact = useEpicRenameArtifact(true);
   const renameTerminal = useTerminalRenameFor(useEpicSessionHostClient());
 
-  return useCallback(
-    async (kind, nodeId, title) => {
+  const commit = useCallback(
+    async (
+      kind: SwitcherRowKind,
+      nodeId: string,
+      title: string,
+    ): Promise<void> => {
       // Trimmed for BOTH the stamp and the RPC - and for the raw terminal
       // too, whose arm previously sat above this guard and would send a
       // whitespace-only title straight to `terminal.rename`. The overlay
@@ -93,7 +97,9 @@ export function useSwitcherRename(
       if (kind === "terminal-agent") {
         const agents = epicHandle.store.getState().tuiAgents.byId;
         if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
-          epicHandle.store.getState().renameArtifact(nodeId, trimmed);
+          // `void`: the doc write is a round trip now, and this arm's whole
+          // point is that it needs no stamp to retire and nothing to await.
+          void epicHandle.store.getState().renameArtifact(nodeId, trimmed);
           return;
         }
       }
@@ -156,5 +162,15 @@ export function useSwitcherRename(
       renameTerminal,
       renameTuiAgent,
     ],
+  );
+
+  // The returned callback stays VOID-returning, which is what the declared
+  // type says and what a DOM handler needs. `void` makes the fire-and-forget
+  // explicit rather than leaving a promise assignable-to-void by accident.
+  return useCallback(
+    (kind: SwitcherRowKind, nodeId: string, title: string): void => {
+      void commit(kind, nodeId, title);
+    },
+    [commit],
   );
 }

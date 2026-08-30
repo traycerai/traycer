@@ -830,10 +830,12 @@ export async function commitSidebarReparentDrop(
         } else {
           invalidateEpicChatRecords(input.queryClient, sessionHostId);
         }
-        retire("landed");
+        // `void`: the retire is a round trip now, and this settle handler
+        // returns synchronously.
+        void retire("landed");
       })
       .catch((error: unknown) => {
-        retire("failed");
+        void retire("failed");
         toastFromHostError(
           toHostRpcError(error, "epic.reparentChat"),
           "Couldn't move this agent.",
@@ -871,14 +873,19 @@ export async function commitSidebarReparentDrop(
     // by this file's own rule, and two reads of one tree disagreeing is an
     // internal invariant mismatch the user cannot act on.
     if (evaluation.node.family === "artifact") {
-      handle.store.getState().enqueueWriteCommand({
+      // `void`: the queue mints its id over the bridge now. Nothing here
+      // reads it - the surface reacts to the projected write-command list.
+      void handle.store.getState().enqueueWriteCommand({
         kind: "reparent-artifact",
         artifactId: input.sourceNodeId,
         parentId: input.newParentId,
       });
     } else {
       try {
-        handle.store
+        // `void`: the doc write is a round trip now. The `try` around it
+        // still catches a SYNCHRONOUS throw from the call itself, which is
+        // what the illegal-move guard raises before any await.
+        void handle.store
           .getState()
           .reparentArtifact(input.sourceNodeId, input.newParentId);
       } catch (error: unknown) {

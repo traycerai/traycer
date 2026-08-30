@@ -368,7 +368,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "  Trimmed title  ");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "  Trimmed title  ");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -424,7 +428,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "Failed rename");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "Failed rename");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -464,7 +472,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "Unmount-race rename");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "Unmount-race rename");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -515,7 +527,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "First");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "First");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -528,7 +544,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "Second");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "Second");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -581,7 +601,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(chatTile(chatId), "New chat name");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(chatTile(chatId), "New chat name");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -613,7 +637,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(terminalAgentTile("agent-1"), "New agent name");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(terminalAgentTile("agent-1"), "New agent name");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -646,7 +674,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(terminalAgentTile(agentId), "Doc agent name");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(terminalAgentTile(agentId), "Doc agent name");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -674,7 +706,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(terminalTile("session-1"), "New terminal name");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(terminalTile("session-1"), "New terminal name");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -706,7 +742,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "New spec title");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "New spec title");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -735,7 +775,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "Rejected title");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "Rejected title");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -781,7 +825,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "B");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -794,7 +842,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "C");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "C");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -861,7 +913,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "B");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -874,7 +930,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "C");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "C");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -924,7 +984,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "B");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -952,7 +1016,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "C");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "C");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -993,7 +1061,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "B");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -1075,7 +1147,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "B");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few
@@ -1156,7 +1232,11 @@ describe("useRenameCanvasTab", () => {
     // bridge. Asserting straight after the call reads state still in
     // flight.
     await act(async () => {
-      await result.current(artifactTile(id), "B");
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
     });
     // The write command travels store -> worker queue ->
     // `main/write-command` -> the dispatcher, so the RPC lands a few

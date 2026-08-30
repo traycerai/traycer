@@ -1425,7 +1425,11 @@ export function RootDndProvider(props: RootDndProviderProps) {
         // what has to survive the failure, so the error is logged and
         // swallowed and the commit's own handler owns anything user-facing.
         try {
-          commitSidebarReparentDrop({
+          // `void`: the commit is a round trip now. The `try` still catches a
+          // SYNCHRONOUS throw from the call itself, and the commit's own
+          // handler owns anything user-facing after that - which is exactly
+          // what the comment above already says about this site.
+          void commitSidebarReparentDrop({
             epicId: reparent.epicId,
             sourceNodeId: reparent.sourceNodeId,
             newParentId: reparent.newParentId,

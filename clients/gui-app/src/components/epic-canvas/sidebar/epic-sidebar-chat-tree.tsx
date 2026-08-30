@@ -1661,8 +1661,8 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         renameArtifactInTab(tabId, nodeId, trimmed);
       }
     };
-    const failed = (): void => {
-      retire("failed");
+    const failed = async (): Promise<void> => {
+      await retire("failed");
     };
     if (artifactType === "chat") {
       void renameChat
@@ -1674,8 +1674,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         .then(landed, failed);
     } else {
       // No RPC arm for this kind — nothing can ack it, so a lingering stamp
-      // would never land; drop it outright.
-      retire("failed");
+      // would never land; drop it outright. `void`: the retire is a round trip
+      // now and there is nothing here that waits on it.
+      void retire("failed");
     }
   }, [
     artifactType,
@@ -1694,7 +1695,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        commitRename();
+        // `void`: committing is a round trip now, and a key handler returns
+        // synchronously.
+        void commitRename();
       } else if (event.key === "Escape") {
         event.preventDefault();
         setIsRenaming(false);
@@ -1709,7 +1712,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   };
 
   const confirmDelete = () => {
-    epicHandle.store.getState().deleteArtifact(nodeId);
+    // `void`: the delete is a round trip now. The surface below reacts to the
+    // PROJECTION, not to this promise, so nothing here waits on it.
+    void epicHandle.store.getState().deleteArtifact(nodeId);
     markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
       setConfirmDeleteOpen(false);
@@ -1781,7 +1786,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       renameInputRef={renameInputRef}
       renameValue={renameValue}
       onRenameValueChange={setRenameValue}
-      onCommitRename={commitRename}
+      // Wrapped rather than passed through: the prop is declared void-returning
+      // and `commitRename` is a round trip now. `void` states that nothing
+      // here waits on it, which is what the caller already assumed.
+      onCommitRename={() => {
+        void commitRename();
+      }}
       onRenameKeyDown={handleRenameKeyDown}
       onToggle={handleToggle}
       onClick={rowClick}

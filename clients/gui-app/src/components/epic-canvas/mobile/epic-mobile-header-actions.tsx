@@ -157,7 +157,12 @@ export function MobileEpicHeaderTitle(props: {
     <InlineTitleField
       value={title}
       editable={canEdit}
-      onCommit={handleCommit}
+      // Wrapped: the prop is declared void-returning and the commit is a
+      // round trip now. `void` states the fire-and-forget the caller already
+      // assumed, instead of leaking a promise into a void slot.
+      onCommit={(next: string) => {
+        void handleCommit(next);
+      }}
       inputLabel="Epic title"
       testId="mobile-epic-header-title"
       className="min-w-0 flex-1 truncate font-medium text-foreground"

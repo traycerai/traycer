@@ -45,13 +45,10 @@ export function useRenameCanvasTab(
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifact = useEpicRenameArtifact(true);
 
-  return useCallback(
-    // ASYNC because the replica moved: the doc write's verdict and the
-    // rename-stamp check are both round trips now. The declared callback still
-    // returns `void` and callers still fire-and-forget it - a function
-    // returning `Promise<void>` is assignable to one returning `void`, and
-    // nothing here awaited it before.
-    async (tab, rawTitle) => {
+  // ASYNC because the replica moved: the doc write's verdict and the
+  // rename-stamp check are both round trips now.
+  const commit = useCallback(
+    async (tab: EpicCanvasTileRef, rawTitle: string): Promise<void> => {
       const trimmed = rawTitle.trim();
       // No same-title suppression: the optimistic local update can already be
       // ahead of a failed RPC, and resubmitting the visible title is the
@@ -227,5 +224,16 @@ export function useRenameCanvasTab(
       renameTerminalAgent,
       viewTabId,
     ],
+  );
+
+  // The returned callback stays VOID-returning, which is what every caller
+  // declares and what a DOM handler needs. `void` makes the fire-and-forget
+  // explicit rather than leaving a promise assignable-to-void by accident -
+  // the shape that silently swallows a rejection.
+  return useCallback(
+    (tab: EpicCanvasTileRef, rawTitle: string): void => {
+      void commit(tab, rawTitle);
+    },
+    [commit],
   );
 }

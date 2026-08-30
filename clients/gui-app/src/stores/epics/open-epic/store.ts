@@ -1559,7 +1559,11 @@ export function createOpenEpicStore(
                 grant.release();
                 return;
               }
-              grantedRelease = grant.release;
+              // Wrapped, not referenced: `grant.release` is a method, and
+              // handing the bare reference on loses its receiver.
+              grantedRelease = () => {
+                grant.release();
+              };
             });
             return () => {
               if (released) return;
