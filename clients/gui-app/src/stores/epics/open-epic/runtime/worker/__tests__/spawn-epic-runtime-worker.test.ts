@@ -224,29 +224,20 @@ describe("spawnEpicRuntimeWorker", () => {
     handle.dispose();
   });
 
-  it("attach re-binds to a NEW host, leaving none open on the old", () => {
-    const fixture = createFixture(false);
-    const first = createRecordingStreamClient();
-    const second = createRecordingStreamClient();
-    const handle = spawnEpicRuntimeWorker(
-      spawnOptions(
-        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
-        { streams: first.client },
-      ),
-    );
-    openStreams(fixture, 2);
-
-    handle.attach(second.client);
-    openStreams(fixture, 2);
-
-    // Zero left on the old, both on the new. A host that SWAPPED its client
-    // instead of being replaced would have the two generations' worker-assigned
-    // `streamId`s colliding in one map.
-    expect(first.closedCount()).toBe(2);
-    expect(second.opened()).toHaveLength(2);
-    expect(second.closedCount()).toBe(0);
-    handle.dispose();
-  });
+  // RETIRED WITH ITS SUBJECT: "attach re-binds to a NEW host, leaving none open
+  // on the old". `EpicRuntimeWorkerHandle.attach` is deleted - it had no callers
+  // and could not have done what it promised: it re-detached (emitting a second
+  // detach-transport) and installed a main-side proxy the worker never reopens
+  // through, so the worker stayed detached with no sessions. Production
+  // rebinding is a RESPAWN, where the retained handle merges into a new session.
+  //
+  // Worth naming rather than just deleting: this test was GREEN throughout, and
+  // it was green because `openStreams(fixture, 2)` after the attach FABRICATED
+  // the step production has no path to - the worker asking the new proxy to open
+  // streams. The pin supplied the missing half of the mechanism itself, so it
+  // could only ever confirm the half that worked. A green test is not evidence a
+  // member is wired; this one is why the member survived twelve unwired
+  // instances' worth of sweeps.
 
   it("dispose reports every close BEFORE it tears the bridge down", () => {
     const fixture = createFixture(false);

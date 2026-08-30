@@ -225,12 +225,6 @@ export interface EpicRuntimeWorkerHandle {
   currentUser(userId: string | null): void;
   detach(): void;
   /**
-   * Re-binds the worker to a NEW transport after a detach - a fresh proxy host,
-   * never a swap of the old one's client, because `streamId`s are the worker's
-   * and two generations in one map would collide.
-   */
-  attach(streams: IStreamClient<HostStreamRpcRegistry>): void;
-  /**
    * Idempotent. Detaches (so the worker observes every close), then asks the
    * worker to stop and terminates it. Paths 1, 3, 4 and 5.
    */
@@ -252,10 +246,16 @@ export function spawnEpicRuntimeWorker<TProjection>(
     mainCallHandlers,
   );
   // The proxy host owns the REAL sessions the worker opens. It is the object
-  // this side detaches, not the socket - and it is a SLOT rather than a
-  // constant, because a re-attach binds a NEW host over the new transport:
-  // `streamId`s are the worker's, so two generations sharing one host would
-  // collide in one map.
+  // this side detaches, not the socket.
+  //
+  // A SLOT rather than a constant only because `detach()` clears it. There used
+  // to be an `attach(streams)` beside it that re-bound a fresh proxy over a new
+  // transport, and this comment justified the slot by that re-attach - but the
+  // member had no callers and could not have worked: it re-detached (emitting a
+  // second detach-transport) and installed a main-side proxy the worker never
+  // reopens through, leaving the worker detached with no sessions. Production
+  // rebinding is a RESPAWN - the retained handle merges into a new session - so
+  // the member was deleted rather than completed.
   const buildProxy = (
     streams: IStreamClient<HostStreamRpcRegistry>,
   ): StreamProxyHost =>
@@ -441,12 +441,6 @@ export function spawnEpicRuntimeWorker<TProjection>(
       bridge.emit({ kind: "runtime/command", command }, NO_TRANSFER);
     },
     detach,
-    attach(streams): void {
-      if (disposed) return;
-      // A FRESH host, never a swap of the old one's client.
-      detach();
-      proxy = buildProxy(streams);
-    },
     dispose(): void {
       if (disposed) return;
       disposed = true;

@@ -41,20 +41,57 @@ import type {
   EpicRuntimeWorkerCore,
 } from "./epic-runtime-worker-host";
 
+/** What a settle answers, and what a resend replays. */
+interface DemoteAnswer {
+  readonly accepted: boolean;
+  readonly settledBytes: number;
+  readonly reason: "not-held" | "newer-generation" | "pinned" | null;
+}
+
 /**
- * The latest settled demote for one doc.
+ * What `body/demote` carries. Mirrors the member's parameter on
+ * {@link EpicRuntimeWorkerCore} and the `bodies.settle` port between them;
+ * named here because the serialization below passes it between helpers.
+ */
+interface DemoteInput {
+  readonly docKey: string;
+  readonly generation: number;
+  readonly docGuid: string;
+  readonly update: Uint8Array;
+}
+
+/**
+ * The latest settled demote for one doc, within one lifetime of that doc.
  *
- * One entry per `docKey`, never a history: the main thread has at most one
- * demote outstanding per doc, so anything older than the stored generation is
- * from a lifetime it has already moved past.
+ * One entry per `docKey`, never a history.
+ *
+ * **The premise this doc used to state was false, and it is what licensed a
+ * corruption bug:** "the main thread has at most one demote outstanding per
+ * doc". It does not. `artifact-body-lease-bridge.ts` will re-acquire a doc
+ * whose demote is unacknowledged (`reviveAndHold`, which bumps the generation)
+ * and then end that lifetime again (`postLifecycleEnd`, which bumps once more
+ * and posts) - so gen N and gen N+2 are both in flight here, and the settles
+ * can resolve in either order. With the check before the await and the write
+ * after it, the older completion overwrote the newer record, and a resend of
+ * the newer generation then missed, re-settled against a tier that no longer
+ * held the doc, and answered a refusal main could never clear.
+ *
+ * The record carries no lifetime marker of its own, and that is a property of
+ * the write rather than an omission: `recordSettledDemote` refuses to write a
+ * completion whose lifetime has ended, so every entry here belongs to the
+ * CURRENT lifetime by construction and a reader never has to ask.
+ *
+ * Why a lifetime check is needed at all: the main-side `generation` is NOT
+ * monotonic across lifetimes. The bridge deletes its entry once a demote is
+ * acknowledged and a re-materialized doc starts again at `generation: 1`
+ * (`artifact-body-lease-bridge.ts` - the `entries.set` with `generation: 1`).
+ * So "older loses" cannot be decided on generation alone: a stale gen 5 from
+ * the previous lifetime would outrank a live gen 1 and refuse every demote of
+ * the new one forever.
  */
 interface SettledDemote {
   readonly generation: number;
-  readonly answer: {
-    readonly accepted: boolean;
-    readonly settledBytes: number;
-    readonly reason: "not-held" | "newer-generation" | "pinned" | null;
-  };
+  readonly answer: DemoteAnswer;
 }
 
 export interface EpicRuntimeCorePorts {
@@ -181,6 +218,113 @@ export function createEpicRuntimeWorkerCore(
 ): EpicRuntimeWorkerCore {
   let serving = true;
   const settledDemotes = new Map<string, SettledDemote>();
+  /**
+   * This doc's lifetime, counted here rather than taken from main.
+   *
+   * Bumped by `materializeBody`, which is the only thing that starts a new
+   * lifetime. A settle that began before the bump belongs to the lifetime that
+   * ended, so its record is dropped rather than written - see
+   * {@link SettledDemote} for why generation alone cannot decide that.
+   */
+  const bodyEpochs = new Map<string, number>();
+  /**
+   * The per-`docKey` demote chain: at most one settle in flight per doc.
+   *
+   * Two concurrent settles for one doc is the corruption {@link SettledDemote}
+   * describes, and serializing them is what makes the record's ordering match
+   * the main thread's posting order. The value is a tail that NEVER rejects, so
+   * one failed settle cannot poison the doc's queue.
+   */
+  const demoteTails = new Map<string, Promise<undefined>>();
+  /**
+   * In-flight demotes, keyed by doc AND generation.
+   *
+   * The idempotence contract extended to the in-flight window.
+   * `resendUnacknowledgedDemotes` re-posts the SAME generation precisely when
+   * main does not know whether the first post was seen - and "not seen yet" and
+   * "seen and still settling" are indistinguishable from over there. A resend
+   * that arrives while its twin is running JOINS it, so the tier is asked once
+   * and both callers get the same answer. Without this the resend queues behind
+   * its twin and settles a second time, which is the double-release the settled
+   * map exists to prevent, just moved earlier in time.
+   *
+   * Keyed by generation as well as doc because serialization means several
+   * generations can be queued at once, and a resend must be able to find its
+   * own twin rather than only the newest.
+   */
+  const demotesInFlight = new Map<string, Promise<DemoteAnswer>>();
+
+  function epochOf(docKey: string): number {
+    return bodyEpochs.get(docKey) ?? 0;
+  }
+
+  /**
+   * Write the settled record, unless this doc's lifetime ended while the settle
+   * was in flight.
+   *
+   * That is the ONE staleness this has to judge, and the reason is the chaining
+   * above rather than anything here: serialized settles complete in the order
+   * main posted them, so within a lifetime the newest completion is also the
+   * last write and no "older loses" comparison has anything to do. One was
+   * written and then removed - ablating it changed no test, because
+   * serialization makes it unreachable, and an unreachable guard reads as a
+   * defence that is really scaffolding.
+   *
+   * Across lifetimes the ordering argument does NOT hold: `materializeBody`
+   * bumps the epoch while a settle from the previous lifetime is still out, and
+   * that completion would otherwise write a record the new lifetime's
+   * generations all lose to. See {@link SettledDemote}.
+   */
+  function recordSettledDemote(
+    input: DemoteInput,
+    epochAtStart: number,
+    answer: DemoteAnswer,
+  ): void {
+    if (epochOf(input.docKey) !== epochAtStart) return;
+    settledDemotes.set(input.docKey, {
+      generation: input.generation,
+      answer,
+    });
+  }
+
+  async function settleOneDemote(input: DemoteInput): Promise<DemoteAnswer> {
+    // Re-checked at the FRONT of the queue, not only on arrival: this call may
+    // have waited behind another settle for the same doc, and disposal can land
+    // in that window.
+    if (!serving) {
+      return { accepted: false, settledBytes: 0, reason: "not-held" };
+    }
+
+    // Idempotence lives HERE and not on the main thread's generation guard,
+    // because `resendUnacknowledgedDemotes` deliberately re-posts the SAME
+    // generation - the resend exists precisely for the case where the main
+    // thread does not know whether the first post was seen. Releasing on both
+    // copies would decrement body demand twice and unsubscribe a body that is
+    // still open on the other side.
+    const epochAtStart = epochOf(input.docKey);
+    const settled = settledDemotes.get(input.docKey);
+    // No lifetime check needed on the READ: `materializeBody` deletes the
+    // record when a lifetime ends and `recordSettledDemote` declines to write
+    // one after it, so anything found here belongs to the current lifetime.
+    // A second, read-side check was written and removed - it could not be
+    // ablated to red, because the write side already holds the invariant.
+    if (settled !== undefined) {
+      // The resend case: answer with what the first copy settled, and do not
+      // touch demand again.
+      if (settled.generation === input.generation) return settled.answer;
+      // Older than what has settled - it belongs to a lifetime the main
+      // thread has already moved past. Its own guard drops this answer, but
+      // this side must not RELEASE on it, which is why it never reaches the
+      // port.
+      if (input.generation < settled.generation) {
+        return { accepted: false, settledBytes: 0, reason: "newer-generation" };
+      }
+    }
+
+    const answer = await ports.bodies.settle(input);
+    recordSettledDemote(input, epochAtStart, answer);
+    return answer;
+  }
 
   return {
     async readAttachmentBytes(hash): Promise<Uint8Array | null> {
@@ -197,45 +341,56 @@ export function createEpicRuntimeWorkerCore(
       if (!serving) return null;
       const materialized = await ports.bodies.materialize(artifactId);
       // A new lifetime for this doc starts a new generation sequence, so the
-      // previous lifetime's settled answer must not shadow it.
-      if (materialized !== null) settledDemotes.delete(materialized.docKey);
+      // previous lifetime's settled answer must not shadow it. The epoch bump
+      // is the same statement made durably: it also invalidates any settle
+      // still in flight from the lifetime that just ended, which the delete
+      // alone cannot do because that settle writes its record AFTER this runs.
+      if (materialized !== null) {
+        settledDemotes.delete(materialized.docKey);
+        bodyEpochs.set(materialized.docKey, epochOf(materialized.docKey) + 1);
+      }
       return materialized;
     },
-    async demoteBody(input) {
+    demoteBody(input) {
       // Refuse rather than accept-and-lose. The main thread keeps the live doc
       // on a refusal, so a demote that arrives during teardown costs a
       // re-send after respawn; one accepted here and never written costs the
       // edit.
-      if (!serving)
-        return { accepted: false, settledBytes: 0, reason: "not-held" };
-
-      // Idempotence lives HERE and not on the main thread's generation guard,
-      // because `resendUnacknowledgedDemotes` deliberately re-posts the SAME
-      // generation - the resend exists precisely for the case where the main
-      // thread does not know whether the first post was seen. Releasing on both
-      // copies would decrement body demand twice and unsubscribe a body that is
-      // still open on the other side.
-      const settled = settledDemotes.get(input.docKey);
-      if (settled !== undefined) {
-        // The resend case: answer with what the first copy settled, and do not
-        // touch demand again.
-        if (settled.generation === input.generation) return settled.answer;
-        // Older than what has settled - it belongs to a lifetime the main
-        // thread has already moved past. Its own guard drops this answer, but
-        // this side must not RELEASE on it, which is why it never reaches the
-        // port.
-        if (input.generation < settled.generation) {
-          return {
-            accepted: false,
-            settledBytes: 0,
-            reason: "newer-generation",
-          };
-        }
+      if (!serving) {
+        return Promise.resolve({
+          accepted: false,
+          settledBytes: 0,
+          reason: "not-held" as const,
+        });
       }
-      const answer = await ports.bodies.settle(input);
-      settledDemotes.set(input.docKey, {
-        generation: input.generation,
-        answer,
+
+      // A resend whose twin is still in flight gets the TWIN, not a second
+      // settle - see `demotesInFlight`.
+      const inFlightKey = `${input.docKey}\u0000${String(input.generation)}`;
+      const twin = demotesInFlight.get(inFlightKey);
+      if (twin !== undefined) return twin;
+
+      // Chained behind this doc's previous demote, so two generations can never
+      // be settling at once. The tail never rejects, so a failed settle does
+      // not strand every later demote for the doc.
+      const previous = demoteTails.get(input.docKey);
+      const answer =
+        previous === undefined
+          ? settleOneDemote(input)
+          : previous.then(() => settleOneDemote(input));
+      const tail = answer.then(
+        () => undefined,
+        () => undefined,
+      );
+      demotesInFlight.set(inFlightKey, answer);
+      demoteTails.set(input.docKey, tail);
+      void tail.then(() => {
+        demotesInFlight.delete(inFlightKey);
+        // Only if nothing has queued behind this one, or the next demote for
+        // this doc would start a second chain and lose the serialization.
+        if (demoteTails.get(input.docKey) === tail) {
+          demoteTails.delete(input.docKey);
+        }
       });
       return answer;
     },
@@ -313,6 +468,13 @@ export function createEpicRuntimeWorkerCore(
       if (!serving) return;
       serving = false;
       settledDemotes.clear();
+      // The demote bookkeeping goes with it. `settleOneDemote` re-checks
+      // `serving` at the front of the queue, so anything still chained answers
+      // "not-held" and main keeps its doc - the refusal that costs a resend
+      // rather than an edit.
+      bodyEpochs.clear();
+      demoteTails.clear();
+      demotesInFlight.clear();
       // BEFORE the transport closes. A pending wait settles `null` rather than
       // outliving the runtime it was waiting on - a caller parked on a
       // disposed replica is the failure this pair was built to prevent, and
