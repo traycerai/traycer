@@ -28,6 +28,7 @@ import {
 import { createEpicRuntimeWorkerCore } from "./epic-runtime-core";
 import { buildEpicRuntimeCorePorts } from "./epic-runtime-core-ports";
 import type { EpicRuntimeWorkerHost } from "./epic-runtime-worker-host";
+import type { EpicReplicaRuntime } from "../epic-replica-runtime";
 
 /**
  * The doc arm to use before the first manifest push.
@@ -88,7 +89,8 @@ export function buildProxiedRuntimeFactories(
 export function installEpicRuntimeCore(
   host: EpicRuntimeWorkerHost,
   buildFactories: (host: EpicRuntimeWorkerHost) => EpicRuntimeStreamFactories,
-): void {
+): () => EpicReplicaRuntime | null {
+  let composed: EpicReplicaRuntime | null = null;
   host.onBootstrap((facts) => {
     const factories = buildFactories(host);
 
@@ -203,10 +205,21 @@ export function installEpicRuntimeCore(
       ),
     );
 
+    composed = runtime;
+
     // Last, exactly as the store does it: the first projection must land after
     // everything that consumes it exists.
     runtime.start();
   });
+  /**
+   * The composed runtime, or `null` before the bootstrap lands.
+   *
+   * Production ignores this. It exists for the ONE in-process harness
+   * (`openStoreForTest`), which constructed this host and this composition and
+   * so may look inside them - a suite reaching a doc it built itself is not
+   * the same as production reaching across a thread boundary.
+   */
+  return () => composed;
 }
 
 /**

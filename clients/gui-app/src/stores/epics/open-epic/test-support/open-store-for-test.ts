@@ -27,6 +27,8 @@
  * One helper, not a pattern to copy. A second wiring is a second harness to
  * keep honest, and the two would drift in exactly the places that matter.
  */
+import type * as Y from "yjs";
+import type { Awareness } from "y-protocols/awareness";
 import { createFakeBridgePair } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
 import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
 import { createRecordingStreamClient } from "@traycer-clients/shared/replica-runtime/worker/test-support/recording-stream-client";
@@ -66,8 +68,15 @@ export interface OpenStoreForTestOptions {
     | null;
 }
 
-export interface OpenedStoreForTest {
-  readonly handle: OpenEpicStoreHandle;
+/**
+ * The handle itself, plus the pipe control.
+ *
+ * The handle is SPREAD rather than nested so a migrating suite changes its
+ * construction line and nothing else - `opened.store`, `opened.dispose()` and
+ * every assertion below them keep working. That is what makes this migration
+ * setup-only rather than a rewrite.
+ */
+export interface OpenedStoreForTest extends OpenEpicStoreHandle {
   /**
    * Deliver everything queued on the pipe, and everything that causes.
    *
@@ -76,7 +85,20 @@ export interface OpenedStoreForTest {
    * mutation is asserting on a frame still in flight.
    */
   flush(): Promise<void>;
-  dispose(): void;
+  /**
+   * The root replica's live doc and awareness, from the IN-PROCESS worker.
+   *
+   * These left `OpenEpicStoreHandle` because production's runtime is on
+   * another thread and a `Y.Doc` cannot cross it. They are here because this
+   * harness BUILT the runtime in this thread - a suite reading a doc it
+   * constructed itself is not production reaching across a boundary, and
+   * seeding through it is how these suites have always driven the replica.
+   *
+   * Named `doc` and `awareness` so a migrating suite's assertion lines do not
+   * move; the construction line is the only thing that changes.
+   */
+  readonly doc: Y.Doc;
+  readonly awareness: Awareness;
 }
 
 export function openStoreForTest(
@@ -87,7 +109,10 @@ export function openStoreForTest(
   // The worker side, in this thread: the real host, given the suite's
   // factories in place of the proxy-built ones.
   const host = startEpicRuntimeWorkerHost(pair.worker);
-  installEpicRuntimeCore(host, () => options.factories);
+  const composedRuntime = installEpicRuntimeCore(
+    host,
+    () => options.factories,
+  );
 
   const accounting = createProcessBackedAccountingPort({
     hostId: "test-host",
@@ -173,11 +198,18 @@ export function openStoreForTest(
   });
   projectionTarget = handle.projection;
 
+  const runtime = composedRuntime();
+  if (runtime === null) {
+    // The bootstrap is emitted synchronously by `spawnEpicRuntimeWorker` over
+    // a `"sync"` pipe, so this is unreachable - and it is checked rather than
+    // asserted, because a harness that silently handed back a doc-less handle
+    // would fail somewhere far from the cause.
+    throw new Error("[openStoreForTest] the worker composed no runtime");
+  }
   return {
-    handle,
+    ...handle,
     flush: () => pair.flush(),
-    dispose: () => {
-      handle.dispose();
-    },
+    doc: runtime.doc,
+    awareness: runtime.awareness,
   };
 }

@@ -3,6 +3,7 @@ import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -128,13 +129,14 @@ describe("createOpenEpicStore", () => {
 
   it("projects the snapshot frame into store state", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -154,12 +156,14 @@ describe("createOpenEpicStore", () => {
 
   it("namespaces the persist key by identity and epicId", () => {
     const { factory } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: "user-alice",
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     // Persisting a field flushes the slice to localStorage under the persist
@@ -180,12 +184,14 @@ describe("createOpenEpicStore", () => {
 
   it("records epicDeleted with attribution on the onEpicDeleted frame", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     handle().callbacks.onEpicDeleted({
@@ -206,12 +212,14 @@ describe("createOpenEpicStore", () => {
 
   it("sets accessLost (not epicDeleted) on a full revoke via onPermissionChanged(null)", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -229,12 +237,14 @@ describe("createOpenEpicStore", () => {
 
   it("does not raise a close signal on a downgrade to viewer (downgrade != close)", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -252,12 +262,14 @@ describe("createOpenEpicStore", () => {
 
   it("applies subsequent update frames to the local Y.Doc", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -274,12 +286,14 @@ describe("createOpenEpicStore", () => {
 
   it("marks the session dirty on local edits while open even when the queue stays empty", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     const hostDoc = new Y.Doc();
     handle().callbacks.onConnectionStatus("open", null);
@@ -304,12 +318,14 @@ describe("createOpenEpicStore", () => {
 
   it("handles permission downgrade, upgrade, and full revoke", () => {
     const { factory, handle, handles } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     handle().callbacks.onConnectionStatus("open", null);
@@ -353,12 +369,14 @@ describe("createOpenEpicStore", () => {
 
   it("keeps offline bytes in the queue diagnostically but reconciles them as a single update on snapshot", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     const hostDoc = new Y.Doc();
     handle().callbacks.onSnapshot(
@@ -394,12 +412,14 @@ describe("createOpenEpicStore", () => {
 
   it("collapses a long offline queue on flush without losing edits or under-reporting its size", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     const hostDoc = new Y.Doc();
     handle().callbacks.onSnapshot(
@@ -440,12 +460,14 @@ describe("createOpenEpicStore", () => {
 
   it("shows reconnecting on cloud sync loss but keeps streaming edits to the local host (durable offline persistence is host-owned)", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     const hostDoc = new Y.Doc();
     handle().callbacks.onConnectionStatus("open", null);
@@ -484,12 +506,14 @@ describe("createOpenEpicStore", () => {
 
   it("clears isDirty when a snapshot's host state vector covers the dirty watermark", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     const initialHostDoc = new Y.Doc();
     handle().callbacks.onConnectionStatus("open", null);
@@ -519,12 +543,14 @@ describe("createOpenEpicStore", () => {
 
   it("keeps isDirty true and emits a reconcile update when a snapshot does not cover the dirty watermark", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     const hostDoc = new Y.Doc();
     handle().callbacks.onConnectionStatus("open", null);
@@ -557,12 +583,14 @@ describe("createOpenEpicStore", () => {
 
   it("treats snapshot reconcile as a no-op when local state is already a subset of the host state vector", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     const hostDoc = new Y.Doc();
     hostDoc.getMap("epic").set("title", "Server truth");
@@ -582,12 +610,14 @@ describe("createOpenEpicStore", () => {
 
   it("does not clear isDirty on host-origin updates without convergence proof", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -610,12 +640,14 @@ describe("createOpenEpicStore", () => {
 
   it("clears isDirty when a host-origin update establishes convergence", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -636,23 +668,27 @@ describe("createOpenEpicStore", () => {
 
   it("persists lastFocusedArtifactId to localStorage and restores it on remount", () => {
     const { factory } = fakeFactory();
-    const first = createOpenEpicStore({
+    const first = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     first.store.getState().setLastFocusedArtifactId("art-42");
     first.dispose();
 
     const { factory: factory2 } = fakeFactory();
-    const second = createOpenEpicStore({
+    const second = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory2,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory2,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     expect(second.store.getState().lastFocusedArtifactId).toBe("art-42");
     second.dispose();
@@ -660,23 +696,27 @@ describe("createOpenEpicStore", () => {
 
   it("scopes lastFocusedArtifactId persistence per userId", () => {
     const { factory: factoryA } = fakeFactory();
-    const userA = createOpenEpicStore({
+    const userA = openStoreForTest({
       epicId: "epic-shared",
-      streamClientFactory: factoryA,
       userId: "alice@example.com",
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factoryA,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     userA.store.getState().setLastFocusedArtifactId("art-alice");
     userA.dispose();
 
     const { factory: factoryB } = fakeFactory();
-    const userB = createOpenEpicStore({
+    const userB = openStoreForTest({
       epicId: "epic-shared",
-      streamClientFactory: factoryB,
       userId: "bob@example.com",
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factoryB,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     // Bob has never focused anything - he must NOT see Alice's focus state.
     expect(userB.store.getState().lastFocusedArtifactId).toBeNull();
@@ -685,23 +725,27 @@ describe("createOpenEpicStore", () => {
 
     // Round-trip: Alice still sees her own focus value, Bob still sees his.
     const { factory: factoryA2 } = fakeFactory();
-    const userAAgain = createOpenEpicStore({
+    const userAAgain = openStoreForTest({
       epicId: "epic-shared",
-      streamClientFactory: factoryA2,
       userId: "alice@example.com",
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factoryA2,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     expect(userAAgain.store.getState().lastFocusedArtifactId).toBe("art-alice");
     userAAgain.dispose();
 
     const { factory: factoryB2 } = fakeFactory();
-    const userBAgain = createOpenEpicStore({
+    const userBAgain = openStoreForTest({
       epicId: "epic-shared",
-      streamClientFactory: factoryB2,
       userId: "bob@example.com",
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factoryB2,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     expect(userBAgain.store.getState().lastFocusedArtifactId).toBe("art-bob");
     userBAgain.dispose();
@@ -709,12 +753,14 @@ describe("createOpenEpicStore", () => {
 
   it("applies inbound awareness updates to the local Awareness", async () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-aware",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -746,12 +792,14 @@ describe("createOpenEpicStore", () => {
 
   it("emits outbound awareness on local Awareness state change", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-out",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -764,12 +812,14 @@ describe("createOpenEpicStore", () => {
 
   it("does not re-emit inbound awareness back out through the stream (no-loop)", async () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-loop",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -791,12 +841,14 @@ describe("createOpenEpicStore", () => {
 
   it("dispose closes the underlying stream client exactly once", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-dispose",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     expect(handle().closeCount).toBe(0);
     opened.dispose();
@@ -808,12 +860,14 @@ describe("createOpenEpicStore", () => {
 
   it("requestFreshSnapshot rebinds the stream and clears unsynced local replica state", () => {
     const { factory, handles } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-refresh",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     handles()[0].callbacks.onConnectionStatus("open", null);
@@ -847,12 +901,14 @@ describe("createOpenEpicStore", () => {
 
   it("stops forwarding awareness updates after dispose", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-awareness-dispose",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
@@ -986,12 +1042,14 @@ describe("createOpenEpicStore", () => {
     // one that fails - the artifact stays `unavailable` forever with a room the
     // host has already called ready.
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
     handle().callbacks.onConnectionStatus("open", null);
 
@@ -1027,12 +1085,14 @@ describe("createOpenEpicStore", () => {
 
   it("resolves an artifact body fragment from the artifact-room doc seeded by onArtifactRoomSnapshot", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     // Build a donor with one artifact pointing at artifact-room-0.
@@ -1079,12 +1139,14 @@ describe("createOpenEpicStore", () => {
 
   it("surfaces unavailable / retrying artifactRoom states via onArtifactRoomState without losing root metadata", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1114,12 +1176,14 @@ describe("createOpenEpicStore", () => {
 
   it("resets host dirtiness to unknown until an automatic reconnect receives its atomic dirty snapshot", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     handle().callbacks.onConnectionStatus("open", null);
@@ -1154,12 +1218,14 @@ describe("createOpenEpicStore", () => {
 
   it("does not let a root-dirty delta stand in for the atomic snapshot", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-root-dirty-delta",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     handle().callbacks.onConnectionStatus("open", null);
@@ -1173,12 +1239,14 @@ describe("createOpenEpicStore", () => {
 
   it("forwards artifact-room doc edits as outbound artifactRoomApplyUpdate frames keyed by artifactRoomId", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1226,12 +1294,14 @@ describe("createOpenEpicStore", () => {
 
   it("applies inbound artifactRoomAwareness to a artifact-room-scoped Awareness instance, not the root awareness", async () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1290,12 +1360,14 @@ describe("createOpenEpicStore", () => {
 
   it("emits outbound artifactRoom awareness keyed by artifactRoomId when the artifactRoom awareness changes locally", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1337,12 +1409,14 @@ describe("createOpenEpicStore", () => {
 
   it("queues artifact-room-body local edits during reconnect and replays them after the fresh root snapshot", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1391,12 +1465,14 @@ describe("createOpenEpicStore", () => {
 
   it("does not flush queued artifact-room-body edits with a stale editor role when the reconnect snapshot downgrades to viewer", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1457,12 +1533,14 @@ describe("createOpenEpicStore", () => {
 
   it("clears queued artifact-room-body edits on viewer downgrade (fail-closed)", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1501,12 +1579,14 @@ describe("createOpenEpicStore", () => {
 
   it("merges incoming artifactRoomSnapshot into the existing local artifactRoom replica without destroying offline edits", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1583,12 +1663,14 @@ describe("createOpenEpicStore", () => {
 
   it("keeps streaming artifact-room body edits to the host during a cloud-sync drop", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1644,12 +1726,14 @@ describe("createOpenEpicStore", () => {
     // retain an outbound propagation path so the fresh root snapshot after
     // reopen ships a reconcile carrying those edits to the host.
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1748,12 +1832,14 @@ describe("createOpenEpicStore", () => {
     // stream is not open and the role then drops to viewer before
     // the stream reopens, the deferred reconcile MUST be discarded.
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1819,12 +1905,14 @@ describe("createOpenEpicStore", () => {
     // a subsequent `onConnectionStatus("open")` on the same handle
     // does not emit stale `artifactRoomApplyUpdate` bytes.
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1882,12 +1970,14 @@ describe("createOpenEpicStore", () => {
 
   it("clears the per-artifact-room dirty signal when a artifactRoomUpdate's host state vector covers the local watermark", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -1954,12 +2044,14 @@ describe("createOpenEpicStore", () => {
 
   it("discardUnsyncedEdits clears public dirty state for artifact-room body edits", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -2008,12 +2100,14 @@ describe("createOpenEpicStore", () => {
     // clear the per-artifact-room dirty watermark so a follow-up snapshot does not
     // ship a redundant reconcile.
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -2100,12 +2194,14 @@ describe("createOpenEpicStore", () => {
 
   it("preserves local edits when artifactRoomSnapshot arrives BEFORE the local edit (steady state)", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -2144,12 +2240,14 @@ describe("createOpenEpicStore", () => {
 
   it("clears the per-artifact-room dirty watermark on viewer downgrade (fail-closed)", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -2204,12 +2302,14 @@ describe("createOpenEpicStore", () => {
 
   it("does not assume artifactRoom frames imply root metadata changes - artifactRoom state slice updates do not touch projected root slices", () => {
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     const donor = new Y.Doc();
@@ -2244,13 +2344,15 @@ describe("createOpenEpicStore", () => {
   describe("migration slice", () => {
     it("starts idle and transitions to running on migrationStarted + progress", () => {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-a",
+      const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       expect(opened.store.getState().migration.status).toBe("idle");
 
@@ -2276,13 +2378,15 @@ describe("createOpenEpicStore", () => {
 
     it("resets to idle once the post-migration snapshot lands", () => {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-a",
+      const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       handle().callbacks.onMigrationStarted();
       handle().callbacks.onMigrationProgress("upload", 5, 5);
@@ -2296,13 +2400,15 @@ describe("createOpenEpicStore", () => {
 
     it("transitions to error on onMigrationFailed and retries in-stream", () => {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-a",
+      const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       // The host's `migrationFailed` path keeps the WS open, so the
       // renderer's `currentStatus` is still "open". The retryMigration
@@ -2328,13 +2434,15 @@ describe("createOpenEpicStore", () => {
 
     it("transitions to not-allowed on onMigrationNotAllowed (terminal, not retryable)", () => {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-a",
+      const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       handle().callbacks.onConnectionStatus("open", null);
       handle().callbacks.onMigrationNotAllowed();
@@ -2357,13 +2465,15 @@ describe("createOpenEpicStore", () => {
 
     it("transitions to error on a fatal close after migration started", () => {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-a",
+      const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       handle().callbacks.onMigrationStarted();
       handle().callbacks.onConnectionStatus("closed", {
@@ -2425,13 +2535,15 @@ describe("createOpenEpicStore", () => {
 
     it("ignores fatal close when no migration ever started", () => {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-a",
+      const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       handle().callbacks.onConnectionStatus("closed", {
         kind: "fatalError",
@@ -2454,13 +2566,15 @@ describe("createOpenEpicStore", () => {
       // user on the Prepare step. Verify the store falls back to a full
       // requestFreshSnapshot (close + reopen) instead of in-stream retry.
       const { factory, handle, handles } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-a",
+      const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       const initialStream = handle();
       handle().callbacks.onMigrationStarted();
@@ -2494,13 +2608,15 @@ describe("createOpenEpicStore", () => {
 
     it("retryMigration is a no-op when migration is not in error", () => {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-a",
+      const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       opened.store.getState().retryMigration();
       expect(handle().retryMigrationCount).toBe(0);
@@ -2516,12 +2632,14 @@ describe("createOpenEpicStore", () => {
 
   it("settles an in-flight attachment read when disposed without an abort", async () => {
     const { factory } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     // Park a waiter on a hash that has not synced in yet, then dispose the
@@ -2554,12 +2672,14 @@ describe("createOpenEpicStore", () => {
       .getMap("attachments")
       .set("present-hash", new Uint8Array([1, 2, 3]));
     const { factory, handle } = fakeFactory();
-    const opened = createOpenEpicStore({
+    const opened = openStoreForTest({
       epicId: "epic-a",
-      streamClientFactory: factory,
       userId: null,
-      onAuthError: null,
-      laneSelection: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     });
 
     handle().callbacks.onSnapshot(
@@ -2581,13 +2701,15 @@ describe("createOpenEpicStore", () => {
   describe("sync-pill raw connection legs (hostTransportStatus / cloudSyncStatus / hasConnectedOnce)", () => {
     it("keeps the optimistic cloud display value separate from fresh cloud proof", () => {
       const { factory } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-legs-construct",
+      const opened = openStoreForTest({
+      epicId: "epic-legs-construct",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       const state = opened.store.getState();
       expect(state.cloudSyncStatus).toBe("connected");
@@ -2601,13 +2723,15 @@ describe("createOpenEpicStore", () => {
 
     it("publishes raw transport, cloud, and freshness legs across each open cycle", () => {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-legs-lifecycle",
+      const opened = openStoreForTest({
+      epicId: "epic-legs-lifecycle",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       // Transport opens before a current-cycle cloud status arrives. Preserve
       // the historical functional `open` blend, but freshness remains false
@@ -2660,13 +2784,15 @@ describe("createOpenEpicStore", () => {
 
     it("requestFreshSnapshot invalidates cloud acknowledgement for its new cycle", () => {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-legs-refresh",
+      const opened = openStoreForTest({
+      epicId: "epic-legs-refresh",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
 
       handle().callbacks.onConnectionStatus("open", null);
       handle().callbacks.onCloudSyncStatus("connected");
@@ -2931,13 +3057,15 @@ describe("createOpenEpicStore", () => {
       // back a live-but-empty fragment there reads as a real, empty body:
       // export skips its "still loading" guard and writes an empty file.
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-lease-unseeded",
+      const opened = openStoreForTest({
+      epicId: "epic-lease-unseeded",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
       const donor = new Y.Doc();
       seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
       handle().callbacks.onConnectionStatus("open", null);
@@ -3088,13 +3216,15 @@ describe("createOpenEpicStore", () => {
 
     it("evicts the least recently leased room once more rooms are hot than the cap", () => {
       const { factory, handle } = fakeFactory();
-      const opened = createOpenEpicStore({
-        epicId: "epic-lease-cap",
+      const opened = openStoreForTest({
+      epicId: "epic-lease-cap",
+      userId: null,
+      factories: {
         streamClientFactory: factory,
-        userId: null,
-        onAuthError: null,
         laneSelection: null,
-      });
+      },
+      writeCommand: null,
+    });
       const roomCount = MAX_HOT_ARTIFACT_ROOMS_FOR_TESTS + 1;
       const donor = new Y.Doc();
       for (let index = 0; index < roomCount; index += 1) {
