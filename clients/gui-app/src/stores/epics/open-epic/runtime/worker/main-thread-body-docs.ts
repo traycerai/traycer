@@ -30,8 +30,16 @@ import type { MainThreadBodyDocs } from "./artifact-body-lease-bridge";
 interface LiveBody {
   readonly doc: Y.Doc;
   readonly awareness: Awareness;
-  /** The identity this document's history descends from. */
-  docGuid: string;
+  /**
+   * The identity this document's history descends from, or `null` when none
+   * was stated.
+   *
+   * `null` is the `@1` arm's truth, not an absence this side may fill in:
+   * `artifact-room-tier.ts:325` forbids fabricating one because "a fabricated
+   * guid would be indistinguishable from a stated one, and the replace rule
+   * below would then be deciding on a value this client invented".
+   */
+  docGuid: string | null;
   /**
    * The authority's state vector at the last install, carried for the demote
    * that returns these bytes. Not read here; held so the one object that owns
@@ -102,6 +110,12 @@ export function createMainThreadBodyDocStore(
     install(input): void {
       const held = bodies.get(input.docKey);
       if (held !== undefined) {
+        // A second install for a RESIDENT key does not happen: the lease
+        // bridge revives an existing entry (`findByArtifact`, and the `raced`
+        // check for `@1`, where the key is a room id) instead of materializing
+        // again. Kept as a total function rather than a throw, and the pin for
+        // that invariant lives with the bridge.
+        //
         // Same lineage: apply. Yjs merges an update from the same ancestry
         // idempotently, so a re-delivered snapshot is a no-op rather than a
         // duplication - which is why `seedMode` does not need to branch here.

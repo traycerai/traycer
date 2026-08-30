@@ -148,8 +148,16 @@ export interface EpicRuntimeWorkerCore {
 export interface ArtifactBodyMaterialization {
   readonly docKey: string;
   readonly update: Uint8Array;
-  /** The identity these bytes were cut at - see `body/materialize`. */
-  readonly docGuid: string;
+  /**
+   * The identity these bytes were cut at, or `null` when the arm states none.
+   *
+   * `null` is the `@1` arm's truth carried forward, never a value invented
+   * here - `artifact-room-tier.ts:325` forbids fabricating one. A `null` guid
+   * marks the body FORWARD-ONLY: the lease bridge installs it and never posts
+   * a demote for it, because `settleColdState` decides its refusal on an
+   * identity and would refuse these bytes anyway.
+   */
+  readonly docGuid: string | null;
   readonly seedMode: ArtifactBodySeedMode;
   readonly hostStateVector: string | null;
 }

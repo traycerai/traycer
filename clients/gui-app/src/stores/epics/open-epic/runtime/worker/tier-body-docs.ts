@@ -41,7 +41,15 @@ export function createTierBodyDocs(
   source: TierBodyDocsSource,
 ): MainThreadBodyDocs {
   return {
-    install: (input) => source.installColdState(input),
+    install: (input) => {
+      // The `@1` arm states no identity, and this adapter cannot represent
+      // that: `installColdState` requires one. It is scaffolding with a known
+      // expiry (see this file's header) with no production caller, so the
+      // honest behaviour is to SKIP rather than fabricate a guid -
+      // `artifact-room-tier.ts:325` forbids inventing one.
+      if (input.docGuid === null) return;
+      source.installColdState({ ...input, docGuid: input.docGuid });
+    },
     encode: (docKey) => {
       const cold = source.encodeColdState(docKey);
       // An empty array, NOT a throw. `encode` is called on the demote path

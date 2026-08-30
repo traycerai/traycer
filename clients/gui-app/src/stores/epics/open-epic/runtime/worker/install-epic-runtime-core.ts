@@ -141,6 +141,8 @@ export function installEpicRuntimeCore(
           bodyDocKey: (artifactId) => runtime.getArtifactBodyDocKey(artifactId),
           encodeColdState: (docKey) =>
             runtime.encodeArtifactBodyColdState(docKey),
+          encodeForwardOnly: (docKey) =>
+            runtime.encodeArtifactBodyForwardOnly(docKey),
           settleColdState: (docKey, update, expectedDocGuid) =>
             runtime.settleArtifactBodyColdState(
               docKey,

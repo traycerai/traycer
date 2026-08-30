@@ -337,6 +337,23 @@ export interface EpicReplicaRuntime {
    */
   encodeArtifactBodyColdState(docKey: string): ArtifactRoomColdState | null;
   /**
+   * The live body doc's bytes for a room that states NO identity.
+   *
+   * The `@1` arm's rooms are exactly that: its adapter sets `docGuid: null` by
+   * design, so `encodeArtifactBodyColdState` refuses them - "bytes whose
+   * document cannot be identified cannot be safely settled back" - and before
+   * the relocation nothing needed them, because `getArtifactFragment` returned
+   * the tier's live doc BY REFERENCE.
+   *
+   * After the relocation the main thread must build its own doc, so the bytes
+   * have to cross. This is that read, and it claims nothing: no guid is
+   * invented (`artifact-room-tier.ts:325` forbids it), and the caller marks
+   * the result forward-only so it is never settled back.
+   *
+   * `null` when the room is not materialized - there is no live doc to encode.
+   */
+  encodeArtifactBodyForwardOnly(docKey: string): Uint8Array | null;
+  /**
    * Take a body doc's encoded state back. Refuses a moved identity rather than
    * splicing two histories - see `ArtifactRoomColdSettlement`.
    */
@@ -1296,6 +1313,10 @@ export function createEpicReplicaRuntime(
     getArtifactBodyDocKey: (artifactId) => artifactBodyDocKey(artifactId),
 
     encodeArtifactBodyColdState: (docKey) => tier.encodeColdState(docKey),
+    encodeArtifactBodyForwardOnly: (docKey) => {
+      const entry = tier.peek(docKey);
+      return entry === null ? null : Y.encodeStateAsUpdate(entry.doc);
+    },
     settleArtifactBodyColdState: (docKey, update, expectedDocGuid) =>
       tier.settleColdState(docKey, update, expectedDocGuid),
     sendArtifactBodyUpdate: (docKey, update) => {

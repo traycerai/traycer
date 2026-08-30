@@ -38,6 +38,7 @@ function createSource(
     acquireBodyLease: () => () => {},
     bodyDocKey: () => null,
     encodeColdState: () => null,
+    encodeForwardOnly: () => null,
     settleColdState: () => ({ accepted: false }),
     sendBodyUpdate: () => ({ kind: "sent" }),
     renameArtifact: () => false,

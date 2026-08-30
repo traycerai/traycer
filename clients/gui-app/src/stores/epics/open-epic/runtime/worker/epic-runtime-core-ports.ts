@@ -47,6 +47,8 @@ export interface EpicRuntimeCorePortSource {
   acquireBodyLease(artifactId: string): () => void;
   bodyDocKey(artifactId: string): string | null;
   encodeColdState(docKey: string): ArtifactRoomColdState | null;
+  /** Live bytes for a room that states no identity. See the runtime member. */
+  encodeForwardOnly(docKey: string): Uint8Array | null;
   settleColdState(
     docKey: string,
     update: Uint8Array,
@@ -224,6 +226,27 @@ export function buildEpicRuntimeCorePorts(
           return Promise.resolve(null);
         }
         const cold = source.encodeColdState(docKey);
+        if (cold === null) {
+          // No COLD state, but the room may still be materialized with no
+          // stated identity - the `@1` arm, whose snapshots claim none by
+          // design. Serve those FORWARD-ONLY: real bytes, `docGuid: null`, and
+          // the lease bridge never posts a demote for them. Refusing here
+          // instead would take the whole `@1` arm dark, since its bodies
+          // reached editors by reference before the relocation and have no
+          // other way across now.
+          const live = source.encodeForwardOnly(docKey);
+          if (live !== null) {
+            if (heldLeases.has(docKey)) release();
+            else heldLeases.set(docKey, release);
+            return Promise.resolve({
+              docKey,
+              update: live,
+              docGuid: null,
+              seedMode: "full" as const,
+              hostStateVector: null,
+            });
+          }
+        }
         // `null` is NOT empty bytes: a zero-length update applies cleanly and
         // yields an empty document, so conflating them replaces a body with
         // nothing. The lease comes back off - nothing was handed over, so

@@ -46,7 +46,7 @@ export interface MainThreadBodyDocs {
      * no ancestor with what was installed, and merging the two is
      * unrecoverable rather than lossy.
      */
-    readonly docGuid: string;
+    readonly docGuid: string | null;
     readonly seedMode: ArtifactBodySeedMode;
     readonly hostStateVector: string | null;
   }): void;
@@ -114,8 +114,18 @@ export interface ArtifactBodyLeaseBridge {
 
 interface BodyEntry {
   leases: number;
-  /** What this doc was materialized at; sent back on every demote. */
-  docGuid: string;
+  /**
+   * What this doc was materialized at; sent back on every demote.
+   *
+   * `null` on the `@1` arm, where a room snapshot states no identity by
+   * design - `legacy-epic-stream-adapter.ts`: "it claims no doc identity,
+   * which leaves the tier's replace rule unreachable from this arm by
+   * construction rather than by luck". A `null` here is the tier's own
+   * recorded truth carried one layer further, never a decision this side
+   * made: `artifact-room-tier.ts:325` forbids inventing one, because "a
+   * fabricated guid would be indistinguishable from a stated one".
+   */
+  docGuid: string | null;
   /**
    * Bumped on every demote post AND on every re-acquire.
    *
@@ -136,10 +146,15 @@ export function createArtifactBodyLeaseBridge(options: {
 
   function postDemote(docKey: string, generation: number): void {
     const entry = entries.get(docKey);
-    // No entry means nothing to demote - and no identity to demote it AT. The
-    // guid is not optional on the wire, so this is the honest early return
-    // rather than sending bytes the worker cannot decide about.
+    // FORWARD-ONLY bodies are never posted. `body/demote` names an identity
+    // and the tier decides its refusal on one, so an entry with no guid has
+    // nothing to settle back TO - `settleColdState` would answer
+    // `newer-generation` for it. This is that existing refusal moved to where
+    // it is cheap, not a new rule: the round trip it saves would always have
+    // ended in a no.
     if (entry === undefined) return;
+    const docGuid = entry.docGuid;
+    if (docGuid === null) return;
     const encoded = takeBytesForTransfer(options.docs.encode(docKey));
     void options.bridge
       .call(
@@ -147,7 +162,7 @@ export function createArtifactBodyLeaseBridge(options: {
         {
           docKey,
           generation,
-          docGuid: entry.docGuid,
+          docGuid,
           update: encoded.bytes,
         },
         encoded.transfer,
@@ -221,12 +236,19 @@ export function createArtifactBodyLeaseBridge(options: {
       if (raced !== undefined) {
         return reviveAndHold(docKey, raced);
       }
-      // A granted answer with no identity cannot be demoted later - the guid
-      // is what a refusal is decided on - so it is treated as unavailable
-      // rather than installed and stranded.
-      if (answer.docGuid === null) {
-        return { kind: "unavailable", reason: `no identity for ${artifactId}` };
-      }
+      // A granted answer with no identity is FORWARD-ONLY, not unavailable.
+      //
+      // This branch used to refuse, reasoning that a body which cannot be
+      // demoted would be "installed and stranded". That reasoning holds for
+      // the lanes arm, where every body states an identity - and it makes the
+      // `@1` arm unserviceable, because `@1` states none BY DESIGN and its
+      // bodies were never settled back even before the relocation:
+      // `settleColdState` already refuses without a recorded guid, so the
+      // demote path has always been unreachable there.
+      //
+      // Stranded is therefore `@1`'s normal state, not a hazard this side
+      // introduces. Refusing here would mean no `@1` body ever reaches an
+      // editor, which is the whole arm going dark.
       options.docs.install({
         docKey,
         update: answer.update,
