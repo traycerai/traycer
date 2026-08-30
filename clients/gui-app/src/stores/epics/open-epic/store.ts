@@ -71,6 +71,7 @@ import {
 } from "./runtime/epic-replica-runtime";
 import { createRendererRuntimeEnvironment } from "./runtime/runtime-environment";
 import { createProcessBackedAccountingPort } from "./runtime/process-backed-accounting-port";
+import { dispatchEpicWriteCommand } from "./runtime/epic-write-command-dispatch";
 import {
   createBatchingDelivery,
   type EpicRuntimeDelivery,
@@ -87,7 +88,6 @@ import type {
 } from "./runtime/epic-runtime-projection";
 import type { EpicStreamClientFactory } from "./runtime/legacy-epic-stream-adapter";
 import {
-  EpicWriteCommandTransportUnavailableError,
   type EpicWriteCommandIntent,
 } from "./runtime/epic-write-command";
 
@@ -99,9 +99,38 @@ export type {
 } from "./runtime/epic-runtime-projection";
 export { LOCAL_ORIGIN } from "./runtime/epic-records-replica";
 
+/**
+ * The relocated runtime, as this store reaches it.
+ *
+ * Narrow on purpose. `port` is `call` and nothing else - the spawner hands out
+ * no `onEvent`, so a second projection reducer over one stream is unreachable
+ * rather than merely discouraged - and `command` is the one way to push a
+ * fire-and-forget member. Handing the store the bridge itself would put both
+ * of those back within reach.
+ */
+export interface EpicRuntimeBinding {
+  readonly port: RuntimeWorkerPort;
+  /** One fire-and-forget command. See `RuntimeCommandMap`. */
+  command(command: RuntimeCommand): void;
+  /** Ends the transport while the replica lives on. */
+  detach(): void;
+  /** Ends the worker. */
+  dispose(): void;
+}
+
 export interface OpenEpicStoreOptions {
   readonly epicId: string;
-  readonly streamClientFactory: EpicStreamClientFactory;
+  /**
+   * The spawned runtime. Constructed by the session provider, because the
+   * worker needs the session's real stream client and this store never had one.
+   */
+  readonly runtime: EpicRuntimeBinding;
+  /**
+   * The process-backed books, built on MAIN by the same composition that
+   * spawned the worker. The main-side body plane charges through this one;
+   * the worker's runtime charges through it too, over the bridge.
+   */
+  readonly accounting: EpicRuntimeAccountingPort;
   /**
    * Identity to namespace persisted state under - the CANONICAL
    * `profile.userId`, never the email (two accounts can share an address).
@@ -175,6 +204,16 @@ export interface OpenEpicState {
    * reference re-reads it.
    */
   readonly bindingVersion: number;
+  /**
+   * Bumped whenever a body doc becomes resident on THIS thread, or stops being.
+   *
+   * The re-render signal for `getArtifactFragment` / `getArtifactBodyAwareness`,
+   * which are synchronous reads of a set that fills in asynchronously. Distinct
+   * from `bindingVersion` (a replica replacement) and from availability (the
+   * host's view of the room): a room can be `ready` for some time before its
+   * bytes have crossed and been installed here.
+   */
+  readonly bodyResidencyVersion: number;
 
   // ── Projected slices (owned by the runtime's records plane) ───────────
   readonly epic: EpicHeader;
@@ -870,110 +909,35 @@ export function createOpenEpicStore(
     });
   });
 
-  const runtimeHostId =
-    options.commandRequester?.getActiveHostId() ?? "unbound";
-  const runtimeEnvironment = createRendererRuntimeEnvironment();
-  const runtime = createEpicReplicaRuntime({
-    epicId,
-    environment: runtimeEnvironment,
-    streamClientFactory: options.streamClientFactory,
-    delivery,
-    // Built HERE, on main, and handed in — the runtime no longer reaches the
-    // process accountant itself. Both arms construct this same port, so both
-    // draw their runtime token from the one process-wide sequence; two
-    // sequences would collide on `bookKey` in the merge window.
-    accounting: createProcessBackedAccountingPort({
-      hostId: runtimeHostId,
-      epicId,
-      environment: runtimeEnvironment,
-    }),
-    // The projector hides chats owned by a different signed-in user. The owner
-    // id is the canonical `profile.userId`, read LIVE rather than off the
-    // store's `userId` option: that option is the same canonical id today (it
-    // used to be the email), but it is fixed at construction, and a session
-    // constructed before the auth profile hydrates must pick up the id on its
-    // next projection.
-    getCurrentUserId: () => useAuthStore.getState().profile?.userId ?? null,
-    laneSelection: options.laneSelection,
-    // Read LIVE off the negotiated manifest, never captured: a host that
-    // handshakes after this session is constructed - or upgrades in place -
-    // must move the arms without the tab reopening. See `readEpicDocRecordArms`
-    // for why the two planes ask different questions and why unknown keeps the
-    // doc on.
-    getDocArm: () =>
-      readEpicDocRecordArms(
-        options.commandRequester?.getActiveHostId() ?? null,
-      ),
-    onAuthError: options.onAuthError,
-    commandIdFactory: { next: () => crypto.randomUUID() },
-    writeCommandSender: {
-      currentHostId: () => commandRequester?.getActiveHostId() ?? null,
-      async send(commandId, intent) {
-        const hostId = commandRequester?.getActiveHostId() ?? null;
-        if (commandRequester === null || hostId === null) {
-          throw new EpicWriteCommandTransportUnavailableError();
-        }
-        switch (intent.kind) {
-          case "rename-artifact":
-            await commandRequester.requestWithIdempotencyKey(
-              "epic.renameArtifact",
-              {
-                epicId,
-                artifactId: intent.artifactId,
-                title: intent.title,
-              },
-              commandId,
-            );
-            break;
-          case "delete-artifact":
-            await commandRequester.requestWithIdempotencyKey(
-              "epic.deleteArtifact",
-              { epicId, artifactId: intent.artifactId },
-              commandId,
-            );
-            break;
-          case "reparent-artifact":
-            await commandRequester.requestWithIdempotencyKey(
-              "epic.reparentArtifact",
-              {
-                epicId,
-                artifactId: intent.artifactId,
-                newParentId: intent.parentId,
-              },
-              commandId,
-            );
-            break;
-          case "update-artifact-status":
-            await commandRequester.requestWithIdempotencyKey(
-              "epic.updateArtifactStatus",
-              {
-                epicId,
-                artifactId: intent.artifactId,
-                artifactType: intent.artifactType,
-                status: intent.status,
-              },
-              commandId,
-            );
-            break;
-          case "update-epic-title":
-            await commandRequester.requestWithIdempotencyKey(
-              "epic.updateTitle",
-              {
-                epicDelta: {
-                  id: epicId,
-                  title: intent.title,
-                  updatedAt: intent.updatedAt,
-                },
-              },
-              commandId,
-            );
-            break;
-        }
-        return { hostId };
-      },
-    },
+  /**
+   * The relocated runtime, reached through the bridge.
+   *
+   * This store no longer CONSTRUCTS a runtime. The composition root moved into
+   * the worker (`install-epic-runtime-core.ts`), so what is left here is the
+   * binding the session provider spawned: `call` for the four ask-shaped
+   * members, `command` for the fifteen fire-and-forget ones, and the two
+   * lifetime members. Everything below that used to read `runtime.*`
+   * synchronously either became one of those, moved to the main-side body
+   * plane, or is answered from the projection.
+   */
+  const runtime = options.runtime;
+
+  const bodyDocs = createMainThreadBodyDocStore(() => {
+    // Residency is a MAIN-THREAD fact and nothing else publishes it.
+    // Availability comes from the projection and says the room is `ready`;
+    // this says the fragment exists. Without the bump an editor that
+    // re-rendered on availability alone would read `null` at `ready` and never
+    // look again.
+    storeApi?.setState((state) => ({
+      bodyResidencyVersion: state.bodyResidencyVersion + 1,
+    }));
   });
-  runtimeRef = runtime;
+
+  const bodyLeases = createArtifactBodyLeaseBridge({
+    bridge: runtime.port,
+    docs: bodyDocs,
+    budget: createHotBodyBudgetAdapter(options.accounting),
+  });
 
   const store = create<OpenEpicState>()(
     persist(
@@ -986,6 +950,7 @@ export function createOpenEpicStore(
           // The React remount token starts where the runtime's binding epoch
           // does; every later value IS that epoch, translated on delivery.
           bindingVersion: EMPTY_ROOMS_PROJECTION.bindingEpoch,
+          bodyResidencyVersion: 0,
           ...EMPTY_RECORDS_PROJECTION,
           artifactRooms: EMPTY_ROOMS_PROJECTION.artifactRooms,
           ...INITIAL_CONTROL_PROJECTION,
