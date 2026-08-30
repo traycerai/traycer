@@ -136,6 +136,36 @@ describe("seedBrowserViewCookies", () => {
     expect(set).not.toHaveBeenCalled();
   });
 
+  it("skips partitioned cookies rather than merging them into the unpartitioned jar", async () => {
+    const seeded: string[] = [];
+
+    await seedBrowserViewCookies(
+      {
+        cookies: [
+          {
+            ...storageCookie("partitioned"),
+            partitionKey: "https://top-level.test",
+          },
+          storageCookie("unpartitioned"),
+        ],
+        origins: [],
+      },
+      {
+        session: {
+          cookies: {
+            get: async () => [],
+            flushStore: async () => {},
+            set: async (details) => {
+              seeded.push(details.name ?? "");
+            },
+          },
+        },
+      },
+    );
+
+    expect(seeded).toEqual(["unpartitioned"]);
+  });
+
   it("writes sequentially and stops on a cookie-store failure", async () => {
     const written: string[] = [];
 
@@ -209,6 +239,7 @@ describe("captureBrowserViewStorageState", () => {
             httpOnly: true,
             secure: false,
             sameSite: "Lax",
+            partitionKey: null,
           },
         ],
         origins: [
@@ -307,6 +338,7 @@ describe("captureBrowserPrimaryProfile", () => {
             httpOnly: true,
             secure: true,
             sameSite: "Lax",
+            partitionKey: null,
           },
           {
             name: "domain-cookie",
@@ -317,6 +349,7 @@ describe("captureBrowserPrimaryProfile", () => {
             httpOnly: true,
             secure: true,
             sameSite: "Lax",
+            partitionKey: null,
           },
         ],
         origins,
@@ -418,6 +451,7 @@ function storageCookie(name: string): {
   readonly httpOnly: boolean;
   readonly secure: boolean;
   readonly sameSite: "Lax";
+  readonly partitionKey: null;
 } {
   return {
     name,
@@ -428,6 +462,7 @@ function storageCookie(name: string): {
     httpOnly: false,
     secure: false,
     sameSite: "Lax",
+    partitionKey: null,
   };
 }
 

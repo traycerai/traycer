@@ -18,8 +18,6 @@ import type {
 type BrowserStorageCookieSameSite = ProtocolStorageCookie["sameSite"];
 const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
 
-// The protocol shape has no partition key, so seed/capture cannot preserve
-// CHIPS identity.
 const desktopStorageCookieSchema = protocolStorageCookieSchema.transform(
   (cookie) => ({
     ...cookie,
@@ -211,8 +209,13 @@ export async function seedBrowserViewCookies(
   webContents: BrowserStorageSeedWebContents,
 ): Promise<void> {
   if (storageState === null) return;
-  const cookieDetails =
-    parseStorageState(storageState).cookies.map(toCookieSetDetails);
+  const cookieDetails = parseStorageState(storageState)
+    // Electron's cookies API has no partition key, so setting a partitioned
+    // cookie here would land it in the UNPARTITIONED jar - readable from
+    // top-level sites CHIPS scoped it out of. Skipping it costs a re-login in
+    // that embedded context; restoring it merged is a cross-site leak.
+    .cookies.filter((cookie) => cookie.partitionKey === null)
+    .map(toCookieSetDetails);
   for (const details of cookieDetails) {
     await webContents.session.cookies.set(toElectronCookieSetDetails(details));
   }
@@ -324,6 +327,10 @@ function toStorageCookie(cookie: Cookie): DesktopStorageCookie {
     httpOnly: cookie.httpOnly === true,
     secure: cookie.secure === true,
     sameSite: playwrightSameSite(cookie.sameSite),
+    // Electron's cookies API exposes no partition key, so every cookie this
+    // shell captures is unpartitioned by construction. `null` says exactly
+    // that; it is not a lost value.
+    partitionKey: null,
   };
 }
 

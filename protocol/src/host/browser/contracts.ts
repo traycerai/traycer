@@ -132,18 +132,43 @@ export type BrowserSessionsOpenRequest = z.infer<
   typeof browserSessionsOpenRequestSchema
 >;
 
-export const browserStorageCookieSchema = z
-  .object({
-    name: z.string(),
-    value: z.string(),
-    domain: z.string(),
-    path: z.string(),
-    expires: z.number(),
-    httpOnly: z.boolean(),
-    secure: z.boolean(),
-    sameSite: z.enum(["Strict", "Lax", "None"]),
-  })
-  .strict();
+/**
+ * Deliberately NOT `.strict()`: Chrome emits cookie fields the contract does
+ * not model (`_crHasCrossSiteAncestor`, …) and they change between Chromium
+ * majors. Unknown keys are stripped, not rejected - a strict parse here failed
+ * every capture and materialized native tabs logged out.
+ *
+ * `partitionKey` IS modelled, because dropping it silently merges a partitioned
+ * cookie into the unpartitioned jar on restore. It is the storage-state STRING
+ * form; a producer holding CDP's `{topLevelSite, hasCrossSiteAncestor}` object
+ * must flatten it before it reaches this schema, and Electron's cookies API has
+ * no partition key at all, so its producers send `null`.
+ *
+ * Known fidelity limit of that string form: Playwright flattens CDP's
+ * `CookiePartitionKey` to `topLevelSite` and drops `hasCrossSiteAncestor`
+ * (which arrives as one of the stripped `_cr*` extras). A cookie partitioned
+ * with a cross-site ancestor therefore re-seeds into the neighbouring
+ * `hasCrossSiteAncestor: false` partition - still partitioned, so not a
+ * cross-site leak, just fidelity loss the wire's declared string form cannot
+ * express.
+ *
+ * It defaults rather than being required: a peer built before CHIPS identity
+ * existed omits the field entirely, and requiring it would fail the whole frame
+ * parse. Frame drops are silent on both sides, so a required field here turned
+ * a version skew into an inert "+ Add browser" button. Absent means
+ * unpartitioned - the same thing those producers meant by sending `null`.
+ */
+export const browserStorageCookieSchema = z.object({
+  name: z.string(),
+  value: z.string(),
+  domain: z.string(),
+  path: z.string(),
+  expires: z.number(),
+  httpOnly: z.boolean(),
+  secure: z.boolean(),
+  sameSite: z.enum(["Strict", "Lax", "None"]),
+  partitionKey: z.string().nullable().default(null),
+});
 export type BrowserStorageCookie = z.infer<typeof browserStorageCookieSchema>;
 
 export const browserStorageLocalStorageEntrySchema = z

@@ -357,6 +357,7 @@ class FakeBridge {
             httpOnly: true,
             secure: true,
             sameSite: "Lax",
+            partitionKey: null,
           },
         ],
         origins: [],

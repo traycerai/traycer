@@ -224,6 +224,7 @@ describe("browser.sessions Electron tab birth", () => {
             httpOnly: true,
             secure: true,
             sameSite: "Lax",
+            partitionKey: null,
           },
         ],
         origins: [
