@@ -460,8 +460,18 @@ async function resolveCachedHostArchive(release) {
     const { config } = await import(
       path.join(REPO_ROOT, "clients", "traycer-cli", "src", "config.ts")
     );
+    // `createDefaultRegistryClient` takes an explicit `onProgress` sink -
+    // the project style forbids default parameter values, so every caller
+    // passes one. This script has no progress UI to drive and wants the
+    // quiet path, which is spelled `null`: omitting the argument leaves
+    // `onProgress` undefined, and the heartbeat emitter's `=== null` guard
+    // does not catch that, so the first registry heartbeat throws
+    // "onProgress is not a function" and sends every run down the
+    // network-install fallback. Nothing type-checks this file, so only the
+    // explicit argument keeps it honest.
     const client = await registry.createDefaultRegistryClient(
       config.environment,
+      null,
     );
     const { entry, asset } = await client.resolveAsset(
       release ?? "latest",
