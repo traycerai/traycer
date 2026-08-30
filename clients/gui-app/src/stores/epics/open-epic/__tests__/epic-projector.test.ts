@@ -310,7 +310,13 @@ describe("epic-projector", () => {
     const a = createArtifactInDocForTests(handle.doc, "spec", null);
     const b = createArtifactInDocForTests(handle.doc, "ticket", a);
     const c = createArtifactInDocForTests(handle.doc, "chat", null);
-    await handle.store.getState().beginEpicTitleMutation("Parity Check");
+    // Written to the DOC, not stamped as an overlay. This test asserts PARITY
+    // between the store's projection and a fresh full projection of the doc,
+    // and an optimistic overlay breaks that by construction - it is precisely
+    // a value the store shows and the doc does not yet have. `setEpicTitle`
+    // (which this replaced) was a doc write, so writing the doc is what keeps
+    // the test asserting what it always asserted.
+    handle.doc.getMap("epic").set("title", "Parity Check");
     await handle.store.getState().renameArtifact(b, "Ticket B");
     void a;
     void c;

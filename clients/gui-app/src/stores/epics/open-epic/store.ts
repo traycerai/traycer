@@ -1614,7 +1614,15 @@ export function createOpenEpicStore(
   // it is pushed at construction rather than waited for: a session built
   // before the auth profile hydrates would otherwise project its first frames
   // for a null user, which is the fail-OPEN direction - foreign rows visible.
-  runtime.currentUser(userId);
+  //
+  // Read from the AUTH STORE, not from `options.userId`. The two are the same
+  // value in production and are not the same FACT: `options.userId` is the
+  // identity persisted state is namespaced under, while the projector's
+  // question is who is signed in right now - which is what the subscription
+  // below tracks. Pushing the option instead made a caller that namespaces by
+  // nothing (every test harness) start the worker with no viewer, and a null
+  // viewer hides nothing.
+  runtime.currentUser(useAuthStore.getState().profile?.userId ?? null);
 
   unsubscribeAuthUserId = useAuthStore.subscribe((state, prevState) => {
     const nextUserId = state.profile?.userId ?? null;
