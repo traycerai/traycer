@@ -225,6 +225,11 @@ describe("SwitcherBrowsersList", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    // The double-tap test leaves a mutation deliberately unsettled, and the
+    // client is shared for the file's lifetime - so without this the pending
+    // count stays above zero and every later test finds the add button
+    // disabled.
+    testQueryClient.getMutationCache().clear();
   });
 
   it("lists every tab of every session on the surface's host", () => {
