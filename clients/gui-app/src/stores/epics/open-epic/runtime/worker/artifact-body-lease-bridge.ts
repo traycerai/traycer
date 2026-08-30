@@ -25,6 +25,10 @@ import {
   takeBytesForTransfer,
 } from "@traycer-clients/shared/replica-runtime/worker/transferable-bytes";
 import type { ArtifactBodySeedMode } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+import type {
+  RuntimeScheduler,
+  RuntimeTimer,
+} from "@traycer-clients/shared/replica-runtime";
 
 /**
  * The live main-thread documents, as this module addresses them.
@@ -110,6 +114,16 @@ export interface ArtifactBodyLeaseBridge {
   resendUnacknowledgedDemotes(): void;
   /** Doc keys posted for demotion and not yet settled. A test seam. */
   unacknowledgedDemoteKeys(): readonly string[];
+  /**
+   * Post every LINGERING doc's demote/release now, without waiting.
+   *
+   * For teardown. A linger is a bet that the user is coming back to this body;
+   * at session dispose that bet is already lost, and waiting it out would hold
+   * the session's docs - and the worker's holds - for a full window after
+   * everything that could use them is gone. A sixty-second wait inside
+   * teardown is a park wearing a UX feature's clothes.
+   */
+  flushLingering(): void;
 }
 
 interface BodyEntry {
@@ -135,6 +149,24 @@ interface BodyEntry {
    */
   generation: number;
   demotingGeneration: number | null;
+  /**
+   * The LINGER: this doc's last lease is gone, but the doc is still live and
+   * will stay live until this fires.
+   *
+   * The hot doc's linger lives HERE because the hot doc lives here. Pre-flip
+   * the tier ran it, because the tier owned the hot doc; ownership moved to
+   * main, and the linger is part of that object's lifetime, so it moved with
+   * it. The tier's remaining cooldown governs its own COLD copy - a different
+   * object with its own memory story. One linger per object, each at its
+   * owner.
+   *
+   * It covers BOTH lifecycles, which is what keeps it one timer rather than
+   * two: at expiry the entry posts whichever of demote/release its identity
+   * calls for. `null` while a lease is held, and cancelled by a re-acquire -
+   * that cancellation is the property the whole thing exists for, because a
+   * tab switch that remounts a tile must not pay to re-materialize the body.
+   */
+  lingerTimer: RuntimeTimer | null;
 }
 
 export function createArtifactBodyLeaseBridge(options: {
@@ -149,6 +181,20 @@ export function createArtifactBodyLeaseBridge(options: {
    * this leg is an EVENT with no answer.
    */
   readonly releaseForwardOnly: (docKey: string) => void;
+  /**
+   * Where the linger's timer comes from. INJECTED rather than `setTimeout`, so
+   * a suite drives the window instead of waiting out a real minute.
+   */
+  readonly scheduler: RuntimeScheduler;
+  /**
+   * How long a doc stays live after its last lease.
+   *
+   * Passed in from `ARTIFACT_ROOM_LEASE_POLICY.cooldownMs` - the SAME value the
+   * tier's cooldown used - rather than restated here. The UX property is
+   * preserved at its original magnitude; a second number beside the first is
+   * how one silently becomes the other.
+   */
+  readonly lingerMs: number;
 }): ArtifactBodyLeaseBridge {
   const entries = new Map<string, BodyEntry>();
 
@@ -295,6 +341,7 @@ export function createArtifactBodyLeaseBridge(options: {
         generation: 1,
         docGuid: answer.docGuid,
         demotingGeneration: null,
+        lingerTimer: null,
       });
       options.budget.chargeHot(docKey, answer.update.byteLength);
       return { kind: "granted", docKey, release: releaseFor(docKey) };
@@ -312,6 +359,19 @@ export function createArtifactBodyLeaseBridge(options: {
       }
       return keys;
     },
+    flushLingering(): void {
+      // Snapshot first: `postLifecycleEnd` mutates `entries` for the
+      // forward-only arm (it retires the entry inline, having no ack to wait
+      // for), and mutating a Map mid-iteration skips entries.
+      const lingering: [string, BodyEntry][] = [];
+      for (const pair of entries) {
+        if (pair[1].lingerTimer !== null) lingering.push(pair);
+      }
+      for (const [docKey, entry] of lingering) {
+        cancelLinger(entry);
+        postLifecycleEnd(docKey, entry);
+      }
+    },
   };
 
   /**
@@ -327,12 +387,35 @@ export function createArtifactBodyLeaseBridge(options: {
    * the document is dropped under a live grant.
    */
   function reviveAndHold(docKey: string, entry: BodyEntry): ArtifactBodyGrant {
+    // THE point of the linger: a re-acquire inside the window costs nothing -
+    // no materialize call, no round trip, no re-encode. The doc was never
+    // released, so this is a reference count going back up.
+    cancelLinger(entry);
     if (entry.demotingGeneration !== null) {
       entry.demotingGeneration = null;
       entry.generation += 1;
     }
     entry.leases += 1;
     return { kind: "granted", docKey, release: releaseFor(docKey) };
+  }
+
+  /**
+   * End this doc's lifetime, whichever lifetime it has.
+   *
+   * The ONE place the two shapes diverge, so the linger above does not have to
+   * know which it is holding: identity-stated bodies settle their bytes back
+   * through `body/demote`, forward-only bodies release their hold. Both begin
+   * by advancing the generation, because both make any outstanding ack stale.
+   */
+  function postLifecycleEnd(docKey: string, entry: BodyEntry): void {
+    entry.generation += 1;
+    entry.demotingGeneration = entry.generation;
+    postDemote(docKey, entry.generation);
+  }
+
+  function cancelLinger(entry: BodyEntry): void {
+    entry.lingerTimer?.cancel();
+    entry.lingerTimer = null;
   }
 
   function releaseFor(docKey: string): () => void {
@@ -350,9 +433,21 @@ export function createArtifactBodyLeaseBridge(options: {
       // Already on its way out - a second release before the ack must not post
       // a second demote, nor tell the accountant twice.
       if (entry.demotingGeneration !== null) return;
-      entry.generation += 1;
-      entry.demotingGeneration = entry.generation;
-      postDemote(docKey, entry.generation);
+      // ...nor arm a second linger for a doc already inside one.
+      if (entry.lingerTimer !== null) return;
+      entry.lingerTimer = options.scheduler.schedule(options.lingerMs, () => {
+        // Re-read rather than closing over `entry`: the window is long enough
+        // for the doc to have been dropped entirely, and a timer that resolved
+        // against a stale object would post for a body that no longer exists.
+        const current = entries.get(docKey);
+        if (current === undefined) return;
+        current.lingerTimer = null;
+        // A re-acquire inside the window cancels this timer, but a cancel that
+        // raced the fire still lands here - so the lease count decides, not the
+        // fact that the timer ran.
+        if (current.leases > 0) return;
+        postLifecycleEnd(docKey, current);
+      });
     };
   }
 }

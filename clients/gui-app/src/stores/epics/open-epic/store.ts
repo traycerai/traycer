@@ -65,6 +65,8 @@ import type { PendingChatCreation } from "./pending-chat-creations";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { appLogger } from "@/lib/logger";
 import { createArtifactBodyLeaseBridge } from "./runtime/worker/artifact-body-lease-bridge";
+import { createRendererRuntimeEnvironment } from "./runtime/runtime-environment";
+import { ARTIFACT_ROOM_LEASE_POLICY } from "./runtime/artifact-room-tier";
 import { createHotBodyBudgetAdapter } from "./runtime/worker/hot-body-budget-adapter";
 import { createMainThreadBodyDocStore } from "./runtime/worker/main-thread-body-docs";
 import type { RuntimeProjectionHandlers } from "@traycer-clients/shared/replica-runtime/worker/runtime-projection-subscription";
@@ -1007,6 +1009,16 @@ export function createOpenEpicStore(
     releaseForwardOnly: (docKey) => {
       runtime.releaseBody(docKey);
     },
+    // The renderer's own clock. Constructed here rather than taken as an
+    // option because the linger is an internal fact about the lifetime of
+    // main's hot docs, not something a caller chooses - and every caller that
+    // builds this store already runs on this same clock.
+    scheduler: createRendererRuntimeEnvironment().scheduler,
+    // The SAME value the tier's cooldown used. Imported, never restated: the
+    // UX property this preserves is "a tab switch must not pay to
+    // re-materialize", and a second number beside the first is how one
+    // silently becomes the other.
+    lingerMs: ARTIFACT_ROOM_LEASE_POLICY.cooldownMs,
   });
 
   const store = create<OpenEpicState>()(
@@ -1158,6 +1170,14 @@ export function createOpenEpicStore(
             unsubscribeAuthUserId?.();
             unsubscribeAuthUserId = null;
             disposed = true;
+            // BEFORE dropping the docs, and before the worker goes away: a
+            // linger is a bet that the user is coming back to this body, and
+            // at dispose that bet is already lost. Waiting it out would hold
+            // both sides' state for a full window after everything that could
+            // use it is gone - a sixty-second park wearing a UX feature's
+            // clothes. Ordering matters: `flushLingering` reads the docs it is
+            // settling, so it cannot run after `dropAll`.
+            bodyLeases.flushLingering();
             bodyDocs.dropAll();
             runtime.dispose();
           },

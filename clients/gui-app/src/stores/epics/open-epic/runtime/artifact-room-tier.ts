@@ -527,6 +527,23 @@ export interface ArtifactRoomTier {
     localClientId: number,
   ): void;
   /**
+   * A local body EDIT from the main-thread editor, on its way out.
+   *
+   * The doc twin of {@link relayLocalAwareness}, and it exists for the same
+   * reason: on the `@1` arm the body rides the ROOM, so there is no body lane
+   * to send to and the outbound frame is produced by this room's own update
+   * handler. Applying the edit here with a non-stream origin is what makes
+   * that handler treat it as local and emit `room-apply-update`.
+   *
+   * Not {@link applyUpdate}: that is the INBOUND path and stamps
+   * `BIN_STREAM_ORIGIN`, which is precisely the origin the handler skips - the
+   * same names-vs-operations trap as `applyAwareness`, one plane over.
+   *
+   * `false` when the room is not materialized: the caller's edit went nowhere
+   * and the reason is what makes that legible rather than a silent no-op.
+   */
+  relayLocalUpdate(artifactRoomId: string, update: Uint8Array): boolean;
+  /**
    * Observe this room's presence; returns the detach.
    *
    * The return leg of the relocation: remote peers land in this room's
@@ -1610,6 +1627,20 @@ export function createArtifactRoomTier(
       // hot, so re-test it here rather than waiting for a doc frame that may
       // never come.
       scheduleCooldown(artifactRoomId);
+    },
+    relayLocalUpdate(artifactRoomId, update): boolean {
+      const entry = replicas.get(artifactRoomId);
+      // Cold room: DROP. There is no live doc to apply to, and buffering a
+      // local edit here would replay it as though it had arrived from the
+      // host on the next materialize - inventing an authored change.
+      if (entry === undefined) return false;
+      // A LOCAL origin, which here means "anything but `BIN_STREAM_ORIGIN`".
+      // `BIN_AWARENESS_RELAYED_LOCAL_ORIGIN` is reused deliberately rather
+      // than a second constant minted: both planes are answering the same
+      // question - did this come from the main-thread editor? - and two
+      // symbols for one fact is how the two ends drift apart.
+      Y.applyUpdate(entry.doc, update, BIN_AWARENESS_RELAYED_LOCAL_ORIGIN);
+      return true;
     },
     relayLocalAwareness(artifactRoomId, awarenessBytes, localClientId) {
       const entry = replicas.get(artifactRoomId);

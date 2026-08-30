@@ -24,6 +24,15 @@ import {
   isMainToWorkerFrame,
   type RuntimeWorkerCallKind,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
+import type {
+  RuntimeScheduler,
+  RuntimeTimer,
+} from "@traycer-clients/shared/replica-runtime";
+
+/** The linger window these tests drive. Any positive number; the bridge takes
+ * its production value from `ARTIFACT_ROOM_LEASE_POLICY.cooldownMs`. */
+const LINGER_MS = 60_000;
+
 import {
   createArtifactBodyLeaseBridge,
   type ArtifactBodyGrant,
@@ -49,6 +58,9 @@ function createWorkerSide(
   docKeyFor: (artifactId: string) => string,
 ) {
   const demotes: DemoteRecord[] = [];
+  // Counted, because "a re-acquire inside the window pays nothing" is a claim
+  // about work NOT done - and the only honest way to assert that is a count.
+  const materializes: string[] = [];
   const unsubscribe = pair.worker.subscribe((message) => {
     if (!isMainToWorkerFrame(message) || message.frame !== "call") return;
     const { callId, call } = message;
@@ -59,6 +71,7 @@ function createWorkerSide(
       );
     };
     if (call.kind === "body/materialize") {
+      materializes.push(call.request.artifactId);
       respond({
         docKey: docKeyFor(call.request.artifactId),
         update: Uint8Array.from([1, 2, 3]),
@@ -83,7 +96,7 @@ function createWorkerSide(
       });
     }
   });
-  return { demotes, unsubscribe };
+  return { demotes, materializes, unsubscribe };
 }
 
 function createDocs(): MainThreadBodyDocs & {
@@ -122,6 +135,38 @@ function createBudget(): HotBodyBudget & { readonly calls: string[] } {
   };
 }
 
+/**
+ * A scheduler the test drives, so the linger window is a call rather than a
+ * real minute. Fires in insertion order and only what is due, matching a real
+ * scheduler's next tick rather than an eager drain.
+ */
+function createScheduler(): RuntimeScheduler & { advance(ms: number): void } {
+  let now = 0;
+  const pending: { at: number; run: () => void; cancelled: boolean }[] = [];
+  return {
+    schedule(delayMs, callback): RuntimeTimer {
+      const entry = { at: now + delayMs, run: callback, cancelled: false };
+      pending.push(entry);
+      return {
+        cancel(): void {
+          entry.cancelled = true;
+        },
+      };
+    },
+    scheduleMicrotask(callback): void {
+      callback();
+    },
+    advance(ms): void {
+      now += ms;
+      for (const entry of pending.filter((e) => !e.cancelled && e.at <= now)) {
+        if (entry.cancelled) continue;
+        entry.cancelled = true;
+        entry.run();
+      }
+    },
+  };
+}
+
 function grantedKey(grant: ArtifactBodyGrant): string {
   if (grant.kind !== "granted") {
     throw new Error(`Expected a granted body, got ${grant.kind}`);
@@ -138,6 +183,7 @@ function setup() {
   // Recorded, not a no-op: the forward-only release is fire-and-forget, so the
   // ONLY observable that it happened at all is that it was posted.
   const releasedForwardOnly: string[] = [];
+  const scheduler = createScheduler();
   const leases = createArtifactBodyLeaseBridge({
     bridge: main,
     docs,
@@ -145,13 +191,24 @@ function setup() {
     releaseForwardOnly: (docKey) => {
       releasedForwardOnly.push(docKey);
     },
+    scheduler,
+    lingerMs: LINGER_MS,
   });
-  return { pair, worker, main, docs, budget, leases, releasedForwardOnly };
+  return {
+    pair,
+    worker,
+    main,
+    docs,
+    budget,
+    leases,
+    releasedForwardOnly,
+    scheduler,
+  };
 }
 
 describe("acquire / materialize", () => {
   it("installs the worker's bytes once and charges the doc hot", async () => {
-    const { leases, docs, budget } = setup();
+    const { leases, docs, budget, scheduler } = setup();
 
     const grant = await leases.acquire("artifact-1");
 
@@ -188,6 +245,8 @@ describe("acquire / materialize", () => {
       docs,
       budget: createBudget(),
       releaseForwardOnly: () => {},
+      scheduler: createScheduler(),
+      lingerMs: LINGER_MS,
     });
 
     const grant = await leases.acquire("artifact-missing");
@@ -199,11 +258,14 @@ describe("acquire / materialize", () => {
 
 describe("constraint 1 — the doc stays hot until the ack", () => {
   it("does not drop the doc, nor settle the charge, before the worker answers", async () => {
-    const { leases, docs, budget, worker } = setup();
+    const { leases, docs, budget, worker, scheduler } = setup();
     const grant = await leases.acquire("artifact-1");
 
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
 
     // Posted, not settled.
     expect(worker.demotes).toHaveLength(1);
@@ -217,11 +279,14 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
   });
 
   it("settles cold with the WORKER's byte count and drops the doc on the ack", async () => {
-    const { leases, docs, budget, worker } = setup();
+    const { leases, docs, budget, worker, scheduler } = setup();
     const grant = await leases.acquire("artifact-1");
 
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     worker.demotes[0]?.settle({ accepted: true, settledBytes: 4_096 });
     await Promise.resolve();
     await Promise.resolve();
@@ -237,7 +302,7 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
   });
 
   it("does not post a second demote, nor charge twice, on a second release before the ack", async () => {
-    const { leases, worker, budget } = setup();
+    const { leases, worker, budget, scheduler } = setup();
     const first = await leases.acquire("artifact-1");
     const second = await leases.acquire("artifact-1");
 
@@ -245,12 +310,24 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
       throw new Error("expected two grants");
     }
     first.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     // One holder left, so nothing should have been posted yet.
     expect(worker.demotes).toHaveLength(0);
     second.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     // A caller's `finally` backstop running after its own early release.
     second.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     first.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
 
     expect(worker.demotes).toHaveLength(1);
     expect(
@@ -259,11 +336,14 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
   });
 
   it("keeps the doc when the worker declines the generation", async () => {
-    const { leases, docs, budget, worker } = setup();
+    const { leases, docs, budget, worker, scheduler } = setup();
     const grant = await leases.acquire("artifact-1");
 
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     worker.demotes[0]?.settle({ accepted: false, settledBytes: 0 });
     await Promise.resolve();
     await Promise.resolve();
@@ -278,11 +358,14 @@ describe("constraint 1 — the doc stays hot until the ack", () => {
 
 describe("constraint 2 — a worker that dies mid-demote", () => {
   it("keeps the doc, and re-sends once to the replacement", async () => {
-    const { leases, docs, main, worker } = setup();
+    const { leases, docs, main, worker, scheduler } = setup();
     const grant = await leases.acquire("artifact-1");
 
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     const posted = worker.demotes[0];
     expect(posted).toBeDefined();
 
@@ -305,6 +388,8 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
       docs,
       budget: createBudget(),
       releaseForwardOnly: () => {},
+      scheduler: createScheduler(),
+      lingerMs: LINGER_MS,
     });
     // The re-send is driven from the state the ORIGINAL bridge holds, so this
     // asserts the observable half: the doc survived with its bytes intact and
@@ -322,11 +407,14 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
   });
 
   it("re-sends with the SAME generation, so a worker that saw both settles once", async () => {
-    const { leases, worker, docs } = setup();
+    const { leases, worker, docs, scheduler } = setup();
     const grant = await leases.acquire("artifact-1");
 
     if (grant.kind !== "granted") throw new Error("expected a grant");
     grant.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     const firstGeneration = worker.demotes[0]?.generation;
 
     leases.resendUnacknowledgedDemotes();
@@ -348,11 +436,14 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
 
 describe("constraint 3 — re-acquire before the ack wins locally", () => {
   it("cancels the pending drop, does no round trip, and ignores the stale ack", async () => {
-    const { leases, docs, budget, worker, pair } = setup();
+    const { leases, docs, budget, worker, pair, scheduler } = setup();
     const first = await leases.acquire("artifact-1");
 
     if (first.kind !== "granted") throw new Error("expected a grant");
     first.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     expect(worker.demotes).toHaveLength(1);
 
     const callsBefore = countCalls(pair, "body/materialize");
@@ -381,15 +472,21 @@ describe("constraint 3 — re-acquire before the ack wins locally", () => {
   });
 
   it("demotes again on the next release, under a fresh generation", async () => {
-    const { leases, worker, docs } = setup();
+    const { leases, worker, docs, scheduler } = setup();
     const first = await leases.acquire("artifact-1");
     if (first.kind !== "granted") throw new Error("expected a grant");
     first.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     const staleGeneration = worker.demotes[0]?.generation;
 
     const second = await leases.acquire("artifact-1");
     if (second.kind !== "granted") throw new Error("expected a grant");
     second.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
 
     expect(worker.demotes).toHaveLength(2);
     expect(worker.demotes[1]?.generation).not.toBe(staleGeneration);
@@ -403,11 +500,14 @@ describe("constraint 3 — re-acquire before the ack wins locally", () => {
 
 describe("constraint 4 — the encoded state is transferred, not copied by reference", () => {
   it("hands the demote's bytes over as a transfer", async () => {
-    const { leases, pair, worker } = setup();
+    const { leases, pair, worker, scheduler } = setup();
     const grant = await leases.acquire("artifact-1");
     if (grant.kind !== "granted") throw new Error("expected a grant");
 
     grant.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
 
     const post = pair.fromMain.at(-1);
     expect(post?.transferCount).toBe(1);
@@ -437,17 +537,23 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
     const main = createMainBridgeEndpoint(pair.main, stubMainCallHandlers({}));
     const docs = createDocs();
     const budget = createBudget();
+    const scheduler = createScheduler();
     const leases = createArtifactBodyLeaseBridge({
       bridge: main,
       docs,
       budget,
       releaseForwardOnly: () => {},
+      scheduler,
+      lingerMs: LINGER_MS,
     });
 
     const first = await leases.acquire("artifact-1");
     expect(grantedKey(first)).toBe("room-1");
     if (first.kind !== "granted") throw new Error("expected a grant");
     first.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     expect(worker.demotes).toHaveLength(1);
     const staleGeneration = worker.demotes[0]?.generation;
 
@@ -473,7 +579,130 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
     // the generation that was ignored.
     if (second.kind !== "granted") throw new Error("expected a grant");
     second.release();
+    // The linger sits between the release and the post now; a release is
+    // no longer the demote. See `BodyEntry.lingerTimer`.
+    scheduler.advance(LINGER_MS);
     expect(worker.demotes).toHaveLength(2);
     expect(worker.demotes[1]?.generation).toBeGreaterThan(staleGeneration);
+  });
+});
+
+/**
+ * The LINGER — the hot doc's own reclaim window, relocated with the hot doc.
+ *
+ * Pre-flip the tier ran this timer because the tier owned the hot doc. That
+ * ownership moved to main, and the linger is part of the object's lifetime, so
+ * it moved too; the tier's remaining cooldown governs its cold copy. One
+ * linger per object, each at its owner.
+ *
+ * The property it protects is stated in `artifact-room-tier.ts`: the cap is "a
+ * backstop ceiling, NOT the reclaim mechanism; the linger timer is." In UX
+ * terms, a tab switch that remounts a tile must not pay to re-materialize the
+ * body — which is a claim about work NOT done, so these pins COUNT.
+ */
+describe("the linger window", () => {
+  it("re-acquiring inside the window costs no materialize and no demote", async () => {
+    const { leases, worker, docs, scheduler } = setup();
+    const first = await leases.acquire("artifact-1");
+    if (first.kind !== "granted") throw new Error("expected a grant");
+    expect(worker.materializes).toEqual(["artifact-1"]);
+
+    first.release();
+    // Inside the window, not past it.
+    scheduler.advance(LINGER_MS - 1);
+    const second = await leases.acquire("artifact-1");
+
+    if (second.kind !== "granted") throw new Error("expected a revival");
+    // THE assertion: still ONE materialize. The doc was never released, so the
+    // second acquire is a reference count going back up rather than a round
+    // trip. A `toHaveLength(2)` here is the churn this window exists to avoid.
+    expect(worker.materializes).toEqual(["artifact-1"]);
+    expect(worker.demotes).toEqual([]);
+    expect(docs.dropped).toEqual([]);
+    expect(docs.has("artifact-1")).toBe(true);
+  });
+
+  it("holds the doc live for the whole window, then posts at expiry", async () => {
+    const { leases, worker, docs, scheduler } = setup();
+    const grant = await leases.acquire("artifact-1");
+    if (grant.kind !== "granted") throw new Error("expected a grant");
+
+    grant.release();
+    scheduler.advance(LINGER_MS - 1);
+    // One tick short: still live, nothing posted. Without this the test below
+    // would pass against a bridge that posted immediately.
+    expect(worker.demotes).toEqual([]);
+    expect(docs.has("artifact-1")).toBe(true);
+
+    scheduler.advance(1);
+    expect(worker.demotes).toHaveLength(1);
+  });
+
+  it("posts a DEMOTE at expiry for an identity-stated body", async () => {
+    // The lifecycle fork, arm one: this body's seed named a guid, so its bytes
+    // are settled back.
+    const { leases, worker, releasedForwardOnly, scheduler } = setup();
+    const grant = await leases.acquire("artifact-1");
+    if (grant.kind !== "granted") throw new Error("expected a grant");
+
+    grant.release();
+    scheduler.advance(LINGER_MS);
+
+    expect(worker.demotes).toHaveLength(1);
+    expect(worker.demotes[0]?.docGuid).toBe("guid-artifact-1");
+    // And NOT the other shape. A body has exactly one of the two lifecycles.
+    expect(releasedForwardOnly).toEqual([]);
+  });
+
+  it("flushes lingering docs immediately at teardown", async () => {
+    // A linger is a bet that the user is coming back. At dispose that bet is
+    // already lost, so waiting it out would hold both sides' state for a full
+    // window after everything that could use it is gone.
+    const { leases, worker, scheduler } = setup();
+    const grant = await leases.acquire("artifact-1");
+    if (grant.kind !== "granted") throw new Error("expected a grant");
+
+    grant.release();
+    expect(worker.demotes).toEqual([]);
+
+    leases.flushLingering();
+
+    // Posted WITHOUT the clock moving - that is the whole claim.
+    expect(worker.demotes).toHaveLength(1);
+    // And the timer is disarmed, so expiry does not post a second one.
+    scheduler.advance(LINGER_MS);
+    expect(worker.demotes).toHaveLength(1);
+  });
+});
+
+describe("the linger window — re-arming", () => {
+  it("restarts the window on each release rather than firing on the first one's clock", async () => {
+    // Written after ablating `cancelLinger` in `reviveAndHold` left the pins
+    // above GREEN. They pass either way, because the callback's `leases > 0`
+    // guard already suppresses the post for a doc that was re-acquired - so
+    // "a re-acquire costs nothing" does not, on its own, pin the cancel.
+    //
+    // This is what the cancel actually prevents. Without it the first timer
+    // stays armed; the second release then finds `lingerTimer !== null`,
+    // declines to arm a new one, and the doc is demoted on the FIRST
+    // release's clock - early, by however long the user kept it open.
+    const { leases, worker, scheduler } = setup();
+    const first = await leases.acquire("artifact-1");
+    if (first.kind !== "granted") throw new Error("expected a grant");
+
+    first.release();
+    scheduler.advance(LINGER_MS / 2);
+    const second = await leases.acquire("artifact-1");
+    if (second.kind !== "granted") throw new Error("expected a revival");
+    second.release();
+
+    // Half a window past the FIRST release, which is where the stale timer
+    // would fire - but only half of one past the second, which is what counts.
+    scheduler.advance(LINGER_MS / 2);
+    expect(worker.demotes).toEqual([]);
+
+    // ...and it still demotes on its own clock.
+    scheduler.advance(LINGER_MS / 2);
+    expect(worker.demotes).toHaveLength(1);
   });
 });

@@ -1389,7 +1389,18 @@ export function createEpicReplicaRuntime(
       // than a silent no-op, because the caller's edit went nowhere and the
       // reason is what makes that legible.
       if (installedArm !== "lanes" || laneArm === null) {
-        return { kind: "dropped", reason: "no body lane on the @1 arm" };
+        // On `@1` the body rides the ROOM. There is no lane, but there IS an
+        // outbound path: the room's own update handler emits
+        // `room-apply-update` for a locally-originated edit, which before the
+        // relocation is exactly how this arm's edits reached the host - the
+        // tier held the live doc and the editor wrote to it directly.
+        //
+        // Returning `dropped` here (which this did) was that path going
+        // missing: every `@1` body edit compiled, applied to main's doc, and
+        // never left the tab.
+        return tier.relayLocalUpdate(docKey, update)
+          ? { kind: "sent" }
+          : { kind: "dropped", reason: "artifact room is not materialized" };
       }
       return laneArm.bodies.sendUpdate(docKey, update);
     },
