@@ -116,6 +116,12 @@ export interface ChatsSlice {
  * Mirrors `TuiAgent` from the persistence registry but keeps the fields
  * the renderer needs to surface a tile + cascade them into the tree slice.
  */
+/**
+ * The three planes a terminal-agent row can reach this renderer from, mirroring
+ * `epic.listTuiAgents@1.2`'s `origin`. See {@link TuiAgentProjection.origin}.
+ */
+export type TuiAgentProjectionOrigin = "registry" | "doc" | "cloud";
+
 export interface TuiAgentProjection {
   readonly id: string;
   /**
@@ -133,7 +139,29 @@ export interface TuiAgentProjection {
    * no registry chat and fails host-side.
    */
   readonly docResident: boolean;
-  readonly harnessId: TuiHarnessId;
+  /**
+   * WHICH PLANE this agent's row came from, and therefore how much of the
+   * projection below is real.
+   *
+   * `registry` and `doc` are LOCAL to the host serving this epic and carry the
+   * whole record. `cloud` is a read-only REPLICA of an agent bound to another
+   * of the user's machines, and the cloud metadata projection it came from has
+   * no resume metadata in it at all - so on a `cloud` row `workspaceFolders`
+   * is empty, `agentMode` is the launch default, and every launch override and
+   * `harnessSessionId` is null. Those are PLACEHOLDERS, not values.
+   *
+   * Read this before any of them. It is not a decoration on `docResident` - it
+   * answers a different question ("does this row have the fields") from the one
+   * `docResident` answers ("is this row addressable through the registry
+   * affordances"), which is why both are carried.
+   *
+   * The one thing it settles for good: a `cloud` row can never be cloned,
+   * forked or resumed onto this machine. There is no `harnessSessionId` to
+   * resume from and there never will be - which is also the no-double-driver
+   * property, one driver per provider CLI session, by construction.
+   */
+  readonly origin: TuiAgentProjectionOrigin;
+  readonly harnessId: TuiHarnessId | null;
   readonly title: string;
   readonly parentId: string | null;
   readonly createdAt: number;

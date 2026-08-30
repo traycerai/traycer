@@ -64,6 +64,7 @@ function terminalAgent(fields: {
     // An ordinary registry-backed agent - this suite exercises mention-item
     // ordering, not doc residency.
     docResident: false,
+    origin: "registry",
     harnessId,
     title,
     parentId,

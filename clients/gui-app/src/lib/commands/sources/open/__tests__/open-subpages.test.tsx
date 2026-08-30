@@ -148,6 +148,7 @@ function agent(id: string, title: string): TuiAgentProjection {
     // An ordinary registry-backed agent - this suite exercises the open
     // command's subpages, not doc residency.
     docResident: false,
+    origin: "registry",
     harnessId: "claude",
     title,
     parentId: null,

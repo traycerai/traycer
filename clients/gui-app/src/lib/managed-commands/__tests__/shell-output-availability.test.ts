@@ -153,6 +153,9 @@ describe("shellOutputHostAvailability", () => {
       status: over.status ?? "reachable",
       hostLabel: over.hostLabel ?? "Work laptop",
       unavailability: over.unavailability ?? null,
+      // shellOutputHostAvailability branches on `status` alone - this suite
+      // doesn't exercise whose machine the host is.
+      hostKind: over.hostKind ?? "unknown",
     };
   }
 

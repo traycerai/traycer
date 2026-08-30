@@ -39,7 +39,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
-import { SweepWorktreesDialog } from "@/components/epics/sweep-worktrees-dialog";
+import { SweepWorktreesFlow } from "@/components/epics/sweep-worktrees-flow";
+import {
+  namesHostOutsideSurface,
+  unionHostIds,
+} from "@/components/epics/sweep-host-model";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
   Tooltip,
@@ -118,6 +122,7 @@ import { worktreePrReferences } from "@/components/worktree/worktree-pr-metadata
 const EMPTY_REPOS: ReadonlyArray<string> = [];
 const EMPTY_WORKSPACES: ReadonlyArray<HistoryWorkspaceRef> = [];
 const EMPTY_ITEMS: ReadonlyArray<HistoryItem> = [];
+const EMPTY_HOST_IDS: ReadonlySet<string> = new Set();
 const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
 const EMPTY_WORKTREES_BY_EPIC: ReadonlyMap<
   string,
@@ -403,6 +408,19 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
     return item === undefined ? null : historyItemDisplayTitle(item);
   }, [items, sweepEpicIds]);
+  // The badge hint for the host picker, from provenance the list ALREADY
+  // carries: `chatHostIds` names the hosts owning the signed-in user's own
+  // chats in a Task. No RPC is added for it - a `null` (peer predates the
+  // field) simply badges nothing, and the picker still lists every host.
+  const sweepOccupiedHostIds = useMemo(() => {
+    if (sweepEpicIds === null) return EMPTY_HOST_IDS;
+    const selected = new Set(sweepEpicIds);
+    return unionHostIds(
+      items.flatMap((item) =>
+        selected.has(item.epicId) ? [item.chatHostIds] : [],
+      ),
+    );
+  }, [items, sweepEpicIds]);
 
   const selectableItemIds = useMemo(
     () =>
@@ -444,12 +462,24 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // dialog with nothing to sweep. The row control already gates on this
   // (`useHistoryRowSweep`); the bulk button has to ask the same question, of
   // the SELECTION rather than of one task, so a mixed selection still sweeps.
+  //
+  // "Owns worktrees" is asked of THIS host - the only reliable per-host
+  // worktree oracle - so the second clause is what keeps the affordance live
+  // for a Task whose agents ran elsewhere. Without it the picker behind this
+  // button is unreachable for exactly the multi-host selections it exists for.
   const canSweepSelected = useMemo(
     () =>
-      visibleSelectedIds.some(
-        (id) => (worktreesByEpicId.get(id) ?? EMPTY_WORKTREES).length > 0,
-      ),
-    [visibleSelectedIds, worktreesByEpicId],
+      visibleSelectedIds.some((id) => {
+        if ((worktreesByEpicId.get(id) ?? EMPTY_WORKTREES).length > 0) {
+          return true;
+        }
+        const item = items.find((candidate) => candidate.epicId === id);
+        return namesHostOutsideSurface({
+          hostIds: item?.chatHostIds ?? null,
+          surfaceHostId: hostId,
+        });
+      }),
+    [hostId, items, visibleSelectedIds, worktreesByEpicId],
   );
   const enterSelectionMode = useCallback(() => {
     if (!selectionEnabled) return;
@@ -634,6 +664,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             onOpenInNewWindow={openInNewWindowFlow.requestOpen}
             openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
             worktreesByEpicId={worktreesByEpicId}
+            surfaceHostId={hostId}
             openEpicIds={openEpicIdSet}
             listRef={listRef}
             onRowKeyDown={keyboardNav.onRowKeyDown}
@@ -654,13 +685,22 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         isPathChecked={isWorktreePathChecked}
         onTogglePath={toggleWorktreePathChecked}
       />
-      <SweepWorktreesDialog
+      <SweepWorktreesFlow
         epicIds={sweepEpicIds}
         // The Epics list is app chrome: its sweep proves and sweeps the
         // app-wide host's worktrees (the following client - `null` resolves
         // to the effective host's requester, the same seam the landing
-        // composer's following state uses).
-        hostClient={sweepHostClient}
+        // composer's following state uses). On a fleet with more than one
+        // dialable host the flow asks WHICH first and resolves that pick
+        // instead; at one host this is byte-for-byte the previous wiring.
+        surfaceHostClient={sweepHostClient}
+        // The host this panel is ALREADY reading from, so the picker opens
+        // marked where Sweep used to go without a second app-wide read. It is
+        // the same client family: the list's `hostId` is what the app-wide
+        // client currently addresses, which is what `useHostClientForHostId(null)`
+        // follows.
+        surfaceHostId={hostId}
+        occupiedHostIds={sweepOccupiedHostIds}
         taskTitle={sweepTaskTitle}
         onOpenChange={(open) => {
           if (!open) setSweepEpicIds(null);
@@ -1073,6 +1113,7 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         onOpenInNewWindow={props.onOpenInNewWindow}
         openInNewWindowAvailable={props.openInNewWindowAvailable}
         worktreesByEpicId={props.worktreesByEpicId}
+        surfaceHostId={props.surfaceHostId}
         openEpicIds={props.openEpicIds}
         listRef={props.listRef}
         onRowKeyDown={props.onRowKeyDown}
@@ -1108,6 +1149,12 @@ interface EpicsListBodyProps {
     string,
     readonly WorktreeHostEntryV12[]
   >;
+  /**
+   * The host this list is reading from - the one whose worktree listing
+   * `worktreesByEpicId` is. A row compares its own provenance against it to
+   * decide whether the Task reaches past this machine.
+   */
+  readonly surfaceHostId: string | null;
   readonly openEpicIds: ReadonlySet<string>;
   /** Anchors the arrow-key traversal: DOM order inside it is row order. */
   readonly listRef: RefObject<HTMLUListElement | null>;
@@ -1139,6 +1186,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     onOpenInNewWindow,
     openInNewWindowAvailable,
     worktreesByEpicId,
+    surfaceHostId,
     openEpicIds,
     listRef,
     onRowKeyDown,
@@ -1186,6 +1234,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               onOpenInNewWindow={onOpenInNewWindow}
               openInNewWindowAvailable={openInNewWindowAvailable}
               worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
+              surfaceHostId={surfaceHostId}
               isOpen={openEpicIds.has(item.epicId)}
               onRowKeyDown={onRowKeyDown}
             />
@@ -1220,6 +1269,8 @@ interface EpicsListRowProps {
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
+  /** See `EpicsListBodyProps.surfaceHostId`. */
+  readonly surfaceHostId: string | null;
   readonly isOpen: boolean;
   /** Arrow-key traversal, bound to whichever control covers the whole card. */
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
@@ -1295,6 +1346,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     onOpenInNewWindow,
     openInNewWindowAvailable,
     worktrees,
+    surfaceHostId,
     isOpen,
     onRowKeyDown,
   } = props;
@@ -1302,6 +1354,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const rowSweep = useHistoryRowSweep({
     item,
     worktrees,
+    surfaceHostId,
     selectionMode,
     selectionEnabled,
     onRequestSweep,
@@ -1678,16 +1731,32 @@ interface HistoryRowSweepState {
  * only the safe ones, so the affordance no longer pre-judges eligibility.
  * Cheap and reactive - derived from the same enriched listing the PR pills
  * already join, with no extra host call to render the affordance.
+ *
+ * ...OR the Task's own provenance names a machine other than this one. That
+ * second clause is the multi-host half, and it is not a nicety: the listing
+ * above is THIS host's, so without it the host picker behind this control is
+ * unreachable for precisely the Tasks it exists for. Still zero-RPC -
+ * `chatHostIds` is already on the row - and still a hint, with the dialog's
+ * own act-time proof as the judge. See `namesHostOutsideSurface` for what the
+ * hint under- and over-claims.
  */
 function useHistoryRowSweep(args: {
   readonly item: HistoryItem;
   readonly worktrees: readonly WorktreeHostEntryV12[];
+  /** The host `worktrees` was listed from — see `EpicsListBodyProps`. */
+  readonly surfaceHostId: string | null;
   readonly selectionMode: boolean;
   readonly selectionEnabled: boolean;
   readonly onRequestSweep: (epicId: string) => void;
 }): HistoryRowSweepState {
-  const { item, worktrees, selectionMode, selectionEnabled, onRequestSweep } =
-    args;
+  const {
+    item,
+    worktrees,
+    surfaceHostId,
+    selectionMode,
+    selectionEnabled,
+    onRequestSweep,
+  } = args;
   const requestSweep = useCallback(() => {
     onRequestSweep(item.epicId);
   }, [item.epicId, onRequestSweep]);
@@ -1698,13 +1767,16 @@ function useHistoryRowSweep(args: {
   // control there would be noise rather than consistency. The read-only picker
   // embed (`selectionEnabled=false`) uses the same disabled treatment rather
   // than a live-looking button whose click is silently neutered upstream.
+  const hasSweepTarget =
+    worktrees.length > 0 ||
+    namesHostOutsideSurface({ hostIds: item.chatHostIds, surfaceHostId });
   return {
     isVisible: !selectionMode && item.taskType !== "phase",
     canSweep:
       selectionEnabled &&
       !selectionMode &&
       item.taskType !== "phase" &&
-      worktrees.length > 0,
+      hasSweepTarget,
     requestSweep,
   };
 }

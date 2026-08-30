@@ -21,10 +21,20 @@ export interface BrowserLinkClickEvent {
   readonly altKey: boolean;
 }
 
+/**
+ * Where the opened tab lands. `split-right` puts it beside the page the link
+ * came from, which is the point of opening in-app on a canvas showing several
+ * tiles at once. A viewport that shows exactly one tile has no beside: the
+ * split would leave a second pane the user cannot see and cannot close, so
+ * `same-pane` takes over the pane instead.
+ */
+export type BrowserPageTilePlacement = "split-right" | "same-pane";
+
 type BrowserPageOpenTileRequest = BrowserLinkSource & {
   readonly sessionId: string;
   readonly tabId: string;
   readonly url: string;
+  readonly placement: BrowserPageTilePlacement;
 };
 
 interface RouteBrowserLinkArgs {
@@ -98,14 +108,16 @@ export function openBrowserSessionTileFromPage(
     sessionId: request.sessionId,
     tabId: request.tabId,
   });
-  store.splitPaneWithNode(request.viewTabId, request.paneId, "right", tile);
-  const nextCanvas =
-    useEpicCanvasStore.getState().canvasByTabId[request.viewTabId];
-  if (
-    nextCanvas !== undefined &&
-    nextCanvas.tilesByInstanceId[tile.instanceId] !== undefined
-  ) {
-    return true;
+  if (request.placement === "split-right") {
+    store.splitPaneWithNode(request.viewTabId, request.paneId, "right", tile);
+    const nextCanvas =
+      useEpicCanvasStore.getState().canvasByTabId[request.viewTabId];
+    if (
+      nextCanvas !== undefined &&
+      nextCanvas.tilesByInstanceId[tile.instanceId] !== undefined
+    ) {
+      return true;
+    }
   }
   store.openTileInPane(request.viewTabId, request.paneId, tile);
   return true;

@@ -210,6 +210,9 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
             sessionId: opened.sessionId,
             tabId: opened.tabId,
             url: change.url,
+            // Electron-only surface: a natively-placed tab exists on the
+            // desktop canvas alone, which always has room beside it.
+            placement: "split-right",
           });
         })
         .catch((cause: unknown) => {

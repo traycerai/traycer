@@ -232,8 +232,17 @@ describe("ChatRecordsStreamClient", () => {
       reason: "deleted",
     });
 
+    // The `@1.1` row is PROMOTED to the current union on the way through, and
+    // both fills are exact rather than defaults: a `@1.1` host is never sent
+    // the `@1.2` cloud arm (the host gates its emission on the negotiated
+    // version), and the delta plane has no doc-resident producer at all - such
+    // a row reaches a client through `epic.listTuiAgents` alone.
     expect(h.deltas).toEqual([
-      { kind: "tuiUpsert", epicId: "epic-1", record },
+      {
+        kind: "tuiUpsert",
+        epicId: "epic-1",
+        record: { ...record, docResident: false, origin: "registry" },
+      },
       {
         kind: "tuiRemove",
         epicId: "epic-2",
@@ -241,6 +250,68 @@ describe("ChatRecordsStreamClient", () => {
         reason: "deleted",
       },
     ]);
+    h.client.close();
+  });
+
+  it("TRIPWIRE: still delivers a tuiUpsert when the session negotiated @1.1", () => {
+    // THE REGRESSION THIS PINS. A newer app talking to a host that only
+    // negotiates `@1.1` parsed every frame with the `@1.2` schema - whose
+    // `tuiUpsert` row is a union DISCRIMINATED on `origin`, a key the frozen
+    // `@1.1` row does not have. So the upsert failed to parse and was dropped
+    // while `tuiRemove`, unchanged between the minors, kept arriving: rows
+    // vanished on removal and never came back on creation.
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+    const record = tuiRow({ tuiAgentId: "tui-legacy", revision: 4 });
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-legacy",
+      revision: 4,
+      record,
+    });
+
+    expect(h.deltas).toEqual([
+      {
+        kind: "tuiUpsert",
+        epicId: "epic-1",
+        record: { ...record, docResident: false, origin: "registry" },
+      },
+    ]);
+    h.client.close();
+  });
+
+  it("delivers the @1.2 cloud arm verbatim when the session negotiated @1.2", () => {
+    // The other side of the branch: at `@1.2` the row is already the union, so
+    // it passes through untouched - including the narrow cloud arm, which the
+    // `@1.1` schema would reject.
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 2 };
+    const record = {
+      origin: "cloud" as const,
+      tuiAgentId: "tui-remote",
+      ownerUserId: "user-a",
+      hostId: "host-elsewhere",
+      harnessId: "claude",
+      parentId: null,
+      title: "An agent on my other machine",
+      isTitleEditedByUser: false,
+      createdAt: 1,
+      updatedAt: 2,
+      archived: false,
+      revision: 7,
+    };
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-remote",
+      revision: 7,
+      record,
+    });
+
+    expect(h.deltas).toEqual([{ kind: "tuiUpsert", epicId: "epic-1", record }]);
     h.client.close();
   });
 
