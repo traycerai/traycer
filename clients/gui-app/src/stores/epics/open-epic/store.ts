@@ -71,6 +71,7 @@ import { createHotBodyBudgetAdapter } from "./runtime/worker/hot-body-budget-ada
 import { createMainThreadBodyDocStore } from "./runtime/worker/main-thread-body-docs";
 import type { RuntimeProjectionHandlers } from "@traycer-clients/shared/replica-runtime/worker/runtime-projection-subscription";
 import { BridgeDisposedError } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
+import { inertMutationResult } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import type { EpicRuntimeBodyReturnTarget } from "./runtime/worker/spawn-epic-runtime-worker";
 import {
   NO_TRANSFER,
@@ -923,7 +924,6 @@ export function createOpenEpicStore(
    * would carry a value no subscriber ever saw, and every later change gate
    * would compare against it.
    */
-  let preStorePatch: Partial<EpicRuntimeProjection> | null = null;
 
   /**
    * The one write into zustand, and now the PROJECTION HANDLER's apply.
@@ -985,16 +985,27 @@ export function createOpenEpicStore(
   function applyProjection(patch: Partial<EpicRuntimeProjection>): void {
     const api = storeApi;
     if (api === null) {
-      preStorePatch =
-        preStorePatch === null
-          ? { ...patch }
-          : Object.assign(preStorePatch, patch);
-      return;
+      // UNREACHABLE, and thrown rather than assumed away.
+      //
+      // This had been a BUFFER, which was correct under the old topology: the
+      // runtime was constructed inside this store, so its construction-time
+      // publishes really could land before `create()` had assigned `storeApi`.
+      // After the relocation there is no such caller. `applyProjection` has
+      // exactly two: this file's own projection handler, which the CALLER
+      // wires only after `createOpenEpicStore` returns, and nothing else -
+      // and `storeApi` is assigned inside the zustand initializer, which
+      // `create()` runs synchronously long before that return.
+      //
+      // A buffer for a window with no writer is worse than nothing: it reads
+      // as evidence the state occurs, and its contents would sit in a drawer
+      // nobody flushes. If a future wiring re-creates a pre-attach caller,
+      // this fails AT that call site rather than silently swallowing the
+      // first projection of the session.
+      throw new Error(
+        "[open-epic] projection applied before the store attached",
+      );
     }
-    const held = preStorePatch;
-    preStorePatch = null;
-    const { bindingEpoch, ...projected } =
-      held === null ? patch : { ...held, ...patch };
+    const { bindingEpoch, ...projected } = patch;
     api.setState(
       bindingEpoch === undefined
         ? projected
@@ -1019,8 +1030,34 @@ export function createOpenEpicStore(
   /**
    * One mutation, over the bridge. Callers narrow on their own literal `kind`.
    */
-  const applyMutation = (mutation: EpicMutation): Promise<EpicMutationResult> =>
-    runtime.port.call("mutation/apply", mutation, NO_TRANSFER);
+  const applyMutation = async (
+    mutation: EpicMutation,
+  ): Promise<EpicMutationResult> => {
+    try {
+      return await runtime.port.call("mutation/apply", mutation, NO_TRANSFER);
+    } catch (cause: unknown) {
+      // A DISPOSED session answers INERT, it does not reject.
+      //
+      // Every one of these members had a falsy no-op answer before the
+      // relocation - `false` for a retire, `null` for a mint - because a
+      // mutation against a torn-down replica has always been a no-op rather
+      // than an error. Across the bridge that same teardown arrives as a
+      // rejection, so a caller that used to read `false` now gets an unhandled
+      // one.
+      //
+      // `inertMutationResult` is the SHARED answer the worker already returns
+      // for a mutation it cannot serve, so the two sides agree on the shape
+      // rather than this file inventing a second one per kind.
+      //
+      // Narrowed on the error type: a mutation that genuinely threw (an
+      // illegal reparent) must still reach its caller as a rejection, which is
+      // how a cycle is told from a no-op.
+      if (cause instanceof BridgeDisposedError) {
+        return inertMutationResult(mutation);
+      }
+      throw cause;
+    }
+  };
 
   const bodyDocs = createMainThreadBodyDocStore({
     onResidencyChange: () => {
@@ -1463,24 +1500,6 @@ export function createOpenEpicStore(
       },
     ),
   );
-
-  // FLUSH-ON-ATTACH.
-  //
-  // `applyProjection` buffers into `preStorePatch` while `storeApi` is null and
-  // returns; the merge that drains it runs only on the NEXT call. Nothing was
-  // draining it when the store attached, so a slice whose ONLY publish happens
-  // during construction sat in the buffer until some unrelated projection
-  // happened to arrive - indefinitely, in a quiet epic.
-  //
-  // `heldAttachmentHashes` is exactly that slice: its standing observation
-  // republishes at bind time, which is before this store exists. The visible
-  // failure was an attachment that IS present reporting as absent.
-  //
-  // Routed through `applyProjection` rather than a bespoke `setState` so the
-  // buffered patch takes the identical path a live one does - the
-  // `bindingEpoch` -> `bindingVersion` translation included, since a buffered
-  // epoch must translate exactly as a live one would.
-  if (preStorePatch !== null) applyProjection({});
 
   unsubscribeAuthUserId = useAuthStore.subscribe((state, prevState) => {
     const nextUserId = state.profile?.userId ?? null;

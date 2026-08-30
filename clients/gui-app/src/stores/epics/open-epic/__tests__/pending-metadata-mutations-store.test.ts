@@ -10,11 +10,13 @@ import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
 import {
-  createOpenEpicStore,
   LOCAL_ORIGIN,
   type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
+import {
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   ensureMap,
   getEpicMap,
@@ -143,7 +145,7 @@ function makeMeta(permissionRole: PermissionRole): SnapshotMetaEpic {
 }
 
 function newSession(permissionRole: PermissionRole): {
-  handle: OpenEpicStoreHandle;
+  handle: OpenedStoreForTest;
   callbacks: EpicStreamCallbacks;
 } {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
@@ -158,13 +160,22 @@ function newSession(permissionRole: PermissionRole): {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  // The ONE blessed wiring: real host, real core, real composition, real
+  // bridge. `createOpenEpicStore` stopped constructing a runtime, so a suite
+  // that used to hand it a `streamClientFactory` has nothing to hand it - the
+  // factories go to the composition instead. `handle.doc` keeps working
+  // because this harness built the runtime in THIS thread and exposes its
+  // live doc as a getter.
+  const handle = openStoreForTest({
     epicId: "epic-test",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    factories: {
+      streamClientFactory: factory,
+      // No lane stream clients in this suite - the legacy @1 arm, which is
+      // what these tests drive.
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   const seed = Y.encodeStateAsUpdate(new Y.Doc());
@@ -173,11 +184,11 @@ function newSession(permissionRole: PermissionRole): {
 }
 
 describe("beginRenameMutation", () => {
-  it("shows the optimistic title synchronously, before any RPC settles", () => {
+  it("shows the optimistic title synchronously, before any RPC settles", async () => {
     const { handle } = newSession("editor");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(id, "Renamed live");
 
@@ -191,15 +202,15 @@ describe("beginRenameMutation", () => {
     handle.dispose();
   });
 
-  it("retiring as FAILED deletes the entry and reveals the authoritative value", () => {
+  it("retiring as FAILED deletes the entry and reveals the authoritative value", async () => {
     const { handle } = newSession("editor");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(id, "Renamed live");
     if (requestId === null) throw new Error("expected a request id");
 
-    const retired = handle.store
+    const retired = await handle.store
       .getState()
       .retirePendingMutation(requestId, "failed");
 
@@ -210,15 +221,15 @@ describe("beginRenameMutation", () => {
     handle.dispose();
   });
 
-  it("retiring as LANDED, with no doc echo yet, keeps showing the acked target (the row IS the projection, not stale)", () => {
+  it("retiring as LANDED, with no doc echo yet, keeps showing the acked target (the row IS the projection, not stale)", async () => {
     const { handle } = newSession("editor");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(id, "Renamed live");
     if (requestId === null) throw new Error("expected a request id");
 
-    const retired = handle.store
+    const retired = await handle.store
       .getState()
       .retirePendingMutation(requestId, "landed");
 
@@ -231,12 +242,12 @@ describe("beginRenameMutation", () => {
     handle.dispose();
   });
 
-  it("no-ops against the DISPLAYED value, not the chain baseline - renaming back to the original while a landed rename awaits its echo stamps a real entry", () => {
+  it("no-ops against the DISPLAYED value, not the chain baseline - renaming back to the original while a landed rename awaits its echo stamps a real entry", async () => {
     const { handle } = newSession("editor");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const first = handle.store.getState().beginRenameMutation(id, "B");
+    const first = await handle.store.getState().beginRenameMutation(id, "B");
     if (first === null) throw new Error("expected a request id");
-    handle.store.getState().retirePendingMutation(first, "landed");
+    await handle.store.getState().retirePendingMutation(first, "landed");
     // Landed, no doc echo yet - display shows "B".
     expect(handle.store.getState().artifacts.byId[id].title).toBe("B");
 
@@ -244,21 +255,23 @@ describe("beginRenameMutation", () => {
     // DISPLAYED ("B"), so this must stamp a real entry - a baseline compare
     // would have wrongly no-op'd here (baseline IS "New spec"), leaving the
     // UI stuck on "B" until a full round trip.
-    const second = handle.store.getState().beginRenameMutation(id, "New spec");
+    const second = await handle.store
+      .getState()
+      .beginRenameMutation(id, "New spec");
 
     expect(second).not.toBeNull();
     expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
     handle.dispose();
   });
 
-  it("once the doc echoes a landed mutation's target, the chain goes dead and is swept from the map", () => {
+  it("once the doc echoes a landed mutation's target, the chain goes dead and is swept from the map", async () => {
     const { handle } = newSession("editor");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(id, "Renamed live");
     if (requestId === null) throw new Error("expected a request id");
-    handle.store.getState().retirePendingMutation(requestId, "landed");
+    await handle.store.getState().retirePendingMutation(requestId, "landed");
 
     // Simulate the doc echoing the host's own write of the acked value.
     const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
@@ -277,25 +290,25 @@ describe("beginRenameMutation", () => {
     // The chain is dead now - a plain (non-overlay) rename on the SAME node
     // must not be blocked or shadowed by a stale entry.
     expect(
-      handle.store.getState().beginRenameMutation(id, "Plain rename"),
+      await handle.store.getState().beginRenameMutation(id, "Plain rename"),
     ).not.toBeNull();
     handle.dispose();
   });
 
-  it("retiring an unknown requestId is a no-op that returns false", () => {
+  it("retiring an unknown requestId is a no-op that returns false", async () => {
     const { handle } = newSession("editor");
 
     expect(
-      handle.store.getState().retirePendingMutation("ghost", "failed"),
+      await handle.store.getState().retirePendingMutation("ghost", "failed"),
     ).toBe(false);
     handle.dispose();
   });
 
-  it("a chat (registry-backed row shape) also gets the optimistic overlay", () => {
+  it("a chat (registry-backed row shape) also gets the optimistic overlay", async () => {
     const { handle } = newSession("editor");
     const chatId = createArtifactInDocForTests(handle.doc, "chat", null);
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(chatId, "New chat title");
 
@@ -306,14 +319,14 @@ describe("beginRenameMutation", () => {
     handle.dispose();
   });
 
-  it("baseline comes from the RAW union row, not the tree's display fallback - an UNTITLED row's rename applies", () => {
+  it("baseline comes from the RAW union row, not the tree's display fallback - an UNTITLED row's rename applies", async () => {
     const { handle } = newSession("editor");
     const chatId = createUntitledChatInDocForTests(handle.doc);
     // The tree carries an "Untitled ..." display fallback for empty titles;
     // the raw row title is still "".
     expect(handle.store.getState().chats.byId[chatId].title).toBe("");
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(chatId, "Plan");
 
@@ -325,12 +338,12 @@ describe("beginRenameMutation", () => {
     handle.dispose();
   });
 
-  it("a second begin on the same node chains off the FIRST mutation's baseline, and survives retiring the first as LANDED", () => {
+  it("a second begin on the same node chains off the FIRST mutation's baseline, and survives retiring the first as LANDED", async () => {
     const { handle } = newSession("editor");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const first = handle.store.getState().beginRenameMutation(id, "B");
+    const first = await handle.store.getState().beginRenameMutation(id, "B");
     if (first === null) throw new Error("expected a request id");
-    const second = handle.store.getState().beginRenameMutation(id, "C");
+    const second = await handle.store.getState().beginRenameMutation(id, "C");
     if (second === null) throw new Error("expected a request id");
 
     // The row shows the LATEST stamped value while both are pending.
@@ -341,7 +354,7 @@ describe("beginRenameMutation", () => {
     // pending second entry anchored: the chain now has an explicit landed
     // target ("B") to anchor against, independent of whether the doc has
     // visibly echoed it yet.
-    handle.store.getState().retirePendingMutation(first, "landed");
+    await handle.store.getState().retirePendingMutation(first, "landed");
     expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
     // The doc now echoes the host's write of "B" - the row moves off the
@@ -360,7 +373,7 @@ describe("beginRenameMutation", () => {
 
     // Finally the second's own RPC acks too and the doc echoes it - the
     // chain is now fully landed and caught up, so it goes dead.
-    handle.store.getState().retirePendingMutation(second, "landed");
+    await handle.store.getState().retirePendingMutation(second, "landed");
     handle.doc.transact(() => {
       entry.set("title", "C");
     });
@@ -368,12 +381,12 @@ describe("beginRenameMutation", () => {
     handle.dispose();
   });
 
-  it("shows the LAST-STAMPED target when the NEWER entry acks first, not the older still-pending one - an out-of-order ACK must not walk the display backward", () => {
+  it("shows the LAST-STAMPED target when the NEWER entry acks first, not the older still-pending one - an out-of-order ACK must not walk the display backward", async () => {
     const { handle } = newSession("editor");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const first = handle.store.getState().beginRenameMutation(id, "B");
+    const first = await handle.store.getState().beginRenameMutation(id, "B");
     if (first === null) throw new Error("expected a request id");
-    const second = handle.store.getState().beginRenameMutation(id, "C");
+    const second = await handle.store.getState().beginRenameMutation(id, "C");
     if (second === null) throw new Error("expected a request id");
     expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
@@ -381,52 +394,54 @@ describe("beginRenameMutation", () => {
     // still pending. Filtering landed entries out of display selection (the
     // pre-fix behavior) would fall back to the still-pending "B" here -
     // regressing the newest thing the user asked for until "B" also settles.
-    handle.store.getState().retirePendingMutation(second, "landed");
+    await handle.store.getState().retirePendingMutation(second, "landed");
     expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
     // "B" acks too - the chain is now fully landed. Continuity across the
     // final settle: still "C", the last-stamped target.
-    handle.store.getState().retirePendingMutation(first, "landed");
+    await handle.store.getState().retirePendingMutation(first, "landed");
     expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
     handle.dispose();
   });
 
-  it("returns null for a viewer role", () => {
+  it("returns null for a viewer role", async () => {
     const { handle } = newSession("viewer");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
 
-    expect(handle.store.getState().beginRenameMutation(id, "Nope")).toBeNull();
-    handle.dispose();
-  });
-
-  it("returns null when the requested title already equals the current value", () => {
-    const { handle } = newSession("editor");
-    const id = createArtifactInDocForTests(handle.doc, "spec", null);
-
     expect(
-      handle.store.getState().beginRenameMutation(id, "New spec"),
+      await handle.store.getState().beginRenameMutation(id, "Nope"),
     ).toBeNull();
     handle.dispose();
   });
 
-  it("returns null for an unknown nodeId", () => {
+  it("returns null when the requested title already equals the current value", async () => {
+    const { handle } = newSession("editor");
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+
+    expect(
+      await handle.store.getState().beginRenameMutation(id, "New spec"),
+    ).toBeNull();
+    handle.dispose();
+  });
+
+  it("returns null for an unknown nodeId", async () => {
     const { handle } = newSession("editor");
 
     expect(
-      handle.store.getState().beginRenameMutation("ghost", "Anything"),
+      await handle.store.getState().beginRenameMutation("ghost", "Anything"),
     ).toBeNull();
     handle.dispose();
   });
 });
 
 describe("beginEpicTitleMutation", () => {
-  it("shows the optimistic title in epic.title synchronously", () => {
+  it("shows the optimistic title in epic.title synchronously", async () => {
     const { handle } = newSession("editor");
     handle.doc.transact(() => {
       handle.doc.getMap("epic").set("title", "Original epic title");
     });
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginEpicTitleMutation("New epic title");
 
@@ -435,26 +450,26 @@ describe("beginEpicTitleMutation", () => {
     handle.dispose();
   });
 
-  it("returns null when the value already matches", () => {
+  it("returns null when the value already matches", async () => {
     const { handle } = newSession("editor");
     handle.doc.transact(() => {
       handle.doc.getMap("epic").set("title", "Same title");
     });
 
     expect(
-      handle.store.getState().beginEpicTitleMutation("Same title"),
+      await handle.store.getState().beginEpicTitleMutation("Same title"),
     ).toBeNull();
     handle.dispose();
   });
 });
 
 describe("beginReparentMutation", () => {
-  it("moves the node in the published tree", () => {
+  it("moves the node in the published tree", async () => {
     const { handle } = newSession("editor");
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
     const child = createArtifactInDocForTests(handle.doc, "ticket", null);
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginReparentMutation(child, parent);
 
@@ -465,7 +480,7 @@ describe("beginReparentMutation", () => {
     handle.dispose();
   });
 
-  it("stale-parent case: a row whose RAW parentId points at a deleted node (tree promotes it to root) still reparents optimistically", () => {
+  it("stale-parent case: a row whose RAW parentId points at a deleted node (tree promotes it to root) still reparents optimistically", async () => {
     const { handle } = newSession("editor");
     // The raw doc parentId names a node that was never created - the tree
     // projector's `resolveEffectiveParent` cannot resolve it and promotes
@@ -483,7 +498,7 @@ describe("beginReparentMutation", () => {
       "deleted-parent",
     );
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginReparentMutation(orphan, newParent);
 
@@ -494,57 +509,57 @@ describe("beginReparentMutation", () => {
     handle.dispose();
   });
 
-  it("returns null for a cycle (parent is the node's own descendant)", () => {
+  it("returns null for a cycle (parent is the node's own descendant)", async () => {
     const { handle } = newSession("editor");
     const root = createArtifactInDocForTests(handle.doc, "spec", null);
     const child = createArtifactInDocForTests(handle.doc, "ticket", root);
 
     // Dropping `root` onto its own child would create a cycle.
     expect(
-      handle.store.getState().beginReparentMutation(root, child),
+      await handle.store.getState().beginReparentMutation(root, child),
     ).toBeNull();
     handle.dispose();
   });
 
-  it("returns null for a cross-family move (artifact under a chat)", () => {
+  it("returns null for a cross-family move (artifact under a chat)", async () => {
     const { handle } = newSession("editor");
     const artifact = createArtifactInDocForTests(handle.doc, "spec", null);
     const chat = createArtifactInDocForTests(handle.doc, "chat", null);
 
     expect(
-      handle.store.getState().beginReparentMutation(artifact, chat),
+      await handle.store.getState().beginReparentMutation(artifact, chat),
     ).toBeNull();
     handle.dispose();
   });
 
-  it("returns null for a same-parent move (no-op)", () => {
+  it("returns null for a same-parent move (no-op)", async () => {
     const { handle } = newSession("editor");
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
     const child = createArtifactInDocForTests(handle.doc, "ticket", parent);
 
     expect(
-      handle.store.getState().beginReparentMutation(child, parent),
+      await handle.store.getState().beginReparentMutation(child, parent),
     ).toBeNull();
     handle.dispose();
   });
 
-  it("returns null for a viewer role", () => {
+  it("returns null for a viewer role", async () => {
     const { handle } = newSession("viewer");
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
     const child = createArtifactInDocForTests(handle.doc, "ticket", null);
 
     expect(
-      handle.store.getState().beginReparentMutation(child, parent),
+      await handle.store.getState().beginReparentMutation(child, parent),
     ).toBeNull();
     handle.dispose();
   });
 });
 
 describe("dispose", () => {
-  it("clears the pending mutation map", () => {
+  it("clears the pending mutation map", async () => {
     const { handle } = newSession("editor");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(id, "Renamed live");
     if (requestId === null) throw new Error("expected a request id");
@@ -553,16 +568,16 @@ describe("dispose", () => {
 
     // Nothing left to retire - dispose already cleared it.
     expect(
-      handle.store.getState().retirePendingMutation(requestId, "failed"),
+      await handle.store.getState().retirePendingMutation(requestId, "failed"),
     ).toBe(false);
   });
 });
 
 describe("detachTransport", () => {
-  it("an un-landed entry survives detach, but its later 'landed' retire deletes instead of marking landed - the RPC still owns a terminal retire, but there is no attached projector left to keep it around for", () => {
+  it("an un-landed entry survives detach, but its later 'landed' retire deletes instead of marking landed - the RPC still owns a terminal retire, but there is no attached projector left to keep it around for", async () => {
     const { handle } = newSession("editor");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(id, "Renamed live");
     if (requestId === null) throw new Error("expected a request id");
@@ -580,12 +595,12 @@ describe("detachTransport", () => {
     // observable here only via the boolean return values below, since the
     // detached store no longer republishes a projection to inspect.
     expect(
-      handle.store.getState().retirePendingMutation(requestId, "landed"),
+      await handle.store.getState().retirePendingMutation(requestId, "landed"),
     ).toBe(true);
     // The first call already deleted the entry, so a second terminal retire
     // for the same requestId finds nothing left.
     expect(
-      handle.store.getState().retirePendingMutation(requestId, "failed"),
+      await handle.store.getState().retirePendingMutation(requestId, "failed"),
     ).toBe(false);
 
     handle.dispose();
@@ -593,7 +608,7 @@ describe("detachTransport", () => {
 });
 
 describe("landed-entry TTL", () => {
-  it("reports landed TTL retirement with the exact superseded outcome and source", () => {
+  it("reports landed TTL retirement with the exact superseded outcome and source", async () => {
     const { store, reconciled, scheduled } = metadataOverlayFixture();
     const mutation: PendingRename = {
       kind: "rename",
@@ -615,7 +630,7 @@ describe("landed-entry TTL", () => {
     );
   });
 
-  it("reports authoritative echo reconciliation with the exact echo outcome and source", () => {
+  it("reports authoritative echo reconciliation with the exact echo outcome and source", async () => {
     const { store, reconciled } = metadataOverlayFixture();
     const mutation: PendingRename = {
       kind: "rename",
@@ -636,7 +651,7 @@ describe("landed-entry TTL", () => {
     );
   });
 
-  it("cancels an ambiguous TTL when explicitly retried, so only the fresh landed TTL can reconcile", () => {
+  it("cancels an ambiguous TTL when explicitly retried, so only the fresh landed TTL can reconcile", async () => {
     const { store, reconciled, scheduled } = metadataOverlayFixture();
     const mutation: PendingRename = {
       kind: "rename",
@@ -668,17 +683,17 @@ describe("landed-entry TTL", () => {
     );
   });
 
-  it("a landed entry self-expires and row-wins once LANDED_MUTATION_TTL_MS passes with no echo - the bounded bridge for a peer's write-back to the baseline", () => {
+  it("a landed entry self-expires and row-wins once LANDED_MUTATION_TTL_MS passes with no echo - the bounded bridge for a peer's write-back to the baseline", async () => {
     vi.useFakeTimers();
     try {
       const { handle } = newSession("editor");
       const id = createArtifactInDocForTests(handle.doc, "spec", null);
       const baseline = handle.store.getState().artifacts.byId[id].title;
-      const requestId = handle.store
+      const requestId = await handle.store
         .getState()
         .beginRenameMutation(id, "Renamed live");
       if (requestId === null) throw new Error("expected a request id");
-      handle.store.getState().retirePendingMutation(requestId, "landed");
+      await handle.store.getState().retirePendingMutation(requestId, "landed");
       expect(handle.store.getState().artifacts.byId[id].title).toBe(
         "Renamed live",
       );
@@ -695,7 +710,9 @@ describe("landed-entry TTL", () => {
       vi.advanceTimersByTime(1);
       expect(handle.store.getState().artifacts.byId[id].title).toBe(baseline);
       expect(
-        handle.store.getState().retirePendingMutation(requestId, "failed"),
+        await handle.store
+          .getState()
+          .retirePendingMutation(requestId, "failed"),
       ).toBe(false);
 
       handle.dispose();
@@ -704,21 +721,21 @@ describe("landed-entry TTL", () => {
     }
   });
 
-  it("is CHAIN-SCOPED: a landed entry re-arms instead of expiring while an un-landed sibling still anchors on it, and only expires once the chain drains", () => {
+  it("is CHAIN-SCOPED: a landed entry re-arms instead of expiring while an un-landed sibling still anchors on it, and only expires once the chain drains", async () => {
     vi.useFakeTimers();
     try {
       const { handle } = newSession("editor");
       const id = createArtifactInDocForTests(handle.doc, "spec", null);
       const baseline = handle.store.getState().artifacts.byId[id].title;
 
-      const r1 = handle.store.getState().beginRenameMutation(id, "B");
+      const r1 = await handle.store.getState().beginRenameMutation(id, "B");
       if (r1 === null) throw new Error("expected a request id");
-      handle.store.getState().retirePendingMutation(r1, "landed");
+      await handle.store.getState().retirePendingMutation(r1, "landed");
       expect(handle.store.getState().artifacts.byId[id].title).toBe("B");
 
       // A second, still-PENDING mutation chains off the same node. It relies
       // on r1's landed target as part of its anchor set.
-      const r2 = handle.store.getState().beginRenameMutation(id, "C");
+      const r2 = await handle.store.getState().beginRenameMutation(id, "C");
       if (r2 === null) throw new Error("expected a request id");
       expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
@@ -731,7 +748,7 @@ describe("landed-entry TTL", () => {
 
       // r2 settles (terminal failure - the simplest way to drain it). r1 is
       // still landed and un-expired, so it keeps anchoring the display.
-      handle.store.getState().retirePendingMutation(r2, "failed");
+      await handle.store.getState().retirePendingMutation(r2, "failed");
       expect(handle.store.getState().artifacts.byId[id].title).toBe("B");
 
       // r1's RE-ARMED timer's next fire (another full TTL later) finds no
@@ -739,9 +756,9 @@ describe("landed-entry TTL", () => {
       // authoritative value.
       vi.advanceTimersByTime(30_000);
       expect(handle.store.getState().artifacts.byId[id].title).toBe(baseline);
-      expect(handle.store.getState().retirePendingMutation(r1, "failed")).toBe(
-        false,
-      );
+      expect(
+        await handle.store.getState().retirePendingMutation(r1, "failed"),
+      ).toBe(false);
 
       handle.dispose();
     } finally {
@@ -749,28 +766,28 @@ describe("landed-entry TTL", () => {
     }
   });
 
-  it("is TAIL-owned and chain-ATOMIC: an out-of-order ACK must not walk the display backward through the chain's history", () => {
+  it("is TAIL-owned and chain-ATOMIC: an out-of-order ACK must not walk the display backward through the chain's history", async () => {
     vi.useFakeTimers();
     try {
       const { handle } = newSession("editor");
       const id = createArtifactInDocForTests(handle.doc, "spec", null);
       const baseline = handle.store.getState().artifacts.byId[id].title;
 
-      const r1 = handle.store.getState().beginRenameMutation(id, "B");
+      const r1 = await handle.store.getState().beginRenameMutation(id, "B");
       if (r1 === null) throw new Error("expected a request id");
-      const r2 = handle.store.getState().beginRenameMutation(id, "C");
+      const r2 = await handle.store.getState().beginRenameMutation(id, "C");
       if (r2 === null) throw new Error("expected a request id");
       expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
       // r2 - the chain TAIL, last STAMPED - acks first, out of order. Its
       // own expiry timer arms now, for t=30_000.
-      handle.store.getState().retirePendingMutation(r2, "landed");
+      await handle.store.getState().retirePendingMutation(r2, "landed");
 
       vi.advanceTimersByTime(10_000);
       // r1 acks ten seconds later. It is NOT the tail, so even once landed
       // it never owns the chain's deletion - only re-arming or standing
       // aside for the tail's timer.
-      handle.store.getState().retirePendingMutation(r1, "landed");
+      await handle.store.getState().retirePendingMutation(r1, "landed");
       expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
 
       // Just shy of r2's t=30_000 fire (20_000 more from t=10_000): still
@@ -787,12 +804,12 @@ describe("landed-entry TTL", () => {
       expect(handle.store.getState().artifacts.byId[id].title).not.toBe("B");
       expect(handle.store.getState().artifacts.byId[id].title).toBe(baseline);
 
-      expect(handle.store.getState().retirePendingMutation(r1, "failed")).toBe(
-        false,
-      );
-      expect(handle.store.getState().retirePendingMutation(r2, "failed")).toBe(
-        false,
-      );
+      expect(
+        await handle.store.getState().retirePendingMutation(r1, "failed"),
+      ).toBe(false);
+      expect(
+        await handle.store.getState().retirePendingMutation(r2, "failed"),
+      ).toBe(false);
 
       handle.dispose();
     } finally {
@@ -802,7 +819,7 @@ describe("landed-entry TTL", () => {
 });
 
 describe("chat-record revision guard protects a pending overlay chain from a delayed poll answer", () => {
-  it("list P(rev1/A) -> push rev2/C -> delayed P lands -> C survives and the pending C->B overlay chain is not swept", () => {
+  it("list P(rev1/A) -> push rev2/C -> delayed P lands -> C survives and the pending C->B overlay chain is not swept", async () => {
     const { handle } = newSession("editor");
     const store = handle.store;
 
@@ -841,9 +858,9 @@ describe("chat-record revision guard protects a pending overlay chain from a del
 
     // Proven not swept: the chain is still in the map to retire, and
     // retiring it reveals the authoritative "C" (never regressed to "A").
-    expect(store.getState().retirePendingMutation(requestId, "failed")).toBe(
-      true,
-    );
+    expect(
+      await store.getState().retirePendingMutation(requestId, "failed"),
+    ).toBe(true);
     expect(store.getState().chats.byId.c.title).toBe("C");
 
     handle.dispose();
