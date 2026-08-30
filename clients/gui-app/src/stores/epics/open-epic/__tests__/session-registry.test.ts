@@ -65,12 +65,17 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
   let isCleanOverride = clean;
 
   const wrappedHandle: OpenedStoreForTest = {
-    get epicId() {
-      return base.epicId;
-    },
-    get userId() {
-      return base.userId;
-    },
+    // SPREAD, rather than a member-by-member forward. The comment below has
+    // always said every other member must be the harness's own; a spread is
+    // that sentence as code, and a hand-written list is the same sentence as a
+    // promise that expires the next time the interface grows a member - which
+    // is how this line came to need editing at all.
+    ...base,
+    // Re-declared as getters ON TOP of the spread, because these three are the
+    // members a spread would get WRONG rather than merely miss: the harness
+    // declares them as getters precisely because a replica replacement swaps
+    // the live `Y.Doc` and `Awareness`, and a spread freezes whichever pair
+    // existed at wrap time. `store` follows them for the same reason.
     get doc() {
       return base.doc;
     },
@@ -80,17 +85,10 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
     get store() {
       return base.store;
     },
-    requestFreshSnapshot: () => base.requestFreshSnapshot(),
+    // The two the wrapper actually exists to change.
     dispose: testDispose,
-    detachTransport: () => base.detachTransport(),
     isClean: () => isCleanOverride,
     hotArtifactRoomIdsForTests: () => [],
-    // Forwarded, not stubbed: the wrapper's job is to override `isClean` and
-    // count disposals, so every other member has to be the harness's own or
-    // the wrapper stops standing in for it.
-    flush: () => base.flush(),
-    projection: base.projection,
-    body: base.body,
     ...INERT_ROOT_STATE_PORT,
   };
 

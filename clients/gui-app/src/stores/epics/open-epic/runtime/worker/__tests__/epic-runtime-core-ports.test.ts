@@ -216,6 +216,31 @@ describe("bodies.settle", () => {
     );
   });
 
+  it("reports settledBytes from what the TIER stored, not from the input", async () => {
+    // RE-HOMED from `in-process-runtime-port.test.ts`, which is retired: that
+    // suite pinned this on a port with no production caller, and the property
+    // belongs to whichever port actually serves a demote. The distinction is
+    // not cosmetic - the accountant's `settleCold` figure comes from this
+    // number, so reporting the input's length would charge the books for bytes
+    // the tier may have merged rather than stored.
+    const ports = buildPorts(
+      createSource({
+        settleColdState: () => ({ accepted: true as const, settledBytes: 512 }),
+      }),
+    );
+
+    await expect(
+      ports.bodies.settle({
+        docKey: "doc-1",
+        generation: 1,
+        docGuid: "guid-1",
+        // Deliberately a DIFFERENT length from the answer above, so a port
+        // reporting `update.byteLength` fails rather than coincides.
+        update: new Uint8Array([1, 2, 3]),
+      }),
+    ).resolves.toEqual({ accepted: true, settledBytes: 512, reason: null });
+  });
+
   it("reports zero settled bytes on a refusal", async () => {
     const ports = buildPorts(
       createSource({
@@ -426,6 +451,15 @@ describe("bodies.materialize — the lease it stands on", () => {
     expect(rig.leases).toEqual(["art-1"]);
     // Retained: the main thread now holds the doc this lease stands for.
     expect(rig.releases).toEqual([]);
+    // RE-HOMED from `in-process-runtime-port.test.ts`, which is retired: the
+    // granted answer carries the tier's OWN seed mode and watermark rather
+    // than defaults minted here. `seedMode` decides merge-vs-replace on main
+    // and `hostStateVector` is what a later reattach offers, so a port that
+    // substituted its own values for either would be silently lossy on the
+    // resume path.
+    expect(materialized?.seedMode).toBe("full");
+    expect(materialized?.hostStateVector).toBeNull();
+    expect(materialized?.docGuid).toBe("guid-room-art-1");
   });
 
   it("RETAINS the demand when there is nothing to hand over yet", async () => {

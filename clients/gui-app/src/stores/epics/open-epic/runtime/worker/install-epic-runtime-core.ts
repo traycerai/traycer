@@ -26,7 +26,10 @@ import {
   type EpicRuntimeStreamFactories,
 } from "./epic-runtime-composition";
 import { createEpicRuntimeWorkerCore } from "./epic-runtime-core";
-import { buildEpicRuntimeCorePorts } from "./epic-runtime-core-ports";
+import {
+  buildEpicRuntimeCorePorts,
+  type EpicRuntimeCorePortSource,
+} from "./epic-runtime-core-ports";
 import type { EpicRuntimeWorkerHost } from "./epic-runtime-worker-host";
 import type { EpicReplicaRuntime } from "../epic-replica-runtime";
 
@@ -68,6 +71,100 @@ export function buildProxiedRuntimeFactories(
     },
     subscribeSupport: (listener) => host.streams.subscribeManifest(listener),
   });
+}
+
+/**
+ * The runtime-to-port mapping the core ports are built over.
+ *
+ * EXPORTED rather than left inline, and not for reuse's own sake: the accounting
+ * equality pin drives the SAME ports twice, once in-process and once across the
+ * bridge, and the only variable it is allowed to have is the bridge. A mapping
+ * hand-written in that suite would be a second implementation of this one, so a
+ * defect here (a call wired to the wrong runtime method) would sit on one side
+ * of the comparison only - and the pin would read green while comparing
+ * production's mapping against the test's own.
+ *
+ * Every entry is a call-through, never a captured value, for the same reason the
+ * module header gives: the runtime's answers change over a session's life.
+ */
+export function epicRuntimeCorePortSourceOf(
+  runtime: EpicReplicaRuntime,
+): EpicRuntimeCorePortSource {
+  return {
+    hasAttachmentBytes: (hash) => runtime.hasAttachmentBytes(hash),
+    readAttachmentBytes: (hash, signal) =>
+      runtime.readAttachmentBytes(hash, signal),
+    acquireBodyLease: (artifactId) =>
+      runtime.acquireArtifactBodyLease(artifactId),
+    bodyDocKey: (artifactId) => runtime.getArtifactBodyDocKey(artifactId),
+    encodeColdState: (docKey) => runtime.encodeArtifactBodyColdState(docKey),
+    encodeForwardOnly: (docKey) =>
+      runtime.encodeArtifactBodyForwardOnly(docKey),
+    observeBodyDoc: (docKey, onUpdate) =>
+      runtime.observeArtifactBodyDoc(docKey, onUpdate),
+    applyBodyAwareness: (docKey, frame, localClientId) => {
+      runtime.sendArtifactBodyAwareness(docKey, frame, localClientId);
+    },
+    observeBodyAwareness: (docKey, onFrame) =>
+      runtime.observeArtifactBodyAwareness(docKey, onFrame),
+    isBodyPinned: (docKey) => runtime.isArtifactBodyPinned(docKey),
+    encodeBodyPeerAwareness: (docKey) =>
+      runtime.encodeArtifactBodyPeerAwareness(docKey),
+    settleColdState: (docKey, update, expectedDocGuid) =>
+      runtime.settleArtifactBodyColdState(docKey, update, expectedDocGuid),
+    sendBodyUpdate: (docKey, update) =>
+      runtime.sendArtifactBodyUpdate(docKey, update),
+    renameArtifact: (artifactId, nextTitle) =>
+      runtime.renameArtifact(artifactId, nextTitle),
+    deleteArtifact: (artifactId) => runtime.deleteArtifact(artifactId),
+    reparentArtifact: (artifactId, newParentId) =>
+      runtime.reparentArtifact(artifactId, newParentId),
+    beginRenameMutation: (nodeId, nextTitle) =>
+      runtime.beginRenameMutation(nodeId, nextTitle),
+    beginEpicTitleMutation: (nextTitle) =>
+      runtime.beginEpicTitleMutation(nextTitle),
+    beginReparentMutation: (nodeId, newParentId) =>
+      runtime.beginReparentMutation(nodeId, newParentId),
+    retirePendingMutation: (requestId, outcome) =>
+      runtime.retirePendingMutation(requestId, outcome),
+    isLatestRenameStamp: (nodeId, requestId) =>
+      runtime.isLatestRenameStamp(nodeId, requestId),
+    enqueueWriteCommand: (intent) =>
+      runtime.enqueueWriteCommand(intent)?.commandId ?? null,
+    readWriteCommandIntent: (intent) => readWriteCommandIntent(intent),
+    applyChatRecords: (records, issuedAtSeq) =>
+      runtime.applyChatRecords(records, issuedAtSeq),
+    applyChatRecordDelta: (delta) => runtime.applyChatRecordDelta(delta),
+    applyTuiAgentRecords: (records, issuedAtSeq) =>
+      runtime.applyTuiAgentRecords(records, issuedAtSeq),
+    applyTuiAgentRecordDelta: (delta) =>
+      runtime.applyTuiAgentRecordDelta(delta),
+    markChatRecordListAuthoritative: () =>
+      runtime.markChatRecordListAuthoritative(),
+    markChatRecordListNotAuthoritative: () =>
+      runtime.markChatRecordListNotAuthoritative(),
+    beginPendingChatCreation: (pending) =>
+      runtime.beginPendingChatCreation(pending),
+    clearPendingChatCreation: (chatId) =>
+      runtime.clearPendingChatCreation(chatId),
+    republishRecordsForCurrentUser: () =>
+      runtime.republishRecordsForCurrentUser(),
+    reprojectForViewerChange: () => runtime.reprojectForViewerChange(),
+    discardUnsyncedEdits: () => runtime.discardUnsyncedEdits(),
+    requestFreshSnapshot: () => runtime.requestFreshSnapshot(),
+    retryMigration: () => runtime.retryMigration(),
+    retryWriteCommand: (commandId) => runtime.retryWriteCommand(commandId),
+    discardWriteCommand: (commandId) => runtime.discardWriteCommand(commandId),
+    encodeRootState: () => runtime.encodeRootState(),
+    applyRootUpdate: (update, asLocalEdit) =>
+      runtime.applyRootUpdate(update, asLocalEdit),
+    detachTransport: () => {
+      runtime.detachTransport();
+    },
+    dispose: () => {
+      runtime.dispose();
+    },
+  };
 }
 
 /**
@@ -132,105 +229,19 @@ export function installEpicRuntimeCore(
 
     host.installCore(
       createEpicRuntimeWorkerCore(
-        buildEpicRuntimeCorePorts(
-          {
-            hasAttachmentBytes: (hash) => runtime.hasAttachmentBytes(hash),
-            readAttachmentBytes: (hash, signal) =>
-              runtime.readAttachmentBytes(hash, signal),
-            acquireBodyLease: (artifactId) =>
-              runtime.acquireArtifactBodyLease(artifactId),
-            bodyDocKey: (artifactId) =>
-              runtime.getArtifactBodyDocKey(artifactId),
-            encodeColdState: (docKey) =>
-              runtime.encodeArtifactBodyColdState(docKey),
-            encodeForwardOnly: (docKey) =>
-              runtime.encodeArtifactBodyForwardOnly(docKey),
-            observeBodyDoc: (docKey, onUpdate) =>
-              runtime.observeArtifactBodyDoc(docKey, onUpdate),
-            applyBodyAwareness: (docKey, frame, localClientId) => {
-              runtime.sendArtifactBodyAwareness(docKey, frame, localClientId);
-            },
-            observeBodyAwareness: (docKey, onFrame) =>
-              runtime.observeArtifactBodyAwareness(docKey, onFrame),
-            isBodyPinned: (docKey) => runtime.isArtifactBodyPinned(docKey),
-            encodeBodyPeerAwareness: (docKey) =>
-              runtime.encodeArtifactBodyPeerAwareness(docKey),
-            settleColdState: (docKey, update, expectedDocGuid) =>
-              runtime.settleArtifactBodyColdState(
-                docKey,
-                update,
-                expectedDocGuid,
-              ),
-            sendBodyUpdate: (docKey, update) =>
-              runtime.sendArtifactBodyUpdate(docKey, update),
-            renameArtifact: (artifactId, nextTitle) =>
-              runtime.renameArtifact(artifactId, nextTitle),
-            deleteArtifact: (artifactId) => runtime.deleteArtifact(artifactId),
-            reparentArtifact: (artifactId, newParentId) =>
-              runtime.reparentArtifact(artifactId, newParentId),
-            beginRenameMutation: (nodeId, nextTitle) =>
-              runtime.beginRenameMutation(nodeId, nextTitle),
-            beginEpicTitleMutation: (nextTitle) =>
-              runtime.beginEpicTitleMutation(nextTitle),
-            beginReparentMutation: (nodeId, newParentId) =>
-              runtime.beginReparentMutation(nodeId, newParentId),
-            retirePendingMutation: (requestId, outcome) =>
-              runtime.retirePendingMutation(requestId, outcome),
-            isLatestRenameStamp: (nodeId, requestId) =>
-              runtime.isLatestRenameStamp(nodeId, requestId),
-            enqueueWriteCommand: (intent) =>
-              runtime.enqueueWriteCommand(intent)?.commandId ?? null,
-            readWriteCommandIntent: (intent) => readWriteCommandIntent(intent),
-            applyChatRecords: (records, issuedAtSeq) =>
-              runtime.applyChatRecords(records, issuedAtSeq),
-            applyChatRecordDelta: (delta) =>
-              runtime.applyChatRecordDelta(delta),
-            applyTuiAgentRecords: (records, issuedAtSeq) =>
-              runtime.applyTuiAgentRecords(records, issuedAtSeq),
-            applyTuiAgentRecordDelta: (delta) =>
-              runtime.applyTuiAgentRecordDelta(delta),
-            markChatRecordListAuthoritative: () =>
-              runtime.markChatRecordListAuthoritative(),
-            markChatRecordListNotAuthoritative: () =>
-              runtime.markChatRecordListNotAuthoritative(),
-            beginPendingChatCreation: (pending) =>
-              runtime.beginPendingChatCreation(pending),
-            clearPendingChatCreation: (chatId) =>
-              runtime.clearPendingChatCreation(chatId),
-            republishRecordsForCurrentUser: () =>
-              runtime.republishRecordsForCurrentUser(),
-            reprojectForViewerChange: () => runtime.reprojectForViewerChange(),
-            discardUnsyncedEdits: () => runtime.discardUnsyncedEdits(),
-            requestFreshSnapshot: () => runtime.requestFreshSnapshot(),
-            retryMigration: () => runtime.retryMigration(),
-            retryWriteCommand: (commandId) =>
-              runtime.retryWriteCommand(commandId),
-            discardWriteCommand: (commandId) =>
-              runtime.discardWriteCommand(commandId),
-            encodeRootState: () => runtime.encodeRootState(),
-            applyRootUpdate: (update, asLocalEdit) =>
-              runtime.applyRootUpdate(update, asLocalEdit),
-            detachTransport: () => {
-              runtime.detachTransport();
-            },
-            dispose: () => {
-              runtime.dispose();
-            },
+        buildEpicRuntimeCorePorts(epicRuntimeCorePortSourceOf(runtime), {
+          onDocUpdate: (docKey, update) => {
+            // The return leg: a resident body's updates go to main's live
+            // doc. No origin filter on this side - see `observeBodyDoc`.
+            host.publishBodyDocUpdate(docKey, update);
           },
-          {
-            onDocUpdate: (docKey, update) => {
-              // The return leg: a resident body's updates go to main's live
-              // doc. No origin filter on this side - see `observeBodyDoc`.
-              host.publishBodyDocUpdate(docKey, update);
-            },
-            onAwareness: (docKey, frame) => {
-              // Presence's return leg. The filter that matters here already
-              // ran at the source (`observeBodyAwareness` drops what main
-              // relayed in), so this is a straight forward.
-              host.publishBodyAwareness(docKey, frame);
-            },
+          onAwareness: (docKey, frame) => {
+            // Presence's return leg. The filter that matters here already
+            // ran at the source (`observeBodyAwareness` drops what main
+            // relayed in), so this is a straight forward.
+            host.publishBodyAwareness(docKey, frame);
           },
-        ),
+        }),
       ),
     );
 

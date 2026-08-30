@@ -29,6 +29,8 @@
  */
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
+import type { RuntimeWorkerPort } from "@traycer-clients/shared/replica-runtime/worker/bridge-endpoint";
+import type { EpicReplicaRuntime } from "../runtime/epic-replica-runtime";
 import { createFakeBridgePair } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
 import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
 import { createRecordingStreamClient } from "@traycer-clients/shared/replica-runtime/worker/test-support/recording-stream-client";
@@ -104,6 +106,23 @@ export interface OpenedStoreForTest extends OpenEpicStoreHandle {
    */
   readonly doc: Y.Doc;
   readonly awareness: Awareness;
+  /**
+   * The composed replica runtime itself, and the port the bridge reaches it by.
+   *
+   * For ONE caller: the arm-equality pin, which has to build a SECOND set of
+   * core ports over this same runtime so that the direct call and the bridged
+   * call differ in the bridge and nothing else. Reaching the runtime is the
+   * requirement, not a convenience - a pin that compared two runtimes would be
+   * comparing two of everything.
+   *
+   * Not a general accessor, and the header's "one helper, not a pattern to
+   * copy" applies inside this file too: a suite that reads `runtime` to assert
+   * something the STORE also projects is asserting past the boundary 4e exists
+   * to draw, and should read the store. `doc` and `awareness` above are the
+   * sanctioned reads for seeding.
+   */
+  readonly runtime: EpicReplicaRuntime;
+  readonly workerPort: RuntimeWorkerPort;
 }
 
 export function openStoreForTest(
@@ -256,5 +275,12 @@ export function openStoreForTest(
     get awareness(): Awareness {
       return runtime.awareness;
     },
+    // A plain value, not a getter, and the asymmetry with `doc`/`awareness`
+    // above is the point: those two are REPLACED when the replica is (a viewer
+    // downgrade, a fresh snapshot), which is why they must be re-read. The
+    // composition itself is not - `installEpicRuntimeCore` builds it once per
+    // bootstrap and this harness bootstraps once.
+    runtime,
+    workerPort: worker.port,
   };
 }
