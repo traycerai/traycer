@@ -124,13 +124,14 @@ export async function readEpicAttachmentBytes(
  * leg is supposed to own, and the blob cache never retries the leg that could
  * have succeeded.
  *
- * Two reads today - a synchronous presence check and then the read it guards -
- * because that is the only way to express "do not wait" against a store whose
- * read has no such mode. Once the replica is in the worker they become ONE
- * call: the worker answers `{ bytes: null }` for a hash it does not hold, and
- * the presence predicate stops being a separate thing that can be forgotten.
+ * ONE call, as of the relocation. It was two reads - a synchronous presence
+ * check and then the read it guarded - because that was the only way to
+ * express "do not wait" against a store whose read had no such mode. The
+ * worker now answers `{ bytes: null }` for a hash it does not hold, so the
+ * presence predicate stopped being a separate thing that can be forgotten.
  * That collapse is why both live behind this seam rather than at their call
- * sites.
+ * sites - and it applies to THIS leg only. The waiting leg above still waits;
+ * collapsing that one is the regression this file's header names.
  *
  * **Do not merge this with {@link readEpicAttachmentBytes}.** They look like
  * one function with a flag and they are not: collapsing them is a regression
@@ -143,11 +144,16 @@ export async function readEpicAttachmentBytes(
 export async function readHeldEpicAttachmentBytes(
   handle: OpenEpicStoreHandle,
   hash: string,
-  signal: AbortSignal,
 ): Promise<Uint8Array | null> {
-  const state = handle.store.getState();
-  if (!state.hasAttachmentBytes(hash)) return null;
-  return state.readAttachmentBytes(hash, signal);
+  // ONE call now, exactly as this function's own comment predicted: "the
+  // worker answers `{ bytes: null }` for a hash it does not hold, and the
+  // presence predicate stops being a separate thing that can be forgotten."
+  // The guard moved INTO the worker, where it is a local synchronous read
+  // ahead of a read that would otherwise wait.
+  //
+  // No `signal` either: there is nothing to abort. The waiting is what a
+  // signal bounded, and this leg does not wait.
+  return handle.store.getState().readAttachmentBytes(hash);
 }
 
 function onceOnly(release: () => void): () => void {

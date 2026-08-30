@@ -156,7 +156,7 @@ async function readAttachmentFromEpicDoc(
   // Through the replica-read seam, in its non-waiting variant - the same
   // guarded read this leg always did, now expressed as one contract that
   // survives the replica moving into the runtime worker.
-  const bytes = await readHeldEpicAttachmentBytes(handle, hash, signal);
+  const bytes = await readHeldEpicAttachmentBytes(handle, hash);
   return bytes === null
     ? null
     : { bytes: new Uint8Array(bytes), mediaType: null };
