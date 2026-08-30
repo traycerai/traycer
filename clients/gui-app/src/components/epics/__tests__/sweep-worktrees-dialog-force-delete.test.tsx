@@ -100,6 +100,7 @@ const testState = vi.hoisted(() => {
     taskTitles: new Map<string, string>(),
     sweepingPaths: new Set<string>(),
     deferOutcome: false,
+    deferredOutcome: null as ((result: unknown) => void) | null,
     refresh: vi.fn(() => Promise.resolve(testState.rows)),
   };
 });
@@ -125,7 +126,10 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
     ) => {
       testState.lastVariables = testState.parseSweepVariables(variables);
       testState.mutate(variables);
-      if (testState.deferOutcome) return;
+      if (testState.deferOutcome) {
+        testState.deferredOutcome = options?.onSuccess ?? null;
+        return;
+      }
       options?.onSuccess?.({
         hostId: "host-1",
         removed: testState.removed,
@@ -203,6 +207,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     testState.hostId = "host-1";
     testState.sweepingPaths = new Set();
     testState.deferOutcome = false;
+    testState.deferredOutcome = null;
     testState.refresh.mockReset();
     testState.refresh.mockImplementation(() => Promise.resolve(testState.rows));
     testState.rows = [];
@@ -2041,6 +2046,71 @@ describe("SweepWorktreesDialog ergonomics", () => {
       name: "Sweep worktree feat-wt",
     });
     expect(backOnA.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByTestId("sweep-worktrees-row-outcome")).toBeNull();
+  });
+
+  it("ignores a host A outcome after retargeting the parked session to host B", () => {
+    const path = "/repo/wt";
+    const sharedPathRow = {
+      entry: worktreeEntry({
+        worktreePath: path,
+        branch: "feat-wt",
+        inUse: false,
+      }),
+      tier: "merged" as const,
+      defaultChecked: true,
+      disabled: false,
+      note: null,
+      holders: [],
+      holdersStatus: "none" as const,
+    };
+    testState.hostId = "host-a";
+    testState.rows = [sharedPathRow];
+    testState.deferOutcome = true;
+    const onOpenChange = vi.fn();
+    const view = render(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        taskTitle="Task"
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sweep selected" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(testState.deferredOutcome).not.toBeNull();
+
+    view.rerender(
+      <SweepWorktreesDialog
+        epicIds={null}
+        hostClient={null}
+        taskTitle="Task"
+        onOpenChange={onOpenChange}
+      />,
+    );
+    testState.hostId = "host-b";
+    view.rerender(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        taskTitle="Task"
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    testState.deferredOutcome?.({
+      hostId: "host-a",
+      removed: [],
+      failed: [path],
+      uncertain: [],
+      holdersChanged: [],
+    });
+
+    const onB = screen.getByRole("checkbox", {
+      name: "Sweep worktree feat-wt",
+    });
+    expect(onB.hasAttribute("disabled")).toBe(false);
     expect(screen.queryByTestId("sweep-worktrees-row-outcome")).toBeNull();
   });
 

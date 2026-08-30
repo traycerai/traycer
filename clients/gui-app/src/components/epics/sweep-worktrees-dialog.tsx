@@ -176,6 +176,12 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     ReadonlyMap<string, boolean>
   >(() => new Map());
   const selectionKey = sweepSessionKey(hostId, epicIds);
+  const activeSessionKeyRef = useRef(selectionKey);
+  useEffect(() => {
+    if (selectionKey !== null) {
+      activeSessionKeyRef.current = selectionKey;
+    }
+  }, [selectionKey]);
   const [previousSelectionKey, setPreviousSelectionKey] =
     useState(selectionKey);
   const [previousInUseByPath, setPreviousInUseByPath] = useState<
@@ -259,6 +265,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     rows.map((row) => row.entry),
   );
   const kickoff = (targets: ReadonlyArray<EpicSweepWorktreeRow>): void => {
+    const kickoffSessionKey = selectionKey;
     // A confirmed batch is now represented by the per-row shared mutation
     // state. Park the session on Choose before closing so reopening shows the
     // live rows, rather than a spent confirmation receipt.
@@ -271,6 +278,12 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       mutate: sweepMutation.mutate,
       onClose: () => onOpenChange(false),
       onSweepOutcome: (result) => {
+        if (
+          kickoffSessionKey === null ||
+          activeSessionKeyRef.current !== kickoffSessionKey
+        ) {
+          return;
+        }
         setInventoryChanged(true);
         setTypedSweep("");
         setCheckOverrides((current) =>
