@@ -145,12 +145,21 @@ function seedRootArtifact(targetDoc: Y.Doc, artifactId: string): void {
  * reading its fragment - the same "editor is mounted" stand-in used by
  * `store.test.ts`. The lease is intentionally not released, so the room stays
  * hot for the assertions that follow.
+ *
+ * ASYNC, and the premise is what changed rather than the behaviour. Before the
+ * relocation `acquireArtifactBodyLease` materialized the room and installed the
+ * doc synchronously, so the fragment was readable on the next line. It is now a
+ * `body/materialize` CALL - the store fires it and installs the doc in a `.then`
+ * - so a synchronous read on the next line is a read of a frame still in
+ * flight, and answers `null` for a room that does materialize a microtask
+ * later. `flush()` is the harness's own name for that boundary.
  */
-function leasedFragmentDoc(
+async function leasedFragmentDoc(
   opened: OpenedStoreForTest,
   artifactId: string,
-): Y.Doc {
+): Promise<Y.Doc> {
   opened.store.getState().acquireArtifactBodyLease(artifactId);
+  await opened.flush();
   const fragment = opened.store.getState().getArtifactFragment(artifactId);
   if (fragment === null) throw new Error("expected a materialized fragment");
   const fragmentDoc = fragment.doc;
@@ -273,7 +282,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     useAuthStore.getState().setSignedOut();
   });
 
-  it("a viewer-role snapshot tears down every artifact room and republishes divergence", () => {
+  it("a viewer-role snapshot tears down every artifact room and republishes divergence", async () => {
     const { factory, handle: streamHandle } = fakeFactory();
     handle = openStoreForTest({
       epicId: "epic-viewer-teardown",
@@ -308,7 +317,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       stateVectorBase64(new Y.Doc()),
     );
 
-    const fragmentDoc = leasedFragmentDoc(opened, "art-1");
+    const fragmentDoc = await leasedFragmentDoc(opened, "art-1");
     expect(opened.hotArtifactRoomIdsForTests()).toEqual(["artifact-room-0"]);
     expect(opened.store.getState().isDirty).toBe(false);
 
