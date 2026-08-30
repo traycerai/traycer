@@ -15,7 +15,7 @@ import type {
   ChatRecordRemovalReason,
   ChatRecordSummary,
 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -598,7 +598,7 @@ export interface OpenEpicState {
    * holds an omitted row for one extra pass instead.
    */
   applyTuiAgentRecords: (
-    records: readonly TuiAgentRecordSummaryV11[],
+    records: readonly TuiAgentRecordSummaryV12[],
     issuedAtSeq: number | null,
   ) => void;
   /**
@@ -1024,6 +1024,42 @@ function emitCurrentAwareness(
  *   - Persist only `lastFocusedArtifactId` + `lastFocusedThreadId` to
  *     localStorage under a key scoped to `epicId`
  */
+/**
+ * Whether an incoming terminal-agent row should REPLACE the one held.
+ *
+ * AUTHORITY FIRST, revision second - and the order is the whole point.
+ *
+ * A `cloud` row is a read-only replica of an agent on another machine; a
+ * `registry` (or `doc`) row is the serving host's own. Comparing revisions
+ * first treats the two as interchangeable, and they are not: the host may
+ * legitimately answer with an authoritative row at the SAME revision a stale
+ * replica already carries - it silently drops a stale replica sitting under a
+ * live local row, then serves the local row from its next list - and a
+ * revision-first rule rejects it as "not newer". The GUI then keeps the cloud
+ * copy for good: it is unlaunchable and unforkable, and because the id WAS in
+ * the snapshot, the omission fence cannot remove it either. Nothing short of a
+ * later local mutation that happens to bump the revision would dislodge it.
+ *
+ * So: a local row always beats a replica, a replica never beats a local row,
+ * and `revision` decides only between two rows of the same authority.
+ *
+ * The doc-over-doc waiver rides on that last clause. A doc row has no registry
+ * seq and ships at `revision: 0` on every answer, so "strictly greater" would
+ * reject each refresh and freeze the row at whatever the session first saw.
+ * Two doc reads are the same authority and the later one is newer by
+ * construction, being a fresher read of the same map.
+ */
+function tuiAgentRowSupersedes(
+  incoming: TuiAgentRecordSummaryV12,
+  held: TuiAgentRecordSummaryV12,
+): boolean {
+  const incomingIsLocal = incoming.origin !== "cloud";
+  const heldIsLocal = held.origin !== "cloud";
+  if (incomingIsLocal !== heldIsLocal) return incomingIsLocal;
+  if (incoming.origin === "doc" && held.origin === "doc") return true;
+  return incoming.revision > held.revision;
+}
+
 export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {
@@ -2051,7 +2087,7 @@ export function createOpenEpicStore(
    * to be safe for what the host actually serves.
    */
   let tuiAgentRecords: TerminalAgentsSlice = EMPTY_TERMINAL_AGENTS_SLICE;
-  const tuiAgentRecordRows = new Map<string, TuiAgentRecordSummaryV11>();
+  const tuiAgentRecordRows = new Map<string, TuiAgentRecordSummaryV12>();
   /** See `OpenEpicState.tuiAgentRetractions` - absorbing for the session. */
   const tuiAgentRetractions = new Map<string, ChatRecordRemovalReason>();
   /**
@@ -2562,7 +2598,7 @@ export function createOpenEpicStore(
           // See publishChatRecords: provenance marks are captured at the one
           // seam every terminal-agent record write flows through.
           markRegistryBackedMutations();
-          const visible: TuiAgentRecordSummaryV11[] = [];
+          const visible: TuiAgentRecordSummaryV12[] = [];
           for (const row of tuiAgentRecordRows.values()) {
             if (!isTerminalAgentVisibleToUser(row.ownerUserId, currentUserId)) {
               continue;
@@ -4162,7 +4198,7 @@ export function createOpenEpicStore(
 
           applyTuiAgentRecords: (records, issuedAtSeq) => {
             if (disposed) return;
-            const served = new Map<string, TuiAgentRecordSummaryV11>();
+            const served = new Map<string, TuiAgentRecordSummaryV12>();
             for (const row of records) {
               // A retracted agent never comes back through the poll: the list
               // read is a snapshot of the host's registry and the host applies
@@ -4208,9 +4244,8 @@ export function createOpenEpicStore(
               // waived is only the comparison between two rows that both carry
               // a placeholder, where the later answer is newer by construction
               // because it is a fresher read of the same map.
-              if (held !== undefined) {
-                const bothDocResident = held.docResident && row.docResident;
-                if (!bothDocResident && row.revision <= held.revision) continue;
+              if (held !== undefined && !tuiAgentRowSupersedes(row, held)) {
+                continue;
               }
               tuiAgentRecordRows.set(id, row);
               tuiAgentIngestSeq += 1;
@@ -4249,23 +4284,31 @@ export function createOpenEpicStore(
             // the row here.
             if (tuiAgentRetractions.has(record.tuiAgentId)) return;
             const held = tuiAgentRecordRows.get(record.tuiAgentId);
-            // The staleness test: `revision` is per-record monotonic and the
-            // only ordering fact on a row, so a delta that does not strictly
-            // exceed what is held is a replay, a reorder or a duplicate.
-            if (held !== undefined && record.revision <= held.revision) return;
-            // The delta plane is REGISTRY-ONLY by construction - a doc-resident
-            // agent has no registry row, so it can never produce a delta. So
-            // `false` here is a fact about the source, not a filled-in default.
+            // The staleness test, AUTHORITY FIRST - the same rule the snapshot
+            // path applies, and shared with it so the poll and the push can
+            // never disagree about which of two rows wins. `revision` alone
+            // would let a stale cloud replica hold its ground against the
+            // authoritative local row at an equal revision; see
+            // `tuiAgentRowSupersedes`.
+            if (held !== undefined && !tuiAgentRowSupersedes(record, held)) {
+              return;
+            }
+            // Stored VERBATIM, where this used to force `docResident: false`.
             //
-            // It is also what makes ADOPTION converge through the staleness
-            // test above: `epic.listTuiAgents@1.1` serves a frozen doc row at
-            // `revision: 0`, so the first real delta after that agent's binding
-            // host upgrades and the sweep imports it strictly exceeds 0 and
-            // replaces the frozen copy in place.
-            tuiAgentRecordRows.set(record.tuiAgentId, {
-              ...record,
-              docResident: false,
-            });
+            // That fill was a fact about the source while the delta plane was
+            // registry-only: a doc-resident agent has no registry row, so it
+            // could never produce a delta. It has two sources from `@1.2` -
+            // the host's own registry and its record inbox's cross-host
+            // replicas - and the row now STATES which, so re-deriving it here
+            // would be overwriting an answer with a guess (and the narrow
+            // replica arm has no `docResident` key to write anyway).
+            //
+            // The property that made the fill load-bearing is unchanged and
+            // still carried by the row itself: `epic.listTuiAgents` serves a
+            // frozen doc row at `revision: 0`, so the first real delta after
+            // that agent's binding host upgrades and the sweep imports it
+            // strictly exceeds 0 and replaces the frozen copy in place.
+            tuiAgentRecordRows.set(record.tuiAgentId, record);
             // Past the fence the last snapshot left: an `epic.listTuiAgents`
             // answer already in flight cannot carry this row, so its omission
             // must not delete it. See `tuiAgentRowSeq`.

@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { EpicLeftPanelHost } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { EpicLeftPanelRail } from "@/components/epic-canvas/sidebar/epic-sidebar-rail";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
@@ -148,6 +149,15 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 
 const EPIC_ID = "epic-sidebar-test";
 const TAB_ID = "epic-sidebar-tab";
+
+// One client for the file's lifetime - a fresh one per render strands
+// observers on the old one.
+const testQueryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: false, gcTime: 0 },
+    mutations: { retry: false },
+  },
+});
 const HOST_ID = "epic-sidebar-host";
 
 function resetLeftPanelStore(): void {
@@ -770,8 +780,10 @@ describe("Browsers panel registration", () => {
   it("activates the registered browser body and keeps sibling panel mechanics", () => {
     useLeftPanelStore.getState().setActivePanelId(TAB_ID, "terminals");
 
+    // The browsers body reaches Query through its add action, so this panel
+    // cannot mount without a client - unlike the siblings it is compared to.
     render(
-      <>
+      <QueryClientProvider client={testQueryClient}>
         <EpicLeftPanelRail
           epicId={EPIC_ID}
           tabId={TAB_ID}
@@ -780,7 +792,7 @@ describe("Browsers panel registration", () => {
         <SidebarProvider>
           <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
         </SidebarProvider>
-      </>,
+      </QueryClientProvider>,
     );
 
     const rail = screen.getByTestId("epic-sidebar-rail");

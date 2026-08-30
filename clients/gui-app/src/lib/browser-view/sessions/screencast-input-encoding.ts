@@ -49,7 +49,12 @@ export interface ScreencastFrameSize {
   readonly height: number;
 }
 
-interface PointerLike {
+/**
+ * The pointer shape the encoder reads. Named and exported because a translated
+ * gesture - a finger drag re-expressed as a wheel - has no DOM event that
+ * carries the right `button` / `buttons`, and must supply them itself.
+ */
+export interface PointerLike {
   readonly clientX: number;
   readonly clientY: number;
   readonly button: number;

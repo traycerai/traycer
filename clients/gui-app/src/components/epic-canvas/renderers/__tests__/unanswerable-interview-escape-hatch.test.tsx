@@ -138,6 +138,7 @@ function props(
       fallbackToGlobalMentionRoots: true,
       currentEpicId: "epic-1",
       onSubmitMessage: () => false,
+      onSideChat: () => false,
       onSettingsChange: null,
       workspaceControls: null,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,

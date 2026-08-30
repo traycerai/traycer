@@ -826,11 +826,19 @@ function buildChatMentionEntry(
   };
 }
 
+/**
+ * `null` for an agent this build cannot address: a cross-host replica whose
+ * cloud row predates `runSettingsSummary` carries no harness, and a mention
+ * entry's whole purpose is to route a message to one. It stays in the roster
+ * (the protocol contract keeps it listed) and simply is not offered here.
+ */
 function buildTerminalAgentMentionEntry(
   agent: TuiAgentProjection,
   epicId: string,
   epicTitle: string,
-): EpicTerminalAgentMentionEntry {
+): EpicTerminalAgentMentionEntry | null {
+  const harnessId = agent.harnessId;
+  if (harnessId === null) return null;
   return {
     kind: "epic-terminal-agent",
     id: `terminal-agent:${epicId}:${agent.id}`,
@@ -838,7 +846,7 @@ function buildTerminalAgentMentionEntry(
     epicId,
     epicTitle,
     terminalAgentId: agent.id,
-    harnessId: agent.harnessId,
+    harnessId,
     // Same interface-agnostic fallback as the chat arm. Harness identity stays
     // secondary metadata rather than becoming the Agent's title fallback.
     label: displayTitle(agent.title, "agent"),
@@ -889,7 +897,8 @@ export function epicAgentMentionEntriesFromEpic(
     if (!Object.hasOwn(tuiAgents.byId, id)) return [];
     const agent = tuiAgents.byId[id];
     if (agent.harnessId === "cursor") return [];
-    return [buildTerminalAgentMentionEntry(agent, epicId, epicTitle)];
+    const entry = buildTerminalAgentMentionEntry(agent, epicId, epicTitle);
+    return entry === null ? [] : [entry];
   });
   const entries: ReadonlyArray<EpicAgentMentionEntry> = [
     ...chatEntries,

@@ -7,6 +7,7 @@ import {
   hostUnavailability,
   type HostUnavailability,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { HostKind } from "@traycer-clients/shared/host-client/host-directory";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { isUnknownHost } from "@/lib/host/constants";
@@ -41,6 +42,33 @@ export type HostReachabilityStatus =
  */
 export type HostReachabilityBasis = "directory" | "starting-deadline";
 
+/**
+ * WHOSE MACHINE the bound host is - this one, or another of the user's.
+ *
+ * `unknown` is a real third answer and not a placeholder: before the directory
+ * resolves, for the unknown-host placeholder, and for a bound host the
+ * directory has no entry for at all, there is nothing that says which.
+ *
+ * It exists because "cannot reach this host" means two different things to a
+ * person depending on the answer, and one surface has to persist a claim about
+ * it. A LOCAL host that went unreachable took its PTYs with it on the machine
+ * the reader is sitting at. A REMOTE one is somebody's closed laptop - the
+ * reader did not close anything, and telling them a terminal closed is a claim
+ * about a machine this client cannot observe.
+ *
+ * That distinction was academic while terminal agents were doc-shared and
+ * rarely opened cross-host. The TUI roster's phase 2 makes it routine: every
+ * agent on every other machine the user owns is now in the tree, and most of
+ * those machines are asleep most of the time.
+ *
+ * The directory's own `HostKind` is reused rather than narrowed to the two
+ * values the one consumer branches on. Narrowing would mean mapping `mock`
+ * onto `local` here, which is a claim about a fixture host that nothing has
+ * checked - and a value invented in this file could drift from the directory's
+ * meaning of the same word. Consumers ask for the kind they care about.
+ */
+export type HostReachabilityHostKind = HostKind | "unknown";
+
 export interface HostReachability {
   readonly status: HostReachabilityStatus;
   readonly hostLabel: string;
@@ -52,6 +80,8 @@ export interface HostReachability {
   readonly unavailability: HostUnavailability | null;
   /** How strong the evidence behind `status` is. See `HostReachabilityBasis`. */
   readonly basis: HostReachabilityBasis;
+  /** Whose machine the bound host is. See `HostReachabilityHostKind`. */
+  readonly hostKind: HostReachabilityHostKind;
 }
 
 /**
@@ -102,6 +132,7 @@ export function useHostReachability(hostId: string): HostReachability {
           hostLabel: hostId,
           unavailability: null,
           basis: "directory",
+          hostKind: "unknown",
         };
       }
       return {
@@ -109,6 +140,7 @@ export function useHostReachability(hostId: string): HostReachability {
         hostLabel: hostId,
         unavailability: null,
         basis: "directory",
+        hostKind: "unknown",
       };
     }
     if (isUnknownHost(hostId)) {
@@ -117,6 +149,7 @@ export function useHostReachability(hostId: string): HostReachability {
         hostLabel: hostId,
         unavailability: null,
         basis: "directory",
+        hostKind: "unknown",
       };
     }
     // An EMPTY directory means this machine's own host has not published
@@ -135,15 +168,21 @@ export function useHostReachability(hostId: string): HostReachability {
         hostLabel: hostId,
         unavailability: null,
         basis: "directory",
+        hostKind: "unknown",
       };
     }
     const entry = list.data.find((e) => e.hostId === hostId);
     if (entry === undefined) {
+      // A bound host the directory does not list at all: a machine that left
+      // the account, or a past identity's. `unknown` rather than `remote` -
+      // there is no entry to read a kind off, and inferring one from "it is
+      // not the local host" would be a guess dressed as a fact.
       return {
         status: "unreachable",
         hostLabel: hostId,
         unavailability: "offline",
         basis: "directory",
+        hostKind: "unknown",
       };
     }
     // The same "not published yet" state as the empty-directory arm above,
@@ -174,6 +213,7 @@ export function useHostReachability(hostId: string): HostReachability {
         hostLabel: entry.label.length > 0 ? entry.label : hostId,
         unavailability: null,
         basis: "directory",
+        hostKind: "local",
       };
     }
     // Remote entries answer from their directory status, same as local ones.
@@ -196,6 +236,7 @@ export function useHostReachability(hostId: string): HostReachability {
     // notification. So it gates on the REASON, and only the reason that is
     // actually evidence about the host.
     const hostLabel = entry.label.length > 0 ? entry.label : hostId;
+    const hostKind = entry.kind;
     const unavailability = hostUnavailability(entry);
     if (unavailability === null) {
       return {
@@ -203,6 +244,7 @@ export function useHostReachability(hostId: string): HostReachability {
         hostLabel,
         unavailability: null,
         basis: "directory",
+        hostKind,
       };
     }
     // A live E2E session is firsthand proof the host is up, and it outranks a
@@ -215,6 +257,7 @@ export function useHostReachability(hostId: string): HostReachability {
         hostLabel,
         unavailability: null,
         basis: "directory",
+        hostKind,
       };
     }
     if (unavailability === "indeterminate") {
@@ -229,6 +272,7 @@ export function useHostReachability(hostId: string): HostReachability {
         hostLabel,
         unavailability: null,
         basis: "directory",
+        hostKind,
       };
     }
     // `offline` and `plan-restricted` both mean this client cannot open a
@@ -240,6 +284,7 @@ export function useHostReachability(hostId: string): HostReachability {
       hostLabel,
       unavailability,
       basis: "directory",
+      hostKind,
     };
   }, [hostId, list.data, list.fetchStatus, hasReadySession]);
 
@@ -280,6 +325,9 @@ export function useHostReachability(hostId: string): HostReachability {
       // differently to a person and name different remedies.
       unavailability: "offline",
       basis: "starting-deadline",
+      // Carried through unchanged: whose machine this is does not change
+      // because our patience ran out.
+      hostKind: directoryVerdict.hostKind,
     };
   }, [directoryVerdict, startingBudgetElapsed]);
 }

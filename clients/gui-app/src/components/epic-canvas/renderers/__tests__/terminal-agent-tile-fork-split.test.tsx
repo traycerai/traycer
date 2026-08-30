@@ -112,6 +112,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     // An ordinary registry-backed agent - this suite exercises the tile's
     // fork-split affordance, not doc residency.
     docResident: false,
+    origin: "registry",
     harnessId: "claude",
     title: "Claude agent",
     parentId: null,

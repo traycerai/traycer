@@ -387,6 +387,7 @@ describe("useSwitcherRename", () => {
           terminalShellArgs: null,
           revision: 1,
           docResident: false,
+          origin: "registry",
         },
       ],
       null,

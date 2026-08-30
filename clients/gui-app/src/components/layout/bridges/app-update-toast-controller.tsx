@@ -34,6 +34,28 @@ const APP_UPDATE_REPORT_CONTEXT = createReportIssueContext({
   source: "App update",
 });
 
+interface DownloadProgressToastState {
+  dismissed: boolean;
+  active: boolean;
+}
+
+function prepareDownloadProgressToast(
+  status: DesktopAppUpdateSnapshot["status"],
+  state: DownloadProgressToastState,
+): boolean {
+  if (status !== "downloading") {
+    // A terminal or reset state ends the dismissal scope. Mark the progress
+    // toast inactive before replacing it because Sonner also invokes
+    // `onDismiss` for programmatic removal and replacement.
+    state.active = false;
+    state.dismissed = false;
+    return true;
+  }
+  if (state.dismissed) return false;
+  state.active = true;
+  return true;
+}
+
 export function AppUpdateToastController(): null {
   const { bridge, snapshot } = useDesktopAppUpdates();
   const openInstallGuidance = useDesktopDialogStore(
@@ -82,6 +104,10 @@ export function AppUpdateToastController(): null {
     undefined,
   );
   const mountedAtMsRef = useRef<number | null>(null);
+  const downloadProgressToastStateRef = useRef<DownloadProgressToastState>({
+    dismissed: false,
+    active: false,
+  });
 
   useEffect(() => {
     mountedAtMsRef.current ??= Date.now();
@@ -90,6 +116,8 @@ export function AppUpdateToastController(): null {
       bridgeRef.current = bridge;
       handledSequenceRef.current = 0;
       handledReportCapabilityRef.current = null;
+      downloadProgressToastStateRef.current.dismissed = false;
+      downloadProgressToastStateRef.current.active = false;
       if (!isInitialBridge) {
         mountedAtMsRef.current = Date.now();
       }
@@ -138,34 +166,44 @@ export function AppUpdateToastController(): null {
       return;
     }
 
-    showAppUpdateToast(snapshot, {
-      onDownload: () => {
-        trackUpdateDownloadStarted("direct_ui");
-        void bridge.downloadUpdate();
+    showPreparedAppUpdateToast(
+      snapshot,
+      {
+        onDownload: () => {
+          trackUpdateDownloadStarted("direct_ui");
+          void bridge.downloadUpdate();
+        },
+        // "Restart" installs straight away UNLESS some epic holds work that can
+        // never sync. The old comment here read "the click is the confirmation,
+        // and the host keeps running agents across the app restart" - both
+        // clauses are still true and neither covers this: the click confirms a
+        // RESTART, not the discarding of editor work the user was never told
+        // about, and "agents keep running" is a promise about agents, not about a
+        // retained `Y.Doc` with no transport for the host to keep anything alive
+        // through.
+        onRestart: () => {
+          trackUpdateRestartRequested("direct_ui");
+          void requestAppUpdateInstall(bridge);
+        },
+        onViewInstructions: () => {
+          Analytics.getInstance().track(
+            AnalyticsEvent.UpdateInstallGuidanceOpened,
+            { source: "direct_ui" },
+          );
+          openInstallGuidance();
+        },
+        onReportIssue: reportIssueAvailable
+          ? () => openReportIssueWithContext(APP_UPDATE_REPORT_CONTEXT)
+          : null,
+        onDownloadProgressDismiss: () => {
+          const state = downloadProgressToastStateRef.current;
+          if (!state.active) return;
+          state.dismissed = true;
+          state.active = false;
+        },
       },
-      // "Restart" installs straight away UNLESS some epic holds work that can
-      // never sync. The old comment here read "the click is the confirmation,
-      // and the host keeps running agents across the app restart" - both
-      // clauses are still true and neither covers this: the click confirms a
-      // RESTART, not the discarding of editor work the user was never told
-      // about, and "agents keep running" is a promise about agents, not about a
-      // retained `Y.Doc` with no transport for the host to keep anything alive
-      // through.
-      onRestart: () => {
-        trackUpdateRestartRequested("direct_ui");
-        void requestAppUpdateInstall(bridge);
-      },
-      onViewInstructions: () => {
-        Analytics.getInstance().track(
-          AnalyticsEvent.UpdateInstallGuidanceOpened,
-          { source: "direct_ui" },
-        );
-        openInstallGuidance();
-      },
-      onReportIssue: reportIssueAvailable
-        ? () => openReportIssueWithContext(APP_UPDATE_REPORT_CONTEXT)
-        : null,
-    });
+      downloadProgressToastStateRef.current,
+    );
   }, [
     bridge,
     snapshot,
@@ -183,6 +221,18 @@ interface AppUpdateToastActions {
   readonly onRestart: () => void;
   readonly onViewInstructions: () => void;
   readonly onReportIssue: (() => void) | null;
+  readonly onDownloadProgressDismiss: () => void;
+}
+
+function showPreparedAppUpdateToast(
+  snapshot: DesktopAppUpdateSnapshot,
+  actions: AppUpdateToastActions,
+  downloadProgressState: DownloadProgressToastState,
+): void {
+  if (!prepareDownloadProgressToast(snapshot.status, downloadProgressState)) {
+    return;
+  }
+  showAppUpdateToast(snapshot, actions);
 }
 
 function showAppUpdateToast(
@@ -240,6 +290,7 @@ function showAppUpdateToast(
             : `${snapshot.downloadProgress}% complete`,
         duration: Infinity,
         cancel: null,
+        onDismiss: actions.onDownloadProgressDismiss,
       });
       return;
     case "ready":
