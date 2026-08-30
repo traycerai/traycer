@@ -1,4 +1,8 @@
 import type { HostActivationState } from "./host-state";
+import type {
+  HostUpdateAttemptContinuation,
+  HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
 
 // Type surface for `HostController` (Host Update Layer Redesign Tech Plan,
 // "Desktop main: HostController" > "State model" / "Canonical status").
@@ -75,8 +79,30 @@ export interface DownloadLaneStatus {
   readonly lastError: string | null;
 }
 
+/**
+ * Mirror of `@traycer-clients/shared`'s `LocalAttemptFacts`.
+ *
+ * This file already re-declares `HostControllerStatus` structurally rather than
+ * importing it, and this rides that existing shape. The duplication is
+ * pre-existing and out of Ticket 07's scope; noting it so the next reader knows
+ * BOTH declarations must move together, and that the compile is what catches a
+ * one-sided edit.
+ */
+export interface LocalAttemptFacts {
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly sequence: number;
+  readonly targetVersion: string;
+  readonly phase: HostUpdateAttemptPhase;
+  // `HostUpdateAttemptContinuation` already includes `null`.
+  readonly continuation: HostUpdateAttemptContinuation;
+  readonly updatedAt: string;
+}
+
 // Two independent lanes, per the Tech Plan's canonical status shape.
 export interface HostControllerStatus {
+  /** Durable attempt facts for the host-down window (Ticket 07 §5.2.7). */
+  readonly localAttempt: LocalAttemptFacts | null;
   readonly download: DownloadLaneStatus | null;
   readonly mutation: MutationLaneStatus | null;
   readonly installedVersion: string | null;

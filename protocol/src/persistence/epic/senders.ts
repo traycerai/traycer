@@ -548,60 +548,17 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
 
 // Wire-freeze copy of the LIVE anchor union minus the Reasonix variant, bound
-// to `chat.subscribe@1.6`. `1.0–1.5` take `chatSessionAnchorSchemaPreTurnTail`
-// below, which predates Reasonix for a different reason; this copy keeps every
-// live anchor field (including the Claude `turnTailUuid`) and drops only the
-// discriminant a released `1.6` client cannot decode.
+// to every released line (`chat.subscribe@1.0–1.6`). It keeps every live
+// anchor field (including the Claude `turnTailUuid` - the released baseline
+// proves all of those minors shipped it) and drops only the discriminant a
+// released client cannot decode. A separate "pre-turnTailUuid" copy used to
+// serve `1.0–1.5` on the belief the field postdated them; the
+// released-line-narrowing test showed that transcription was a retroactive
+// narrowing of what actually shipped, and it was removed.
 export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
   "harnessId",
   [
     claudeChatSessionAnchorSchema,
-    codexChatSessionAnchorSchema,
-    openCodeChatSessionAnchorSchema,
-    cursorChatSessionAnchorSchema,
-    traycerChatSessionAnchorSchema,
-    openRouterChatSessionAnchorSchema,
-    grokChatSessionAnchorSchema,
-    qwenChatSessionAnchorSchema,
-    kiroChatSessionAnchorSchema,
-    droidChatSessionAnchorSchema,
-    kimiChatSessionAnchorSchema,
-    copilotChatSessionAnchorSchema,
-    kilocodeChatSessionAnchorSchema,
-    ampChatSessionAnchorSchema,
-    devinChatSessionAnchorSchema,
-    piChatSessionAnchorSchema,
-    hermesChatSessionAnchorSchema,
-    ompChatSessionAnchorSchema,
-    huggingFaceChatSessionAnchorSchema,
-  ],
-);
-
-// ── Wire-freeze variant (pre-turnTailUuid) ──────────────────────────────────
-// Hand-frozen copy of the claude anchor from before `turnTailUuid` existed.
-// Bound (via `userMessageSchemaPreTurnTail` -> `messageSchemaPreImage`) to the
-// released `chat.subscribe@1.4`/`@1.5` snapshot trees, so those lines can never
-// observe the field. It also backed a `1.6` freeze until the release collapsed
-// that unreleased minor with `1.7`; `1.6` binds the live schemas now.
-// Field-for-field hand copy, NOT `.omit()`, so a future anchor field cannot
-// silently leak onto the frozen lines.
-export const claudeChatSessionAnchorSchemaPreTurnTail = z.object({
-  harnessId: z.literal("claude"),
-  hostId: z.string(),
-  sessionId: z.string(),
-  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
-  claudeMessageUuid: z.string(),
-  createdAt: z.number(),
-  coveredUntilMessageId: z.string().nullable().default(null),
-  ...profileSnapshotFields,
-});
-
-// Non-claude variants reuse their live shapes: the pre-turn-tail freeze point
-// only concerns the claude anchor.
-export const chatSessionAnchorSchemaPreTurnTail = z.discriminatedUnion(
-  "harnessId",
-  [
-    claudeChatSessionAnchorSchemaPreTurnTail,
     codexChatSessionAnchorSchema,
     openCodeChatSessionAnchorSchema,
     cursorChatSessionAnchorSchema,

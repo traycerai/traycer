@@ -1,5 +1,6 @@
 import { type Transition } from "motion/react";
 import * as m from "motion/react-m";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { displayTitle } from "@/lib/display-title";
 import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
 
@@ -18,6 +19,12 @@ interface HeaderTabDragOverlayProps {
 
 export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
   const { tab } = props;
+  // While a merge target is highlighted the overlay ghosts: the highlight sits
+  // on the approach half of the target tab, which is exactly where this
+  // overlay is - opaque, it would cover the one signal the gesture shows.
+  const mergeTargeted = useEpicDndStore(
+    (state) => state.topLevelStripPairPreview !== null,
+  );
   // Epic tabs can carry an empty name; render through `displayTitle`. Render
   // only - never mutate the tab.
   const displayName =
@@ -32,7 +39,7 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
       // No entry scale/offset: the dragged tab must be the SAME object that was
       // under the pointer a frame ago, not a chip that animates into being.
       initial={false}
-      animate={{ opacity: 1 }}
+      animate={{ opacity: mergeTargeted ? 0.45 : 1 }}
       transition={HEADER_TAB_OVERLAY_TRANSITION}
       data-browser-overlay="drag-overlay"
       style={props.width === null ? undefined : { width: props.width }}

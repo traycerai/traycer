@@ -1,5 +1,8 @@
 import { app } from "electron";
 import { autoUpdater } from "electron-updater";
+// Type-only: erased at compile time, so it is unaffected by the unit suite's
+// `electron-updater` package-root mock (which exports `autoUpdater` alone).
+import type { VerifyUpdateCodeSignature } from "electron-updater";
 import { execFileSync } from "node:child_process";
 import { access } from "node:fs/promises";
 import { release as osRelease } from "node:os";
@@ -127,6 +130,12 @@ const UPDATE_ERROR_SERVICE_MESSAGE =
   "Traycer couldn't reach the update service right now. Please try again in a little while.";
 const UPDATE_ERROR_DOWNLOAD_MESSAGE =
   "Traycer couldn't download and install the latest update. Please try again in a little while.";
+// The download itself succeeded and its checksum matched; what failed is the
+// authenticity check on the downloaded installer. "Try again" is the wrong
+// advice - a retry re-downloads bytes that were never the problem - and the
+// artifact to distrust is the UPDATE, not the copy already installed.
+const UPDATE_ERROR_SIGNATURE_MESSAGE =
+  "Traycer couldn't verify this update and did not install it. Please download Traycer again from traycer.ai.";
 const UPDATE_ERROR_GENERIC_MESSAGE =
   "Traycer ran into a problem while updating. Please try again in a little while.";
 // Linux deb/rpm only: a live install attempt hit an escalation failure
@@ -298,6 +307,83 @@ export async function installAutoUpdater(
   }
 }
 
+/**
+ * Windows only: an update whose signature check could not RUN must not be
+ * thrown away, but one that genuinely FAILED still must be.
+ *
+ * `NsisUpdater.verifySignature` settles five different ways, and only one of
+ * the rejecting ones means "the verifier itself broke":
+ *
+ * | branch                                          | settles                | meaning                |
+ * | ----------------------------------------------- | ---------------------- | ---------------------- |
+ * | publisher mismatch, or `Status !== 0`           | `resolve(<reason>)`    | genuine mismatch       |
+ * | Windows 6.x, or the `ConvertTo-Json` probe threw | `resolve(null)`        | can't run - upstream already proceeds |
+ * | `execFile` failed and the probe passed          | `reject(execFile err)` | can't run - **ours**   |
+ * | `LiteralPath` !== the file we downloaded        | `reject(new Error)`    | ANTI-SUBSTITUTION check |
+ * | exit 0 but stderr non-empty                     | `reject(new Error)`    | upstream's deliberate fail-closed |
+ *
+ * So a blanket `catch` would also swallow the verify-one-file/install-another
+ * check and upstream's fail-closed branch - downgrading two security controls
+ * to a log line. Only the third row is ours to tolerate.
+ *
+ * The discriminator is structural, never textual: Node stamps `cmd` onto every
+ * error `execFile` raises - a timeout kill and a non-zero exit alike, which are
+ * exactly the two modes seen in the field - while the two rejections
+ * electron-updater mints by hand carry no such property. Matching on message
+ * text instead would quietly stop working the next time upstream rewords one.
+ */
+export function tolerateUnrunnableSignatureCheck(
+  base: VerifyUpdateCodeSignature,
+): VerifyUpdateCodeSignature {
+  return async (publisherNames, filePath) => {
+    try {
+      return await base(publisherNames, filePath);
+    } catch (err) {
+      if (!isChildProcessFailure(err)) {
+        throw err;
+      }
+      log.warn(
+        "[updater] code-signature verification could not run; installing the downloaded update anyway",
+        err,
+      );
+      return null;
+    }
+  };
+}
+
+function isChildProcessFailure(error: unknown): boolean {
+  return (
+    error instanceof Error && typeof Reflect.get(error, "cmd") === "string"
+  );
+}
+
+// The `verifyUpdateCodeSignature` accessor exists only on `NsisUpdater`. We
+// feature-detect rather than `instanceof NsisUpdater`, because importing that
+// class as a VALUE would resolve to the unit suite's `electron-updater`
+// package-root mock (which exports `autoUpdater` alone) and make every test
+// throw on `instanceof undefined`.
+interface CodeSignatureVerifyingUpdater {
+  verifyUpdateCodeSignature: VerifyUpdateCodeSignature;
+}
+
+function hasCodeSignatureVerifier(
+  candidate: object,
+): candidate is CodeSignatureVerifyingUpdater {
+  return (
+    typeof Reflect.get(candidate, "verifyUpdateCodeSignature") === "function"
+  );
+}
+
+function installWindowsSignatureTolerance(): void {
+  if (process.platform !== "win32" || !hasCodeSignatureVerifier(autoUpdater)) {
+    return;
+  }
+  const nsisUpdater: CodeSignatureVerifyingUpdater = autoUpdater;
+  nsisUpdater.verifyUpdateCodeSignature = tolerateUnrunnableSignatureCheck(
+    nsisUpdater.verifyUpdateCodeSignature,
+  );
+}
+
 // Applies the persisted channel, configures the update feed, and attaches every
 // electron-updater event listener. Extracted so `installAutoUpdater` can wrap it
 // in a single initialization boundary that always settles the readiness barrier
@@ -331,6 +417,10 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   // update" click, where a failure is guaranteed to surface visibly (see
   // `handleUpdaterError`'s `installingUpdate` branch).
   autoUpdater.autoInstallOnAppQuit = linuxPackageType === null;
+  // Windows: keep a completed, sha512-verified download from being discarded
+  // when the Authenticode check can't execute (its PowerShell call carries a
+  // hardcoded 20s timeout that a full ~138MB installer hash routinely exceeds).
+  installWindowsSignatureTolerance();
   // electron-updater auto-enables prereleases when the running build is an RC,
   // and then selects the newest prerelease it can see - across release lines,
   // and across the `host-v*` / `cli-v*` tags this repository also publishes.
@@ -609,6 +699,18 @@ export async function checkForUpdatesNow(
     // THE MODE decides whether the namespaced selector runs, not the flag it
     // derived: `allowPrerelease` is now an effect of the mode, and reading the
     // effect back to re-decide the cause is how the two drift.
+    //
+    // Stable deliberately does NOT run discovery, and is safe without it only
+    // because of an invariant that lives in the release workflows rather than
+    // here: electron-updater's stable path resolves this repository's
+    // `/releases/latest`, and although the repo also publishes `host-v*` and
+    // `cli-v*` stable tags, both are created with `--latest=false`
+    // (`release-host.yml`: "host version releases must never become the
+    // latest"; same in `release-cli.yml`), while only a stable desktop publish
+    // passes `--latest`. So `/releases/latest` can only ever be a `desktop-v*`
+    // stable release. If that ever changes, a host-only release becomes the
+    // latest, its `latest.yml` does not exist, and EVERY stable check starts
+    // failing - at which point stable needs the selector too.
     if (modeAllowsPrerelease(activeChannelMode)) {
       const feed = await resolveDesktopReleaseFeed(activeChannelMode);
       // Discovery is async: if the channel changed while it ran, reject this
@@ -1475,6 +1577,23 @@ function invalidPrivateConfig(): boolean {
   );
 }
 
+/**
+ * The stable feed: electron-updater's own GitHub provider, which resolves the
+ * repository's `/releases/latest`.
+ *
+ * That is only correct because of an invariant enforced OUTSIDE this file. The
+ * repository publishes `host-v*` and `cli-v*` releases beside `desktop-v*`, and
+ * GitHub would by default hand `/releases/latest` to whichever of them is the
+ * newest non-prerelease - a host-only release such as `host-v1.1.11` (which has
+ * no `desktop-v1.1.11` counterpart) would then win it, and every stable check
+ * would fail on its absent `latest.yml`. It cannot, because both other release
+ * workflows publish with `--latest=false` ("host version releases must never
+ * become the latest") while only a stable desktop publish passes `--latest`.
+ *
+ * If that ever changes, stable must move to `resolveDesktopReleaseFeed` like
+ * the prerelease modes already have - the namespaced selector is the only
+ * in-process defence.
+ */
 function configureStableGitHubUpdateFeed(): void {
   const coordinate = resolveUpdateRepo();
   const token = PRIVATE_UPDATE_TOKEN.trim();
@@ -2023,13 +2142,22 @@ function formatUserVisibleUpdateError(rawMessage: string): string {
   ) {
     return UPDATE_BLOCKED_LOCATION_REASON;
   }
+  // BEFORE install, and deliberately the most specific set: every phrase below
+  // also contains `signature` or `not signed`, both of which INSTALL matches -
+  // so the reverse order would make this bucket unreachable.
+  if (includesAny(message, SIGNATURE_ERROR_HINTS)) {
+    return UPDATE_ERROR_SIGNATURE_MESSAGE;
+  }
   if (includesAny(message, CONNECTIVITY_ERROR_HINTS)) {
     return UPDATE_ERROR_OFFLINE_MESSAGE;
   }
   if (includesAny(message, INSTALL_ERROR_HINTS)) {
     return UPDATE_ERROR_DOWNLOAD_MESSAGE;
   }
-  if (includesAny(message, SERVICE_ERROR_HINTS)) {
+  if (
+    includesAny(message, SERVICE_ERROR_HINTS) ||
+    includesHttpStatusCode(message)
+  ) {
     return UPDATE_ERROR_SERVICE_MESSAGE;
   }
   return UPDATE_ERROR_GENERIC_MESSAGE;
@@ -2037,6 +2165,17 @@ function formatUserVisibleUpdateError(rawMessage: string): string {
 
 function includesAny(message: string, hints: readonly string[]): boolean {
   return hints.some((hint) => message.includes(hint));
+}
+
+// A bare `"500"` hint is an unanchored substring match, so it also fires inside
+// `chcp 65001` - which appears in every Windows signature-verifier error - and
+// `"404"` fires inside any longer id ending in those digits. Word boundaries
+// pin each code to a standalone number: `\b500\b` does NOT match `65001`,
+// because the digits either side of it are word characters.
+const SERVICE_HTTP_STATUS_PATTERN = /\b(?:401|403|404|500|502|503|504)\b/;
+
+function includesHttpStatusCode(message: string): boolean {
+  return SERVICE_HTTP_STATUS_PATTERN.test(message);
 }
 
 // macOS Squirrel.Mac refuses to apply an update when the running app sits on a
@@ -2079,6 +2218,26 @@ const CONNECTIVITY_ERROR_HINTS: readonly string[] = [
   "offline",
 ];
 
+// The downloaded installer is not authentic, or its authenticity could not be
+// established for a reason that is NOT an infrastructure failure. Exactly three
+// texts reach here, all Windows, and none of them mentions a checksum - so a
+// `sha512` mismatch still lands in the install bucket where it belongs:
+//   1. `New version X is not signed by the application owner: …`
+//      (`ERR_UPDATER_INVALID_SIGNATURE`) - the publisher genuinely mismatched.
+//   2. `LiteralPath of A is different than B` - upstream's verify-one-file /
+//      install-another check; rethrown by `tolerateUnrunnableSignatureCheck`.
+//   3. `… Failing signature validation due to unknown stderr.` - upstream's
+//      deliberate fail-closed branch; likewise rethrown.
+// Each hint must match the MINTED message and not the command echo that every
+// `Command failed:` error carries. `"literalpath"` alone would match the echoed
+// `-LiteralPath '<file>'` present in every verifier invocation, and so would
+// classify an ordinary timeout as a tampered installer.
+const SIGNATURE_ERROR_HINTS: readonly string[] = [
+  "is not signed by the application owner",
+  "literalpath of ",
+  "failing signature validation",
+];
+
 // The update was located but couldn't be downloaded, verified, or applied:
 // checksum/signature mismatch, full disk, or filesystem permission errors.
 const INSTALL_ERROR_HINTS: readonly string[] = [
@@ -2099,17 +2258,13 @@ const INSTALL_ERROR_HINTS: readonly string[] = [
 // The update feed/service was reachable but returned an error response, or a
 // raw HTTP error body leaked through (GitHub `releases.atom` 404, status codes,
 // missing channel manifests). All of these are transient/server-side.
+// Numeric status codes are NOT listed here as bare strings - see
+// `includesHttpStatusCode`, which matches them as whole numbers instead.
 const SERVICE_ERROR_HINTS: readonly string[] = [
   "releases.atom",
   "status code",
   "statuscode",
-  "404",
-  "403",
-  "401",
-  "500",
-  "502",
-  "503",
-  "504",
+  "failed with http",
   "httperror",
   "not found",
   "forbidden",

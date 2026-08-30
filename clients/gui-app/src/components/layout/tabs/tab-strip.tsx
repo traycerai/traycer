@@ -17,7 +17,6 @@ import {
   type HeaderTabSlotDropData,
 } from "@/components/layout/tabs/header-tab-dnd";
 import {
-  useActiveHeaderTab,
   useHeaderStripDropIndex,
   useHeaderStripOffsets,
 } from "@/components/epic-canvas/dnd/dnd-store";
@@ -89,7 +88,6 @@ function TabStripBody() {
   // Single insertion index covering header-tab reorder AND canvas tear-off
   // hovers - both flow through the root DndContext into the drag store.
   const dropIndicatorIndex = useHeaderStripDropIndex();
-  const activeHeaderTab = useActiveHeaderTab();
   // Explicit per-item displacement resolved by the drag model - the same
   // mechanism the tile strip uses. No provisional CSS `order`, no layout
   // projection, so no projection can be stranded mid-flight.
@@ -305,11 +303,8 @@ function TabStripBody() {
                     isNextActive={headerItemIds[index + 1] === activeItemId}
                     nextIsSplit={layoutItems[index + 1]?.kind === "split"}
                     isLastItem={index === headerItemIds.length - 1}
-                    showDropIndicatorBefore={
-                      activeHeaderTab === null && dropIndicatorIndex === index
-                    }
+                    showDropIndicatorBefore={dropIndicatorIndex === index}
                     showDropIndicatorAfter={
-                      activeHeaderTab === null &&
                       dropIndicatorIndex === index + 1 &&
                       index === headerItemIds.length - 1
                     }

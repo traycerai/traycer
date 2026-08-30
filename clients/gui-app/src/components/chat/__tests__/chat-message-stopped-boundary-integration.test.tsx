@@ -142,6 +142,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -209,10 +210,12 @@ describe("Stopped-turn boundary row: hook -> ChatMessage -> AssistantMessageBody
         {
           messages: [userMessage("m1")],
           events: [turnStoppedEvent("turn-pre-setup", 10_500)],
+          rowContext: {},
           pendingUserMessages: [],
           liveAssistantMessage: null,
           activeTurn: null,
           runStatus: "idle",
+          setupCardWindows: [],
           ...BINDING,
         },
         displayContext,
@@ -255,10 +258,12 @@ describe("Stopped-turn boundary row: hook -> ChatMessage -> AssistantMessageBody
         {
           messages: [userMessage("m1"), assistant],
           events: [turnStoppedEvent("turn-1", 13_000)],
+          rowContext: {},
           pendingUserMessages: [],
           liveAssistantMessage: null,
           activeTurn: null,
           runStatus: "idle",
+          setupCardWindows: [],
           ...BINDING,
         },
         displayContext,
@@ -320,10 +325,12 @@ describe("Stopped-turn boundary row: hook -> ChatMessage -> AssistantMessageBody
         {
           messages: [userMessage("m1"), assistant],
           events: [turnStoppedEvent("turn-1", 10_500)],
+          rowContext: {},
           pendingUserMessages: [],
           liveAssistantMessage: null,
           activeTurn: null,
           runStatus: "idle",
+          setupCardWindows: [],
           ...BINDING,
         },
         displayContext,

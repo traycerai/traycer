@@ -189,6 +189,7 @@ const COMPOSER: ChatLowerComposerState = {
   fallbackToGlobalMentionRoots: true,
   currentEpicId: "epic-1",
   onSubmitMessage: () => false,
+  onSideChat: () => false,
   onSettingsChange: null,
   workspaceControls: (
     <>
@@ -211,6 +212,8 @@ function restoreContext(): ChatRestoreContextValue {
     restoreActionPending: false,
     restoreCheckpoint: () => null,
     accumulatedFileChanges: [],
+    undeliveredChangeCount: 0,
+    accumulatedSetComplete: true,
     revertFileChanges: () => null,
   };
 }

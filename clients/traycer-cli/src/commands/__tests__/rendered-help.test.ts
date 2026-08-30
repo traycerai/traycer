@@ -1174,6 +1174,14 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "host purge-stage",
         "host stamp-runtime",
         "host free-port",
+        // Host Update Layer machine contracts: the desktop reads the
+        // executor-segment adoption nonce, drives the root-maintenance
+        // lease handshake, and asks for a staged-bytes verification verdict
+        // over NDJSON. None of them has a human-usable outcome on its own,
+        // and each is exercised as a machine contract by its own suite.
+        "host adoption-nonce",
+        "host maintenance-lease",
+        "host update-verify",
         "cli mark-source",
         "cli finalize-upgrade",
         "agent title-from-hook",
@@ -1200,6 +1208,24 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "traycer host start --service-label",
         "traycer host start --transition-id",
         "traycer host start --probe-nonce",
+        // Executor-segment adoption handoff (Host Update Layer): a parent
+        // that already holds the attempt lock hands its child a one-shot
+        // proof instead of contending. Machine-minted, single-use,
+        // clock-bounded - never something a person types.
+        "traycer host start --adoption-nonce",
+        "traycer host apply --attempt-adoption",
+        "traycer host ensure --attempt-adoption",
+        "traycer host install --attempt-adoption",
+        "traycer host service install --attempt-adoption",
+        "traycer host stamp-runtime --attempt-adoption",
+        // Parked-activation refusal contract shared by the desktop's
+        // restart paths: refuse a generic restart when parked bytes make
+        // it unsafe, rather than activating them as a side effect.
+        "traycer host restart --defer-if-parked",
+        "traycer host free-port-and-restart --defer-if-parked",
+        // Update ACK correlation nonce - the host echoes it back so the
+        // dispatcher can tell THIS update's ack from an unrelated one.
+        "traycer host update --ack-nonce",
         "traycer host restart --if-idle",
         "traycer host install --if-idle",
         "traycer host apply --expected-stage-fingerprint",

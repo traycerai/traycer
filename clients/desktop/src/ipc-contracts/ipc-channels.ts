@@ -69,6 +69,7 @@ export const RunnerHostInvoke = {
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
   openMicrophoneSettings: "runnerHost:openMicrophoneSettings",
+  notificationOpenSystemSettings: "runnerHost:notifications:openSystemSettings",
   notificationShow: "runnerHost:notifications:show",
   traySetEpics: "runnerHost:tray:setEpics",
   traySetIndicator: "runnerHost:tray:setIndicator",
@@ -124,6 +125,8 @@ export const RunnerHostInvoke = {
   windowsRequestClose: "runnerHost:windows:requestClose",
   windowsRequestOpenEpicInNewWindow:
     "runnerHost:windows:requestOpenEpicInNewWindow",
+  windowsRequestOpenDraftInNewWindow:
+    "runnerHost:windows:requestOpenDraftInNewWindow",
   ownershipSnapshot: "runnerHost:windows:ownership:snapshot",
   ownershipClaim: "runnerHost:windows:ownership:claim",
   ownershipRelease: "runnerHost:windows:ownership:release",

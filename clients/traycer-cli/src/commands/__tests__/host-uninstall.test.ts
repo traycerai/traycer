@@ -6,6 +6,7 @@ import type { UninstallHostOptions } from "../../installer";
 import {
   runHostUninstall,
   stopServiceBeforeRuntimePurge,
+  type HostUninstallActuators,
   type RunHostUninstallDeps,
 } from "../host-uninstall";
 
@@ -67,21 +68,27 @@ const COMMAND_CONTEXT = {
   progress: () => undefined,
 };
 
+function testActuators(deps: RunHostUninstallDeps): HostUninstallActuators {
+  return {
+    uninstall: (controller, options) => controller.uninstall(options),
+    stop: (controller, label, options) => controller.stop(label, options),
+    verifyMutationCapability: async (): Promise<void> => undefined,
+  };
+}
+
 describe("stopServiceBeforeRuntimePurge", () => {
   it("allows runtime purge after stop confirms the host exited", async () => {
     const label = serviceLabelFor("dev");
 
     await expect(
-      stopServiceBeforeRuntimePurge({
-        controller: {
-          stop: async (receivedLabel) => {
-            expect(receivedLabel).toBe(label);
-          },
+      stopServiceBeforeRuntimePurge(
+        {
+          environment: "dev",
+          label,
+          logger: noopLogger,
         },
-        environment: "dev",
-        label,
-        logger: noopLogger,
-      }),
+        async () => undefined,
+      ),
     ).resolves.toBe(true);
   });
 
@@ -89,16 +96,16 @@ describe("stopServiceBeforeRuntimePurge", () => {
     const label = serviceLabelFor("production");
 
     await expect(
-      stopServiceBeforeRuntimePurge({
-        controller: {
-          stop: async () => {
-            throw new Error("host still running");
-          },
+      stopServiceBeforeRuntimePurge(
+        {
+          environment: "production",
+          label,
+          logger: noopLogger,
         },
-        environment: "production",
-        label,
-        logger: noopLogger,
-      }),
+        async () => {
+          throw new Error("host still running");
+        },
+      ),
     ).resolves.toBe(false);
   });
 });
@@ -113,21 +120,27 @@ describe("runHostUninstall", () => {
   it("never purges runtime, even when stop resolved and the child is positively dead", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
 
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "dead",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions,
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: "dead",
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(receivedOptions).toEqual([
-      { environment: "dev", purgeChannelRuntime: false },
+      expect.objectContaining({
+        environment: "dev",
+        purgeChannelRuntime: false,
+        verifyMutationCapability: expect.any(Function),
+      }),
     ]);
     expect(result.data).toMatchObject({ purgedRuntime: false });
   });
@@ -140,17 +153,19 @@ describe("runHostUninstall", () => {
   // while the observed truth lives in `serviceRegistrationRetained` beside it
   // and the human copy is keyed on THAT.
   it("publishes the deregistration request alongside the observed readback", async () => {
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions: [],
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions: [],
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: null,
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     // `not-installed` earns NULL, not false: Windows maps every
@@ -169,22 +184,24 @@ describe("runHostUninstall", () => {
   // field - Desktop projects that to `deregisteredService`, whose contract is
   // "actually accomplished".
   it("vetoes the legacy deregistration field when the readback still finds it registered", async () => {
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions: [],
+      status: async () => ({
+        state: "stopped",
+        version: "1.2.3",
+        listenUrl: null,
+        pid: null,
+      }),
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions: [],
-        status: async () => ({
-          state: "stopped",
-          version: "1.2.3",
-          listenUrl: null,
-          pid: null,
-        }),
-        liveness: null,
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(result.data).toMatchObject({
@@ -198,17 +215,19 @@ describe("runHostUninstall", () => {
   // NOT death - a host that started moments ago and has not written pid.json
   // looks identical - so liveness stays unknown.
   it("reports liveness as unknown when nothing was ever published", async () => {
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions: [],
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "unpublished",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions: [],
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: "unpublished",
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(result.data).toMatchObject({
@@ -220,23 +239,29 @@ describe("runHostUninstall", () => {
   it("forwards runtime preservation after a failed stop", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
 
+    const deps = commandDeps({
+      stop: async () => {
+        throw new Error("host still running");
+      },
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => {
-          throw new Error("host still running");
-        },
-        receivedOptions,
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: null,
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(receivedOptions).toEqual([
-      { environment: "dev", purgeChannelRuntime: false },
+      expect.objectContaining({
+        environment: "dev",
+        purgeChannelRuntime: false,
+        verifyMutationCapability: expect.any(Function),
+      }),
     ]);
     expect(result.data).toMatchObject({ purgedRuntime: false });
   });
@@ -252,21 +277,27 @@ describe("runHostUninstall", () => {
   it("withholds the purge and reports the host live when a resolved --all stop left one serving", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
 
+    const deps = commandDeps({
+      stop: async () => undefined, // resolves, proving nothing
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "current",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined, // resolves, proving nothing
-        receivedOptions,
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: "current",
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(receivedOptions).toEqual([
-      { environment: "dev", purgeChannelRuntime: false },
+      expect.objectContaining({
+        environment: "dev",
+        purgeChannelRuntime: false,
+        verifyMutationCapability: expect.any(Function),
+      }),
     ]);
     expect(result.data).toMatchObject({
       purgedRuntime: false,
@@ -277,24 +308,26 @@ describe("runHostUninstall", () => {
   });
 
   it("reads --all's registration back from the platform rather than assuming the deregister landed", async () => {
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions: [],
+      // `uninstall()` resolved, but the unit is still registered - the
+      // Linux/Windows teardown calls tolerate their own failures.
+      status: async () => ({
+        state: "stopped",
+        version: "1.2.3",
+        listenUrl: null,
+        pid: null,
+      }),
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions: [],
-        // `uninstall()` resolved, but the unit is still registered - the
-        // Linux/Windows teardown calls tolerate their own failures.
-        status: async () => ({
-          state: "stopped",
-          version: "1.2.3",
-          listenUrl: null,
-          pid: null,
-        }),
-        liveness: null,
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     // `serviceUninstalled` keeps REQUEST semantics (no platform can verify
@@ -317,19 +350,21 @@ describe("runHostUninstall", () => {
   // agreement and printed "deregistered OS service" for a deregistration
   // nothing had confirmed.
   it("says the deregistration could not be verified when the readback throws", async () => {
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions: [],
+      status: async () => {
+        throw new Error("launchctl unavailable");
+      },
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions: [],
-        status: async () => {
-          throw new Error("launchctl unavailable");
-        },
-        liveness: null,
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(result.data).toMatchObject({
@@ -348,21 +383,27 @@ describe("runHostUninstall", () => {
   it("withholds the purge when a successor published while the probes ran", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
 
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "dead", // the CAPTURED child is positively gone
+      successorAfterTeardown: true,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions,
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: "dead", // the CAPTURED child is positively gone
-        successorAfterTeardown: true,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(receivedOptions).toEqual([
-      { environment: "dev", purgeChannelRuntime: false },
+      expect.objectContaining({
+        environment: "dev",
+        purgeChannelRuntime: false,
+        verifyMutationCapability: expect.any(Function),
+      }),
     ]);
     expect(result.data).toMatchObject({ purgedRuntime: false });
   });
@@ -371,17 +412,19 @@ describe("runHostUninstall", () => {
   // `dead` for anything non-integral or <= 0. A record carrying `pid: -5` was
   // therefore read as proof the host exited, and licensed the purge.
   it("treats an unusable published pid as unknown, never as death", async () => {
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions: [],
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "dead",
+      successorAfterTeardown: null,
+      publishedPid: -5,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions: [],
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: "dead",
-        successorAfterTeardown: null,
-        publishedPid: -5,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(result.data).toMatchObject({
@@ -391,17 +434,19 @@ describe("runHostUninstall", () => {
   });
 
   it("reports liveness as null on --all when the probe itself cannot answer", async () => {
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions: [],
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "indeterminate",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions: [],
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: "indeterminate",
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(result.data).toMatchObject({
@@ -411,22 +456,24 @@ describe("runHostUninstall", () => {
   });
 
   it("reports the retained registration and running host a default uninstall leaves behind", async () => {
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions: [],
+      status: async () => ({
+        state: "running",
+        version: "1.2.3",
+        listenUrl: "ws://127.0.0.1:1234",
+        pid: 4242,
+      }),
+      liveness: "current",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: false },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions: [],
-        status: async () => ({
-          state: "running",
-          version: "1.2.3",
-          listenUrl: "ws://127.0.0.1:1234",
-          pid: 4242,
-        }),
-        liveness: "current",
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(result.data).toMatchObject({
@@ -440,17 +487,19 @@ describe("runHostUninstall", () => {
   });
 
   it("stays quiet about the service when nothing is registered", async () => {
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions: [],
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: false },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions: [],
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: null,
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(result.data).toMatchObject({
@@ -467,23 +516,29 @@ describe("runHostUninstall", () => {
   it("completes the uninstall when the service probe throws", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
 
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => {
+        throw new Error("launchctl unavailable");
+      },
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: false },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions,
-        status: async () => {
-          throw new Error("launchctl unavailable");
-        },
-        liveness: null,
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(receivedOptions).toEqual([
-      { environment: "dev", purgeChannelRuntime: false },
+      expect.objectContaining({
+        environment: "dev",
+        purgeChannelRuntime: false,
+        verifyMutationCapability: expect.any(Function),
+      }),
     ]);
     expect(result.exitCode).toBe(0);
     // NULL for registration: `false` would be a claim about something this
@@ -501,19 +556,21 @@ describe("runHostUninstall", () => {
   // serving does not license deleting its runtime - the process may simply
   // not be publishing yet.
   it("withholds the purge when the stop threw, even with nothing serving", async () => {
+    const deps = commandDeps({
+      stop: async () => {
+        throw new Error("host denied the shutdown claim");
+      },
+      receivedOptions: [],
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => {
-          throw new Error("host denied the shutdown claim");
-        },
-        receivedOptions: [],
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: null,
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(result.data).toMatchObject({
@@ -531,17 +588,19 @@ describe("runHostUninstall", () => {
   // The other half of the same rule: a CONFIRMED stop is what gates the
   // runtime purge, so it is also the only evidence that justifies `false`.
   it("reports liveness as unknown after --all unless a probe positively finds one", async () => {
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions: [],
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions: [],
-        status: async () => NOT_INSTALLED_STATUS,
-        liveness: null,
-        successorAfterTeardown: null,
-        publishedPid: null,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(result.data).toMatchObject({

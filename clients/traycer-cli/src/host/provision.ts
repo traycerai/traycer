@@ -1,6 +1,6 @@
+import type { UpdateMutationCapabilityAdoption } from "@traycer-clients/shared/host-update";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
-  commitHostInstallSource,
   discardStagedHostInstallSource,
   stageHostInstallSource,
   type InstallSourceArg,
@@ -23,7 +23,17 @@ import {
   createBytesOnlyInstallLifecycle,
   createServiceInstallLifecycle,
 } from "../service/install-lifecycle";
-import { withCliLock } from "../store/cli-lock";
+import {
+  requireCliUpdateMutationCapability,
+  withCliAttemptMutation,
+  withCliUpdateExecutionSegment,
+} from "./update-contender";
+import {
+  commitHostInstallSourceWithAttempt,
+  installHostServiceWithAttempt,
+  startHostServiceWithAttempt,
+} from "./update-mutation";
+import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
 import {
   createRegistryYankLookup,
   type RegistryYankLookup,
@@ -130,6 +140,12 @@ export interface ProvisionHostOptions {
   // CLI registers and starts the service.
   readonly registerService: boolean;
   readonly lockReason: string;
+  /**
+   * A parent executor's live-lock proof, when this provision runs as one step
+   * inside a held segment (Ticket 05, Ruling 1). `undefined` for every ordinary
+   * invocation, which keeps the acquire-or-refuse path exactly as it was.
+   */
+  readonly adoption: UpdateMutationCapabilityAdoption | undefined;
   readonly onProgress: ((info: ProgressInfo) => void) | null;
   // When true, skip the pre-reinstall busy probe and replace a running host
   // unconditionally (the desktop's "Force restart"). Default callers pass
@@ -217,34 +233,41 @@ export async function provisionHost(
     });
     return noopResult(fast);
   }
-  // Past the no-op return: this call is going to install, register or start
-  // something, so any caller step gated on "a host will actually be started"
-  // runs here - still outside cli-lock, still ahead of the staging download.
-  if (opts.beforeMutate !== null) {
-    await opts.beforeMutate();
-  }
-  // Lock-scope restructure (Tech Plan): when the fast read already predicts
-  // the install branch will run, resolve + stage (download/verify/extract)
-  // OUTSIDE cli-lock, into an owner-tokened temp - the same split `host
-  // install` uses - so a long download never blocks a concurrent CLI/
-  // Desktop operation. The prediction is re-verified against a locked
-  // re-read below.
-  const predictedInstall =
-    opts.force ||
-    !fast.installed ||
-    !(await versionSatisfied(fast, opts.satisfaction, yankLookup));
-  const preStaged = predictedInstall
-    ? await prepareInstallStage(opts, progress)
-    : null;
+  const contenderOptions = {
+    environment: opts.runtime.environment,
+    reason: opts.lockReason,
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "legacy-update-shadow" as const,
+    adoption: opts.adoption,
+  };
+  return withCliUpdateExecutionSegment(contenderOptions, async (capability) => {
+    // Past the no-op return: this call is going to install, register or
+    // start something. Keep the outer capability from that decision through
+    // source resolution and staging, while preserving the short CLI-lock
+    // scope around only the final lifecycle mutation.
+    if (opts.beforeMutate !== null) {
+      await opts.beforeMutate();
+    }
+    const predictedInstall =
+      opts.force ||
+      !fast.installed ||
+      !(await versionSatisfied(fast, opts.satisfaction, yankLookup));
+    const preStaged = predictedInstall
+      ? await prepareInstallStage(opts, progress, capability, contenderOptions)
+      : null;
 
-  return provisionUnderLock(
-    opts,
-    controller,
-    label,
-    progress,
-    preStaged,
-    yankLookup,
-  );
+    return provisionUnderLock(
+      opts,
+      controller,
+      label,
+      progress,
+      preStaged,
+      yankLookup,
+      capability,
+      contenderOptions,
+    );
+  });
 }
 
 // A lost prediction ("no install needed" at the fast read, but the locked
@@ -269,6 +292,14 @@ async function provisionUnderLock(
   progress: (info: ProgressInfo) => void,
   preStaged: StagedHostInstallSource | null,
   yankLookup: RegistryYankLookup,
+  capability: UpdateMutationCapability,
+  contenderOptions: {
+    readonly environment: Environment;
+    readonly reason: string;
+    readonly waitMs: number;
+    readonly pollIntervalMs: number;
+    readonly admission: "legacy-update-shadow";
+  },
 ): Promise<HostProvisionResult> {
   let stagedConsumed = false;
   opts.runtime.logger.debug("Host provisioning entering CLI lock", {
@@ -278,13 +309,9 @@ async function provisionUnderLock(
     preStaged: preStaged !== null,
   });
   try {
-    const outcome = await withCliLock(
-      {
-        environment: opts.runtime.environment,
-        reason: opts.lockReason,
-        waitMs: 30_000,
-        pollIntervalMs: 100,
-      },
+    const outcome = await withCliAttemptMutation(
+      capability,
+      contenderOptions,
       async (): Promise<ProvisionAttemptOutcome> => {
         // Re-read inside the lock so a caller that lost the race observes the
         // now-provisioned state and short-circuits instead of redundantly
@@ -396,6 +423,8 @@ async function provisionUnderLock(
               label,
               progress,
               preStaged,
+              capability,
+              contenderOptions,
             ),
           };
         }
@@ -408,7 +437,14 @@ async function provisionUnderLock(
           );
           return {
             kind: "result",
-            result: await runServiceRegister(opts, controller, label, progress),
+            result: await runServiceRegister(
+              opts,
+              controller,
+              label,
+              progress,
+              capability,
+              contenderOptions,
+            ),
           };
         }
         // installed + registered + stopped → start.
@@ -420,7 +456,15 @@ async function provisionUnderLock(
         );
         return {
           kind: "result",
-          result: await runStart(opts, controller, label, state, progress),
+          result: await runStart(
+            opts,
+            controller,
+            label,
+            state,
+            progress,
+            capability,
+            contenderOptions,
+          ),
         };
       },
     );
@@ -430,7 +474,12 @@ async function provisionUnderLock(
     // Lock released. Stage outside it (network transfer never runs inside
     // cli-lock), then reacquire and retry - `preStaged` is non-null on this
     // retry, so the callback above cannot select `"need-stage"` again.
-    const staged = await prepareInstallStage(opts, progress);
+    const staged = await prepareInstallStage(
+      opts,
+      progress,
+      capability,
+      contenderOptions,
+    );
     return provisionUnderLock(
       opts,
       controller,
@@ -438,6 +487,8 @@ async function provisionUnderLock(
       progress,
       staged,
       yankLookup,
+      capability,
+      contenderOptions,
     );
   } finally {
     // Anything staged in anticipation of the install branch that the lock
@@ -446,7 +497,11 @@ async function provisionUnderLock(
     // be scrubbed here. Once `commitInstall` runs, `commitHostInstallSource`
     // owns cleanup itself - never double-discard.
     if (preStaged !== null && !stagedConsumed) {
-      await discardStagedHostInstallSource(opts.runtime.environment, preStaged);
+      await discardStagedHostInstallSource(
+        opts.runtime.environment,
+        preStaged,
+        () => requireCliUpdateMutationCapability(capability, contenderOptions),
+      );
     }
   }
 }
@@ -454,6 +509,14 @@ async function provisionUnderLock(
 async function prepareInstallStage(
   opts: ProvisionHostOptions,
   progress: (info: ProgressInfo) => void,
+  capability: UpdateMutationCapability,
+  contenderOptions: {
+    readonly environment: Environment;
+    readonly reason: string;
+    readonly waitMs: number;
+    readonly pollIntervalMs: number;
+    readonly admission: "legacy-update-shadow";
+  },
 ): Promise<StagedHostInstallSource> {
   const source = await opts.resolveInstallSource();
   opts.runtime.logger.debug("Host provisioning install source resolved", {
@@ -479,6 +542,8 @@ async function prepareInstallStage(
     source,
     onProgress: progress,
     recordVersionOverride: opts.recordVersionOverride,
+    verifyMutationCapability: () =>
+      requireCliUpdateMutationCapability(capability, contenderOptions),
   });
 }
 
@@ -488,6 +553,14 @@ async function commitInstall(
   label: ServiceLabel,
   progress: (info: ProgressInfo) => void,
   staged: StagedHostInstallSource,
+  capability: UpdateMutationCapability,
+  contenderOptions: {
+    readonly environment: Environment;
+    readonly reason: string;
+    readonly waitMs: number;
+    readonly pollIntervalMs: number;
+    readonly admission: "legacy-update-shadow";
+  },
 ): Promise<HostProvisionResult> {
   // When the host owns service registration, install the bytes without service
   // bootstrap. On Windows, still stop the slot first so stale processes do not
@@ -519,12 +592,16 @@ async function commitInstall(
   // source directly (it expects the caller to hold the lock). Reconcile
   // wiring (Tech Plan: "Install/ensure re-run reconcile after a successful
   // commit") comes from `commitHostInstallSource` itself.
-  const result = await commitHostInstallSource({
-    environment: opts.runtime.environment,
-    staged,
-    onProgress: progress,
-    lifecycle,
-  });
+  const result = await commitHostInstallSourceWithAttempt(
+    capability,
+    contenderOptions,
+    {
+      environment: opts.runtime.environment,
+      staged,
+      onProgress: progress,
+      lifecycle,
+    },
+  );
   const post = await readProvisionState(controller, label, opts.runtime);
   opts.runtime.logger.info("Host provisioning install branch completed", {
     environment: opts.runtime.environment,
@@ -561,6 +638,14 @@ async function runServiceRegister(
   controller: ServiceController,
   label: ServiceLabel,
   progress: (info: ProgressInfo) => void,
+  capability: UpdateMutationCapability,
+  contenderOptions: {
+    readonly environment: Environment;
+    readonly reason: string;
+    readonly waitMs: number;
+    readonly pollIntervalMs: number;
+    readonly admission: "legacy-update-shadow";
+  },
 ): Promise<HostProvisionResult> {
   progress({
     stage: "host-provision",
@@ -584,7 +669,16 @@ async function runServiceRegister(
       allowSelfInvocation: opts.allowSelfInvocation,
     },
   );
-  await controller.install({ label, cli, enableLinger: opts.enableLinger });
+  await installHostServiceWithAttempt(
+    capability,
+    contenderOptions,
+    controller,
+    {
+      label,
+      cli,
+      enableLinger: opts.enableLinger,
+    },
+  );
   const post = await readProvisionState(controller, label, opts.runtime);
   const installGeneration = await attestedGenerationFromCurrentRecord(
     opts.runtime.environment,
@@ -625,6 +719,14 @@ async function runStart(
   label: ServiceLabel,
   state: ProvisionState,
   progress: (info: ProgressInfo) => void,
+  capability: UpdateMutationCapability,
+  contenderOptions: {
+    readonly environment: Environment;
+    readonly reason: string;
+    readonly waitMs: number;
+    readonly pollIntervalMs: number;
+    readonly admission: "legacy-update-shadow";
+  },
 ): Promise<HostProvisionResult> {
   progress({
     stage: "host-provision",
@@ -637,7 +739,12 @@ async function runStart(
   // First attempt: plain start (on win32 this already polls for post-baseline
   // spawn evidence and surfaces Last Run Result on failure - finding F).
   try {
-    await controller.start(label);
+    await startHostServiceWithAttempt(
+      capability,
+      contenderOptions,
+      controller,
+      label,
+    );
   } catch (firstError) {
     // Escalate once: full task/launcher rewrite (the install-branch
     // registration - the field-proven manual recovery "we had to manually
@@ -666,11 +773,16 @@ async function runStart(
     });
     let rewriteError: unknown = null;
     try {
-      await controller.install({
-        label,
-        cli,
-        enableLinger: opts.enableLinger,
-      });
+      await installHostServiceWithAttempt(
+        capability,
+        contenderOptions,
+        controller,
+        {
+          label,
+          cli,
+          enableLinger: opts.enableLinger,
+        },
+      );
     } catch (cause) {
       // A retry is valid only after the rewritten task was successfully
       // registered and its own `/Run`/verification failed. Retrying after a
@@ -709,7 +821,12 @@ async function runStart(
     // repaired host as failed. Only retry when install's own launch failed.
     if (rewriteError !== null) {
       try {
-        await controller.start(label);
+        await startHostServiceWithAttempt(
+          capability,
+          contenderOptions,
+          controller,
+          label,
+        );
       } catch (retryError) {
         opts.runtime.logger.error(
           "Host provisioning start still failed after service rewrite",

@@ -9,10 +9,9 @@
  * lookup is group-scoped: a tile dragged from group A over group B resolves
  * against B's geometry, not A's.
  */
-import {
-  TILE_MERGE_BAND_PX,
-  type StripDragGeometry,
-  type StripSlot,
+import type {
+  StripDragGeometry,
+  StripSlot,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 
 /**
@@ -161,9 +160,9 @@ export function measureTileStripGeometry(input: {
     sourceInitialLeft: originX + source.contentLeft,
     sourceWidth: source.width,
     // Tile tabs have no pair-into-split gesture: the split lives on the pane
-    // BODY, a different target. Band 0 puts the swap boundary exactly at the
-    // neighbour's centre, which is Chrome's own rule.
-    mergeBandPx: TILE_MERGE_BAND_PX,
+    // BODY, a different target. `readTileStripSlots` marks every slot
+    // `isMergeTarget: false`, which is what keeps the model's merge branch
+    // unreachable here.
     stripTop: stripRect.top,
     stripBottom: stripRect.bottom,
   };

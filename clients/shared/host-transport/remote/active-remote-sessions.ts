@@ -1,6 +1,7 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { TimerHandle } from "../timer-handle";
+import type { RequestOfMethod, ResponseOfMethod } from "../host-messenger";
 import type { ReconnectAllOptions } from "../host-stream-client";
 import { REMOTE_SESSION_LINGER_MS } from "./config";
 import type { IRemoteSession } from "./remote-session";
@@ -139,6 +140,31 @@ interface CacheEntry {
    */
   readonly proactiveWakeEligible: boolean;
   refCount: number;
+  /**
+   * Outstanding STATUS-POLL borrows (see {@link tryAcquireReadyRemoteSession}),
+   * counted separately from `refCount` on purpose - this is the whole
+   * non-lingering guarantee, so it is worth stating why a second counter beats
+   * reusing the first.
+   *
+   * A borrow that incremented `refCount` would be indistinguishable from a
+   * consumer, and the keep-warm teardown is scheduled from whoever brings the
+   * count to zero. So owner-releases-then-poller-releases would arm the linger
+   * at the POLLER's release: the session would outlive its last real consumer
+   * by however long the poll happened to hold it, plus the full window. That is
+   * exactly "prolong a session for status", and no amount of care at the call
+   * site prevents it - the arithmetic does it.
+   *
+   * Keeping borrows out of `refCount` makes it unrepresentable instead:
+   * `release`, `closeSupersededIdentities` and the linger timer never read this
+   * field, so an outstanding borrow cannot arm, cancel, delay or extend a
+   * teardown. A borrow whose entry dies underneath it simply fails its in-flight
+   * request, which is the correct outcome for a status read (the caller renders
+   * unknown; it never renders failure).
+   *
+   * It is counted rather than ignored so a borrow can be revoked at `release()`
+   * and so a leak is observable to a test.
+   */
+  borrowCount: number;
   /** Armed while the entry lingers at refCount 0; null while consumers hold it. */
   lingerTimer: TimerHandle | null;
   /**
@@ -328,6 +354,7 @@ export function acquireRemoteSession<
       identity,
       proactiveWakeEligible: policy.proactiveWakeEligible,
       refCount: 0,
+      borrowCount: 0,
       lingerTimer: null,
       superseded: false,
       disposeReadinessWiring: () => undefined,
@@ -381,6 +408,20 @@ export function acquireRemoteSession<
     entry.lingerTimer = null;
   }
   entry.refCount += 1;
+  if (entry.refCount === 1) {
+    // BORROWABILITY changed (0 -> 1 consumers, and any linger just cancelled):
+    // this entry has just gained a live non-poller owner, which is the whole
+    // admission test for {@link tryAcquireReadyRemoteSession}. The pre-existing
+    // wirings all report readiness of the SESSION; this one reports a change in
+    // who holds it, which `hasReadyRemoteSession` does not care about and the
+    // borrowable predicate does.
+    //
+    // Adding a notify is safe by construction: delivery is coalesced onto a
+    // microtask and every subscriber compares a derived stamp with `Object.is`,
+    // so a wake that moves no host's answer re-renders nothing (the same
+    // property the push-replaces-poll note above relies on).
+    notifyReadinessChanged();
+  }
 
   // Sound: a given cache key is only ever populated - and read back - by
   // callers building the session from this app's one production registry
@@ -442,6 +483,11 @@ export function acquireRemoteSession<
     // liveness and a re-acquire adopts it), and the session keeps its own
     // reconnect/re-auth machinery running - bounded by the window, so an
     // abandoned session cannot dial forever.
+    //
+    // NOTE the ordering below: the linger is armed from THIS release, and an
+    // outstanding status-poll borrow (`borrowCount`) is deliberately not
+    // consulted. The teardown clock therefore starts when the last real
+    // consumer let go, never when a poller did.
     entry.lingerTimer = setTimeout(() => {
       entry.lingerTimer = null;
       // Superseded (evicted after a fatal, then re-created) or re-acquired
@@ -454,6 +500,12 @@ export function acquireRemoteSession<
       entry.session.close();
       notifyReadinessChanged();
     }, REMOTE_SESSION_LINGER_MS);
+    // BORROWABILITY changed (1 -> 0 consumers, linger now armed): this entry
+    // has just become a zero-consumer lingering session, which
+    // {@link tryAcquireReadyRemoteSession} refuses. `hasReadyRemoteSession`
+    // still answers true for it - it is a live attached connection - so the two
+    // predicates genuinely diverge here and only the borrowable one moved.
+    notifyReadinessChanged();
   };
 
   return {
@@ -724,9 +776,241 @@ export function hasReadyRemoteSession(hostId: string): boolean {
   return false;
 }
 
+/**
+ * A status-poll BORROW of an already-established session: the narrow surface a
+ * fleet-status poller gets, and deliberately not an {@link IRemoteSession}.
+ *
+ * Three things are absent, each on purpose:
+ *
+ *  - **no `close()`** - a borrower must not be able to tear down a connection
+ *    it does not own. `release()` gives back the borrow, nothing more.
+ *  - **no `subscribe()` / `subscribeWithParamsProvider()`** - those open
+ *    server-side streams on the host, which is work created *by observation*.
+ *    A status projection reads; it does not subscribe.
+ *  - **no `start()`** - there is nothing to start. The only entries this hands
+ *    out are already ready.
+ */
+export interface BorrowedRemoteSession<
+  RpcRegistry extends VersionedRpcRegistry,
+> {
+  /**
+   * The exact identity this borrow is bound to - full physical identity AND
+   * auth epoch, not just `hostId`. A caller that cares which connection
+   * answered (a projection stamping its observation's source) reads it here
+   * rather than assuming the host has only one.
+   */
+  readonly identity: RemoteSessionIdentity;
+  sendUnary<Method extends keyof RpcRegistry & string>(
+    method: Method,
+    params: RequestOfMethod<RpcRegistry, Method>,
+    abortSignal: AbortSignal | null,
+    responseTimeoutMs: number | undefined,
+  ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
+  /** Idempotent. Gives the borrow back; never closes or schedules anything. */
+  release(): void;
+}
+
+/**
+ * Atomically borrows an ALREADY-READY, ALREADY-OWNED session for `hostId`, or
+ * returns `null` - never dialing, never constructing, never extending a
+ * lifetime.
+ *
+ * This exists because `hasReadyRemoteSession(hostId)` followed by
+ * `acquireRemoteSession(identity, factory)` is not a safe way to reach the same
+ * place, in two independent ways:
+ *
+ *  1. The two calls are not atomic. The entry can be closed, superseded, or
+ *     swept between them, and the acquire then runs the FACTORY - minting a
+ *     grant, dialing the relay, and standing up a Noise session that exists
+ *     only because something wanted to draw a badge.
+ *  2. `hasReadyRemoteSession` deliberately counts a zero-consumer LINGERING
+ *     entry as honest liveness (it is a live attached connection). Adopting one
+ *     is exactly what a status poller must not do: `acquireRemoteSession`
+ *     cancels the pending teardown, so observing the host would keep it alive.
+ *
+ * So this takes **no factory parameter at all**. "Fleet observation creates
+ * zero sessions" is then a property of the signature rather than a promise
+ * about the body - there is nothing here that could construct one, however the
+ * function is later edited.
+ *
+ * Admission is one synchronous pass over the map, so no state can move
+ * underneath a partially-made decision. An entry qualifies only if it is:
+ *
+ *  - this host's, and NOT superseded (a superseded entry is pinned to a public
+ *    key, relay URL or auth context the host has moved off - see
+ *    {@link hasReadyRemoteSession}, which refuses them for the same reason);
+ *  - open (`!isClosed()`) and at its ready boundary (`isReady()`);
+ *  - held by a **live non-poller owner** (`refCount > 0`) with **no linger
+ *    armed** (`lingerTimer === null`). Together these are the "not a
+ *    zero-consumer lingering entry" rule, checked as state rather than
+ *    inferred: they are equivalent today, and asserting both means a future
+ *    change to one cannot quietly admit the case the other was guarding.
+ *
+ * The borrow does not touch `refCount`, so it can neither arm nor postpone the
+ * keep-warm teardown - see {@link CacheEntry.borrowCount} for why that has to
+ * be a separate counter and not care at the call site.
+ *
+ * A borrowed entry may still die underneath the borrower (its owner releases
+ * and the window expires, sign-out retires it, a session fatal closes it). That
+ * is not an error to prevent: the in-flight request rejects, and a status read
+ * that cannot complete renders **unknown** - never failure, and never a stale
+ * value presented as live.
+ */
+export function tryAcquireReadyRemoteSession<
+  RpcRegistry extends VersionedRpcRegistry,
+>(hostId: string): BorrowedRemoteSession<RpcRegistry> | null {
+  const entry = findBorrowableEntry(hostId);
+  if (entry === null) {
+    return null;
+  }
+  entry.borrowCount += 1;
+  // Sound for the same reason `acquireRemoteSession` re-specializes: a cache
+  // key is only ever populated by callers building the session from this app's
+  // one production registry pair, so narrowing the wide entry to this call's
+  // registry cannot observe a different shape.
+  const session = entry.session as IRemoteSession<
+    RpcRegistry,
+    VersionedStreamRpcRegistry
+  >;
+  let released = false;
+  return {
+    identity: entry.identity,
+    sendUnary: (method, params, abortSignal, responseTimeoutMs) => {
+      if (released) {
+        // A released handle is dead, not merely discouraged. Letting a late
+        // call through would let an abandoned poll keep issuing requests on a
+        // connection its owner has stopped accounting for.
+        return Promise.reject(
+          new Error("borrowed remote session was already released"),
+        );
+      }
+      // SUPERSESSION IS RE-READ ON EVERY SEND, not sampled when the borrow was
+      // taken. `findBorrowableEntry` bars a marked entry from being borrowed,
+      // but an entry can be marked AFTER a borrow is outstanding, and this
+      // closure had no other way to notice.
+      //
+      // Usually that resolves itself: `closeSupersededIdentities` closes the
+      // entries that are free at that moment, and a closed session fails the
+      // request — the designed outcome for a status read. The gap is the entry
+      // that is NOT free, because a real consumer still holds it. That one is
+      // marked and deliberately left open, carrying the verdict forward until
+      // its consumer releases. Its `refCount` guard belongs to that consumer;
+      // the borrower had none, so it kept polling over a session whose identity
+      // was retired — which, when the supersession came from a retired
+      // credential lease or a signed-out user, means requests under a retired
+      // credential for as long as the real consumer holds on.
+      //
+      // Refusing is the safe answer rather than a degradation: this handle's
+      // one caller is a status poll, and a status read that cannot complete
+      // renders `unknown` — never failure, and never a stale value presented as
+      // live. That is the same contract the doc comment above already relies on
+      // for a borrowed entry that dies underneath its borrower.
+      if (entry.superseded) {
+        return Promise.reject(
+          new Error("borrowed remote session identity was superseded"),
+        );
+      }
+      // The check above is a SNAPSHOT, and on its own it only narrows the
+      // window rather than closing it. Sign-out, an auth-epoch change, or a
+      // host-key/relay rotation can supersede this entry while the unary is
+      // already in flight; the pre-send check has passed by then, so the
+      // retired session's response comes back and
+      // `readUpdateStatusOverBorrowedSession` timestamps it as a fresh current
+      // observation — the stale-value-presented-as-live outcome the pre-send
+      // arm exists to prevent, arriving through the one path it cannot see.
+      //
+      // Recheck the CAPTURED entry on resolution, never a key relookup, for the
+      // same reason `release` captures it: a successor may already occupy the
+      // key, and this response's identity is the one it was sent under.
+      // Refusing matches the pre-send arm exactly — the caller is a status
+      // poll, so a refused read renders `unknown`, never failure and never a
+      // retired value shown as live.
+      return session
+        .sendUnary(method, params, abortSignal, responseTimeoutMs)
+        .then((result) => {
+          if (entry.superseded) {
+            throw new Error("borrowed remote session identity was superseded");
+          }
+          return result;
+        });
+    },
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      // The CAPTURED entry, never a key relookup - identical to `release` in
+      // `acquireRemoteSession`, and for the identical reason: a fresh entry may
+      // have been created under the same key, and a late give-back must not
+      // decrement the successor's books.
+      entry.borrowCount -= 1;
+      // Deliberately nothing else. No close, no linger, no notify: giving a
+      // borrow back changes no host's readiness and schedules no teardown,
+      // because taking it scheduled none either.
+    },
+  };
+}
+
+/**
+ * Whether {@link tryAcquireReadyRemoteSession} would currently succeed for
+ * `hostId` - the predicate a surface reads to decide whether it can show live
+ * state for a row WITHOUT causing a connection.
+ *
+ * Strictly narrower than {@link hasReadyRemoteSession}, and the gap is the
+ * point: that one answers "is this host reachable right now", which a
+ * zero-consumer lingering session honestly satisfies. This one answers "can a
+ * poller read this host without keeping anything alive", which the same session
+ * does not. Both are correct for their own question; using the wrong one is how
+ * observation turns into lifetime extension.
+ *
+ * Changes to this answer are reported through
+ * {@link subscribeRemoteSessionReadiness}, which now also fires on the
+ * consumer-count and linger transitions that move only this predicate.
+ */
+export function hasBorrowableRemoteSession(hostId: string): boolean {
+  return findBorrowableEntry(hostId) !== null;
+}
+
+/** The single admission test, shared so the predicate cannot drift from the borrow. */
+function findBorrowableEntry(hostId: string): CacheEntry | null {
+  for (const entry of entriesByKey.values()) {
+    if (
+      entry.identity.hostId === hostId &&
+      // Only durable, auth-revalidating sessions may serve borrowed reads. A
+      // ready `"terminal"` one-shot shares the hostId and can precede the
+      // durable entry in map order, but it runs with `auth: null`, so the
+      // first UNAUTHORIZED goes terminal-fatal — closing that owner's stream
+      // subscriptions and rejecting its pending calls because a status poll
+      // happened to pick it. Observation must never spend a one-shot's life.
+      entry.identity.authRecovery === "revalidate" &&
+      !entry.superseded &&
+      entry.lingerTimer === null &&
+      entry.refCount > 0 &&
+      !entry.session.isClosed() &&
+      entry.session.isReady()
+    ) {
+      return entry;
+    }
+  }
+  return null;
+}
+
 /** Test-only: the number of live consumer references held for `identity`. */
 export function remoteSessionRefCountForTest(
   identity: RemoteSessionIdentity,
 ): number {
   return entriesByKey.get(remoteSessionCacheKey(identity))?.refCount ?? 0;
+}
+
+/**
+ * Test-only: outstanding status-poll borrows for `identity`.
+ *
+ * Exposed so a suite can assert borrows are BALANCED - the coordinator's
+ * teardown, a sign-out mid-poll, and a superseding acquire must all leave this
+ * at zero. A leak here would be invisible in `refCount` by design.
+ */
+export function remoteSessionBorrowCountForTest(
+  identity: RemoteSessionIdentity,
+): number {
+  return entriesByKey.get(remoteSessionCacheKey(identity))?.borrowCount ?? 0;
 }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
+  Chat,
   ChatEvent,
   ClaudePendingWake,
   InterviewDeliveryProjection,
@@ -20,6 +21,7 @@ import type {
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { RuntimeEvent } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type {
   HeldManagedCommandUpdate,
   ManagedCommand,
@@ -60,7 +62,10 @@ import {
   type StreamFlushCoordinator,
   type StreamFlushRegistrationInput,
 } from "@/stores/chats/stream-flush-coordinator";
+import type { ChatTranscriptDerived } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { RestorableSetupInterruption } from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
 import { selectRestorableSetupInterruption } from "@/stores/chats/chat-session-selectors";
+import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -336,6 +341,7 @@ class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -390,6 +396,8 @@ function createHarness(): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
     },
@@ -431,6 +439,15 @@ function createProtocolChainHarness(
         },
         sameTurnSteeringProtocolSupported: () =>
           client.sameTurnSteeringProtocolSupported(),
+        // Delegated rather than stubbed: this harness drives a REAL
+        // `ChatStreamClient` over a mock socket, so the reads have to reach it
+        // for a test to observe what was put on the wire.
+        requestTranscriptRange: (request) => {
+          client.requestTranscriptRange(request);
+        },
+        requestResnapshot: () => {
+          client.requestResnapshot();
+        },
         interviewSettlementActionsProtocolSupported: () =>
           client.interviewSettlementActionsProtocolSupported(),
         close: () => {
@@ -661,32 +678,38 @@ function emitSnapshotWithQueuedSend(
   });
 }
 
-function emitSnapshotFrame(input: SnapshotFrameInput): void {
+/**
+ * Returns the raw `chat` record it just sent, so a caller can hold a
+ * reference to the exact object the snapshot carried - the aliasing test
+ * mutates it after the fact to prove the store copied rather than aliased it.
+ */
+function emitSnapshotFrame(input: SnapshotFrameInput): Chat {
   input.callbacks.onConnectionStatus("open", null);
+  const chat: Chat = {
+    id: CHAT_ID,
+    parentId: null,
+    userId: OWNER_ID,
+    hostId: "test-host",
+    title: "Host Chat",
+    createdAt: 1,
+    updatedAt: 1,
+    isTitleEditedByUser: false,
+    settings: input.settings ?? null,
+    activeSessionChain: null,
+    claudePendingWakes: [...(input.claudePendingWakes ?? [])],
+    messages: [...input.messages],
+    events: [],
+    archivedAt: null,
+    pinnedUserProviderHandle: null,
+    lastDeliveredRolesDigest: null,
+  };
   input.callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     snapshot: {
-      chat: {
-        id: CHAT_ID,
-        parentId: null,
-        userId: OWNER_ID,
-        hostId: "test-host",
-        title: "Host Chat",
-        createdAt: 1,
-        updatedAt: 1,
-        isTitleEditedByUser: false,
-        settings: input.settings ?? null,
-        activeSessionChain: null,
-        claudePendingWakes: [...(input.claudePendingWakes ?? [])],
-        messages: [...input.messages],
-        events: [],
-        archivedAt: null,
-        pinnedUserProviderHandle: null,
-        lastDeliveredRolesDigest: null,
-      },
+      chat,
       access: {
         role: input.access,
         ownerUserId: OWNER_ID,
@@ -711,6 +734,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         : { turnInProgress: input.turnInProgress }),
     },
   });
+  return chat;
 }
 
 function emitSnapshotWithWorktree(
@@ -845,6 +869,7 @@ function assistantSteerMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -925,6 +950,7 @@ function persistedInterviewMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -1093,6 +1119,8 @@ describe("createChatSessionStore", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => {
             closeCalls += 1;
           },
@@ -1144,6 +1172,8 @@ describe("createChatSessionStore", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => undefined,
         };
       },
@@ -1180,6 +1210,73 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().chat?.claudePendingWakes).toEqual([
       PENDING_CLAUDE_WAKE,
     ]);
+  });
+
+  it("carries the transcript once: `chat` drops the arrays while the scalars and the real messages copy survive", () => {
+    const harness = createHarness();
+    const messages = [persistedUserMessage("m1"), persistedUserMessage("m2")];
+
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages,
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    const state = harness.handle.store.getState();
+    if (state.chat === null) throw new Error("Expected chat");
+
+    // The regression guard: a future `{...snapshot.chat}` spread would
+    // silently reintroduce the duplicate, and this is the only check that
+    // would catch it - the type-level guarantee disappears the moment
+    // someone widens `ChatSessionRecord` back to `Chat`.
+    expect(Object.keys(state.chat)).not.toContain("messages");
+    expect(Object.keys(state.chat)).not.toContain("events");
+
+    // The four scalar reads `ChatSessionRecord` exists to serve.
+    expect(state.chat.title).toBe("Host Chat");
+    expect(state.chat.isTitleEditedByUser).toBe(false);
+    expect(state.chat.settings).toEqual(SETTINGS);
+    expect(state.chat.parentId).toBeNull();
+
+    // The strip must not have taken the real copy.
+    expect(state.messages).toEqual(messages);
+  });
+
+  it("carries the events transcript once: `chat` drops events too, and state.events keeps the full copy", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const events = [
+      chatEvent("event-1", "turn.started", null),
+      chatEvent("event-2", "turn.completed", null),
+    ];
+
+    emitSnapshotWithWorktree(callbacks, events, null);
+
+    const state = harness.handle.store.getState();
+    if (state.chat === null) throw new Error("Expected chat");
+    expect(Object.keys(state.chat)).not.toContain("events");
+    expect(Object.keys(state.chat)).not.toContain("messages");
+    expect(state.events).toEqual(events);
+  });
+
+  it("does not alias the snapshot's chat object - mutating it after the fact does not write through into store state", () => {
+    const harness = createHarness();
+    const sentChat = emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // Simulates a caller (or a future bug) mutating the object it handed to
+    // the store after the fact - it must not be the same reference.
+    sentChat.title = "mutated after the fact";
+
+    expect(harness.handle.store.getState().chat?.title).toBe("Host Chat");
   });
 
   it("seeds composer settings from the initial persisted chat snapshot", () => {
@@ -1362,7 +1459,10 @@ describe("createChatSessionStore", () => {
       retryable: true,
       generation: 0,
     };
-    const snapshot = (): void =>
+    const snapshot = (): void => {
+      // Block body: this branch's `emitSnapshotFrame` returns the chat record
+      // it emitted (the windowed adapter needs it), so a concise arrow would
+      // return it out of a `: void` annotation.
       emitSnapshotFrame({
         callbacks,
         access: "owner",
@@ -1370,6 +1470,7 @@ describe("createChatSessionStore", () => {
         queue: { status: "idle", items: [] },
         pendingFileEditApprovals: [],
       });
+    };
     snapshot();
     harness.handle.store.setState({
       interviewDeliveryRetryProtocolSupported: true,
@@ -1458,6 +1559,504 @@ describe("createChatSessionStore", () => {
         generation: 1,
       },
     });
+  });
+
+  // ─── The pre-restart runtime disposal is not an answer failure ───────────
+  //
+  // A Claude runtime torn down under a pending question leaves a coded `error`
+  // block in the SAME row as the interview. The host retires exactly that block
+  // when the answer settles, because the answer resumes on a fresh runtime. The
+  // fold below mirrors that projection so a client which already hydrated this
+  // (arbitrarily old) row sees it immediately, instead of keeping a red card
+  // under the answered question until some later frame happens to resend the
+  // row - which, on the windowed line, a bounded snapshot may never do.
+  function disposedInterviewRow(): Extract<Message, { role: "assistant" }> {
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const interview = persisted.blocks[0];
+    if (interview.type !== "interview") throw new Error("Expected interview");
+    return {
+      ...persisted,
+      blocks: [
+        {
+          ...interview,
+          status: "streaming",
+          answers: [],
+          outcome: null,
+          settlement: null,
+          delivery: null,
+        },
+        {
+          type: "error",
+          blockId: "turn-1:unrelated-error",
+          status: "errored",
+          timestamp: 4,
+          message: "A tool call failed.",
+          recoverable: true,
+          code: "TOOL_EXECUTION_FAILED",
+        },
+        {
+          type: "error",
+          blockId: "turn-1",
+          status: "errored",
+          timestamp: 5,
+          message:
+            "Claude Code's session was torn down while this turn was still running. " +
+            "Send your message again to continue on a fresh session.",
+          recoverable: true,
+          code: "CLAUDE_RUNTIME_DISPOSED",
+        },
+        {
+          type: "error",
+          blockId: "queue-paused:message-1",
+          status: "completed",
+          timestamp: 6,
+          message:
+            "1 queued message was held because this turn ended with an error, and it was not sent. Resume the queue to send it.",
+          recoverable: true,
+          code: "QUEUE_PAUSED_AFTER_ERROR",
+        },
+      ],
+    };
+  }
+
+  function rowBlockShape(harness: Harness): ReadonlyArray<string> {
+    const message = harness.handle.store.getState().messages[0];
+    if (message.role !== "assistant") throw new Error("Expected assistant");
+    return message.blocks.map((block) =>
+      block.type === "error" ? `error:${block.code ?? "null"}` : block.type,
+    );
+  }
+
+  it("retires only the same-row runtime-disposal error when the interview is answered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [disposedInterviewRow()],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:TOOL_EXECUTION_FAILED",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+      "error:QUEUE_PAUSED_AFTER_ERROR",
+    ]);
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      // Strictly after the disposal at 5: on this path the runtime died while
+      // the question was outstanding and the user answered afterwards, which is
+      // the chronology retirement requires.
+      resolvedAt: 10,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({ status: "completed", outcome: "answered" });
+    // The unrelated failure and the still-actionable queue-paused notice keep
+    // their places; only the coded disposal goes.
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:TOOL_EXECUTION_FAILED",
+      "error:QUEUE_PAUSED_AFTER_ERROR",
+    ]);
+  });
+
+  it("keeps the runtime-disposal error when the interview settles unanswered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [disposedInterviewRow()],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "No longer needed.",
+      resolvedAt: 5,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      outcome: "failed",
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({ status: "errored", outcome: "failed" });
+    // Nothing resumed, so the disposal is still the only account of why the
+    // prior turn stopped.
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:TOOL_EXECUTION_FAILED",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+      "error:QUEUE_PAUSED_AFTER_ERROR",
+    ]);
+  });
+
+  it("keeps a disposal that followed later work when the row's only interview settled before it", () => {
+    // Answering does not end the turn: the continuation streams more text into
+    // the same row, and only then is the runtime disposed. Position cannot tell
+    // this row from the one retirement is for - A is the nearest preceding
+    // interview either way - so the fold also compares chronology. A settled
+    // BEFORE the disposal, so the disposal is not about A.
+    //
+    // A stale or duplicate exact-settlement frame for A is the reachable
+    // trigger on this side: the effective block stays answered, so the fold
+    // re-runs on every one.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const template = persisted.blocks[0];
+    if (template.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            // Accepted at 5 - but the block's own stamp has since DRIFTED to 9,
+            // past the disposal at 7. That is not corruption: the reducer
+            // advances the stamp on every contributing settlement, so a late
+            // losing cleanup or a delivery-generation bump moves it without
+            // touching the outcome. A stamp-based guard would read 9 > 7 and
+            // delete a truthful error; the canonical acceptance is what the
+            // frame carries as `resolvedAt`.
+            {
+              ...template,
+              blockId: "interview-a",
+              status: "completed",
+              timestamp: 9,
+              outcome: "answered",
+              settlement: { settlementId: "settlement-a", source: "gui" },
+              delivery: null,
+            },
+            {
+              type: "text",
+              blockId: "turn-1:text",
+              status: "completed",
+              timestamp: 6,
+              text: "Wiring up PostgreSQL now.",
+              providerNotice: null,
+            },
+            // Disposed at 7, after the work the answer released.
+            {
+              type: "error",
+              blockId: "turn-1",
+              status: "errored",
+              timestamp: 7,
+              message:
+                "Claude Code's session was torn down while this turn was still running. " +
+                "Send your message again to continue on a fresh session.",
+              recoverable: true,
+              code: "CLAUDE_RUNTIME_DISPOSED",
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The exact settlement frame for A - a reconnect redelivering the same
+    // settlement it already applied.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-a",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-a",
+      settlementSource: "gui",
+      delivery: null,
+    });
+
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "text",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+    ]);
+  });
+
+  it("keeps the disposal when a legacy lifecycle frame settles the block without settlement authority", () => {
+    // `settlementId` is nullable on the wire: a peer on the pre-settlement
+    // line sends a legacy tuple, and the fold's legacy branch settles the block
+    // to answered WITHOUT installing any authority. There is then nothing to
+    // confirm the frame's `resolvedAt` is this block's canonical acceptance, so
+    // the fold retains and waits for the host's authoritative row - the host
+    // has already made the durable decision either way.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const template = persisted.blocks[0];
+    if (template.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            {
+              ...template,
+              blockId: "interview-a",
+              status: "streaming",
+              timestamp: 5,
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+            {
+              type: "error",
+              blockId: "turn-1",
+              status: "errored",
+              timestamp: 7,
+              message:
+                "Claude Code's session was torn down while this turn was still running. " +
+                "Send your message again to continue on a fresh session.",
+              recoverable: true,
+              code: "CLAUDE_RUNTIME_DISPOSED",
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-a",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      // Comfortably after the disposal, so only the missing authority can be
+      // what holds the card.
+      resolvedAt: 20,
+      settlementId: null,
+      settlementSource: null,
+      delivery: null,
+    });
+
+    // The card still settles - this fold has never gated that on authority.
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({ status: "completed", outcome: "answered" });
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+    ]);
+  });
+
+  it("correlates the disposal to the nearest preceding interview when a row holds two", () => {
+    // The row is not an interview boundary: a provider turn can ask twice, and
+    // the accumulator appends both interview blocks to the same row. Here A is
+    // already answered, B is still streaming, and the disposal follows B - so
+    // it explains B, and an exact lifecycle frame for A must leave it alone.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const template = persisted.blocks[0];
+    if (template.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            // A: answered, with its canonical settlement already recorded.
+            {
+              ...template,
+              blockId: "interview-a",
+              status: "completed",
+              outcome: "answered",
+              settlement: { settlementId: "settlement-a", source: "gui" },
+              delivery: null,
+            },
+            // B: still awaiting the user.
+            {
+              ...template,
+              blockId: "interview-b",
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+            {
+              type: "error",
+              blockId: "turn-1",
+              status: "errored",
+              timestamp: 6,
+              message:
+                "Claude Code's session was torn down while this turn was still running. " +
+                "Send your message again to continue on a fresh session.",
+              recoverable: true,
+              code: "CLAUDE_RUNTIME_DISPOSED",
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // An EXACT settlement frame for A - the strongest match the fold has - and
+    // it still must not reach B's disposal.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-a",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 7,
+      settlementId: "settlement-a",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "interview",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+    ]);
+
+    // Answering B is what the disposal was waiting on.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-b",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 8,
+      settlementId: "settlement-b",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    expect(rowBlockShape(harness)).toEqual(["interview", "interview"]);
+  });
+
+  it("leaves the row untouched when the lifecycle frame names another interview", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [disposedInterviewRow()],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const before = harness.handle.store.getState().messages[0];
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "some-other-interview",
+      answers: [],
+      resolvedAt: 5,
+      settlementId: "settlement-other",
+      settlementSource: "gui",
+      delivery: null,
+    });
+
+    // Referential no-op: an unmatched frame must not rewrite the row, or every
+    // memoized row renderer downstream re-runs for nothing.
+    expect(harness.handle.store.getState().messages[0]).toBe(before);
   });
 
   it("installs lifecycle authority on a streaming block and ignores a stale settlement", () => {
@@ -9356,6 +9955,7 @@ describe("createChatSessionStore", () => {
           usage: null,
           reasoningEffort: null,
           serviceTier: null,
+          envCredentialVar: null,
           imageResolutions: [],
         },
       ],
@@ -9455,6 +10055,478 @@ describe("createChatSessionStore", () => {
     const blocks = harness.handle.store.getState().liveAssistantMessage?.blocks;
     expect(blocks).toEqual([
       expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
+  // The live turn's OWN cards, which the detached drop must never eat.
+  //
+  // "No message owns this block" is the detached test, and it is satisfied by
+  // two opposite situations: an evicted owner (drop) and a block that does not
+  // exist YET because this very event creates it (keep). The active turn's row
+  // is `liveAssistantMessage` until it materializes, and that is not in
+  // `state.messages` at all - so on a live turn the ownership scan finds
+  // nothing for either one, and reading that as "detached" drops the card at
+  // its birth. Everything after it then has no owner either, so nothing about
+  // the subagent ever renders.
+  it("creates the active turn's own subagent card from its first subagent.started", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    emitTextDelta(callbacks, "Active turn", 4);
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "subagent.started",
+        blockId: "live-subagent",
+        timestamp: 5,
+        name: "Explore",
+      },
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "text" }),
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-subagent",
+        status: "streaming",
+      }),
+    ]);
+  });
+
+  it("keeps applying progress and completion to the subagent card it created", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "subagent.started",
+      blockId: "live-subagent",
+      timestamp: 5,
+      name: "Explore",
+    });
+    emit({
+      type: "subagent.progress",
+      blockId: "live-subagent",
+      timestamp: 6,
+      update: "reading files",
+    });
+    emit({
+      type: "subagent.completed",
+      blockId: "live-subagent",
+      timestamp: 7,
+      outcome: "completed",
+      result: "done",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-subagent",
+        status: "completed",
+        progressUpdates: ["reading files"],
+        result: "done",
+      }),
+    ]);
+  });
+
+  // The widest arm of the same seam: a nested event names its owner through
+  // `parentBlockId`, and that owner is MANDATORY - it never falls through. So
+  // for a subagent's own tool activity the live row is the only place its
+  // parent can be found, and not looking there strands every child of a card
+  // the active turn is still building.
+  it("nests a live subagent's own tool call under it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "subagent.started",
+      blockId: "live-subagent",
+      timestamp: 5,
+      name: "Explore",
+    });
+    emit({
+      type: "tool_call.started",
+      blockId: "child-tool",
+      parentBlockId: "live-subagent",
+      timestamp: 6,
+      toolName: "Grep",
+      agentMessageSend: null,
+    });
+    emit({
+      type: "tool_call.completed",
+      blockId: "child-tool",
+      parentBlockId: "live-subagent",
+      timestamp: 7,
+      toolName: "Grep",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "subagent", blockId: "live-subagent" }),
+      expect.objectContaining({
+        type: "tool_call",
+        blockId: "child-tool",
+        parentBlockId: "live-subagent",
+        status: "completed",
+      }),
+    ]);
+  });
+
+  // A foreground tool call is the same shape one step over: `tool_call.started`
+  // creates the block on the live row, and its terminal names that block by its
+  // own id with no `parentBlockId`. If the terminal is read as detached the
+  // call spins forever, which is the same defect as the subagent card and not a
+  // separate one.
+  it("completes the active turn's own foreground tool call", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "tool_call.started",
+      blockId: "live-tool",
+      timestamp: 5,
+      toolName: "Read",
+      agentMessageSend: null,
+    });
+    emit({
+      type: "tool_call.completed",
+      blockId: "live-tool",
+      timestamp: 6,
+      toolName: "Read",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        blockId: "live-tool",
+        status: "completed",
+      }),
+    ]);
+  });
+
+  // The other half of the seam: an update naming a card that genuinely is not
+  // here must still be dropped rather than synthesized under whatever turn is
+  // running. `subagent.progress` and `subagent.completed` both BUILD a card
+  // when none exists (see the accumulator), which is exactly what makes the
+  // fall-through dangerous for them and harmless for `started`.
+  it.each([
+    [
+      "progress",
+      {
+        type: "subagent.progress",
+        blockId: "evicted-subagent",
+        timestamp: 5,
+        update: "still working",
+      } satisfies RuntimeEvent,
+    ],
+    [
+      "completed",
+      {
+        type: "subagent.completed",
+        blockId: "evicted-subagent",
+        timestamp: 5,
+        outcome: "completed",
+        result: "done",
+      } satisfies RuntimeEvent,
+    ],
+  ])(
+    "still drops an ownerless subagent %s rather than opening a card for it",
+    (_label, event) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      startRunningTurn(callbacks);
+      emitTextDelta(callbacks, "Active turn", 4);
+
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ type: "text" })]);
+    },
+  );
+
+  // `workflow.*` is the same card by another name: all three write the SAME
+  // `subagent` block through `makeSubAgentBlock`, addressed by `event.blockId`,
+  // and all three build one when none exists - the accumulator's `started`
+  // opens, `progress`/`completed` update-or-synthesize, exactly as `subagent.*`
+  // does. A Workflow run is a fleet that outlives its spawning turn for the
+  // same reason a background subagent does, so it inherits the same hazard and
+  // must inherit the same rule.
+  it("creates the active turn's own workflow card from its first workflow.started", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    emitTextDelta(callbacks, "Active turn", 4);
+
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "workflow.started",
+        blockId: "live-workflow",
+        timestamp: 5,
+        name: "review-changes",
+        intent: "Review changed files across dimensions",
+      },
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "text" }),
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-workflow",
+        status: "streaming",
+      }),
+    ]);
+  });
+
+  it("keeps applying progress and completion to the workflow card it created", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "workflow.started",
+      blockId: "live-workflow",
+      timestamp: 5,
+      name: "review-changes",
+      intent: "Review changed files",
+    });
+    emit({
+      type: "workflow.progress",
+      blockId: "live-workflow",
+      timestamp: 6,
+      activity: { kind: "phase", text: "Review" },
+      agentsStarted: 3,
+      agentsFinished: 1,
+    });
+    emit({
+      type: "workflow.completed",
+      blockId: "live-workflow",
+      timestamp: 7,
+      outcome: "completed",
+      result: "3 findings",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-workflow",
+        status: "completed",
+        progressUpdates: ["Review"],
+        result: "3 findings",
+      }),
+    ]);
+  });
+
+  it.each([
+    [
+      "progress",
+      {
+        type: "workflow.progress",
+        blockId: "evicted-workflow",
+        timestamp: 5,
+        activity: { kind: "phase", text: "Verify" },
+        agentsStarted: 4,
+        agentsFinished: 2,
+      } satisfies RuntimeEvent,
+    ],
+    [
+      "completed",
+      {
+        type: "workflow.completed",
+        blockId: "evicted-workflow",
+        timestamp: 5,
+        outcome: "completed",
+        result: "done",
+      } satisfies RuntimeEvent,
+    ],
+  ])(
+    "still drops an ownerless workflow %s rather than opening a card for it",
+    (_label, event) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      startRunningTurn(callbacks);
+      emitTextDelta(callbacks, "Active turn", 4);
+
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ type: "text" })]);
+    },
+  );
+
+  // The door the opens-its-own-card exemption leaves open, and both sides of
+  // it. The accumulator deliberately accepts a `subagent.started` re-emitted
+  // AFTER its turn completed - Codex resolves the agent nickname
+  // asynchronously and re-emits when it lands - so "no row owns this block" can
+  // mean an evicted row rather than a new card. Nothing on the wire separates
+  // the two: a `blockDelta` carries no turn identity, and the re-emit is the
+  // same event shape as the start. Only the session's memory of what it has
+  // already opened can, so that is what decides it.
+  it.each([
+    ["subagent", "subagent.started", "subagent.progress"],
+    ["workflow", "workflow.started", "workflow.progress"],
+  ])(
+    "drops a late %s start re-emit whose card was evicted",
+    (_label, startedType, _progressType) => {
+      const harness = createHarness();
+      const callbacks = harness.callbacks();
+      startRunningTurn(callbacks);
+      const started: RuntimeEvent =
+        startedType === "subagent.started"
+          ? {
+              type: "subagent.started",
+              blockId: "run-1",
+              timestamp: 5,
+              name: "Explore",
+            }
+          : {
+              type: "workflow.started",
+              blockId: "run-1",
+              timestamp: 5,
+              name: "review",
+              intent: "Review",
+            };
+      const emit = (event: RuntimeEvent): void => {
+        callbacks.onBlockDelta({
+          kind: "blockDelta",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ID,
+          event,
+        });
+      };
+
+      // The genuine first start opens the card on the live turn.
+      emit(started);
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ blockId: "run-1" })]);
+
+      // That turn ends and a new one begins; the old row is not hydrated here,
+      // which is exactly what eviction looks like to this reducer.
+      settleTurnAndEvictItsRow(callbacks);
+      emitTextDelta(callbacks, "Second turn", 20);
+
+      // The nickname resolves and the adapter re-emits the SAME start.
+      emit({ ...started, timestamp: 21 });
+
+      // The new turn shows its own text and nothing else: the re-emit did not
+      // mint a copy of the old card here.
+      expect(
+        harness.handle.store.getState().liveAssistantMessage?.blocks,
+      ).toEqual([expect.objectContaining({ type: "text" })]);
+    },
+  );
+
+  it("still opens a card for a DIFFERENT run started on the later turn", () => {
+    // The direction the memory must not break. A start whose block id this
+    // session has never seen is a first start no matter how many turns have
+    // been and gone, so the later turn's own subagent still gets its card.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    const emit = (event: RuntimeEvent): void => {
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event,
+      });
+    };
+    emit({
+      type: "subagent.started",
+      blockId: "run-1",
+      timestamp: 5,
+      name: "Explore",
+    });
+
+    settleTurnAndEvictItsRow(callbacks);
+    emit({
+      type: "subagent.started",
+      blockId: "run-2",
+      timestamp: 21,
+      name: "Verify",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "run-2",
+        status: "streaming",
+      }),
     ]);
   });
 
@@ -9632,6 +10704,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              envCredentialVar: null,
               imageResolutions: [],
             },
           ],
@@ -9776,6 +10849,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              envCredentialVar: null,
               imageResolutions: [],
             },
             persistedUserMessage("message-split-steered"),
@@ -9802,6 +10876,7 @@ describe("createChatSessionStore", () => {
               usage: null,
               reasoningEffort: null,
               serviceTier: null,
+              envCredentialVar: null,
               imageResolutions: [],
             },
           ],
@@ -10501,7 +11576,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-gating" },
+      eventId: "event-gating",
       messageId: "queued-msg-1",
       clientActionId: "send-1",
     });
@@ -10559,8 +11634,8 @@ describe("createChatSessionStore", () => {
       event: gating,
     });
     expect(
-      selectRestorableSetupInterruption(harness.handle.store.getState())?.event
-        .eventId,
+      selectRestorableSetupInterruption(harness.handle.store.getState())
+        ?.eventId,
     ).toBe("event-gating-1");
 
     callbacks.onEventAppended({
@@ -10596,7 +11671,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-gating-2" },
+      eventId: "event-gating-2",
       messageId: "queued-msg-2",
     });
   });
@@ -10673,7 +11748,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-cancelled-gating" },
+      eventId: "event-cancelled-gating",
       messageId: sent.messageId,
       clientActionId: sent.clientActionId,
       workspacePath: "/repo",
@@ -10722,10 +11797,187 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-cancelled-gating" },
+      eventId: "event-cancelled-gating",
       messageId: "queued-msg-cancelled",
       clientActionId: "send-cancelled",
     });
+  });
+
+  // ─── On the windowed line the host has already answered ─────────────────
+  //
+  // The one consumer in the `state.messages` sweep with NO client-side repair.
+  // The event this comes from occupies no ordinal, so it is in no row's record
+  // set: `sliceTranscriptTail` never carries it and `loadRange` - addressed by
+  // ordinal - cannot ask for it. `state.events` never receives it however much
+  // the client hydrates, so the scan above is not "degraded over a window", it
+  // is permanently blind. It rides the snapshot instead.
+
+  it("takes the host's derived interruption when the events array cannot hold it", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: emptyTranscriptWindow(),
+        transcriptDerived: {
+          latestAssistantUsage: null,
+          pinnedTodo: null,
+          pinnedTaskTodoItems: [],
+          latestForkableAssistantMessageId: null,
+          restorableSetupInterruption: {
+            eventType: "setup.failed",
+            eventId: "event-host-derived",
+            workspacePath: "/repo",
+            terminalSessionId: null,
+            setupExitCode: 1,
+            clientActionId: "send-1",
+            messageId: "queued-msg",
+          },
+          interviewAnswerability: [],
+          latestAssistantAuthFailureTurnKey: null,
+          setupCardWindows: [],
+        },
+      }),
+    ).toMatchObject({
+      eventId: "event-host-derived",
+      messageId: "queued-msg",
+    });
+  });
+
+  it("reports the host's null rather than re-running the scan over a window", () => {
+    // Not a `??` chain. `restorableSetupInterruption: null` inside a derived
+    // payload is an ANSWER - "nothing to restore", the ordinary case - so a
+    // stray hydrated event must not override the party that read the whole
+    // event log. Falling through here would restore a draft the user never
+    // lost, which is the failure this whole selector exists to avoid.
+    expect(
+      selectRestorableSetupInterruption({
+        events: [
+          // Carries a `messageId`, so the scan WOULD return it - without that
+          // the selector skips it anyway and the assertion proves nothing.
+          {
+            ...chatEvent("event-hydrated", "setup.failed", {
+              workspacePath: "/repo",
+            }),
+            messageId: "queued-msg-hydrated",
+          },
+        ],
+        // HYDRATED, not live-appended: it is in `events` and NOT in the
+        // window's live list, which is the distinction the fold turns on.
+        transcriptWindow: emptyTranscriptWindow(),
+        transcriptDerived: {
+          latestAssistantUsage: null,
+          pinnedTodo: null,
+          pinnedTaskTodoItems: [],
+          latestForkableAssistantMessageId: null,
+          restorableSetupInterruption: null,
+          interviewAnswerability: [],
+          latestAssistantAuthFailureTurnKey: null,
+          setupCardWindows: [],
+        },
+      }),
+    ).toBeNull();
+  });
+
+  // ─── ... but the host's answer is a snapshot, not a subscription ─────────
+  //
+  // The derived value states the answer as of the frame it rode in on. A setup
+  // failure that happens NEXT reaches this client as an `eventAppended` with no
+  // snapshot behind it - `appendLiveRecords` seats a record with no ordinal in
+  // `window.liveEvents`, which is exactly the "later than the baseline" set.
+  // Without the fold the composer stops restoring drafts for every mid-session
+  // failure until something unrelated forces a resnapshot.
+
+  function derivedWith(
+    restorableSetupInterruption: RestorableSetupInterruption | null,
+  ): ChatTranscriptDerived {
+    return {
+      latestAssistantUsage: null,
+      pinnedTodo: null,
+      pinnedTaskTodoItems: [],
+      latestForkableAssistantMessageId: null,
+      restorableSetupInterruption,
+      interviewAnswerability: [],
+      latestAssistantAuthFailureTurnKey: null,
+      setupCardWindows: [],
+    };
+  }
+
+  function liveSetupEvent(
+    eventId: string,
+    type: ChatEvent["type"],
+    messageId: string | null,
+  ): ChatEvent {
+    return {
+      ...chatEvent(eventId, type, { workspacePath: "/repo" }),
+      messageId,
+    };
+  }
+
+  it("folds a live-appended interruption over the host's baseline", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: {
+          ...emptyTranscriptWindow(),
+          liveEvents: [
+            liveSetupEvent("event-live", "setup.failed", "queued-msg-live"),
+          ],
+        },
+        transcriptDerived: derivedWith(null),
+      }),
+    ).toMatchObject({
+      eventId: "event-live",
+      messageId: "queued-msg-live",
+    });
+  });
+
+  it("clears the host's baseline once a live retry transitions setup back to running", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: {
+          ...emptyTranscriptWindow(),
+          liveEvents: [liveSetupEvent("event-retry", "setup.running", null)],
+        },
+        transcriptDerived: derivedWith({
+          eventType: "setup.failed",
+          eventId: "event-host-derived",
+          workspacePath: "/repo",
+          terminalSessionId: null,
+          setupExitCode: 1,
+          clientActionId: "send-1",
+          messageId: "queued-msg",
+        }),
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the host's baseline when the live appends say nothing about it", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptWindow: {
+          ...emptyTranscriptWindow(),
+          // A different workspace's retry must not clear this one.
+          liveEvents: [
+            {
+              ...chatEvent("event-other", "setup.running", {
+                workspacePath: "/other",
+              }),
+              messageId: null,
+            },
+          ],
+        },
+        transcriptDerived: derivedWith({
+          eventType: "setup.failed",
+          eventId: "event-host-derived",
+          workspacePath: "/repo",
+          terminalSessionId: null,
+          setupExitCode: 1,
+          clientActionId: "send-1",
+          messageId: "queued-msg",
+        }),
+      }),
+    ).toMatchObject({ eventId: "event-host-derived" });
   });
 });
 
@@ -10788,6 +12040,8 @@ function createCoalesceHarness(): CoalesceHarness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
     },
@@ -10856,6 +12110,64 @@ function startRunningTurn(callbacks: ChatStreamCallbacks): void {
       reasoningEffort: null,
       serviceTier: null,
     },
+  });
+}
+
+/**
+ * Settle turn 1 into a row, EVICT that row, and start turn 2.
+ *
+ * Both halves matter and neither can be skipped. Seating the settled row is
+ * what releases `liveAssistantMessage` (`liveAssistantCoveredByMessages`
+ * matches it by `turnId`); without it the live row is re-stamped onto the new
+ * turn and carries its blocks along, so the old card is still owned and the
+ * detached path is never reached. Dropping the row on the next snapshot is
+ * eviction as this reducer sees it: `state.messages` is what is HYDRATED, and a
+ * row outside the retained window is simply not in it.
+ */
+function settleTurnAndEvictItsRow(callbacks: ChatStreamCallbacks): void {
+  const settled: Extract<Message, { role: "assistant" }> = {
+    role: "assistant",
+    messageId: "assistant-turn-1",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [],
+    startedAt: 5,
+    timestamp: 10,
+    turnId: "turn-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
+  emitSnapshotFrame({
+    callbacks,
+    access: "owner",
+    messages: [settled],
+    queue: { status: "idle", items: [] },
+    pendingFileEditApprovals: [],
+  });
+  emitSnapshotFrame({
+    callbacks,
+    access: "owner",
+    messages: [],
+    queue: { status: "idle", items: [] },
+    pendingFileEditApprovals: [],
+    runStatus: "running",
+    activeTurn: {
+      ...runningActiveTurn(),
+      turnId: "turn-2",
+      userMessageId: "message-2",
+      startedAt: 20,
+      updatedAt: 20,
+    },
+    turnInProgress: true,
   });
 }
 
@@ -11125,6 +12437,8 @@ describe("surface visibility rollup", () => {
       streamClientFactory: () => ({
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       }),
     });
@@ -11555,6 +12869,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       usage: null,
       reasoningEffort: null,
       serviceTier: null,
+      envCredentialVar: null,
       imageResolutions: [],
     };
   }
@@ -11583,6 +12898,8 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => undefined,
         };
       },
@@ -11741,6 +13058,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
         usage: null,
         reasoningEffort: null,
         serviceTier: null,
+        envCredentialVar: null,
         imageResolutions: [],
       },
     ]);

@@ -80,8 +80,14 @@ import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
 import { buildHostLogsCommand } from "./commands/host-logs";
+import {
+  parseHostMaintenanceLeaseTarget,
+  runHostMaintenanceLease,
+  type HostMaintenanceLeaseAdmission,
+} from "./commands/host-maintenance-lease";
 import { buildHostRestartCommand } from "./commands/host-restart";
 import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
+import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
 import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
 import { runHostCapabilities } from "./host/capabilities";
 import {
@@ -91,6 +97,7 @@ import {
 import { hostStatusCommand } from "./commands/host-status";
 import { buildHostStopCommand } from "./commands/host-stop";
 import { buildHostUninstallCommand } from "./commands/host-uninstall";
+import { buildHostUpdateVerifyCommand } from "./commands/host-update-verify";
 import { buildHostUpdateCommand } from "./commands/host-update";
 import { buildLinkPhoneCommand } from "./commands/link-phone";
 import { buildLoginCommand } from "./commands/login";
@@ -155,6 +162,33 @@ function expectRequiredPositional(
     details: null,
     exitCode: 1,
   });
+}
+
+/**
+ * `--attempt-adoption <nonce>` - the child half of Ticket 05's adoption
+ * protocol (Ruling 1).
+ *
+ * Hidden, because no human runs it: the only thing that passes it is a
+ * packaged-macOS executor that already holds `update-attempt.lock` and is
+ * spawning this command as one step INSIDE its own segment. Without it the
+ * child would contend for a lock its own parent holds, wait out the timeout,
+ * and fail the segment that spawned it.
+ *
+ * A nonce names a proof file; the parent's lock token never travels on argv,
+ * which `ps` exposes. Absent, expired, or unusable all fall back to ordinary
+ * acquisition, so every solo invocation behaves exactly as it did before this
+ * option existed.
+ */
+function attemptAdoptionOption(): Option {
+  return new Option(
+    "--attempt-adoption <nonce>",
+    "Internal: adopt a parent update segment's live attempt lock instead of acquiring",
+  ).hideHelp();
+}
+
+function attemptAdoptionNonce(opts: Record<string, unknown>): string | null {
+  const value = opts.attemptAdoption;
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function parsePortArg(value: string): number | null {
@@ -838,6 +872,12 @@ function registerHostCommands(program: Command): void {
       )
       .addOption(
         new Option(
+          "--adoption-nonce <nonce>",
+          "Internal: service-launch adoption nonce",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
           "--transition-id <id>",
           "Internal: lifecycle transition id",
         ).hideHelp(),
@@ -887,13 +927,18 @@ function registerHostCommands(program: Command): void {
       typeof opts.transitionId === "string" ? opts.transitionId : null;
     const probeNonce =
       typeof opts.probeNonce === "string" ? opts.probeNonce : null;
+    const adoptionNonce =
+      typeof opts.adoptionNonce === "string" ? opts.adoptionNonce : null;
     const mode = resolveForegroundStartMode({
       // Any identity flag means a registered service definition produced this
       // invocation. Positive evidence, checked before any inference about the
       // terminal - a service manager must never have the host log duplicated
       // into its own stdout.
       serviceManaged:
-        serviceLabel !== null || transitionId !== null || probeNonce !== null,
+        serviceLabel !== null ||
+        transitionId !== null ||
+        probeNonce !== null ||
+        adoptionNonce !== null,
       json: opts.json === true,
       quiet: opts.quiet === true,
       // Commander materialises `--no-progress` as `progress: false`, matching
@@ -920,6 +965,7 @@ function registerHostCommands(program: Command): void {
           environment: config.environment,
           cwd: typeof opts.cwd === "string" ? opts.cwd : null,
           serviceLabel,
+          adoptionNonce,
           transitionId,
           probeNonce,
         }),
@@ -944,6 +990,24 @@ function registerHostCommands(program: Command): void {
       foreground.close();
     }
   });
+
+  // The service wrapper obtains this opaque value immediately before it execs
+  // `host start`. It is raw stdout by design: launchd/systemd/VBScript use it
+  // as an argv capability, not a runner envelope.
+  host
+    .command("adoption-nonce", { hidden: true })
+    .requiredOption("--service-label <label>", "Internal: owning service label")
+    .action(async (opts) => {
+      const nonce = await readHostStartAdoptionNonce(
+        config.environment,
+        typeof opts.serviceLabel === "string" ? opts.serviceLabel : "",
+      );
+      if (nonce === null) {
+        process.exitCode = 1;
+        return;
+      }
+      writeStdout(`${nonce}\n`);
+    });
 
   // The capability contract emitted service definitions probe before they
   // pass an argument their (possibly N-1) CLI slot may not understand. NOT
@@ -980,6 +1044,70 @@ function registerHostCommands(program: Command): void {
         writeStdout(response.stdout);
       }
       process.exitCode = response.exitCode;
+    });
+
+  // Deliberately not routed through the normal runner: this process keeps
+  // its attempt + CLI locks live while the internal root scripts issue a
+  // versioned stdin/stdout protocol. Any older CLI lacks both this command
+  // and the advertised capability token, so scripts fail closed.
+  host
+    .command("maintenance-lease", { hidden: true })
+    .requiredOption(
+      "--admission <kind>",
+      "Internal: root-maintenance admission policy",
+    )
+    .requiredOption(
+      "--host-home <path>",
+      "Internal: canonical target host home",
+    )
+    .requiredOption("--service-uid <uid>", "Internal: target GUI service uid")
+    .action(async (opts) => {
+      const admission =
+        opts.admission === "desktop-activation-maintenance" ||
+        opts.admission === "uninstall-maintenance"
+          ? (opts.admission as HostMaintenanceLeaseAdmission)
+          : null;
+      if (admission === null) {
+        writeStdout(
+          `${JSON.stringify({
+            v: 1,
+            id: null,
+            kind: "refused",
+            message: "invalid maintenance lease admission",
+          })}\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const target = parseHostMaintenanceLeaseTarget(
+        opts.hostHome,
+        opts.serviceUid,
+      );
+      if (target === null) {
+        writeStdout(
+          `${JSON.stringify({
+            v: 1,
+            id: null,
+            kind: "refused",
+            message: "invalid target-bound maintenance lease context",
+          })}\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        await runHostMaintenanceLease(config.environment, admission, target);
+      } catch (err) {
+        writeStdout(
+          `${JSON.stringify({
+            v: 1,
+            id: null,
+            kind: "refused",
+            message: err instanceof Error ? err.message : String(err),
+          })}\n`,
+        );
+        process.exitCode = 1;
+      }
     });
 
   withRunner(
@@ -1030,11 +1158,20 @@ function registerHostCommands(program: Command): void {
       .option(
         "--force",
         "Restart even if the host has work in progress: skip the cooperative shutdown claim and kill the host process. Running terminal sessions and in-flight agent work are killed.",
+      )
+      // Hidden: the Desktop force-restart path, which must never leave the
+      // host stopped without a relaunch - see commands/host-restart.ts.
+      .addOption(
+        new Option(
+          "--defer-if-parked",
+          "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
+        ).hideHelp(),
       ),
     (opts) =>
       buildHostRestartCommand({
         ifIdle: opts.ifIdle === true,
         force: opts.force === true,
+        deferIfParked: opts.deferIfParked === true,
       }),
   );
 
@@ -1097,6 +1234,7 @@ function registerHostCommands(program: Command): void {
           "Internal: refuse with E_HOST_BUSY if the host has work in progress, probed immediately before the service stop",
         ).hideHelp(),
       )
+      .addOption(attemptAdoptionOption())
       .addHelpText(
         "after",
         [
@@ -1141,6 +1279,7 @@ function registerHostCommands(program: Command): void {
           });
         }
         return buildHostInstallCommand({
+          attemptAdoption: attemptAdoptionNonce(opts),
           // Registry path defaults to "latest" when neither flag is set.
           // For --from installs the value is unused (the archive supplies
           // the version), but the underlying command contract still wants
@@ -1193,7 +1332,8 @@ function registerHostCommands(program: Command): void {
       .option(
         "--force",
         "Reinstall and restart the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
-      ),
+      )
+      .addOption(attemptAdoptionOption()),
     (opts) => {
       const explicitVersion =
         typeof opts.release === "string" && opts.release.length > 0
@@ -1213,6 +1353,7 @@ function registerHostCommands(program: Command): void {
           });
         }
         return buildHostEnsureCommand({
+          attemptAdoption: attemptAdoptionNonce(opts),
           versionRequest: explicitVersion,
           fromPath,
           enableLinger: opts.linger !== false,
@@ -1251,6 +1392,7 @@ function registerHostCommands(program: Command): void {
           "Internal: skip the busy check and service stop/start; rejected on Windows",
         ).hideHelp(),
       )
+      .addOption(attemptAdoptionOption())
       .addHelpText(
         "after",
         [
@@ -1281,7 +1423,42 @@ function registerHostCommands(program: Command): void {
           typeof opts.expectedStageFingerprint === "string"
             ? opts.expectedStageFingerprint
             : null,
+        attemptAdoption: attemptAdoptionNonce(opts),
       }),
+  );
+
+  withRunner(
+    host
+      .command("update-verify", { hidden: true })
+      .description(
+        "Internal: claim and terminalize a Desktop-owned packaged-macOS activation after its restart. Dispatched by Desktop, which holds no capability here - this is a first-class claimant with its own lock and its own lock-scoped evidence.",
+      )
+      .requiredOption("--attempt-id <id>", "Attempt identity being verified")
+      .requiredOption("--generation <n>", "Expected attempt generation")
+      .requiredOption("--sequence <n>", "Expected attempt sequence")
+      .requiredOption("--target-version <version>", "Expected target version"),
+    // Validation lives INSIDE the returned command so the refusal flows
+    // through the runner's CliError handling (typed code + exit path) instead
+    // of escaping the factory and reaching the entrypoint as UNEXPECTED.
+    (opts) => (ctx) => {
+      const generation = parsePositiveIntegerArg(String(opts.generation));
+      const sequence = parsePositiveIntegerArg(String(opts.sequence));
+      if (generation === null || sequence === null) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message:
+            "host update-verify: --generation and --sequence must be positive whole numbers",
+          details: { generation: opts.generation, sequence: opts.sequence },
+          exitCode: 1,
+        });
+      }
+      return buildHostUpdateVerifyCommand({
+        attemptId: String(opts.attemptId),
+        generation,
+        sequence,
+        targetVersion: String(opts.targetVersion),
+      })(ctx);
+    },
   );
 
   withRunner(
@@ -1321,7 +1498,8 @@ function registerHostCommands(program: Command): void {
       .requiredOption(
         "--observed-runtime-version <version>",
         "pid.json's version (runtime stamp) for the observed fresh process",
-      ),
+      )
+      .addOption(attemptAdoptionOption()),
     (opts) => {
       return async (ctx) => {
         const observedPid =
@@ -1338,6 +1516,7 @@ function registerHostCommands(program: Command): void {
           });
         }
         return buildHostStampRuntimeCommand({
+          attemptAdoption: attemptAdoptionNonce(opts),
           expectedInstallGeneration:
             typeof opts.expectedInstallGeneration === "string"
               ? opts.expectedInstallGeneration
@@ -1378,6 +1557,15 @@ function registerHostCommands(program: Command): void {
       .option(
         "--force",
         "Update the host even if it has work in progress: skips the busy check and force-stops a busy host. Running terminal sessions and in-flight agent work are killed.",
+      )
+      // Hidden: the host resolver's dispatch-ACK correlation nonce (Ticket 07
+      // §5.2.8). A nonce and never a token - it grants nothing, which is why
+      // argv is a legitimate carrier. Not a user-facing switch.
+      .addOption(
+        new Option(
+          "--ack-nonce <nonce>",
+          "Internal: correlation nonce for the dispatching host's ACK wait",
+        ).hideHelp(),
       )
       .addHelpText(
         "after",
@@ -1424,6 +1612,7 @@ function registerHostCommands(program: Command): void {
         return buildHostUpdateCommand({
           force: opts.force === true,
           versionRequest: release,
+          ackNonce: typeof opts.ackNonce === "string" ? opts.ackNonce : null,
         })(ctx);
       };
     },
@@ -1590,6 +1779,14 @@ function registerHostCommands(program: Command): void {
       .option(
         "--port <port>",
         "Port that PID is holding, as reported by 'traycer host doctor'. Requires --pid.",
+      )
+      // Same contract as `host restart --defer-if-parked`; this command
+      // reaches the identical stop-only branch from the port repair.
+      .addOption(
+        new Option(
+          "--defer-if-parked",
+          "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
+        ).hideHelp(),
       ),
     (opts) => {
       const pid =
@@ -1629,6 +1826,7 @@ function registerHostCommands(program: Command): void {
       return buildHostFreePortAndRestartCommand({
         pid,
         port,
+        deferIfParked: opts.deferIfParked === true,
       });
     },
   );
@@ -1676,9 +1874,28 @@ export function hostStartOptionsFromCommand(input: {
   readonly environment: typeof config.environment;
   readonly cwd: string | null;
   readonly serviceLabel: string | null;
+  readonly adoptionNonce: string | null;
   readonly transitionId: string | null;
   readonly probeNonce: string | null;
 }): RunHostStartOptions {
+  if (
+    input.adoptionNonce !== null &&
+    (input.serviceLabel === null ||
+      input.transitionId !== null ||
+      input.probeNonce !== null)
+  ) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "host start adoption nonce requires a service label and cannot be combined with a probe",
+      details: {
+        serviceLabelProvided: input.serviceLabel !== null,
+        transitionIdProvided: input.transitionId !== null,
+        probeNonceProvided: input.probeNonce !== null,
+      },
+      exitCode: 1,
+    });
+  }
   const probeValues = [
     input.serviceLabel,
     input.transitionId,
@@ -1697,6 +1914,7 @@ export function hostStartOptionsFromCommand(input: {
       environment: input.environment,
       cwd: input.cwd,
       serviceLabel: input.serviceLabel,
+      adoptionNonce: input.adoptionNonce,
     };
   }
   if (
@@ -1755,9 +1973,11 @@ function registerServiceCommands(host: Command): void {
       .option(
         "--takeover",
         "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
-      ),
+      )
+      .addOption(attemptAdoptionOption()),
     (opts) =>
       buildServiceInstallCommand({
+        attemptAdoption: attemptAdoptionNonce(opts),
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
         takeover: opts.takeover === true,

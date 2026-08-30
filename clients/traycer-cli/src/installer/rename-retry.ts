@@ -26,9 +26,13 @@ const DEFAULT_DELAYS_MS: readonly number[] = [50, 100, 200, 400, 800, 1000];
 // A caller-tuned retry: `delaysMs` sets both the attempt count and the
 // backoff, and `onRetry` (when non-null) runs after each retryable failure
 // before the backoff sleep - the install swap uses it to re-kill lingering
-// host processes whose handles are exactly what made the rename fail. The
-// hook is best-effort: a throw from it is swallowed so it can never mask
-// the rename's own error.
+// host processes whose handles are exactly what made the rename fail.
+//
+// `verifyBeforeAttempt` is deliberately evaluated by this primitive, rather
+// than only by its callers. A retry is a new irreversible rename attempt and
+// a retry hook can itself kill a process; checking only once before entering
+// this loop would let a lost update-attempt capability authorize both later
+// operations. Verification failures are never caught here.
 //
 // `maxTotalMs` is a wall-clock ceiling across ALL attempts, hooks, and
 // backoff sleeps. The schedule alone does not bound the retry when the
@@ -41,13 +45,37 @@ export interface RenameRetryPlan {
   readonly delaysMs: readonly number[];
   readonly onRetry: (() => Promise<void>) | null;
   readonly maxTotalMs: number | null;
+  /** Required: every retry is a fresh irreversible filesystem edge. */
+  readonly verifyBeforeAttempt: () => Promise<void>;
 }
 
-export async function renameWithRetry(from: string, to: string): Promise<void> {
+export async function renameWithRetry(
+  from: string,
+  to: string,
+  verifyBeforeAttempt: () => Promise<void>,
+): Promise<void> {
   await renameWithRetryPlan(from, to, {
     delaysMs: DEFAULT_DELAYS_MS,
     onRetry: null,
     maxTotalMs: null,
+    verifyBeforeAttempt,
+  });
+}
+
+/**
+ * A deliberately named compatibility path for non-host metadata maintenance.
+ * It may never be imported by an install-tree, stage, service, or restart
+ * contender; those all call the mandatory-verifier primitive above.
+ */
+export async function renameWithRetryLegacy(
+  from: string,
+  to: string,
+): Promise<void> {
+  await renameWithRetryPlan(from, to, {
+    delaysMs: DEFAULT_DELAYS_MS,
+    onRetry: null,
+    maxTotalMs: null,
+    verifyBeforeAttempt: async () => undefined,
   });
 }
 
@@ -58,6 +86,7 @@ export async function renameWithRetryPlan(
 ): Promise<void> {
   const startedAt = Date.now();
   for (let attempt = 0; ; attempt++) {
+    await plan.verifyBeforeAttempt();
     try {
       await rename(from, to);
       return;
@@ -76,7 +105,11 @@ export async function renameWithRetryPlan(
         throw cause;
       }
       if (plan.onRetry !== null) {
-        await plan.onRetry().catch(() => undefined);
+        // This is a second boundary, immediately before an optional
+        // retry-side kill/cleanup hook. Do not collapse a lost authority
+        // into a best-effort hook failure.
+        await plan.verifyBeforeAttempt();
+        await plan.onRetry();
       }
       await new Promise((resolve) =>
         setTimeout(resolve, plan.delaysMs[attempt]),

@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeAttemptRecordForEnvironment } from "./attempt-record-test-support";
 // Type-only, so it is erased before `vi.hoisted` runs. Annotating the fixture
 // with the PRODUCER's contract rather than a hand-copied structural twin is
 // what makes this mock fail to compile - instead of silently going stale -
@@ -48,17 +52,39 @@ vi.mock("../../service", async (importOriginal) => {
       restart: async () => {
         mocks.controllerCalls.push("restart");
       },
+      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
   };
 });
+
+// The real `publishHostStartAdoption` waits (up to 30s) for a service-
+// manager child to ack a spawn that never happens under a stubbed
+// controller. This suite pins `host free-port-and-restart`'s command-level
+// wiring, not the adoption handshake (that's `host-start-adoption.
+// test.ts`), so replace it with an immediately-satisfied lease.
+vi.mock("../../host/host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => undefined,
+    cancel: async () => undefined,
+  }),
+}));
 
 vi.mock("../../host/free-port-kill", () => ({
   killConflictingPortOwner: async (opts: {
     pid: number;
     port: number;
     commandName: string;
+    verifyMutationCapability: () => Promise<void>;
   }) => {
-    mocks.killCalls.push(opts);
+    // Recorded WITHOUT the capability callback so the `toEqual` assertions
+    // below stay value-comparisons; the callback's wiring is exercised by
+    // the revalidation tests, not by identity on this record.
+    mocks.killCalls.push({
+      pid: opts.pid,
+      port: opts.port,
+      commandName: opts.commandName,
+    });
+    await opts.verifyMutationCapability();
     if (mocks.killThrows !== null) throw mocks.killThrows;
     return mocks.killResult;
   },
@@ -80,6 +106,21 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
 
 import { buildHostFreePortAndRestartCommand } from "../host-free-port-and-restart";
 import type { CommandContext } from "../../runner/runner";
+
+// `store/paths` binds its home root from `os.homedir()` at module load, and
+// the shared contender layer's real, unmocked attempt lock/record live
+// under it - without redirecting this, every test in this file would read
+// and lock-contend the actual operator's `~/.traycer/host-home`, not a
+// sandbox. Mirrors `host-restart.test.ts`'s identical fixture.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
+const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
+let workHome: string;
 
 function fakeCtx(): CommandContext {
   return {
@@ -109,14 +150,44 @@ function fakeCtx(): CommandContext {
 }
 
 describe("buildHostFreePortAndRestartCommand", () => {
+  beforeEach(() => {
+    workHome = mkdtempSync(
+      join(tmpdir(), "traycer-host-free-port-and-restart-cmd-test-"),
+    );
+    osHome.current = workHome;
+    process.env.HOME = workHome;
+    process.env.USERPROFILE = workHome;
+    // `store/paths` captures `homedir()` once at module load - drop the
+    // module cache so each test (and its dynamic import below) sees its
+    // own tmp HOME, matching `host-restart.test.ts`'s identical pattern.
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_HOME === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = ORIGINAL_HOME;
+    }
+    if (ORIGINAL_USERPROFILE === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = ORIGINAL_USERPROFILE;
+    }
+    rmSync(workHome, { recursive: true, force: true });
+  });
+
   it("with no pid, restarts inside one cli-lock acquisition without touching the kill helper", async () => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];
     mocks.killCalls = [];
 
+    const { buildHostFreePortAndRestartCommand } =
+      await import("../host-free-port-and-restart");
     const command = buildHostFreePortAndRestartCommand({
       pid: null,
       port: null,
+      deferIfParked: false,
     });
     const result = await command(fakeCtx());
 
@@ -143,15 +214,22 @@ describe("buildHostFreePortAndRestartCommand", () => {
       holderPid: null,
     };
 
+    const { buildHostFreePortAndRestartCommand } =
+      await import("../host-free-port-and-restart");
     const command = buildHostFreePortAndRestartCommand({
       pid: 4242,
       port: 51820,
+      deferIfParked: false,
     });
     const result = await command(fakeCtx());
 
     expect(mocks.lockCalls).toEqual([{ reason: "host-free-port-and-restart" }]);
     expect(mocks.killCalls).toEqual([
-      { pid: 4242, port: 51820, commandName: "host free-port-and-restart" },
+      {
+        pid: 4242,
+        port: 51820,
+        commandName: "host free-port-and-restart",
+      },
     ]);
     expect(mocks.controllerCalls).toEqual(["restart"]);
     expect(result.data).toMatchObject({
@@ -167,9 +245,12 @@ describe("buildHostFreePortAndRestartCommand", () => {
     mocks.lockCalls = [];
     mocks.killCalls = [];
 
+    const { buildHostFreePortAndRestartCommand } =
+      await import("../host-free-port-and-restart");
     const command = buildHostFreePortAndRestartCommand({
       pid: 4242,
       port: null,
+      deferIfParked: false,
     });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_INVALID_ARGUMENT",
@@ -186,9 +267,12 @@ describe("buildHostFreePortAndRestartCommand", () => {
       code: "E_INVALID_ARGUMENT",
     });
 
+    const { buildHostFreePortAndRestartCommand } =
+      await import("../host-free-port-and-restart");
     const command = buildHostFreePortAndRestartCommand({
       pid: 4242,
       port: 51820,
+      deferIfParked: false,
     });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_INVALID_ARGUMENT",
@@ -214,9 +298,12 @@ describe("buildHostFreePortAndRestartCommand", () => {
       holderPid: 4242,
     };
 
+    const { buildHostFreePortAndRestartCommand } =
+      await import("../host-free-port-and-restart");
     const command = buildHostFreePortAndRestartCommand({
       pid: 4242,
       port: 51820,
+      deferIfParked: false,
     });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_HOST_PORT_KILL_FAILED",
@@ -240,6 +327,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
     const command = buildHostFreePortAndRestartCommand({
       pid: 4242,
       port: 51820,
+      deferIfParked: false,
     });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_HOST_PORT_STILL_HELD",
@@ -265,6 +353,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
     const command = buildHostFreePortAndRestartCommand({
       pid: 4242,
       port: 51820,
+      deferIfParked: false,
     });
     const rejection = await command(fakeCtx()).then(
       () => null,
@@ -298,6 +387,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
     const command = buildHostFreePortAndRestartCommand({
       pid: 4242,
       port: 51820,
+      deferIfParked: false,
     });
     const rejection = await command(fakeCtx()).then(
       () => null,
@@ -329,10 +419,153 @@ describe("buildHostFreePortAndRestartCommand", () => {
     const command = buildHostFreePortAndRestartCommand({
       pid: 4242,
       port: 51820,
+      deferIfParked: false,
     });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_HOST_PORT_RELEASE_UNVERIFIED",
     });
     expect(mocks.controllerCalls).toEqual([]);
+  });
+
+  // Same `--defer-if-parked` contract as `host restart` (round-2
+  // revalidation redesign): this command reaches the identical `stop-only`
+  // branch from the port-conflict repair, so it is the same
+  // stop-without-relaunch hazard by another entry point. Driven by a real
+  // attempt record on disk, read by the real, unmocked shared contender
+  // layer - not a stubbed `recoveryAction`.
+  describe("--defer-if-parked", () => {
+    it("a stop-only record + --defer-if-parked refuses WITHOUT ever stopping the service", async () => {
+      mocks.controllerCalls = [];
+      mocks.lockCalls = [];
+      mocks.killCalls = [];
+      await writeAttemptRecordForEnvironment("production", {
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      });
+
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+      const command = buildHostFreePortAndRestartCommand({
+        pid: null,
+        port: null,
+        deferIfParked: true,
+      });
+      const result = await command(fakeCtx());
+
+      // The load-bearing negative: the service was never touched.
+      expect(mocks.controllerCalls).toEqual([]);
+      // Paired positive, so this test cannot pass merely because the
+      // command failed early and never reached the branch under test.
+      expect(result.data).toMatchObject({
+        restartedLabel: null,
+        deferredForParkedActivation: true,
+      });
+    });
+
+    it("the same stop-only record WITHOUT --defer-if-parked keeps the old behavior: stops the service", async () => {
+      mocks.controllerCalls = [];
+      mocks.lockCalls = [];
+      mocks.killCalls = [];
+      await writeAttemptRecordForEnvironment("production", {
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      });
+
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+      const command = buildHostFreePortAndRestartCommand({
+        pid: null,
+        port: null,
+        deferIfParked: false,
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual(["stop"]);
+      expect(result.data).toMatchObject({
+        restartedLabel: null,
+        deferredForParkedActivation: false,
+      });
+    });
+
+    // Regression for the `killError` warning composing with whichever
+    // action actually ran, instead of a hardcoded "restart requested"
+    // claim: before this fix, a failed SIGTERM on a stop-only outcome
+    // still told the caller a restart was requested even though the
+    // service was only stopped.
+    it("a stop-only record with a failed SIGTERM composes the warning with the action that actually ran (stop), not a hardcoded restart claim", async () => {
+      mocks.controllerCalls = [];
+      mocks.lockCalls = [];
+      mocks.killCalls = [];
+      // A failed SIGTERM whose port was verified free regardless: the only
+      // failed-signal shape that still reaches the service action, now that
+      // an unverified release throws before it (CLI-011). The composition
+      // under test is the same - the kill sentence must attach to the action
+      // that actually ran (stop), not to a hardcoded restart claim.
+      mocks.killResult = {
+        killed: false,
+        killError: "EPERM",
+        release: "released",
+        releaseDetail: "port 51820 has no listener (freed before the signal)",
+        holderPid: null,
+      };
+      await writeAttemptRecordForEnvironment("production", {
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      });
+
+      const { serviceLabelFor } = await import("../../service");
+      const label = serviceLabelFor("production");
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+      const command = buildHostFreePortAndRestartCommand({
+        pid: 4242,
+        port: 51820,
+        deferIfParked: false,
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual(["stop"]);
+      expect(result.data).toMatchObject({ killed: false, killError: "EPERM" });
+      expect(result.human).toBe(
+        `pid 4242 could not be signalled (EPERM); port verified free anyway (port 51820 has no listener (freed before the signal)); stopped '${label.id}' without activating parked update bytes`,
+      );
+      mocks.killResult = {
+        killed: true,
+        killError: null,
+        release: "released",
+        releaseDetail: "port 51820 has no listener (pid 4242 released it)",
+        holderPid: null,
+      };
+    });
+
+    it("a restart-current record (restarting/activate) still restarts even with --defer-if-parked set", async () => {
+      mocks.controllerCalls = [];
+      mocks.lockCalls = [];
+      mocks.killCalls = [];
+      await writeAttemptRecordForEnvironment("production", {
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+      });
+
+      const { buildHostFreePortAndRestartCommand } =
+        await import("../host-free-port-and-restart");
+      const command = buildHostFreePortAndRestartCommand({
+        pid: null,
+        port: null,
+        deferIfParked: true,
+      });
+      const result = await command(fakeCtx());
+
+      // The actual restart happened - not merely "did not defer".
+      expect(mocks.controllerCalls).toEqual(["restart"]);
+      expect(result.data).toMatchObject({
+        restartedLabel: "ai.traycer.host",
+        deferredForParkedActivation: false,
+      });
+    });
   });
 });

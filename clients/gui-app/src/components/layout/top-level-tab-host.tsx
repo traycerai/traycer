@@ -30,22 +30,16 @@ import {
   subscribeTabStructuralLocks,
 } from "@/stores/tabs/tab-structural-lock";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { HeaderTab, TabRef } from "@/stores/tabs/types";
+import type { HeaderTab } from "@/stores/tabs/types";
 import { SplitDivider } from "@/components/layout/tabs/split-divider";
 import { SplitSlotChooser } from "@/components/layout/tabs/split-slot-chooser";
 import {
-  TOP_LEVEL_EDGE_SPLIT_TARGET,
   TOP_LEVEL_FILLABLE_TARGET,
-  edgeSplitDropId,
   fillableSlotDropId,
   resolveValidatedTopLevelTabDrop,
-  type TopLevelEdgeSplitTarget,
   type TopLevelFillableTarget,
 } from "@/components/layout/tabs/top-level-tab-dnd";
-import {
-  useEpicDndStore,
-  useTopLevelEdgeSplitPreview,
-} from "@/components/epic-canvas/dnd/dnd-store";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { PhaseMigrationControllerHost } from "@/components/epic-tabs/phase-migration-controller-host";
 import { PhaseMigrationSurface } from "@/components/epic-tabs/phase-migration-surface";
 import {
@@ -162,9 +156,6 @@ export function TopLevelTabHost() {
           activeItem={activeItem}
           activateSurface={activateSurface}
         />
-      ) : null}
-      {renderedActiveItem?.kind === "tab" ? (
-        <TopLevelEdgeSplitTargets targetRef={renderedActiveItem.ref} />
       ) : null}
       {renderedActiveItem?.kind === "split" ? (
         <>
@@ -448,82 +439,6 @@ function useFillableSlotDropActive(
   if (!isOver || activeHeaderTab === null) return false;
   return (
     resolveValidatedTopLevelTabDrop(activeHeaderTab, target, layout) !== null
-  );
-}
-
-function TopLevelEdgeSplitTargets(props: {
-  readonly targetRef: TabRef;
-}): ReactNode {
-  const left: TopLevelEdgeSplitTarget = {
-    kind: TOP_LEVEL_EDGE_SPLIT_TARGET,
-    targetRef: props.targetRef,
-    side: "left",
-  };
-  const right: TopLevelEdgeSplitTarget = {
-    kind: TOP_LEVEL_EDGE_SPLIT_TARGET,
-    targetRef: props.targetRef,
-    side: "right",
-  };
-  const { setNodeRef: setLeftRef } = useDroppable({
-    id: edgeSplitDropId(props.targetRef, "left"),
-    data: left,
-  });
-  const { setNodeRef: setRightRef } = useDroppable({
-    id: edgeSplitDropId(props.targetRef, "right"),
-    data: right,
-  });
-  const preview = useTopLevelEdgeSplitPreview(
-    props.targetRef.kind,
-    props.targetRef.id,
-  );
-  return (
-    <>
-      {preview !== null ? (
-        <div
-          aria-hidden
-          data-preview-side={preview}
-          data-testid="top-level-edge-split-preview"
-          className="pointer-events-none absolute inset-0 z-10 grid grid-cols-2 gap-px bg-border/70 p-px"
-        >
-          <div
-            data-testid="top-level-edge-split-preview-left"
-            data-destination={preview === "left" ? "true" : "false"}
-            className={cn(
-              "bg-background/85",
-              preview === "left" &&
-                "bg-primary/15 ring-2 ring-inset ring-primary",
-            )}
-          />
-          <div
-            data-testid="top-level-edge-split-preview-right"
-            data-destination={preview === "right" ? "true" : "false"}
-            className={cn(
-              "bg-background/85",
-              preview === "right" &&
-                "bg-primary/15 ring-2 ring-inset ring-primary",
-            )}
-          />
-        </div>
-      ) : null}
-      <div
-        ref={setLeftRef}
-        aria-hidden
-        data-testid="top-level-edge-target-left"
-        className={cn(
-          "pointer-events-none absolute inset-y-0 left-0 z-20 w-1/5 border-2 border-transparent transition-colors",
-          preview === "left" && "border-primary bg-primary/10",
-        )}
-      />
-      <div
-        ref={setRightRef}
-        aria-hidden
-        data-testid="top-level-edge-target-right"
-        className={cn(
-          "pointer-events-none absolute inset-y-0 right-0 z-20 w-1/5 border-2 border-transparent transition-colors",
-          preview === "right" && "border-primary bg-primary/10",
-        )}
-      />
-    </>
   );
 }
 

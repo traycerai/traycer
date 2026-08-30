@@ -639,6 +639,10 @@ describe("buildDesktopReleaseFeed", () => {
       updateProvider: ExactReleaseAssetProvider,
       assets: release.assets,
       token: "secret-token",
+      // Carried so `getBlockMapFiles` can resolve the PREVIOUS release's
+      // assets, which `assets` above (this release alone) cannot supply.
+      owner: "traycerai",
+      repo: "private-traycer",
     });
   });
 });
@@ -694,6 +698,8 @@ describe("ExactReleaseAssetProvider", () => {
         updateProvider: ExactReleaseAssetProvider,
         assets,
         token: "secret-token",
+        owner: "traycerai",
+        repo: "private-traycer",
       },
       undefined,
       buildRuntimeOptions(executor),
@@ -764,5 +770,106 @@ describe("ExactReleaseAssetProvider", () => {
     expect(() => provider.resolveFiles(updateInfo)).toThrow(
       /Traycer-1\.6\.0-rc\.3-mac\.zip/,
     );
+  });
+
+  // The differential downloader asks for the blockmap of the release being
+  // installed AND of the one already installed. Artifact names carry no
+  // version, so both blockmaps are called `<installer>.blockmap` - and this
+  // provider is pinned to a single release's assets. Resolving the old one
+  // therefore cannot be a lookup in `assets`; it has to fetch that release.
+  describe("getBlockMapFiles", () => {
+    const newBlockMapUrl =
+      "https://api.github.com/repos/traycerai/private-traycer/releases/assets/1003";
+    const oldBlockMapUrl =
+      "https://api.github.com/repos/traycerai/private-traycer/releases/assets/2003";
+    const blockMapName = "Traycer-1.6.0-rc.3-mac.zip.blockmap";
+
+    function currentReleaseAssets(): DesktopReleaseAsset[] {
+      return [
+        { name: "latest-mac.yml", url: manifestAssetUrl },
+        { name: "Traycer-1.6.0-rc.3-mac.zip", url: installerAssetUrl },
+        { name: blockMapName, url: newBlockMapUrl },
+      ];
+    }
+
+    it("resolves the old blockmap from the previous release and the new one from the pinned assets", async () => {
+      const { executor, provider } = buildProvider(currentReleaseAssets());
+      executor.response = JSON.stringify({
+        assets: [{ name: blockMapName, url: oldBlockMapUrl }],
+      });
+
+      const [oldUrl, newUrl] = await provider.getBlockMapFiles(
+        new URL(installerAssetUrl),
+        "1.5.0",
+        "1.6.0-rc.3",
+      );
+
+      // The two URLs must DIFFER. Returning the new blockmap for both sides is
+      // the failure this override exists to prevent: the downloader would then
+      // "reconstruct" the file already on disk.
+      expect(newUrl.toString()).toBe(newBlockMapUrl);
+      expect(oldUrl.toString()).toBe(oldBlockMapUrl);
+
+      expect(executor.calls).toHaveLength(1);
+      const [options] = executor.calls;
+      expect(options).toMatchObject({
+        hostname: "api.github.com",
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: "token secret-token",
+        },
+      });
+      // Addressed by TAG, which is the only handle on a release this provider
+      // is not pinned to.
+      expect(String(options.path)).toContain("/releases/tags/desktop-v1.5.0");
+    });
+
+    it("throws when the previous release publishes no matching blockmap", async () => {
+      const { executor, provider } = buildProvider(currentReleaseAssets());
+      executor.response = JSON.stringify({
+        assets: [{ name: "latest-mac.yml", url: manifestAssetUrl }],
+      });
+
+      // Throwing is the correct outcome, not a regression:
+      // `differentialDownloadInstaller` catches it and falls back to a full
+      // download. Silently returning the new blockmap twice would not.
+      await expect(
+        provider.getBlockMapFiles(
+          new URL(installerAssetUrl),
+          "1.5.0",
+          "1.6.0-rc.3",
+        ),
+      ).rejects.toThrow(/1\.5\.0/);
+    });
+
+    it("throws before any network call when this release publishes no blockmap", async () => {
+      const { executor, provider } = buildProvider([
+        { name: "latest-mac.yml", url: manifestAssetUrl },
+        { name: "Traycer-1.6.0-rc.3-mac.zip", url: installerAssetUrl },
+      ]);
+
+      await expect(
+        provider.getBlockMapFiles(
+          new URL(installerAssetUrl),
+          "1.5.0",
+          "1.6.0-rc.3",
+        ),
+      ).rejects.toThrow(/1\.6\.0-rc\.3/);
+      expect(executor.calls).toHaveLength(0);
+    });
+
+    it("throws when the installer URL is not one of the pinned assets", async () => {
+      const { provider } = buildProvider(currentReleaseAssets());
+
+      await expect(
+        provider.getBlockMapFiles(
+          new URL(
+            "https://api.github.com/repos/traycerai/private-traycer/releases/assets/9999",
+          ),
+          "1.5.0",
+          "1.6.0-rc.3",
+        ),
+      ).rejects.toThrow(/9999/);
+    });
   });
 });

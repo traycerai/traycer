@@ -97,6 +97,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -190,10 +191,12 @@ function consentEntry(source: string): ImageResolutionEntry {
 const CANONICAL_INPUT: RenderedMessagesInput = {
   messages: [],
   events: [],
+  rowContext: {},
   pendingUserMessages: [],
   liveAssistantMessage: null,
   activeTurn: null,
   runStatus: "idle",
+  setupCardWindows: [],
   ...BINDING,
 };
 
@@ -763,6 +766,7 @@ function assistantMessageWithoutImageResolutions(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     // Deliberately no `imageResolutions` key.
   };
   return preImage as Extract<Message, { role: "assistant" }>;

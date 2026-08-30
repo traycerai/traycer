@@ -20,6 +20,10 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
+import {
+  clockSkewStreamReason,
+  type ServerClockSkewSignal,
+} from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import type {
   ConnectionManifest,
   FatalErrorDetails,
@@ -92,6 +96,24 @@ export interface WsStreamClientOptions<
    * cannot recover an auth rejection by retrying the same bearer.
    */
   readonly auth: StreamAuthRevalidator | null;
+  /**
+   * Verdict on whether this machine's WALL CLOCK is trustworthy, from the
+   * shared server-time offset tracker.
+   *
+   * Read at the two places an auth failure could be a lie: the pre-dial expiry
+   * gate and the no-progress `UNAUTHORIZED` bound. When the tracker says
+   * `skewed`, neither is evidence about the credential — a 15-minute bearer
+   * reads as hours expired on a clock that is hours off, and the host rejects
+   * it for the same reason — so the session PARKS on the tracker's recovery
+   * edge instead of counting toward `goTerminal`.
+   *
+   * Required, not defaulted, for the same reason `evidence` and
+   * `clientIdentity` are: a new construction site has to answer the question.
+   * `null` means "no tracker wired" and restores the pre-existing behaviour
+   * exactly — correct for dev mocks, tests, and any client that has no
+   * server-time reference to key on.
+   */
+  readonly clock: ServerClockSkewSignal | null;
   /**
    * Mints a device credential when a connected host reports it has none, so the
    * host can act on the user's behalf after the client disconnects. `null` opts
@@ -395,6 +417,7 @@ export class WsStreamClient<
       endpoint: this.options.endpoint,
       bearer: this.options.bearer,
       auth: this.options.auth,
+      clock: this.options.clock,
       evidence: this.options.evidence,
       webSocketFactory: this.options.webSocketFactory,
       dialTimeoutMs: this.options.dialTimeoutMs,
@@ -1100,6 +1123,8 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly auth: StreamAuthRevalidator | null;
+  /** See `WsStreamClientOptions.clock`. */
+  readonly clock: ServerClockSkewSignal | null;
   readonly evidence: TransportEvidenceReporter;
   readonly webSocketFactory: IStreamWebSocketFactory;
   readonly dialTimeoutMs: number;
@@ -1224,6 +1249,14 @@ class StreamSession<
    * (the user stays signed in, so recovery is a manual reload).
    */
   private noProgressUnauthorizedReconnects = 0;
+  /**
+   * Live subscription to the clock tracker's `skewed → ok` edge while this
+   * session is PARKED, or `null` when it is not parked. Doubles as the parked
+   * flag: a parked session holds no socket and no timer, so this handle is the
+   * only thing keeping it reachable, and losing it would strand the session
+   * silently — the exact failure mode parking exists to remove.
+   */
+  private clockParkUnsubscribe: (() => void) | null = null;
   private disposed = false;
 
   private activeSocket: StreamWebSocketLike | null = null;
@@ -1565,6 +1598,11 @@ class StreamSession<
     if (this.disposed) {
       return;
     }
+    // A dial is happening, so nothing is parked any more - whether we got here
+    // from the recovery edge itself or from a wake `forceReconnect` that ran
+    // straight through the park. Idempotent, and the only place besides
+    // `disposeSession` that releases the subscription.
+    this.clearClockPark();
     // Single-dial guard: a connect must never overwrite a live `activeSocket`.
     // Normally every reconnect path nulls the socket first (`onTransportDrop` /
     // `resetForReconnect`), but the async `revalidateThenReconnect` can resolve
@@ -1607,11 +1645,20 @@ class StreamSession<
     // certain rejection (surfacing a sign-in toast). Revalidate first and
     // dial with the rotated bearer. The local `exp` read is unverified and
     // advisory only - the reactive UNAUTHORIZED path stays the authority for
-    // everything it cannot see (revocation, clock skew, config mismatch),
-    // and an undecodable token falls through to a normal dial.
+    // everything it cannot see (revocation, config mismatch), and an
+    // undecodable token falls through to a normal dial.
     const auth = this.config.auth;
     const expiresAtMs = readAccessTokenExpiryMs(token);
     if (auth !== null && expiresAtMs !== null && expiresAtMs <= Date.now()) {
+      // THE EXPIRY READ IS A COMPARISON AGAINST `Date.now()`, so on a machine
+      // whose clock is hours off it says "expired" about a bearer minted
+      // seconds ago. Park rather than revalidate: authn (correct clock) would
+      // answer "valid", we would re-dial the same token, and the loop below
+      // would walk this session to `goTerminal` with a diagnosis that names
+      // the credential instead of the clock.
+      if (this.parkIfClockSkewed("pre-dial-expiry")) {
+        return;
+      }
       console.debug(
         `[stream] pre-dial bearer already expired; revalidating before dial method=${String(this.config.method)}`,
       );
@@ -1620,7 +1667,7 @@ class StreamSession<
         auth,
         {
           code: "UNAUTHORIZED",
-          reason: "Bearer expired before dial (client resumed from suspension)",
+          reason: this.preDialExpiryReason(),
           incompatibleMethods: null,
           upgradeGuidance: null,
         },
@@ -2208,6 +2255,21 @@ class StreamSession<
     // clock skew / config mismatch). Bound that loop so we don't hammer authn
     // forever; otherwise reset and re-dial with the fresh token.
     if (rejectedToken !== null && this.currentBearerToken() === rejectedToken) {
+      // "authn validates it, the host rejects it" has exactly two causes, and
+      // only one of them is this session's fault. The revalidation that just
+      // resolved is itself the strongest evidence available: it is an authn
+      // round trip, so its `Date` header has already reached the tracker. If
+      // our clock is running FAST, that is why - park before the counter
+      // moves, so skew can never contribute to the terminal bound.
+      //
+      // Keyed on the CLOCK and never on the rejection shape: host config
+      // mismatch produces an identical no-progress streak and must still reach
+      // `goTerminal`, because retrying it forever helps nobody. And keyed on
+      // the direction that can cause this, not on `skewed`: a SLOW clock
+      // leaves this rejection just as unexplained as no skew at all.
+      if (this.parkIfClockSkewed("no-progress-unauthorized")) {
+        return;
+      }
       this.noProgressUnauthorizedReconnects += 1;
       if (
         this.noProgressUnauthorizedReconnects >=
@@ -2259,6 +2321,135 @@ class StreamSession<
         clearTimeout(timer);
       }
     }
+  }
+
+  /**
+   * Parks this session if - and only if - the shared tracker reads the local
+   * clock as wrong IN THE DIRECTION THAT CAN CAUSE THIS FAILURE: running
+   * AHEAD, where a valid bearer reads as expired locally. Returns whether it
+   * parked, so both call sites read as a guard.
+   *
+   * Not merely `skewed`. A clock running BEHIND is equally wrong and equally
+   * banner-worthy, but it cannot make a bearer look expired and cannot make a
+   * host reject one, so an UNAUTHORIZED alongside it has some other cause -
+   * one the terminal bound diagnoses honestly today. Parking on that would
+   * strand a recoverable session behind a "fix your clock" that fixes nothing.
+   * See `clockCanMakeValidBearersLookExpired`.
+   *
+   * A parked session holds NO socket, NO retry timer and NO backoff ladder. It
+   * is not terminal: `goTerminal`'s "recovery is a manual reload" contract is
+   * reserved for genuinely broken sessions, and a wrong clock is a condition
+   * the user fixes in seconds. The only thing keeping the session alive is a
+   * subscription to the tracker's `skewed → ok` edge, on which it resumes the
+   * ordinary dial path with whatever bearer is current by then.
+   *
+   * Not parking when the tracker is absent, says `ok`/`unknown`, or says the
+   * clock is wrong the other way is the whole safety story: without a
+   * trustworthy server-time reference that names THIS failure's cause, this
+   * must degrade to exactly the behaviour that shipped before it existed.
+   */
+  private parkIfClockSkewed(trigger: string): boolean {
+    if (this.disposed) {
+      return false;
+    }
+    const clock = this.config.clock;
+    if (clock === null || !clock.canMakeValidBearersLookExpired()) {
+      return false;
+    }
+    if (this.clockParkUnsubscribe !== null) {
+      return true;
+    }
+    console.warn(
+      `[stream] parking session on system-clock skew ` +
+        `(trigger=${trigger}, method=${String(this.config.method)}): ` +
+        clockSkewStreamReason(clock.currentState()),
+    );
+    this.teardownTimers();
+    this.teardownSocket(1000, "clock-skew-park");
+    this.phase = "idle";
+    // SUBSCRIBE BEFORE THE STATUS EMIT, and re-check disposal after it.
+    // `transitionTo` invokes the consumer's handler SYNCHRONOUSLY, and a
+    // consumer closing the session from inside it (an unmounting owner does
+    // exactly that) runs `disposeSession` → `clearClockPark` against a handle
+    // this method has not assigned yet. Control then returns here and installs
+    // a recovery listener on an already-disposed session, which
+    // `resumeFromClockPark` refuses to act on and therefore never releases -
+    // the app-wide tracker would retain the dead session for the life of the
+    // page. Assigning first means the re-entrant `clearClockPark` finds a real
+    // handle; the post-emit check covers the ordering either way.
+    this.clockParkUnsubscribe = clock.subscribeToRecovery(() => {
+      this.resumeFromClockPark();
+    });
+    // "reconnecting", not "closed": the session IS coming back, and consumers
+    // already render this state as an interruption rather than a failure. The
+    // app-level clock banner is what names the cause.
+    this.transitionTo("reconnecting", null);
+    if (this.disposed) {
+      this.clearClockPark();
+    }
+    return true;
+  }
+
+  /**
+   * The `skewed → ok` edge: the clock was corrected, so dial immediately.
+   *
+   * Every loop counter is reset first. The streak this session accumulated was
+   * measuring a condition that no longer exists, and carrying it forward would
+   * let a handful of pre-fix cycles push the first honest post-fix attempt into
+   * a long backoff - or, worse, into the terminal bound.
+   */
+  private resumeFromClockPark(): void {
+    if (this.clockParkUnsubscribe === null) {
+      return;
+    }
+    if (this.disposed) {
+      // RELEASE, never just bail: a disposed session that returns here still
+      // holding its handle stays in the tracker's listener set forever. Belt
+      // and braces alongside `parkIfClockSkewed`'s post-emit check.
+      this.clearClockPark();
+      return;
+    }
+    console.info(
+      `[stream] system clock corrected; resuming parked session ` +
+        `method=${String(this.config.method)}`,
+    );
+    this.reconnectAttempt = 0;
+    this.slowClientReconnectStreak = 0;
+    this.resetLoopCounters();
+    // `connect()` releases the park subscription itself.
+    this.connect();
+  }
+
+  private clearClockPark(): void {
+    const unsubscribe = this.clockParkUnsubscribe;
+    if (unsubscribe === null) {
+      return;
+    }
+    this.clockParkUnsubscribe = null;
+    unsubscribe();
+  }
+
+  /**
+   * Why the pre-dial gate believes the bearer is unusable, for the details a
+   * later `goTerminal` would surface.
+   *
+   * Replaces the fabricated "client resumed from suspension" copy this gate
+   * used to assert unconditionally. It was a guess that happened to fit the
+   * case the gate was written for, and it read as a confident misdiagnosis in
+   * the clock-skew incident - the user's app said their bearer had expired
+   * while suspended, on a machine that had just booted.
+   *
+   * Blames the clock only when the clock CAN be to blame, for the same reason:
+   * a clock running BEHIND makes this gate's `exp <= Date.now()` read LESS
+   * likely to fire, so if it fired anyway the bearer really is expired and
+   * naming the clock would just be the next confident misdiagnosis.
+   */
+  private preDialExpiryReason(): string {
+    const clock = this.config.clock;
+    if (clock !== null && clock.canMakeValidBearersLookExpired()) {
+      return clockSkewStreamReason(clock.currentState());
+    }
+    return "Bearer expired before dial (local token expiry read)";
   }
 
   /** The bearer the next open frame would carry, or null if none is available. */
@@ -2607,6 +2798,11 @@ class StreamSession<
       return false;
     }
     this.disposed = true;
+    // The single choke point for both `close()` and `goTerminal()`. A parked
+    // session's tracker subscription is the one handle that is NOT a timer, so
+    // `teardownTimers` cannot reach it: left attached it would re-dial a
+    // disposed session the next time somebody's clock came right.
+    this.clearClockPark();
     this.config.onDispose();
     return true;
   }

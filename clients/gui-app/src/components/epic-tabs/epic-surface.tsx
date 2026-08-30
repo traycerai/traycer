@@ -55,16 +55,17 @@ export function EpicSurface(props: EpicSurfaceProps) {
       <PaneVisibilityContext.Provider value={activity.visible}>
         <EpicSessionProvider epicId={props.epicId} tabId={props.tabId}>
           <BrowserSessionsProvider epicId={props.epicId}>
-            {/* Fills the mobile header's right-actions slot (the tab switcher
-                trigger) for the epic the tab layout has FOCUSED, not for the one
-                the route names. Only the focused surface writes, so the single
-                cell still has one owner, and the trigger appears on a phone cold
-                restore - where the layout restores the tab but the router boots
-                at `/`, leaving the route-active effects below unmounted. Self-
-                gates on mobile, so desktop renders nothing either way. */}
-            {activity.focused ? (
-              <MobileEpicHeaderActionsBinder tabId={props.tabId} />
-            ) : null}
+            {/* Registers the mobile header's right actions (the tab switcher
+                trigger) for this epic PANE - focused or merely retained - so a
+                focus switch onto an already-retained tab resolves its trigger
+                in that same commit, with no register-on-focus gap. Which pane's
+                entry the header shows is resolution's call, keyed by the tab
+                layout's focused ref rather than the route - so the trigger also
+                appears on a phone cold restore, where the layout restores the
+                tab but the router boots at `/`, leaving the route-active
+                effects below unmounted. Self-gates on mobile, so desktop
+                registers nothing either way. */}
+            <MobileEpicHeaderActionsBinder tabId={props.tabId} />
             <EpicViewTabContext.Provider value={props.tabId}>
               <div
                 className="flex min-h-0 min-w-0 flex-1 flex-row"

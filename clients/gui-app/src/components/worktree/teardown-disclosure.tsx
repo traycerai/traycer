@@ -1,40 +1,47 @@
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { cn } from "@/lib/utils";
 import { teardownHolderRowKey } from "@/lib/worktree/owner-teardown-snapshot";
+import {
+  formatTeardownActors,
+  type FormattedTeardownActor,
+} from "@/lib/worktree/teardown-holder-copy";
 
 /**
- * Renders a T2 holder list as "what will be stopped". Source-agnostic: the
- * list may come from the phase-1 client-local snapshot or, later, the host
- * `listHolders` read. Empty renders nothing.
+ * Compact grouped disclosure for a single-target teardown (rebind commit,
+ * Settings force-delete). Actor sentences wrap; hold-kind tags are never
+ * shown. Sweep uses {@link TeardownInlineDisclosure} inside each row.
  */
 export function TeardownDisclosure(props: {
   readonly holders: readonly WorktreeBusyHolder[];
   readonly failures?: Readonly<Record<string, string>>;
+  readonly agentNames: ReadonlyMap<string, string> | undefined;
 }) {
   if (props.holders.length === 0) return null;
-  const working = props.holders.filter(
-    (holder) => holder.activity === "working",
+  const actors = formatTeardownActors(
+    props.holders,
+    props.agentNames ?? new Map(),
   );
-  const idle = props.holders.filter((holder) => holder.activity === "idle");
+  const working = actors.filter((actor) => actor.tone === "working");
+  const idle = actors.filter((actor) => actor.tone === "idle");
   return (
     <div
       className="flex w-full min-w-0 flex-col gap-3 overflow-hidden"
       data-testid="teardown-disclosure"
     >
       {working.length > 0 ? (
-        <HolderGroup
+        <ActorGroup
           testId="teardown-disclosure-working"
           heading={workingHeading(working)}
-          holders={working}
+          actors={working}
           tone="working"
           failures={props.failures}
         />
       ) : null}
       {idle.length > 0 ? (
-        <HolderGroup
+        <ActorGroup
           testId="teardown-disclosure-idle"
           heading={idleHeading(idle)}
-          holders={idle}
+          actors={idle}
           tone="idle"
           failures={props.failures}
         />
@@ -43,10 +50,59 @@ export function TeardownDisclosure(props: {
   );
 }
 
-function HolderGroup(props: {
+/**
+ * Worktree-scoped inline disclosure: heading + wrapping actor sentences,
+ * no pooled type tags.
+ */
+export function TeardownInlineDisclosure(props: {
+  readonly holders: readonly WorktreeBusyHolder[];
+  readonly heading: string;
+  readonly agentNames: ReadonlyMap<string, string> | undefined;
+  readonly unknownConsequence: string | null;
+}) {
+  const actors = formatTeardownActors(
+    props.holders,
+    props.agentNames ?? new Map(),
+  );
+  if (actors.length === 0 && props.unknownConsequence === null) return null;
+  return (
+    <div
+      className="mt-2 min-w-0 rounded-md border-l-2 border-amber-500/70 bg-amber-500/8 px-2.5 py-2"
+      data-testid="teardown-disclosure-inline"
+    >
+      <p className="text-ui-xs font-medium text-foreground">{props.heading}</p>
+      <ul className="m-0 mt-1 flex list-none flex-col gap-1 p-0">
+        {props.unknownConsequence !== null ? (
+          <li className="text-ui-xs wrap-anywhere text-foreground">
+            {props.unknownConsequence}
+          </li>
+        ) : (
+          actors.map((actor) => (
+            <li
+              key={actor.key}
+              className="text-ui-xs wrap-anywhere text-foreground"
+            >
+              {actor.sentence}
+              {actor.evidence.map((line) => (
+                <span
+                  key={line}
+                  className="mt-0.5 block wrap-anywhere text-muted-foreground"
+                >
+                  {line}
+                </span>
+              ))}
+            </li>
+          ))
+        )}
+      </ul>
+    </div>
+  );
+}
+
+function ActorGroup(props: {
   readonly testId: string;
   readonly heading: string;
-  readonly holders: readonly WorktreeBusyHolder[];
+  readonly actors: readonly FormattedTeardownActor[];
   readonly tone: "working" | "idle";
   readonly failures: Readonly<Record<string, string>> | undefined;
 }) {
@@ -66,12 +122,11 @@ function HolderGroup(props: {
         {props.heading}
       </p>
       <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
-        {props.holders.map((holder) => {
-          const key = teardownHolderRowKey(holder);
-          const failure = props.failures?.[key];
+        {props.actors.map((actor) => {
+          const failure = firstFailure(actor, props.failures);
           return (
             <li
-              key={key}
+              key={actor.key}
               className={cn(
                 "flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1 text-ui-sm",
                 props.tone === "working"
@@ -79,17 +134,20 @@ function HolderGroup(props: {
                   : "bg-foreground/3",
               )}
             >
-              <div className="flex min-w-0 items-baseline gap-2">
+              <span
+                className="min-w-0 wrap-anywhere text-foreground"
+                data-testid="teardown-holder-label"
+              >
+                {actor.sentence}
+              </span>
+              {actor.evidence.map((line) => (
                 <span
-                  className="min-w-0 flex-1 wrap-anywhere text-foreground"
-                  data-testid="teardown-holder-label"
+                  key={line}
+                  className="min-w-0 wrap-anywhere text-ui-xs text-muted-foreground"
                 >
-                  {holder.label}
+                  {line}
                 </span>
-                <span className="shrink-0 text-ui-xs text-muted-foreground">
-                  {holdKindLabel(holder.holdKind)}
-                </span>
-              </div>
+              ))}
               {failure === undefined ? null : (
                 <span
                   className="text-ui-xs text-destructive"
@@ -106,14 +164,20 @@ function HolderGroup(props: {
   );
 }
 
-function holdKindLabel(holdKind: WorktreeBusyHolder["holdKind"]): string {
-  if (holdKind === "chat-turn") return "Turn";
-  if (holdKind === "terminal-agent-pty") return "Terminal";
-  if (holdKind === "supervised-shell") return "Shell";
-  return "Run directory";
+function firstFailure(
+  actor: FormattedTeardownActor,
+  failures: Readonly<Record<string, string>> | undefined,
+): string | undefined {
+  if (failures === undefined) return undefined;
+  for (const holder of actor.holders) {
+    const rowKey = teardownHolderRowKey(holder);
+    if (Object.hasOwn(failures, rowKey)) return failures[rowKey];
+  }
+  return undefined;
 }
 
-function workingHeading(holders: readonly WorktreeBusyHolder[]): string {
+function workingHeading(actors: readonly FormattedTeardownActor[]): string {
+  const holders = actors.flatMap((actor) => actor.holders);
   const agents = holders.filter(
     (holder) =>
       holder.holdKind === "chat-turn" ||
@@ -135,8 +199,9 @@ function workingHeading(holders: readonly WorktreeBusyHolder[]): string {
   return parts.join(" · ");
 }
 
-function idleHeading(holders: readonly WorktreeBusyHolder[]): string {
-  return holders.length === 1
+function idleHeading(actors: readonly FormattedTeardownActor[]): string {
+  const count = actors.length;
+  return count === 1
     ? "1 background process will be stopped"
-    : `${holders.length} background processes will be stopped`;
+    : `${String(count)} background processes will be stopped`;
 }

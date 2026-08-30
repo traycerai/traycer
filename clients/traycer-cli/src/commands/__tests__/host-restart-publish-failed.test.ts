@@ -63,9 +63,20 @@ vi.mock("../../service", async (importOriginal) => {
       relaunchAfterRestart: async () => {
         mocks.controllerCalls.push("relaunchAfterRestart");
       },
+      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
   };
 });
+
+// The attempt-gated relaunch publishes a host-start adoption and waits for
+// the spawn; there is no real service here to spawn anything, so the wait
+// must be stubbed exactly as host-restart.test.ts stubs it.
+vi.mock("../../host/host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => undefined,
+    cancel: async () => undefined,
+  }),
+}));
 
 // Selectively fails `rename` with EXDEV once, and corrupts the
 // destination-side copy `publishAcrossFilesystems` makes - same rig as
@@ -227,7 +238,11 @@ describe("host restart survives a CLI upgrade publication failure (Codex P1 #2)"
     mocks.corruptCopyDestSuffix = ".traycer-upgrade-";
 
     const { buildHostRestartCommand } = await import("../host-restart");
-    const command = buildHostRestartCommand({ ifIdle: false, force: false });
+    const command = buildHostRestartCommand({
+      ifIdle: false,
+      force: false,
+      deferIfParked: false,
+    });
 
     // Must resolve, not reject - this is the regression: before the fix
     // the publish failure's CliError propagated out of this call and the

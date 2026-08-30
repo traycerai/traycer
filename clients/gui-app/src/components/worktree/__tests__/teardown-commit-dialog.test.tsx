@@ -97,7 +97,7 @@ describe("TeardownCommitDialog", () => {
     const label = screen.getByTestId("teardown-holder-label");
     const confirm = screen.getByTestId("teardown-commit-immediate");
     const footer = confirm.closest("[data-slot='dialog-footer']");
-    expect(label.textContent).toBe(unbrokenToken);
+    expect(label.textContent).toContain(unbrokenToken);
     expect(dialog.contains(label)).toBe(true);
     expect(dialog.contains(confirm)).toBe(true);
     expect(label.className).toContain("wrap-anywhere");

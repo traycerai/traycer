@@ -74,6 +74,10 @@ function makeMessengerFactory(): (args: {
             busySessionCount: 0,
             updateProgress: null,
             busyBreakdown: null,
+            // `null` = this fixture's host did not report the durable attempt,
+            // which is exactly what host.status@1.2-and-older peers send.
+            updateOperation: null,
+            updateTransaction: null,
           }),
       },
     });
@@ -538,7 +542,11 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
       scan.compareDocumentPosition(signIn) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     // Manual code entry stays reachable as a tertiary link.
-    expect(screen.getByTestId("link-code-signin-manual")).toBeTruthy();
+    const manual = screen.getByTestId("link-code-signin-manual");
+    expect(manual).toBeTruthy();
+    // The hero's inherited white text must not reach this outline button's
+    // light surface - the label pins its own foreground.
+    expect(manual.className).toContain("text-foreground");
     mobile.cleanupClient();
   });
 

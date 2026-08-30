@@ -233,6 +233,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // back off and re-subscribe on `network-error`), so wiring the client
     // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
     auth: null,
+    clock: null,
     // Delegated host-credential provisioning. `monitor` is the CLI command that
     // most needs it: the host it watches should keep serving after this process
     // exits. Provisioning is silent, so this works the same whether `monitor` is

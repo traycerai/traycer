@@ -2,6 +2,23 @@ import { defineConfig } from "vitest/config";
 import path from "node:path";
 
 export default defineConfig({
+  // The build bakes `__TRAYCER_MOBILE_CONFIG__` via `vite.config.ts`'s
+  // `define`; tests never run through that config, so any module-scope read
+  // of the global would throw a ReferenceError at import time without an
+  // equivalent definition here. Shape must satisfy `TraycerMobileBakedConfig`
+  // (`src/vite-env.d.ts`); the values themselves are inert — nothing in a
+  // jsdom test dials these endpoints.
+  define: {
+    __TRAYCER_MOBILE_CONFIG__: JSON.stringify({
+      environment: "dev",
+      authnBaseUrl: "http://127.0.0.1:1",
+      signInUrl: "http://127.0.0.1:1/sign-in",
+      relayBaseUrl: "ws://127.0.0.1:1",
+      hostLabel: "Traycer Mobile (vitest)",
+      returnScheme: "traycer-dev",
+      devHost: null,
+    }),
+  },
   resolve: {
     // The `@traycer/protocol` pair mirrors `clients/shared/vitest.config.ts`:
     // the workspace package resolves through the compiler's paths for `tsc`,

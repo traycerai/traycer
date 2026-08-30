@@ -63,6 +63,7 @@ import type {
   ChatEvent,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
+import type { RestorableSetupInterruption } from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import {
   createChatSessionStore,
@@ -120,6 +121,8 @@ function createHarness(): Harness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
     },
@@ -222,6 +225,73 @@ function emitSnapshot(
       heldUpdates: [],
       worktreeBinding: null,
       missingWorktreePaths: [],
+    },
+  });
+}
+
+/**
+ * The same chat on the WINDOWED line, where the interruption is not an event
+ * the driver can watch arrive - it is a value on the snapshot.
+ *
+ * An empty transcript (`rowCount: 0`) rather than a contrived long one: the
+ * point under test is the CARRIAGE, and a setup failure by definition happens
+ * before the message it gated ever became a row. That is also why `events` is
+ * empty and stays empty - the interruption's event occupies no ordinal, so no
+ * amount of hydration would ever put it in `state.events`.
+ */
+function emitWindowedSnapshot(
+  callbacks: ChatStreamCallbacks,
+  restorableSetupInterruption: RestorableSetupInterruption | null,
+): void {
+  callbacks.onConnectionStatus("open", null);
+  callbacks.onWindowedSnapshot({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    snapshot: {
+      chat: {
+        id: CHAT_ID,
+        parentId: null,
+        userId: OWNER_ID,
+        hostId: "test-host",
+        title: "Setup Chat",
+        createdAt: 0,
+        updatedAt: 0,
+        isTitleEditedByUser: false,
+        settings: null,
+        activeSessionChain: null,
+        claudePendingWakes: [],
+        archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
+      },
+      access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
+      queue: { status: "idle", items: [] },
+      runStatus: "idle",
+      activeTurn: null,
+      pendingApprovals: [],
+      pendingInterviews: [],
+      pendingFileEditApprovals: [],
+      accumulatedFileChangeCount: 0,
+      managedCommands: [],
+      heldUpdates: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      transcriptEpoch: 1,
+      rowCount: 0,
+      indexRevision: null,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+      derived: {
+        latestAssistantUsage: null,
+        pinnedTodo: null,
+        pinnedTaskTodoItems: [],
+        latestForkableAssistantMessageId: null,
+        restorableSetupInterruption,
+        interviewAnswerability: [],
+        latestAssistantAuthFailureTurnKey: null,
+        setupCardWindows: [],
+      },
     },
   });
 }
@@ -330,6 +400,92 @@ describe("useChatSetupFailureRestoreDriver", () => {
           { messageId: sent.messageId },
         ),
       );
+    });
+
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.resetEpoch).toBe(
+      epochAfterFirst,
+    );
+  });
+
+  it("restores the failed prompt on the windowed line, where no event ever reaches state.events", () => {
+    // Consumer 25 of the `state.messages` sweep, and the one with no
+    // client-side repair: `selectRestorableSetupInterruption`'s scan reads
+    // `state.events`, and on this line the interruption's event occupies no
+    // ordinal - `sliceTranscriptTail` never carries it and `loadRange` cannot
+    // ask for it. If the driver does not read the host's derived payload, the
+    // composer silently stops restoring drafts after a setup failure.
+    const harness = createHarness();
+    emitWindowedSnapshot(harness.callbacks(), null);
+
+    const failedContent = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "windowed prompt" }],
+        },
+      ],
+    };
+
+    act(() => {
+      harness.handle.store.getState().sendMessage({
+        content: failedContent,
+        sender: { type: "user", userId: OWNER_ID },
+        settings: {
+          harnessId: "codex",
+          model: "gpt-5-codex",
+          permissionMode: "supervised",
+          reasoningEffort: "medium",
+          serviceTier: null,
+          agentMode: "epic",
+          profileId: null,
+        },
+        attachments: [],
+        deliveryPolicy: "auto",
+        restore: { content: failedContent, browserAnnotations: [] },
+      });
+    });
+    const sent = harness.handle.store.getState().pendingUserMessages.at(0);
+    if (sent === undefined) throw new Error("expected pending user message");
+
+    render(<DriverHost handle={harness.handle} />);
+
+    act(() => {
+      emitWindowedSnapshot(harness.callbacks(), {
+        eventType: "setup.failed",
+        eventId: "evt-windowed-failed",
+        workspacePath: "/repo",
+        terminalSessionId: null,
+        setupExitCode: 1,
+        clientActionId: sent.clientActionId,
+        messageId: sent.messageId,
+      });
+    });
+
+    // The event log stayed empty throughout, which is the whole point: the
+    // legacy scan had nothing to find and the restore happened anyway.
+    expect(harness.handle.store.getState().events).toEqual([]);
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+    expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.content).toEqual(
+      failedContent,
+    );
+
+    const epochAfterFirst =
+      useComposerDraftStore.getState().drafts[CHAT_ID]?.resetEpoch ?? 0;
+
+    // Every subsequent snapshot re-delivers the SAME interruption as a value,
+    // so `eventId` is the only thing standing between this and a re-restore on
+    // every frame. Legacy's dedupe guard has to hold harder here.
+    act(() => {
+      emitWindowedSnapshot(harness.callbacks(), {
+        eventType: "setup.failed",
+        eventId: "evt-windowed-failed",
+        workspacePath: "/repo",
+        terminalSessionId: null,
+        setupExitCode: 1,
+        clientActionId: sent.clientActionId,
+        messageId: sent.messageId,
+      });
     });
 
     expect(useComposerDraftStore.getState().drafts[CHAT_ID]?.resetEpoch).toBe(
