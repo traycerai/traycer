@@ -135,6 +135,56 @@ describe("host surface notification routing", () => {
     ).toBeNull();
   });
 
+  // `view` narrows a destination that already works without it, so both
+  // directions of the version skew have to stay non-fatal: a newer producer's
+  // view must survive the parse, and a view this build does not know must
+  // degrade to the surface's default rather than reject the whole route.
+  it("parses a known host-surface view and degrades on an unknown one", () => {
+    expect(
+      parseNotificationPayload({
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        view: "cleanupHistory",
+        focus: { resourceId: "run-42" },
+      }),
+    ).toEqual({
+      kind: "hostSurface",
+      surface: "worktreeSettings",
+      view: "cleanupHistory",
+      focus: { resourceId: "run-42" },
+    });
+    expect(
+      parseNotificationPayload({
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        view: "someFutureView",
+      }),
+    ).toEqual({
+      kind: "hostSurface",
+      surface: "worktreeSettings",
+      view: undefined,
+      focus: undefined,
+    });
+  });
+
+  it("opens the parent surface for a view no panel consumes yet", () => {
+    const navigate = vi.fn();
+    routeNotification(
+      navigate,
+      {
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        view: "cleanupHistory",
+        focus: { resourceId: "run-42" },
+      },
+      1_000,
+    );
+
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "/settings/worktrees" }),
+    );
+  });
+
   it("does not park an unscoped transcript jump on the hostless fallback", () => {
     const navigate = vi.fn();
 

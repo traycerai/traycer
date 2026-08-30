@@ -112,6 +112,13 @@ export interface TerminalNotificationPayload {
 export interface HostSurfaceNotificationPayload {
   readonly kind: "hostSurface";
   readonly surface: "worktreeSettings";
+  /**
+   * Which view WITHIN the surface, when the surface has more than one. Also a
+   * hint, and for the same reason `focus` is: a build that does not know a view
+   * must land on the surface itself rather than refuse to navigate, so this can
+   * only ever narrow a destination that already works without it.
+   */
+  readonly view?: "cleanupHistory" | undefined;
   readonly focus: { readonly resourceId: string } | undefined;
 }
 
@@ -276,9 +283,14 @@ function parseHostSurfacePayload(
   const focus = isRecord(value.focus)
     ? readString(value.focus.resourceId)
     : null;
+  // An unknown `view` degrades to the surface's default view, exactly as an
+  // unresolvable `focus` degrades to no focus. A native envelope can arrive
+  // from a newer build naming views this one has never heard of.
+  const view = value.view === "cleanupHistory" ? "cleanupHistory" : undefined;
   return {
     kind: "hostSurface",
     surface: "worktreeSettings",
+    view,
     focus: focus === null ? undefined : { resourceId: focus },
   };
 }

@@ -13,6 +13,7 @@ import {
   hostNotificationInterviewPayloadSchema,
   hostNotificationKnownPayloadSchema,
   hostNotificationWorkspaceOperationFailedPayloadSchema,
+  hostNotificationWorktreeAutoCleanupPayloadSchema,
   hostNotificationWorktreeDeletionPayloadSchema,
   type HostNotificationKnownPayloadKind,
 } from "@traycer/protocol/host/notifications/payloads";
@@ -37,6 +38,7 @@ const LIVE_PAYLOAD_SCHEMAS: Record<
   approval: hostNotificationApprovalPayloadSchema,
   interview: hostNotificationInterviewPayloadSchema,
   worktree_deletion: hostNotificationWorktreeDeletionPayloadSchema,
+  worktree_auto_cleanup: hostNotificationWorktreeAutoCleanupPayloadSchema,
 };
 
 const KINDS = [
@@ -47,6 +49,7 @@ const KINDS = [
   "approval",
   "interview",
   "worktree_deletion",
+  "worktree_auto_cleanup",
 ] as const satisfies readonly HostNotificationKnownPayloadKind[];
 
 describe("host notification payload additivity", () => {

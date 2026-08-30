@@ -146,13 +146,14 @@ export function hostOperationKnownCopy(
     case "interview":
     case "workspace_operation_failed":
       return null;
-    // Worktree deletion supplies no copy of its own on purpose: the host
-    // already composed `title`/`message` into the payload's common fields, and
-    // that exact wording is what reached email and notification hooks at mint
-    // time. Re-deriving it here would make the in-app row and the email
-    // disagree about the same command for no gain - the arm's value is the
-    // structured counts and the navigation target, not the prose.
+    // Neither worktree operation supplies copy of its own, on purpose: the
+    // host already composed `title`/`message` into the payload's common
+    // fields, and that exact wording is what reached email and notification
+    // hooks at mint time. Re-deriving it here would make the in-app row and
+    // the email disagree about the same run for no gain - these arms' value is
+    // the structured counts and the navigation target, not the prose.
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
       return null;
   }
 }
@@ -216,6 +217,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "workspace_operation_failed":
       return payload.taskTitle;
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
       return null;
   }
 }
@@ -230,6 +232,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
       return null;
   }
 }
@@ -244,6 +247,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "epic":
     case "agent_stalled":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
       return null;
   }
 }
@@ -263,6 +267,7 @@ function knownStoppedReason(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
       return null;
   }
 }
@@ -281,6 +286,7 @@ function knownProviderId(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
       return null;
   }
 }
@@ -311,6 +317,7 @@ function knownBackgroundWorkRunning(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
       return false;
   }
 }

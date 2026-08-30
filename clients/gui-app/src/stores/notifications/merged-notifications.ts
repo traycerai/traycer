@@ -1634,6 +1634,18 @@ function navigationPayloadFromKnown(
         surface: "worktreeSettings",
         focus: undefined,
       };
+    // An automatic run DOES have something to focus: its own history entry,
+    // which survives the worktrees it removed. The run id is a hint either way -
+    // retention GC bounds history, so a row read months later may name a run
+    // that is gone, and landing on the history list is then the right answer
+    // rather than a dead end.
+    case "worktree_auto_cleanup":
+      return {
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        view: "cleanupHistory",
+        focus: { resourceId: known.runId },
+      };
   }
 }
 

@@ -756,6 +756,47 @@ describe("merged notifications feed", () => {
     });
   });
 
+  it("routes an automatic-cleanup row to that host's cleanup history, focused on the run", () => {
+    expect(
+      rowFromHostEntry({
+        id: "worktree.autoCleanup:run-7",
+        updatedAt: 10,
+        readAt: null,
+        kind: "host.operation.finished",
+        sourceRef: "run-7",
+        // Informational even with a failure in the mix: an unattended pass
+        // reports, it does not demand attention. Detail lives in history.
+        severity: "info",
+        outcome: "completed",
+        epicId: null,
+        chatId: null,
+        payload: {
+          kind: "worktree_auto_cleanup",
+          operation: "worktree.autoCleanup",
+          title: "Automatic cleanup removed 3 worktrees",
+          message: "Removed 3 worktrees; 1 skipped, 1 failed.",
+          runId: "run-7",
+          hostId: "host-1",
+          deletedCount: 3,
+          skippedCount: 1,
+          failedCount: 1,
+          interruptedCount: 0,
+        },
+      }),
+    ).toMatchObject({
+      title: "Automatic cleanup removed 3 worktrees",
+      body: "Removed 3 worktrees; 1 skipped, 1 failed.",
+      // Unlike a manual deletion, this row HAS something that outlives the
+      // worktrees it removed: its own history entry.
+      payload: {
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        view: "cleanupHistory",
+        focus: { resourceId: "run-7" },
+      },
+    });
+  });
+
   it("renders a newer host's unknown operation payload from its common fields, with no destination", () => {
     const row = rowFromHostEntry({
       id: "testbox.provision:command-2",
