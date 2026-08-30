@@ -760,3 +760,112 @@ describe("the hot-doc cap", () => {
     for (const grant of held) grant.release();
   });
 });
+
+/**
+ * The FORWARD-ONLY release, and its refusal.
+ *
+ * A `@1` body states no identity, so it has no `body/demote` to be refused -
+ * which is how its pins came to have no channel at all, and why main released
+ * rooms the tier still considered occupied. `body/release` answers for exactly
+ * that reason; the reason vocabulary is shared with the demote so "the tier
+ * says no" has one shape.
+ *
+ * What the refusal buys here is WARMTH, not correctness: on `@1` every main
+ * edit is relayed ahead of the release, and the presence-rebind gap that
+ * would have been a correctness cost is closed separately by the tier pushing
+ * current peers when an observer attaches. So these pin "does not churn a room
+ * a collaborator is sitting in", and say so rather than implying more.
+ */
+describe("the forward-only release", () => {
+  function forwardOnlySetup(release: {
+    released: boolean;
+    reason: "not-held" | "newer-generation" | "pinned" | null;
+  }) {
+    const pair = createFakeBridgePair("sync");
+    const releases: string[] = [];
+    pair.worker.subscribe((message) => {
+      if (!isMainToWorkerFrame(message) || message.frame !== "call") return;
+      const { callId, call } = message;
+      const respond = (value: unknown): void => {
+        pair.worker.post(
+          { frame: "result", callId, result: { outcome: "ok", value } },
+          [],
+        );
+      };
+      if (call.kind === "body/materialize") {
+        respond({
+          docKey: "room-1",
+          update: Uint8Array.from([1, 2, 3]),
+          // NO identity - this is what makes the body forward-only.
+          docGuid: null,
+          seedMode: "full",
+          hostStateVector: null,
+        });
+        return;
+      }
+      if (call.kind === "body/release") {
+        releases.push(call.request.docKey);
+        respond(release);
+      }
+    });
+    const docs = createDocs();
+    const scheduler = createScheduler();
+    const leases = createArtifactBodyLeaseBridge({
+      bridge: createMainBridgeEndpoint(pair.main, stubMainCallHandlers({})),
+      docs,
+      budget: createBudget(),
+      scheduler,
+      lingerMs: LINGER_MS,
+      maxHotDocs: MAX_HOT,
+    });
+    return { leases, docs, scheduler, releases, pair };
+  }
+
+  it("releases an unpinned body at expiry and drops the doc", async () => {
+    // The negative control. Without it the refusal pin below passes against a
+    // bridge that never releases anything at all.
+    const { leases, docs, scheduler, releases } = forwardOnlySetup({
+      released: true,
+      reason: null,
+    });
+    const grant = await leases.acquire("artifact-1");
+    if (grant.kind !== "granted") throw new Error("expected a grant");
+
+    grant.release();
+    scheduler.advance(LINGER_MS);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(releases).toEqual(["room-1"]);
+    expect(docs.dropped).toEqual(["room-1"]);
+  });
+
+  it("KEEPS the doc when the tier refuses, and looks again next window", async () => {
+    // A collaborator is present in the room. The tier refuses, main keeps its
+    // copy - and must re-arm, or a refusal is a wedge: the entry sits pending
+    // with no timer and nothing ever posts for it again.
+    const { leases, docs, scheduler, releases } = forwardOnlySetup({
+      released: false,
+      reason: "pinned",
+    });
+    const grant = await leases.acquire("artifact-1");
+    if (grant.kind !== "granted") throw new Error("expected a grant");
+
+    grant.release();
+    scheduler.advance(LINGER_MS);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(releases).toEqual(["room-1"]);
+    expect(docs.dropped).toEqual([]);
+    expect(docs.has("room-1")).toBe(true);
+
+    // RE-ARMED: the next window asks again rather than giving up.
+    scheduler.advance(LINGER_MS);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(releases).toEqual(["room-1", "room-1"]);
+    expect(docs.dropped).toEqual([]);
+  });
+});
