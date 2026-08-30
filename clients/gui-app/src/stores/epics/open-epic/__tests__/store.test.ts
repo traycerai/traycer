@@ -249,7 +249,7 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  it("sets accessLost (not epicDeleted) on a full revoke via onPermissionChanged(null)", async () => {
+  it("sets accessLost (not epicDeleted) on a full revoke via onPermissionChanged(null)", () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-a",

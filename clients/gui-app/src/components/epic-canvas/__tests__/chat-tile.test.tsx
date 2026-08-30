@@ -1555,8 +1555,10 @@ describe("<ChatTile />", () => {
       throw new Error("expected live epic handle");
     }
 
-    act(() => {
-      handle.store.getState().renameArtifact(CHAT_ARTIFACT.id, "Latest title");
+    await act(async () => {
+      await handle.store
+        .getState()
+        .renameArtifact(CHAT_ARTIFACT.id, "Latest title");
       emitChatSnapshotWithMessages({
         callbacks: chatHarness.callbacks(),
         access: "owner",

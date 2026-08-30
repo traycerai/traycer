@@ -249,12 +249,12 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
-  it("structural change (parent move) updates childrenByParent buckets", () => {
+  it("structural change (parent move) updates childrenByParent buckets", async () => {
     const { handle } = newSession();
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
     const child = createArtifactInDocForTests(handle.doc, "ticket", null);
 
-    handle.store.getState().reparentArtifact(child, parent);
+    await handle.store.getState().reparentArtifact(child, parent);
 
     const tree = handle.store.getState().tree;
     expect(tree.rootIds).toContain(parent);
@@ -263,14 +263,14 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
-  it("delete preserves artifact child parent links for host cascade", () => {
+  it("delete preserves artifact child parent links for host cascade", async () => {
     const { handle } = newSession();
     const root = createArtifactInDocForTests(handle.doc, "spec", null);
     const mid = createArtifactInDocForTests(handle.doc, "spec", root);
     const leaf = createArtifactInDocForTests(handle.doc, "ticket", mid);
     const chat = createArtifactInDocForTests(handle.doc, "chat", mid);
 
-    handle.store.getState().deleteArtifact(mid);
+    await handle.store.getState().deleteArtifact(mid);
 
     const state = handle.store.getState();
     expect(Object.hasOwn(state.artifacts.byId, mid)).toBe(false);

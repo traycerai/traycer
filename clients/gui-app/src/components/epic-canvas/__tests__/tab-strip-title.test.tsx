@@ -262,8 +262,8 @@ describe("TabStrip title", () => {
 
     const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
     if (handle === null) throw new Error("expected open epic handle");
-    act(() => {
-      handle.store.getState().renameArtifact(CHAT_ID, "Generated title");
+    await act(async () => {
+      await handle.store.getState().renameArtifact(CHAT_ID, "Generated title");
     });
 
     await waitFor(() => {

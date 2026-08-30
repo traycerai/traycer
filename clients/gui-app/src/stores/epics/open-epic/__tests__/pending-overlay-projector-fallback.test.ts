@@ -86,12 +86,12 @@ function newSession(): {
 }
 
 describe("projector full-projection fallback while a mutation is pending", () => {
-  it("an UNRELATED artifact's doc edit still shows the pending row's overlay", () => {
+  it("an UNRELATED artifact's doc edit still shows the pending row's overlay", async () => {
     const { handle } = newSession();
     const renamed = createArtifactInDocForTests(handle.doc, "spec", null);
     const other = createArtifactInDocForTests(handle.doc, "ticket", null);
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(renamed, "Optimistic title");
     if (requestId === null) throw new Error("expected a request id");
@@ -102,7 +102,7 @@ describe("projector full-projection fallback while a mutation is pending", () =>
     // An ordinary doc edit on a DIFFERENT node. With no pending mutation this
     // would take the incremental `applyPatches` path, which recomputes rows
     // purely from the doc and would drop the overlay for `renamed`.
-    handle.store.getState().renameArtifact(other, "Other renamed");
+    await handle.store.getState().renameArtifact(other, "Other renamed");
 
     expect(handle.store.getState().artifacts.byId[other].title).toBe(
       "Other renamed",
@@ -114,14 +114,14 @@ describe("projector full-projection fallback while a mutation is pending", () =>
     handle.dispose();
   });
 
-  it("reference stabilization: an untouched bystander row keeps its === identity through the full-projection fallback", () => {
+  it("reference stabilization: an untouched bystander row keeps its === identity through the full-projection fallback", async () => {
     const { handle } = newSession();
     const renamed = createArtifactInDocForTests(handle.doc, "spec", null);
     const other = createArtifactInDocForTests(handle.doc, "ticket", null);
     const bystander = createArtifactInDocForTests(handle.doc, "spec", null);
     const bystanderBefore = handle.store.getState().artifacts.byId[bystander];
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(renamed, "Optimistic title");
     if (requestId === null) throw new Error("expected a request id");
@@ -130,7 +130,7 @@ describe("projector full-projection fallback while a mutation is pending", () =>
     // in the projector) must reconcile against the previously published
     // state, not hand every consumer a fresh row reference just because a
     // pending mutation forced the full-projection path.
-    handle.store.getState().renameArtifact(other, "Other renamed");
+    await handle.store.getState().renameArtifact(other, "Other renamed");
 
     expect(handle.store.getState().artifacts.byId[bystander]).toBe(
       bystanderBefore,
@@ -138,11 +138,11 @@ describe("projector full-projection fallback while a mutation is pending", () =>
     handle.dispose();
   });
 
-  it("a doc edit that lands the pending row's OWN authoritative value keeps showing the overlay's chain rules", () => {
+  it("a doc edit that lands the pending row's OWN authoritative value keeps showing the overlay's chain rules", async () => {
     const { handle } = newSession();
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(id, "Optimistic title");
     if (requestId === null) throw new Error("expected a request id");

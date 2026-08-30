@@ -293,7 +293,27 @@ export function spawnEpicRuntimeWorker<TProjection>(
     },
   });
 
+  /**
+   * The stream-proxy family, recognised as ONE thing.
+   *
+   * Lifted out of the switch below because `complexity` counts case labels:
+   * five of them sharing a single one-line body pushed that dispatch over the
+   * cap while adding no decision a reader has to follow. A named predicate
+   * says what the five have in common, which the labels never did.
+   */
+  const isStreamProxyEvent = (
+    event: WorkerToMainEvent,
+  ): event is Extract<WorkerToMainEvent, { kind: `stream/${string}` }> =>
+    event.kind.startsWith("stream/");
+
   const unsubscribeEvents = bridge.onEvent((event: WorkerToMainEvent) => {
+    if (isStreamProxyEvent(event)) {
+      // Every unknown id is dropped inside the host, silently and on purpose:
+      // a frame can be in flight when a session closes, and a throw here is an
+      // unhandled error in a `message` listener with no route back.
+      proxy?.handle(event);
+      return;
+    }
     switch (event.kind) {
       case "ready":
         settleReady?.();
@@ -304,16 +324,7 @@ export function spawnEpicRuntimeWorker<TProjection>(
       case "projection":
         projections.deliver(event.revision, event.value);
         return;
-      case "stream/open":
-      case "stream/params":
-      case "stream/send":
-      case "stream/reconnect":
-      case "stream/close":
-        // Every unknown id is dropped inside the host, silently and on purpose:
-        // a frame can be in flight when a session closes, and a throw here is
-        // an unhandled error in a `message` listener with no route back.
-        proxy?.handle(event);
-        return;
+
       case "body/doc-in":
         // The return leg. Main stamps these with its own private origin on
         // apply, which is what stops its observer sending them straight back.

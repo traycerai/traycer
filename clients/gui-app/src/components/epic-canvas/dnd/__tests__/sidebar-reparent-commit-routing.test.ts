@@ -179,8 +179,11 @@ function treeOf(nodes: readonly TreeNode[]): TreeSlice {
 
 const queryClient = new QueryClient();
 
-function drop(sourceNodeId: string, newParentId: string | null): void {
-  commitSidebarReparentDrop({
+async function drop(
+  sourceNodeId: string,
+  newParentId: string | null,
+): Promise<void> {
+  await commitSidebarReparentDrop({
     epicId: "epic-1",
     sourceNodeId,
     newParentId,
@@ -222,7 +225,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     seam.request.mockResolvedValueOnce({ updated: true });
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 
-    drop("tui-1", "tui-parent");
+    await drop("tui-1", "tui-parent");
 
     // The optimistic overlay stamps BEFORE the RPC fires, so the row moves at
     // drop time rather than waiting on the round trip.
@@ -263,7 +266,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     seam.recordIds = ["tui-1", "tui-parent"];
     seam.request.mockRejectedValueOnce(new Error("host refused the move"));
 
-    drop("tui-1", "tui-parent");
+    await drop("tui-1", "tui-parent");
 
     expect(seam.beginReparentMutation).toHaveBeenCalledWith(
       "tui-1",
@@ -277,7 +280,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     });
   });
 
-  it("writes the doc for a terminal agent the host serves no record for", () => {
+  it("writes the doc for a terminal agent the host serves no record for", async () => {
     // The legacy-host case. `epic.listTuiAgents` is unsupported there, so the
     // record slice is empty and the agent renders from the doc's `tuiAgents`
     // map - which is also where its parent pointer still lives. Absent from
@@ -293,7 +296,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.recordIds = [];
 
-    drop("tui-legacy", "tui-parent");
+    await drop("tui-legacy", "tui-parent");
 
     expect(seam.reparentArtifact).toHaveBeenCalledWith(
       "tui-legacy",
@@ -304,7 +307,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.request).not.toHaveBeenCalled();
   });
 
-  it("routes a docResident: true agent to the Y.Doc branch even though it is not absent from the union", () => {
+  it("routes a docResident: true agent to the Y.Doc branch even though it is not absent from the union", async () => {
     // `epic.listTuiAgents@1.1` unions the doc-resident remainder INTO the
     // same table `epic.listTuiAgents` records fill, so "absent from the
     // union" stopped being a reliable doc-only tell - this id is very much
@@ -322,7 +325,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.docResidentIds = ["tui-frozen"];
 
-    drop("tui-frozen", "tui-parent");
+    await drop("tui-frozen", "tui-parent");
 
     expect(seam.reparentArtifact).toHaveBeenCalledWith(
       "tui-frozen",
@@ -331,7 +334,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.request).not.toHaveBeenCalled();
   });
 
-  it("sends a doc-homed chat through epic.reparentChat on a FLOOR-ERA host", () => {
+  it("sends a doc-homed chat through epic.reparentChat on a FLOOR-ERA host", async () => {
     // No handshake recorded, so this host has no chat record plane at all -
     // and `epic.reparentChat` is on `RELEASED_FLOOR_METHOD_NAMES`, so it exists
     // there and resolves a doc chat through the host's own storage seam.
@@ -345,7 +348,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.docHomedChatIds = ["chat-doc"];
 
-    drop("chat-doc", "chat-parent");
+    await drop("chat-doc", "chat-parent");
 
     expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
       epicId: "epic-1",
@@ -354,7 +357,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     });
   });
 
-  it("REFUSES a doc-homed chat on a host that serves the chat record plane", () => {
+  it("REFUSES a doc-homed chat on a host that serves the chat record plane", async () => {
     // The plane exists and states this row lives in the doc, so the writer
     // cannot address it: `epic.reparentChat` would name no registry row and
     // fail HOST-SIDE, after the row rendered fine. Nothing is sent, and
@@ -372,7 +375,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.docHomedChatIds = ["chat-doc"];
 
-    drop("chat-doc", "chat-parent");
+    await drop("chat-doc", "chat-parent");
 
     expect(seam.request).not.toHaveBeenCalled();
     expect(seam.reparentArtifact).not.toHaveBeenCalled();
@@ -381,7 +384,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.beginReparentMutation).not.toHaveBeenCalled();
   });
 
-  it("still sends a STORE-homed chat on a host that serves the record plane", () => {
+  it("still sends a STORE-homed chat on a host that serves the record plane", async () => {
     // The other half of the same host: the plane stated this row is in the
     // store, so it is addressable. Without this, the test above would pass just
     // as well against a gate that refused every chat on a record-plane host.
@@ -395,7 +398,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.recordIds = ["chat-store"];
 
-    drop("chat-store", "chat-parent");
+    await drop("chat-store", "chat-parent");
 
     expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
       epicId: "epic-1",
@@ -404,7 +407,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     });
   });
 
-  it("sends a chat through epic.reparentChat even with no terminal records", () => {
+  it("sends a chat through epic.reparentChat even with no terminal records", async () => {
     // Chats are NOT gated on the terminal-agent record slice: `epic.reparentChat`
     // has routed chats since chats-off-YJS, and a doc-only chat resolves through
     // the same storage seam on the host. Gating them too would restore the
@@ -415,7 +418,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.recordIds = [];
 
-    drop("chat-1", "chat-parent");
+    await drop("chat-1", "chat-parent");
 
     expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
       epicId: "epic-1",
@@ -425,7 +428,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.reparentArtifact).not.toHaveBeenCalled();
   });
 
-  it("enqueues an artifact drop as a write command, with no direct doc write", () => {
+  it("enqueues an artifact drop as a write command, with no direct doc write", async () => {
     // RETARGETED, not patched. T11 moved the artifact reparent off the
     // dual-write (a local `reparentArtifact` Y write PLUS an
     // `epic.reparentArtifact` RPC) onto the write-command queue, which owns
@@ -439,7 +442,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
       node("spec-parent", "spec", null),
     ]);
 
-    commitSidebarReparentDrop({
+    await commitSidebarReparentDrop({
       epicId: "epic-1",
       sourceNodeId: "spec-1",
       newParentId: "spec-parent",
@@ -461,7 +464,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.request).not.toHaveBeenCalled();
   });
 
-  it("still enqueues an artifact drop when the session has no client", () => {
+  it("still enqueues an artifact drop when the session has no client", async () => {
     // Unlike a record-backed agent (silent cancel), an artifact drop is always
     // accepted locally: the queue holds it and sends it when a transport comes
     // back, which is the whole point of an offline-tolerant write path. Before
@@ -473,7 +476,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.hasClient = false;
 
-    commitSidebarReparentDrop({
+    await commitSidebarReparentDrop({
       epicId: "epic-1",
       sourceNodeId: "spec-1",
       newParentId: "spec-parent",
@@ -491,7 +494,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.request).not.toHaveBeenCalled();
   });
 
-  it("does not fall back to a doc write when a record-backed agent has no client", () => {
+  it("does not fall back to a doc write when a record-backed agent has no client", async () => {
     // A session with no serving client is a silent cancel, not a licence to
     // write the doc: the pointer for this row lives on the host, so a Y write
     // would be a no-op the user reads as a move.
@@ -502,7 +505,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     seam.recordIds = ["tui-1", "tui-parent"];
     seam.hasClient = false;
 
-    drop("tui-1", "tui-parent");
+    await drop("tui-1", "tui-parent");
 
     expect(seam.request).not.toHaveBeenCalled();
     expect(seam.reparentArtifact).not.toHaveBeenCalled();

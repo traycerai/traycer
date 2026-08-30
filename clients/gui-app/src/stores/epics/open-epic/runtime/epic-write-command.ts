@@ -63,42 +63,64 @@ export type EpicWriteCommandIntent =
  * REFUSAL rather than an error. Enqueuing a malformed intent would mint an id
  * for a command that can never be dispatched, which is the never-settles hang.
  */
+/**
+ * The ARTIFACT-shaped intents: every one keyed by an `artifactId`.
+ *
+ * Split from the epic-title arm below because `complexity` counts each `case`,
+ * and one switch over five kinds cleared the cap without any single decision
+ * being hard. The split is by SUBJECT - what the intent names - rather than an
+ * arbitrary halving, so a new intent has an obvious home.
+ */
+function readArtifactIntent(
+  value: object,
+  kind: string,
+): EpicWriteCommandIntent | null {
+  const artifactId: unknown = Reflect.get(value, "artifactId");
+  if (typeof artifactId !== "string") return null;
+  const title: unknown = Reflect.get(value, "title");
+  switch (kind) {
+    case "rename-artifact":
+      return typeof title === "string"
+        ? { kind: "rename-artifact", artifactId, title }
+        : null;
+    case "delete-artifact":
+      return { kind: "delete-artifact", artifactId };
+    case "reparent-artifact": {
+      const parentId: unknown = Reflect.get(value, "parentId");
+      if (parentId !== null && typeof parentId !== "string") return null;
+      return { kind: "reparent-artifact", artifactId, parentId };
+    }
+    case "update-artifact-status": {
+      const artifactType: unknown = Reflect.get(value, "artifactType");
+      const status = ticketStatusSchema.safeParse(Reflect.get(value, "status"));
+      if (!status.success) return null;
+      if (artifactType !== "ticket" && artifactType !== "story") return null;
+      return {
+        kind: "update-artifact-status",
+        artifactId,
+        artifactType,
+        status: status.data,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
 export function readWriteCommandIntent(
   value: unknown,
 ): EpicWriteCommandIntent | null {
   if (typeof value !== "object" || value === null) return null;
   const kind: unknown = Reflect.get(value, "kind");
-  const artifactId: unknown = Reflect.get(value, "artifactId");
-  const title: unknown = Reflect.get(value, "title");
-  switch (kind) {
-    case "rename-artifact":
-      return typeof artifactId === "string" && typeof title === "string"
-        ? { kind, artifactId, title }
-        : null;
-    case "delete-artifact":
-      return typeof artifactId === "string" ? { kind, artifactId } : null;
-    case "reparent-artifact": {
-      const parentId: unknown = Reflect.get(value, "parentId");
-      if (typeof artifactId !== "string") return null;
-      if (parentId !== null && typeof parentId !== "string") return null;
-      return { kind, artifactId, parentId };
-    }
-    case "update-artifact-status": {
-      const artifactType: unknown = Reflect.get(value, "artifactType");
-      const status = ticketStatusSchema.safeParse(Reflect.get(value, "status"));
-      if (typeof artifactId !== "string" || !status.success) return null;
-      if (artifactType !== "ticket" && artifactType !== "story") return null;
-      return { kind, artifactId, artifactType, status: status.data };
-    }
-    case "update-epic-title": {
-      const updatedAt: unknown = Reflect.get(value, "updatedAt");
-      return typeof title === "string" && typeof updatedAt === "number"
-        ? { kind, title, updatedAt }
-        : null;
-    }
-    default:
-      return null;
+  if (typeof kind !== "string") return null;
+  if (kind === "update-epic-title") {
+    const title: unknown = Reflect.get(value, "title");
+    const updatedAt: unknown = Reflect.get(value, "updatedAt");
+    return typeof title === "string" && typeof updatedAt === "number"
+      ? { kind, title, updatedAt }
+      : null;
   }
+  return readArtifactIntent(value, kind);
 }
 
 export interface EpicWriteCommandSender {

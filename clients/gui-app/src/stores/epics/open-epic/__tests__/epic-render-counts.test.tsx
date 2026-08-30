@@ -105,7 +105,7 @@ afterEach(() => {
 });
 
 describe("epic projector render-count regressions", () => {
-  it("editing artifact A does NOT re-render a component subscribed to artifact B", () => {
+  it("editing artifact A does NOT re-render a component subscribed to artifact B", async () => {
     const handle = newSession();
     const idA = createArtifactInDocForTests(handle.doc, "spec", null);
     const idB = createArtifactInDocForTests(handle.doc, "spec", null);
@@ -128,17 +128,17 @@ describe("epic projector render-count regressions", () => {
     const initial = spy.counts.get("b") ?? 0;
     expect(initial).toBeGreaterThan(0);
 
-    act(() => {
-      handle.store.getState().renameArtifact(idA, "A renamed once");
-      handle.store.getState().renameArtifact(idA, "A renamed twice");
-      handle.store.getState().renameArtifact(idA, "A renamed thrice");
+    await act(async () => {
+      await handle.store.getState().renameArtifact(idA, "A renamed once");
+      await handle.store.getState().renameArtifact(idA, "A renamed twice");
+      await handle.store.getState().renameArtifact(idA, "A renamed thrice");
     });
 
     expect(spy.counts.get("b") ?? 0).toBe(initial);
     handle.dispose();
   });
 
-  it("editing artifact title does NOT re-render the connection-status subscriber", () => {
+  it("editing artifact title does NOT re-render the connection-status subscriber", async () => {
     const handle = newSession();
     const idA = createArtifactInDocForTests(handle.doc, "spec", null);
 
@@ -157,16 +157,16 @@ describe("epic projector render-count regressions", () => {
 
     const initial = spy.counts.get("conn") ?? 0;
 
-    act(() => {
-      handle.store.getState().renameArtifact(idA, "Title 1");
-      handle.store.getState().renameArtifact(idA, "Title 2");
+    await act(async () => {
+      await handle.store.getState().renameArtifact(idA, "Title 1");
+      await handle.store.getState().renameArtifact(idA, "Title 2");
     });
 
     expect(spy.counts.get("conn") ?? 0).toBe(initial);
     handle.dispose();
   });
 
-  it("tree slice stays referentially stable when only a title changes", () => {
+  it("tree slice stays referentially stable when only a title changes", async () => {
     const handle = newSession();
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
 
@@ -185,8 +185,8 @@ describe("epic projector render-count regressions", () => {
     );
     const initial = spy.counts.get("root") ?? 0;
 
-    act(() => {
-      handle.store.getState().renameArtifact(id, "Title only");
+    await act(async () => {
+      await handle.store.getState().renameArtifact(id, "Title only");
     });
 
     expect(spy.counts.get("root") ?? 0).toBe(initial);

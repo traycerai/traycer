@@ -1065,10 +1065,11 @@ describe("settleColdState refuses a pinned room", () => {
       GUID,
     );
 
-    expect(settlement.accepted).toBe(false);
-    expect(settlement.accepted === false ? settlement.reason : null).toBe(
-      "pinned",
-    );
+    // Narrowed by a guard rather than by a ternary on `accepted`: the union's
+    // refusal arm is the one that carries `reason`, and reading it through a
+    // boolean comparison hides that from both the reader and the compiler.
+    if (settlement.accepted) throw new Error("expected a refusal");
+    expect(settlement.reason).toBe("pinned");
     // And the room is still live, which is what main relies on when it keeps
     // its own copy and re-arms.
     expect(tier.peek("room-settle-dirty")).not.toBeNull();
@@ -1088,10 +1089,11 @@ describe("settleColdState refuses a pinned room", () => {
       GUID,
     );
 
-    expect(settlement.accepted).toBe(false);
-    expect(settlement.accepted === false ? settlement.reason : null).toBe(
-      "pinned",
-    );
+    // Narrowed by a guard rather than by a ternary on `accepted`: the union's
+    // refusal arm is the one that carries `reason`, and reading it through a
+    // boolean comparison hides that from both the reader and the compiler.
+    if (settlement.accepted) throw new Error("expected a refusal");
+    expect(settlement.reason).toBe("pinned");
   });
 
   it("settles once the pin clears, so a refusal is a delay and not a wedge", () => {

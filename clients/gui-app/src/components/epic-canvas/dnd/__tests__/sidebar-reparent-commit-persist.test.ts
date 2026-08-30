@@ -133,7 +133,7 @@ describe("commitSidebarReparentDrop persists an artifact reparent on a live doc"
     seam.hasClient = true;
   });
 
-  it("moves the projected parent optimistically and leaves the doc to the queue", () => {
+  it("moves the projected parent optimistically and leaves the doc to the queue", async () => {
     const handle = newSession();
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
     const child = createArtifactInDocForTests(handle.doc, "spec", null);
@@ -143,7 +143,7 @@ describe("commitSidebarReparentDrop persists an artifact reparent on a live doc"
     if (childBefore === null) throw new Error("seeded child missing from doc");
     expect(childBefore.get("parentId")).toBeNull();
 
-    commitSidebarReparentDrop({
+    await commitSidebarReparentDrop({
       epicId: "epic-1",
       sourceNodeId: child,
       newParentId: parent,

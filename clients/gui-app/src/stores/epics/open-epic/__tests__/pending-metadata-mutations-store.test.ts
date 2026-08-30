@@ -608,7 +608,7 @@ describe("detachTransport", () => {
 });
 
 describe("landed-entry TTL", () => {
-  it("reports landed TTL retirement with the exact superseded outcome and source", async () => {
+  it("reports landed TTL retirement with the exact superseded outcome and source", () => {
     const { store, reconciled, scheduled } = metadataOverlayFixture();
     const mutation: PendingRename = {
       kind: "rename",
@@ -630,7 +630,7 @@ describe("landed-entry TTL", () => {
     );
   });
 
-  it("reports authoritative echo reconciliation with the exact echo outcome and source", async () => {
+  it("reports authoritative echo reconciliation with the exact echo outcome and source", () => {
     const { store, reconciled } = metadataOverlayFixture();
     const mutation: PendingRename = {
       kind: "rename",
@@ -651,7 +651,7 @@ describe("landed-entry TTL", () => {
     );
   });
 
-  it("cancels an ambiguous TTL when explicitly retried, so only the fresh landed TTL can reconcile", async () => {
+  it("cancels an ambiguous TTL when explicitly retried, so only the fresh landed TTL can reconcile", () => {
     const { store, reconciled, scheduled } = metadataOverlayFixture();
     const mutation: PendingRename = {
       kind: "rename",
