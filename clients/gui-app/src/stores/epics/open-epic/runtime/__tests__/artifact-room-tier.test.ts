@@ -358,6 +358,139 @@ describe("isPinned — three independent arms, verified via demoteIdle()", () =>
     expect(tier.peek("room-peered")).not.toBeNull();
     expect(tier.materializedIds()).toContain("room-peered");
   });
+
+  it("the RELAYED main-thread identity does NOT keep the room hot", () => {
+    // The twin of the arm above, and the one with a leak behind it.
+    //
+    // After the worker relocation the editor's presence arrives under a
+    // main-side `clientID` that is not `entry.awareness.clientID`. Read
+    // naively that is "a remote collaborator is present", which is a
+    // materialisation PIN - so the room would never cool while an editor was
+    // open, and would stay hot forever if the departure frame never arrived
+    // (a teardown-order accident, permanent when it happens).
+    //
+    // `relayedLocalClientId` is what makes the predicate tell the two apart.
+    // Ablate its exclusion in `isOwnAwarenessClient` and this goes red.
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+    const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
+
+    tier.applySnapshot({
+      artifactRoomId: "room-relayed",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+    const leaseGrant = tier.acquireSync("room-relayed");
+    requireHotEntry(tier, "room-relayed");
+    leaseOf(leaseGrant).release(); // the relayed identity is the ONLY arm left
+
+    tier.relayLocalAwareness("room-relayed", remoteAwarenessFrame(4242), 4242);
+    const entry = requireHotEntry(tier, "room-relayed");
+    // The state IS present - this is not a room where nothing was relayed.
+    // Without that check the cooling below would pass vacuously.
+    expect(entry.awareness.getStates().has(4242)).toBe(true);
+    expect(entry.relayedLocalClientId).toBe(4242);
+
+    tier.demoteIdle();
+
+    // COOLED. This is the assertion the remote-peer arm inverts.
+    expect(tier.peek("room-relayed")).toBeNull();
+  });
+
+  it("replaces a changed relayed identity and evicts the old one", () => {
+    // A rematerialize builds a fresh main-side `Y.Doc`, so `Awareness` takes a
+    // NEW clientID for the same room. The old id must be evicted, not merely
+    // forgotten: once this field names the new id, nothing excludes the old
+    // one any more - it becomes exactly the stranger that pins the room hot,
+    // and no teardown will ever remove it.
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+    const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
+
+    tier.applySnapshot({
+      artifactRoomId: "room-reidentified",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+    const leaseGrant = tier.acquireSync("room-reidentified");
+    requireHotEntry(tier, "room-reidentified");
+    leaseOf(leaseGrant).release();
+
+    tier.relayLocalAwareness(
+      "room-reidentified",
+      remoteAwarenessFrame(1001),
+      1001,
+    );
+    expect(
+      requireHotEntry(tier, "room-reidentified")
+        .awareness.getStates()
+        .has(1001),
+    ).toBe(true);
+
+    tier.relayLocalAwareness(
+      "room-reidentified",
+      remoteAwarenessFrame(1002),
+      1002,
+    );
+    const entry = requireHotEntry(tier, "room-reidentified");
+
+    expect(entry.relayedLocalClientId).toBe(1002);
+    // The old identity is GONE from the state map, not just unreferenced.
+    expect(entry.awareness.getStates().has(1001)).toBe(false);
+    expect(entry.awareness.getStates().has(1002)).toBe(true);
+
+    // And the room still cools: the superseded id is not left behind as a
+    // stranger pinning it hot, which is the whole failure this guards.
+    tier.demoteIdle();
+    expect(tier.peek("room-reidentified")).toBeNull();
+  });
+
+  it("does not replay the relayed identity back as a peer after a demote", () => {
+    // The GHOST-CURSOR twin, and it has its own ablation: `encodePeerAwareness`
+    // filters by the same helper, and reverting THAT call site alone (leaving
+    // `hasRemotePeers` correct) reds only this test.
+    //
+    // The demote replay exists so a peer who was present before a room cooled
+    // is still visible after it comes back. The relayed identity must be
+    // excluded for the reason the exclusion was written for in the first
+    // place: the editor sets its own state when it rebinds, so replaying a
+    // stale copy fights that - here by rendering the user their own cursor as
+    // a stranger sitting in the room.
+    const { tier } = createHarness();
+    trackTierDisposal(tier);
+    const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
+
+    tier.applySnapshot({
+      artifactRoomId: "room-replayed",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+    const leaseGrant = tier.acquireSync("room-replayed");
+    requireHotEntry(tier, "room-replayed");
+    leaseOf(leaseGrant).release();
+
+    tier.relayLocalAwareness("room-replayed", remoteAwarenessFrame(7777), 7777);
+    expect(
+      requireHotEntry(tier, "room-replayed").awareness.getStates().has(7777),
+    ).toBe(true);
+
+    // Cools (per the arm above), encoding its peer replay on the way out.
+    tier.demoteIdle();
+    expect(tier.peek("room-replayed")).toBeNull();
+
+    // Back from cold: the replay runs here.
+    const revived = tier.acquireSync("room-replayed");
+    const entry = requireHotEntry(tier, "room-replayed");
+
+    expect(entry.awareness.getStates().has(7777)).toBe(false);
+    leaseOf(revived).release();
+  });
 });
 
 // ─── 2. Cooldown timer + re-arm on release ─────────────────────────────────
