@@ -653,9 +653,7 @@ describe("the doc slice is handed through by reference in doc-only mode", () => 
         null,
       );
 
-    expect(store.getState().tuiAgents).not.toBe(
-      store.getState().docTuiAgents,
-    );
+    expect(store.getState().tuiAgents).not.toBe(store.getState().docTuiAgents);
     expect(store.getState().tuiAgents.byId.both.title).toBe("Same content");
   });
 });

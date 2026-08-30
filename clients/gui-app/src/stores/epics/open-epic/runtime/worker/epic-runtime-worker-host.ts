@@ -168,9 +168,36 @@ export interface EpicRuntimeWorkerCore {
   dispose(): void;
 }
 
+/**
+ * One answer to `body/materialize`, and it has THREE outcomes, not two.
+ *
+ * The third one is the reason this type carries a nullable `update`, and it is
+ * a distinction the wire always permitted while nothing produced it:
+ *
+ * | answer | meaning |
+ * | --- | --- |
+ * | `null` (this type absent) | **not held** - no body for that artifact on the installed arm |
+ * | `docKey` set, `update: null` | **awaiting seed** - the demand is retained and bytes will exist later |
+ * | `update` set | **granted** - install these bytes |
+ *
+ * Awaiting exists because on the LANE arm the lease IS the subscribe
+ * (`epic-replica-runtime.ts`, "so the lease is also the subscribe"), so a cold
+ * open legitimately has demand and no bytes yet. Collapsing that into "not
+ * held" made the release run, which closed the subscription that was about to
+ * deliver the bytes - the body never arrived and nothing retried.
+ *
+ * The awaiting answer states nothing it does not know: `docGuid: null` because
+ * no bytes were cut so no identity was cut either (and fabricating one is
+ * forbidden - `artifact-room-tier.ts:325`), `hostStateVector: null` because
+ * there is no coverage to claim, `awarenessFrames: []` because presence rides
+ * an INSTALL and there is no doc for a peer to be present in yet - the retry's
+ * own answer carries the real set. `seedMode` is the union's inert `"full"`,
+ * matching the not-held answer, because there is no seed to describe.
+ */
 export interface ArtifactBodyMaterialization {
   readonly docKey: string;
-  readonly update: Uint8Array;
+  /** `null` is AWAITING SEED, never "empty body". See this type's table. */
+  readonly update: Uint8Array | null;
   /**
    * The identity these bytes were cut at, or `null` when the arm states none.
    *
@@ -346,6 +373,27 @@ export function startEpicRuntimeWorkerHost(
             seedMode: "full",
             hostStateVector: null,
             // Nothing held, so nobody to be present in it.
+            awarenessFrames: [],
+          },
+          transfer: NO_TRANSFER,
+        };
+      }
+      if (held.update === null) {
+        // AWAITING SEED. `docKey` is stated and `update` is not, which is the
+        // discriminator main reads - see `ArtifactBodyMaterialization`.
+        //
+        // No transfer list, because there are no bytes to give up. Routed
+        // through its own arm rather than falling into the one below:
+        // `takeBytesForTransfer(null)` has no meaning, and widening it to
+        // accept a null would put an "or nothing" case inside a helper whose
+        // whole job is deciding what is safe to detach.
+        return {
+          value: {
+            docKey: held.docKey,
+            update: null,
+            docGuid: null,
+            seedMode: "full",
+            hostStateVector: null,
             awarenessFrames: [],
           },
           transfer: NO_TRANSFER,

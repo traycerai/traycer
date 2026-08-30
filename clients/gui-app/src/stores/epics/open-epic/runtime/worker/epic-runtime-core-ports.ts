@@ -234,6 +234,37 @@ export function buildEpicRuntimeCorePorts(
    */
   const bodyObservers = new Map<string, () => void>();
 
+  /**
+   * Demand retained for a body that has no bytes YET - one release per docKey,
+   * held rather than called.
+   *
+   * The defect it closes: on the lane arm the lease taken at the top of
+   * `materialize` IS the `artifact.subscribe` open, so a cold open runs
+   * lease → no bytes → release, and the release closes the subscription that
+   * was about to deliver those bytes. Nothing retried, because the tile's
+   * effect keys on a docKey that never moves. Every artifact body on that arm
+   * was unreachable.
+   *
+   * Disjoint from {@link heldLeases} BY CONSTRUCTION, and the disjointness is
+   * what makes "already held" answerable in one question: a docKey is resident
+   * (bytes handed over, demote owed) or awaiting (demand held, nothing handed
+   * over), never both. Every transition below moves the entry rather than
+   * copying it.
+   */
+  const awaitingDemand = new Map<string, () => void>();
+
+  /**
+   * Whether this docKey already has demand on it from either map.
+   *
+   * The guard a second `materialize` for the same body needs, and it must ask
+   * about BOTH: `bodies.release` is ref-counted, so a retry that recorded its
+   * own release on top of a retained one would leave demand permanently one
+   * too high and keep the subscription open for the session.
+   */
+  function hasBodyDemand(docKey: string): boolean {
+    return heldLeases.has(docKey) || awaitingDemand.has(docKey);
+  }
+
   function attachBodyObserver(docKey: string): void {
     if (bodyObservers.has(docKey)) return;
     const detachDoc = source.observeBodyDoc(docKey, (update) => {
@@ -268,6 +299,57 @@ export function buildEpicRuntimeCorePorts(
     if (detach === undefined) return;
     bodyObservers.delete(docKey);
     detach();
+  }
+
+  /**
+   * Record demand for a body whose bytes have not arrived, and answer nothing.
+   *
+   * NO OBSERVER IS ATTACHED HERE, and that is not an omission to tidy up later.
+   * `observeArtifactBodyDoc` on an unmaterialized key is a documented no-op
+   * that watches nothing and hands back a no-op detach - but
+   * {@link attachBodyObserver} would still record an entry for the docKey, and
+   * its `bodyObservers.has(docKey)` early-out would then make the REAL attach
+   * on the retry a silent no-op. The body would materialise on main and never
+   * receive another update.
+   */
+  function holdAwaitingDemand(docKey: string, release: () => void): void {
+    // Demand from either map already covers this body; a second retained
+    // release would raise the ref-count with nothing left to lower it.
+    if (hasBodyDemand(docKey)) {
+      release();
+      return;
+    }
+    awaitingDemand.set(docKey, release);
+  }
+
+  /**
+   * Record demand for a body whose bytes ARE being handed over.
+   *
+   * The awaiting → resident transition MOVES the retained release rather than
+   * dropping it and keeping this call's: the retained one has held the
+   * subscription open continuously since the awaiting answer, so promoting it
+   * takes demand from two to one with no instant at zero. Dropping it instead
+   * would be correct on a ref-count and wrong on a socket, if the two releases
+   * ever stop being interchangeable.
+   */
+  function holdResidentLease(docKey: string, release: () => void): void {
+    const awaited = awaitingDemand.get(docKey);
+    if (awaited !== undefined) {
+      awaitingDemand.delete(docKey);
+      heldLeases.set(docKey, awaited);
+      release();
+      return;
+    }
+    // Already resident for this doc. Drop the SECOND lease rather than stacking
+    // it: the main side has one doc per `docKey` and will send one demote, so a
+    // second retained release would never be called - and `bodies.release`
+    // decrements a ref-count, so an unreleased extra demand keeps the body
+    // stream open for the session.
+    if (heldLeases.has(docKey)) {
+      release();
+      return;
+    }
+    heldLeases.set(docKey, release);
   }
 
   /** Cancellable waits, by the caller's id. Closure state, not module state. */
@@ -354,8 +436,7 @@ export function buildEpicRuntimeCorePorts(
           const live = source.encodeForwardOnly(docKey);
           if (live !== null) {
             attachBodyObserver(docKey);
-            if (heldLeases.has(docKey)) release();
-            else heldLeases.set(docKey, release);
+            holdResidentLease(docKey, release);
             return Promise.resolve({
               docKey,
               update: live,
@@ -366,25 +447,31 @@ export function buildEpicRuntimeCorePorts(
             });
           }
         }
-        // `null` is NOT empty bytes: a zero-length update applies cleanly and
-        // yields an empty document, so conflating them replaces a body with
-        // nothing. The lease comes back off - nothing was handed over, so
-        // nothing will come back to release it.
+        // No bytes on either path. This is AWAITING SEED, not not-held, and the
+        // difference is the whole defect: on the lane arm the lease taken above
+        // IS the `artifact.subscribe` open, so releasing here closes the
+        // subscription that was about to deliver these bytes - and nothing ever
+        // retries, because the tile's effect keys on a docKey that does not
+        // move. Every body on that arm was unreachable.
+        //
+        // The demand is RETAINED instead, and main re-calls when the
+        // projection says this artifact is ready
+        // (`retryAwaitingBodies`). `null` is still not empty bytes: a
+        // zero-length update applies cleanly and yields an empty document, so
+        // the answer states no bytes rather than handing over none.
         if (cold === null) {
-          release();
-          return Promise.resolve(null);
+          holdAwaitingDemand(docKey, release);
+          return Promise.resolve({
+            docKey,
+            update: null,
+            docGuid: null,
+            seedMode: "full" as const,
+            hostStateVector: null,
+            awarenessFrames: [],
+          });
         }
         attachBodyObserver(docKey);
-        if (heldLeases.has(docKey)) {
-          // Already held for this doc. Drop the SECOND lease rather than
-          // stacking it: the main side has one doc per `docKey` and will send
-          // one demote, so a second retained release would never be called -
-          // and `bodies.release` decrements a ref-count, so an unreleased
-          // extra demand keeps the body stream open for the session.
-          release();
-        } else {
-          heldLeases.set(docKey, release);
-        }
+        holdResidentLease(docKey, release);
         return Promise.resolve({
           docKey,
           update: cold.update,
@@ -458,6 +545,15 @@ export function buildEpicRuntimeCorePorts(
         detachBodyObserver(docKey);
         heldLeases.get(docKey)?.();
         heldLeases.delete(docKey);
+        // The AWAITING half of the same terminator. A consumer that unmounts
+        // while its body is still waiting for a seed sends this release like
+        // any other, and the demand retained for it is the only thing holding
+        // that subscription open - so it comes off here or it never does, and
+        // the tab stays subscribed to a body nobody is looking at for the rest
+        // of the session. Disjoint from `heldLeases` by construction, so at
+        // most one of these two lines does anything.
+        awaitingDemand.get(docKey)?.();
+        awaitingDemand.delete(docKey);
         return { released: true, reason: null };
       },
       applyAwareness: (docKey, frame, localClientId) => {
@@ -591,12 +687,20 @@ export function buildEpicRuntimeCorePorts(
         applyArgumentCommand(source, command);
       },
     },
-    detachAllBodyObservers: () => {
+    releaseAllBodyHolds: () => {
       const detachers = [...bodyObservers.values()];
       // Cleared BEFORE detaching, so a detach that re-enters cannot see a
       // half-emptied map - the same ordering `cancelAll` uses.
       bodyObservers.clear();
       for (const detach of detachers) detach();
+      // Retained demand is the OTHER thing a teardown leaves behind, and it is
+      // invisible to the loop above: an awaiting body has no observer to
+      // detach, by design, so a corner that only walked `bodyObservers` would
+      // skip exactly the entries this map exists to hold. Same order, same
+      // reason.
+      const awaited = [...awaitingDemand.values()];
+      awaitingDemand.clear();
+      for (const release of awaited) release();
     },
     root: {
       encode: () => source.encodeRootState(),

@@ -192,6 +192,13 @@ function grantedKey(grant: ArtifactBodyGrant): string {
   return grant.docKey;
 }
 
+/**
+ * For the constructions that never reach an awaiting body - their worker side
+ * always answers with bytes or with nothing at all, so no retry can stall.
+ * `setup`'s rig records instead, because that is where the awaiting pins live.
+ */
+const IGNORE_STALL_REPORT = (): void => {};
+
 function setup() {
   const pair = createFakeBridgePair("sync");
   const worker = createWorkerSide(pair, (artifactId) => artifactId);
@@ -202,6 +209,10 @@ function setup() {
   // ONLY observable that it happened at all is that it was posted.
   const releasedForwardOnly: string[] = [];
   const scheduler = createScheduler();
+  // Recorded for the same reason: a stalled retry keeps waiting rather than
+  // failing, so the report is the only observable that the disagreement between
+  // the availability map and the tier was noticed at all.
+  const stalled: string[] = [];
   const leases = createArtifactBodyLeaseBridge({
     bridge: main,
     docs,
@@ -209,6 +220,7 @@ function setup() {
     scheduler,
     lingerMs: LINGER_MS,
     maxHotDocs: MAX_HOT,
+    reportAwaitingStalled: (docKey) => stalled.push(docKey),
   });
   return {
     pair,
@@ -219,6 +231,7 @@ function setup() {
     leases,
     releasedForwardOnly,
     scheduler,
+    stalled,
   };
 }
 
@@ -264,6 +277,7 @@ describe("acquire / materialize", () => {
       scheduler: createScheduler(),
       lingerMs: LINGER_MS,
       maxHotDocs: MAX_HOT,
+      reportAwaitingStalled: IGNORE_STALL_REPORT,
     });
 
     const grant = await leases.acquire("artifact-missing");
@@ -407,6 +421,7 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
       scheduler: createScheduler(),
       lingerMs: LINGER_MS,
       maxHotDocs: MAX_HOT,
+      reportAwaitingStalled: IGNORE_STALL_REPORT,
     });
     // The re-send is driven from the state the ORIGINAL bridge holds, so this
     // asserts the observable half: the doc survived with its bytes intact and
@@ -562,6 +577,7 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
       scheduler,
       lingerMs: LINGER_MS,
       maxHotDocs: MAX_HOT,
+      reportAwaitingStalled: IGNORE_STALL_REPORT,
     });
 
     const first = await leases.acquire("artifact-1");
@@ -828,6 +844,7 @@ describe("the forward-only release", () => {
       scheduler,
       lingerMs: LINGER_MS,
       maxHotDocs: MAX_HOT,
+      reportAwaitingStalled: IGNORE_STALL_REPORT,
     });
     return { leases, docs, scheduler, releases, pair };
   }

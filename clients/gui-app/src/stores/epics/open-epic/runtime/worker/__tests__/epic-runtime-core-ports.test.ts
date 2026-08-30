@@ -168,15 +168,25 @@ describe("bodies.materialize", () => {
     });
   });
 
-  it("answers null for a doc key the tier cannot encode, never empty bytes", async () => {
+  it("answers AWAITING for a doc key the tier cannot encode yet, never empty bytes", async () => {
     // The conflation this arm exists to prevent: a zero-length update applies
     // cleanly and produces an EMPTY body, so answering `{ update: new
-    // Uint8Array() }` here would replace a body with nothing.
+    // Uint8Array() }` here would replace a body with nothing. That property is
+    // unchanged - the answer states NO bytes.
+    //
+    // What changed is which no-bytes answer it is. A doc key EXISTS for this
+    // artifact and the tier simply has nothing for it yet, which on the lane
+    // arm is every cold open: the lease taken above is the `artifact.subscribe`
+    // open, so the bytes are on their way precisely because the demand is held.
+    // Answering `null` here (which this did) made main read `unavailable`, drop
+    // its release, and close the subscription that was about to deliver them.
     const ports = buildPorts(
       createSource({ bodyDocKey: () => "doc-1", encodeColdState: () => null }),
     );
 
-    await expect(ports.bodies.materialize("artifact-1")).resolves.toBeNull();
+    await expect(ports.bodies.materialize("artifact-1")).resolves.toMatchObject(
+      { docKey: "doc-1", update: null },
+    );
   });
 });
 
@@ -418,17 +428,107 @@ describe("bodies.materialize — the lease it stands on", () => {
     expect(rig.releases).toEqual([]);
   });
 
-  it("releases immediately when there is nothing to hand over", async () => {
-    // No cold state means nothing was materialized for the caller, so no
-    // demote will ever come back to release this lease. Holding it would keep
-    // the body subscribed for the session.
+  it("RETAINS the demand when there is nothing to hand over yet", async () => {
+    // This pin used to assert the opposite, with the reasoning "no demote will
+    // ever come back to release this lease, and holding it would keep the body
+    // subscribed for the session". Both halves were right about `@1`, where a
+    // room arrives whether or not anything is looking, and exactly backwards
+    // about the lane arm - where the lease IS the subscribe, so releasing here
+    // closes the subscription that would have produced the bytes, and nothing
+    // ever asks again because the tile's effect keys on a docKey that does not
+    // move. Every artifact body on that arm was unreachable.
+    //
+    // The demand is held instead, and main is told so (`update: null` with a
+    // stated `docKey`), so it keeps a release to post and re-materializes when
+    // the projection says the room is ready.
     const rig = leasedSource({ encodeColdState: () => null });
     const ports = buildPorts(rig.source);
 
-    await expect(ports.bodies.materialize("art-1")).resolves.toBeNull();
+    await expect(ports.bodies.materialize("art-1")).resolves.toMatchObject({
+      // `leasedSource` keys bodies by ROOM, so this also pins that the awaiting
+      // answer names the doc key rather than echoing the artifact id.
+      docKey: "room-art-1",
+      update: null,
+    });
 
     expect(rig.leases).toEqual(["art-1"]);
+    expect(rig.releases).toEqual([]);
+  });
+
+  it("does not stack demand when an awaiting body is materialized again", async () => {
+    // The retry calls `body/materialize` a second time while the first demand
+    // is still retained. `bodies.release` decrements a REF-COUNT, so a second
+    // retained release would raise it with nothing left to lower it - the
+    // subscription would outlive every holder.
+    const rig = leasedSource({ encodeColdState: () => null });
+    const ports = buildPorts(rig.source);
+
+    await ports.bodies.materialize("art-1");
+    await ports.bodies.materialize("art-1");
+
+    expect(rig.leases).toEqual(["art-1", "art-1"]);
+    // The second came straight back off; the first is still held.
     expect(rig.releases).toEqual(["art-1"]);
+  });
+
+  it("releases retained demand when the awaiting holder unmounts", async () => {
+    // A tile that goes away while still waiting sends `body/release` like any
+    // other. The retained demand is the only thing holding that subscription
+    // open, so it comes off here or it never does.
+    const rig = leasedSource({ encodeColdState: () => null });
+    const ports = buildPorts(rig.source);
+    await ports.bodies.materialize("art-1");
+    expect(rig.releases).toEqual([]);
+
+    ports.bodies.release("room-art-1");
+
+    expect(rig.releases).toEqual(["art-1"]);
+  });
+
+  it("releases retained demand at teardown, which no observer walk would reach", async () => {
+    // An awaiting body deliberately has NO observer - there is no materialized
+    // doc to watch - so a teardown that only detached observers would skip
+    // exactly these entries. That is why the corner is named for the HOLDS.
+    const rig = leasedSource({ encodeColdState: () => null });
+    const ports = buildPorts(rig.source);
+    await ports.bodies.materialize("art-1");
+
+    ports.releaseAllBodyHolds();
+
+    expect(rig.releases).toEqual(["art-1"]);
+  });
+
+  it("promotes the RETAINED demand when the seed finally arrives", async () => {
+    // The awaiting -> resident transition. The retained release has held the
+    // subscription open continuously since the awaiting answer, so it becomes
+    // the resident hold and the retry's own lease is what comes off - demand
+    // goes two to one with no instant at zero.
+    let seeded = false;
+    const rig = leasedSource({
+      encodeColdState: (docKey) =>
+        seeded
+          ? {
+              update: new Uint8Array([4, 5]),
+              seedMode: "full" as const,
+              hostStateVector: null,
+              docGuid: `guid-${docKey}`,
+            }
+          : null,
+    });
+    const ports = buildPorts(rig.source);
+
+    await expect(ports.bodies.materialize("art-1")).resolves.toMatchObject({
+      update: null,
+    });
+    // The host's `doc` frame lands, which is what the retry is waiting for.
+    seeded = true;
+    const granted = await ports.bodies.materialize("art-1");
+
+    expect(granted?.update).toEqual(new Uint8Array([4, 5]));
+    expect(rig.leases).toEqual(["art-1", "art-1"]);
+    // Exactly ONE came off, and the doc is resident on one held demand.
+    expect(rig.releases).toEqual(["art-1"]);
+    expect(ports.bodies.heldDocKeys()).toEqual(["room-art-1"]);
   });
 
   it("does not stack leases for a docKey already held", async () => {
@@ -520,7 +620,7 @@ describe("bodies.materialize — forward-only vs not-held", () => {
     expect(materialized?.update).toEqual(new Uint8Array([7]));
   });
 
-  it("answers NOT-HELD when the source offers no forward-only bytes", async () => {
+  it("answers AWAITING when the source offers no forward-only bytes either", async () => {
     // PLUMBING ONLY, and named that way deliberately. This drives
     // `encodeForwardOnly` at the SOURCE, so it pins the ports' both-directions
     // wiring and NOT the discrimination that decides which rooms get here.
@@ -530,9 +630,17 @@ describe("bodies.materialize — forward-only vs not-held", () => {
     // (`epic-replica-runtime.ts`), which reads `tier.statedDocGuid`. Ablating
     // that check leaves THIS suite green, which is how the gap was found. Its
     // pin is owed at the runtime level, against a real tier.
+    //
+    // NEITHER path has bytes, and that is AWAITING rather than not-held: the
+    // artifact HAS a doc key, so this is a body whose seed has not arrived, not
+    // a body that does not exist. Only a `null` doc key is not-held now, and
+    // the pin above (`bodyDocKey: () => null`) is the one that covers it.
     const ports = buildPorts(coldRefusingSource(null));
 
-    await expect(ports.bodies.materialize("art-1")).resolves.toBeNull();
+    await expect(ports.bodies.materialize("art-1")).resolves.toMatchObject({
+      docKey: "room-art-1",
+      update: null,
+    });
   });
 });
 

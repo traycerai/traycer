@@ -151,14 +151,20 @@ export interface EpicRuntimeCorePorts {
     enqueueWrite(intent: unknown): EnqueuedWriteCommand;
   };
   /**
-   * Detach every resident body's doc observer.
+   * Let go of every hold this core has on a body: each resident body's doc and
+   * presence observers, and the demand retained for each AWAITING one.
    *
-   * The third corner of the observer lifetime, and the one that gets
-   * forgotten: a worker tearing down with observers attached is the same shape
-   * as a pending await left parked, so it is closed in the same place and for
-   * the same reason.
+   * The third corner of the body lifetime, and the one that gets forgotten: a
+   * worker tearing down with observers attached is the same shape as a pending
+   * await left parked, so it is closed in the same place and for the same
+   * reason.
+   *
+   * Named for the holds rather than for the observers because the two sets are
+   * not the same: an awaiting body deliberately has NO observer, so a member
+   * called `detachAllBodyObservers` would have been honest about what it did
+   * and wrong about what this corner has to cover.
    */
-  detachAllBodyObservers(): void;
+  releaseAllBodyHolds(): void;
   /** The root replica's state, in and out, for session-to-session transfers. */
   readonly root: {
     encode(): Promise<Uint8Array>;
@@ -312,7 +318,7 @@ export function createEpicRuntimeWorkerCore(
       // disposed replica is the failure this pair was built to prevent, and
       // teardown is the easiest way to reintroduce it.
       ports.attachments.cancelAll();
-      ports.detachAllBodyObservers();
+      ports.releaseAllBodyHolds();
       ports.transport.close();
       ports.durableStore.close();
     },

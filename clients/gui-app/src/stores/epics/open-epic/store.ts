@@ -1021,11 +1021,15 @@ export function createOpenEpicStore(
    * Entries are forgotten WITHOUT posting: there is nothing on the far side to
    * settle into, and a demote would sit pending on a `not-held`.
    */
-  function dropBodiesWhoseRoomIsGone(): void {
-    const resident = bodyDocs.residentDocKeys();
-    if (resident.length === 0) return;
+  /**
+   * Doc keys the projection currently calls `ready`.
+   *
+   * ONE reader of the availability map for both body-plane reconcilers, so
+   * "which rooms are ready" cannot be answered two ways in the same frame.
+   */
+  function readyBodyDocKeys(): ReadonlySet<string> {
     const state = storeApi?.getState();
-    if (state === undefined) return;
+    if (state === undefined) return new Set<string>();
     const ready = new Set<string>();
     for (const [artifactId, availability] of Object.entries(
       state.artifactRooms.stateByArtifactId,
@@ -1034,11 +1038,34 @@ export function createOpenEpicStore(
       const docKey = state.getArtifactBodyDocKey(artifactId);
       if (docKey !== null) ready.add(docKey);
     }
+    return ready;
+  }
+
+  function dropBodiesWhoseRoomIsGone(): void {
+    const resident = bodyDocs.residentDocKeys();
+    if (resident.length === 0) return;
+    const ready = readyBodyDocKeys();
     for (const docKey of resident) {
       if (ready.has(docKey)) continue;
       bodyLeases.forget(docKey);
       bodyDocs.drop(docKey);
     }
+  }
+
+  /**
+   * The completion half of an `"awaiting-seed"` grant.
+   *
+   * Sibling of {@link dropBodiesWhoseRoomIsGone}, at the same site and off the
+   * same slice: that one retires a resident body whose room stopped being
+   * ready, this one materializes an awaiting body whose room STARTED being
+   * ready. Together they are the body plane reconciled against the projection,
+   * which is the only signal main has and the only one it needs - a body lane's
+   * `doc` frame is what turns its availability `ready`, so "ready" and "the
+   * bytes exist now" are the same event seen from the two sides.
+   */
+  function retryBodiesWhoseRoomBecameReady(): void {
+    const ready = readyBodyDocKeys();
+    bodyLeases.retryAwaitingBodies((docKey) => ready.has(docKey));
   }
 
   function applyProjection(patch: Partial<EpicRuntimeProjection>): void {
@@ -1094,6 +1121,7 @@ export function createOpenEpicStore(
         : { ...projected, bindingVersion: bindingEpoch },
     );
     dropBodiesWhoseRoomIsGone();
+    retryBodiesWhoseRoomBecameReady();
   }
 
   /**
@@ -1274,6 +1302,18 @@ export function createOpenEpicStore(
     // Same source as the linger, and the same reason: the hot docs are here
     // now, so the ceiling on how many of them exist is here too.
     maxHotDocs: ARTIFACT_ROOM_LEASE_POLICY.maxMaterialized,
+    // The availability map says this body's room is ready and the runtime
+    // still has no bytes for it. The retry stays armed - the next projection
+    // push tries again - but the disagreement is reported, because the symptom
+    // it produces on screen is an editor that never fills in and there would
+    // otherwise be nothing anywhere to read.
+    reportAwaitingStalled: (docKey, artifactId) => {
+      appLogger.warn("[open-epic] body ready but still unseeded", {
+        epicId: options.epicId,
+        docKey,
+        artifactId,
+      });
+    },
   });
 
   const store = create<OpenEpicState>()(
@@ -1663,7 +1703,13 @@ export function createOpenEpicStore(
             let released = false;
             let grantedRelease: (() => void) | null = null;
             void bodyLeases.acquire(artifactId).then((grant) => {
-              if (grant.kind !== "granted") return;
+              // Discriminated on the ONE outcome that owes nothing.
+              // `"awaiting-seed"` is a grant a holder must release exactly like
+              // a granted one - the retained worker-side demand is the body
+              // lane's subscription - so a `!== "granted"` test here would drop
+              // the release for every cold open on the lane arm and leave the
+              // tab subscribed for the session.
+              if (grant.kind === "unavailable") return;
               if (released) {
                 grant.release();
                 return;

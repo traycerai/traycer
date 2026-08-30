@@ -105,12 +105,46 @@ export interface HotBodyBudget {
   settleCold(docKey: string, settledBytes: number): void;
 }
 
+/**
+ * THREE outcomes, and the middle one is not a weaker `unavailable`.
+ *
+ * `"awaiting-seed"` deliberately echoes `LeaseGrant`'s member of the same name
+ * in the runtime, because it is the same fact one layer out: the demand is
+ * held and it is the demand that makes the seed arrive. That member existed
+ * before the relocation and the bridge's two-outcome answer is what lost it -
+ * on the lane arm the lease IS the subscribe, so "no bytes yet" was answered by
+ * releasing, which closed the subscription that would have produced them.
+ *
+ * A holder must release an `"awaiting-seed"` grant exactly as it releases a
+ * `"granted"` one. That is why both carry `docKey` and `release` and why a
+ * consumer should discriminate on `"unavailable"` rather than on `"granted"`:
+ * the question a holder is asking is "do I owe a release", and two of the three
+ * answers are yes.
+ */
 export type ArtifactBodyGrant =
   | { readonly kind: "granted"; readonly docKey: string; release(): void }
+  | { readonly kind: "awaiting-seed"; readonly docKey: string; release(): void }
   | { readonly kind: "unavailable"; readonly reason: string };
 
 export interface ArtifactBodyLeaseBridge {
   acquire(artifactId: string): Promise<ArtifactBodyGrant>;
+  /**
+   * Re-materialize every awaiting body whose room the projection now calls
+   * ready.
+   *
+   * The completion half of `"awaiting-seed"`. It is a RE-CALL rather than a
+   * pushed seed, and that was the ruling: `body/doc-in` carries bytes only, so
+   * installing from a push would have to invent `docGuid` / `seedMode` /
+   * `hostStateVector` or add them to the wire - and a body installed with
+   * `docGuid: null` on the lane arm is forward-only, which is un-demotable.
+   * The second `body/materialize` answers with the full identity.
+   *
+   * The readiness predicate is the CALLER's, over doc keys, because the
+   * projection is main's and there must be one reader of it - the same reason
+   * `dropBodiesWhoseRoomIsGone` computes its ready set in the store and this
+   * module never touches a slice.
+   */
+  retryAwaitingBodies(isReadyDocKey: (docKey: string) => boolean): void;
   /**
    * Re-post every demote that was posted but never acknowledged.
    *
@@ -201,6 +235,34 @@ interface BodyEntry {
   lastHeldSeq: number;
 }
 
+/** One body waiting for its first bytes. */
+interface AwaitingBody {
+  /**
+   * The artifact the retry re-materializes.
+   *
+   * Held rather than derived from the doc key: the two are equal on the lane
+   * arm and NOT on `@1`, where the key is a room id - and `@1` never awaits, so
+   * a reader could "simplify" this away and be right in every case it tested.
+   */
+  readonly artifactId: string;
+  leases: number;
+  /** A retry is in flight; a second projection push must not start another. */
+  retrying: boolean;
+  /**
+   * A projection push asked for a retry while one was already in flight.
+   *
+   * A LATCH rather than a dropped signal, and it is load-bearing on the
+   * ordinary cold open. `artifact-lane-adapter.ts` emits `doc-ready` on the
+   * transition into ready and THEN `doc-snapshot` with the bytes, so the
+   * room reads `ready` one frame before the tier holds anything. The first
+   * retry therefore fires on the ready edge and legitimately finds nothing;
+   * the push that carries the seed arrives while it is still in flight.
+   * Without this latch that push is swallowed by `retrying` and the body waits
+   * for a projection that never comes again.
+   */
+  retryRequested: boolean;
+}
+
 export function createArtifactBodyLeaseBridge(options: {
   readonly bridge: RuntimeWorkerPort;
   readonly docs: MainThreadBodyDocs;
@@ -232,8 +294,36 @@ export function createArtifactBodyLeaseBridge(options: {
    * a lower value as a regression rather than a tightening.
    */
   readonly maxHotDocs: number;
+  /**
+   * A body the projection calls READY answered `body/materialize` with no bytes
+   * again.
+   *
+   * Reported rather than swallowed, and this module takes it as a callback so
+   * it stays free of the app logger - the same reason every other dependency
+   * here is injected.
+   *
+   * The retry loop is bounded by projection pushes, so this cannot spin on its
+   * own. But a body that keeps answering byteless while its room reads ready is
+   * a genuine disagreement between the availability map and the tier, and the
+   * failure it produces - a tile that never fills in - is exactly the kind that
+   * gets reported as "sometimes the editor is empty" with nothing in any log.
+   */
+  readonly reportAwaitingStalled: (docKey: string, artifactId: string) => void;
 }): ArtifactBodyLeaseBridge {
   const entries = new Map<string, BodyEntry>();
+  /**
+   * Bodies whose demand is held worker-side with no bytes yet, by doc key.
+   *
+   * REF-COUNTED like {@link BodyEntry.leases}, and for the same reason: several
+   * tiles legitimately show one artifact, each takes its own awaiting grant,
+   * and posting `body/release` on the first unmount would drop the one retained
+   * demand out from under the others - which on the lane arm is the
+   * subscription itself.
+   *
+   * Disjoint from {@link entries}: a doc key is awaiting or resident, never
+   * both. The resolve path moves the count across in one step.
+   */
+  const awaiting = new Map<string, AwaitingBody>();
   let leaseSeq = 0;
 
   function postDemote(docKey: string, generation: number): void {
@@ -396,7 +486,20 @@ export function createArtifactBodyLeaseBridge(options: {
         { artifactId },
         NO_TRANSFER,
       );
-      if (answer.docKey === null || answer.update === null) {
+      // THE DISCRIMINATOR, split. These two nulls used to be read as one
+      // meaning and they are two:
+      //
+      //   `docKey === null`               NOT HELD  - no body for this artifact
+      //                                              on the installed arm, and
+      //                                              the worker released.
+      //   `docKey` set, `update === null` AWAITING  - the worker RETAINED the
+      //                                              demand and bytes will
+      //                                              exist later.
+      //
+      // Collapsing them is the defect: on the lane arm the awaiting case is
+      // every cold open, and answering `unavailable` there left the tile with
+      // no release to hold and no reason to ask again.
+      if (answer.docKey === null) {
         return { kind: "unavailable", reason: `no body for ${artifactId}` };
       }
       const docKey = answer.docKey;
@@ -419,6 +522,13 @@ export function createArtifactBodyLeaseBridge(options: {
       if (raced !== undefined) {
         return reviveAndHold(docKey, raced);
       }
+      // AWAITING, checked after the raced-entry lookup on purpose: if this side
+      // already holds a live doc under this key, that doc is the better answer
+      // than a wait, and the worker dropped this call's lease rather than
+      // retaining it (`hasBodyDemand` covers both of its maps).
+      if (answer.update === null) {
+        return holdAwaiting(docKey, artifactId);
+      }
       // A granted answer with no identity is FORWARD-ONLY, not unavailable.
       //
       // This branch used to refuse, reasoning that a body which cannot be
@@ -432,36 +542,29 @@ export function createArtifactBodyLeaseBridge(options: {
       // Stranded is therefore `@1`'s normal state, not a hazard this side
       // introduces. Refusing here would mean no `@1` body ever reaches an
       // editor, which is the whole arm going dark.
-      options.docs.install({
+      installGranted({
         docKey,
         update: answer.update,
         docGuid: answer.docGuid,
         seedMode: answer.seedMode,
         hostStateVector: answer.hostStateVector,
-      });
-      // Presence, in the same step as the install and never before it. These
-      // frames rode the response precisely because a push could not: the
-      // worker attaches its observer inside the materialize handler, so a
-      // pushed frame would arrive for a docKey main had not installed yet and
-      // be dropped. Without this a re-materialized room shows an empty
-      // presence channel until each peer's next heartbeat.
-      for (const frame of answer.awarenessFrames) {
-        options.docs.applyRemoteAwareness(docKey, frame);
-      }
-      entries.set(docKey, {
+        awarenessFrames: answer.awarenessFrames,
         leases: 1,
-        generation: 1,
-        docGuid: answer.docGuid,
-        demotingGeneration: null,
-        lingerTimer: null,
-        lastHeldSeq: (leaseSeq += 1),
       });
-      options.budget.chargeHot(docKey, answer.update.byteLength);
-      // AFTER the new doc is installed and charged, so the entry that just
-      // arrived is part of the population being measured - and it is leased,
-      // so it can never be its own victim.
-      enforceHotCap();
       return { kind: "granted", docKey, release: releaseFor(docKey) };
+    },
+    retryAwaitingBodies(isReadyDocKey): void {
+      // A COPY of the keys: each iteration can resolve an entry and delete it,
+      // and mutating the map mid-iteration is how a body gets skipped and left
+      // waiting for a push that already happened.
+      for (const [docKey, held] of [...awaiting]) {
+        // The projection is the only completion signal, and asking it here is
+        // what keeps this loop bounded: it runs once per delivered projection,
+        // never on a timer, and does nothing at all for a body whose room is
+        // still not ready.
+        if (!isReadyDocKey(docKey)) continue;
+        startAwaitingRetry(docKey, held);
+      }
     },
     resendUnacknowledgedDemotes(): void {
       for (const [docKey, entry] of entries) {
@@ -582,6 +685,177 @@ export function createArtifactBodyLeaseBridge(options: {
   function cancelLinger(entry: BodyEntry): void {
     entry.lingerTimer?.cancel();
     entry.lingerTimer = null;
+  }
+
+  /**
+   * Ask the worker once more for a body whose room now reads ready.
+   *
+   * At most ONE call in flight per doc key, with a latch for the pushes that
+   * arrive while it is - see {@link AwaitingBody.retryRequested}. Coalescing
+   * rather than dropping is what makes the ordinary cold open work: `ready`
+   * arrives one frame ahead of the bytes, so the first attempt is expected to
+   * find nothing and the push that carries the seed lands mid-flight.
+   */
+  function startAwaitingRetry(docKey: string, held: AwaitingBody): void {
+    if (held.retrying) {
+      held.retryRequested = true;
+      return;
+    }
+    held.retrying = true;
+    held.retryRequested = false;
+    void options.bridge
+      .call("body/materialize", { artifactId: held.artifactId }, NO_TRANSFER)
+      .then((answer) => {
+        const stillAwaiting = awaiting.get(docKey);
+        // Every holder released while this was in flight. The release already
+        // posted `body/release`, so there is nothing to install INTO and
+        // nothing to keep waiting for.
+        if (stillAwaiting === undefined) return;
+        stillAwaiting.retrying = false;
+        if (answer.docKey === null || answer.update === null) {
+          if (stillAwaiting.retryRequested) {
+            // A newer projection landed mid-flight, so this answer is already
+            // stale - which is the ordinary seed sequence, not a fault. Ask
+            // again on the state that push described, and say nothing.
+            stillAwaiting.retryRequested = false;
+            startAwaitingRetry(docKey, stillAwaiting);
+            return;
+          }
+          // STILL byteless, with the room reading ready and nothing newer to
+          // go on. Stay awaiting - a later push tries again - but say so: this
+          // is a disagreement between the availability map and the tier, and
+          // the symptom it produces is a tile that never fills in.
+          options.reportAwaitingStalled(docKey, held.artifactId);
+          return;
+        }
+        awaiting.delete(docKey);
+        // The awaiting count carries across whole. Every one of those holders
+        // is still mounted and still owes a release; restarting at one would
+        // let the first unmount demote a doc the others hold.
+        installGranted({
+          docKey,
+          update: answer.update,
+          docGuid: answer.docGuid,
+          seedMode: answer.seedMode,
+          hostStateVector: answer.hostStateVector,
+          awarenessFrames: answer.awarenessFrames,
+          leases: stillAwaiting.leases,
+        });
+      });
+  }
+
+  /**
+   * Take (or add to) an awaiting hold and hand back its grant.
+   *
+   * The worker retains exactly ONE demand per doc key however many times it is
+   * asked, so this side ref-counts the holders and posts one `body/release`
+   * when the last of them goes.
+   */
+  function holdAwaiting(docKey: string, artifactId: string): ArtifactBodyGrant {
+    const held = awaiting.get(docKey);
+    if (held === undefined) {
+      awaiting.set(docKey, {
+        artifactId,
+        leases: 1,
+        retrying: false,
+        retryRequested: false,
+      });
+    } else {
+      held.leases += 1;
+    }
+    return {
+      kind: "awaiting-seed",
+      docKey,
+      release: releaseAwaitingFor(docKey),
+    };
+  }
+
+  /**
+   * Install a materialized body and record it as resident.
+   *
+   * Shared by the first `acquire` and by the retry that resolves an awaiting
+   * hold, because they differ only in the lease count they start at. Written as
+   * one function rather than two similar blocks: the pair that drifted here
+   * before was the revive, and the cost of that drift was a document dropped
+   * under a live grant.
+   */
+  function installGranted(input: {
+    readonly docKey: string;
+    readonly update: Uint8Array;
+    readonly docGuid: string | null;
+    readonly seedMode: ArtifactBodySeedMode;
+    readonly hostStateVector: string | null;
+    readonly awarenessFrames: readonly Uint8Array[];
+    readonly leases: number;
+  }): void {
+    options.docs.install({
+      docKey: input.docKey,
+      update: input.update,
+      docGuid: input.docGuid,
+      seedMode: input.seedMode,
+      hostStateVector: input.hostStateVector,
+    });
+    // Presence, in the same step as the install and never before it. These
+    // frames rode the response precisely because a push could not: the worker
+    // attaches its observer inside the materialize handler, so a pushed frame
+    // would arrive for a docKey main had not installed yet and be dropped.
+    // Without this a re-materialized room shows an empty presence channel until
+    // each peer's next heartbeat.
+    for (const frame of input.awarenessFrames) {
+      options.docs.applyRemoteAwareness(input.docKey, frame);
+    }
+    entries.set(input.docKey, {
+      leases: input.leases,
+      generation: 1,
+      docGuid: input.docGuid,
+      demotingGeneration: null,
+      lingerTimer: null,
+      lastHeldSeq: (leaseSeq += 1),
+    });
+    options.budget.chargeHot(input.docKey, input.update.byteLength);
+    // AFTER the new doc is installed and charged, so the entry that just
+    // arrived is part of the population being measured - and it is leased, so
+    // it can never be its own victim.
+    enforceHotCap();
+  }
+
+  /**
+   * The awaiting holder's release.
+   *
+   * Idempotent per grant for the same reason {@link releaseFor} is, and it has
+   * to reach the worker: the retained demand is the SUBSCRIPTION on the lane
+   * arm, so a tile that unmounts while still waiting must post the release or
+   * the tab stays subscribed to a body nobody is looking at.
+   *
+   * It also has to survive the resolve: a holder that took an awaiting grant
+   * and released after the retry installed the doc is releasing a lease the
+   * resident entry now counts, so this falls through to that entry rather than
+   * finding nothing and returning.
+   */
+  function releaseAwaitingFor(docKey: string): () => void {
+    let live = true;
+    return () => {
+      if (!live) return;
+      live = false;
+      const held = awaiting.get(docKey);
+      if (held === undefined) {
+        // Resolved while this holder was mounted - its lease was carried into
+        // the resident entry, so that is where the decrement belongs.
+        releaseFor(docKey)();
+        return;
+      }
+      held.leases -= 1;
+      if (held.leases > 0) return;
+      awaiting.delete(docKey);
+      void options.bridge.call("body/release", { docKey }, NO_TRANSFER).then(
+        () => {},
+        () => {
+          // The worker went away mid-release. Nothing on this side holds a doc
+          // for an awaiting body, so there is nothing to keep consistent: a
+          // respawned worker starts with no demand at all.
+        },
+      );
+    };
   }
 
   function releaseFor(docKey: string): () => void {
