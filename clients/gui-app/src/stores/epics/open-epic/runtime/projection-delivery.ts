@@ -97,8 +97,53 @@ export function createBatchingDelivery(
 export function deliverInto<TProjection extends Partial<EpicRuntimeProjection>>(
   delivery: EpicRuntimeDelivery,
 ): ProjectionDelivery<TProjection> {
+  /**
+   * The last value DELIVERED for each top-level key, by reference.
+   *
+   * Per `deliverInto` call, which is per sink, and that is safe because a key
+   * has exactly one owning sink - the property the two-publisher bug was a
+   * violation of. Two sinks diffing the same key independently would each
+   * think it unchanged while the other changed it.
+   */
+  const lastDelivered = new Map<string, unknown>();
+
   return (value: TProjection): void => {
-    delivery.publish(value);
+    // A sink flush delivers its WHOLE slice on any change, which was harmless
+    // in-process: the projector mints a new reference only for what actually
+    // changed, so unchanged keys arrived as the same objects and `setState`
+    // left every selector over them undisturbed.
+    //
+    // A structured clone does not preserve references. Post-relocation the
+    // whole slice is re-minted on every publish, so every selector over any
+    // key of that slice re-renders on every frame - a room-state frame
+    // re-rendering the artifact tree, the epic header and the chat list.
+    //
+    // So the diff moves HERE, to the last point that still holds the
+    // producer's references. Comparison is by reference and that is honest
+    // rather than cheap: it rests on the projector's own new-reference-iff-
+    // changed discipline - the same discipline the in-process behaviour rested
+    // on - and nothing downstream mutates a published slice value in place
+    // (swept: every mutating call in the runtime writes a local accumulator,
+    // and the one re-derivation of a published value spreads it).
+    //
+    // The NON-case, stated because it is the only way this goes wrong: a
+    // producer that mutated a sub-object in place would keep its reference,
+    // read as unchanged here, and stop being published - a value frozen on
+    // screen with no error anywhere. A new producer must mint a new reference
+    // for a changed key.
+    const next: Partial<EpicRuntimeProjection> = { ...value };
+    for (const key of Object.keys(next)) {
+      const candidate: unknown = Reflect.get(next, key);
+      if (lastDelivered.has(key) && lastDelivered.get(key) === candidate) {
+        Reflect.deleteProperty(next, key);
+        continue;
+      }
+      lastDelivered.set(key, candidate);
+    }
+    // Nothing actually moved. The sink flushed because ITS revision advanced,
+    // which is a fact about the sink rather than about the read model.
+    if (Object.keys(next).length === 0) return;
+    delivery.publish(next);
   };
 }
 

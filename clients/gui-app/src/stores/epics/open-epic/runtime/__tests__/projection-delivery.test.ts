@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import type { ProjectionSink } from "@traycer-clients/shared/replica-runtime";
 import {
   createBatchingDelivery,
+  deliverInto,
   projectedSlicesView,
 } from "@/stores/epics/open-epic/runtime/projection-delivery";
 import type { EpicRuntimeProjection } from "@/stores/epics/open-epic/runtime/epic-runtime-projection";
@@ -291,5 +292,111 @@ describe("projectedSlicesView", () => {
     });
     expect(ran).toBe(true);
     expect(transactCalls).toBe(1);
+  });
+});
+
+/**
+ * `deliverInto` publishes only the keys whose reference MOVED.
+ *
+ * A sink flush delivers its whole slice on any change. In-process that cost
+ * nothing: the projector mints a new reference only for what changed, so
+ * unchanged keys arrived as the same objects and no selector over them was
+ * disturbed. A structured clone does not preserve references, so post-flip
+ * the whole slice is re-minted every publish and every selector over any of
+ * its keys re-renders on every frame.
+ *
+ * The diff restores that property at the last point which still holds the
+ * producer's references.
+ */
+describe("deliverInto", () => {
+  function recorder(): {
+    published: Partial<EpicRuntimeProjection>[];
+    delivery: { publish(patch: Partial<EpicRuntimeProjection>): void };
+  } {
+    const published: Partial<EpicRuntimeProjection>[] = [];
+    return {
+      published,
+      delivery: {
+        publish(patch): void {
+          published.push(patch);
+        },
+      },
+    };
+  }
+
+  it("publishes everything on the first delivery", () => {
+    const { published, delivery } = recorder();
+    const deliver = deliverInto<Partial<EpicRuntimeProjection>>({
+      ...delivery,
+      batch: (body: () => void) => {
+        body();
+      },
+    });
+    const tree = EMPTY_RECORDS_PROJECTION.tree;
+
+    deliver({ tree, isDirty: false }, 1);
+
+    expect(published).toHaveLength(1);
+    expect(Object.keys(published[0] ?? {}).sort()).toEqual(["isDirty", "tree"]);
+  });
+
+  it("OMITS a key whose reference did not move, and keeps one that did", () => {
+    const { published, delivery } = recorder();
+    const deliver = deliverInto<Partial<EpicRuntimeProjection>>({
+      ...delivery,
+      batch: (body: () => void) => {
+        body();
+      },
+    });
+    const tree = EMPTY_RECORDS_PROJECTION.tree;
+
+    deliver({ tree, isDirty: false }, 1);
+    // Same `tree` reference, different `isDirty`: this is the room-frame case
+    // that was re-rendering the whole artifact tree.
+    deliver({ tree, isDirty: true }, 2);
+
+    expect(published).toHaveLength(2);
+    expect(Object.keys(published[1] ?? {})).toEqual(["isDirty"]);
+  });
+
+  it("publishes NOTHING when no reference moved", () => {
+    const { published, delivery } = recorder();
+    const deliver = deliverInto<Partial<EpicRuntimeProjection>>({
+      ...delivery,
+      batch: (body: () => void) => {
+        body();
+      },
+    });
+    const tree = EMPTY_RECORDS_PROJECTION.tree;
+
+    deliver({ tree, isDirty: false }, 1);
+    deliver({ tree, isDirty: false }, 2);
+
+    // The sink flushed because ITS revision advanced, which is a fact about
+    // the sink and not about the read model.
+    expect(published).toHaveLength(1);
+  });
+
+  it("does NOT see an in-place mutation - the documented non-case", () => {
+    // Not a bug being pinned, a boundary being recorded. The diff rests on the
+    // projector's new-reference-iff-changed discipline; a producer that
+    // mutated a sub-object in place would keep its reference, read as
+    // unchanged, and stop publishing - a value frozen on screen with no error
+    // anywhere. This test exists so that behaviour is discovered here, by
+    // someone reading the contract, rather than in a UI that stopped updating.
+    const { published, delivery } = recorder();
+    const deliver = deliverInto<Partial<EpicRuntimeProjection>>({
+      ...delivery,
+      batch: (body: () => void) => {
+        body();
+      },
+    });
+    const mutable = { ...EMPTY_RECORDS_PROJECTION.tree };
+
+    deliver({ tree: mutable }, 1);
+    Reflect.set(mutable, "rootIds", ["mutated-in-place"]);
+    deliver({ tree: mutable }, 2);
+
+    expect(published).toHaveLength(1);
   });
 });
