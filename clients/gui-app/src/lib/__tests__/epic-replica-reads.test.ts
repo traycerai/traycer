@@ -1,5 +1,4 @@
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
-import { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -21,8 +20,6 @@ interface FakeState {
 }
 
 function createHandle(state: FakeState): OpenEpicStoreHandle {
-  const doc = new Y.Doc();
-  const awareness = new Awareness(doc);
   const store = {
     getState: (): FakeState => state,
   } as OpenEpicStoreHandle["store"];
@@ -31,9 +28,19 @@ function createHandle(state: FakeState): OpenEpicStoreHandle {
   return {
     epicId: "epic-1",
     userId: "user-1",
-    doc,
-    awareness,
+    // No `doc` / `awareness`: a production handle has neither, because the
+    // replica lives on the worker thread and a `Y.Doc` cannot cross a
+    // structured clone. A fake that offered them would let a test reach for a
+    // capability its callers no longer have.
     store,
+    // Present because the handle is the real public type; the read seam never
+    // touches either, and a fixture that omitted them would not compile.
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     dispose: () => {},
     detachTransport: () => {},
     requestFreshSnapshot: () => {},
@@ -153,11 +160,7 @@ describe("attachment reads", () => {
     );
 
     await expect(
-      readHeldEpicAttachmentBytes(
-        handle,
-        "missing",
-        new AbortController().signal,
-      ),
+      readHeldEpicAttachmentBytes(handle, "missing"),
     ).resolves.toBeNull();
     expect(read).not.toHaveBeenCalled();
   });
@@ -176,9 +179,11 @@ describe("attachment reads", () => {
       }),
     );
 
-    await expect(
-      readHeldEpicAttachmentBytes(handle, "hash", signal),
-    ).resolves.toBe(bytes);
-    expect(read).toHaveBeenCalledWith("hash", signal);
+    await expect(readHeldEpicAttachmentBytes(handle, "hash")).resolves.toBe(
+      bytes,
+    );
+    // ONE argument: the held read stopped taking a signal when its wait moved
+    // to `awaitAttachmentBytes`, which is the leg the signal belongs to.
+    expect(read).toHaveBeenCalledWith("hash");
   });
 });

@@ -1423,15 +1423,18 @@ export function createOpenEpicStore(
               : false;
           },
           /**
-           * `signal` is accepted and no longer used to bound a WAIT.
+           * The WAITING leg. `signal` is LOAD-BEARING here.
            *
-           * The runtime's read waited indefinitely for a hash that had not
-           * synced, and `hasAttachmentBytes` existed solely to stop callers
-           * parking on it - "the guard is not optional". Across the bridge the
-           * worker answers not-held promptly (its own `hasAttachmentBytes`
-           * check is inside `attachment/read`), so the guard has no caller-side
-           * job left and is gone. The parameter stays because callers hold one
-           * and dropping it would be a second change to their call shape.
+           * This header used to describe the prompt read and said the opposite
+           * - that the signal bounded nothing and survived only because
+           * callers held one. That was true of `readAttachmentBytes`, which
+           * has since dropped the parameter entirely; it is false of this
+           * member, whose signal is what drives `attachment/cancel`. A reader
+           * trusting the old text would delete the parameter this depends on.
+           *
+           * The two legs are deliberately separate members - see the
+           * declaration and `epic-replica-reads.ts`, whose own headers say
+           * they must not be merged.
            */
           awaitAttachmentBytes: async (hash, signal) => {
             if (signal.aborted) return null;

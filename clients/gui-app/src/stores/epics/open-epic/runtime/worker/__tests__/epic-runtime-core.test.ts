@@ -68,6 +68,7 @@ function createPorts(): EpicRuntimeCorePorts & {
           update: Uint8Array.from([2]),
           seedMode: "full",
           hostStateVector: null,
+          awarenessFrames: [],
         }),
       settle: (input) => {
         settles.push(`${input.docKey}:${String(input.generation)}`);

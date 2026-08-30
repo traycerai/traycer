@@ -15,7 +15,10 @@
  */
 import { describe, expect, it } from "vitest";
 import type { EpicStreamClientFactory } from "../runtime/legacy-epic-stream-adapter";
-import { createOpenEpicStore, type OpenEpicStoreHandle } from "../store";
+import {
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "../test-support/open-store-for-test";
 
 /**
  * A session plus the updates its stream client was asked to SEND.
@@ -27,7 +30,7 @@ import { createOpenEpicStore, type OpenEpicStoreHandle } from "../store";
  * flag ablated. What the origin decides is whether the union is RE-SENT.
  */
 function openSession(epicId: string): {
-  readonly handle: OpenEpicStoreHandle;
+  readonly handle: OpenedStoreForTest;
   readonly sent: readonly Uint8Array[];
 } {
   const sent: Uint8Array[] = [];
@@ -39,12 +42,15 @@ function openSession(epicId: string): {
     retryMigration: () => {},
     close: () => {},
   });
-  const handle = createOpenEpicStore({
+  // The blessed harness, which exposes the in-thread runtime's live `doc` as a
+  // getter. That is what keeps the origin observer below possible: a
+  // PRODUCTION handle has no doc - the replica is on the worker thread - so a
+  // suite that needs one has to be the side that built it.
+  const handle = openStoreForTest({
     epicId,
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
-    laneSelection: null,
+    factories: { streamClientFactory: factory, laneSelection: null },
+    writeCommand: null,
   });
   return { handle, sent };
 }
@@ -78,7 +84,9 @@ describe("the root-state port", () => {
   it("carries an edit from one session's replica into another's projection", async () => {
     const source = openSession("epic-a");
     const target = openSession("epic-a");
-    source.handle.store.getState().setEpicTitle("edited in source");
+    await source.handle.store
+      .getState()
+      .beginEpicTitleMutation("edited in source");
 
     const update = await source.handle.encodeRootState();
     const applied = await target.handle.applyRootUpdate(update, false);
@@ -108,7 +116,9 @@ describe("the root-state port", () => {
     const source = openSession("epic-a");
     const asLocal = openSession("epic-a");
     const asPlain = openSession("epic-a");
-    source.handle.store.getState().setEpicTitle("edited in source");
+    await source.handle.store
+      .getState()
+      .beginEpicTitleMutation("edited in source");
     const update = await source.handle.encodeRootState();
 
     const localOrigins: unknown[] = [];
@@ -139,7 +149,9 @@ describe("the root-state port", () => {
   it("reports NOT applied for a disposed target rather than throwing", async () => {
     const source = openSession("epic-a");
     const target = openSession("epic-a");
-    source.handle.store.getState().setEpicTitle("edited in source");
+    await source.handle.store
+      .getState()
+      .beginEpicTitleMutation("edited in source");
     const update = await source.handle.encodeRootState();
     target.handle.dispose();
 
@@ -155,7 +167,7 @@ describe("the root-state port", () => {
 
   it("encodes state that survives a round trip through bytes alone", async () => {
     const source = openSession("epic-a");
-    source.handle.store.getState().setEpicTitle("round trip");
+    await source.handle.store.getState().beginEpicTitleMutation("round trip");
 
     const update = await source.handle.encodeRootState();
 

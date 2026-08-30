@@ -576,11 +576,14 @@ describe("the body return leg's ownership of its bytes", () => {
     );
 
     await ports.bodies.materialize("artifact-1");
-    if (emit === null) throw new Error("observer never attached");
+    // Captured into a const: TypeScript will not narrow a `let` that a closure
+    // assigns, so calling `emit` directly reads as possibly-null.
+    const emitUpdate = emit;
+    if (emitUpdate === null) throw new Error("observer never attached");
 
     // The array Yjs would hand to BOTH listeners.
     const shared = Uint8Array.from([9, 8, 7]);
-    emit(shared);
+    emitUpdate(shared);
 
     expect(forwarded).toHaveLength(1);
     // Equal bytes...
