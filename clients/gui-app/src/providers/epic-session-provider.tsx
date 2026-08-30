@@ -623,14 +623,121 @@ export function EpicSessionProvider(
                   seedOfferProvider,
                 }),
             };
+      /**
+       * The books, on MAIN, and the one set for this session.
+       *
+       * Built here rather than in the store because the worker reports into
+       * them too, over the bridge - so the composition that spawns the worker
+       * is the composition that owns them.
+       */
+      const accounting = createProcessBackedAccountingPort({
+        hostId: targetHostId,
+        epicId,
+        environment: createRendererRuntimeEnvironment(),
+      });
+
+      /**
+       * The projection handlers, filled once the store exists.
+       *
+       * A slot because the two constructions are mutually dependent: the
+       * spawner reduces into handlers only the store can supply, and the store
+       * needs the port only the spawner can hand back. The worker cannot
+       * publish before its bootstrap is answered, and that happens after both
+       * lines below - so the window where this is `null` carries no traffic.
+       * It is still checked rather than asserted, because "cannot happen" is
+       * not a thing this file gets to claim about another thread.
+       */
+      let projectionTarget: RuntimeProjectionHandlers<
+        Partial<EpicRuntimeProjection>
+      > | null = null;
+
+      const runtimeWorker = spawnEpicRuntimeWorker({
+        createWorker: getEpicRuntimeWorkerFactory(),
+        relay: {
+          log: (entry) => {
+            appLogger.log(entry.level, entry.message, entry.fields);
+          },
+          fatal: (message, stack) => {
+            // NOT just a log line. The runtime behind the bridge is gone, so a
+            // UI waiting on projections would wait forever - the epic reads as
+            // permanently loading. Surfaced as `failed`, which is the state
+            // that carries a retry affordance.
+            appLogger.error("[epic-session] runtime worker fatal", {
+              epicId,
+              stack,
+            });
+            presentSession({
+              kind: "failed",
+              targetHostId,
+              originalHostId: originalHostIdRef.current,
+            });
+          },
+        },
+        // Classified HERE, on main: an `Error` does not survive structured
+        // clone, so the worker receives the classifier's own union.
+        writeCommand: async (commandId, intent) => {
+          const narrowed = readWriteCommandIntent(intent);
+          if (narrowed === null) {
+            return {
+              ok: false,
+              failure: {
+                kind: "rejected",
+                resolution: {
+                  kind: "rejected",
+                  code: "RPC_ERROR",
+                  reason: "unrecognised write command intent",
+                  retryable: false,
+                },
+              },
+            };
+          }
+          try {
+            const sent = await dispatchEpicWriteCommand(
+              { epicId, requester: () => getCommandRequester() },
+              commandId,
+              narrowed,
+            );
+            return { ok: true, hostId: sent.hostId };
+          } catch (cause: unknown) {
+            return {
+              ok: false,
+              failure: classifyEpicWriteCommandFailure(cause),
+            };
+          }
+        },
+        streams: wsStreamClient,
+        accounting,
+        projection: {
+          accept: (value) => projectionTarget?.accept(value) ?? null,
+          apply: (value, revision) => {
+            projectionTarget?.apply(value, revision);
+          },
+          reject: (reason, revision) => {
+            projectionTarget?.reject(reason, revision);
+          },
+        },
+        epicId,
+        windowLabel: epicId,
+      });
+
       const created = createOpenEpicStore({
         epicId,
-        streamClientFactory,
         userId: sessionUserId,
-        onAuthError: handleSessionAuthError,
-        commandRequester: getCommandRequester(),
-        laneSelection,
+        accounting,
+        runtime: {
+          port: runtimeWorker.port,
+          command: (command) => {
+            runtimeWorker.command(command);
+          },
+          detach: () => {
+            runtimeWorker.detach();
+          },
+          dispose: () => {
+            runtimeWorker.dispose();
+          },
+        },
       });
+      projectionTarget = created.projection;
       // Construction-honest stamp, written exactly once: `streamClientFactory`
       // above captures this run's `targetHostId` into the transport it opens,
       // so the stamp IS the handle's transport binding. Nothing re-stamps a
