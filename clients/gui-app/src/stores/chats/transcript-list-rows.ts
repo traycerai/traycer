@@ -1,18 +1,16 @@
-import type {
-  ChatEvent,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
+  addRecordBackedRowIds,
   hydratedRecords,
   skeletonOrdinalByRowId,
+  spanEvents,
+  spanMessages,
+  staleSpansByFreshestServe,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import {
-  assistantRowId,
-  chatTranscriptEventRowId,
-  forkedChatLinkRowId,
   projectTranscriptRows,
   type TranscriptRowDescriptor,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
@@ -163,41 +161,28 @@ function spanRowIds(spans: TranscriptWindow["spans"]): ReadonlySet<string> {
   return rowIds;
 }
 
-/** Its own cache: a DIFFERENT set under the same key. */
+/**
+ * Its own cache: a DIFFERENT set under the same key. Composite-keyed on the
+ * spans array AND the ledger revision, because the fold below reads record
+ * contents through the ledger: two spans of one steered turn hold the same
+ * records under different `rowIds`, so a merge changes the answer without
+ * changing membership - the spans array moves there - while a re-serve can
+ * change what the records back without replacing the array - the revision
+ * moves there. Both key parts are stable across in-place token rewrites, so
+ * the per-token protection this cache exists for holds. (The one content read
+ * the fold makes - `event.turnId` for the `turn.stopped` shape - is safe
+ * under the key because events are never rewritten in place.)
+ */
 const spanBackedRowIdCache = new WeakMap<
   TranscriptWindow["spans"],
-  ReadonlySet<string>
+  { readonly revision: number; readonly rowIds: ReadonlySet<string> }
 >();
-
-/**
- * Fold one record set's BACKABLE identities into `into` - the derived id
- * shapes every tier produces the same way: a message backs the row carrying
- * its id, an event backs both its transcript row and its forked-chat-link
- * row, and a stopped turn's event backs that turn's assistant row.
- *
- * One fold consumed by both tiers' id channels, so a new derived shape cannot
- * land in one tier and not the other - previously a doc convention ("keep in
- * step"), now structural.
- */
-function addRecordBackedRowIds(
-  into: Set<string>,
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
-): void {
-  for (const message of messages) into.add(message.messageId);
-  for (const event of events) {
-    into.add(chatTranscriptEventRowId(event.eventId));
-    into.add(forkedChatLinkRowId(event.eventId));
-    if (event.type === "turn.stopped" && event.turnId !== null) {
-      into.add(assistantRowId(event.turnId));
-    }
-  }
-}
 
 /**
  * Every id a tier's contents can be rendered FROM - the mirror of
  * {@link liveRecordRowIds} over a hydrated tier, sharing its fold
- * ({@link addRecordBackedRowIds}).
+ * ({@link addRecordBackedRowIds}, which lives beside the draws relation in
+ * `transcript-window.ts` so the two cannot drift).
  *
  * Deliberately not {@link spanRowIds}, and the distinction is the point. Those
  * are the rows a span DRAWS. These are the identities its contents can back,
@@ -207,20 +192,30 @@ function addRecordBackedRowIds(
  *
  * Ask this only where the question is "what backs this model". Asking it where
  * the question is "is this row already drawn" over-suppresses - a record can
- * ride in `span.messages` to render a DIFFERENT row of the same turn without
- * the span drawing a row for it at all.
+ * ride in a span's record set to render a DIFFERENT row of the same turn
+ * without the span drawing a row for it at all.
  */
 function spanBackedRowIds(
+  window: TranscriptWindow,
   spans: TranscriptWindow["spans"],
 ): ReadonlySet<string> {
   const cached = spanBackedRowIdCache.get(spans);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined && cached.revision === window.records.revision) {
+    return cached.rowIds;
+  }
   const rowIds = new Set<string>();
   for (const span of spans) {
     for (const rowId of span.rowIds) rowIds.add(rowId);
-    addRecordBackedRowIds(rowIds, span.messages, span.events);
+    addRecordBackedRowIds(
+      rowIds,
+      spanMessages(window, span),
+      spanEvents(window, span),
+    );
   }
-  spanBackedRowIdCache.set(spans, rowIds);
+  spanBackedRowIdCache.set(spans, {
+    revision: window.records.revision,
+    rowIds,
+  });
   return rowIds;
 }
 
@@ -358,7 +353,7 @@ function staleBackingLookup(
   return backingLookup({
     tier: "stale",
     holdsNothing: () => window.staleSpans.length === 0,
-    rowIds: () => (rowIds ??= spanBackedRowIds(window.staleSpans)),
+    rowIds: () => (rowIds ??= spanBackedRowIds(window, window.staleSpans)),
     setupRowIds: null,
     steerRowIds: () => (steerRowIds ??= staleOnlySteerRowIds(window)),
   });
@@ -441,7 +436,7 @@ function steerRowIdsForTurnKeys(
 function staleOnlySteerRowIds(window: TranscriptWindow): ReadonlySet<string> {
   const turnKeys = new Set<string>();
   for (const span of window.staleSpans) {
-    for (const message of span.messages) {
+    for (const message of spanMessages(window, span)) {
       if (message.role === "assistant") turnKeys.add(assistantTurnKey(message));
     }
   }
@@ -451,7 +446,7 @@ function staleOnlySteerRowIds(window: TranscriptWindow): ReadonlySet<string> {
   };
   for (const message of window.liveMessages) alsoCurrent(message);
   for (const span of window.spans) {
-    for (const message of span.messages) alsoCurrent(message);
+    for (const message of spanMessages(window, span)) alsoCurrent(message);
   }
   return steerRowIdsForTurnKeys(window, turnKeys);
 }
@@ -673,11 +668,12 @@ function seatStaleRows(input: {
   readonly suppressedOrdinals: Set<number>;
 }): void {
   const { window } = input;
-  // A copy: the STORED order is ordinal, which `hydratedRecords` relies on for
-  // its linear merge, so the serve order is local to this pass.
-  const byFreshestServe = [...window.staleSpans].sort(
-    (left, right) => right.servedAt - left.servedAt,
-  );
+  // A sorted COPY (the STORED order is ordinal, which `hydratedRecords` relies
+  // on for its linear merge), on the derived record-grain serve stamp - the
+  // identical record-level figure `staleRowOwners` and the admission sort
+  // read, which is what keeps the three passes awarding a contested row the
+  // same way.
+  const byFreshestServe = staleSpansByFreshestServe(window);
   for (const span of byFreshestServe) {
     span.rowIds.forEach((rowId, offset) => {
       // The empty string is a positionally-seated legacy tail's "identity

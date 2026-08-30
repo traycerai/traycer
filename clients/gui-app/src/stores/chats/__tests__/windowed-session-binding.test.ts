@@ -17,6 +17,7 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import {
   isTailHydrated,
+  spanMessages,
   TRANSCRIPT_WINDOW_MAX_BYTES,
 } from "@/stores/chats/transcript-window";
 
@@ -3290,8 +3291,11 @@ describe("a row-targeted delta on the windowed line", () => {
     const harness = createWindowedHarness();
     try {
       seedAndResolve(harness);
-      const span = harness.handle.store.getState().transcriptWindow.spans[0];
-      const row = span.messages.find((message) => message.messageId === "a-1");
+      const window = harness.handle.store.getState().transcriptWindow;
+      const span = window.spans[0];
+      const row = spanMessages(window, span).find(
+        (message) => message.messageId === "a-1",
+      );
       expect(
         row?.role === "assistant" ? row.imageResolutions : [],
       ).toHaveLength(1);

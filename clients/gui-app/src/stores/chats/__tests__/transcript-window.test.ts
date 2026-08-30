@@ -29,6 +29,10 @@ import {
   mapWindowMessages,
   planTranscriptHydration,
   settleWindowBytes,
+  spanChargeBytes,
+  spanMessages,
+  spanServeStamp,
+  spanTouchStamp,
   streamWindowMessage,
   touchTranscriptRange,
   transcriptHydrationGaps,
@@ -937,7 +941,14 @@ describe("idempotent voiding", () => {
     expect(reindexed).not.toBe(held);
   });
 
-  it("pending byte measurements force the full void path", () => {
+  it("pending byte measurements survive an idempotent repeat void", () => {
+    // Pending byte measurements USED to force the full void path (a third
+    // exclusion from the repeat guard), when the full void's carry settled
+    // eagerly and a no-op repeat would silently skip that work. The ledger now
+    // carries the debt (`unsettledByteMessageIds` and the entries both
+    // survive) through a void, so a repeat with pending measurements is safe
+    // to short-circuit: it skips nothing because there is nothing left to
+    // settle-on-void.
     const held = heldWindowWithHydratedSpan();
     const voided = applyIndexChange(held, {
       activeTurnId: null,
@@ -960,8 +971,8 @@ describe("idempotent voiding", () => {
       changes: [{ type: "reindexed" }],
     });
 
-    expect(repeat).not.toBe(pending);
-    expect(repeat.unsettledByteMessageIds).toEqual([]);
+    expect(repeat).toBe(pending);
+    expect(repeat.unsettledByteMessageIds).toEqual(["m1"]);
   });
 });
 
@@ -1255,15 +1266,8 @@ describe("range responses", () => {
       "row-3",
       "row-4",
     ]);
-    expect(merged.messages.map((message) => message.messageId)).toEqual([
-      "m-0",
-      "m-shared",
-      "m-4",
-    ]);
-    expect(merged.events.map((entry) => entry.eventId)).toEqual([
-      "e-shared",
-      "e-4",
-    ]);
+    expect(merged.messageIds).toEqual(["m-0", "m-shared", "m-4"]);
+    expect(merged.eventIds).toEqual(["e-shared", "e-4"]);
   });
 });
 
@@ -2352,13 +2356,16 @@ describe("stale spans", () => {
     const bulk = "x".repeat(Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.47));
     // Seated first, so it is the COLDER of the two by seat order; only the
     // viewport touch can make it the survivor.
+    // Message ids match their row ids (production seats a plain user row at
+    // `message.messageId` - `row-projection.ts`), which is what lets the
+    // viewport touch below find a record on "row-0" to warm.
     const withOnScreen = applyRangeResponse(
       windowWithSkeleton(30),
       rangeResponse({
         epoch: 1,
         fromOrdinal: 0,
         rowIds: ["row-0"],
-        messages: [messageWithText(userMessage("m-0", 0), bulk)],
+        messages: [messageWithText(userMessage("row-0", 0), bulk)],
       }),
       null,
       null,
@@ -2369,7 +2376,7 @@ describe("stale spans", () => {
         epoch: 1,
         fromOrdinal: 10,
         rowIds: ["row-10"],
-        messages: [messageWithText(userMessage("m-10", 10), bulk)],
+        messages: [messageWithText(userMessage("row-10", 10), bulk)],
       }),
       null,
       null,
@@ -2487,13 +2494,17 @@ describe("stale spans", () => {
       ["row-0", "row-1"],
     ]);
 
-    const before = served.staleSpans.map((span) => span.touchedAt);
+    const before = served.staleSpans.map((span) =>
+      spanTouchStamp(served, span),
+    );
     const read = touchTranscriptRange(served, {
       fromOrdinal: 0,
       toOrdinal: 1,
     });
 
-    expect(read.staleSpans.map((span) => span.touchedAt)).toEqual(before);
+    expect(read.staleSpans.map((span) => spanTouchStamp(read, span))).toEqual(
+      before,
+    );
   });
 
   it("does not warm a carry through the old ordinal of a row the index names off screen", () => {
@@ -2509,7 +2520,11 @@ describe("stale spans", () => {
         epoch: 1,
         fromOrdinal: 5,
         rowIds: ["row-5"],
-        messages: [userMessage("m-5", 5)],
+        // The message's own id names its row, matching production
+        // (`row-projection.ts` seats a plain user row at `message.messageId`)
+        // - the touch below warms the record a span DRAWS, which is decided by
+        // that identity, not by the span's `fromOrdinal`.
+        messages: [userMessage("row-5", 5)],
       }),
       null,
       null,
@@ -2522,7 +2537,7 @@ describe("stale spans", () => {
         indexRevision: null,
         tail: {
           fromOrdinal: 29,
-          messages: [userMessage("m-29", 29)],
+          messages: [userMessage("row-29", 29)],
           events: [],
         },
       },
@@ -2540,15 +2555,17 @@ describe("stale spans", () => {
     expect(renamed.skeleton[5]).toBeUndefined();
     expect(renamed.staleSpans.map((span) => span.rowIds)).toEqual([["row-5"]]);
 
-    const before = renamed.staleSpans.map((span) => span.touchedAt);
+    const before = renamed.staleSpans.map((span) =>
+      spanTouchStamp(renamed, span),
+    );
     const atOldOrdinal = touchTranscriptRange(renamed, {
       fromOrdinal: 5,
       toOrdinal: 6,
     });
 
-    expect(atOldOrdinal.staleSpans.map((span) => span.touchedAt)).toEqual(
-      before,
-    );
+    expect(
+      atOldOrdinal.staleSpans.map((span) => spanTouchStamp(atOldOrdinal, span)),
+    ).toEqual(before);
 
     // The other direction, so this cannot pass by never warming anything: at
     // the ordinal the index actually names, the carry IS on screen.
@@ -2557,7 +2574,9 @@ describe("stale spans", () => {
       toOrdinal: 21,
     });
 
-    expect(atName.staleSpans.map((span) => span.touchedAt)).not.toEqual(before);
+    expect(
+      atName.staleSpans.map((span) => spanTouchStamp(atName, span)),
+    ).not.toEqual(before);
   });
 
   it("does not warm a carry whose rows are all unverified-identity markers", () => {
@@ -2597,13 +2616,17 @@ describe("stale spans", () => {
     );
     expect(rebased.staleSpans.map((span) => span.rowIds)).toEqual([["", ""]]);
 
-    const before = rebased.staleSpans.map((span) => span.touchedAt);
+    const before = rebased.staleSpans.map((span) =>
+      spanTouchStamp(rebased, span),
+    );
     const read = touchTranscriptRange(rebased, {
       fromOrdinal: 8,
       toOrdinal: 10,
     });
 
-    expect(read.staleSpans.map((span) => span.touchedAt)).toEqual(before);
+    expect(read.staleSpans.map((span) => spanTouchStamp(read, span))).toEqual(
+      before,
+    );
   });
 
   it("keeps both carries when their markers collide only across coordinate spaces", () => {
@@ -2666,11 +2689,12 @@ describe("stale spans", () => {
     );
 
     expect(third.staleSpans).toHaveLength(2);
-    expect(
-      third.staleSpans
-        .flatMap((span) => span.messages.map((message) => message.messageId))
-        .sort(),
-    ).toEqual(["m-8", "m-9", "n-8", "n-9"]);
+    expect(third.staleSpans.flatMap((span) => span.messageIds).sort()).toEqual([
+      "m-8",
+      "m-9",
+      "n-8",
+      "n-9",
+    ]);
   });
 
   it("keeps the carry the renderer draws from when two hold one row and warmth ties", () => {
@@ -2685,13 +2709,29 @@ describe("stale spans", () => {
     // see are equally warm, and a stable sort then falls back to input order -
     // which for the re-bound below is the STORED ordinal order, putting the
     // older carry first.
+    //
+    // Message ids match their row ids throughout, as production seats a plain
+    // user row (`row-projection.ts`: `rowId: message.messageId`).
+    //
+    // Under single ownership this pin's ORIGINAL premise (a coverage dedupe
+    // could discard the FRESHER carry's row while a redundant OLDER copy
+    // survives) is unrepresentable: `older` and `fresher` both reference
+    // "row-5" through the one ledger entry, so they tie in derived warmth AND
+    // serve stamp by construction. `boundedStaleSpans`' admission pass then
+    // sees `fresher` (processed second on the stable tie-break) contribute NO
+    // uncovered row at all - `older` already covers "row-5" too - so `fresher`
+    // is dropped as wholly redundant, not "discarded despite being the newer
+    // copy". That is a correct consequence of single ownership, not the
+    // regression this test used to guard: there is only one "row-5" body to
+    // render, and it renders correctly (asserted below) whichever span
+    // structurally carries the reference.
     const seeded = applyRangeResponse(
       windowWithSkeleton(30),
       rangeResponse({
         epoch: 1,
         fromOrdinal: 5,
         rowIds: ["row-5", "row-6"],
-        messages: [userMessage("m-5", 5), userMessage("m-6", 6)],
+        messages: [userMessage("row-5", 5), userMessage("row-6", 6)],
       }),
       null,
       null,
@@ -2715,7 +2755,7 @@ describe("stale spans", () => {
         epoch: 2,
         fromOrdinal: 12,
         rowIds: ["row-5"],
-        messages: [userMessage("m-5", 555)],
+        messages: [userMessage("row-5", 555)],
       }),
       null,
       null,
@@ -2738,8 +2778,9 @@ describe("stale spans", () => {
       ["row-5", "row-6"],
       ["row-5"],
     ]);
-    const [older, fresher] = carried.staleSpans;
-    expect(fresher.servedAt).toBeGreaterThan(older.servedAt);
+    // No per-span serve comparison here any more: both carries reference
+    // "row-5" through the single ledger entry, so their derived serve stamps
+    // tie BY CONSTRUCTION - there is no per-span copy left to disagree.
 
     // Both rows on screen, so both carries are warmed to the same clock.
     const named = applySkeletonChunk(carried, {
@@ -2752,7 +2793,9 @@ describe("stale spans", () => {
       fromOrdinal: 20,
       toOrdinal: 22,
     });
-    expect(warm.staleSpans[0].touchedAt).toBe(warm.staleSpans[1].touchedAt);
+    expect(spanTouchStamp(warm, warm.staleSpans[0])).toBe(
+      spanTouchStamp(warm, warm.staleSpans[1]),
+    );
 
     // Any seat re-bounds the tier, and this one covers neither carry.
     const seat = applyRangeResponse(
@@ -2761,21 +2804,23 @@ describe("stale spans", () => {
         epoch: 3,
         fromOrdinal: 0,
         rowIds: ["row-0"],
-        messages: [userMessage("m-0", 0)],
+        messages: [userMessage("row-0", 0)],
       }),
       null,
       null,
     );
 
+    // `fresher` contributed no coverage the admitted `older` span did not
+    // already have (see the migration note above), so only one carry survives.
     expect(seat.staleSpans.map((span) => span.rowIds)).toEqual([
       ["row-5", "row-6"],
-      ["row-5"],
     ]);
     // The consequence, stated on the body rather than on span identity: the
-    // row still renders from the newer serve.
+    // row still renders from the newer serve, regardless of which span
+    // structurally references it.
     expect(
       hydratedRecords(seat).messages.find(
-        (message) => message.messageId === "m-5",
+        (message) => message.messageId === "row-5",
       )?.timestamp,
     ).toBe(555);
   });
@@ -3273,11 +3318,11 @@ describe("stale spans", () => {
         (candidate) =>
           candidate.fromOrdinal <= fromOrdinal &&
           fromOrdinal < candidate.fromOrdinal + candidate.rowIds.length &&
-          candidate.messages.some((message) => message.messageId === messageId),
+          candidate.messageIds.includes(messageId),
       );
-      const seated = span?.messages.find(
-        (message) => message.messageId === messageId,
-      );
+      const seated = (
+        span !== undefined ? spanMessages(delayed, span) : []
+      ).find((message) => message.messageId === messageId);
       return seated !== undefined && seated.role === "assistant"
         ? seated.imageResolutions[0].state
         : "missing";
@@ -3413,7 +3458,7 @@ describe("stale spans", () => {
         epoch: 1,
         fromOrdinal: 5,
         rowIds: ["row-5", "row-6"],
-        messages: [userMessage("m-5", 5), userMessage("m-6", 6)],
+        messages: [userMessage("row-5", 5), userMessage("row-6", 6)],
       }),
       null,
       null,
@@ -3437,7 +3482,7 @@ describe("stale spans", () => {
         epoch: 2,
         fromOrdinal: 12,
         rowIds: ["row-5"],
-        messages: [userMessage("m-5", 555)],
+        messages: [userMessage("row-5", 555)],
       }),
       null,
       null,
@@ -3455,10 +3500,21 @@ describe("stale spans", () => {
       fromOrdinal: 20,
       toOrdinal: 21,
     });
-    expect(warm.staleSpans[0].touchedAt).toBeGreaterThan(
-      warm.spans[0].touchedAt,
+    expect(spanTouchStamp(warm, warm.staleSpans[0])).toBeGreaterThan(
+      spanTouchStamp(warm, warm.spans[0]),
     );
-    expect(warm.spans[0].servedAt).toBeGreaterThan(warm.staleSpans[0].servedAt);
+    // Single ownership ties the serve stamps: both tiers reference the ONE
+    // "row-5" ledger entry, so neither can be "fresher served" than the other
+    // for that row. The scoping the touch stamps prove is visible at the
+    // ledger too - the bump reached ONLY the record backing the row the carry
+    // draws in range, never the fresh-drawn neighbour it merely holds.
+    expect(spanServeStamp(warm, warm.spans[0])).toBe(
+      spanServeStamp(warm, warm.staleSpans[0]),
+    );
+    expect(warm.records.messages.get("row-6")?.touchedAt).toBe(warm.clock);
+    expect(warm.records.messages.get("row-5")?.touchedAt).toBeLessThan(
+      warm.clock,
+    );
 
     // The next rebase weighs them against each other, warmest first.
     const carried = applyWindowedSnapshot(
@@ -3479,24 +3535,29 @@ describe("stale spans", () => {
     ]);
     expect(
       hydratedRecords(carried).messages.find(
-        (message) => message.messageId === "m-5",
+        (message) => message.messageId === "row-5",
       )?.timestamp,
     ).toBe(555);
   });
 
-  it("warms only the freshest carry of a row two carries hold", () => {
-    // The warmth bump answers "is this carry drawing anything on screen", and
-    // for a row the replacement index NAMES the answer is known: the freshest
-    // serve draws it and the staler duplicate draws nothing. Bumping both
-    // equalizes them, which hands a later squeeze's outcome to a tiebreak when
-    // the tier already knows which copy it would render.
+  it("warms a shared row's one record and nothing beside it", () => {
+    // The pre-ledger pin here - "only the freshest carry warms" - rested on
+    // two carries holding two COPIES of the row, where only the fresher copy
+    // would render. Single ownership dissolves that premise: both carries
+    // reference the ONE ledger entry, seat it at the same named ordinal, and
+    // render the same bytes, so warming the record moves every span drawing
+    // it together - that is the record grain working, not a leak. What stays
+    // pinned is the SCOPING: the bump reaches only the record backing the
+    // viewed row, so the older carry's private "row-6" record earns nothing
+    // from a viewport it is not in, and a later squeeze still sees its
+    // exclusive holdings at their true temperature.
     const seeded = applyRangeResponse(
       windowWithSkeleton(30),
       rangeResponse({
         epoch: 1,
         fromOrdinal: 5,
         rowIds: ["row-5", "row-6"],
-        messages: [userMessage("m-5", 5), userMessage("m-6", 6)],
+        messages: [userMessage("row-5", 5), userMessage("row-6", 6)],
       }),
       null,
       null,
@@ -3518,7 +3579,7 @@ describe("stale spans", () => {
         epoch: 2,
         fromOrdinal: 12,
         rowIds: ["row-5"],
-        messages: [userMessage("m-5", 555)],
+        messages: [userMessage("row-5", 555)],
       }),
       null,
       null,
@@ -3542,15 +3603,19 @@ describe("stale spans", () => {
       entries: [skeletonEntry("row-5", 20)],
       isFinal: false,
     });
-    const before = named.staleSpans.map((span) => span.touchedAt);
+    const before = named.staleSpans.map((span) => spanTouchStamp(named, span));
 
     const warm = touchTranscriptRange(named, {
       fromOrdinal: 20,
       toOrdinal: 21,
     });
 
-    expect(warm.staleSpans[0].touchedAt).toBe(before[0]);
-    expect(warm.staleSpans[1].touchedAt).toBeGreaterThan(before[1]);
+    expect(spanTouchStamp(warm, warm.staleSpans[0])).toBeGreaterThan(before[0]);
+    expect(spanTouchStamp(warm, warm.staleSpans[1])).toBeGreaterThan(before[1]);
+    expect(warm.records.messages.get("row-5")?.touchedAt).toBe(warm.clock);
+    expect(warm.records.messages.get("row-6")?.touchedAt).toBeLessThan(
+      warm.clock,
+    );
   });
 
   it("retires a stale span mixing a marker with a survivor once the skeleton completes", () => {
@@ -3775,7 +3840,9 @@ describe("eviction", () => {
         epoch: 1,
         fromOrdinal: 0,
         rowIds: ["row-0", "row-1"],
-        messages: [userMessage("old", 0)],
+        // The message's own id names its row (matching production), so the
+        // touch below has a record to warm.
+        messages: [userMessage("row-0", 0)],
       }),
       null,
       null,
@@ -3786,7 +3853,7 @@ describe("eviction", () => {
         epoch: 1,
         fromOrdinal: 10,
         rowIds: ["row-10", "row-11"],
-        messages: [userMessage("new", 10)],
+        messages: [userMessage("row-10", 10)],
       }),
       null,
       null,
@@ -3797,7 +3864,7 @@ describe("eviction", () => {
         epoch: 1,
         fromOrdinal: 28,
         rowIds: ["row-28", "row-29"],
-        messages: [userMessage("tail", 28)],
+        messages: [userMessage("row-28", 28)],
       }),
       null,
       null,
@@ -3805,15 +3872,18 @@ describe("eviction", () => {
 
     // The reader is looking at the OLDEST-loaded span. Touching it must
     // reorder eviction, or scrolling up evicts exactly what is on screen.
-    const oldTouchedAt = window.spans.find(
-      (span) => span.fromOrdinal === 0,
-    )?.touchedAt;
+    const oldSpan = window.spans.find((span) => span.fromOrdinal === 0);
+    const oldTouchedAt =
+      oldSpan !== undefined ? spanTouchStamp(window, oldSpan) : undefined;
     const touched = touchTranscriptRange(window, {
       fromOrdinal: 0,
       toOrdinal: 2,
     });
+    const touchedSpan = touched.spans.find((span) => span.fromOrdinal === 0);
     expect(
-      touched.spans.find((span) => span.fromOrdinal === 0)?.touchedAt,
+      touchedSpan !== undefined
+        ? spanTouchStamp(touched, touchedSpan)
+        : undefined,
     ).toBeGreaterThan(oldTouchedAt ?? -1);
 
     const evicted = evictTranscriptWindowToBudget(
@@ -3948,6 +4018,512 @@ describe("eviction protects the visible span", () => {
   });
 });
 
+describe("the record ledger", () => {
+  it("accepts staying over budget rather than dropping a protected span, and resets the terminal once a later evict lands under budget", () => {
+    // A single span whose end touches `rowCount` is the tail - exempt from
+    // eviction outright - so a window that is over budget with NOTHING else
+    // to drop cannot make progress. That is not a bug to paper over: the
+    // terminal names it so a caller can tell "nothing evictable was over
+    // budget" apart from "eviction ran and still could not fit", which is
+    // `evictionTerminal`'s whole reason to exist.
+    const huge = messageWithText(
+      userMessage("m-huge1", 0),
+      "x".repeat(TRANSCRIPT_WINDOW_MAX_BYTES + 4096),
+    );
+    const window = applyRangeResponse(
+      windowWithSkeleton(2),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [huge],
+      }),
+      null,
+      null,
+    );
+    expect(window.hydratedBytes).toBeGreaterThan(TRANSCRIPT_WINDOW_MAX_BYTES);
+
+    const evicted = evictTranscriptWindowToBudget(
+      window,
+      TRANSCRIPT_WINDOW_MAX_BYTES,
+      null,
+      [],
+    );
+    // Nothing was dropped - the tail span is the only span there is.
+    expect(evicted.spans).toEqual(window.spans);
+    expect(evicted.hydratedBytes).toBeGreaterThan(TRANSCRIPT_WINDOW_MAX_BYTES);
+    expect(evicted.evictionTerminal).toBe("over-budget-accepted");
+
+    // The reset: a later evict that DOES land under budget must not leave the
+    // stale terminal standing, or a caller reading it after the window
+    // recovered would keep reporting a squeeze that is long over.
+    const recovered = evictTranscriptWindowToBudget(
+      evicted,
+      evicted.hydratedBytes,
+      null,
+      [],
+    );
+    expect(recovered.evictionTerminal).toBe("none");
+  });
+
+  it("names the alias-group as unbreakable when the only unprotected span's every record is shared with the protected tail", () => {
+    // The cold span at ordinal 0 holds nothing of its own - its one record IS
+    // the tail's record, re-served under the same id. Evicting it alone saves
+    // nothing (the tail still references the record), and its alias closure
+    // reaches the tail, so the closure can never be evicted either. That is a
+    // DIFFERENT terminal from "over-budget-accepted": a caller that treated
+    // the two alike could not tell a genuine leak (a closure that keeps
+    // growing) from the ordinary tail exemption.
+    const shared = "x".repeat(TRANSCRIPT_WINDOW_MAX_BYTES + 4096);
+    const window = applyRangeResponse(
+      applyRangeResponse(
+        windowWithSkeleton(6),
+        rangeResponse({
+          epoch: 1,
+          fromOrdinal: 4,
+          rowIds: ["row-4", "row-5"],
+          messages: [messageWithText(userMessage("m-shared2", 4), shared)],
+        }),
+        null,
+        null,
+      ),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        // Same record id as the tail's - this span's ENTIRE reference set is
+        // shared, so its own `contextBytes` and exclusive records are both
+        // zero.
+        messages: [messageWithText(userMessage("m-shared2", 0), shared)],
+      }),
+      null,
+      null,
+    );
+    expect(window.hydratedBytes).toBeGreaterThan(TRANSCRIPT_WINDOW_MAX_BYTES);
+
+    const evicted = evictTranscriptWindowToBudget(
+      window,
+      TRANSCRIPT_WINDOW_MAX_BYTES,
+      null,
+      [],
+    );
+    // Both spans survive - the cold one is not evicted, because doing so
+    // frees nothing while the tail still names the record.
+    expect(evicted.spans).toHaveLength(2);
+    expect(evicted.hydratedBytes).toBeGreaterThan(TRANSCRIPT_WINDOW_MAX_BYTES);
+    expect(evicted.evictionTerminal).toBe("alias-group-unbreakable");
+  });
+
+  it("evicts an alias closure of two unprotected spans as one unit, and prunes the shared record only once both are gone", () => {
+    // Neither cold span has a positive marginal saving alone - each holds
+    // ONLY the record they share, so evicting either alone frees nothing
+    // (the other still references it). Unlike the previous case, nothing
+    // protected sits in their closure, so the pair is evictable as a UNIT -
+    // the case `aliasClosure` exists to handle rather than leaving the window
+    // permanently over budget.
+    const shared = "x".repeat(Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 1.1));
+    const sharedMessage = messageWithText(userMessage("m-shared3", 0), shared);
+    let window = windowWithSkeleton(20);
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [sharedMessage],
+      }),
+      null,
+      null,
+    );
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 8,
+        rowIds: ["row-8", "row-9"],
+        messages: [{ ...sharedMessage, messageId: "m-shared3" }],
+      }),
+      null,
+      null,
+    );
+    // A small protected tail keeps the window's only other span alive so the
+    // closure is genuinely the sole eviction candidate.
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 18,
+        rowIds: ["row-18", "row-19"],
+        messages: [userMessage("row-18", 18)],
+      }),
+      null,
+      null,
+    );
+    expect(window.spans).toHaveLength(3);
+    expect(window.hydratedBytes).toBeGreaterThan(TRANSCRIPT_WINDOW_MAX_BYTES);
+
+    const sharedBytes = recordByteLength(sharedMessage);
+    const evicted = evictTranscriptWindowToBudget(
+      window,
+      TRANSCRIPT_WINDOW_MAX_BYTES,
+      null,
+      [],
+    );
+    // Only the protected tail remains.
+    expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([18]);
+    // The union saving is exactly the shared record's bytes, charged once -
+    // neither span had any exclusive bytes of its own.
+    expect(window.hydratedBytes - evicted.hydratedBytes).toBe(sharedBytes);
+    // Reference-counted release: with both holders gone, the ledger entry is
+    // reclaimed rather than lingering as unreferenced memory.
+    expect(evicted.records.messages.has("m-shared3")).toBe(false);
+    expect(evicted.evictionTerminal).toBe("none");
+  });
+
+  it("charges an evicted span's marginal saving exactly, and re-evaluates it after each drop - never trusting an alias's bytes as savings until it is truly the last holder", () => {
+    // Spans A (ordinal 0) and B (ordinal 10) each hold their own exclusive
+    // record plus a big record they SHARE; a tiny protected tail (ordinal 18)
+    // anchors the window. A's marginal saving alone is only its exclusive
+    // record plus its own context - the shared record is not freed by
+    // dropping A while B still names it. Sized so that saving alone is NOT
+    // enough to reach budget: a correct pass must re-derive B's saving AFTER
+    // A is gone (when the shared record becomes B's alone to free) and drop
+    // B too. A pass that credited A with the shared record's bytes up front
+    // would believe the budget was already met and stop after A, leaving the
+    // window well over the budget it was asked to reach - the exact failure
+    // mode `messageRefs` is maintained incrementally to prevent.
+    const sharedText = "s".repeat(4 * 1024 * 1024);
+    const exclusiveTextA = "a".repeat(5000);
+    const exclusiveTextB = "b".repeat(5000);
+    let window = windowWithSkeleton(20);
+    window = applyRangeResponse(
+      window,
+      {
+        ...rangeResponse({
+          epoch: 1,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [
+            messageWithText(userMessage("m-excl4a", 0), exclusiveTextA),
+            messageWithText(userMessage("m-shared4", 0), sharedText),
+          ],
+        }),
+        rowContext: { "row-0": { legacyRowAnchorAt: 4321 } },
+      },
+      null,
+      null,
+    );
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 10,
+        rowIds: ["row-10", "row-11"],
+        messages: [
+          messageWithText(userMessage("m-excl4b", 10), exclusiveTextB),
+          { ...messageWithText(userMessage("m-shared4", 10), sharedText) },
+        ],
+      }),
+      null,
+      null,
+    );
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 18,
+        rowIds: ["row-18", "row-19"],
+        messages: [userMessage("row-18", 18)],
+      }),
+      null,
+      null,
+    );
+    expect(window.spans.map((span) => span.fromOrdinal)).toEqual([0, 10, 18]);
+
+    const spanA = window.spans.find((span) => span.fromOrdinal === 0);
+    const spanB = window.spans.find((span) => span.fromOrdinal === 10);
+    const tailSpan = window.spans.find((span) => span.fromOrdinal === 18);
+    expect(spanA).toBeDefined();
+    expect(spanB).toBeDefined();
+    expect(tailSpan).toBeDefined();
+    const exclusiveA = window.records.messages.get("m-excl4a")?.record;
+    const exclusiveB = window.records.messages.get("m-excl4b")?.record;
+    const shared = window.records.messages.get("m-shared4")?.record;
+    expect(exclusiveA).toBeDefined();
+    expect(exclusiveB).toBeDefined();
+    expect(shared).toBeDefined();
+    const expectedDrop =
+      (exclusiveA !== undefined ? recordByteLength(exclusiveA) : 0) +
+      (exclusiveB !== undefined ? recordByteLength(exclusiveB) : 0) +
+      (shared !== undefined ? recordByteLength(shared) : 0) +
+      (spanA !== undefined ? spanA.contextBytes : 0);
+
+    // The budget only the protected tail's own charge can satisfy: reaching
+    // it requires BOTH A and B to go, since A's marginal saving alone (its
+    // exclusive record plus its context) is nowhere near the ~4 MiB the
+    // shared record contributes.
+    const budget =
+      tailSpan !== undefined ? spanChargeBytes(window, tailSpan) : 0;
+    const evicted = evictTranscriptWindowToBudget(window, budget, null, []);
+
+    expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([18]);
+    expect(window.hydratedBytes - evicted.hydratedBytes).toBe(expectedDrop);
+    expect(evicted.evictionTerminal).toBe("none");
+    // Both exclusive records and the shared one are gone - the reference-
+    // counted release once the last holder drops.
+    expect(evicted.records.messages.has("m-excl4a")).toBe(false);
+    expect(evicted.records.messages.has("m-excl4b")).toBe(false);
+    expect(evicted.records.messages.has("m-shared4")).toBe(false);
+  });
+
+  it("charges a record shared across three carries once at a rebase, and once more across the fresh/stale boundary after one carry is re-served", () => {
+    // All three ranges below name the SAME extra message id ("m-shared5"), so
+    // a rebase demotes all three spans to stale in ONE `boundedStaleSpans`
+    // pass whose per-record dedupe (`chargedIds`) starts from nothing - the
+    // three-way sharing is entirely this pass's problem. Sized so the three
+    // fit together only if the shared record is billed ONCE: correctly
+    // deduped they total comfortably under budget, but charging the shared
+    // record again for each candidate that still names it pushes the total
+    // well over - which a chargedIds bug that skipped the membership check
+    // would do, and it would surface as the coldest carry silently failing to
+    // be admitted rather than as a thrown error.
+    const sharedText = "s".repeat(
+      Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.34),
+    );
+    const exclusiveText1 = "e".repeat(
+      Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.3),
+    );
+    const exclusiveText2 = "f".repeat(
+      Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.3),
+    );
+    let window = windowWithSkeleton(20);
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [
+          userMessage("row-0", 0),
+          messageWithText(userMessage("m-shared5", 0), sharedText),
+        ],
+      }),
+      null,
+      null,
+    );
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 10,
+        rowIds: ["row-10"],
+        messages: [
+          messageWithText(userMessage("row-10", 10), exclusiveText1),
+          messageWithText(userMessage("m-shared5", 10), sharedText),
+        ],
+      }),
+      null,
+      null,
+    );
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 15,
+        rowIds: ["row-15"],
+        messages: [
+          messageWithText(userMessage("row-15", 15), exclusiveText2),
+          messageWithText(userMessage("m-shared5", 15), sharedText),
+        ],
+      }),
+      null,
+      null,
+    );
+    expect(window.spans).toHaveLength(3);
+
+    const rebased = applyWindowedSnapshot(
+      window,
+      {
+        epoch: 2,
+        rowCount: 20,
+        indexRevision: null,
+        tail: { fromOrdinal: 20, messages: [], events: [] },
+      },
+      null,
+      null,
+    );
+    // All three carried: correctly deduped, SHARED + EXCLUSIVE_1 +
+    // EXCLUSIVE_2 fits; a triple charge of SHARED would not.
+    expect(rebased.staleSpans.map((span) => span.fromOrdinal)).toEqual([
+      0, 10, 15,
+    ]);
+
+    // Re-serve the shared-only row fresh under the new epoch. Its span now
+    // draws "m-shared5" from the FRESH tier; the other two carries still name
+    // it too, so keeping BOTH is the cross-tier half of the identical dedupe
+    // - seeded this time from the fresh tier's own references rather than
+    // from nothing.
+    const reserved = applyRangeResponse(
+      rebased,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [
+          userMessage("row-0", 0),
+          messageWithText(userMessage("m-shared5", 0), sharedText),
+        ],
+      }),
+      null,
+      null,
+    );
+    expect(reserved.staleSpans.map((span) => span.fromOrdinal)).toEqual([
+      10, 15,
+    ]);
+  });
+
+  it("keeps two spans apart when the tail's row grew past the merge cap while streaming, and merges them when it did not", () => {
+    // The merge ceiling must read the record's TRUE current size, not the
+    // ledger's settled `bytes` figure - `streamWindowMessage` leaves that
+    // figure stale BY DESIGN (see `unsettledByteMessageIds`), so a ceiling
+    // that trusted it would let the tail absorb a neighbour into one span far
+    // past `SPAN_MERGE_MAX_BYTES`, exactly the unbounded-tail hazard the cap
+    // exists to prevent.
+    const grow = (message: Message): Message =>
+      messageWithText(
+        message,
+        "g".repeat(Math.ceil(SPAN_MERGE_MAX_BYTES * 1.5)),
+      );
+    const seedTail = (): TranscriptWindow =>
+      applyRangeResponse(
+        windowWithSkeleton(30),
+        rangeResponse({
+          epoch: 1,
+          fromOrdinal: 28,
+          rowIds: ["row-28", "row-29"],
+          messages: [userMessage("m-tail6", 28)],
+        }),
+        null,
+        null,
+      );
+    const withAdjacent = (window: TranscriptWindow): TranscriptWindow =>
+      applyRangeResponse(
+        window,
+        rangeResponse({
+          epoch: 1,
+          fromOrdinal: 26,
+          rowIds: ["row-26", "row-27"],
+          messages: [userMessage("m-adjacent6", 26)],
+        }),
+        null,
+        null,
+      );
+
+    // Control: nothing grew, so the settled figure is the true one and the
+    // adjacent response merges as usual.
+    const merged = withAdjacent(seedTail());
+    expect(merged.spans).toHaveLength(1);
+
+    // The tail's row streams far past the cap with its charge DEFERRED.
+    const grown = streamWindowMessage(seedTail(), "m-tail6", grow).window;
+    const stayedApart = withAdjacent(grown);
+    expect(stayedApart.spans).toHaveLength(2);
+  });
+
+  it("keeps a shared record charged only while a span still references it, and prunes it once the last one is evicted", () => {
+    // Two cold spans (ordinals 0 and 8) hold their own exclusive record plus
+    // one they share; a small protected tail (ordinal 18) keeps the window
+    // itself alive across two separate squeezes. The first squeeze can only
+    // afford to drop the coldest (ordinal 0) - the shared record must survive
+    // that, because ordinal 8's span still draws it and still has to render.
+    // Only the second squeeze, which drops the last holder, may reclaim it.
+    const sharedText = "s".repeat(50_000);
+    let window = windowWithSkeleton(20);
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [
+          messageWithText(userMessage("row-0", 0), "own-c".repeat(2000)),
+          messageWithText(userMessage("m-s7", 0), sharedText),
+        ],
+      }),
+      null,
+      null,
+    );
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 8,
+        rowIds: ["row-8", "row-9"],
+        messages: [
+          messageWithText(userMessage("row-8", 8), "own-d".repeat(2000)),
+          { ...messageWithText(userMessage("m-s7", 8), sharedText) },
+        ],
+      }),
+      null,
+      null,
+    );
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 18,
+        rowIds: ["row-18", "row-19"],
+        messages: [userMessage("row-18", 18)],
+      }),
+      null,
+      null,
+    );
+    expect(window.spans.map((span) => span.fromOrdinal)).toEqual([0, 8, 18]);
+
+    const afterFirstSqueeze = evictTranscriptWindowToBudget(
+      window,
+      window.hydratedBytes - 1,
+      null,
+      [],
+    );
+    expect(afterFirstSqueeze.spans.map((span) => span.fromOrdinal)).toEqual([
+      8, 18,
+    ]);
+    // The shared record survives - span D still draws it, and it still
+    // renders D's row from the surviving ledger entry.
+    expect(afterFirstSqueeze.records.messages.has("m-s7")).toBe(true);
+    const survivingD = afterFirstSqueeze.spans.find(
+      (span) => span.fromOrdinal === 8,
+    );
+    expect(survivingD).toBeDefined();
+    expect(
+      survivingD !== undefined
+        ? spanMessages(afterFirstSqueeze, survivingD).map(
+            (message) => message.messageId,
+          )
+        : [],
+    ).toContain("m-s7");
+    expect(
+      hydratedRecords(afterFirstSqueeze).messages.map(
+        (message) => message.messageId,
+      ),
+    ).toContain("m-s7");
+
+    // Second squeeze: now span D is the only unprotected, cold span, and
+    // dropping it is the last reference to "m-s7".
+    const afterSecondSqueeze = evictTranscriptWindowToBudget(
+      afterFirstSqueeze,
+      afterFirstSqueeze.hydratedBytes - 1,
+      null,
+      [],
+    );
+    expect(afterSecondSqueeze.spans.map((span) => span.fromOrdinal)).toEqual([
+      18,
+    ]);
+    expect(afterSecondSqueeze.records.messages.has("m-s7")).toBe(false);
+  });
+});
+
 describe("reading a long chat upward from the tail", () => {
   /** ~400 KiB in one message, so a few rows cross the span merge cap. */
   function fatMessage(messageId: string, timestamp: number): Message {
@@ -4010,7 +4586,9 @@ describe("reading a long chat upward from the tail", () => {
       (span) => span.fromOrdinal + span.rowIds.length >= window.rowCount,
     );
     expect(tailSpan).toBeDefined();
-    expect(tailSpan?.bytes).toBeLessThanOrEqual(SPAN_MERGE_MAX_BYTES);
+    expect(
+      tailSpan !== undefined ? spanChargeBytes(window, tailSpan) : undefined,
+    ).toBeLessThanOrEqual(SPAN_MERGE_MAX_BYTES);
   });
 
   it("evicts the cold scrollback behind the tail instead of protecting all of it", () => {
@@ -4125,7 +4703,9 @@ describe("records the index has not placed yet", () => {
       timestamp: 111,
     }));
     expect(hydrated.held).toBe(true);
-    expect(hydrated.window.spans[0].messages[0].timestamp).toBe(111);
+    expect(
+      spanMessages(hydrated.window, hydrated.window.spans[0])[0].timestamp,
+    ).toBe(111);
 
     const live = updateWindowMessage(hydrated.window, "m-live", (message) => ({
       ...message,
@@ -4163,28 +4743,58 @@ describe("records the index has not placed yet", () => {
       null,
       null,
     );
-    const spanBytes = (window: TranscriptWindow): number =>
-      window.spans[0].messages.reduce(
-        (sum, message) => sum + recordByteLength(message),
-        0,
-      );
+    // The from-scratch recompute this pins the incremental `hydratedBytes`
+    // delta against: every record referenced by a FRESH span, deduped, plus
+    // each fresh span's structural bytes (0 in this fixture - no
+    // `rowContext`) - i.e. `freshTierBytes` reimplemented from the public
+    // ledger shape rather than imported, since that helper is not exported.
+    const freshBytesFromLedger = (window: TranscriptWindow): number => {
+      const messageIds = new Set<string>();
+      const eventIds = new Set<string>();
+      for (const span of window.spans) {
+        for (const id of span.messageIds) messageIds.add(id);
+        for (const id of span.eventIds) eventIds.add(id);
+      }
+      let bytes = 0;
+      for (const id of messageIds) {
+        bytes += window.records.messages.get(id)?.bytes ?? 0;
+      }
+      for (const id of eventIds) {
+        bytes += window.records.events.get(id)?.bytes ?? 0;
+      }
+      for (const span of window.spans) bytes += span.contextBytes;
+      return bytes;
+    };
+
+    const seededBytes = seeded.records.messages.get("m-0")?.bytes;
 
     const grown = updateWindowMessage(seeded, "m-0", (message) =>
       messageWithText(message, "a much longer body ".repeat(40)),
     );
     expect(grown.held).toBe(true);
-    expect(grown.window.spans[0].bytes).toBe(spanBytes(grown.window));
-    expect(grown.window.hydratedBytes).toBe(spanBytes(grown.window));
+    const grownEntry = grown.window.records.messages.get("m-0");
+    expect(grownEntry?.bytes).toBe(
+      grownEntry !== undefined
+        ? recordByteLength(grownEntry.record)
+        : undefined,
+    );
     // And it moved: an incremental charge that silently did nothing would also
-    // satisfy an equality written against a span that never changed.
-    expect(grown.window.spans[0].bytes).toBeGreaterThan(seeded.spans[0].bytes);
+    // satisfy an equality written against a record that never changed.
+    expect(grownEntry?.bytes).toBeGreaterThan(seededBytes ?? -1);
+    expect(grown.window.hydratedBytes).toBe(freshBytesFromLedger(grown.window));
 
     const shrunk = updateWindowMessage(grown.window, "m-0", (message) =>
       messageWithText(message, "x"),
     );
-    expect(shrunk.window.spans[0].bytes).toBe(spanBytes(shrunk.window));
-    expect(shrunk.window.spans[0].bytes).toBeLessThan(
-      grown.window.spans[0].bytes,
+    const shrunkEntry = shrunk.window.records.messages.get("m-0");
+    expect(shrunkEntry?.bytes).toBe(
+      shrunkEntry !== undefined
+        ? recordByteLength(shrunkEntry.record)
+        : undefined,
+    );
+    expect(shrunkEntry?.bytes).toBeLessThan(grownEntry?.bytes ?? Infinity);
+    expect(shrunk.window.hydratedBytes).toBe(
+      freshBytesFromLedger(shrunk.window),
     );
   });
 });
@@ -4486,13 +5096,18 @@ describe("the streaming row's byte charge", () => {
     ).toContain("m-carry");
   });
 
-  it("settles a deferred figure before carrying the span stale", () => {
-    // `unsettledByteMessageIds` records what still owes a measurement, and
-    // the windows a carry feeds are rebuilt from `emptyTranscriptWindow()` -
-    // so the marker does not survive the transition. A span carried with an
-    // understated figure is therefore never corrected: `settleWindowBytes`
-    // early-returns on the empty marker list, and `boundedStaleSpans` trusts
-    // the number for the life of the tier.
+  it("carries a deferred figure's debt across a rebase, unsettled", () => {
+    // `unsettledByteMessageIds` records what still owes a measurement. A
+    // "settle-before-carry" pass USED to run here - the windows a carry feeds
+    // are rebuilt from `emptyTranscriptWindow()`, so the marker itself could
+    // not survive the transition, and settling eagerly was the only way the
+    // carried figure stayed correct. Class E retired that pass:
+    // `retainLedgerForSpans` now carries the ledger entry AND the
+    // `unsettledByteMessageIds` marker through a rebase exactly as it does
+    // through a void (see `voidedTranscriptWindow`), so the debt survives
+    // instead of being paid at the boundary. The carried figure is still
+    // correct either way - `spanChargeBytes` re-measures an unsettled record
+    // live - so this pins that the debt rides along, not that it disappears.
     const bulk = "x".repeat(Math.ceil(TRANSCRIPT_WINDOW_MAX_BYTES * 0.6));
     const seeded = applyRangeResponse(
       windowWithSkeleton(30),
@@ -4513,9 +5128,14 @@ describe("the streaming row's byte charge", () => {
     // The figure this span WOULD have carried had it been settled in place.
     // Pinned as an equality against that, not as "larger than before": the
     // understated value is also larger than zero.
-    const settledInPlace = settleWindowBytes(streamed.window).spans.find(
+    const settledWindow = settleWindowBytes(streamed.window);
+    const settledInPlace = settledWindow.spans.find(
       (span) => span.fromOrdinal === 10,
     );
+    const settledInPlaceBytes =
+      settledInPlace !== undefined
+        ? spanChargeBytes(settledWindow, settledInPlace)
+        : undefined;
     const rebased = applyWindowedSnapshot(
       streamed.window,
       {
@@ -4532,10 +5152,15 @@ describe("the streaming row's byte charge", () => {
       null,
     );
 
-    expect(rebased.unsettledByteMessageIds).toEqual([]);
+    expect(rebased.unsettledByteMessageIds).toEqual(["m-stream"]);
+    const rebasedStale = rebased.staleSpans.find(
+      (span) => span.fromOrdinal === 10,
+    );
     expect(
-      rebased.staleSpans.find((span) => span.fromOrdinal === 10)?.bytes,
-    ).toBe(settledInPlace?.bytes);
+      rebasedStale !== undefined
+        ? spanChargeBytes(rebased, rebasedStale)
+        : undefined,
+    ).toBe(settledInPlaceBytes);
   });
 
   it("re-measures a stale copy a remap rewrote", () => {
@@ -4578,12 +5203,15 @@ describe("the streaming row's byte charge", () => {
 
     const grownWhileFresh = rebase(mapWindowMessages(seeded, grow));
     const grownWhileStale = mapWindowMessages(rebase(seeded), grow);
+    const rebasedSeeded = rebase(seeded);
 
-    expect(grownWhileStale.staleSpans[0].bytes).toBe(
-      grownWhileFresh.staleSpans[0].bytes,
-    );
-    expect(grownWhileStale.staleSpans[0].bytes).toBeGreaterThan(
-      rebase(seeded).staleSpans[0].bytes,
+    expect(
+      spanChargeBytes(grownWhileStale, grownWhileStale.staleSpans[0]),
+    ).toBe(spanChargeBytes(grownWhileFresh, grownWhileFresh.staleSpans[0]));
+    expect(
+      spanChargeBytes(grownWhileStale, grownWhileStale.staleSpans[0]),
+    ).toBeGreaterThan(
+      spanChargeBytes(rebasedSeeded, rebasedSeeded.staleSpans[0]),
     );
   });
 });
@@ -6272,11 +6900,10 @@ describe("what an overlap keeps", () => {
       ["user-before"],
       ["user-after"],
     ]);
-    expect(
-      partial.spans.map((span) =>
-        span.messages.map((message) => message.messageId),
-      ),
-    ).toEqual([["user-before"], ["user-after"]]);
+    expect(partial.spans.map((span) => span.messageIds)).toEqual([
+      ["user-before"],
+      ["user-after"],
+    ]);
     expect(partial.hydratedBytes).toBe(
       recordByteLength(userMessage("user-before", 0)) +
         recordByteLength(userMessage("user-after", 3)),
@@ -6348,11 +6975,10 @@ describe("what an overlap keeps", () => {
       ["user-before"],
       ["user-after"],
     ]);
-    expect(
-      snapshot.spans.map((span) =>
-        span.messages.map((message) => message.messageId),
-      ),
-    ).toEqual([["user-before"], ["user-after"]]);
+    expect(snapshot.spans.map((span) => span.messageIds)).toEqual([
+      ["user-before"],
+      ["user-after"],
+    ]);
     expect(
       hydratedRecords(snapshot).messages.map((message) => message.messageId),
     ).toEqual(["user-before", "user-after", transientId]);
@@ -6400,9 +7026,7 @@ describe("what an overlap keeps", () => {
     );
 
     expect(partial.spans.map((held) => held.rowIds)).toEqual([[setupRowId]]);
-    expect(partial.spans[0].events.map((event) => event.eventId)).toEqual([
-      setup.eventId,
-    ]);
+    expect(partial.spans[0].eventIds).toEqual([setup.eventId]);
   });
 
   it("does not assign same-timestamp setup windows to each other's rows", () => {
@@ -6456,9 +7080,10 @@ describe("what an overlap keeps", () => {
       null,
     );
 
-    expect(
-      partial.spans.map((span) => span.events.map((event) => event.eventId)),
-    ).toEqual([["setup-first"], ["setup-second"]]);
+    expect(partial.spans.map((span) => span.eventIds)).toEqual([
+      ["setup-first"],
+      ["setup-second"],
+    ]);
   });
 
   it("counts a withheld setup row before seating a later range setup", () => {
@@ -6502,9 +7127,7 @@ describe("what an overlap keeps", () => {
     expect(partial.spans.map((span) => span.rowIds)).toEqual([
       ["setup-card:chat-1:2:200"],
     ]);
-    expect(partial.spans[0].events.map((event) => event.eventId)).toEqual([
-      "setup-second",
-    ]);
+    expect(partial.spans[0].eventIds).toEqual(["setup-second"]);
   });
 
   it("counts a withheld setup row before seating a later inline-tail setup", () => {
@@ -6552,9 +7175,7 @@ describe("what an overlap keeps", () => {
     expect(partial.spans.map((span) => span.rowIds)).toEqual([
       ["setup-card:chat-1:2:200"],
     ]);
-    expect(partial.spans[0].events.map((event) => event.eventId)).toEqual([
-      "setup-second",
-    ]);
+    expect(partial.spans[0].eventIds).toEqual(["setup-second"]);
   });
 
   it("withholds an incomplete steer row that shares the live assistant turn", () => {
@@ -7573,8 +8194,10 @@ describe("what a span charges the byte budget", () => {
     // And the merged span's own charge still INCLUDES that context. Re-serving
     // the identical rows must leave the figure exactly where it was: lower
     // means the merge dropped the context, higher means it billed it twice.
-    expect(reserved.spans[0].bytes).toBe(first.spans[0].bytes);
-    expect(reserved.spans[0].bytes).toBeGreaterThan(
+    expect(spanChargeBytes(reserved, reserved.spans[0])).toBe(
+      spanChargeBytes(first, first.spans[0]),
+    );
+    expect(spanChargeBytes(reserved, reserved.spans[0])).toBeGreaterThan(
       reserved.spans[0].contextBytes,
     );
   });

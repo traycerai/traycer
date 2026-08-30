@@ -14,9 +14,9 @@ import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assis
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   applyIndexChange,
-  type HydratedSpan,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
+import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   transcriptListRows,
   unplacedRowKey,
@@ -158,30 +158,95 @@ function steeredAssistant(
   };
 }
 
-function span(fromOrdinal: number, rowIds: readonly string[]): HydratedSpan {
-  return {
-    fromOrdinal,
-    rowIds,
-    messages: [],
-    events: [],
-    rowContext: {},
-    bytes: rowIds.length * 32,
-    contextBytes: 0,
-    touchedAt: 1,
-    servedAt: 1,
-  };
+/**
+ * The old per-span fixture shape (`fromOrdinal`, `rowIds`, and optionally the
+ * records a span used to carry directly, plus its warmth/serve clocks).
+ *
+ * `class E` moved records and clocks off the span onto the window's ledger, so
+ * `windowOf` is what actually seats a fixture's `messages`/`events` into
+ * `records` and turns this into a real `HydratedSpan` holding only ids. Kept
+ * as a plain data shape (not a `HydratedSpan`) so a call site can still spread
+ * one and override `servedAt`/`touchedAt` the way the old per-span fields let
+ * it - those overrides now describe the LEDGER entry the fixture seats, not a
+ * field on the span itself.
+ */
+interface SpanFixture {
+  readonly fromOrdinal: number;
+  readonly rowIds: readonly string[];
+  readonly messages?: readonly Message[];
+  readonly events?: readonly ChatEvent[];
+  readonly servedAt?: number;
+  readonly touchedAt?: number;
+}
+
+function span(fromOrdinal: number, rowIds: readonly string[]): SpanFixture {
+  return { fromOrdinal, rowIds };
 }
 
 function windowOf(input: {
   rowCount: number;
-  spans: readonly HydratedSpan[];
+  spans: readonly SpanFixture[];
   skeleton: readonly (RowSkeletonEntry | undefined)[];
   skeletonComplete: boolean;
   invalidated: boolean;
   liveMessages?: readonly Message[];
   liveEvents?: readonly ChatEvent[];
-  staleSpans?: readonly HydratedSpan[];
+  staleSpans?: readonly SpanFixture[];
 }): TranscriptWindow {
+  const messageLedger = new Map<
+    string,
+    { record: Message; bytes: number; servedAt: number; touchedAt: number }
+  >();
+  const eventLedger = new Map<
+    string,
+    { record: ChatEvent; bytes: number; servedAt: number; touchedAt: number }
+  >();
+
+  // Fresh spans seated before stale ones, so where a fixture id is shared
+  // across the two tiers the LATER (stale) fixture's stamps win - single
+  // ownership means there is only one ledger entry to hold them.
+  const seat = (fixture: SpanFixture) => {
+    const servedAt = fixture.servedAt ?? 1;
+    const touchedAt = fixture.touchedAt ?? 1;
+    for (const message of fixture.messages ?? []) {
+      messageLedger.set(message.messageId, {
+        record: message,
+        bytes: recordByteLength(message),
+        servedAt,
+        touchedAt,
+      });
+    }
+    for (const event of fixture.events ?? []) {
+      eventLedger.set(event.eventId, {
+        record: event,
+        bytes: recordByteLength(event),
+        servedAt,
+        touchedAt,
+      });
+    }
+    return {
+      fromOrdinal: fixture.fromOrdinal,
+      rowIds: fixture.rowIds,
+      messageIds: (fixture.messages ?? []).map((message) => message.messageId),
+      eventIds: (fixture.events ?? []).map((event) => event.eventId),
+      rowContext: {},
+      contextBytes: 0,
+    };
+  };
+
+  const spans = input.spans.map(seat);
+  const staleSpans = (input.staleSpans ?? []).map(seat);
+
+  const freshMessageIds = new Set(spans.flatMap((held) => held.messageIds));
+  const freshEventIds = new Set(spans.flatMap((held) => held.eventIds));
+  let hydratedBytes = 0;
+  for (const id of freshMessageIds) {
+    hydratedBytes += messageLedger.get(id)?.bytes ?? 0;
+  }
+  for (const id of freshEventIds) {
+    hydratedBytes += eventLedger.get(id)?.bytes ?? 0;
+  }
+
   return {
     epoch: 1,
     rowCount: input.rowCount,
@@ -190,15 +255,17 @@ function windowOf(input: {
     skeleton: input.skeleton,
     skeletonComplete: input.skeletonComplete,
     skeletonStreamCoveredThrough: input.skeletonComplete ? input.rowCount : 0,
-    spans: input.spans,
-    staleSpans: input.staleSpans ?? [],
+    records: { messages: messageLedger, events: eventLedger, revision: 0 },
+    spans,
+    staleSpans,
     liveMessages: [...(input.liveMessages ?? [])],
     liveEvents: [...(input.liveEvents ?? [])],
     snapshotProvisionalMessageIds: [],
     snapshotProvisionalEventIds: [],
     unavailableRowIds: [],
     unavailableRowOrdinals: [],
-    hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
+    hydratedBytes,
+    evictionTerminal: "none",
     unsettledByteMessageIds: [],
     invalidated: input.invalidated,
     visibleOrdinals: null,
@@ -1066,18 +1133,30 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["H:carried-row"]);
   });
 
-  it("places a duplicated stale row from the FRESHEST carry, not the earliest", () => {
-    // Two carries hold `dup` because `boundedStaleSpans` admits a span for any
-    // single uncovered row it contributes - the older one earned its place
-    // with `only-in-old`, and brought its copy of `dup` along. `staleSpans` is
-    // stored in ordinal order, so a first-match scan hands `dup` to the older
-    // coordinate: after an insertion earlier in the transcript, the row draws
-    // at its pre-insertion position until the skeleton chunk naming it lands.
-    const older: HydratedSpan = {
+  // This pin used to guard "the FRESHEST carry wins a
+  // duplicated row", back when `servedAt`/`touchedAt` were independent SCALARS
+  // per span - two spans could disagree about a shared row's recency even
+  // while (as here) neither carries any backing record at all. Class E moved
+  // those clocks onto the per-record LEDGER (`spanServeStamp`/derived from
+  // `window.records`), so a span with no `messages`/`events` now derives a
+  // serve stamp of 0 regardless of any `servedAt` fixture override - and even
+  // if both fixtures DID reference the same messageId for "dup", single
+  // ownership means they would read the identical ledger entry and tie
+  // anyway (the same dissolution `transcript-window.test.ts`'s "keeps the
+  // carry the renderer draws from..." pin already documents). Either way the
+  // two carries here tie, and `staleSpansByFreshestServe`'s documented,
+  // load-bearing tie-break - stable, earliest-first - is what now decides:
+  // the OLDER coordinate wins. This is not a content regression (there is
+  // only one copy of "dup" to render, whichever ordinal it lands on), so the
+  // test is migrated to pin that actual, deterministic tie-break outcome
+  // rather than a freshness rule the ledger no longer has the vocabulary to
+  // express.
+  it("resolves a duplicated stale row via the tie-break's earliest-span order", () => {
+    const older: SpanFixture = {
       ...span(0, ["only-in-old", "dup"]),
       servedAt: 5,
     };
-    const newer: HydratedSpan = { ...span(4, ["dup"]), servedAt: 9 };
+    const newer: SpanFixture = { ...span(4, ["dup"]), servedAt: 9 };
     const rows = transcriptListRows({
       window: windowOf({
         rowCount: 6,
@@ -1090,13 +1169,16 @@ describe("transcriptListRows", () => {
       rendered: [model("only-in-old"), model("dup")],
     });
 
-    // `dup` at 4 (the newer serve's coordinate), not at 1 (the older's).
+    // Both carries tie at a derived serve stamp of 0 (see the migration note
+    // above), so the stable earliest-first tie-break in
+    // `staleSpansByFreshestServe` hands `dup` to `older`'s coordinate (1),
+    // not `newer`'s (4). Exactly one "dup" row renders either way.
     expect(kinds(rows)).toEqual([
       "H:only-in-old",
-      "P:1",
+      "H:dup",
       "P:2",
       "P:3",
-      "H:dup",
+      "P:4",
       "P:5",
     ]);
   });

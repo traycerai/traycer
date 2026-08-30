@@ -14,7 +14,10 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
+  assistantRowId,
   assistantRowTurnKey,
+  chatTranscriptEventRowId,
+  forkedChatLinkRowId,
   isTurnDecoratingEvent,
   projectTranscriptRows,
   queueSteerRowId,
@@ -63,11 +66,22 @@ import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-ass
 /**
  * A contiguous run of hydrated rows.
  *
- * `messages`/`events` are the DEDUPLICATED union of the records these rows
- * render from, not a parallel array to `rowIds` - one folded assistant turn is
+ * `messageIds`/`eventIds` are REFERENCES into the window's record ledger
+ * ({@link RecordLedger}), the deduplicated union of the records these rows
+ * render from - not a parallel array to `rowIds`: one folded assistant turn is
  * many rows and one record set, and the steer bubbles between its slices share
- * it. That is the same shape the host's range response uses, for the same
- * reason.
+ * it. The span holds ids rather than record objects because the same record
+ * routinely sits in several spans ({@link SPAN_MERGE_MAX_BYTES} means a turn's
+ * slices are not always merged), and every defect class that motivated the
+ * ledger - double-charged bytes, per-holder rewrites, position-vs-body dedupe -
+ * came from those copies being allowed to diverge. Single ownership makes
+ * divergence unrepresentable.
+ *
+ * A span carries NO byte figure and NO clocks of its own. Its charge and its
+ * warmth are DERIVED from the ledger records it references (see
+ * {@link derivedSpanBytes} and {@link spanDraws}), so a streaming rewrite
+ * touches one ledger entry and every span referencing it reads the new truth -
+ * no per-holder re-measure, and no retained figure to go stale.
  */
 export interface HydratedSpan {
   readonly fromOrdinal: number;
@@ -84,57 +98,67 @@ export interface HydratedSpan {
    * Sparse by construction - only rows with something to say appear.
    */
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
-  readonly messages: readonly Message[];
-  readonly events: readonly ChatEvent[];
-  /**
-   * Everything this span holds, in bytes: its records AND its
-   * {@link rowContext}.
-   *
-   * The context is charged because the span RETAINS it for exactly as long as
-   * it retains the records - eviction takes the whole span or none of it. A
-   * budget measuring only the records lets a window reporting 8 MiB hold
-   * materially more and never evict for the difference, which is the bounded
-   * guarantee failing silently rather than loudly. Context-bearing assistant
-   * rows repeat session anchors across thousands of rows, so the gap is
-   * proportional to exactly the long chats this window exists for.
-   */
-  readonly bytes: number;
+  /** Ledger references, in transcript order. See the interface doc. */
+  readonly messageIds: readonly string[];
+  readonly eventIds: readonly string[];
   /**
    * What {@link rowContext} alone costs, measured once.
    *
-   * Held beside `bytes` rather than folded into every re-measure because the
-   * context is immutable for a span's life: it is written only where a span is
-   * BUILT (a range response, the snapshot tail) or MERGED, never by the record
-   * rewrites that re-measure `bytes`. Re-deriving it there would put a JSON
-   * encode of the whole context map on the streaming path - the cost
-   * `unsettledByteMessageIds` exists to keep off it.
+   * The one byte figure that stays PER SPAN, deliberately: two spans sharing a
+   * turn's records legitimately hold different context maps, so the structural
+   * charge is not aliased and needs no dedupe. It is immutable for a span's
+   * life - written only where a span is BUILT (a range response, the snapshot
+   * tail) or MERGED, never by record rewrites - so retaining it cannot go
+   * stale the way a retained record figure could.
    */
   readonly contextBytes: number;
-  /**
-   * The window `clock` value at this span's last read or write, for eviction
-   * order. A counter rather than a timestamp so a fold stays pure and a test
-   * does not have to control the wall clock.
-   */
-  readonly touchedAt: number;
-  /**
-   * The window `clock` value at which the HOST served these record bodies.
-   *
-   * Distinct from {@link touchedAt}, which a viewport report bumps: reading a
-   * span does not make its bodies newer, and conflating the two would let the
-   * span a reader happens to be looking at outrank the one that was just
-   * re-served. This one is written where a span is BUILT or MERGED and never
-   * again.
-   *
-   * It exists because one turn's records reach every span its rows do, and
-   * {@link SPAN_MERGE_MAX_BYTES} means those spans are not always merged into
-   * one. Two spans can therefore hold the same record id, and something has to
-   * decide which body the transcript renders. Ordinal order - which is what a
-   * plain first-wins dedupe gives - decides it by POSITION, so the earliest
-   * span's copy wins however old it is, and a turn re-served with a new body
-   * keeps rendering the previous one. This is the answer to that: the newest
-   * SERVE wins, wherever it sits.
-   */
+}
+
+/**
+ * One record's ledger entry: the single owned copy plus its clocks and charge.
+ *
+ * `bytes` is the SETTLED measure. A streaming rewrite may leave it stale by
+ * design - {@link TranscriptWindow.unsettledByteMessageIds} records the debt,
+ * and {@link settleWindowBytes} re-measures here, once, instead of once per
+ * holding span as the retired `resettledSpanBytes` did.
+ *
+ * `servedAt` is the window `clock` at which the HOST last served this body;
+ * `touchedAt` is the clock of its last read or write. Both are per-RECORD
+ * rather than per-span because every span-level copy of them was an aggregate
+ * over records that a viewport report and a streamed rewrite both wrote to -
+ * the tie factory the warmth findings kept rediscovering. A span's warmth and
+ * serve recency are now derived (max over the records it DRAWS), so bumping a
+ * record once warms every span drawing it identically, and a span holding a
+ * record only as a rider inherits nothing from it.
+ */
+interface LedgerRecordEntry<T> {
+  readonly record: T;
+  readonly bytes: number;
   readonly servedAt: number;
+  readonly touchedAt: number;
+}
+
+/**
+ * The window's single-ownership record store - class E's spine.
+ *
+ * Spans reference records by id; this holds the one copy of each. An entry
+ * exists exactly while some span (fresh or stale) references it - live records
+ * stay in {@link TranscriptWindow.liveMessages}/`liveEvents`, which predate
+ * placement and are not aliased - and {@link pruneUnreferencedRecords} is the
+ * reference-counted release: evicting a span never un-charges a record another
+ * span still references.
+ *
+ * `revision` is the cache-key half the spans array cannot carry: it moves on
+ * MEMBERSHIP changes and on serve stamps (both structural moments), and
+ * deliberately NOT on in-place content rewrites or warmth bumps - so a memo
+ * keyed on (spans array, revision) survives every streaming token, which is
+ * the per-token protection `transcript-list-rows.ts` is arranged around, while
+ * a merge that changes what a span's records can back still invalidates.
+ */
+export interface RecordLedger {
+  readonly messages: ReadonlyMap<string, LedgerRecordEntry<Message>>;
+  readonly events: ReadonlyMap<string, LedgerRecordEntry<ChatEvent>>;
+  readonly revision: number;
 }
 
 export interface TranscriptWindow {
@@ -239,6 +263,11 @@ export interface TranscriptWindow {
    * defense has to live here regardless.
    */
   readonly indexRevisionRebuilding: boolean;
+  /**
+   * The single owned copy of every span-referenced record. See
+   * {@link RecordLedger}; spans hold ids into it.
+   */
+  readonly records: RecordLedger;
   /** Disjoint and sorted by `fromOrdinal`. */
   readonly spans: readonly HydratedSpan[];
   /**
@@ -314,7 +343,30 @@ export interface TranscriptWindow {
   readonly unavailableRowIds: readonly string[];
   /** Ordinals paired with unavailable row ids, including pre-skeleton serves. */
   readonly unavailableRowOrdinals: readonly number[];
+  /**
+   * The FRESH tier's charge: every ledger record a fresh span references
+   * (fresh-exclusive AND shared with stale, counted once) plus the fresh
+   * spans' structural bytes. See {@link freshTierBytes}. Sharing with the
+   * stale tier keeps the over-count in the tier that caused it: evicting a
+   * fresh span demotes its shared records to stale-exclusive and this figure
+   * genuinely drops, which is what lets eviction make progress post-rebase
+   * when the carry holds every fresh span's records too.
+   */
   readonly hydratedBytes: number;
+  /**
+   * How the last eviction pass ended - `"none"` until one runs over budget.
+   *
+   * `"over-budget-accepted"` is the soft-budget concession protected spans
+   * (tail, viewport, required) already get; `"alias-group-unbreakable"` means
+   * a zero-marginal alias closure containing a protected member was skipped.
+   * The two are different states and only a mislabeled second one hides a
+   * leak - the steered-turn shape accumulates closures across a session, so
+   * this distinction is what makes drift observable rather than silent.
+   */
+  readonly evictionTerminal:
+    | "none"
+    | "over-budget-accepted"
+    | "alias-group-unbreakable";
   /**
    * MESSAGE ids whose latest rewrite is not yet reflected in
    * {@link hydratedBytes}.
@@ -462,6 +514,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     // by `null` anyway, so this is the robust default rather than a second
     // mechanism.
     indexRevisionRebuilding: true,
+    records: { messages: new Map(), events: new Map(), revision: 0 },
     spans: [],
     staleSpans: [],
     liveMessages: [],
@@ -471,11 +524,470 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     unavailableRowIds: [],
     unavailableRowOrdinals: [],
     hydratedBytes: 0,
+    evictionTerminal: "none",
     unsettledByteMessageIds: [],
     invalidated: false,
     visibleOrdinals: null,
     clock: 0,
   };
+}
+
+/**
+ * A span's message records, resolved through the ledger, in span order.
+ *
+ * A reference with no entry is a defect (the ledger invariant is "entry exists
+ * while referenced"), and it is skipped rather than crashed on: rendering the
+ * rest of the span beats taking the transcript down, and the missing body
+ * surfaces as the placeholder its row falls back to.
+ */
+export function spanMessages(
+  window: TranscriptWindow,
+  span: HydratedSpan,
+): readonly Message[] {
+  const out: Message[] = [];
+  for (const id of span.messageIds) {
+    const entry = window.records.messages.get(id);
+    if (entry !== undefined) out.push(entry.record);
+  }
+  return out;
+}
+
+/** The event half of {@link spanMessages}. */
+export function spanEvents(
+  window: TranscriptWindow,
+  span: HydratedSpan,
+): readonly ChatEvent[] {
+  const out: ChatEvent[] = [];
+  for (const id of span.eventIds) {
+    const entry = window.records.events.get(id);
+    if (entry !== undefined) out.push(entry.record);
+  }
+  return out;
+}
+
+/**
+ * Seat served records into the ledger: each gets the one owned copy, a fresh
+ * measure, and `servedAt`/`touchedAt` at the seating clock.
+ *
+ * A record already present is REPLACED - the seat's body is the chosen winner
+ * (the held-copy preference has already run by the time this is called), and a
+ * re-serve is a serve, so its stamp moves even when the body did not. Both
+ * spans referencing a shared record then read the identical record-level
+ * figure, which is what makes the stale tier's contested-row award and
+ * `seatStaleRows`' draw agree by construction.
+ *
+ * `revision` bumps here because a seat is a structural moment (membership or
+ * serve identity moved) - unlike the in-place rewrites, which must NOT move it
+ * or every (spans, revision)-keyed memo would recompute per streaming token.
+ */
+function seatLedgerRecords(
+  ledger: RecordLedger,
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+  clock: number,
+): RecordLedger {
+  if (messages.length === 0 && events.length === 0) return ledger;
+  const nextMessages = new Map(ledger.messages);
+  for (const message of messages) {
+    nextMessages.set(message.messageId, {
+      record: message,
+      bytes: recordByteLength(message),
+      servedAt: clock,
+      touchedAt: clock,
+    });
+  }
+  const nextEvents = new Map(ledger.events);
+  for (const event of events) {
+    nextEvents.set(event.eventId, {
+      record: event,
+      bytes: recordByteLength(event),
+      servedAt: clock,
+      touchedAt: clock,
+    });
+  }
+  return {
+    messages: nextMessages,
+    events: nextEvents,
+    revision: ledger.revision + 1,
+  };
+}
+
+/** Every record id referenced by any span in `tiers`, both id spaces. */
+function referencedRecordIds(tiers: readonly (readonly HydratedSpan[])[]): {
+  readonly messageIds: Set<string>;
+  readonly eventIds: Set<string>;
+} {
+  const messageIds = new Set<string>();
+  const eventIds = new Set<string>();
+  for (const spans of tiers) {
+    for (const span of spans) {
+      for (const id of span.messageIds) messageIds.add(id);
+      for (const id of span.eventIds) eventIds.add(id);
+    }
+  }
+  return { messageIds, eventIds };
+}
+
+/**
+ * The reference-counted release: drop every ledger entry no span references.
+ *
+ * Run at the end of every fold that can shrink a tier. Evicting a span never
+ * un-charges a record another span references, because the charge is derived
+ * from the surviving references - this only reclaims the memory of records
+ * nothing references at all. Identity-stable when nothing is unreferenced, so
+ * the per-token path (where drops are rare) does not churn the ledger.
+ */
+function pruneUnreferencedRecords(window: TranscriptWindow): TranscriptWindow {
+  const referenced = referencedRecordIds([window.spans, window.staleSpans]);
+  if (
+    referenced.messageIds.size === window.records.messages.size &&
+    referenced.eventIds.size === window.records.events.size
+  ) {
+    return window;
+  }
+  const messages = new Map(
+    [...window.records.messages].filter(([id]) =>
+      referenced.messageIds.has(id),
+    ),
+  );
+  const events = new Map(
+    [...window.records.events].filter(([id]) => referenced.eventIds.has(id)),
+  );
+  return {
+    ...window,
+    records: {
+      messages,
+      events,
+      revision: window.records.revision + 1,
+    },
+  };
+}
+
+/**
+ * The ledger a carry takes into a rebased or voided window: exactly the
+ * entries the carried spans reference. Deferred debt rides along - the caller
+ * carries `unsettledByteMessageIds` beside this (filtered by the same
+ * retention), so a completed long turn's true measure is still owed and
+ * {@link settleWindowBytes} still collects it, which is what retired the
+ * settle-before-carry pass.
+ */
+function retainLedgerForSpans(
+  ledger: RecordLedger,
+  spans: readonly HydratedSpan[],
+): RecordLedger {
+  const referenced = referencedRecordIds([spans]);
+  return {
+    messages: new Map(
+      [...ledger.messages].filter(([id]) => referenced.messageIds.has(id)),
+    ),
+    events: new Map(
+      [...ledger.events].filter(([id]) => referenced.eventIds.has(id)),
+    ),
+    revision: ledger.revision + 1,
+  };
+}
+
+/**
+ * The stale tier a snapshot carries across an index boundary, with the ledger
+ * cut down to what it references. Off the boundary (`crossing` false) nothing
+ * is carried and the ledger passes through untouched; a zero `rowCount` means
+ * the replacement transcript is empty, so there is nothing the carry could be
+ * drawn under and it is dropped rather than retained.
+ */
+function carriedStaleTier(
+  window: TranscriptWindow,
+  crossing: boolean,
+  rowCount: number,
+): {
+  readonly spans: readonly HydratedSpan[];
+  readonly ledger: RecordLedger;
+} {
+  if (!crossing) return { spans: [], ledger: window.records };
+  const spans = rowCount > 0 ? staleCarrySpans(window) : [];
+  return { spans, ledger: retainLedgerForSpans(window.records, spans) };
+}
+
+/**
+ * The fresh tier's charge - see {@link TranscriptWindow.hydratedBytes}.
+ *
+ * Deduplicated across spans by construction: each referenced record is one
+ * ledger entry, summed once however many fresh spans reference it. The
+ * structural bytes stay per-span (context maps are not aliased).
+ */
+function freshTierBytes(
+  ledger: RecordLedger,
+  spans: readonly HydratedSpan[],
+): number {
+  const referenced = referencedRecordIds([spans]);
+  let bytes = 0;
+  for (const id of referenced.messageIds) {
+    bytes += ledger.messages.get(id)?.bytes ?? 0;
+  }
+  for (const id of referenced.eventIds) {
+    bytes += ledger.events.get(id)?.bytes ?? 0;
+  }
+  for (const span of spans) bytes += span.contextBytes;
+  return bytes;
+}
+
+/**
+ * The stale tier's charge against remaining headroom: stale-EXCLUSIVE record
+ * bytes (a record the fresh tier also references is already inside
+ * {@link TranscriptWindow.hydratedBytes} - charging it here would bill the
+ * alias twice, the exact over-count the ledger exists to remove) plus the
+ * stale spans' structural bytes.
+ */
+function staleTierBytes(window: TranscriptWindow): number {
+  if (window.staleSpans.length === 0) return 0;
+  const fresh = referencedRecordIds([window.spans]);
+  const stale = referencedRecordIds([window.staleSpans]);
+  let bytes = 0;
+  for (const id of stale.messageIds) {
+    if (fresh.messageIds.has(id)) continue;
+    bytes += window.records.messages.get(id)?.bytes ?? 0;
+  }
+  for (const id of stale.eventIds) {
+    if (fresh.eventIds.has(id)) continue;
+    bytes += window.records.events.get(id)?.bytes ?? 0;
+  }
+  for (const span of window.staleSpans) bytes += span.contextBytes;
+  return bytes;
+}
+
+/**
+ * One span's charge-inclusive figure: every referenced record at full size
+ * (aliases NOT deduped - a deduped ceiling would let spans sharing a turn's
+ * records merge into the unbounded tail the cap exists to prevent) plus its
+ * structural bytes.
+ *
+ * Derived from the ledger at the moment it is needed and NEVER retained - a
+ * retained figure is stored-at-insert with a different source, and a streaming
+ * rewrite between merges makes it stale again. Records whose charge is
+ * deferred (`unsettled`) are re-measured here so a tail that grew 900 KB while
+ * streaming cannot absorb a neighbour the cap should refuse.
+ */
+function derivedSpanBytes(
+  ledger: RecordLedger,
+  span: HydratedSpan,
+  unsettled: ReadonlySet<string>,
+): number {
+  let bytes = span.contextBytes;
+  for (const id of span.messageIds) {
+    const entry = ledger.messages.get(id);
+    if (entry === undefined) continue;
+    bytes += unsettled.has(id) ? recordByteLength(entry.record) : entry.bytes;
+  }
+  for (const id of span.eventIds) {
+    bytes += ledger.events.get(id)?.bytes ?? 0;
+  }
+  return bytes;
+}
+
+/** The record ids a span DRAWS - they back at least one of its rows. */
+interface SpanDraws {
+  readonly messageIds: ReadonlySet<string>;
+  readonly eventIds: ReadonlySet<string>;
+}
+
+/**
+ * Cached per span object at a ledger revision: span identity survives every
+ * in-place rewrite (spans hold ids), and a rewrite changes no membership and
+ * no row id, so the drawn SET is stable across tokens - only the stamps read
+ * through it move. Structural changes replace the span object or bump the
+ * revision, and either invalidates.
+ */
+const spanDrawsCache = new WeakMap<
+  HydratedSpan,
+  { readonly revision: number; readonly draws: SpanDraws }
+>();
+
+/**
+ * Which of a span's records it DRAWS, as opposed to merely holds.
+ *
+ * The draws relation is the row->record backing shapes the tier-parameterized
+ * registry uses ({@link addRecordBackedRowIds}), intersected with the span's
+ * own `rowIds` - plus the turn-key linkage, because an assistant record backs
+ * its turn's `assistant:` slice rows whose ids never name the record. A record
+ * riding along to render a sibling row a DIFFERENT span draws is a hold, not a
+ * draw, and inherits no warmth from it - the holds-vs-draws conflation was the
+ * tie factory behind the warmth findings.
+ */
+function spanDraws(window: TranscriptWindow, span: HydratedSpan): SpanDraws {
+  const cached = spanDrawsCache.get(span);
+  if (cached !== undefined && cached.revision === window.records.revision) {
+    return cached.draws;
+  }
+  const rowIds = new Set<string>();
+  const rowTurnKeys = new Set<string>();
+  for (const rowId of span.rowIds) {
+    if (rowId === "") continue;
+    rowIds.add(rowId);
+    const turnKey = assistantRowTurnKey(rowId);
+    if (turnKey !== null) rowTurnKeys.add(turnKey);
+  }
+  const draws = spanDrawsForRows(window, span, rowIds, rowTurnKeys);
+  spanDrawsCache.set(span, { revision: window.records.revision, draws });
+  return draws;
+}
+
+/**
+ * The row->record half of {@link spanDraws}, over a caller-chosen subset of
+ * the span's rows. {@link touchTranscriptRange} passes only the rows the span
+ * is actually drawing IN the touched range - the same per-row refusals
+ * {@link staleRowDrawnIn} makes - so a record backing a row the fresh tier
+ * draws, or one outside the viewport, earns no bump through this span even
+ * though the span structurally lists it. Under the shared ledger that
+ * precision is load-bearing: bumping a shared record warms EVERY span drawing
+ * it, so a span-grain bump would launder one span's viewport warmth into
+ * another tier's rider.
+ */
+function spanDrawsForRows(
+  window: TranscriptWindow,
+  span: HydratedSpan,
+  rowIds: ReadonlySet<string>,
+  rowTurnKeys: ReadonlySet<string>,
+): SpanDraws {
+  const messageIds = new Set<string>();
+  for (const id of span.messageIds) {
+    if (rowIds.has(id)) {
+      messageIds.add(id);
+      continue;
+    }
+    const entry = window.records.messages.get(id);
+    if (
+      entry !== undefined &&
+      entry.record.role === "assistant" &&
+      rowTurnKeys.has(assistantTurnKey(entry.record))
+    ) {
+      messageIds.add(id);
+    }
+  }
+  const eventIds = new Set<string>();
+  for (const id of span.eventIds) {
+    const entry = window.records.events.get(id);
+    if (entry === undefined) continue;
+    const backed = new Set<string>();
+    addRecordBackedRowIds(backed, [], [entry.record]);
+    for (const backedId of backed) {
+      if (rowIds.has(backedId)) {
+        eventIds.add(id);
+        break;
+      }
+    }
+  }
+  return { messageIds, eventIds };
+}
+
+/**
+ * A span's derived warmth: the greatest `touchedAt` among the records it
+ * draws. A span drawing nothing (all riders - reachable only through a defect,
+ * since every row is backed by something) falls back to its held records so it
+ * still has an eviction order at all.
+ */
+export function spanTouchStamp(
+  window: TranscriptWindow,
+  span: HydratedSpan,
+): number {
+  const draws = spanDraws(window, span);
+  let stamp = 0;
+  let sawDraw = false;
+  for (const id of draws.messageIds) {
+    const entry = window.records.messages.get(id);
+    if (entry === undefined) continue;
+    sawDraw = true;
+    if (entry.touchedAt > stamp) stamp = entry.touchedAt;
+  }
+  for (const id of draws.eventIds) {
+    const entry = window.records.events.get(id);
+    if (entry === undefined) continue;
+    sawDraw = true;
+    if (entry.touchedAt > stamp) stamp = entry.touchedAt;
+  }
+  if (sawDraw) return stamp;
+  for (const id of span.messageIds) {
+    const entry = window.records.messages.get(id);
+    if (entry !== undefined && entry.touchedAt > stamp) stamp = entry.touchedAt;
+  }
+  for (const id of span.eventIds) {
+    const entry = window.records.events.get(id);
+    if (entry !== undefined && entry.touchedAt > stamp) stamp = entry.touchedAt;
+  }
+  return stamp;
+}
+
+/** The serve half of {@link spanTouchStamp}: greatest `servedAt` over draws. */
+export function spanServeStamp(
+  window: TranscriptWindow,
+  span: HydratedSpan,
+): number {
+  const draws = spanDraws(window, span);
+  let stamp = 0;
+  let sawDraw = false;
+  for (const id of draws.messageIds) {
+    const entry = window.records.messages.get(id);
+    if (entry === undefined) continue;
+    sawDraw = true;
+    if (entry.servedAt > stamp) stamp = entry.servedAt;
+  }
+  for (const id of draws.eventIds) {
+    const entry = window.records.events.get(id);
+    if (entry === undefined) continue;
+    sawDraw = true;
+    if (entry.servedAt > stamp) stamp = entry.servedAt;
+  }
+  if (sawDraw) return stamp;
+  for (const id of span.messageIds) {
+    const entry = window.records.messages.get(id);
+    if (entry !== undefined && entry.servedAt > stamp) stamp = entry.servedAt;
+  }
+  for (const id of span.eventIds) {
+    const entry = window.records.events.get(id);
+    if (entry !== undefined && entry.servedAt > stamp) stamp = entry.servedAt;
+  }
+  return stamp;
+}
+
+/**
+ * One span's charge-inclusive figure, derived on demand - the metric the
+ * merge ceiling reads ({@link derivedSpanBytes}), exported so a test can pin
+ * the ceiling against the ledger without any retained per-span field
+ * existing to read.
+ */
+export function spanChargeBytes(
+  window: TranscriptWindow,
+  span: HydratedSpan,
+): number {
+  return derivedSpanBytes(
+    window.records,
+    span,
+    new Set(window.unsettledByteMessageIds),
+  );
+}
+
+/**
+ * Fold one record set's BACKABLE identities into `into` - the derived id
+ * shapes every tier produces the same way: a message backs the row carrying
+ * its id, an event backs both its transcript row and its forked-chat-link
+ * row, and a stopped turn's event backs that turn's assistant row.
+ *
+ * Lives HERE (not in `transcript-list-rows.ts`, which imports it) because the
+ * draws relation above and both tiers' backing channels consume the same fold
+ * - a derived shape landing in one consumer and not the others is the drift
+ * the shared fold exists to prevent.
+ */
+export function addRecordBackedRowIds(
+  into: Set<string>,
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): void {
+  for (const message of messages) into.add(message.messageId);
+  for (const event of events) {
+    into.add(chatTranscriptEventRowId(event.eventId));
+    into.add(forkedChatLinkRowId(event.eventId));
+    if (event.type === "turn.stopped" && event.turnId !== null) {
+      into.add(assistantRowId(event.turnId));
+    }
+  }
 }
 
 /**
@@ -506,18 +1018,13 @@ export function appendLiveRecords(
   const knownEvents = new Set<string>(
     window.liveEvents.map((event) => event.eventId),
   );
-  for (const span of window.spans) {
-    for (const message of span.messages) knownMessages.add(message.messageId);
-    for (const event of span.events) knownEvents.add(event.eventId);
-  }
-  // The stale carry counts as known too: a reconnect can retransmit an
-  // accepted record whose only copy rode a span into `staleSpans`, and
-  // re-admitting it as live would draw it a second time as an unplaced tail
-  // row wherever its stale row cannot occupy its old ordinal.
-  for (const span of window.staleSpans) {
-    for (const message of span.messages) knownMessages.add(message.messageId);
-    for (const event of span.events) knownEvents.add(event.eventId);
-  }
+  // The ledger IS the span tiers' membership - fresh and the stale carry
+  // alike. The carry counting as known is load-bearing: a reconnect can
+  // retransmit an accepted record whose only copy rode a span into
+  // `staleSpans`, and re-admitting it as live would draw it a second time as
+  // an unplaced tail row wherever its stale row cannot occupy its old ordinal.
+  for (const id of window.records.messages.keys()) knownMessages.add(id);
+  for (const id of window.records.events.keys()) knownEvents.add(id);
   const messages = input.messages.filter(
     (message) => !knownMessages.has(message.messageId),
   );
@@ -560,16 +1067,11 @@ function pruneSupersededLiveRecords(
   if (window.liveMessages.length === 0 && window.liveEvents.length === 0) {
     return window;
   }
-  const spanMessages = new Set<string>();
-  const spanEvents = new Set<string>();
-  for (const span of window.spans) {
-    for (const message of span.messages) {
-      spanMessages.add(message.messageId);
-    }
-    for (const event of span.events) spanEvents.add(event.eventId);
-  }
+  const freshReferenced = referencedRecordIds([window.spans]);
+  const spanHeldMessages = freshReferenced.messageIds;
+  const spanHeldEvents = freshReferenced.eventIds;
   const liveMessages = window.liveMessages.filter((message) => {
-    if (spanMessages.has(message.messageId)) return false;
+    if (spanHeldMessages.has(message.messageId)) return false;
     if (
       message.role !== "assistant" ||
       !isTransientLiveAssistantMessageId(message.messageId)
@@ -585,7 +1087,7 @@ function pruneSupersededLiveRecords(
     );
   });
   const supersededEvents = window.liveEvents.filter(
-    (event) => !spanEvents.has(event.eventId),
+    (event) => !spanHeldEvents.has(event.eventId),
   );
   // Span-supersession alone cannot bound this set, and that is not a tuning
   // matter - it is a whole CLASS of event the rule can never reach.
@@ -929,115 +1431,94 @@ export function mapWindowMessages(
   window: TranscriptWindow,
   update: (message: Message) => Message,
 ): TranscriptWindow {
-  // "Did anything change" is COMPUTED by comparing identities, never
-  // accumulated into a flag inside the `map` callbacks - see
-  // {@link rewriteWindowMessage}, which pays for the same lesson: an
-  // assignment made inside a callback is invisible to control-flow narrowing,
-  // so a `let changed = false` read afterwards is typed `false` and the guard
-  // that reads it is dead code the type-aware lint rejects.
-  const changedFrom = (
-    before: readonly Message[],
-    after: readonly Message[],
-  ): boolean => after.some((message, index) => message !== before[index]);
-
-  const spans = window.spans.map((span) => {
-    const messages = span.messages.map(update);
-    // Unchanged spans keep their identity AND skip a re-measure, so a remap
-    // touching one span does not re-serialize every other span's records.
-    return changedFrom(span.messages, messages)
-      ? {
-          ...span,
-          messages,
-          // `contextBytes` carried, not re-derived: a remap rewrites records
-          // and leaves the context map untouched.
-          bytes: recordsByteLength(messages, span.events) + span.contextBytes,
-        }
-      : span;
-  });
-  // Stale copies too, for the same reason {@link rewriteWindowMessage}
-  // reaches them: a remap that skips a displayed copy leaves that copy
-  // rendering the pre-remap record for as long as it survives.
-  const staleSpans = window.staleSpans.map((span) => {
-    const messages = span.messages.map(update);
-    // Re-measured on the same terms as the fresh branch. `boundedStaleSpans`
-    // trusts `span.bytes`, so a remap that rewrites the records and leaves the
-    // figure behind puts the carry's share of the shared budget out by however
-    // much the rewrite changed - and this function is explicitly off the
-    // streaming path, so it can afford exactly what the fresh branch affords.
-    return changedFrom(span.messages, messages)
-      ? {
-          ...span,
-          messages,
-          bytes: recordsByteLength(messages, span.events) + span.contextBytes,
-        }
-      : span;
-  });
+  // ONE pass over the ledger, because the ledger holds the one copy of every
+  // span-referenced record - the per-tier walks this replaced were the same
+  // records visited once per holder. Re-measured on the spot: a remap is
+  // explicitly off the streaming path, so it can afford what the deferred
+  // charge exists to avoid.
+  let ledgerChanged = false;
+  const nextEntries = new Map<string, LedgerRecordEntry<Message>>();
+  for (const [id, entry] of window.records.messages) {
+    const record = update(entry.record);
+    if (record === entry.record) {
+      nextEntries.set(id, entry);
+      continue;
+    }
+    ledgerChanged = true;
+    nextEntries.set(id, {
+      record,
+      bytes: recordByteLength(record),
+      servedAt: entry.servedAt,
+      touchedAt: entry.touchedAt,
+    });
+  }
   const liveMessages = window.liveMessages.map(update);
-  const touched =
-    changedFrom(window.liveMessages, liveMessages) ||
-    spans.some((span, index) => span !== window.spans[index]) ||
-    staleSpans.some((span, index) => span !== window.staleSpans[index]);
-  if (!touched) return window;
+  const liveChanged = liveMessages.some(
+    (message, index) => message !== window.liveMessages[index],
+  );
+  if (!ledgerChanged && !liveChanged) return window;
+  // The revision moves: a remap can rename `turnId`s, which the draws
+  // relation reads through the record contents - unlike a streaming block
+  // delta, which never touches an identity. This runs at turn boundaries, so
+  // invalidating the (spans, revision)-keyed memos here costs nothing on the
+  // per-token path.
+  const records = ledgerChanged
+    ? {
+        messages: nextEntries,
+        events: window.records.events,
+        revision: window.records.revision + 1,
+      }
+    : window.records;
   return boundStaleTierToBudget({
     ...window,
-    spans,
-    staleSpans,
-    liveMessages,
-    hydratedBytes: totalBytes(spans),
+    records,
+    liveMessages: liveChanged ? liveMessages : window.liveMessages,
+    hydratedBytes: ledgerChanged
+      ? freshTierBytes(records, window.spans)
+      : window.hydratedBytes,
   });
 }
 
 /**
- * Re-measure the spans holding a row whose byte charge was deferred.
+ * Bring the byte figures back in line with what the ledger actually holds.
  *
- * Shared by {@link settleWindowBytes} and {@link staleCarrySpans} so the two
- * cannot drift: both have to turn a deferred figure into a true one, and
- * `boundedStaleSpans` trusts whatever they produce.
- *
- * Only records went unsettled, so `contextBytes` is carried rather than
- * re-derived - that would buy nothing and put a whole-map encode on the path
- * the deferral exists to keep cheap.
- */
-function resettledSpanBytes(
-  spans: readonly HydratedSpan[],
-  unsettled: ReadonlySet<string>,
-): readonly HydratedSpan[] {
-  return spans.map((span) =>
-    span.messages.some((message) => unsettled.has(message.messageId))
-      ? {
-          ...span,
-          bytes:
-            recordsByteLength(span.messages, span.events) + span.contextBytes,
-        }
-      : span,
-  );
-}
-
-/**
- * Bring {@link TranscriptWindow.hydratedBytes} back in line with what the spans
- * actually hold.
- *
- * Re-measures only the spans holding an unsettled row - not the whole window -
- * so the cost is proportional to what was deferred, not to what is hydrated.
- * Called wherever the figure is about to be READ.
+ * Re-measures only the UNSETTLED records - once each, in the ledger - not once
+ * per holding span as the retired `resettledSpanBytes` did: single ownership
+ * is what makes the cost proportional to what was deferred rather than to how
+ * many spans reference it. Called wherever a figure is about to be READ, and
+ * the deferred debt now survives a carry (the ledger and the unsettled list
+ * both ride the void), so the carry no longer has to settle eagerly.
  */
 export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
   if (window.unsettledByteMessageIds.length === 0) return window;
-  const unsettled = new Set(window.unsettledByteMessageIds);
-  const spans = resettledSpanBytes(window.spans, unsettled);
-  // Stale copies of a streaming record grow through the same deferred path
-  // (see {@link rewriteWindowMessage}), and `boundedStaleSpans` trusts
-  // `span.bytes` - so an unsettled stale figure would let a long streaming
-  // turn hold more than the shared budget admits.
-  const staleSpans = resettledSpanBytes(window.staleSpans, unsettled);
+  let changed = false;
+  const nextEntries = new Map(window.records.messages);
+  for (const id of window.unsettledByteMessageIds) {
+    const entry = nextEntries.get(id);
+    if (entry === undefined) continue;
+    const bytes = recordByteLength(entry.record);
+    if (bytes === entry.bytes) continue;
+    changed = true;
+    nextEntries.set(id, { ...entry, bytes });
+  }
+  // No revision bump: a settle changes charges, never membership, serve
+  // identity, or anything a (spans, revision)-keyed memo reads.
+  const records = changed
+    ? {
+        messages: nextEntries,
+        events: window.records.events,
+        revision: window.records.revision,
+      }
+    : window.records;
   // Bounded here rather than only where the tier is BUILT: settling is the
-  // moment a deferred stale figure becomes true, so it is the first moment the
-  // shared budget can be judged at all.
+  // moment a deferred stale figure becomes true, so it is the first moment
+  // the shared budget can be judged at all.
   return boundStaleTierToBudget({
     ...window,
-    spans,
-    staleSpans,
-    hydratedBytes: totalBytes(spans),
+    records,
+    hydratedBytes: changed
+      ? freshTierBytes(records, window.spans)
+      : window.hydratedBytes,
     unsettledByteMessageIds: [],
   });
 }
@@ -1064,7 +1545,7 @@ export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
 function boundStaleTierToBudget(window: TranscriptWindow): TranscriptWindow {
   if (window.staleSpans.length === 0) return window;
   if (
-    window.hydratedBytes + totalBytes(window.staleSpans) <=
+    window.hydratedBytes + staleTierBytes(window) <=
     TRANSCRIPT_WINDOW_MAX_BYTES
   ) {
     return window;
@@ -1076,7 +1557,7 @@ function boundStaleTierToBudget(window: TranscriptWindow): TranscriptWindow {
   );
   return staleSpans.length === window.staleSpans.length
     ? window
-    : { ...window, staleSpans };
+    : pruneUnreferencedRecords({ ...window, staleSpans });
 }
 
 function rewriteWindowMessage(
@@ -1085,117 +1566,90 @@ function rewriteWindowMessage(
   update: (message: Message) => Message,
   charge: "now" | "deferred",
 ): { readonly window: TranscriptWindow; readonly held: boolean } {
-  const indexIn = (messages: readonly Message[]): number =>
-    messages.findIndex((message) => message.messageId === messageId);
-  // Located once and reused below, rather than re-scanned per span. The
-  // positions are also what make `update` run exactly once - a `map` with an
-  // id comparison would call it per matching element, and "the update is pure
-  // so a second call is harmless" is a property of today's callers, not of the
-  // signature.
-  const spanIndexes = window.spans.map((span) => indexIn(span.messages));
-  const staleIndexes = window.staleSpans.map((span) => indexIn(span.messages));
-  const liveIndex = indexIn(window.liveMessages);
-  // Computed rather than accumulated in a flag: an assignment inside a `map`
-  // callback is invisible to control-flow narrowing, so a `let held = false`
-  // read afterwards is typed `false` and the guard below reads as dead code.
-  //
-  // A copy held ONLY by a stale span still counts as held, and rewriting it is
+  // ONE ledger entry, wherever it is referenced from - the per-holder walk
+  // this replaced was the same record rewritten once per span. A record held
+  // ONLY by a stale span still counts as held, and rewriting it is
   // load-bearing rather than tidy: while a turn streams, its row can be
   // demoted to stale (a rebase, a genuine rewrite of a sibling), and if the
   // deltas stopped reaching that copy the display would freeze - or worse,
   // the applier would restart an empty live accumulator and the turn would
   // render as TWO blocks, the frozen prefix and the post-demotion remainder,
   // with an in-progress block (a compaction bar) duplicated across both.
-  const held =
-    liveIndex >= 0 ||
-    spanIndexes.some((index) => index >= 0) ||
-    staleIndexes.some((index) => index >= 0);
+  const entry = window.records.messages.get(messageId);
+  const liveIndex = window.liveMessages.findIndex(
+    (message) => message.messageId === messageId,
+  );
+  const held = entry !== undefined || liveIndex >= 0;
   if (!held) return { window, held: false };
-  const staleSpans = staleIndexes.every((index) => index < 0)
-    ? window.staleSpans
-    : window.staleSpans.map((span, spanIndex) => {
-        const index = staleIndexes[spanIndex];
-        if (index < 0) return span;
-        const previous = span.messages[index];
-        const next = update(previous);
-        const messages = span.messages.slice();
-        messages[index] = next;
-        // Never charged to `hydratedBytes`, but `boundedStaleSpans` trusts
-        // this figure - so a growing streamed copy must keep it honest. Same
-        // delta charge as the fresh branch below; `deferred` is settled by
-        // {@link settleWindowBytes} exactly as a fresh span's is.
-        return {
-          ...span,
-          messages,
-          bytes:
-            charge === "deferred"
-              ? span.bytes
-              : span.bytes +
-                recordByteLength(next) -
-                recordByteLength(previous),
-          // A write, which is what `touchedAt` records. Bumped on the stale
-          // branch and not the fresh one because warmth is the ONLY thing
-          // protecting a stale span: the fresh tier has explicit protection
-          // (the tail, the viewport, the required ordinals), while
-          // `boundedStaleSpans` admits warmest-first and nothing else speaks
-          // for the carry. Without this, the squeeze that bound exists for
-          // could drop the very copy the reader is watching stream and leave
-          // an idle-but-warmer span in its place.
-          //
-          // Every holder, and the flattening that causes is no longer a
-          // hazard: which carry the reader is looking at is answered by
-          // {@link TranscriptWindow.visibleOrdinals} now, not by whose
-          // `touchedAt` is highest, so this scalar is free to mean recency
-          // alone. Scoping the bump to the record's freshest holder instead
-          // only moved the problem - it left the off-screen owner ABOVE the
-          // visible carry rather than level with it.
-          touchedAt: window.clock + 1,
-        };
-      });
-  const spans = window.spans.map((span, spanIndex) => {
-    const index = spanIndexes[spanIndex];
-    if (index < 0) return span;
-    const previous = span.messages[index];
-    const next = update(previous);
-    const messages = span.messages.slice();
-    messages[index] = next;
-    return {
-      ...span,
-      messages,
-      // Charged as a DELTA, not by re-measuring the span: only one record
-      // changed, so the two are identical and this one does not serialize
-      // every record the span holds. `deferred` skips even that - see
-      // `unsettledByteMessageIds` for why the streaming path cannot afford one
-      // serialization of a growing row per delta.
-      bytes:
-        charge === "deferred"
-          ? span.bytes
-          : span.bytes + recordByteLength(next) - recordByteLength(previous),
+  const clock = window.clock + 1;
+  let records = window.records;
+  let hydratedBytes = window.hydratedBytes;
+  if (entry !== undefined) {
+    const next = update(entry.record);
+    // A `now` charge measures the NEW body once and lets the entry's held
+    // figure supply the old one - no serialization of the previous copy, and
+    // any residual staleness in the held figure self-corrects. `deferred`
+    // skips even that one measure - see `unsettledByteMessageIds` for why the
+    // streaming path cannot afford a serialization of a growing row per
+    // delta.
+    const bytes = charge === "deferred" ? entry.bytes : recordByteLength(next);
+    const nextEntries = new Map(window.records.messages);
+    nextEntries.set(messageId, {
+      record: next,
+      bytes,
+      servedAt: entry.servedAt,
+      // A write, which is what `touchedAt` records - bumped ONCE, on the
+      // record, so every span DRAWING it warms identically and a span merely
+      // holding it as a rider inherits nothing. Warmth is the only thing
+      // protecting a stale carry, so this bump is what keeps the squeeze from
+      // dropping the very copy the reader is watching stream.
+      touchedAt: clock,
+    });
+    // No revision bump: a block delta touches record contents, never
+    // membership, serve identity, or an id the backing folds read - this is
+    // exactly the stability the (spans, revision)-keyed memos are built on.
+    records = {
+      messages: nextEntries,
+      events: window.records.events,
+      revision: window.records.revision,
     };
-  });
+    if (charge === "now" && bytes !== entry.bytes) {
+      // The fresh term moves only when a FRESH span references the record; a
+      // stale-exclusive rewrite is the stale tier's business and the bound
+      // below re-judges it.
+      const freshReferenced = window.spans.some((span) =>
+        span.messageIds.includes(messageId),
+      );
+      if (freshReferenced) hydratedBytes += bytes - entry.bytes;
+    }
+  }
   const liveMessages =
     liveIndex < 0
       ? window.liveMessages
       : window.liveMessages.map((message, index) =>
           index === liveIndex ? update(message) : message,
         );
+  const next: TranscriptWindow = {
+    ...window,
+    records,
+    liveMessages,
+    hydratedBytes,
+    unsettledByteMessageIds:
+      charge === "now" ||
+      entry === undefined ||
+      window.unsettledByteMessageIds.includes(messageId)
+        ? window.unsettledByteMessageIds
+        : [...window.unsettledByteMessageIds, messageId],
+    clock,
+  };
   return {
-    // A `now` charge lands on the stale tier immediately, so the budget can be
-    // judged immediately. A `deferred` one leaves `span.bytes` untouched by
-    // construction, so this is a no-op until {@link settleWindowBytes} makes
-    // the figure true - which is where the streaming path's bound lives.
-    window: boundStaleTierToBudget({
-      ...window,
-      spans,
-      staleSpans,
-      liveMessages,
-      hydratedBytes: totalBytes(spans),
-      unsettledByteMessageIds:
-        charge === "now" || window.unsettledByteMessageIds.includes(messageId)
-          ? window.unsettledByteMessageIds
-          : [...window.unsettledByteMessageIds, messageId],
-      clock: window.clock + 1,
-    }),
+    // A `now` charge lands immediately, so the budget can be judged
+    // immediately. A `deferred` one leaves every byte figure untouched BY
+    // CONSTRUCTION, so the bound's answer cannot have changed since the last
+    // structural moment - it is skipped outright rather than re-derived per
+    // token, and {@link settleWindowBytes} is where the streaming path's
+    // bound lives.
+    window: charge === "now" ? boundStaleTierToBudget(next) : next,
     held: true,
   };
 }
@@ -1206,16 +1660,6 @@ function spanExtent(span: HydratedSpan): number {
 
 function spanEnd(span: HydratedSpan): number {
   return span.fromOrdinal + spanExtent(span);
-}
-
-function recordsByteLength(
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
-): number {
-  let bytes = 0;
-  for (const message of messages) bytes += recordByteLength(message);
-  for (const event of events) bytes += recordByteLength(event);
-  return bytes;
 }
 
 /**
@@ -1236,10 +1680,6 @@ function contextByteLength(
 ): number {
   if (Object.keys(rowContext).length === 0) return 0;
   return utf8ByteLength(JSON.stringify(rowContext));
-}
-
-function totalBytes(spans: readonly HydratedSpan[]): number {
-  return spans.reduce((sum, span) => sum + span.bytes, 0);
 }
 
 /**
@@ -1267,40 +1707,26 @@ function skeletonContradicts(
 }
 
 /**
- * Concatenate groups of records, keeping each record id ONCE.
+ * Concatenate groups of record ids, keeping each ONCE at its first occurrence.
  *
  * POSITION comes from the first occurrence, because the groups arrive in
  * ordinal order and that ordering is what makes the result transcript-ordered.
- * The BODY comes from `preferred` wherever it holds that id - so where two
- * copies of one record disagree, position decides where it renders and
- * `preferred` decides what it says.
- *
- * The two halves answer different questions and it matters that they are
- * decided separately. A span is only ever merged with a response that arrived
- * LATER under the same epoch, so where the two copies of a record disagree the
- * incoming one is the host's current answer - the same rule the row ids
- * already follow. Keeping the first BODY as well would let a span retained
- * across a reconnect outrank the authoritative tail that just replaced it: the
- * merge succeeds, the ids update, and the published transcript keeps rendering
- * the stale text with nothing to indicate it.
- *
- * {@link dedupeByFreshestSpan} makes the same judgement for spans that did NOT
- * merge, where "later" is a stamp rather than an argument position.
+ * The BODY question the pre-ledger merge had to answer here - which member's
+ * copy wins when they disagree - no longer exists: the ids resolve through
+ * the ledger, whose one entry per record was already replaced by the incoming
+ * serve at the seat. Single ownership is the stronger form of the old
+ * incoming-copy-wins rule: keeping a superseded body is unrepresentable.
  */
-function dedupePreferringIncoming<T>(
-  groups: readonly (readonly T[])[],
-  preferred: readonly T[],
-  keyOf: (item: T) => string,
-): readonly T[] {
-  const override = new Map(preferred.map((item) => [keyOf(item), item]));
+function dedupeIdsInOrder(
+  groups: readonly (readonly string[])[],
+): readonly string[] {
   const seen = new Set<string>();
-  const out: T[] = [];
+  const out: string[] = [];
   for (const group of groups) {
-    for (const item of group) {
-      const key = keyOf(item);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(override.get(key) ?? item);
+    for (const id of group) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
     }
   }
   return out;
@@ -1319,8 +1745,8 @@ function spanSharesRecord(
 ): boolean {
   if (recordIds.size === 0) return false;
   return (
-    span.messages.some((message) => recordIds.has(message.messageId)) ||
-    span.events.some((event) => recordIds.has(event.eventId))
+    span.messageIds.some((id) => recordIds.has(id)) ||
+    span.eventIds.some((id) => recordIds.has(id))
   );
 }
 
@@ -1349,9 +1775,9 @@ function spanSharesRecord(
  * That is only a problem if something picks between the copies by POSITION, and
  * for a while something did: {@link hydratedRecords} deduped in ordinal order,
  * so the EARLIEST span's copy won however old it was, and a turn re-served with
- * a new body kept rendering the previous one. The fix belongs there, and is
- * there - {@link HydratedSpan.servedAt} makes the newest SERVE win wherever it
- * sits.
+ * a new body kept rendering the previous one. The ledger closes that class
+ * outright: the id resolves to ONE body, replaced at the seat, so position and
+ * body cannot disagree.
  *
  * It must not be fixed HERE, by dropping the sharing span, and the reason is
  * worth stating because that is what this function used to do. Sharing is
@@ -1373,6 +1799,16 @@ function spanSharesRecord(
  * render them), which is a silent blank with no route back.
  */
 function insertSpan(
+  /**
+   * The ledger the spans' references resolve through, POST-seat - the merge
+   * ceiling is derived from it at this moment and never retained (see
+   * {@link derivedSpanBytes}): a retained figure is stored-at-insert with a
+   * different source, and a streaming rewrite between merges would make it
+   * stale again - the 900-KB-tail-absorbs-a-neighbour hazard the cap exists
+   * to refuse.
+   */
+  ledger: RecordLedger,
+  unsettled: ReadonlySet<string>,
   spans: readonly HydratedSpan[],
   incoming: HydratedSpan,
 ): readonly HydratedSpan[] {
@@ -1381,7 +1817,12 @@ function insertSpan(
   // Adjacency is absorbed only while the result stays a unit eviction can
   // reclaim (see SPAN_MERGE_MAX_BYTES). Overlap is not optional: two spans
   // covering one ordinal would place that row twice.
-  let mergedBytes = incoming.bytes;
+  //
+  // The ceiling metric is per-span and CHARGE-INCLUSIVE - each member's
+  // records at full size, aliases not deduped. A deduped ceiling would let
+  // spans sharing a turn's records merge into the unbounded tail the cap
+  // exists to prevent.
+  let mergedBytes = derivedSpanBytes(ledger, incoming, unsettled);
   for (const span of spans) {
     const disjoint =
       spanEnd(span) < incoming.fromOrdinal ||
@@ -1393,11 +1834,12 @@ function insertSpan(
     const touchesOnly =
       spanEnd(span) === incoming.fromOrdinal ||
       spanEnd(incoming) === span.fromOrdinal;
-    if (touchesOnly && mergedBytes + span.bytes > SPAN_MERGE_MAX_BYTES) {
+    const spanBytes = derivedSpanBytes(ledger, span, unsettled);
+    if (touchesOnly && mergedBytes + spanBytes > SPAN_MERGE_MAX_BYTES) {
       untouched.push(span);
       continue;
     }
-    mergedBytes += span.bytes;
+    mergedBytes += spanBytes;
     overlapping.push(span);
   }
   if (overlapping.length === 0) {
@@ -1420,16 +1862,8 @@ function insertSpan(
       rowIds[span.fromOrdinal + index - fromOrdinal] = span.rowIds[index];
     }
   }
-  const messages = dedupePreferringIncoming(
-    members.map((span) => span.messages),
-    incoming.messages,
-    (message) => message.messageId,
-  );
-  const events = dedupePreferringIncoming(
-    members.map((span) => span.events),
-    incoming.events,
-    (event) => event.eventId,
-  );
+  const messageIds = dedupeIdsInOrder(members.map((span) => span.messageIds));
+  const eventIds = dedupeIdsInOrder(members.map((span) => span.eventIds));
   // Incoming last, so a re-served row's context supersedes the held copy for
   // the same reason its row id does.
   const rowContext = Object.assign(
@@ -1437,25 +1871,17 @@ function insertSpan(
     ...overlapping.map((span) => span.rowContext),
     incoming.rowContext,
   ) as Readonly<Record<string, TranscriptRowContext>>;
-  // Re-measured rather than summed from the members: the merge DEDUPES both
-  // the records and the context map, so adding the members' charges would bill
-  // every row a re-served span shares with the one it superseded.
+  // Re-measured rather than summed from the members: the merge DEDUPES the
+  // context map, so adding the members' charges would bill every row a
+  // re-served span shares with the one it superseded.
   const contextBytes = contextByteLength(rowContext);
   const merged: HydratedSpan = {
     fromOrdinal,
     rowIds,
     rowContext,
-    messages,
-    events,
-    bytes: recordsByteLength(messages, events) + contextBytes,
+    messageIds,
+    eventIds,
     contextBytes,
-    touchedAt: Math.max(...members.map((span) => span.touchedAt)),
-    // The merged bodies are `dedupePreferringIncoming`'s answer, so the newest
-    // serve among the members is what this span now holds. Taking the MAX is
-    // therefore a statement of fact rather than a heuristic - and taking the
-    // incoming span's stamp alone would be wrong for a member whose records the
-    // incoming one does not carry at all.
-    servedAt: Math.max(...members.map((span) => span.servedAt)),
   };
   return [...untouched, merged].sort(
     (left, right) => left.fromOrdinal - right.fromOrdinal,
@@ -1831,6 +2257,11 @@ export function applyWindowedSnapshot(
   // records even when they announce a new epoch. Their later skeleton may
   // prove where a record belongs, but absence from it cannot prove that a live
   // record already held by this client was deleted.
+  const { spans: carriedStaleSpans, ledger: carriedLedger } = carriedStaleTier(
+    reconciledWindow,
+    rebased || missedDeltas,
+    input.rowCount,
+  );
   const base: TranscriptWindow =
     rebased || missedDeltas
       ? {
@@ -1858,9 +2289,14 @@ export function applyWindowedSnapshot(
           // skeleton streams in - the completion rebase renames almost no row
           // id, so repainting the whole chat as placeholders for the length
           // of the restream trades held content for a flash. See
-          // {@link TranscriptWindow.staleSpans}.
-          staleSpans:
-            input.rowCount > 0 ? staleCarrySpans(reconciledWindow) : [],
+          // {@link TranscriptWindow.staleSpans}. The ledger entries the carry
+          // references travel with it, deferred debt included.
+          staleSpans: carriedStaleSpans,
+          records: carriedLedger,
+          unsettledByteMessageIds:
+            reconciledWindow.unsettledByteMessageIds.filter((id) =>
+              carriedLedger.messages.has(id),
+            ),
           invalidated: missedDeltas,
           // Carried for the same reason the void carries it: the reader has
           // not moved because the index was replaced, and the carry they are
@@ -2070,21 +2506,36 @@ function seatSnapshotTailSpan(input: {
   // record's cleared occurrence list, which is the fresh-lineage floor rule 3
   // reads.
   stampSeatedMessages(witnesses, messages);
+  // Records into the LEDGER first, so the span's references resolve and the
+  // merge ceiling below derives from post-seat truth.
+  const records = seatLedgerRecords(
+    completeBase.records,
+    messages,
+    tail.events,
+    clock,
+  );
   const tailSpan: HydratedSpan = {
     fromOrdinal: tail.fromOrdinal,
     rowIds,
     rowContext,
-    messages,
-    events: tail.events,
-    bytes: recordsByteLength(messages, tail.events) + contextBytes,
+    messageIds: messages.map((message) => message.messageId),
+    eventIds: tail.events.map((event) => event.eventId),
     contextBytes,
-    touchedAt: clock,
-    servedAt: clock,
   };
-  const spans = insertSpan(completeBase.spans, tailSpan);
+  const spans = insertSpan(
+    records,
+    new Set(completeBase.unsettledByteMessageIds),
+    completeBase.spans,
+    tailSpan,
+  );
   return retireCoveredStaleSpans(
     pruneSupersededLiveRecords(
-      { ...completeBase, spans, hydratedBytes: totalBytes(spans) },
+      {
+        ...completeBase,
+        records,
+        spans,
+        hydratedBytes: freshTierBytes(records, spans),
+      },
       servedAssistantTurns(
         declaredCompleteTailRowIds(tail),
         messages,
@@ -2196,19 +2647,19 @@ function boundWindowToRowCount(
     spans.length !== window.spans.length ||
     staleSpans.length !== window.staleSpans.length;
   if (!changed) return window;
-  return {
+  return pruneUnreferencedRecords({
     ...window,
     skeleton,
     spans,
     staleSpans,
-    hydratedBytes: totalBytes(spans),
+    hydratedBytes: freshTierBytes(window.records, spans),
     skeletonStreamCoveredThrough: Math.min(
       window.skeletonStreamCoveredThrough,
       rowCount,
     ),
     skeletonComplete:
       window.skeletonComplete && coversEveryOrdinal(skeleton, rowCount),
-  };
+  });
 }
 
 /**
@@ -2227,7 +2678,11 @@ function dropSpansOverlappingFrom(
 ): TranscriptWindow {
   const kept = window.spans.filter((span) => spanEnd(span) <= fromOrdinal);
   if (kept.length === window.spans.length) return window;
-  return { ...window, spans: kept, hydratedBytes: totalBytes(kept) };
+  return pruneUnreferencedRecords({
+    ...window,
+    spans: kept,
+    hydratedBytes: freshTierBytes(window.records, kept),
+  });
 }
 
 /**
@@ -2368,7 +2823,7 @@ function retireUnnamedStaleSpans(window: TranscriptWindow): TranscriptWindow {
   );
   return kept.length === window.staleSpans.length
     ? window
-    : { ...window, staleSpans: kept };
+    : pruneUnreferencedRecords({ ...window, staleSpans: kept });
 }
 
 /**
@@ -2444,38 +2899,73 @@ function freshDrawnRowIds(spans: readonly HydratedSpan[]): ReadonlySet<string> {
 /**
  * Which carry the row merger would DRAW each row from, when two hold it.
  *
- * `seatStaleRows` walks the tier by descending `servedAt` and places a row at
- * first encounter, so the freshest serve owns it and a staler duplicate draws
- * nothing. This reproduces that winner exactly rather than approximating it: a
- * forward scan of the STORED order taking `>` picks the greatest stamp and, on
- * a tie, the earliest span - which is what a stable descending sort followed by
- * first-match arrives at.
+ * `seatStaleRows` walks the tier by descending derived serve stamp and places
+ * a row at first encounter, so the freshest serve owns it and a staler
+ * duplicate draws nothing. This reproduces that winner exactly rather than
+ * approximating it: a forward scan of the STORED order taking `>` picks the
+ * greatest stamp and, on a tie, the earliest span - which is what a stable
+ * descending sort followed by first-match arrives at.
  *
- * Cached on the array for {@link staleSpanVisibleIn}, which runs on every
- * viewport report. Both inputs are per-span immutable, so a new array is the
- * only thing that can change an answer.
+ * The stamp is the record-grain derivation ({@link spanServeStamp}), so a
+ * contested row resolves from the identical record-level figure both passes
+ * read - two spans sharing the record tie by construction, and a span holding
+ * a strictly fresher record for the turn outranks one holding only the older
+ * slice. Cached on the array AND the ledger revision: a re-serve can move a
+ * shared record's stamp without replacing the stale array, and revision is
+ * bumped at exactly those structural moments.
  */
 const staleRowOwnerCache = new WeakMap<
   readonly HydratedSpan[],
-  ReadonlyMap<string, HydratedSpan>
+  {
+    readonly revision: number;
+    readonly owners: ReadonlyMap<string, HydratedSpan>;
+  }
 >();
 
+/**
+ * The stale tier by descending derived serve stamp - the walk order
+ * `seatStaleRows` places rows in, exported so the row merger and
+ * {@link staleRowOwners} cannot drift onto different orderings of the same
+ * record-level figure. Stable, so a tie (two carries sharing the one ledger
+ * copy) falls back to the stored ordinal order.
+ */
+export function staleSpansByFreshestServe(
+  window: TranscriptWindow,
+): readonly HydratedSpan[] {
+  const stamps = new Map(
+    window.staleSpans.map((span) => [span, spanServeStamp(window, span)]),
+  );
+  return [...window.staleSpans].sort(
+    (left, right) => (stamps.get(right) ?? 0) - (stamps.get(left) ?? 0),
+  );
+}
+
 function staleRowOwners(
+  window: TranscriptWindow,
   spans: readonly HydratedSpan[],
 ): ReadonlyMap<string, HydratedSpan> {
   const cached = staleRowOwnerCache.get(spans);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined && cached.revision === window.records.revision) {
+    return cached.owners;
+  }
+  const stamps = new Map(
+    spans.map((span) => [span, spanServeStamp(window, span)]),
+  );
   const owners = new Map<string, HydratedSpan>();
   for (const span of spans) {
+    const stamp = stamps.get(span) ?? 0;
     for (const rowId of span.rowIds) {
       if (rowId === "") continue;
       const seen = owners.get(rowId);
-      if (seen === undefined || span.servedAt > seen.servedAt) {
+      if (seen === undefined || stamp > (stamps.get(seen) ?? 0)) {
         owners.set(rowId, span);
       }
     }
   }
-  staleRowOwnerCache.set(spans, owners);
+  staleRowOwnerCache.set(spans, {
+    revision: window.records.revision,
+    owners,
+  });
   return owners;
 }
 
@@ -2571,8 +3061,8 @@ function reconcileSpansWithSkeleton(
       changed = true;
       for (const [turnKey, message] of servedAssistantTurns(
         adopted.rowIds,
-        adopted.messages,
-        adopted.events,
+        spanMessages(window, adopted),
+        spanEvents(window, adopted),
       )) {
         adoptedAssistantTurns.set(turnKey, message);
       }
@@ -2581,7 +3071,11 @@ function reconcileSpansWithSkeleton(
   }
   if (!changed) return window;
   return pruneSupersededLiveRecords(
-    { ...window, spans: kept, hydratedBytes: totalBytes(kept) },
+    pruneUnreferencedRecords({
+      ...window,
+      spans: kept,
+      hydratedBytes: freshTierBytes(window.records, kept),
+    }),
     adoptedAssistantTurns,
   );
 }
@@ -2788,21 +3282,17 @@ function staleCarrySpans(window: TranscriptWindow): readonly HydratedSpan[] {
   // Zero live bytes: a rebase or void discards the fresh spans, so the whole
   // window budget is headroom for the carry.
   //
-  // Settled FIRST, because this transition is where a deferred figure stops
-  // being repairable. An active turn's span carries an UNDERSTATED `bytes`
-  // until {@link settleWindowBytes} runs, and both windows this feeds are
-  // built from `emptyTranscriptWindow()` - so `unsettledByteMessageIds`, the
-  // record of what still owes a measurement, does not survive the carry.
-  // `boundedStaleSpans` would then bound against a figure nothing can ever
-  // correct, and a completed long turn would hold past the budget for the
-  // life of the tier.
+  // No settle-first pass any more: the deferred debt RIDES the carry - the
+  // ledger entries and the filtered `unsettledByteMessageIds` both survive
+  // into the voided window - so {@link settleWindowBytes} still collects the
+  // true measure later and {@link boundStaleTierToBudget} re-judges the tier
+  // then. The pre-ledger carry had to settle eagerly because the per-span
+  // figures were about to become uncorrectable; a ledger figure never is.
   return boundedStaleSpans(
     // A rebase or void discards every fresh span, so nothing is drawn by that
     // tier any more and the candidates are exactly what remains on screen.
     { ...window, spans: [] },
-    window.unsettledByteMessageIds.length === 0
-      ? candidates
-      : resettledSpanBytes(candidates, new Set(window.unsettledByteMessageIds)),
+    candidates,
     0,
   );
 }
@@ -2851,24 +3341,33 @@ function boundedStaleSpans(
   //
   // Coverage below is first-come, so the span that sorts earlier keeps the row
   // and the other is dropped for contributing nothing. `seatStaleRows` draws
-  // that row from the greatest `servedAt`, so ordering by anything else can
-  // discard the copy the renderer had selected and regress the row's body to an
-  // older serve - the loss this tier exists to prevent, reached with no budget
-  // pressure at all.
+  // that row from the greatest derived serve stamp, so ordering by anything
+  // else can discard the copy the renderer had selected and regress the row's
+  // body to an older serve - the loss this tier exists to prevent, reached
+  // with no budget pressure at all.
   //
-  // Warmth alone does not decide it. A viewport report bumps every carry
-  // holding a visible row, and {@link rewriteWindowMessage} bumps every carry
-  // holding a streamed record, so duplicates arrive here TIED far more often
-  // than not; a stable sort then falls back to input order, which is ordinal
-  // for the two callers that pass the stored array
-  // ({@link boundStaleTierToBudget}, {@link retireCoveredStaleSpans}) and
-  // freshest-first for the two that prepend the spans they are demoting. The
-  // tier would otherwise disagree with itself: a carry admitted at a rebase as
-  // the freshest owner of a row is discarded by the next seat's re-bound,
-  // because the same function ran over the same spans in a different order.
+  // Both keys are the record-grain derivations over what each span DRAWS
+  // ({@link spanTouchStamp}, {@link spanServeStamp}). Per-record clocks are
+  // what closed the tie factory the per-span scalars were: a viewport report
+  // and a streamed rewrite bump the RECORD once, so every span drawing it
+  // moves identically and a span holding it only as a rider inherits nothing.
+  // Duplicates sharing a record still tie - the same ledger entry answers for
+  // both - and the stable sort then falls back to input order, which is
+  // ordinal for the callers that pass the stored array and freshest-first for
+  // the ones that prepend the spans they are demoting; the two passes
+  // therefore keep answering "which copy of this row" from the identical
+  // record-level figure, which is the by-construction agreement the record
+  // grain exists to preserve.
+  const touchStamps = new Map(
+    candidates.map((span) => [span, spanTouchStamp(after, span)]),
+  );
+  const serveStamps = new Map(
+    candidates.map((span) => [span, spanServeStamp(after, span)]),
+  );
   const sorted = [...candidates].sort(
     (left, right) =>
-      right.touchedAt - left.touchedAt || right.servedAt - left.servedAt,
+      (touchStamps.get(right) ?? 0) - (touchStamps.get(left) ?? 0) ||
+      (serveStamps.get(right) ?? 0) - (serveStamps.get(left) ?? 0),
   );
   // By row ID only, and a MARKER never counts as covered.
   //
@@ -2909,13 +3408,35 @@ function boundedStaleSpans(
   // owner is then squeezed out by the budget below, losing the row outright,
   // where today it survives. Contributing only ever admits more, and the
   // budget still bounds the total.
-  const ownerOf = staleRowOwners(candidates);
+  const ownerOf = staleRowOwners(after, candidates);
   const drawsViewport =
     after.visibleOrdinals === null
       ? (): boolean => false
       : staleSpanVisibleIn(after, candidates, after.visibleOrdinals);
   const coveredRowIds = new Set<string>();
   const carried: HydratedSpan[] = [];
+  // The stale charge is stale-EXCLUSIVE: a record the surviving fresh tier
+  // references is already inside `liveBytes` (the fresh term), and a record an
+  // already-admitted carry charged is one ledger entry however many carries
+  // reference it - the aliasing double-charge is resolved here by the same
+  // dedupe the ledger gives everything else. Structural bytes stay per span.
+  const chargedIds = referencedRecordIds([after.spans]);
+  const incrementalCharge = (span: HydratedSpan): number => {
+    let increment = span.contextBytes;
+    for (const id of span.messageIds) {
+      if (chargedIds.messageIds.has(id)) continue;
+      increment += after.records.messages.get(id)?.bytes ?? 0;
+    }
+    for (const id of span.eventIds) {
+      if (chargedIds.eventIds.has(id)) continue;
+      increment += after.records.events.get(id)?.bytes ?? 0;
+    }
+    return increment;
+  };
+  const commitCharge = (span: HydratedSpan): void => {
+    for (const id of span.messageIds) chargedIds.messageIds.add(id);
+    for (const id of span.eventIds) chargedIds.eventIds.add(id);
+  };
   let bytes = liveBytes;
   for (const span of sorted) {
     const uncovered = (rowId: string): boolean =>
@@ -2948,9 +3469,10 @@ function boundedStaleSpans(
     // Explicit, not warmth. Warmth is one scalar that a viewport report and a
     // streamed rewrite both write, so it cannot say which of those it is
     // recording - see {@link TranscriptWindow.visibleOrdinals}.
+    const increment = incrementalCharge(span);
     if (
       carried.length > 0 &&
-      bytes + span.bytes > TRANSCRIPT_WINDOW_MAX_BYTES &&
+      bytes + increment > TRANSCRIPT_WINDOW_MAX_BYTES &&
       !drawsViewport(span)
     ) {
       continue;
@@ -2959,7 +3481,8 @@ function boundedStaleSpans(
       if (rowId !== "") coveredRowIds.add(rowId);
     }
     carried.push(span);
-    bytes += span.bytes;
+    commitCharge(span);
+    bytes += increment;
   }
   // Selected by warmth, STORED in ordinal order. `staleSpans` is read on the
   // per-token path (`hydratedRecords` merges it with the fresh tier in
@@ -3016,7 +3539,9 @@ function retireCoveredStaleSpans(window: TranscriptWindow): TranscriptWindow {
   const unchanged =
     bounded.length === window.staleSpans.length &&
     bounded.every((span) => window.staleSpans.includes(span));
-  return unchanged ? window : { ...window, staleSpans: bounded };
+  return unchanged
+    ? window
+    : pruneUnreferencedRecords({ ...window, staleSpans: bounded });
 }
 
 /**
@@ -3046,6 +3571,8 @@ function voidedTranscriptWindow(
         (message.role === "assistant" &&
           isTransientLiveAssistantMessageId(message.messageId))),
   );
+  const carriedStaleSpans = input.rowCount > 0 ? staleCarrySpans(window) : [];
+  const records = retainLedgerForSpans(window.records, carriedStaleSpans);
   return {
     ...emptyTranscriptWindow(),
     epoch: input.epoch,
@@ -3071,7 +3598,13 @@ function voidedTranscriptWindow(
     // The discarded bodies stay renderable while the replacement index
     // streams in - see {@link TranscriptWindow.staleSpans}. A zero-row
     // authority means the rows themselves are gone, so nothing is carried.
-    staleSpans: input.rowCount > 0 ? staleCarrySpans(window) : [],
+    // The ledger entries the carry references travel with it, deferred debt
+    // included - see {@link retainLedgerForSpans}.
+    staleSpans: carriedStaleSpans,
+    records,
+    unsettledByteMessageIds: window.unsettledByteMessageIds.filter((id) =>
+      records.messages.has(id),
+    ),
     invalidated: true,
     // The reader has not moved because the index was replaced, and the carry
     // they are looking at is bounded before any new report can arrive. See the
@@ -3097,13 +3630,16 @@ function voidedTranscriptWindow(
  * `projectedRowCache` and the backing lookups survive, and the bounded stale
  * carry is not re-bounded.
  *
- * Three exclusions, each load-bearing. A moved `rowCount` is ADVANCED
- * authority, not a repeat - the void must adopt it. Pending byte measurements
- * mean the full void's settle pass still owes work the no-op would silently
- * skip. And a NEWER epoch is never a repeat, whatever else matches. The
- * frame's `indexRevision` is deliberately not compared - the first void armed
- * `indexRevisionRebuilding`, in which state the two counters may not be the
- * same counter, and every consumer refuses that comparison.
+ * Two exclusions, each load-bearing. A moved `rowCount` is ADVANCED
+ * authority, not a repeat - the void must adopt it. And a NEWER epoch is never
+ * a repeat, whatever else matches. The frame's `indexRevision` is deliberately
+ * not compared - the first void armed `indexRevisionRebuilding`, in which
+ * state the two counters may not be the same counter, and every consumer
+ * refuses that comparison. Pending byte measurements USED to be a third
+ * exclusion, when the full void's carry settled eagerly and a no-op would
+ * silently skip that work; the ledger carries the debt through the void
+ * intact (`unsettledByteMessageIds` and the entries both survive), so a
+ * repeat with pending measurements skips nothing and is safely idempotent.
  *
  * Scoped to the all-invalidating frame deliberately: the revision-gap and
  * append-base voids stay unconditional - those frames are loss EVIDENCE, not
@@ -3120,8 +3656,7 @@ function idempotentlyVoidedTranscriptWindow(
   const repeat =
     window.invalidated &&
     input.epoch === window.epoch &&
-    input.rowCount === window.rowCount &&
-    window.unsettledByteMessageIds.length === 0;
+    input.rowCount === window.rowCount;
   return repeat ? window : voidedTranscriptWindow(window, input);
 }
 
@@ -3476,8 +4011,8 @@ function dropSpansForUpdatedOrdinals(
   const staleRecordIds = new Set<string>();
   for (const span of window.spans) {
     if (!containsUpdated(span)) continue;
-    for (const message of span.messages) staleRecordIds.add(message.messageId);
-    for (const event of span.events) staleRecordIds.add(event.eventId);
+    for (const id of span.messageIds) staleRecordIds.add(id);
+    for (const id of span.eventIds) staleRecordIds.add(id);
   }
   const kept: HydratedSpan[] = [];
   const dropped: HydratedSpan[] = [];
@@ -3489,8 +4024,8 @@ function dropSpansForUpdatedOrdinals(
     }
   }
   if (dropped.length === 0) return window;
-  const hydratedBytes = totalBytes(kept);
-  return {
+  const hydratedBytes = freshTierBytes(window.records, kept);
+  return pruneUnreferencedRecords({
     ...window,
     spans: kept,
     // The dropped bodies keep rendering while the refetch is in flight - a
@@ -3504,57 +4039,30 @@ function dropSpansForUpdatedOrdinals(
       hydratedBytes,
     ),
     hydratedBytes,
-  };
+  });
 }
 
 /**
  * The window's own copy of a record - the one {@link hydratedRecords} RENDERS.
  *
- * This MIRRORS {@link dedupeByFreshestSpan} for a single key, and the mirror is
- * the contract rather than an implementation echo: the only caller substitutes
- * this copy for a served one at a seat, so a rule that disagrees with the
- * render authority seats a body the window is not showing. Change one of these
- * two and the other moves with it.
+ * Pre-ledger this had to MIRROR the freshest-span dedupe for a single key -
+ * pick the greatest `servedAt` among however many span copies existed - and
+ * the mirror was a contract two functions could drift apart on. Single
+ * ownership makes the question trivial: the ledger holds the one copy, stale
+ * and fresh tiers alike (a copy demoted to stale is the same entry, still
+ * rewritten in place while its turn streams), so the render authority and this
+ * lookup cannot disagree.
  *
- * Both halves of that rule are load-bearing, and a first-match scan gets each
- * of them wrong:
- *
- * - The body follows the greatest `servedAt`, not the earliest ordinal. One
- *   turn's records reach every span its rows do and `SPAN_MERGE_MAX_BYTES`
- *   means those are not always merged, so the same id sits in several spans at
- *   different serves.
- * - Spans outrank live records wholesale - "a live copy never displaces a
- *   span's" - so a live copy answers only for an id no span holds. It is a
- *   fallback, not a first look.
- *
- * A copy demoted to stale competes on equal terms here, which is what keeps
- * the carry reachable: it is still rewritten in place, so a same-epoch
- * `updated` can demote the active turn's span while its deltas keep arriving
- * (see {@link rewriteWindowMessage}), and until a replacement is served it
- * holds the greatest stamp there is.
+ * Spans outrank live records wholesale - "a live copy never displaces a
+ * span's" - so the live set answers only for an id the ledger does not hold.
+ * It is a fallback, not a first look.
  */
 function heldMessageCopy(
   window: TranscriptWindow,
   messageId: string,
 ): Message | null {
-  const spans =
-    window.staleSpans.length === 0
-      ? window.spans
-      : mergeSpansByOrdinal(window.spans, window.staleSpans);
-  let best: Message | null = null;
-  let bestServedAt = 0;
-  for (const span of spans) {
-    for (const message of span.messages) {
-      if (message.messageId !== messageId) continue;
-      // `>` and not `>=`, over the merged ordinal order, so an equal stamp
-      // resolves to the same copy `dedupeByFreshestSpan` keeps.
-      if (best === null || span.servedAt > bestServedAt) {
-        best = message;
-        bestServedAt = span.servedAt;
-      }
-    }
-  }
-  if (best !== null) return best;
+  const entry = window.records.messages.get(messageId);
+  if (entry !== undefined) return entry.record;
   for (const message of window.liveMessages) {
     if (message.messageId === messageId) return message;
   }
@@ -3582,8 +4090,11 @@ export function holdsActiveTurnAssistantMessage(
   const matches = (message: Message): boolean =>
     message.role === "assistant" && assistantTurnKey(message) === activeTurnId;
   if (window.liveMessages.some(matches)) return true;
-  if (window.spans.some((span) => span.messages.some(matches))) return true;
-  return window.staleSpans.some((span) => span.messages.some(matches));
+  // The ledger IS the span tiers' holdings, fresh and stale alike.
+  for (const entry of window.records.messages.values()) {
+    if (matches(entry.record)) return true;
+  }
+  return false;
 }
 
 /**
@@ -3964,24 +4475,35 @@ export function applyRangeResponse(
   );
   // Range seats stamp; they never reset.
   stampSeatedMessages(witnesses, messages);
+  // Records into the LEDGER first, so the span's references resolve and the
+  // merge ceiling derives from post-seat truth.
+  const records = seatLedgerRecords(
+    completeWindow.records,
+    messages,
+    response.events,
+    clock,
+  );
   const span: HydratedSpan = {
     fromOrdinal: response.fromOrdinal,
     rowIds: response.rowIds,
     rowContext: response.rowContext,
-    messages,
-    events: response.events,
-    bytes: recordsByteLength(messages, response.events) + contextBytes,
+    messageIds: messages.map((message) => message.messageId),
+    eventIds: response.events.map((event) => event.eventId),
     contextBytes,
-    touchedAt: clock,
-    servedAt: clock,
   };
-  const spans = insertSpan(completeWindow.spans, span);
+  const spans = insertSpan(
+    records,
+    new Set(completeWindow.unsettledByteMessageIds),
+    completeWindow.spans,
+    span,
+  );
   return retireCoveredStaleSpans(
     pruneSupersededLiveRecords(
       {
         ...completeWindow,
+        records,
         spans,
-        hydratedBytes: totalBytes(spans),
+        hydratedBytes: freshTierBytes(records, spans),
         clock,
       },
       servedAssistantTurns(
@@ -4017,10 +4539,11 @@ export function hydratedRowContext(
   // the per-token publish path.
   const staleServe = new Map<string, number>();
   for (const span of window.staleSpans) {
+    const stamp = spanServeStamp(window, span);
     for (const rowId of Object.keys(span.rowContext)) {
       const seen = staleServe.get(rowId);
-      if (seen !== undefined && seen >= span.servedAt) continue;
-      staleServe.set(rowId, span.servedAt);
+      if (seen !== undefined && seen >= stamp) continue;
+      staleServe.set(rowId, stamp);
       out[rowId] = span.rowContext[rowId];
     }
   }
@@ -4144,7 +4667,7 @@ export function holdsEveryRecordFrom(
     return true;
   }
   const holder = window.spans.find((span) =>
-    span.messages.some((message) => message.messageId === messageId),
+    span.messageIds.includes(messageId),
   );
   if (holder === undefined) return false;
   // Coverage, not a single span. Adjacent spans are no longer always merged
@@ -4210,17 +4733,17 @@ export function hydratedRecords(window: TranscriptWindow): {
       ? window.spans
       : mergeSpansByOrdinal(window.spans, window.staleSpans);
   return {
-    messages: dedupeByFreshestSpan(
+    messages: dedupeLedgerRecordsInOrder(
       spans,
-      (span) => span.messages,
-      window.liveMessages,
-      (message) => message.messageId,
+      (span) => span.messageIds,
+      window.records.messages,
+      { items: window.liveMessages, keyOf: (message) => message.messageId },
     ),
-    events: dedupeByFreshestSpan(
+    events: dedupeLedgerRecordsInOrder(
       spans,
-      (span) => span.events,
-      window.liveEvents,
-      (event) => event.eventId,
+      (span) => span.eventIds,
+      window.records.events,
+      { items: window.liveEvents, keyOf: (event) => event.eventId },
     ),
     rowContext: hydratedRowContext(window),
   };
@@ -4260,60 +4783,53 @@ function mergeSpansByOrdinal(
 }
 
 /**
- * Every record the window holds, positioned by ORDINAL and bodied by SERVE.
+ * Every record the window holds, positioned by ORDINAL and bodied by the
+ * LEDGER.
  *
- * The two axes are separate because the same record id can sit in two spans -
- * one turn's records reach every span its rows do, and `SPAN_MERGE_MAX_BYTES`
- * means those are not always merged (see {@link insertSpan}). Position has to
- * come from the earliest span, or the transcript is out of order; the body has
- * to come from the newest SERVE, or the earliest span's copy renders however
- * stale it is - which is the defect {@link HydratedSpan.servedAt} exists for.
+ * Position comes from the first span encountered, which the ordinal-ordered
+ * walk makes the earliest - the same rule as ever. The body question the
+ * pre-ledger version answered with a serve-stamp competition ("the newest
+ * SERVE wins, wherever it sits") no longer exists: however many spans
+ * reference an id, they resolve to the ONE ledger entry, and a seat replaces
+ * that entry - so the newest serve wins by construction rather than by
+ * comparison, and the position/body split this function used to enforce is
+ * now unrepresentable to get wrong.
  *
  * Spans FIRST, live records after, and both facts matter. Chronologically an
  * unplaced record is the newest thing the client has, so it sorts last anyway;
- * and a live copy never displaces a span's, so if the record has already landed
- * in a span the authoritative one wins even in the window between its arrival
- * and the prune. That is a POSITION question, which is why the live records do
- * not carry a serve stamp and do not compete on one.
+ * and a live copy never displaces a ledger one, so if the record has already
+ * landed in a span the authoritative copy wins even in the window between its
+ * arrival and the prune.
  *
- * ONE pass and one map, deliberately: this runs on the streaming path (a block
- * delta republishes `messages`), so it is held to the same standard as
- * everything else there - a constant factor over the records the window holds,
- * never a second walk and never a sort.
- *
- * {@link heldMessageCopy} answers this same question for a single key and must
- * keep answering it the same way; a change to the rule here belongs there too.
+ * ONE pass, deliberately: this runs on the streaming path (a block delta
+ * republishes `messages`), so it is held to the same standard as everything
+ * else there - a constant factor over the records the window holds, never a
+ * second walk and never a sort.
  */
-function dedupeByFreshestSpan<T>(
+function dedupeLedgerRecordsInOrder<T>(
   spans: readonly HydratedSpan[],
-  pick: (span: HydratedSpan) => readonly T[],
-  live: readonly T[],
-  keyOf: (item: T) => string,
+  pickIds: (span: HydratedSpan) => readonly string[],
+  ledger: ReadonlyMap<string, LedgerRecordEntry<T>>,
+  live: {
+    readonly items: readonly T[];
+    readonly keyOf: (item: T) => string;
+  },
 ): readonly T[] {
   const out: T[] = [];
-  const placed = new Map<string, { index: number; servedAt: number }>();
+  const placed = new Set<string>();
   for (const span of spans) {
-    for (const item of pick(span)) {
-      const key = keyOf(item);
-      const seen = placed.get(key);
-      if (seen === undefined) {
-        placed.set(key, { index: out.length, servedAt: span.servedAt });
-        out.push(item);
-        continue;
-      }
-      // The position it already has, the body this span serves. `>` and not
-      // `>=` so an equal stamp keeps the earlier span's copy, which is the same
-      // record either way and one less write.
-      if (span.servedAt > seen.servedAt) {
-        out[seen.index] = item;
-        placed.set(key, { index: seen.index, servedAt: span.servedAt });
-      }
+    for (const id of pickIds(span)) {
+      if (placed.has(id)) continue;
+      const entry = ledger.get(id);
+      if (entry === undefined) continue;
+      placed.add(id);
+      out.push(entry.record);
     }
   }
-  for (const item of live) {
-    const key = keyOf(item);
+  for (const item of live.items) {
+    const key = live.keyOf(item);
     if (placed.has(key)) continue;
-    placed.set(key, { index: out.length, servedAt: 0 });
+    placed.add(key);
     out.push(item);
   }
   return out;
@@ -4366,7 +4882,11 @@ export function touchTranscriptRange(
   }
   const overlaps = (span: HydratedSpan): boolean =>
     span.fromOrdinal < range.toOrdinal && spanEnd(span) > range.fromOrdinal;
-  const staleVisible = staleSpanVisibleIn(window, window.staleSpans, range);
+  const staleDrawn = staleRowDrawnIn(window, window.staleSpans, range);
+  const staleVisible = (span: HydratedSpan): boolean => {
+    const rowDrawn = staleDrawn(span);
+    return span.rowIds.some((rowId, offset) => rowDrawn(rowId, offset));
+  };
   const touchedSpans = window.spans.some(overlaps);
   const touchedStale = window.staleSpans.some((span) => staleVisible(span));
   // The range is recorded even when nothing is warmed by it. The two answer
@@ -4382,21 +4902,85 @@ export function touchTranscriptRange(
     return sameRange ? window : { ...window, visibleOrdinals: range };
   }
   const clock = window.clock + 1;
+  // The bump lands on the records backing the rows each span is drawing IN
+  // the range - per row, not per span. A span is warm because its drawn
+  // records are, and the max-derivation ({@link spanTouchStamp}) turns one
+  // in-range row's bump into whole-span warmth for eviction, so scoping loses
+  // nothing there. What it buys is containment: a ledger record is shared, so
+  // bumping one a span merely HOLDS for the range (a row the fresh tier
+  // draws, a duplicate a fresher owner draws, a row outside the viewport)
+  // would warm every other span referencing it - rider warmth crossing tiers
+  // through the alias, the tie factory reborn one level down. The span arrays
+  // keep their identity, which is what lets every (spans, revision)-keyed
+  // memo survive a viewport report.
+  const touchedMessageIds = new Set<string>();
+  const touchedEventIds = new Set<string>();
+  const collect = (
+    span: HydratedSpan,
+    drawn: (rowId: string, offset: number) => boolean,
+  ): void => {
+    const rows = new Set<string>();
+    const turnKeys = new Set<string>();
+    span.rowIds.forEach((rowId, offset) => {
+      if (rowId === "" || !drawn(rowId, offset)) return;
+      rows.add(rowId);
+      const turnKey = assistantRowTurnKey(rowId);
+      if (turnKey !== null) turnKeys.add(turnKey);
+    });
+    if (rows.size === 0) return;
+    const draws = spanDrawsForRows(window, span, rows, turnKeys);
+    for (const id of draws.messageIds) touchedMessageIds.add(id);
+    for (const id of draws.eventIds) touchedEventIds.add(id);
+  };
+  if (touchedSpans) {
+    for (const span of window.spans) {
+      if (!overlaps(span)) continue;
+      // The fresh tier draws its rows at its own ordinals, so "in range" is
+      // plain arithmetic here; the stale tier's per-row rule is the seat
+      // truth ({@link staleRowDrawnIn}).
+      collect(span, (_rowId, offset) => {
+        const ordinal = span.fromOrdinal + offset;
+        return ordinal >= range.fromOrdinal && ordinal < range.toOrdinal;
+      });
+    }
+  }
+  if (touchedStale) {
+    for (const span of window.staleSpans) {
+      collect(span, staleDrawn(span));
+    }
+  }
   return {
     ...window,
     visibleOrdinals: sameRange ? window.visibleOrdinals : range,
-    spans: touchedSpans
-      ? window.spans.map((span) =>
-          overlaps(span) ? { ...span, touchedAt: clock } : span,
-        )
-      : window.spans,
-    staleSpans: touchedStale
-      ? window.staleSpans.map((span) =>
-          staleVisible(span) ? { ...span, touchedAt: clock } : span,
-        )
-      : window.staleSpans,
+    // No revision bump: warmth is not something the structural memos read.
+    records: {
+      messages: withTouchStamp(
+        window.records.messages,
+        touchedMessageIds,
+        clock,
+      ),
+      events: withTouchStamp(window.records.events, touchedEventIds, clock),
+      revision: window.records.revision,
+    },
     clock,
   };
+}
+
+/**
+ * Copy a ledger map with `touchedAt` advanced to `clock` on the given ids.
+ * Ids the ledger does not hold are skipped - the touch is a bump, not a seat.
+ */
+function withTouchStamp<T>(
+  entries: ReadonlyMap<string, LedgerRecordEntry<T>>,
+  ids: ReadonlySet<string>,
+  clock: number,
+): ReadonlyMap<string, LedgerRecordEntry<T>> {
+  const next = new Map(entries);
+  for (const id of ids) {
+    const entry = next.get(id);
+    if (entry !== undefined) next.set(id, { ...entry, touchedAt: clock });
+  }
+  return next;
 }
 
 /**
@@ -4445,34 +5029,53 @@ function staleSpanVisibleIn(
   carries: readonly HydratedSpan[],
   range: OrdinalRange,
 ): (span: HydratedSpan) => boolean {
+  const drawn = staleRowDrawnIn(window, carries, range);
+  return (span) => {
+    const rowDrawn = drawn(span);
+    return span.rowIds.some((rowId, offset) => rowDrawn(rowId, offset));
+  };
+}
+
+/**
+ * The per-ROW half of {@link staleSpanVisibleIn}: is this carry drawing THIS
+ * row inside `range`? {@link touchTranscriptRange} needs the row-level answer
+ * because its bump lands on records, and a record is shared - crediting it for
+ * a row this carry does NOT draw (one the fresh tier or a fresher owner does)
+ * warms every other span referencing the same ledger entry, which is exactly
+ * the rider warmth the draws relation exists to refuse.
+ */
+function staleRowDrawnIn(
+  window: TranscriptWindow,
+  carries: readonly HydratedSpan[],
+  range: OrdinalRange,
+): (span: HydratedSpan) => (rowId: string, offset: number) => boolean {
   // Over the CANDIDATE set rather than `window.staleSpans`, because
   // `boundedStaleSpans` asks this about spans it has not seated yet - and
   // ownership is only meaningful within the set being weighed.
   //
   // No carry, no question - and this runs on every viewport report, so the
   // ordinary window must not pay for the lookups below.
-  if (carries.length === 0) return () => false;
+  if (carries.length === 0) return () => () => false;
   const from = Math.max(0, range.fromOrdinal);
   const to = Math.min(range.toOrdinal, window.rowCount);
-  if (from >= to) return () => false;
+  if (from >= to) return () => () => false;
   const namedAt = skeletonOrdinalByRowId(window.skeleton);
   const drawnByFreshTier = freshDrawnRowIds(window.spans);
-  const ownerOf = staleRowOwners(carries);
-  return (span) =>
-    span.rowIds.some((rowId, offset) => {
-      if (rowId === "" || drawnByFreshTier.has(rowId)) return false;
-      const named = namedAt.get(rowId);
-      if (named !== undefined) {
-        if (ownerOf.get(rowId) !== span) return false;
-        return named >= from && named < to;
-      }
-      const oldOrdinal = span.fromOrdinal + offset;
-      return (
-        oldOrdinal >= from &&
-        oldOrdinal < to &&
-        window.skeleton[oldOrdinal] === undefined
-      );
-    });
+  const ownerOf = staleRowOwners(window, carries);
+  return (span) => (rowId, offset) => {
+    if (rowId === "" || drawnByFreshTier.has(rowId)) return false;
+    const named = namedAt.get(rowId);
+    if (named !== undefined) {
+      if (ownerOf.get(rowId) !== span) return false;
+      return named >= from && named < to;
+    }
+    const oldOrdinal = span.fromOrdinal + offset;
+    return (
+      oldOrdinal >= from &&
+      oldOrdinal < to &&
+      window.skeleton[oldOrdinal] === undefined
+    );
+  };
 }
 
 /**
@@ -4702,7 +5305,11 @@ export function evictTranscriptWindowToBudget(
   // point: a window carrying a turn's worth of deferred growth would otherwise
   // read as under budget and evict nothing.
   const window = settleWindowBytes(input);
-  if (window.hydratedBytes <= maxBytes) return window;
+  if (window.hydratedBytes <= maxBytes) {
+    return window.evictionTerminal === "none"
+      ? window
+      : { ...window, evictionTerminal: "none" };
+  }
   const isProtected = (span: HydratedSpan): boolean => {
     if (spanEnd(span) >= window.rowCount && window.rowCount > 0) return true;
     if (
@@ -4718,17 +5325,161 @@ export function evictTranscriptWindowToBudget(
       spanEnd(span) > visible.fromOrdinal
     );
   };
-  const evictable = window.spans
+  // Coldest first, by the derived record-grain warmth - the eviction unit
+  // stays the span, so the machinery's shape is unchanged; only where the
+  // stamp COMES FROM moved (max over the records the span draws).
+  const warmth = new Map(
+    window.spans.map((span) => [span, spanTouchStamp(window, span)]),
+  );
+  const candidates = window.spans
     .filter((span) => !isProtected(span))
-    .sort((left, right) => left.touchedAt - right.touchedAt);
+    .sort((left, right) => (warmth.get(left) ?? 0) - (warmth.get(right) ?? 0));
+  // Reference counts over the SURVIVING fresh tier, maintained as spans drop:
+  // savings are set-valued, not additive - a record two candidates share is
+  // freed by neither alone - so each candidate's saving is its MARGINAL one
+  // at this iteration, records no other surviving fresh span references plus
+  // its structural bytes. A stale sharer neither joins nor blocks anything:
+  // eviction demotes those bytes to stale-exclusive, and the fresh term
+  // genuinely drops - which is what lets a post-rebase window (whose carry
+  // holds every fresh span's records) make progress at all.
+  const { messageRefs, eventRefs } = freshRecordRefCounts(window.spans);
+  const marginalSaving = (span: HydratedSpan): number => {
+    let saving = span.contextBytes;
+    for (const id of span.messageIds) {
+      if (messageRefs.get(id) !== 1) continue;
+      saving += window.records.messages.get(id)?.bytes ?? 0;
+    }
+    for (const id of span.eventIds) {
+      if (eventRefs.get(id) !== 1) continue;
+      saving += window.records.events.get(id)?.bytes ?? 0;
+    }
+    return saving;
+  };
   const dropped = new Set<HydratedSpan>();
-  let bytes = window.hydratedBytes;
-  for (const span of evictable) {
-    if (bytes <= maxBytes) break;
+  const evictSpan = (span: HydratedSpan): void => {
     dropped.add(span);
-    bytes -= span.bytes;
+    for (const id of span.messageIds) {
+      messageRefs.set(id, (messageRefs.get(id) ?? 1) - 1);
+    }
+    for (const id of span.eventIds) {
+      eventRefs.set(id, (eventRefs.get(id) ?? 1) - 1);
+    }
+  };
+  // A zero-marginal candidate's records are all shared, so the correct unit is
+  // its ALIAS CLOSURE: the transitive connected component of the fresh
+  // span<->record sharing graph - a chain across two adjacent turns would
+  // otherwise read as unbreakable when evicting the whole chain frees it.
+  const aliasClosure = (seed: HydratedSpan): ReadonlySet<HydratedSpan> => {
+    const members = new Set<HydratedSpan>([seed]);
+    const queue: HydratedSpan[] = [seed];
+    while (queue.length > 0) {
+      const member = queue.pop();
+      if (member === undefined) break;
+      const ids = new Set<string>([...member.messageIds, ...member.eventIds]);
+      for (const other of window.spans) {
+        if (members.has(other) || dropped.has(other)) continue;
+        if (spanSharesRecord(other, ids)) {
+          members.add(other);
+          queue.push(other);
+        }
+      }
+    }
+    return members;
+  };
+  let bytes = window.hydratedBytes;
+  let sawUnbreakableGroup = false;
+  for (const span of candidates) {
+    if (bytes <= maxBytes) break;
+    if (dropped.has(span)) continue;
+    const saving = marginalSaving(span);
+    if (saving > 0) {
+      evictSpan(span);
+      bytes -= saving;
+      continue;
+    }
+    const closure = aliasClosure(span);
+    if ([...closure].some((member) => isProtected(member))) {
+      // Genuinely unevictable: what it retains is bounded, not an open leak -
+      // the protected anchor's charge is capped by the merge ceiling (tail)
+      // or finite (viewport), and the chain part by sharing locality. If that
+      // locality ever drifts, the growth lands in the terminal below,
+      // observable rather than silent.
+      sawUnbreakableGroup = true;
+      continue;
+    }
+    // Every member unprotected: evict the closure as one unit and charge the
+    // union saving.
+    bytes -= evictClosureUnit(closure, window.records, evictSpan);
   }
-  if (dropped.size === 0) return window;
+  let evictionTerminal: TranscriptWindow["evictionTerminal"] = "none";
+  if (bytes > maxBytes) {
+    evictionTerminal = sawUnbreakableGroup
+      ? "alias-group-unbreakable"
+      : "over-budget-accepted";
+  }
+  if (dropped.size === 0) {
+    return window.evictionTerminal === evictionTerminal
+      ? window
+      : { ...window, evictionTerminal };
+  }
   const spans = window.spans.filter((span) => !dropped.has(span));
-  return { ...window, spans, hydratedBytes: totalBytes(spans) };
+  return pruneUnreferencedRecords({
+    ...window,
+    spans,
+    // Recomputed from the ledger rather than trusted from the loop's running
+    // figure - the loop's arithmetic is control flow, the derivation is truth.
+    hydratedBytes: freshTierBytes(window.records, spans),
+    evictionTerminal,
+  });
+}
+
+/**
+ * Reference counts of every record over the fresh tier - the starting state
+ * {@link evictTranscriptWindowToBudget} decrements as spans drop, which is
+ * what makes each candidate's saving MARGINAL at its own iteration.
+ */
+function freshRecordRefCounts(spans: readonly HydratedSpan[]): {
+  readonly messageRefs: Map<string, number>;
+  readonly eventRefs: Map<string, number>;
+} {
+  const messageRefs = new Map<string, number>();
+  const eventRefs = new Map<string, number>();
+  for (const span of spans) {
+    for (const id of span.messageIds) {
+      messageRefs.set(id, (messageRefs.get(id) ?? 0) + 1);
+    }
+    for (const id of span.eventIds) {
+      eventRefs.set(id, (eventRefs.get(id) ?? 0) + 1);
+    }
+  }
+  return { messageRefs, eventRefs };
+}
+
+/**
+ * Evict every member of an alias closure and return the union saving: each
+ * member's structural bytes plus each of the closure's records charged ONCE -
+ * all of their fresh references live inside the closure, by the definition of
+ * a connected component.
+ */
+function evictClosureUnit(
+  closure: ReadonlySet<HydratedSpan>,
+  records: RecordLedger,
+  evictSpan: (span: HydratedSpan) => void,
+): number {
+  let unionSaving = 0;
+  const freedMessages = new Set<string>();
+  const freedEvents = new Set<string>();
+  for (const member of closure) {
+    unionSaving += member.contextBytes;
+    for (const id of member.messageIds) freedMessages.add(id);
+    for (const id of member.eventIds) freedEvents.add(id);
+    evictSpan(member);
+  }
+  for (const id of freedMessages) {
+    unionSaving += records.messages.get(id)?.bytes ?? 0;
+  }
+  for (const id of freedEvents) {
+    unionSaving += records.events.get(id)?.bytes ?? 0;
+  }
+  return unionSaving;
 }

@@ -17,7 +17,10 @@ import {
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
-import { TRANSCRIPT_WINDOW_MAX_BYTES } from "@/stores/chats/transcript-window";
+import {
+  spanTouchStamp,
+  TRANSCRIPT_WINDOW_MAX_BYTES,
+} from "@/stores/chats/transcript-window";
 
 const EPIC_ID = "epic-viewport";
 const CHAT_ID = "chat-viewport";
@@ -1137,17 +1140,34 @@ describe("chat session viewport hydration: review fixes", () => {
       harness.handle.store
         .getState()
         .reportVisibleTranscriptRange({ fromOrdinal: 10, toOrdinal: 15 });
-      harness.callbacks().onRange(range(harness, 10, 15));
+      // A plain user row's id IS its message's id in production
+      // (`row-projection.ts`), which is what lets the warmth bump below find a
+      // record to touch - `range()`'s shared `rangeAnswering` fixture names
+      // only one message ("m-<fromOrdinal>") for a five-row response, so it is
+      // not representative here and this test builds its own instead.
+      harness
+        .callbacks()
+        .onRange(
+          rangeWithMessages(
+            harness,
+            10,
+            ["row-10", "row-11", "row-12", "row-13", "row-14"],
+            [userMessage("row-10", 10)],
+          ),
+        );
       // The reader leaves that scrollback for the tail, which is what makes
       // coming back to it the interesting event.
       harness.handle.store
         .getState()
         .reportVisibleTranscriptRange({ fromOrdinal: 20, toOrdinal: 21 });
-      const before = harness.handle.store
-        .getState()
-        .transcriptWindow.spans.find(
-          (span) => span.fromOrdinal === 10,
-        )?.touchedAt;
+      const beforeWindow = harness.handle.store.getState().transcriptWindow;
+      const beforeSpan = beforeWindow.spans.find(
+        (span) => span.fromOrdinal === 10,
+      );
+      const before =
+        beforeSpan !== undefined
+          ? spanTouchStamp(beforeWindow, beforeSpan)
+          : undefined;
       expect(before).toBeDefined();
 
       // Already hydrated, so reporting it visible plans no new fetch...
@@ -1158,11 +1178,14 @@ describe("chat session viewport hydration: review fixes", () => {
 
       // ...but it does warm the span's LRU clock, which is what keeps it from
       // reading as coldest the next time eviction runs.
-      const after = harness.handle.store
-        .getState()
-        .transcriptWindow.spans.find(
-          (span) => span.fromOrdinal === 10,
-        )?.touchedAt;
+      const afterWindow = harness.handle.store.getState().transcriptWindow;
+      const afterSpan = afterWindow.spans.find(
+        (span) => span.fromOrdinal === 10,
+      );
+      const after =
+        afterSpan !== undefined
+          ? spanTouchStamp(afterWindow, afterSpan)
+          : undefined;
       expect(after ?? -1).toBeGreaterThan(before ?? -1);
     } finally {
       harness.handle.dispose();
