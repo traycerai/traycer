@@ -217,6 +217,17 @@ export interface OpenEpicState {
    * bytes have crossed and been installed here.
    */
   readonly bodyResidencyVersion: number;
+  /**
+   * Whether the root replica holds bytes for `hash`, SYNCHRONOUSLY.
+   *
+   * The one member of the attachment-read class that cannot become a promise:
+   * three paste handlers read it inside a ProseMirror handler that decides
+   * whether to accept a paste and cannot await. It stays on the store, as
+   * `lib/epic-replica-reads.ts`'s header always said it would - what changed
+   * is the answer's source, which is now the projected hash set rather than a
+   * live doc read.
+   */
+  hasAttachmentBytes: (hash: string) => boolean;
 
   // ── Projected slices (owned by the runtime's records plane) ───────────
   readonly epic: EpicHeader;
@@ -250,6 +261,13 @@ export interface OpenEpicState {
   /** Projected ingest counters - see `EpicRecordsProjection`. */
   /** Projected adapter arm - see `EpicControlProjection`. */
   readonly installedArm: EpicAdapterArm | null;
+  /**
+   * Every attachment hash the root replica holds, projected.
+   *
+   * The source `hasAttachmentBytes` answers from. Declared here rather than
+   * inherited because this interface names its projected fields explicitly.
+   */
+  readonly heldAttachmentHashes: readonly string[];
   readonly chatIngestSeq: number;
   readonly tuiAgentIngestSeq: number;
   /**
@@ -1230,6 +1248,15 @@ export function createOpenEpicStore(
           // is the whole reason the hot half is on this thread: a
           // `Y.XmlFragment` is what Tiptap binds to by reference and cannot
           // become a promise at the binding site.
+          // Answered from the PROJECTION, one push of staleness and no call.
+          // A hash that just landed reads as absent until the next publish,
+          // and the paste path treats absent as "not ours to accept" - the
+          // fail-closed direction, which is why the staleness is acceptable.
+          // `includes` rather than a memoised `Set`: this is read once per
+          // paste against a handful of hashes, and a cache here is a
+          // cache-invalidation bug waiting for the next projection field.
+          hasAttachmentBytes: (hash) =>
+            get().heldAttachmentHashes.includes(hash),
           getArtifactFragment: (artifactId) => {
             const docKey = get().getArtifactBodyDocKey(artifactId);
             return docKey === null

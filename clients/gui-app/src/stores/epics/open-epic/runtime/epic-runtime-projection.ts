@@ -252,6 +252,25 @@ export interface EpicControlProjection {
    * `records.sink` without putting a selection fact on the records slice.
    */
   readonly installedArm: EpicAdapterArm | null;
+  /**
+   * Every content-addressed attachment hash the root replica currently holds.
+   *
+   * A PROJECTION rather than a call, and it is the one member of the
+   * attachment-read class that could not be anything else: three paste
+   * handlers read it synchronously inside a ProseMirror handler that decides
+   * whether to accept a paste and cannot await
+   * (`new-conversation-modal.tsx:698`, `chat-message-user-body.tsx:642`,
+   * `chat-composer.tsx:280`). `lib/epic-replica-reads.ts`'s header named this
+   * shape before the relocation started: "answered from a projected set of
+   * held hashes rather than from a live doc read - a projection, not a call".
+   *
+   * Same argument as {@link installedArm} above: a read of runtime state the
+   * store needs SYNCHRONOUSLY belongs in the projection rather than in a call
+   * into the replica. One push of staleness is acceptable here - a hash that
+   * just landed reads as absent until the next publish, and the paste path
+   * treats absent as "not ours to accept", which is the fail-closed direction.
+   */
+  readonly heldAttachmentHashes: readonly string[];
   readonly permissionRole: PermissionRole | null;
   /**
    * VISIBLE connection status: `deriveConnectionStatus(hostTransportStatus,
@@ -329,6 +348,7 @@ export interface EpicControlProjection {
 export const INITIAL_CONTROL_PROJECTION: EpicControlProjection = Object.freeze({
   permissionRole: null,
   installedArm: null,
+  heldAttachmentHashes: [],
   connectionStatus: "connecting",
   hostTransportStatus: "connecting",
   cloudSyncStatus: "connected",

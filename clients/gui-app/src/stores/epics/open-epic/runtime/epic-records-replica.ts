@@ -106,6 +106,16 @@ const STREAM_ORIGIN = "stream";
 export const LOCAL_ORIGIN = "local";
 
 export interface EpicRecordsReplicaSources {
+  /**
+   * Fires when the set of held attachment hashes changes.
+   *
+   * The runtime publishes it into the control projection; this replica cannot,
+   * because its own sink is typed to the RECORDS slice and a held-bytes fact
+   * is not a record. Same split `installedArm` documents in the other
+   * direction.
+   */
+  readonly onHeldAttachmentsChanged: () => void;
+
   readonly environment: RuntimeEnvironment;
   readonly session: EpicSessionFacts;
   readonly sink: ProjectionSink<EpicRecordsProjection>;
@@ -263,6 +273,8 @@ export interface EpicRecordsReplica extends Replica<
   readArtifactRoomId(artifactId: string): string | null;
   readArtifactTitle(artifactId: string): string | null;
   hasAttachmentBytes(hash: string): boolean;
+  /** Every hash this replica currently holds bytes for. */
+  heldAttachmentHashes(): readonly string[];
   readAttachmentBytes(
     hash: string,
     signal: AbortSignal,
@@ -348,6 +360,29 @@ export function createEpicRecordsReplica(
     observedMap: Y.Map<unknown> | null;
   }
   const attachmentReadWaiters = new Set<AttachmentReadWaiter>();
+
+  /**
+   * A STANDING observation of the attachments map, distinct from the
+   * per-waiter ones above.
+   *
+   * Those exist only while a read is in flight; this one exists for the life
+   * of the replica, because the synchronous presence predicate has to be
+   * answerable when nobody is reading. Re-bound on a replica swap for the same
+   * reason the waiters are - an observation left on a destroyed doc reports
+   * nothing and never says so.
+   */
+  let heldAttachmentsObservedMap: Y.Map<unknown> | null = null;
+  const onHeldAttachmentsChanged = (): void => {
+    sources.onHeldAttachmentsChanged();
+  };
+  const bindHeldAttachmentsObserver = (): void => {
+    if (heldAttachmentsObservedMap !== null) {
+      heldAttachmentsObservedMap.unobserve(onHeldAttachmentsChanged);
+    }
+    const map = doc.getMap("attachments");
+    heldAttachmentsObservedMap = map;
+    map.observe(onHeldAttachmentsChanged);
+  };
   const bindAttachmentWaiter = (waiter: AttachmentReadWaiter): void => {
     if (waiter.observedMap !== null) {
       waiter.observedMap.unobserve(waiter.onChange);
@@ -524,6 +559,10 @@ export function createEpicRecordsReplica(
     // Re-point pending attachment reads at the freshly-bound doc so a wait
     // started before a snapshot rebind still observes the live map.
     for (const waiter of attachmentReadWaiters) bindAttachmentWaiter(waiter);
+    // The standing observation moves with them, and then REPUBLISHES: a swap
+    // can change which hashes are held, and nothing else would say so.
+    bindHeldAttachmentsObserver();
+    onHeldAttachmentsChanged();
   }
 
   function destroyReplica(
@@ -1400,6 +1439,14 @@ export function createEpicRecordsReplica(
 
     hasAttachmentBytes: (hash) =>
       doc.getMap("attachments").get(hash) instanceof Uint8Array,
+
+    heldAttachmentHashes: () => {
+      const held: string[] = [];
+      for (const [hash, value] of doc.getMap("attachments").entries()) {
+        if (value instanceof Uint8Array) held.push(hash);
+      }
+      return held;
+    },
 
     readAttachmentBytes(hash, signal): Promise<Uint8Array | null> {
       if (signal.aborted) return Promise.resolve(null);

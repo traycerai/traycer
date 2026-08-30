@@ -560,6 +560,13 @@ export function createEpicReplicaRuntime(
   });
 
   const records = createEpicRecordsReplica({
+    // Published from HERE because the control slice is the runtime's; the
+    // records replica owns the doc but its sink is typed to the records slice.
+    onHeldAttachmentsChanged: () => {
+      options.delivery.publish({
+        heldAttachmentHashes: records.heldAttachmentHashes(),
+      });
+    },
     environment,
     session: control.facts,
     sink: recordsSink,
