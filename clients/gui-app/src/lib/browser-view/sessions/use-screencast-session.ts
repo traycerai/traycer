@@ -251,6 +251,17 @@ export function useScreencastSession(
    * would tear down and re-register it at that rate.
    */
   const presentedImageRef = useRef<ScreencastImage | null>(null);
+  /**
+   * The stats sample and the last time its `framesDecoded` moved - the
+   * DECODE-side half of the video plane's liveness (see
+   * {@link isVideoPlaneStale}). Refs, not state: the staleness timer below is
+   * keyed on the controller and must not be torn down every 5s cadence tick.
+   */
+  const videoStatsRef = useRef<WebrtcVideoStatsSample | null>(null);
+  const decodeProgressRef = useRef<{
+    readonly framesDecoded: number;
+    readonly at: number;
+  } | null>(null);
 
   const [armedState, setArmedState] = useState<{
     readonly client: IHostStreamClient<HostStreamRpcRegistry>;
@@ -703,6 +714,7 @@ export function useScreencastSession(
     clientRef.current = client;
     presentedImageRef.current = image;
     captureDormantSnapshotRef.current = options.captureDormantSnapshot;
+    videoStatsRef.current = videoStats;
   });
 
   /**
@@ -790,7 +802,26 @@ export function useScreencastSession(
         // the return.
         const visibleSince = visibleSinceRef.current;
         if (visibleSince === null) return;
-        if (Date.now() - Math.max(videoFrameAt, visibleSince) < staleAfterMs) {
+        const stats = videoStatsRef.current;
+        const progress = decodeProgressRef.current;
+        if (
+          stats !== null &&
+          (progress === null || stats.framesDecoded !== progress.framesDecoded)
+        ) {
+          decodeProgressRef.current = {
+            framesDecoded: stats.framesDecoded,
+            at: Date.now(),
+          };
+        }
+        if (
+          !isVideoPlaneStale({
+            videoFrameAt,
+            decodeAdvancedAt: decodeProgressRef.current?.at ?? null,
+            visibleSince,
+            now: Date.now(),
+            staleAfterMs,
+          })
+        ) {
           return;
         }
         // A track that connected, painted, then froze is the one failure no
@@ -928,6 +959,36 @@ export function useScreencastSession(
     overlayHandlers: controller.overlayHandlers,
     imeHandlers: controller.imeHandlers,
   };
+}
+
+/**
+ * Whether a video round that has painted before has genuinely stopped, judged
+ * from the last decode-side evidence rather than from presentation alone.
+ *
+ * `requestVideoFrameCallback` reports COMPOSITING, and compositing is exactly
+ * what is fragile across a hidden->visible edge: a window occluded for minutes
+ * returns with the track still decoding and rVFC yet to resume, and calling
+ * that dead tore down a healthy round. `framesDecoded` (the 5s stats sample)
+ * moves whether or not anything is painted, so it is the honest liveness
+ * signal here; presentation is still counted, since it is the fresher of the
+ * two while the window is visible.
+ *
+ * The visibility gate is unchanged: nothing is judged over a window nobody
+ * could see, so the clock runs from `visibleSince` at the earliest.
+ */
+export function isVideoPlaneStale(input: {
+  readonly videoFrameAt: number;
+  readonly decodeAdvancedAt: number | null;
+  readonly visibleSince: number;
+  readonly now: number;
+  readonly staleAfterMs: number;
+}): boolean {
+  const evidenceAt = Math.max(
+    input.videoFrameAt,
+    input.decodeAdvancedAt ?? 0,
+    input.visibleSince,
+  );
+  return input.now - evidenceAt >= input.staleAfterMs;
 }
 
 /**
