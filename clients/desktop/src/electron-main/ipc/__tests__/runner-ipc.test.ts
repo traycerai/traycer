@@ -688,6 +688,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.diagnosticsTakeHeapSnapshot,
         RunnerHostInvoke.diagnosticsTraceStart,
         RunnerHostInvoke.diagnosticsTraceStop,
+        RunnerHostInvoke.rendererCrashPersist,
         RunnerHostInvoke.systemPreferencesAccentColor,
         RunnerHostInvoke.systemPreferencesAppearance,
         RunnerHostInvoke.systemPreferencesAccessibilityTheme,
