@@ -24,7 +24,7 @@
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   AgentMode,
   ChatRunSettings,
@@ -349,6 +349,7 @@ export function projectTerminalAgent(
     // This IS the doc arm - every entry it reads is by definition still
     // pointing at the Y.Doc.
     docResident: true,
+    origin: "doc",
     harnessId,
     title: readMaybeString(entry, "title"),
     parentId: readMaybeNullableString(entry, "parentId"),
@@ -469,6 +470,11 @@ export function terminalAgentProjectionsEq(
     // imports a frozen entry verbatim), so omitting it here would freeze the
     // stale routing decision behind the change gate.
     a.docResident === b.docResident,
+    // A row can move between planes without any other field changing - an
+    // agent this device only replicated and has since adopted reads
+    // identically apart from its origin - so omitting it here would freeze
+    // every origin-gated affordance on the stale answer.
+    a.origin === b.origin,
     a.harnessId === b.harnessId,
     a.title === b.title,
     a.parentId === b.parentId,
@@ -847,29 +853,41 @@ function narrowTuiHarnessId(value: string): TuiHarnessId | null {
 }
 
 /**
- * One host-served registry row, in the renderer's terminal-agent shape, or
- * `null` for a row this build cannot dispatch (unknown/reserved harness).
+ * One host-served row, in the renderer's terminal-agent shape, or `null` for a
+ * row this build cannot dispatch (unknown/reserved harness).
  *
- * Unlike {@link chatProjectionFromRecord} there is no field the row lacks: a
- * terminal agent's resume metadata IS its record, so the row carries
- * everything the doc entry ever did and the union has no doc-supplied
- * exception like the chats' `settings`.
+ * ## Two populations, and only one of them carries a whole record
+ *
+ * The LOCAL arms (`registry`, `doc`) lack nothing: a terminal agent's resume
+ * metadata IS its record, so the row carries everything the doc entry ever did
+ * and the union has no doc-supplied exception like the chats' `settings`.
+ *
+ * The `cloud` arm is a replica of an agent on another of the user's machines,
+ * and the cloud metadata projection carries no resume metadata at all. Those
+ * fields are filled with the SAME inert values the launch path would have used
+ * anyway - an empty workspace list, the `regular` mode launch hardcodes - and
+ * `origin` is what tells a consumer they are placeholders. Filling them is not
+ * a claim: a replica has no launch path on this machine to mislead, because
+ * without a `harnessSessionId` there is nothing to resume and no fork to seed.
+ * The affordances that WOULD read them gate on `origin` first.
  *
  * `archivedAt` is derived from `archived`, not copied - same trap, same fix as
  * the chat row: the boolean is the rendering-authoritative field, and
  * `updatedAt` stands in when the plane that answered carried no timestamp.
  */
 export function tuiAgentProjectionFromRecord(
-  record: TuiAgentRecordSummaryV11,
+  record: TuiAgentRecordSummaryV12,
 ): TuiAgentProjection | null {
+  if (record.origin === "cloud") return cloudReplicaProjection(record);
   const harnessId = narrowTuiHarnessId(record.harnessId);
   if (harnessId === null) return null;
   return {
     id: record.tuiAgentId,
-    // Passed through, never assumed false: at `@1.1` the record plane carries
-    // BOTH registry rows and the doc-resident remainder, and the host is the
-    // only party that can still tell them apart.
+    // Passed through, never assumed false: from `@1.1` the record plane
+    // carries BOTH registry rows and the doc-resident remainder, and the host
+    // is the only party that can still tell them apart.
     docResident: record.docResident,
+    origin: record.origin,
     harnessId,
     title: record.title,
     parentId: record.parentId,
@@ -894,6 +912,81 @@ export function tuiAgentProjectionFromRecord(
 }
 
 /**
+ * A cross-host replica in the renderer's shape.
+ *
+ * `harnessId` is narrowed exactly as a local row's is, and a replica NAMING a
+ * harness this build cannot dispatch is dropped for the same reason: the
+ * roster row would open a tile that could not attach.
+ *
+ * A replica whose cloud row never recorded a harness at all is a different
+ * case and is LISTED, with `harnessId: null`. The protocol arm makes the field
+ * nullable on purpose - a row written before `runSettingsSummary` carried the
+ * harness has none - and says such a row renders without a harness mark. An
+ * earlier cut dropped it here, and this comment still described that; the
+ * agent then vanished from the roster on every other machine even though the
+ * host stored and served it correctly.
+ *
+ * `docResident: false` is a fact and not a placeholder: a replica is not the
+ * doc map's frozen copy, and it IS addressable through the registry
+ * affordances - on its OWN host, which is where every mutation aimed at it has
+ * to go regardless.
+ *
+ * ## A row whose cloud record never named a harness is LISTED, not dropped
+ *
+ * The protocol arm makes `harnessId` nullable on purpose - a cloud row written
+ * before `runSettingsSummary` carried the harness has none - and says such a
+ * row renders without a harness mark. Returning `null` here instead made the
+ * agent vanish from the roster on every other machine, which is the one
+ * outcome the contract rules out: the host stores and serves it correctly, and
+ * only this projection was losing it.
+ *
+ * So the projection carries `harnessId: null` through, and the consumers that
+ * genuinely need one refuse individually - it cannot be launched, forked or
+ * mentioned, because nothing can dispatch a harness nobody named. What it CAN
+ * do is appear in the tree, which is the whole of what phase 2 promises for an
+ * agent on another machine.
+ *
+ * A harness this build cannot NARROW is still dropped, and that is a different
+ * case: the row named something (a newer vendor), and a tile that could not
+ * dispatch it would be a row promising a session this build cannot open.
+ */
+function cloudReplicaProjection(
+  record: Extract<TuiAgentRecordSummaryV12, { origin: "cloud" }>,
+): TuiAgentProjection | null {
+  const harnessId =
+    record.harnessId === null ? null : narrowTuiHarnessId(record.harnessId);
+  if (harnessId === null && record.harnessId !== null) return null;
+  return {
+    id: record.tuiAgentId,
+    docResident: false,
+    origin: "cloud",
+    harnessId,
+    title: record.title,
+    parentId: record.parentId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    userId: record.ownerUserId,
+    hostId: record.hostId,
+    // Placeholders - see the header. `origin` is the discriminator that keeps
+    // a consumer from reading them as facts about the remote machine.
+    workspaceFolders: EMPTY_ARRAY,
+    workspaceMode: undefined,
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    archivedAt: record.archived ? record.updatedAt : null,
+    profileId: null,
+    // THE ABSENCE THAT MATTERS. Never crosses the cloud metadata projection,
+    // so cloning this agent onto this machine is impossible by construction
+    // rather than merely unimplemented.
+    harnessSessionId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+  };
+}
+
+/**
  * The host-served terminal-agent rows as a slice. A pure mapping, like
  * {@link chatRecordsSlice}: the ownership filter is the store's ingest
  * (`publishTuiAgentRecords`), applied when the signed-in user is known, so a
@@ -901,7 +994,7 @@ export function tuiAgentProjectionFromRecord(
  * selection frozen at arrival time. Undispatchable rows are dropped here.
  */
 export function tuiAgentRecordsSlice(
-  records: readonly TuiAgentRecordSummaryV11[],
+  records: readonly TuiAgentRecordSummaryV12[],
 ): TerminalAgentsSlice {
   const byId: Record<string, TuiAgentProjection> = {};
   const allIds: string[] = [];

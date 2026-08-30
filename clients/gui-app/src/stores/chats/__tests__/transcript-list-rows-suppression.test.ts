@@ -68,17 +68,18 @@ function entry(rowId: string): RowSkeletonEntry {
   };
 }
 
+// No test in this file gives a span an actual record - every case here is
+// about ROW placement (span coverage, live records, skeleton), never about
+// record content or ledger clocks - so the fixture spans reference an empty
+// ledger throughout.
 function span(fromOrdinal: number, rowIds: readonly string[]): HydratedSpan {
   return {
     fromOrdinal,
     rowIds,
-    messages: [],
-    events: [],
+    messageIds: [],
+    eventIds: [],
     rowContext: {},
-    bytes: rowIds.length * 32,
     contextBytes: 0,
-    touchedAt: 1,
-    servedAt: 1,
   };
 }
 
@@ -95,16 +96,20 @@ function windowOf(
     skeleton,
     skeletonComplete: true,
     skeletonStreamCoveredThrough: rowCount,
+    records: { messages: new Map(), events: new Map(), revision: 0 },
     spans,
+    staleSpans: [],
     liveMessages: [],
     liveEvents: [],
     snapshotProvisionalMessageIds: [],
     snapshotProvisionalEventIds: [],
     unavailableRowIds: [],
     unavailableRowOrdinals: [],
-    hydratedBytes: spans.reduce((sum, item) => sum + item.bytes, 0),
+    hydratedBytes: 0,
+    evictionTerminal: "none",
     unsettledByteMessageIds: [],
     invalidated: false,
+    visibleOrdinals: null,
     clock: 1,
   };
 }

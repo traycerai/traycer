@@ -7,7 +7,7 @@ import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projection-helpers";
-import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 
 /**
  * What the cache holds for one `epic.listTuiAgents` answer: the rows, plus
@@ -18,7 +18,7 @@ import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-a
  * answer is applied. `null` when no session existed to read at dispatch.
  */
 interface TuiAgentListAnswer {
-  readonly tuiAgents: readonly TuiAgentRecordSummaryV11[];
+  readonly tuiAgents: readonly TuiAgentRecordSummaryV12[];
   readonly issuedAtSeq: number | null;
   /**
    * WHICH store's counter `issuedAtSeq` was read from - see the chat twin

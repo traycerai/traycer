@@ -51,6 +51,11 @@ import type {
   StreamAuthRevalidator,
 } from "../../auth/bearer-revalidator";
 import {
+  clockCanMakeValidBearersLookExpired,
+  type ServerClockSkewSignal,
+  type ServerClockState,
+} from "../../clock/server-time-offset-tracker";
+import {
   NO_TRANSPORT_EVIDENCE,
   type TransportEvidenceReporter,
 } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -156,6 +161,60 @@ function makeFactory(): {
   return { factory, sockets };
 }
 
+/**
+ * Bound and cadence for {@link pollUntil}. The budget is far longer than any
+ * backoff rung these suites configure, so it only ever expires on a genuine
+ * hang - it is a failure message, not a timing assumption.
+ */
+const POLL_BUDGET_MS = 2_000;
+const POLL_STEP_MS = 5;
+
+/**
+ * Waits for something to HAPPEN, instead of betting it happened inside a fixed
+ * sleep.
+ *
+ * `await wait(30)` followed by `expect(sockets).toHaveLength(1)` — or worse,
+ * `sockets[0].socket.fireOpen()` — is the shape behind this file's known
+ * intermittent failures: the sleep loses the race against a backoff redial and
+ * the test either indexes a socket that does not exist yet or reads a count
+ * that has not caught up. These suites run on REAL timers, so that race is
+ * decided by machine load, and every test added to the file makes it likelier.
+ *
+ * Every POSITIVE claim ("a dial happened", "the park installed its listener")
+ * goes through this. NEGATIVE claims ("nothing dialed", "never closed") keep
+ * their fixed `wait`, because there the elapsed time IS the assertion and
+ * polling would weaken it.
+ */
+async function pollUntil(
+  label: string,
+  predicate: () => boolean,
+): Promise<void> {
+  const deadline = Date.now() + POLL_BUDGET_MS;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_STEP_MS));
+  }
+  throw new Error(`timed out after ${POLL_BUDGET_MS}ms waiting for ${label}`);
+}
+
+/**
+ * The socket for dial number `index`, once it exists.
+ *
+ * Indexed rather than "the most recent", which is the other half of the same
+ * hazard: a loop that grabs `sockets[sockets.length - 1]` before the next dial
+ * has landed silently re-drives the PREVIOUS socket, so the test appears to run
+ * its cycles while actually running one of them twice.
+ */
+async function nthSocket(
+  sockets: RecordedSocket[],
+  index: number,
+): Promise<StubStreamWebSocket> {
+  await pollUntil(`dial #${index}`, () => sockets.length > index);
+  return sockets[index].socket;
+}
+
 function makeClient(options: {
   readonly factory: IStreamWebSocketFactory;
   readonly authToken: string | null;
@@ -172,6 +231,7 @@ function makeClient(options: {
     endpoint: () => mockLocalHostEntry,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
@@ -216,6 +276,7 @@ function makeRotatableClient(
     endpoint: () => mockLocalHostEntry,
     bearer: () => ctx.credentials,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
@@ -250,6 +311,7 @@ function makeClientWithEvidence(options: {
     endpoint: options.endpoint,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: options.evidence,
@@ -620,6 +682,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -716,6 +779,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1560,6 +1624,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1617,6 +1682,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1675,6 +1741,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1806,6 +1873,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1866,6 +1934,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1917,6 +1986,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1954,6 +2024,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2004,6 +2075,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2047,6 +2119,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2104,6 +2177,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2156,6 +2230,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2205,6 +2280,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2282,6 +2358,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2321,6 +2398,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2366,6 +2444,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2476,6 +2555,7 @@ describe("WsStreamClient", () => {
       endpoint: () => entry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2513,6 +2593,7 @@ describe("WsStreamClient", () => {
       endpoint: () => entry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -2713,6 +2794,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       // actually rotates it), which is what lets the no-progress bound trip.
       bearer: () => makeRequestContext("expired").credentials,
       auth,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -3289,6 +3371,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => ctx.credentials,
       auth,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -3605,6 +3688,7 @@ describe("WsStreamClient host credential provisioning", () => {
       endpoint: options.endpoint,
       bearer: () => ctx.credentials,
       auth: null,
+      clock: null,
       hostCredentialMint: options.mint,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -3639,6 +3723,7 @@ describe("WsStreamClient host credential provisioning", () => {
       endpoint: options.endpoint,
       bearer: () => ctx.credentials,
       auth: null,
+      clock: null,
       hostCredentialMint: options.mint,
       onHostCredentialState: options.onState,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -3657,6 +3742,21 @@ describe("WsStreamClient host credential provisioning", () => {
     state: "missing" | "active" | "needs-reauth" | null | "omit",
   ): void {
     socket.fireOpen();
+    ackProvisionHandshake(socket, state);
+  }
+
+  /**
+   * The half of the handshake that READS what `fireOpen` produced.
+   *
+   * Split out so a caller that cannot assume the open frame is already on the
+   * wire can poll between the two halves. `socket.textSent[0]` is undefined
+   * until the client has responded to the open event, and parsing that
+   * undefined is the exact shape of this file's long-standing flake.
+   */
+  function ackProvisionHandshake(
+    socket: StubStreamWebSocket,
+    state: "missing" | "active" | "needs-reauth" | null | "omit",
+  ): void {
     const openRaw = socket.textSent[0];
     const openParsed = JSON.parse(openRaw) as {
       readonly manifest: Record<string, { major: number; minor: number }>;
@@ -3848,13 +3948,28 @@ describe("WsStreamClient host credential provisioning", () => {
     expect(mint).toHaveBeenCalledTimes(1);
 
     for (let i = 0; i < 4; i += 1) {
-      sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
-      await wait(30);
-      const latest = sockets[sockets.length - 1].socket;
-      completeProvisionHandshake(latest, "missing");
+      // Wait for the REDIAL, do not bet on it landing inside 30ms. The old
+      // fixed wait could return while `sockets` still ended at the socket just
+      // closed, replaying the handshake against a dead socket - a silent no-op
+      // that made this loop run fewer cycles than it claims - or reach a fresh
+      // socket that had not sent its open frame yet, which is the
+      // `JSON.parse(undefined)` this test failed on.
+      const closedIndex = sockets.length - 1;
+      sockets[closedIndex].socket.fireClose(1000, "drop", false);
+      const latest = await nthSocket(sockets, closedIndex + 1);
+      latest.fireOpen();
+      await pollUntil(
+        `dial #${closedIndex + 1} to send its open frame`,
+        () => latest.textSent.length > 0,
+      );
+      ackProvisionHandshake(latest, "missing");
       await flush();
     }
 
+    // Deliberately NOT polled. "Minted exactly once" is a claim about the whole
+    // window that just elapsed, so waiting for it to become true would be
+    // waiting for the bug; the four cycles above are what give the window its
+    // length.
     expect(mint).toHaveBeenCalledTimes(1);
     session.close();
   });
@@ -5077,5 +5192,618 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
     expect(recovered).toHaveBeenCalledTimes(1);
 
     session.close();
+  });
+});
+
+/**
+ * Clock-skew park (Clock-skew detection and self-healing recovery, §2).
+ *
+ * The incident these cover: a machine boots with its wall clock 7h ahead, so
+ * every 15-minute bearer reads as long expired against `Date.now()` while authn
+ * (correct clock) keeps answering "valid". Before parking, that combination
+ * walked every session to `goTerminal` with a diagnosis naming the credential,
+ * and fixing the clock recovered nothing because terminal sessions never
+ * re-dial.
+ */
+describe("WsStreamClient clock-skew park", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const UNAUTHORIZED_FATAL = {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "bearer expired",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  } as const;
+
+  function wait(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * A hand-driven `ServerClockSkewSignal`. Nothing here samples anything - the
+   * transport's contract is with the verdict, its DIRECTION, and the recovery
+   * edge, and keeping the double dumb is what makes these tests statements
+   * about the transport rather than about the tracker (which has its own
+   * suite).
+   *
+   * `skewed-ahead` is the incident: a local clock running FAST, so
+   * `server − local` is NEGATIVE. `skewed-behind` is the equal-and-opposite
+   * clock that is just as wrong and just as banner-worthy but CANNOT be why a
+   * bearer was rejected - the direction the park must not fire on. The
+   * predicate is computed exactly as the real tracker computes it rather than
+   * hardcoded per case, so the double cannot drift from the sign convention.
+   */
+  function makeClockSignal(
+    initial: "ok" | "skewed-ahead" | "skewed-behind" | "unknown",
+  ): {
+    readonly signal: ServerClockSkewSignal;
+    readonly recover: () => void;
+    readonly recoverySubscribers: () => number;
+  } {
+    const SEVEN_HOURS_MS = 7 * 3_600_000;
+    let state: ServerClockState;
+    if (initial === "skewed-ahead") {
+      state = { verdict: "skewed", offsetMs: -SEVEN_HOURS_MS };
+    } else if (initial === "skewed-behind") {
+      state = { verdict: "skewed", offsetMs: SEVEN_HOURS_MS };
+    } else {
+      state = { verdict: initial, offsetMs: initial === "ok" ? 0 : null };
+    }
+    const recoveryListeners = new Set<() => void>();
+    return {
+      recoverySubscribers: () => recoveryListeners.size,
+      recover: () => {
+        state = { verdict: "ok", offsetMs: 0 };
+        for (const listener of [...recoveryListeners]) {
+          listener();
+        }
+      },
+      signal: {
+        currentState: () => state,
+        canMakeValidBearersLookExpired: () =>
+          clockCanMakeValidBearersLookExpired(state),
+        subscribe: () => () => undefined,
+        subscribeToRecovery: (listener) => {
+          recoveryListeners.add(listener);
+          return () => {
+            recoveryListeners.delete(listener);
+          };
+        },
+      },
+    };
+  }
+
+  /** A decodable JWT whose `exp` is in the past by local-clock arithmetic. */
+  function expiredJwt(): string {
+    const encode = (value: object): string =>
+      btoa(JSON.stringify(value))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+    const expSeconds = Math.floor(Date.now() / 1000) - 3_600;
+    return `${encode({ alg: "none" })}.${encode({ exp: expSeconds })}.sig`;
+  }
+
+  function makeClockClient(options: {
+    readonly factory: IStreamWebSocketFactory;
+    readonly auth: StreamAuthRevalidator;
+    readonly clock: ServerClockSkewSignal | null;
+    // A PROVIDER, not a fixed string, because the incident's last act needs the
+    // bearer to stop reading as expired at the same moment the verdict clears -
+    // which is what physically happens when the clock is corrected.
+    readonly bearer: () => string;
+  }): WsStreamClient<typeof hostStreamRpcRegistry> {
+    const contexts = new Map<string, RequestContext>();
+    const contextFor = (token: string): RequestContext => {
+      const existing = contexts.get(token);
+      if (existing !== undefined) {
+        return existing;
+      }
+      const created = makeRequestContext(token);
+      contexts.set(token, created);
+      return created;
+    };
+    return new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      // Never rotated by these tests' revalidators, which is what makes every
+      // cycle a NO-PROGRESS one - the exact shape of the incident.
+      bearer: () => contextFor(options.bearer()).credentials,
+      auth: options.auth,
+      clock: options.clock,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: options.factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 50,
+    });
+  }
+
+  function makeRevalidator(outcome: RevalidateOutcome): {
+    readonly auth: StreamAuthRevalidator;
+    readonly calls: { count: number };
+  } {
+    const calls = { count: 0 };
+    return {
+      calls,
+      auth: {
+        revalidateForReconnect: async (): Promise<RevalidateOutcome> => {
+          calls.count += 1;
+          return outcome;
+        },
+      },
+    };
+  }
+
+  it("parks at the pre-dial expiry gate instead of revalidating a token the clock only makes LOOK expired", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed-ahead");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => expiredJwt(),
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    await pollUntil(
+      "the pre-dial gate to park",
+      () => clock.recoverySubscribers() === 1,
+    );
+    // Then settle: a park that dialed or revalidated anyway shows up here.
+    // No socket, no authn round trip, no terminal close - and a live
+    // subscription is the only thing holding the session.
+    await wait(60);
+    expect(sockets).toHaveLength(0);
+    expect(revalidator.calls.count).toBe(0);
+    expect(statuses).not.toContain("closed");
+
+    session.close();
+  });
+
+  it("re-dials a session parked on the UNAUTHORIZED path once the clock is corrected", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed-ahead");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      // No `exp` claim at all, so the pre-dial gate never fires and the park
+      // under test is unambiguously the revalidate-outcome one.
+      bearer: () => "plain-bearer",
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    const first = await nthSocket(sockets, 0);
+
+    first.fireOpen();
+    first.fireText(UNAUTHORIZED_FATAL);
+    await pollUntil(
+      "the session to park",
+      () => clock.recoverySubscribers() === 1,
+    );
+    // The dial count AT THE PARK, not a literal: what this test claims is that
+    // correcting the clock adds exactly one more dial, whatever it took to get
+    // here.
+    const dialsAtPark = sockets.length;
+
+    clock.recover();
+    await pollUntil(
+      "the redial on the clock-corrected edge",
+      () => sockets.length > dialsAtPark,
+    );
+    expect(sockets.length).toBe(dialsAtPark + 1);
+    // The park released its handle on the way back out.
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("keeps today's behaviour at the pre-dial gate when the tracker says the clock is fine", async () => {
+    const { factory } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("ok");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => expiredJwt(),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+
+    await pollUntil(
+      "the pre-dial gate to revalidate",
+      () => revalidator.calls.count > 0,
+    );
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("parks rather than counting toward the no-progress terminal bound, however long it sits", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed-ahead");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => "plain-bearer",
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    first.fireText(UNAUTHORIZED_FATAL);
+    await pollUntil(
+      "the session to park",
+      () => clock.recoverySubscribers() === 1,
+    );
+    const dialsAtPark = sockets.length;
+
+    // Far longer than the three backoff rungs the bound would have burned. A
+    // session that counted this cycle would be closed by now; a parked one has
+    // not dialed once more.
+    await wait(250);
+    expect(sockets.length).toBe(dialsAtPark);
+    expect(statuses).not.toContain("closed");
+
+    session.close();
+  });
+
+  it("still reaches the terminal bound for a HOST CONFIG MISMATCH, which looks identical on the wire", async () => {
+    // The whole reason parking keys on the tracker's verdict and not on the
+    // rejection shape: "authn validates it, the host rejects it" is also what a
+    // misconfigured host produces, and retrying that forever helps nobody.
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("ok");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => "plain-bearer",
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const closeReasons: Array<StreamCloseReason | null> = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status, reason) => {
+      statuses.push(status);
+      closeReasons.push(reason);
+    });
+
+    // Each cycle drives ITS OWN dial. Reaching for the most recent socket
+    // behind a fixed wait re-drives the previous one when the redial has not
+    // landed yet, which silently turns three cycles into fewer.
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      const socket = await nthSocket(sockets, cycle);
+      socket.fireOpen();
+      socket.fireText(UNAUTHORIZED_FATAL);
+    }
+    await pollUntil("the no-progress bound to close the session", () =>
+      statuses.includes("closed"),
+    );
+
+    expect(statuses).toContain("closed");
+    const fatalClose = closeReasons.find((r) => r?.kind === "fatalError");
+    expect(fatalClose?.kind).toBe("fatalError");
+
+    session.close();
+  });
+
+  it("does NOT park on a clock running BEHIND, and still walks the no-progress bound to terminal", async () => {
+    // The mirror of the incident, and the failure this feature would otherwise
+    // have reintroduced in the opposite direction. A SLOW clock makes a bearer
+    // look more valid, never expired, and the host validates against its own
+    // clock - so it cannot be why this bearer was rejected. Whatever is (a host
+    // config mismatch, a revocation) is exactly the case the terminal bound
+    // exists to diagnose, and parking here would strand the session until the
+    // user "fixed" a clock that was never the cause.
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed-behind");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => "plain-bearer",
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const closeReasons: Array<StreamCloseReason | null> = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status, reason) => {
+      statuses.push(status);
+      closeReasons.push(reason);
+    });
+
+    // Each cycle drives ITS OWN dial. Reaching for the most recent socket
+    // behind a fixed wait re-drives the previous one when the redial has not
+    // landed yet, which silently turns three cycles into fewer.
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      const socket = await nthSocket(sockets, cycle);
+      socket.fireOpen();
+      socket.fireText(UNAUTHORIZED_FATAL);
+    }
+    await pollUntil("the no-progress bound to close the session", () =>
+      statuses.includes("closed"),
+    );
+
+    expect(statuses).toContain("closed");
+    expect(closeReasons.find((r) => r?.kind === "fatalError")?.kind).toBe(
+      "fatalError",
+    );
+    // Never parked: nothing is holding a recovery subscription, so no clock
+    // correction was ever going to be what brought this session back.
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("does NOT park at the pre-dial gate on a clock running BEHIND, and does not blame the clock for it", async () => {
+    // A slow clock makes `exp <= Date.now()` LESS likely to fire, so if it
+    // fired anyway the bearer really is expired. Revalidate exactly as before,
+    // and do not hand the user a confident misdiagnosis on the way.
+    const { factory } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed-behind");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => expiredJwt(),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+
+    await pollUntil(
+      "the pre-dial gate to revalidate",
+      () => revalidator.calls.count > 0,
+    );
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("leaves the transient network-error outcome untouched under skew", async () => {
+    // A wake-time blip is not evidence about the clock, and the streak-reset +
+    // backoff behaviour it drives must be exactly what it was.
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("network-error");
+    const clock = makeClockSignal("skewed-ahead");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => "plain-bearer",
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    first.fireText(UNAUTHORIZED_FATAL);
+
+    // Re-dialed on the ordinary backoff; never parked, never closed.
+    await pollUntil("the ordinary backoff redial", () => sockets.length > 1);
+    expect(statuses).not.toContain("closed");
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    session.close();
+  });
+
+  it("releases the recovery subscription on close, so a later clock fix cannot revive a dead session", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed-ahead");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => expiredJwt(),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+
+    await pollUntil(
+      "the pre-dial gate to park",
+      () => clock.recoverySubscribers() === 1,
+    );
+    session.close();
+    expect(clock.recoverySubscribers()).toBe(0);
+
+    clock.recover();
+    await wait(60);
+    expect(sockets).toHaveLength(0);
+  });
+
+  it("degrades to the pre-existing behaviour with no tracker wired", async () => {
+    const { factory } = makeFactory();
+    const revalidator = makeRevalidator("rotated");
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: null,
+      bearer: () => expiredJwt(),
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+
+    await pollUntil(
+      "the pre-dial gate to revalidate",
+      () => revalidator.calls.count > 0,
+    );
+
+    session.close();
+  });
+
+  it("simulates the incident end to end: skewed clock + valid credential never goes terminal, and reconnects once the clock is fixed", async () => {
+    const { factory, sockets } = makeFactory();
+    // authn is reachable and keeps saying the credential is current - exactly
+    // what made the old loop make no progress.
+    const revalidator = makeRevalidator("rotated");
+    const clock = makeClockSignal("skewed-ahead");
+    // The bearer and the verdict move TOGETHER because physically they are one
+    // fact: the token only ever "expired" because it was being compared against
+    // a clock that was 7h ahead, so correcting the clock is what makes the same
+    // token read as live again. `expiredJwt()` stands in for that comparison,
+    // since the suite's own `Date.now()` cannot be skewed.
+    const bearer = { current: expiredJwt() };
+    const client = makeClockClient({
+      factory,
+      auth: revalidator.auth,
+      clock: clock.signal,
+      bearer: () => bearer.current,
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((status) => statuses.push(status));
+
+    // Phase 1 - wrong clock. Parked at the pre-dial gate: nothing dialed,
+    // nothing closed, and authn is not being hammered. On the old build this
+    // window was three revalidate/redial cycles ending in `goTerminal`.
+    await pollUntil(
+      "the pre-dial gate to park",
+      () => clock.recoverySubscribers() === 1,
+    );
+    await wait(200);
+    expect(sockets).toHaveLength(0);
+    expect(statuses).not.toContain("closed");
+    expect(revalidator.calls.count).toBe(0);
+
+    // Phase 2 - the user fixes the clock. The recovery edge alone brings the
+    // session back: no reload, no manual intervention, and the host-side rooms
+    // unlatch off the reconnect that follows.
+    bearer.current = "live-bearer";
+    clock.recover();
+    await pollUntil("the resumed dial", () => sockets.length >= 1);
+    expect(statuses).not.toContain("closed");
+
+    session.close();
+  });
+});
+
+/**
+ * Re-entrancy at the park's own status emit. Split into its own describe so
+ * the helpers above stay about the park's ordinary behaviour.
+ */
+describe("WsStreamClient clock-skew park re-entrancy", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const UNAUTHORIZED_FATAL = {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "bearer expired",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  } as const;
+
+  function wait(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  it("leaves NO subscription behind when a consumer closes the session from the park's status callback", async () => {
+    // `transitionTo` runs the consumer's handler synchronously, and an owner
+    // unmounting on a status change is ordinary React. If the park installs
+    // its recovery listener AFTER that emit, the re-entrant `close()` runs
+    // `clearClockPark` against a handle that does not exist yet - and the
+    // listener installed a moment later belongs to a disposed session that
+    // will never release it. The app-wide tracker would then hold that dead
+    // session for the life of the page.
+    const { factory, sockets } = makeFactory();
+    const ctx = makeRequestContext("plain-bearer");
+    const recoveryListeners = new Set<() => void>();
+    const clock: ServerClockSkewSignal = {
+      currentState: (): ServerClockState => ({
+        verdict: "skewed",
+        offsetMs: -7 * 3_600_000,
+      }),
+      canMakeValidBearersLookExpired: () => true,
+      subscribe: () => () => undefined,
+      subscribeToRecovery: (listener) => {
+        recoveryListeners.add(listener);
+        return () => {
+          recoveryListeners.delete(listener);
+        };
+      },
+    };
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => ctx.credentials,
+      auth: {
+        revalidateForReconnect: async (): Promise<RevalidateOutcome> =>
+          "rotated",
+      },
+      clock,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 50,
+    });
+
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    // Two "reconnecting" emits follow the fatal: `resetForReconnect`'s, then
+    // the park's own. Closing on the FIRST would dispose before the park ever
+    // ran and prove nothing, so the close is aimed at the second.
+    let reconnectingAfterFatal = 0;
+    let armed = false;
+    session.onStatusChange((status) => {
+      if (!armed || status !== "reconnecting") {
+        return;
+      }
+      reconnectingAfterFatal += 1;
+      if (reconnectingAfterFatal === 2) {
+        session.close();
+      }
+    });
+
+    const first = await nthSocket(sockets, 0);
+    first.fireOpen();
+    armed = true;
+    first.fireText(UNAUTHORIZED_FATAL);
+    // The park really did reach its emit (otherwise this asserts nothing).
+    await pollUntil(
+      "the park's own status emit",
+      () => reconnectingAfterFatal === 2,
+    );
+    expect(recoveryListeners.size).toBe(0);
+
+    // And the dead session cannot be revived by a later clock fix.
+    for (const listener of [...recoveryListeners]) {
+      listener();
+    }
+    await wait(40);
+    expect(sockets).toHaveLength(1);
   });
 });
