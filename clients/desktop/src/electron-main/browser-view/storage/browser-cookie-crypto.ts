@@ -58,6 +58,48 @@ let probe: BrowserPersistenceProbe | null = null;
 let denialCount = 0;
 
 /**
+ * Every state transition this module can make (spec decision #20, ticket 11).
+ * The GUI reports the same funnel to PostHog; this is the local channel, so a
+ * machine's own logs tell the whole story - card to keystore - with no
+ * analytics and no network.
+ */
+type BrowserPersistenceTransition =
+  /** `on-ready` settled: what the decision file said, and what it cost. */
+  | "init"
+  /** A user gesture is about to interrogate the keystore. */
+  | "enable-attempt"
+  | "enable-result"
+  | "decline"
+  /** A second denial in one process; the next launch re-probes. */
+  | "relaunch-pending"
+  /** A provably silent platform enabled itself at tile-open time. */
+  | "auto-enable";
+
+/**
+ * One structured line per transition, in the SAME vocabulary the state itself
+ * uses (decision kinds, crypto reasons, storage backends) so a log and a
+ * PostHog breakdown read alike. Deliberately carries no cookie, domain, URL or
+ * site count - a persistence log is about the machine, never about browsing.
+ */
+function logBrowserPersistenceTransition(
+  transition: BrowserPersistenceTransition,
+): void {
+  const state = getBrowserCookieCryptoState();
+  log.info("[browser-view] cookie crypto mode resolved", {
+    transition,
+    platform: persistencePlatform(),
+    decision: record.decision.kind,
+    mode: state.mode,
+    persistence: state.persistence,
+    reason: state.reason,
+    storageBackend: state.storageBackend,
+    encryptionAvailable: state.encryptionAvailable,
+    probed: probe !== null,
+    denialCount,
+  });
+}
+
+/**
  * `on-ready`. Reads the decision file only. Probes exactly when the file says
  * the user already consented (`enabled`) or asked us to retry after a restart
  * (`relaunch-pending`) - in both cases the prompt, if any, is expected.
@@ -89,16 +131,8 @@ export async function initBrowserPersistence(
     }
   }
 
-  const state = getBrowserCookieCryptoState();
-  log.info("[browser-view] browser persistence initialised", {
-    decision: record.decision.kind,
-    mode: state.mode,
-    persistence: state.persistence,
-    reason: state.reason,
-    storageBackend: state.storageBackend,
-    probed: probe !== null,
-  });
-  return state;
+  logBrowserPersistenceTransition("init");
+  return getBrowserCookieCryptoState();
 }
 
 /**
@@ -106,6 +140,7 @@ export async function initBrowserPersistence(
  * is durable, so the next launch probes eagerly instead of asking again.
  */
 export async function enableBrowserPersistence(): Promise<BrowserCookieCryptoState> {
+  logBrowserPersistenceTransition("enable-attempt");
   const result = runProbe();
   if (isProbePersistent(result)) {
     denialCount = 0;
@@ -114,12 +149,16 @@ export async function enableBrowserPersistence(): Promise<BrowserCookieCryptoSta
       storageBackend: result.storageBackend,
     };
     await persistRecord(record);
+    logBrowserPersistenceTransition("enable-result");
     return getBrowserCookieCryptoState();
   }
 
   // A `basic_text` Linux backend is a permanent verdict, not a cached denial:
   // relaunching changes nothing, so it never escalates to relaunch-pending.
-  if (result.encryptionAvailable) return getBrowserCookieCryptoState();
+  if (result.encryptionAvailable) {
+    logBrowserPersistenceTransition("enable-result");
+    return getBrowserCookieCryptoState();
+  }
 
   denialCount += 1;
   if (denialCount >= 2 && record.decision.kind !== "relaunch-pending") {
@@ -128,7 +167,10 @@ export async function enableBrowserPersistence(): Promise<BrowserCookieCryptoSta
       storageBackend: record.storageBackend,
     };
     await persistRecord(record);
+    logBrowserPersistenceTransition("relaunch-pending");
+    return getBrowserCookieCryptoState();
   }
+  logBrowserPersistenceTransition("enable-result");
   return getBrowserCookieCryptoState();
 }
 
@@ -138,6 +180,7 @@ export async function declineBrowserPersistence(): Promise<BrowserCookieCryptoSt
     storageBackend: record.storageBackend,
   };
   await persistRecord(record);
+  logBrowserPersistenceTransition("decline");
   return getBrowserCookieCryptoState();
 }
 
@@ -193,6 +236,7 @@ export function ensureBrowserPersistenceForTileOpen(): BrowserCookieCryptoState 
     };
     void persistRecord(record);
   }
+  logBrowserPersistenceTransition("auto-enable");
   return getBrowserCookieCryptoState();
 }
 

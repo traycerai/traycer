@@ -305,5 +305,5 @@ function cookieKeyOf(cookie: Cookie): BrowserCookieKey | null {
 }
 
 function cookieKeyId(key: BrowserCookieKey): string {
-  return `${key.domain} ${key.name} ${key.path}`;
+  return `${key.domain}\u0000${key.name}\u0000${key.path}`;
 }

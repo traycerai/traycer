@@ -4,6 +4,11 @@ import type {
   BrowserViewBridge,
 } from "@traycer-clients/shared/platform/browser-view";
 import { refreshBrowserSessionsPersistenceState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import {
+  browserPersistenceEnableResult,
+  trackBrowserPersistence,
+  type BrowserPersistenceSurface,
+} from "@/lib/browser-view/browser-persistence-analytics";
 
 /**
  * The renderer's single reader of desktop browser-login persistence (keychain
@@ -23,10 +28,18 @@ export interface BrowserPersistenceSnapshot {
 }
 
 export interface BrowserPersistenceController extends BrowserPersistenceSnapshot {
-  /** Runs the keystore probe. THIS is what raises the OS dialog. */
-  readonly enable: () => void;
+  /**
+   * Runs the keystore probe. THIS is what raises the OS dialog.
+   *
+   * `source` is required, and is the surface the gesture came from: the card
+   * passes `"card"`, the tile shield `"shield"`, and Settings ▸ Browser
+   * `"settings"` (ticket 10). The outcome event is emitted HERE rather
+   * than at each call site so all three surfaces report the same funnel with
+   * the same duration; a new surface only has to name itself.
+   */
+  readonly enable: (source: BrowserPersistenceSurface) => void;
   readonly decline: () => void;
-  readonly relaunch: () => void;
+  readonly relaunch: (source: BrowserPersistenceSurface) => void;
 }
 
 const EMPTY_SNAPSHOT: BrowserPersistenceSnapshot = {
@@ -70,19 +83,42 @@ class BrowserPersistenceStore {
     return this.snapshot;
   }
 
-  enable(): void {
-    this.run(() => this.bridge.enablePersistence());
+  enable(source: BrowserPersistenceSurface): void {
+    const startedAt = Date.now();
+    this.run(
+      () => this.bridge.enablePersistence(),
+      (state) => {
+        trackBrowserPersistence({
+          name: "browser_persistence_enable_result",
+          result: browserPersistenceEnableResult(state),
+          durationMs: Date.now() - startedAt,
+          source,
+        });
+      },
+    );
   }
 
   decline(): void {
-    this.run(() => this.bridge.declinePersistence());
+    this.run(
+      () => this.bridge.declinePersistence(),
+      () => undefined,
+    );
   }
 
-  relaunch(): void {
-    // The desktop exits inside this call, so there is no state to apply - only
-    // a pending flag so the button cannot be pressed twice on the way out.
-    this.run(() =>
-      this.bridge.relaunchForPersistence().then(() => this.snapshot.state),
+  relaunch(source: BrowserPersistenceSurface): void {
+    // The desktop exits inside this call, so the click IS the event: there is
+    // no outcome to settle here, and a result emitted after the exit would
+    // never leave the renderer.
+    trackBrowserPersistence({
+      name: "browser_persistence_relaunch_clicked",
+      source,
+    });
+    // Only a pending flag is applied, so the button cannot be pressed twice on
+    // the way out.
+    this.run(
+      () =>
+        this.bridge.relaunchForPersistence().then(() => this.snapshot.state),
+      () => undefined,
     );
   }
 
@@ -102,12 +138,22 @@ class BrowserPersistenceStore {
       });
   }
 
-  private run(action: () => Promise<BrowserPersistenceState | null>): void {
+  /**
+   * `onSettled` runs exactly once per call - with the state the action
+   * resolved with, or `null` when it resolved with nothing or rejected. It is
+   * what keeps a funnel event tied to one gesture instead of to the store's
+   * shared state, which any other window's push can also move.
+   */
+  private run(
+    action: () => Promise<BrowserPersistenceState | null>,
+    onSettled: (state: BrowserPersistenceState | null) => void,
+  ): void {
     this.inFlight += 1;
     this.publish({ state: this.snapshot.state, pending: true });
     void action()
       .then((state) => {
         this.inFlight -= 1;
+        onSettled(state);
         if (state === null) {
           this.publish({ state: this.snapshot.state, pending: this.busy() });
           return;
@@ -116,6 +162,7 @@ class BrowserPersistenceStore {
       })
       .catch(() => {
         this.inFlight -= 1;
+        onSettled(null);
         this.publish({ state: this.snapshot.state, pending: this.busy() });
       });
   }
@@ -173,14 +220,14 @@ export function useBrowserPersistenceState(
     return {
       state: snapshot.state,
       pending: snapshot.pending,
-      enable: () => {
-        store.enable();
+      enable: (source: BrowserPersistenceSurface) => {
+        store.enable(source);
       },
       decline: () => {
         store.decline();
       },
-      relaunch: () => {
-        store.relaunch();
+      relaunch: (source: BrowserPersistenceSurface) => {
+        store.relaunch(source);
       },
     };
   }, [snapshot, store]);

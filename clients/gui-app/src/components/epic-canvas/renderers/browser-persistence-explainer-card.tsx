@@ -1,8 +1,12 @@
-import { memo, type ReactElement } from "react";
+import { memo, useEffect, type ReactElement } from "react";
 import { ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BrowserPersistenceMockDialog } from "@/components/epic-canvas/renderers/browser-persistence-mock-dialog";
 import { keystoreName } from "@/lib/browser-view/browser-cookie-degraded-message";
+import {
+  trackBrowserPersistence,
+  trackBrowserPersistenceCardShown,
+} from "@/lib/browser-view/browser-persistence-analytics";
 import type { BrowserPersistenceController } from "@/lib/browser-view/use-browser-persistence-state";
 import type { BrowserPersistenceState } from "@traycer-clients/shared/platform/browser-view";
 
@@ -43,9 +47,15 @@ export const BrowserPersistenceExplainerCard = memo(
     props: BrowserPersistenceExplainerCardProps,
   ): ReactElement | null {
     const state = props.persistence.state;
-    if (!shouldShowBrowserPersistenceExplainer(state) || state === null) {
-      return null;
-    }
+    const visible = shouldShowBrowserPersistenceExplainer(state);
+    // The impression is latched for the session inside the tracker, so neither
+    // a re-render nor the card moving to a surviving tile (its claim is
+    // released on unmount) counts as a second showing.
+    useEffect(() => {
+      if (!visible) return;
+      trackBrowserPersistenceCardShown();
+    }, [visible]);
+    if (!visible || state === null) return null;
     return (
       <section
         aria-label="Keep your website logins between sessions?"
@@ -65,7 +75,16 @@ export const BrowserPersistenceExplainerCard = memo(
               type="button"
               size="sm"
               disabled={props.persistence.pending}
-              onClick={props.persistence.enable}
+              onClick={() => {
+                trackBrowserPersistence({
+                  name: "browser_persistence_card_action",
+                  action: "enable",
+                });
+                // The outcome (`browser_persistence_enable_result`) is emitted
+                // by the shared hook, so the card, the shield and Settings all
+                // report the same funnel.
+                props.persistence.enable("card");
+              }}
             >
               Enable saved logins
             </Button>
@@ -74,7 +93,13 @@ export const BrowserPersistenceExplainerCard = memo(
               size="sm"
               variant="ghost"
               disabled={props.persistence.pending}
-              onClick={props.persistence.decline}
+              onClick={() => {
+                trackBrowserPersistence({
+                  name: "browser_persistence_card_action",
+                  action: "not_now",
+                });
+                props.persistence.decline();
+              }}
             >
               Not now
             </Button>

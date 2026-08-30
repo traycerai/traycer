@@ -52,6 +52,7 @@ import {
   useBrowserPersistenceState,
   type BrowserPersistenceController,
 } from "@/lib/browser-view/use-browser-persistence-state";
+import { trackBrowserPersistenceStateAtFirstTile } from "@/lib/browser-view/browser-persistence-analytics";
 import { BrowserPersistenceExplainerCard } from "@/components/epic-canvas/renderers/browser-persistence-explainer-card";
 import { useBrowserPersistenceExplainerClaim } from "@/components/epic-canvas/renderers/use-browser-persistence-explainer-claim";
 import { cn } from "@/lib/utils";
@@ -303,6 +304,14 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   });
   const snapshot = useBrowserViewSnapshot(tileKey);
   const persistence = useBrowserPersistenceState(browserView);
+  // The steady-state census (spec decision #20): what persistence looks like
+  // the first time a tile opens in this session. Latched inside the tracker,
+  // so N tiles - and every re-render of them - still mean one reading.
+  const persistenceState = persistence.state;
+  useEffect(() => {
+    if (persistenceState === null) return;
+    trackBrowserPersistenceStateAtFirstTile(persistenceState);
+  }, [persistenceState]);
   const annotation = useBrowserAnnotationSession({
     browserView: showStartPage ? null : browserView,
     tileKey,
