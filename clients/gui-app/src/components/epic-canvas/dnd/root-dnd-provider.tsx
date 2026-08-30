@@ -1425,10 +1425,16 @@ export function RootDndProvider(props: RootDndProviderProps) {
         // what has to survive the failure, so the error is logged and
         // swallowed and the commit's own handler owns anything user-facing.
         try {
-          // `void`: the commit is a round trip now. The `try` still catches a
-          // SYNCHRONOUS throw from the call itself, and the commit's own
-          // handler owns anything user-facing after that - which is exactly
-          // what the comment above already says about this site.
+          // The rejection is caught by `.catch`, NOT by the `catch` below.
+          // The commit is async now, so it has no synchronous throw and the
+          // enclosing `catch` can never see its failure - a `void`ed call
+          // would lose the log entirely and surface as an unhandled rejection.
+          //
+          // `.catch` rather than `await`, and that is the whole point at THIS
+          // site: awaiting would hold the `finally` until the commit settled,
+          // and the `finally` is the gesture cleanup that "has to survive the
+          // failure" per the comment above. Cleanup stays synchronous; only
+          // the logging waits.
           void commitSidebarReparentDrop({
             epicId: reparent.epicId,
             sourceNodeId: reparent.sourceNodeId,
@@ -1436,6 +1442,16 @@ export function RootDndProvider(props: RootDndProviderProps) {
             panelId: reparent.panelId,
             viewTabId: reparent.viewTabId,
             queryClient,
+          }).catch((error: unknown) => {
+            appLogger.error(
+              "[epic-dnd] sidebar reparent commit rejected; the gesture already ended",
+              {
+                epicId: reparent.epicId,
+                sourceNodeId: reparent.sourceNodeId,
+                newParentId: reparent.newParentId,
+              },
+              error,
+            );
           });
         } catch (error: unknown) {
           appLogger.error(

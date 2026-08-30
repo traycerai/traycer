@@ -22,11 +22,12 @@ import {
   readWriteCommandIntent,
 } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import { getEpicRuntimeWorkerFactory } from "@/lib/registries/epic-session-registry";
-import type { RuntimeProjectionHandlers } from "@traycer-clients/shared/replica-runtime/worker/runtime-projection-subscription";
+import { createLateBoundProjectionTarget } from "@/stores/epics/open-epic/runtime/worker/late-bound-projection-target";
 import type { EpicRuntimeProjection } from "@/stores/epics/open-epic/runtime/epic-runtime-projection";
 import { appLogger } from "@/lib/logger";
 import {
   createOpenEpicStore,
+  isProjectionPatch,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -586,15 +587,35 @@ export function EpicSessionProvider(
        * It is still checked rather than asserted, because "cannot happen" is
        * not a thing this file gets to claim about another thread.
        */
-      let projectionTarget: RuntimeProjectionHandlers<
+      // Buffers publications made before the store exists, and answers
+      // `accept` from a pure parser so a `null` there means "foreign payload"
+      // and never "no target yet". The worker composes and starts INSIDE the
+      // spawn below, so that window carries real traffic.
+      const projection = createLateBoundProjectionTarget<
         Partial<EpicRuntimeProjection>
-      > | null = null;
+      >(
+        (value) => (isProjectionPatch(value) ? value : null),
+        (reason, revision) => {
+          appLogger.warn(
+            "[open-epic] dropped a projection publication before attach",
+            { epicId, reason, revision },
+          );
+        },
+      );
       /**
        * The body plane's return leg, filled on the same line as the one above
        * and `null` for the same window. The store owns the live body docs, so
        * this is mutually dependent with the spawn in exactly the way the
        * projection slot is.
        */
+      // NOT buffered, and derived rather than assumed. The body return leg
+      // publishes only from observers attached inside the `body/materialize`
+      // handler (`epic-runtime-core-ports.ts` - both call sites, the cold arm
+      // and the forward-only one). A materialize is a CALL issued by the lease
+      // bridge, and the lease bridge is built by the store - so no body
+      // publication can precede the store, and this slot has no gap to lose
+      // traffic in. Contrast the projection slot above, whose producer runs
+      // during composition.
       let bodyTarget: EpicRuntimeBodyReturnTarget | null = null;
 
       const runtimeWorker = spawnEpicRuntimeWorker<
@@ -667,15 +688,7 @@ export function EpicSessionProvider(
         },
         streams: wsStreamClient,
         accounting,
-        projection: {
-          accept: (value) => projectionTarget?.accept(value) ?? null,
-          apply: (value, revision) => {
-            projectionTarget?.apply(value, revision);
-          },
-          reject: (reason, revision) => {
-            projectionTarget?.reject(reason, revision);
-          },
-        },
+        projection: projection.handlers,
         body: {
           applyDocUpdate: (docKey, update) => {
             bodyTarget?.applyDocUpdate(docKey, update);
@@ -711,7 +724,7 @@ export function EpicSessionProvider(
           },
         },
       });
-      projectionTarget = created.projection;
+      projection.attach(created.projection);
       bodyTarget = created.body;
 
       /**

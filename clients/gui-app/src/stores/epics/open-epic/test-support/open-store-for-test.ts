@@ -33,10 +33,15 @@ import { createFakeBridgePair } from "@traycer-clients/shared/replica-runtime/wo
 import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
 import { createRecordingStreamClient } from "@traycer-clients/shared/replica-runtime/worker/test-support/recording-stream-client";
 
-import { createOpenEpicStore, type OpenEpicStoreHandle } from "../store";
+import {
+  createOpenEpicStore,
+  isProjectionPatch,
+  type OpenEpicStoreHandle,
+} from "../store";
 import { createProcessBackedAccountingPort } from "../runtime/process-backed-accounting-port";
 import { createRendererRuntimeEnvironment } from "../runtime/runtime-environment";
 import { spawnEpicRuntimeWorker } from "../runtime/worker/spawn-epic-runtime-worker";
+import { createLateBoundProjectionTarget } from "../runtime/worker/late-bound-projection-target";
 import { startEpicRuntimeWorkerHost } from "../runtime/worker/epic-runtime-worker-host";
 import { installEpicRuntimeCore } from "../runtime/worker/install-epic-runtime-core";
 import type { EpicRuntimeStreamFactories } from "../runtime/worker/epic-runtime-composition";
@@ -117,11 +122,31 @@ export function openStoreForTest(
     environment: createRendererRuntimeEnvironment(),
   });
 
-  let projectionTarget: OpenEpicStoreHandle["projection"] | null = null;
+  // The SAME helper the provider uses, not a copy of its wiring: the two held
+  // identical inline slots before, which is how they would drift. Buffers what
+  // the worker publishes during composition - which happens inside the spawn
+  // below, over this synchronous pipe.
+  const projection = createLateBoundProjectionTarget<
+    Partial<EpicRuntimeProjection>
+  >(
+    (value) => (isProjectionPatch(value) ? value : null),
+    () => {
+      // A suite that cares asserts on the store; a pre-attach rejection here
+      // is not something a test can act on.
+    },
+  );
   // Late-bound for the same reason `projectionTarget` is: the worker is
   // spawned before the store that owns the live body docs exists, so the
   // return leg cannot be handed over at spawn time. Both latches close on the
   // next line after `createOpenEpicStore` returns.
+  // NOT buffered, and derived rather than assumed. The body return leg
+  // publishes only from observers attached inside the `body/materialize`
+  // handler (`epic-runtime-core-ports.ts` - both call sites, the cold arm
+  // and the forward-only one). A materialize is a CALL issued by the lease
+  // bridge, and the lease bridge is built by the store - so no body
+  // publication can precede the store, and this slot has no gap to lose
+  // traffic in. Contrast the projection slot above, whose producer runs
+  // during composition.
   let bodyTarget: OpenEpicStoreHandle["body"] | null = null;
   const worker = spawnEpicRuntimeWorker<Partial<EpicRuntimeProjection>>({
     createWorker: () => ({
@@ -168,15 +193,7 @@ export function openStoreForTest(
     },
     streams: createRecordingStreamClient().client,
     accounting,
-    projection: {
-      accept: (value) => projectionTarget?.accept(value) ?? null,
-      apply: (value, revision) => {
-        projectionTarget?.apply(value, revision);
-      },
-      reject: (reason, revision) => {
-        projectionTarget?.reject(reason, revision);
-      },
-    },
+    projection: projection.handlers,
     body: {
       applyDocUpdate: (docKey, update) => {
         bodyTarget?.applyDocUpdate(docKey, update);
@@ -212,7 +229,7 @@ export function openStoreForTest(
       },
     },
   });
-  projectionTarget = handle.projection;
+  projection.attach(handle.projection);
   bodyTarget = handle.body;
 
   const runtime = composedRuntime();

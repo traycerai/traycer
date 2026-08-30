@@ -901,7 +901,7 @@ let nextIngestFenceIdentity = 1;
  * object check answers. Re-validating every key would be a second copy of the
  * projection's shape, and that copy is what rots.
  */
-function isProjectionPatch(
+export function isProjectionPatch(
   value: unknown,
 ): value is Partial<EpicRuntimeProjection> {
   return typeof value === "object" && value !== null;
@@ -922,6 +922,30 @@ export function createOpenEpicStore(
    * one - so a reused id would cancel somebody else's wait.
    */
   let nextAttachmentAwaitId = 1;
+
+  /**
+   * One bridge call, answering `null` when the session has been torn down.
+   *
+   * Every member below had a falsy no-op answer before the relocation - a
+   * refusal, empty bytes, `false` - because an operation against a torn-down
+   * replica has always been a no-op rather than an error. Across the bridge
+   * that same teardown arrives as a REJECTION, so each caller maps it back to
+   * the answer its own contract already promised.
+   *
+   * Narrowed on the error TYPE, never a blanket catch: a decode failure or a
+   * worker that threw is a real fault, and swallowing it as "the session
+   * closed" would turn a bug into a silent no-op.
+   */
+  const callOrNullOnTeardown = async <T>(
+    call: () => Promise<T>,
+  ): Promise<T | null> => {
+    try {
+      return await call();
+    } catch (cause: unknown) {
+      if (cause instanceof BridgeDisposedError) return null;
+      throw cause;
+    }
+  };
   /**
    * The last binding epoch main acted on, so an advance is detectable.
    *
@@ -1144,7 +1168,16 @@ export function createOpenEpicStore(
       // live doc, and the bytes reach the host on the next materialize or
       // demote cycle regardless. Surfacing it would put an error in front of
       // someone whose typing worked.
-      void runtime.port.call("body/update", { docKey, update }, NO_TRANSFER);
+      void runtime.port
+        .call("body/update", { docKey, update }, NO_TRANSFER)
+        .catch((cause: unknown) => {
+          // Teardown, not a failure: the session is going away and this edit
+          // is already in main's live doc. Narrowed on the error type so a
+          // real fault still reaches the console rather than being swallowed
+          // as "the session closed".
+          if (cause instanceof BridgeDisposedError) return;
+          throw cause;
+        });
     },
     onLocalAwareness: (docKey, frame, localClientId) => {
       runtime.awarenessOut(docKey, frame, localClientId);
@@ -1226,11 +1259,14 @@ export function createOpenEpicStore(
            * on the way here.
            */
           enqueueWriteCommand: async (intent) => {
-            const answer = await runtime.port.call(
-              "command/enqueue",
-              { intent },
-              NO_TRANSFER,
+            const answer = await callOrNullOnTeardown(() =>
+              runtime.port.call("command/enqueue", { intent }, NO_TRANSFER),
             );
+            // `null` is the queue's own REFUSAL, and a torn-down session is a
+            // refusal too - it minted no id and recorded nothing. Pre-flip
+            // this answered `null` for both; across the bridge the second
+            // arrives as a rejection, so it is mapped back.
+            if (answer === null) return null;
             return answer.outcome === "enqueued" ? answer.commandId : null;
           },
           waitForWriteCommand: (commandId) => {
@@ -1691,18 +1727,30 @@ export function createOpenEpicStore(
       },
     },
     encodeRootState: async () => {
-      const answer = await runtime.port.call("root/encode", {}, NO_TRANSFER);
-      return answer.update;
+      const answer = await callOrNullOnTeardown(() =>
+        runtime.port.call("root/encode", {}, NO_TRANSFER),
+      );
+      // Empty bytes on teardown, which is the SAME answer the worker host
+      // gives with no core - "an empty update applies as nothing rather than
+      // as a document, and the transfer site checks the answer before
+      // retiring the source". A rejection here would break a transfer that
+      // races a dispose.
+      return answer === null ? new Uint8Array() : answer.update;
     },
     applyRootUpdate: async (update, asLocalEdit) => {
       // The bytes are TRANSFERRED, not cloned - this is a whole root replica.
       const encoded = takeBytesForTransfer(update);
-      const answer = await runtime.port.call(
-        "root/apply",
-        { update: encoded.bytes, asLocalEdit },
-        encoded.transfer,
+      const answer = await callOrNullOnTeardown(() =>
+        runtime.port.call(
+          "root/apply",
+          { update: encoded.bytes, asLocalEdit },
+          encoded.transfer,
+        ),
       );
-      return answer.applied;
+      // `applied` is a data-loss guard and never optimistic, so a torn-down
+      // session answers `false`: nothing was applied, and the caller must not
+      // retire its source on the strength of it.
+      return answer === null ? false : answer.applied;
     },
     store,
     dispose: () => {
