@@ -31,41 +31,133 @@ describe("createDialGate: the concurrent-handshake cap and its queueing rules", 
     const gate = createDialGate();
     const started: string[] = [];
 
-    const backgroundTickets = Array.from({ length: 6 }, (_unused, index) =>
+    // The reserve caps background at MAX_BACKGROUND_CONNECTING (3), so 6
+    // background dials alone can no longer fill all six slots the way this
+    // case's setup used to. Fill them with 3 interactive + 3 background
+    // instead - still enough to show that interactive drains first - and
+    // leave the "late interactive cuts ahead of earlier-queued background"
+    // half of the claim to the release below.
+    Array.from({ length: 3 }, (_unused, index) =>
+      gate.acquire("interactive", () => {
+        started.push(`interactive-${index}`);
+      }),
+    );
+    const backgroundTickets = Array.from({ length: 3 }, (_unused, index) =>
       gate.acquire("background", () => {
         started.push(`background-${index}`);
       }),
     );
     await flush();
     expect(started).toEqual([
+      "interactive-0",
+      "interactive-1",
+      "interactive-2",
       "background-0",
       "background-1",
       "background-2",
-      "background-3",
-      "background-4",
-      "background-5",
     ]);
 
     // Three more background dials queue behind the six already connecting...
-    gate.acquire("background", () => started.push("background-6"));
-    gate.acquire("background", () => started.push("background-7"));
-    gate.acquire("background", () => started.push("background-8"));
+    gate.acquire("background", () => started.push("background-3"));
+    gate.acquire("background", () => started.push("background-4"));
+    gate.acquire("background", () => started.push("background-5"));
     // ...then one interactive dial arrives after all of them.
-    gate.acquire("interactive", () => started.push("interactive-0"));
+    gate.acquire("interactive", () => started.push("interactive-3"));
     await flush();
 
     backgroundTickets[0].release();
     await flush();
 
     expect(started).toEqual([
+      "interactive-0",
+      "interactive-1",
+      "interactive-2",
       "background-0",
       "background-1",
       "background-2",
-      "background-3",
-      "background-4",
-      "background-5",
+      "interactive-3",
+    ]);
+  });
+
+  it("reserves capacity for interactive: at most MAX_BACKGROUND_CONNECTING background dials start before a late interactive one", async () => {
+    const gate = createDialGate();
+    const started: string[] = [];
+
+    // 6 background dials acquired first...
+    Array.from({ length: 6 }, (_unused, index) =>
+      gate.acquire("background", () => {
+        started.push(`background-${index}`);
+      }),
+    );
+    await flush();
+
+    // ...then 1 interactive acquired after all of them.
+    gate.acquire("interactive", () => started.push("interactive-0"));
+    await flush();
+
+    // The start ORDER, not just a count, says which dial went first: only 3
+    // of the 6 background dials got a slot before the interactive one did -
+    // background-3..5 are still queued behind it.
+    expect(started).toEqual([
+      "background-0",
+      "background-1",
+      "background-2",
       "interactive-0",
     ]);
+  });
+
+  it("stats() reports the reserve split while background is saturated", async () => {
+    const gate = createDialGate();
+
+    Array.from({ length: 6 }, () => gate.acquire("background", () => {}));
+    await flush();
+
+    expect(gate.stats()).toEqual({
+      connecting: 3,
+      connectingInteractive: 0,
+      connectingBackground: 3,
+      queued: 3,
+    });
+  });
+
+  it("does not cap interactive: six interactive dials with nothing else queued all start", async () => {
+    const gate = createDialGate();
+    const started: number[] = [];
+
+    Array.from({ length: 6 }, (_unused, index) =>
+      gate.acquire("interactive", () => {
+        started.push(index);
+      }),
+    );
+    await flush();
+
+    expect(started).toHaveLength(6);
+    expect(gate.stats()).toEqual({
+      connecting: 6,
+      connectingInteractive: 6,
+      connectingBackground: 0,
+      queued: 0,
+    });
+  });
+
+  it("is not a latch: releasing one of the 3 background slots re-admits a queued background dial", async () => {
+    const gate = createDialGate();
+    const started: string[] = [];
+
+    const backgroundTickets = Array.from({ length: 6 }, (_unused, index) =>
+      gate.acquire("background", () => {
+        started.push(`background-${index}`);
+      }),
+    );
+    await flush();
+    expect(started).toHaveLength(3);
+
+    backgroundTickets[0].release();
+    await flush();
+
+    expect(started).toHaveLength(4);
+    expect(started).toContain("background-3");
+    expect(gate.stats().connectingBackground).toBe(3);
   });
 
   it("makes release() idempotent: a second call frees no extra slot", async () => {
@@ -210,8 +302,16 @@ describe("the WHATWG factories: native construction stays behind the dial gate",
   afterEach(() => {
     vi.unstubAllGlobals();
     // Every case below must leave the shared singleton idle - a slot leaked
-    // here starves every other host socket for the life of the process.
-    expect(hostDialGate.stats()).toEqual({ connecting: 0, queued: 0 });
+    // here starves every other host socket for the life of the process. Both
+    // per-priority counts are asserted, not just the total: the reserve is
+    // enforced off `connectingBackground`, so a leak there would narrow the
+    // background allowance permanently while the total still read clean.
+    expect(hostDialGate.stats()).toEqual({
+      connecting: 0,
+      connectingInteractive: 0,
+      connectingBackground: 0,
+      queued: 0,
+    });
   });
 
   it("constructs at most MAX_CONNECTING native sockets before the first one opens", async () => {

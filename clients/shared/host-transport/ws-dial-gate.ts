@@ -22,12 +22,20 @@ import type { DialPriority } from "./dial-priority";
  * The gate does not make connections cheaper. It stops the client asking for
  * more of them at once than the platform will serve promptly.
  *
- * ## Two queues, not one
+ * ## Two queues, not one - and a reserve
  *
  * A FIFO gate still leaves the lanes behind the boot flood (measured: 720 ms
  * after session-ready). `interactive` drains fully before `background`, so a
  * lane dialed after twenty catalog prefetches takes the next free slot rather
  * than the twenty-first. `dial-priority.ts` owns which method is which.
+ *
+ * Ordering alone was still not enough, and the re-measure said why: it decides
+ * ADMISSION, and a slot already granted is held for its whole handshake. Both
+ * Epic lanes arrived to find all six slots held by prefetch and waited for the
+ * next release (551-655 ms of the rows' wait after session-ready). So
+ * background may hold at most {@link MAX_BACKGROUND_CONNECTING} of the slots -
+ * capacity an interactive dial can count on finding free, rather than a place
+ * in a queue it still has to wait out.
  *
  * ## What holds a slot, and what gives it back
  *
@@ -89,6 +97,33 @@ import type { DialPriority } from "./dial-priority";
  */
 const MAX_CONNECTING = 6;
 
+/**
+ * How many of those slots `background` may hold at once.
+ *
+ * Draining `interactive` first decides ADMISSION ORDER, and that turned out not
+ * to be enough. A slot, once granted, is held for the whole handshake - so at
+ * both Epic lane arrivals in the measured boot flood all six slots were already
+ * held by `agent.gui.listModels` handshakes, and each lane waited for the next
+ * RELEASE rather than jumping a queue. Under host load those handshakes ran
+ * 100-245 ms (against ~70 ms idle), which is most of the 551-655 ms the rows
+ * spent waiting after session-ready.
+ *
+ * Priority cannot preempt a granted slot - a handshake in flight is pending to
+ * the throttler whether or not this client still wants it (see the release
+ * rules above), so cancelling one would cost more than it saves. Reserving
+ * capacity is the version of the same intent that works: an interactive dial
+ * arriving at any moment finds at least `MAX_CONNECTING - MAX_BACKGROUND_CONNECTING`
+ * slots that no prefetch can be holding.
+ *
+ * Three of six. The reserve has to be big enough for the burst that actually
+ * matters - a task open dials its two Epic lanes plus a body lane, and the
+ * shell's own calls arrive alongside them - while leaving enough for prefetch
+ * that the boot flood still drains inside the same window. Interactive is NOT
+ * capped: with nothing else queued it uses all six, so a run with no prefetch in
+ * flight is unchanged.
+ */
+const MAX_BACKGROUND_CONNECTING = 3;
+
 /** Strictly ordered: every `interactive` dial precedes every `background` one. */
 const DRAIN_ORDER: readonly DialPriority[] = ["interactive", "background"];
 
@@ -107,6 +142,15 @@ export interface DialTicket {
 
 export interface DialGateStats {
   readonly connecting: number;
+  /**
+   * The same total, split by priority. Reported because the interesting
+   * question about this gate is no longer "is it full" but "is it full of
+   * prefetch" - `connectingBackground` at its cap with `queued` non-zero is the
+   * reserve doing its job, and the same reading with `connectingInteractive` at
+   * zero for a whole boot would mean the table has drifted.
+   */
+  readonly connectingInteractive: number;
+  readonly connectingBackground: number;
   readonly queued: number;
 }
 
@@ -121,6 +165,7 @@ export interface DialGate {
 }
 
 interface QueueEntry {
+  readonly priority: DialPriority;
   readonly start: () => void;
   started: boolean;
   cancelled: boolean;
@@ -139,18 +184,41 @@ export function createDialGate(): DialGate {
     interactive: [],
     background: [],
   };
-  let connecting = 0;
+  /**
+   * The one place a slot is counted. The TOTAL is derived from these rather
+   * than tracked beside them: two counters that must agree is a state the
+   * release paths (normal, cancelled-mid-pump, `start` threw) could drift
+   * apart, and the cap is not worth that risk.
+   */
+  const connectingByPriority: Record<DialPriority, number> = {
+    interactive: 0,
+    background: 0,
+  };
+  const totalConnecting = (): number =>
+    connectingByPriority.interactive + connectingByPriority.background;
   /**
    * Re-entrancy guard. A `start` that fails synchronously releases its own
    * slot, which re-enters `pump` from inside `pump`'s own loop. The loop
-   * re-reads `connecting` on every iteration and so already handles the freed
+   * re-reads the counts on every iteration and so already handles the freed
    * slot; letting the inner call proceed would instead recurse once per queued
    * entry.
    */
   let pumping = false;
 
+  /**
+   * Interactive is bounded only by the total; background additionally by its
+   * own reserve. Asked BEFORE the queue is drained, so a background entry that
+   * cannot be admitted stays queued in order rather than being shifted off and
+   * pushed back.
+   */
+  function canAdmit(priority: DialPriority): boolean {
+    if (priority === "interactive") return true;
+    return connectingByPriority.background < MAX_BACKGROUND_CONNECTING;
+  }
+
   function takeNext(): QueueEntry | null {
     for (const priority of DRAIN_ORDER) {
+      if (!canAdmit(priority)) continue;
       const queue = queues[priority];
       while (queue.length > 0) {
         const entry = queue.shift();
@@ -166,11 +234,15 @@ export function createDialGate(): DialGate {
     if (pumping) return;
     pumping = true;
     try {
-      while (connecting < MAX_CONNECTING) {
+      while (totalConnecting() < MAX_CONNECTING) {
+        // `null` here means "nothing admissible", which is not the same as
+        // "nothing queued": background at its reserve with free total capacity
+        // stops the loop and waits for a RELEASE to re-enter it. Every release
+        // pumps, so there is no path that leaves an admissible entry parked.
         const entry = takeNext();
         if (entry === null) return;
         entry.started = true;
-        connecting += 1;
+        connectingByPriority[entry.priority] += 1;
         try {
           entry.start();
         } catch (cause) {
@@ -180,7 +252,7 @@ export function createDialGate(): DialGate {
           // factories translate a construction failure into `error` + `close`
           // themselves, so this is a backstop, not a live path.
           entry.released = true;
-          connecting -= 1;
+          connectingByPriority[entry.priority] -= 1;
           throw cause;
         }
       }
@@ -192,6 +264,7 @@ export function createDialGate(): DialGate {
   return {
     acquire(priority: DialPriority, start: () => void): DialTicket {
       const entry: QueueEntry = {
+        priority,
         start,
         started: false,
         cancelled: false,
@@ -214,7 +287,7 @@ export function createDialGate(): DialGate {
         release(): void {
           if (!entry.started || entry.released) return;
           entry.released = true;
-          connecting -= 1;
+          connectingByPriority[entry.priority] -= 1;
           pump();
         },
       };
@@ -227,7 +300,9 @@ export function createDialGate(): DialGate {
       const waiting = (queue: readonly QueueEntry[]): number =>
         queue.filter((entry) => !entry.cancelled).length;
       return {
-        connecting,
+        connecting: totalConnecting(),
+        connectingInteractive: connectingByPriority.interactive,
+        connectingBackground: connectingByPriority.background,
         queued: waiting(queues.interactive) + waiting(queues.background),
       };
     },

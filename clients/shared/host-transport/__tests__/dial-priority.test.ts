@@ -22,4 +22,33 @@ describe("dialPriorityForMethod", () => {
   ])("keeps the mounted-surface method %s interactive", (method) => {
     expect(dialPriorityForMethod(method)).toBe("interactive");
   });
+
+  it.each([
+    "providers.list",
+    "epic.recordViewed",
+    "host.notifications.markRead",
+    "host.chatFork.get",
+    "host.notifications.feed.subscribe",
+    "host.notifications.cloudFeed.subscribe",
+    "resources.subscribe",
+    "epic.chatBackupStatus",
+    "browser.sessions",
+    "epic.listCollaborators",
+    "epic.listCommentThreads",
+    "worktree.listBindingsForEpic",
+  ])("classifies the re-measure method %s as background", (method) => {
+    expect(dialPriorityForMethod(method)).toBe("background");
+  });
+
+  it.each([
+    "epic.listTasks",
+    "epic.listChatRecords",
+    "epic.listTuiAgents",
+    "epic.listCloudChats",
+  ])(
+    "keeps the row-source method %s interactive, since a late answer is a visibly incomplete row set",
+    (method) => {
+      expect(dialPriorityForMethod(method)).toBe("interactive");
+    },
+  );
 });
