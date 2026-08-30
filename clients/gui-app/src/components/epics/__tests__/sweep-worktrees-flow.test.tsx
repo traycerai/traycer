@@ -199,7 +199,7 @@ describe("SweepWorktreesFlow", () => {
   it("shows no picker and sweeps on the surface's own client at one dialable host", () => {
     render(flow(NO_OCCUPANCY));
 
-    expect(screen.queryByTestId("sweep-host-picker-dialog")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     // The confirmation opened immediately, on the object the surface passed -
     // not on a client this flow re-resolved from a host id.
     const opened = captured.dialog.filter((call) => call.epicIds !== null);
@@ -211,7 +211,7 @@ describe("SweepWorktreesFlow", () => {
     state.connectableHostIds = ["host-a", "host-b"];
     render(flow(new Set(["host-b"])));
 
-    expect(screen.getByTestId("sweep-host-picker-dialog")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
     // Nothing is proven or offered until a host is named.
     expect(sweepDialogEverOpened()).toBe(false);
   });
@@ -223,13 +223,13 @@ describe("SweepWorktreesFlow", () => {
     // host-c is neither badged nor the default, so it sits behind the
     // disclosure. Expanding is how this asserts completeness - the row exists
     // and is reachable, it is only demoted.
-    fireEvent.click(screen.getByTestId("sweep-host-picker-other-toggle"));
+    fireEvent.click(screen.getByRole("button", { name: /Other hosts/ }));
 
-    const rowA = screen.getByTestId("sweep-host-picker-option-host-a");
-    const rowB = screen.getByTestId("sweep-host-picker-option-host-b");
+    const rowA = screen.getByRole("button", { name: /Laptop/ });
+    const rowB = screen.getByRole("button", { name: /Desktop/ });
     // Listed even though nothing names it and nothing can dial it:
     // completeness is the guarantee, the badge is only a hint.
-    const rowC = screen.getByTestId("sweep-host-picker-option-host-c");
+    const rowC = screen.getByRole("button", { name: /Retired box/ });
     expect(rowA.getAttribute("data-occupied")).toBe("false");
     expect(rowB.getAttribute("data-occupied")).toBe("true");
     expect(rowC.getAttribute("data-occupied")).toBe("false");
@@ -248,17 +248,17 @@ describe("SweepWorktreesFlow", () => {
 
     // Badged (host-b) and default (host-a) are immediately visible; the rest
     // of the fleet is one collapsed row rather than a wall of machines.
-    expect(screen.getByTestId("sweep-host-picker-option-host-b")).toBeTruthy();
-    expect(screen.getByTestId("sweep-host-picker-option-host-a")).toBeTruthy();
-    expect(screen.queryByTestId("sweep-host-picker-option-host-c")).toBeNull();
+    expect(screen.getByRole("button", { name: /Desktop/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Laptop/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Retired box/ })).toBeNull();
 
-    const toggle = screen.getByTestId("sweep-host-picker-other-toggle");
+    const toggle = screen.getByRole("button", { name: /Other hosts/ });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(toggle.textContent).toContain("Other hosts (1)");
 
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByTestId("sweep-host-picker-option-host-c")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Retired box/ })).toBeTruthy();
   });
 
   it("puts the badged host above the default", () => {
@@ -267,13 +267,12 @@ describe("SweepWorktreesFlow", () => {
 
     // The shared picker's own order puts the local machine (host-a) first;
     // the group's claim is that the badge outranks it here.
-    const rendered = screen
-      .getAllByTestId(/^sweep-host-picker-option-/)
-      .map((row) => row.getAttribute("data-testid"));
-    expect(rendered).toEqual([
-      "sweep-host-picker-option-host-b",
-      "sweep-host-picker-option-host-a",
-    ]);
+    // Document order, which is what the claim is about.
+    const [first, second] = screen.getAllByRole("button", {
+      name: /Laptop|Desktop/,
+    });
+    expect(first.textContent).toContain("Desktop");
+    expect(second.textContent).toContain("Laptop");
   });
 
   it("renders flat, with no disclosure, when nothing is badged", () => {
@@ -291,10 +290,10 @@ describe("SweepWorktreesFlow", () => {
       />,
     );
 
-    expect(screen.queryByTestId("sweep-host-picker-other-toggle")).toBeNull();
-    expect(screen.getByTestId("sweep-host-picker-option-host-a")).toBeTruthy();
-    expect(screen.getByTestId("sweep-host-picker-option-host-b")).toBeTruthy();
-    expect(screen.getByTestId("sweep-host-picker-option-host-c")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Other hosts/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Laptop/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Desktop/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Retired box/ })).toBeTruthy();
   });
 
   it("can sweep on a host that only the disclosure lists", () => {
@@ -303,8 +302,8 @@ describe("SweepWorktreesFlow", () => {
 
     // The completeness backstop, end to end: the badge signal named nothing,
     // and the machine that actually holds the worktrees is still reachable.
-    fireEvent.click(screen.getByTestId("sweep-host-picker-other-toggle"));
-    fireEvent.click(screen.getByTestId("sweep-host-picker-option-host-b"));
+    fireEvent.click(screen.getByRole("button", { name: /Other hosts/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Desktop/ }));
 
     expect(lastOpenDialogHostId()).toBe("host-b");
   });
@@ -313,7 +312,7 @@ describe("SweepWorktreesFlow", () => {
     state.connectableHostIds = ["host-a", "host-b"];
     render(flow(new Set(["host-b"])));
 
-    fireEvent.click(screen.getByTestId("sweep-host-picker-option-host-b"));
+    fireEvent.click(screen.getByRole("button", { name: /Desktop/ }));
 
     expect(lastOpenDialogHostId()).toBe("host-b");
   });
@@ -327,15 +326,13 @@ describe("SweepWorktreesFlow", () => {
     state.unresolvableHostIds = ["host-b"];
     render(flow(new Set(["host-b"])));
 
-    const row = screen.getByTestId("sweep-host-picker-option-host-b");
+    const row = screen.getByRole("button", { name: /Desktop/ });
     expect(row.hasAttribute("disabled")).toBe(true);
     // The refusal is ON the row, so the reason arrives before the click.
     expect(row.textContent).toContain("unavailable");
     // The host that CAN serve is untouched by its neighbour's refusal.
     expect(
-      screen
-        .getByTestId("sweep-host-picker-option-host-a")
-        .hasAttribute("disabled"),
+      screen.getByRole("button", { name: /Laptop/ }).hasAttribute("disabled"),
     ).toBe(false);
   });
 
@@ -346,7 +343,7 @@ describe("SweepWorktreesFlow", () => {
     // above: the button would be disabled, `onPick` would never fire, and this
     // case would pass without reaching the branch it exists for.
     const view = render(flow(new Set(["host-b"])));
-    fireEvent.click(screen.getByTestId("sweep-host-picker-option-host-b"));
+    fireEvent.click(screen.getByRole("button", { name: /Desktop/ }));
     expect(lastOpenDialogHostId()).toBe("host-b");
 
     // NOW the client stops resolving - the credential lease released, or the
@@ -360,11 +357,9 @@ describe("SweepWorktreesFlow", () => {
     // not a re-point: no other host's rows are ever shown under that proof),
     // and the question comes back with host-b now refused on its own row.
     expect(captured.dialog.at(-1)?.epicIds ?? null).toBeNull();
-    expect(screen.getByTestId("sweep-host-picker-dialog")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
     expect(
-      screen
-        .getByTestId("sweep-host-picker-option-host-b")
-        .hasAttribute("disabled"),
+      screen.getByRole("button", { name: /Desktop/ }).hasAttribute("disabled"),
     ).toBe(true);
   });
 
@@ -375,14 +370,14 @@ describe("SweepWorktreesFlow", () => {
 
     // An unanswered directory is not a one-host fleet: neither step opens,
     // rather than the confirmation quietly taking the single-host path.
-    expect(screen.queryByTestId("sweep-host-picker-dialog")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(sweepDialogEverOpened()).toBe(false);
   });
 
   it("keeps an open confirmation pointed at its host when the fleet collapses", () => {
     state.connectableHostIds = ["host-a", "host-b"];
     const view = render(flow(new Set(["host-b"])));
-    fireEvent.click(screen.getByTestId("sweep-host-picker-option-host-b"));
+    fireEvent.click(screen.getByRole("button", { name: /Desktop/ }));
     expect(lastOpenDialogHostId()).toBe("host-b");
 
     // host-b dies mid-confirmation. Sweep's host id is frozen from the proof
