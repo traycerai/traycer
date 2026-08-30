@@ -1302,6 +1302,102 @@ function probeWebsocketUrl(url: string): Promise<boolean> {
 // connect" actually lives. Returns null when the round-trip succeeds.
 // Never throws: a probe failure becomes a DoctorIssue, never a doctor
 // crash.
+/**
+ * Splits the host's `UNAUTHORIZED` into the two failures it actually covers,
+ * because they take OPPOSITE remedies and this reported only one of them.
+ *
+ * A dead stored bearer is fixed by signing in again. A host that holds no
+ * delegated credential of its own rejects a perfectly live bearer too - it
+ * answers "Host is not provisioned" to every client - and there signing in
+ * again fixes nothing, because the user is already signed in. Sending them to
+ * `traycer login` closed a loop: sign in, still rejected, run doctor, be told
+ * to sign in.
+ *
+ * That is the same trap `HOST_CREDENTIAL_NEEDS_REAUTH` was written to avoid,
+ * for the same reason, on the neighbouring state - a host whose credential
+ * DIED. It is decided the same way too: the presence of the host's credential
+ * file. The two states are one file apart - never provisioned versus
+ * provisioned and then burned - so the one that had no report deferred to a
+ * remedy the other already documents as useless.
+ *
+ * The file is the signal rather than the rejection text: the host is an
+ * external component, so its wording is not a contract this repo can hold it
+ * to, while the credential path already is one (`hostCredentialPath`). An
+ * unreadable path is treated as "cannot tell" and keeps the sign-in reading,
+ * which is the safe direction - it is the state a signed-out user is in.
+ */
+export async function hostRpcUnauthorizedIssue(
+  websocketUrl: string | null,
+  err: HostRpcError,
+  environment: Environment,
+): Promise<DoctorIssue> {
+  const credential = await probeHostCredentialFile(environment);
+  // `absent` is the only reading that overturns the sign-in verdict. `present`
+  // is a host that HAS a credential and still refused, which is the dead-bearer
+  // shape this always described; `unprobeable` means doctor could not look, and
+  // guessing "never provisioned" there would tell a signed-out user their
+  // session is fine - the one direction that must not be wrong.
+  if (credential !== "absent") {
+    return {
+      code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,
+      severity: "error",
+      title: "Host rejected the stored credentials",
+      message:
+        "The host is listening but rejected the authenticated RPC connection (UNAUTHORIZED) even after a bearer refresh. Sign in again.",
+      fixAction: null,
+      terminalCommand: "traycer login",
+      details: {
+        websocketUrl,
+        rpcCode: err.code,
+        hostCredential: credential,
+        // Carried through verbatim: the host states why it refused, and
+        // dropping that for the bare status code is what left this report
+        // unable to tell the two failures apart.
+        hostMessage: err.message,
+      },
+    };
+  }
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,
+    severity: "error",
+    title: "Host has no credential of its own and is rejecting every client",
+    message:
+      `The host is listening but rejects every authenticated connection (UNAUTHORIZED: ${err.message}). ` +
+      "It holds no delegated credential of its own, and it never had one - so this is not your sign-in: a valid, freshly refreshed bearer is rejected exactly the same way, and signing in again does not change it. " +
+      "A connected owner client provisions that credential silently, so the way out is to open the Traycer desktop app while signed in as this host's owner and let it connect.",
+    // Same reasoning as HOST_CREDENTIAL_NEEDS_REAUTH: no command repairs this,
+    // and Desktop renders "Open in Terminal" for any non-null
+    // `terminalCommand`, so offering one would only restart the loop this
+    // report exists to end. The recovery lives in the message instead.
+    fixAction: null,
+    terminalCommand: null,
+    details: {
+      websocketUrl,
+      rpcCode: err.code,
+      hostCredential: credential,
+      hostMessage: err.message,
+    },
+  };
+}
+
+/**
+ * Whether the host holds a delegated credential of its own. Only ENOENT is
+ * `absent`; every other failure is `unprobeable`, because "we could not look"
+ * and "it is not there" support opposite reports and merging them is how a
+ * permission error would get told to the reader as a provisioning verdict.
+ * Mirrors `probeAuthDirectory`, which draws the same line for the same reason.
+ */
+async function probeHostCredentialFile(
+  environment: Environment,
+): Promise<"present" | "absent" | "unprobeable"> {
+  try {
+    await access(hostCredentialPath(environment));
+    return "present";
+  } catch (err) {
+    return isFileNotFoundError(err) ? "absent" : "unprobeable";
+  }
+}
+
 async function probeHostRpc(
   endpoint: HostTransportEndpoint,
   environment: Environment,
@@ -1328,16 +1424,7 @@ async function probeHostRpc(
   } catch (err) {
     if (err instanceof HostRpcError) {
       if (err.code === "UNAUTHORIZED") {
-        return {
-          code: DOCTOR_ISSUE_CODES.HOST_RPC_UNAUTHORIZED,
-          severity: "error",
-          title: "Host rejected the stored credentials",
-          message:
-            "The host is listening but rejected the authenticated RPC connection (UNAUTHORIZED) even after a bearer refresh. Sign in again.",
-          fixAction: null,
-          terminalCommand: "traycer login",
-          details: { websocketUrl, rpcCode: err.code },
-        };
+        return hostRpcUnauthorizedIssue(websocketUrl, err, environment);
       }
       if (err.code === "INCOMPATIBLE" || err.code === "DOWNGRADE_UNSUPPORTED") {
         return incompatibleRpcIssue(websocketUrl, err, environment);
