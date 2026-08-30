@@ -46,6 +46,7 @@ import {
   RUNTIME_BRIDGE_PROTOCOL_VERSION,
   type WriteCommandOutcome,
   type RuntimeWorkerLogEntry,
+  type RuntimeCommand,
   type WorkerToMainEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import { NO_TRANSFER } from "@traycer-clients/shared/replica-runtime/worker/transferable-bytes";
@@ -155,6 +156,15 @@ export interface EpicRuntimeWorkerHandle {
    * Must run BEFORE `closeSessionTransport()` at the call site: closing the
    * transport first kills the sessions before they can be reported.
    */
+  /**
+   * Send one fire-and-forget command to the relocated runtime.
+   *
+   * Narrow on purpose, like `port`: this is the ONE way to push a
+   * `runtime/command`, so a caller cannot reach `emit` and publish something
+   * else on the same channel. Ordering across these and the stream frames is
+   * `postMessage` FIFO - see `RuntimeCommandMap`.
+   */
+  command(command: RuntimeCommand): void;
   detach(): void;
   /**
    * Re-binds the worker to a NEW transport after a detach - a fresh proxy host,
@@ -309,6 +319,10 @@ export function spawnEpicRuntimeWorker<TProjection>(
   return {
     port: bridge,
     ready,
+    command(command): void {
+      if (disposed) return;
+      bridge.emit({ kind: "runtime/command", command }, NO_TRANSFER);
+    },
     detach,
     attach(streams): void {
       if (disposed) return;

@@ -145,36 +145,12 @@ export interface OpenEpicStoreOptions {
    * key, so prior focus state never leaks across signed-in identities.
    */
   readonly userId: string | null;
-  /**
-   * Invoked when the host closes the epic stream with an `UNAUTHORIZED`
-   * fatal error. Production wires this to
-   * `AuthService.revalidateCurrentContext()` so a stale bearer is either
-   * confirmed-valid (transient host failure) or evicted with a
-   * sign-out cascade. May be `null` in tests that do not exercise the
-   * auth-recovery path.
-   */
-  readonly onAuthError: (() => void) | null;
   /** Production's host-pinned requester; omitted by stores that never write. */
   readonly commandRequester?: HostRequester<HostRpcRegistry> | null;
-  /**
-   * Everything the lane arm needs, or an explicit `null` for a caller that
-   * genuinely has no lane stream clients.
-   *
-   * REQUIRED, and symmetric with the runtime's `getDocArm` for the same reason:
-   * both are wrong-by-omission in a direction nobody would notice. An absent
-   * `getDocArm` silently empties a released-floor host's epic or restores the
-   * double-count. An absent lane selection silently runs the fat
-   * `epic.subscribe@1` path this cutover exists to retire - on a host that
-   * serves the lanes, invisible to every test and every user until somebody
-   * measures the open.
-   *
-   * "It fails safe" was the argument for making this optional, and it is the
-   * failure the rule exists to prevent: a composition that forgets it - a
-   * refactor of `epic-session-provider.tsx`, a second mount path, the worker
-   * composition root - does not fail, it goes quiet. `null` says the caller
-   * has no lane clients; absence says nobody thought about it.
-   */
-  readonly laneSelection: EpicLaneSelectionSources | null;
+  // `streamClientFactory`, `laneSelection`, `onAuthError` and
+  // `commandRequester` are gone: all four were inputs to a runtime this store
+  // no longer constructs. The worker's composition root takes their
+  // equivalents, and the session provider is what hands them over.
 }
 
 /**

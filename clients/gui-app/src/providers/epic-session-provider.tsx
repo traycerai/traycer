@@ -10,18 +10,23 @@ import {
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { QueryClientContext, type QueryClient } from "@tanstack/react-query";
+import { spawnEpicRuntimeWorker } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
+import { createProcessBackedAccountingPort } from "@/stores/epics/open-epic/runtime/process-backed-accounting-port";
+import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import { dispatchEpicWriteCommand } from "@/stores/epics/open-epic/runtime/epic-write-command-dispatch";
+import {
+  classifyEpicWriteCommandFailure,
+  readWriteCommandIntent,
+} from "@/stores/epics/open-epic/runtime/epic-write-command";
+import { getEpicRuntimeWorkerFactory } from "@/lib/registries/epic-session-registry";
+import type { RuntimeProjectionHandlers } from "@traycer-clients/shared/replica-runtime/worker/runtime-projection-subscription";
+import type { EpicRuntimeProjection } from "@/stores/epics/open-epic/runtime/epic-runtime-projection";
+import { appLogger } from "@/lib/logger";
 import {
   createOpenEpicStore,
-  type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
-import { EpicStreamClient } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import { EpicStateStreamClient } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
-import { EpicStatusStreamClient } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
-import { ArtifactStreamClient } from "@traycer-clients/shared/host-transport/artifact-stream-client";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -530,99 +535,30 @@ export function EpicSessionProvider(
         transportClosed = true;
         transport.close();
       };
-      const streamClientFactory: EpicStreamClientFactory = (
-        factoryEpicId,
-        callbacks,
-        seedOfferProvider,
-      ) => {
-        const override = getEpicStreamClientFactoryOverride();
-        if (override !== null) {
-          return override(factoryEpicId, callbacks, seedOfferProvider);
-        }
-        if (wsStreamClient === null) {
-          // Unreachable: `streamIsOverridden` was true, so the branch above
-          // returned. Stated as a throw rather than a non-null assertion so a
-          // future path that clears the override mid-session fails loudly here
-          // instead of dialling a transport this session never opened.
-          throw new Error(
-            "[epic-session] stream factory reached with no session transport",
-          );
-        }
-        const client = new EpicStreamClient({
-          wsStreamClient,
-          epicId: factoryEpicId,
-          callbacks,
-          seedOfferProvider,
-        });
-        return {
-          applyUpdate: (updateBytes) => client.applyUpdate(updateBytes),
-          awareness: (awarenessBytes) => client.awareness(awarenessBytes),
-          applyArtifactRoomUpdate: (artifactRoomId, updateBytes) =>
-            client.applyArtifactRoomUpdate(artifactRoomId, updateBytes),
-          artifactRoomAwareness: (artifactRoomId, awarenessBytes) =>
-            client.artifactRoomAwareness(artifactRoomId, awarenessBytes),
-          retryMigration: () => client.retryMigration(),
-          // CLIENT ONLY. The transport belongs to the session, and a client
-          // `close()` is also what `requestFreshSnapshot` calls between
-          // discarding the replica and re-subscribing - closing the socket
-          // there would turn a local reseed into a reconnect.
-          close: () => {
-            client.close();
-          },
-        };
-      };
-      // Everything the lane arm needs, off the same transport. `getMethodSupport`
-      // answers `"unknown"` forever over the relay's `RemoteStreamClient` - that
-      // is not special-cased here, because the status-lane open is the probe
-      // that settles it either way.
-      const laneSelection: EpicLaneSelectionSources | null =
-        wsStreamClient === null
-          ? null
-          : {
-              support: (method) =>
-                wsStreamClient.getMethodSupport(
-                  method as keyof HostStreamRpcRegistry & string,
-                ),
-              subscribeSupport: (listener) =>
-                wsStreamClient.subscribeMethodSupport(listener),
-              stateStreamClientFactory: (
-                laneEpicId,
-                callbacks,
-                resumeProvider,
-              ) =>
-                new EpicStateStreamClient({
-                  wsStreamClient,
-                  epicId: laneEpicId,
-                  callbacks,
-                  resumeProvider,
-                }),
-              statusStreamClientFactory: (laneEpicId, callbacks) =>
-                new EpicStatusStreamClient({
-                  wsStreamClient,
-                  epicId: laneEpicId,
-                  callbacks,
-                }),
-              // One client per BODY, all on the same `wsStreamClient` as the
-              // other two lanes. `artifact.subscribe` is a method on the
-              // session's one durable socket, so a canvas with twelve open
-              // tiles multiplexes twelve subscriptions - it does not dial
-              // twelve times.
-              artifactStreamClientFactory: ({
-                epicId: laneEpicId,
-                artifactId,
-                authorityEpoch,
-                callbacks,
-                seedOfferProvider,
-              }) =>
-                new ArtifactStreamClient({
-                  wsStreamClient,
-                  epicId: laneEpicId,
-                  artifactId,
-                  authorityEpoch,
-                  callbacks,
-                  seedOfferProvider,
-                }),
-            };
+      // The four typed stream clients are NOT built here any more. They are
+      // the method-typed zod decode this relocation exists to move, so the
+      // worker builds them itself over its proxied `IStreamClient`
+      // (`buildProxiedStreamFactories`). What crosses is this session's real
+      // `wsStreamClient`, whose socket never leaves this thread.
+      if (wsStreamClient === null) {
+        // A session with no transport cannot spawn a runtime: the worker's
+        // whole composition is built over this client's proxy. Stated as a
+        // throw rather than a non-null assertion, keeping the posture the
+        // deleted stream factory had - a path that reaches here without a
+        // transport fails loudly instead of dialling one this session never
+        // opened.
+        //
+        // NOTE: the OVERRIDE case used to be served here. Suites that inject a
+        // fake stream through `getEpicStreamClientFactoryOverride` have no
+        // path any more, because the worker builds the typed clients itself -
+        // they inject at the WORKER seam instead
+        // (`__setEpicRuntimeWorkerFactoryForTests`). That migration is part of
+        // the caller sweep, not a hole in this guard.
+        throw new Error(
+          "[epic-session] cannot spawn a runtime worker with no session transport",
+        );
+      }
+
       /**
        * The books, on MAIN, and the one set for this session.
        *
@@ -651,21 +587,35 @@ export function EpicSessionProvider(
         Partial<EpicRuntimeProjection>
       > | null = null;
 
-      const runtimeWorker = spawnEpicRuntimeWorker({
+      const runtimeWorker = spawnEpicRuntimeWorker<
+        Partial<EpicRuntimeProjection>
+      >({
         createWorker: getEpicRuntimeWorkerFactory(),
         relay: {
           log: (entry) => {
-            appLogger.log(entry.level, entry.message, entry.fields);
+            // The worker's own level, mapped onto the four this logger has.
+            // `debug` is the floor: a relocated module's chatter must not
+            // arrive as an error just because it crossed a thread.
+            if (entry.level === "error") {
+              appLogger.error(entry.message, entry.fields, entry.error);
+              return;
+            }
+            if (entry.level === "warn") {
+              appLogger.warn(entry.message, entry.fields);
+              return;
+            }
+            appLogger.debug(entry.message, entry.fields);
           },
           fatal: (message, stack) => {
             // NOT just a log line. The runtime behind the bridge is gone, so a
             // UI waiting on projections would wait forever - the epic reads as
             // permanently loading. Surfaced as `failed`, which is the state
             // that carries a retry affordance.
-            appLogger.error("[epic-session] runtime worker fatal", {
-              epicId,
-              stack,
-            });
+            appLogger.error(
+              "[epic-session] runtime worker fatal",
+              { epicId },
+              { message, stack },
+            );
             presentSession({
               kind: "failed",
               targetHostId,
@@ -738,6 +688,42 @@ export function EpicSessionProvider(
         },
       });
       projectionTarget = created.projection;
+
+      /**
+       * The UNAUTHORIZED revalidate, delivered by the PROJECTION rather than by
+       * a callback.
+       *
+       * `onAuthError` fired from the control replica, which is worker-side now.
+       * Its own comment says what it is: "The stream owns UNAUTHORIZED recovery
+       * now: it stays 'reconnecting' and self-revalidates … keep the revalidate
+       * as the sign-out cascade's NET (single-flight, a no-op once already
+       * settled)." A net whose trigger is single-flight and idempotent does not
+       * need callback timing, and the same branch that called it publishes
+       * `snapshotFetchError` one line above - so the fact already crosses.
+       *
+       * Filtered on the CODE. All three branches of that handler publish a
+       * snapshot error; only UNAUTHORIZED is the sign-out cascade's business,
+       * and triggering a revalidate on an INCOMPATIBLE close would be a second
+       * bug wearing this one's clothes.
+       */
+      // Not unsubscribed explicitly: the subscription's lifetime IS this
+      // store's, and the store is what the registry disposes. An unsubscribe
+      // held here would be a second lifetime to keep in step with the first.
+      let revalidatedForUnauthorized = false;
+      created.store.subscribe((state) => {
+        if (state.snapshotFetchError?.code !== "UNAUTHORIZED") {
+          // Re-armed once the error clears, so a later UNAUTHORIZED after a
+          // recovery still reaches the net.
+          revalidatedForUnauthorized = false;
+          return;
+        }
+        // The projection republishes on every publish, not only on change, so
+        // without this the single-flight would be asked once per slice.
+        if (revalidatedForUnauthorized) return;
+        revalidatedForUnauthorized = true;
+        handleSessionAuthError();
+      });
+
       // Construction-honest stamp, written exactly once: `streamClientFactory`
       // above captures this run's `targetHostId` into the transport it opens,
       // so the stamp IS the handle's transport binding. Nothing re-stamps a
@@ -760,13 +746,6 @@ export function EpicSessionProvider(
         // every consumer holding a DESTROYED `Y.Doc` and `Awareness` while the
         // live ones are unreachable. The runtime declares them as getters for
         // exactly this reason; re-declaring them here is what carries that
-        // through the wrapper.
-        get doc() {
-          return created.doc;
-        },
-        get awareness() {
-          return created.awareness;
-        },
         dispose: () => {
           created.dispose();
           closeSessionTransport();
