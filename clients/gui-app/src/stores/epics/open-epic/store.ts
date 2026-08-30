@@ -1397,6 +1397,24 @@ export function createOpenEpicStore(
     ),
   );
 
+  // FLUSH-ON-ATTACH.
+  //
+  // `applyProjection` buffers into `preStorePatch` while `storeApi` is null and
+  // returns; the merge that drains it runs only on the NEXT call. Nothing was
+  // draining it when the store attached, so a slice whose ONLY publish happens
+  // during construction sat in the buffer until some unrelated projection
+  // happened to arrive - indefinitely, in a quiet epic.
+  //
+  // `heldAttachmentHashes` is exactly that slice: its standing observation
+  // republishes at bind time, which is before this store exists. The visible
+  // failure was an attachment that IS present reporting as absent.
+  //
+  // Routed through `applyProjection` rather than a bespoke `setState` so the
+  // buffered patch takes the identical path a live one does - the
+  // `bindingEpoch` -> `bindingVersion` translation included, since a buffered
+  // epoch must translate exactly as a live one would.
+  if (preStorePatch !== null) applyProjection({});
+
   unsubscribeAuthUserId = useAuthStore.subscribe((state, prevState) => {
     const nextUserId = state.profile?.userId ?? null;
     const prevUserId = prevState.profile?.userId ?? null;
