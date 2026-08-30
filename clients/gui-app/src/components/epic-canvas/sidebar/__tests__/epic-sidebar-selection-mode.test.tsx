@@ -647,6 +647,11 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
       store: {
         getState: () => ({
           deleteArtifact: testState.localDeleteArtifact,
+          // The unread marker computes its variant from BOTH stores, reading
+          // the tree non-reactively through this handle so a body-write stamp
+          // cannot re-render the row. That makes `tree` part of the state this
+          // double has to carry.
+          tree: testState.tree,
           renameArtifact: vi.fn(),
           // The rename path stamps an optimistic overlay patch before firing
           // the RPC, and reads the stamp tombstone back on settle. An empty

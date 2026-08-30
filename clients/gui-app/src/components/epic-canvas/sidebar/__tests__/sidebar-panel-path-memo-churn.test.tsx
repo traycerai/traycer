@@ -104,6 +104,21 @@ const ROW_IDS = ["art-1", "art-2", "art-3", "art-4"] as const;
 /** The one whose record moves. Every assertion is about the others. */
 const BUMPED_ID = ROW_IDS[0];
 
+/**
+ * The FIELD's shape: forty roots, twelve of them bursted per round.
+ *
+ * The count matters, not just the ratio. The projector orders roots by recency
+ * (`makeNodeComparator(DEFAULT_SORT_MODE)`), so how many nodes get stamped
+ * decides whether the root ORDER moves - and the order moving is what drives
+ * the defect this file's last case pins. Twelve of forty reorders; one of four,
+ * all tied, does not.
+ */
+const FIELD_ROW_IDS: readonly string[] = Array.from(
+  { length: 40 },
+  (_unused, index) => `art-${index + 1}`,
+);
+const FIELD_BUMPED_IDS: readonly string[] = FIELD_ROW_IDS.slice(0, 12);
+
 function makeMeta(): SnapshotMetaEpic {
   return {
     schemaVersion: "1.0",
@@ -142,16 +157,16 @@ function artifactEntry(id: string): Y.Map<unknown> {
   return entry;
 }
 
-function seedDoc(): Uint8Array {
+function seedDoc(ids: readonly string[]): Uint8Array {
   const donor = new Y.Doc();
   const epic = donor.getMap<unknown>("epic");
   const artifacts = new Y.Map<unknown>();
   epic.set("artifacts", artifacts);
-  for (const id of ROW_IDS) artifacts.set(id, artifactEntry(id));
+  for (const id of ids) artifacts.set(id, artifactEntry(id));
   return Y.encodeStateAsUpdate(donor);
 }
 
-function createSession(): OpenedStoreForTest {
+function createSession(ids: readonly string[]): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -171,7 +186,7 @@ function createSession(): OpenedStoreForTest {
     writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
-  captured.value.onSnapshot(makeMeta(), seedDoc());
+  captured.value.onSnapshot(makeMeta(), seedDoc(ids));
   return handle;
 }
 
@@ -194,13 +209,13 @@ describe("a memoized sidebar row, through the panel", () => {
   });
 
   function sessionForHook(): OpenedStoreForTest {
-    const handle = createSession();
+    const handle = createSession(ROW_IDS);
     opened.push(handle);
     return handle;
   }
 
   function renderPanel(): OpenedStoreForTest {
-    const handle = createSession();
+    const handle = createSession(ROW_IDS);
     opened.push(handle);
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -217,6 +232,12 @@ describe("a memoized sidebar row, through the panel", () => {
     return handle;
   }
 
+  // NOTE: this case does NOT cover the field, and must not be read as doing so.
+  // It bumps ONE record in a list whose `updatedAt`s are all tied, so the
+  // recency order does not move and the reorder chain the last case pins never
+  // fires. It pins a real and distinct property - a row must not re-render for
+  // a sibling's change when nothing about the list moved - and it stays for
+  // that. The field's stimulus is the last case in this file.
   it("does not re-render when a DIFFERENT row's record changes", async () => {
     const handle = renderPanel();
     const before = new Map(rowRenders);
@@ -281,6 +302,118 @@ describe("a memoized sidebar row, through the panel", () => {
     // THE PIN. A different root's record moved; `art-2-child`'s ancestry did
     // not, so the very same Set must come back.
     expect(result.current).toBe(before);
+  });
+
+  it("holds untouched rows still when a burst REORDERS the roots", async () => {
+    // THE FIELD'S STIMULUS, and the one the other cases structurally cannot
+    // produce. The capture bursts body text into 12 of 40 artifacts per round;
+    // each write stamps `updatedAt`, and the projector orders roots by recency,
+    // so the root ORDER genuinely changes.
+    //
+    // That reorder is a real change and `usePanelRootIds` is right to report it
+    // (zustand's shallow compares arrays positionally). What must not follow is
+    // a new `expandedIds`: `deriveEffectiveExpanded` only ever ADDS the root ids
+    // to a Set, where order is meaningless, so a pure reorder produces a
+    // member-identical Set. Rebuilding it re-mints `toggleExpanded` ->
+    // `expansion` and defeats memo on every row.
+    //
+    // The rows that were bursted do re-render, legitimately - their own
+    // `updatedAt` moved and `useEpicTreeNode` hands them the whole node. This
+    // case is only about the 28 that were not touched at all.
+    const handle = createSession(FIELD_ROW_IDS);
+    opened.push(handle);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <EpicSessionContext.Provider value={handle}>
+          <ArtifactTreePanelBody epicId={EPIC_ID} tabId={TAB_ID} />
+        </EpicSessionContext.Provider>
+      </QueryClientProvider>,
+    );
+    const before = new Map(rowRenders);
+    expect(before.size).toBe(FIELD_ROW_IDS.length);
+    const rootsBefore = handle.store.getState().tree.rootIds;
+
+    await act(async () => {
+      const { renameArtifact } = handle.store.getState();
+      for (const id of FIELD_BUMPED_IDS)
+        await renameArtifact(id, `burst ${id}`);
+    });
+
+    // Non-vacuity, and the whole premise: the burst must actually have
+    // reordered the roots while leaving the membership alone. If this stops
+    // holding, the case below is asserting something else.
+    const rootsAfter = handle.store.getState().tree.rootIds;
+    expect([...rootsAfter].sort()).toEqual([...rootsBefore].sort());
+    expect(rootsAfter.join()).not.toBe(rootsBefore.join());
+
+    // THE PIN.
+    const rerendered = FIELD_ROW_IDS.filter(
+      (id) =>
+        !FIELD_BUMPED_IDS.includes(id) &&
+        (rowRenders.get(id) ?? 0) !== (before.get(id) ?? 0),
+    );
+    expect({ untouchedThatRerendered: rerendered.length }).toEqual({
+      untouchedThatRerendered: 0,
+    });
+  });
+
+  it("holds even the BURSTED rows still when only `updatedAt` moves", () => {
+    // The field's write is a BODY append: it stamps `updatedAt` and changes
+    // nothing the row displays. `renameArtifact` cannot express that - the row
+    // renders the title, so a rename must re-render it - so this drives the
+    // stimulus directly, replacing each entry with an identical one whose
+    // `updatedAt` has moved. A top-level `set` on the artifacts map is what
+    // reaches the projection in this harness.
+    //
+    // The row's render inputs are `type` and `title`, both unchanged here, and
+    // the unread marker answers with a VARIANT rather than a timestamp - so a
+    // stamp that does not flip the variant is invisible to the row. Before this
+    // fix the row read the whole `TreeNode`, which carries `updatedAt`, and so
+    // re-rendered on every stamp along with its unmemoized chrome subtree.
+    const handle = createSession(FIELD_ROW_IDS);
+    opened.push(handle);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <EpicSessionContext.Provider value={handle}>
+          <ArtifactTreePanelBody epicId={EPIC_ID} tabId={TAB_ID} />
+        </EpicSessionContext.Provider>
+      </QueryClientProvider>,
+    );
+    const before = new Map(rowRenders);
+    expect(before.size).toBe(FIELD_ROW_IDS.length);
+    const titlesBefore = FIELD_BUMPED_IDS.map(
+      (id) => handle.store.getState().tree.nodeById[id].title,
+    );
+
+    act(() => {
+      handle.doc.transact(() => {
+        const artifacts = artifactsMap(handle);
+        FIELD_BUMPED_IDS.forEach((id, index) => {
+          const entry = artifactEntry(id);
+          entry.set("updatedAt", 100 + index);
+          artifacts.set(id, entry);
+        });
+      });
+    });
+
+    // Non-vacuity: the stamps really landed in the projection, and really left
+    // the titles alone. Without this the case could pass by doing nothing.
+    const nodesAfter = handle.store.getState().tree.nodeById;
+    expect(FIELD_BUMPED_IDS.map((id) => nodesAfter[id].title)).toEqual(
+      titlesBefore,
+    );
+    expect(FIELD_BUMPED_IDS.map((id) => nodesAfter[id].updatedAt)).toEqual(
+      FIELD_BUMPED_IDS.map((_unused, index) => 100 + index),
+    );
+
+    // THE PIN: no row re-renders at all - not the 28 bystanders, and not the
+    // 12 whose own timestamps moved.
+    const rerendered = FIELD_ROW_IDS.filter(
+      (id) => (rowRenders.get(id) ?? 0) !== (before.get(id) ?? 0),
+    );
+    expect({ rowsThatRerendered: rerendered.length }).toEqual({
+      rowsThatRerendered: 0,
+    });
   });
 
   it("still re-renders the row whose OWN record changed", async () => {

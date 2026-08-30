@@ -86,7 +86,6 @@ import {
   useEpicConnectionStatus,
   useEpicPermissionRole,
   useEpicTreeIndex,
-  useEpicTreeNode,
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -155,7 +154,11 @@ import {
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
-import type { ArtifactsSlice, TreeSlice } from "@/stores/epics/open-epic/types";
+import type {
+  ArtifactsSlice,
+  EpicTreeNodeType,
+  TreeSlice,
+} from "@/stores/epics/open-epic/types";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -319,61 +322,139 @@ function collectDescendantArtifactEntries(
  * This mirrors the per-entity `useIsActive...` pattern instead of threading a
  * tab-wide map through the recursive node tree.
  */
+/** The read-state fields the variant is computed from. */
+interface ArtifactReadStateFacts {
+  readonly seedAtByEpic: Readonly<Record<string, number>>;
+  readonly lastSeenByArtifact: Readonly<
+    Record<string, Readonly<Record<string, number>>>
+  >;
+}
+
+/**
+ * The marker's answer, as a pure function of both stores. Shared by the two
+ * subscriptions below so they cannot drift into computing different rules.
+ */
+function computeArtifactUnreadMarkerVariant(args: {
+  readonly epicId: string;
+  readonly nodeId: string;
+  readonly isArtifactKind: boolean;
+  readonly expanded: boolean;
+  readonly visibleIds: ReadonlySet<string> | null;
+  readonly tree: TreeSlice;
+  readonly readState: ArtifactReadStateFacts;
+}): ArtifactUnreadMarkerVariant | null {
+  const { epicId, nodeId, isArtifactKind, expanded, tree, readState } = args;
+  if (!isArtifactKind) return null;
+  // Read `updatedAt` HERE rather than taking it as an argument. Taking it meant
+  // the caller had to subscribe to the whole node to supply it, so every body
+  // write re-rendered the row to recompute a variant that almost never flips.
+  const selfUpdatedAt = Object.hasOwn(tree.nodeById, nodeId)
+    ? tree.nodeById[nodeId].updatedAt
+    : 0;
+  if (
+    isArtifactUnread({
+      epicId,
+      artifactId: nodeId,
+      updatedAt: selfUpdatedAt,
+      seedAtByEpic: readState.seedAtByEpic,
+      lastSeenByArtifact: readState.lastSeenByArtifact,
+    })
+  ) {
+    return "self";
+  }
+  if (expanded) return null;
+  for (const entry of collectDescendantArtifactEntries(
+    nodeId,
+    tree,
+    args.visibleIds,
+  )) {
+    if (
+      isArtifactUnread({
+        epicId,
+        artifactId: entry.id,
+        updatedAt: entry.updatedAt,
+        seedAtByEpic: readState.seedAtByEpic,
+        lastSeenByArtifact: readState.lastSeenByArtifact,
+      })
+    ) {
+      return "descendant";
+    }
+  }
+  return null;
+}
+
+/**
+ * The parts of a row's tree node that the row RENDERS. Deliberately not the
+ * whole `TreeNode`: that carries `updatedAt`, which the host stamps on every
+ * body write, so `useEpicTreeNode` handed the row a new object ~4/s and
+ * re-rendered it (and its whole unmemoized chrome subtree) for a field it does
+ * not display. The unread marker still tracks `updatedAt` - it reads it itself,
+ * and returns a variant rather than the timestamp.
+ */
+interface ArtifactRowNodeFacts {
+  readonly type: EpicTreeNodeType;
+  readonly title: string;
+}
+
+function useArtifactRowNode(nodeId: string): ArtifactRowNodeFacts | null {
+  return useEpicStore(
+    useShallow((state: OpenEpicState): ArtifactRowNodeFacts | null => {
+      if (!Object.hasOwn(state.tree.nodeById, nodeId)) return null;
+      const node = state.tree.nodeById[nodeId];
+      return { type: node.type, title: node.title };
+    }),
+  );
+}
+
 function useArtifactUnreadMarkerVariant(args: {
   readonly epicId: string;
   readonly nodeId: string;
   readonly isArtifactKind: boolean;
   readonly expanded: boolean;
-  readonly selfUpdatedAt: number;
 }): ArtifactUnreadMarkerVariant | null {
-  const { epicId, nodeId, isArtifactKind, expanded, selfUpdatedAt } = args;
+  const { epicId, nodeId, isArtifactKind, expanded } = args;
   const visibleIds = useSidebarVisibleIds();
-  // Subscribed to THIS row's descendants rather than to the whole `tree` slice
-  // the caller used to hand down. The slice re-mints on any record change - the
-  // host stamps `updatedAt` per body write and `TreeNode` carries it - so
-  // taking it as an argument made every row re-render on every stamp.
+  const epicStoreHandle = useOpenEpicHandle();
+  // ## Two subscriptions, one answer
   //
-  // A row with no children reads the shared empty array and is equal by
-  // reference, which covers every leaf. A COLLAPSED PARENT still re-renders on
-  // a descendant's stamp, and that is the honest bound rather than an
-  // oversight: its rollup is computed FROM descendant `updatedAt`s, so it has
-  // to look again. That is O(collapsed ancestors of the stamped row), not O(N).
-  const descendantEntries = useEpicStore(
-    useShallow(
-      (state: OpenEpicState): ReadonlyArray<ArtifactDescendantEntry> =>
-        !isArtifactKind || expanded
-          ? EMPTY_DESCENDANT_ENTRIES
-          : collectDescendantArtifactEntries(nodeId, state.tree, visibleIds),
-    ),
+  // The variant is a function of BOTH stores - the tree (an artifact's
+  // `updatedAt`) and the read state (when it was last seen) - so subscribing to
+  // one and reading the other non-reactively would go stale on changes to the
+  // other. Subscribing to a raw input from either (the node, or `updatedAt`)
+  // would re-render the row on every body write, which is the whole defect.
+  //
+  // So both stores are subscribed, and BOTH selectors return the ANSWER: each
+  // reads its own store reactively and the other via `getState()` at selection
+  // time, which is current because the selector re-runs on its own store's
+  // change and on every render. Zustand bails a subscriber whose selector
+  // output is unchanged, so the row re-renders only when the variant actually
+  // flips - not on the ~4/s stamps that leave it alone.
+  //
+  // The two values are equal by construction (same pure function, same two
+  // stores); `??` simply consumes both.
+  const byTree = useEpicStore((state: OpenEpicState) =>
+    computeArtifactUnreadMarkerVariant({
+      epicId,
+      nodeId,
+      isArtifactKind,
+      expanded,
+      visibleIds,
+      tree: state.tree,
+      readState: useArtifactReadStateStore.getState(),
+    }),
   );
-  return useArtifactReadStateStore((state) => {
-    if (!isArtifactKind) return null;
-    if (
-      isArtifactUnread({
-        epicId,
-        artifactId: nodeId,
-        updatedAt: selfUpdatedAt,
-        seedAtByEpic: state.seedAtByEpic,
-        lastSeenByArtifact: state.lastSeenByArtifact,
-      })
-    ) {
-      return "self";
-    }
-    for (const entry of descendantEntries) {
-      if (
-        isArtifactUnread({
-          epicId,
-          artifactId: entry.id,
-          updatedAt: entry.updatedAt,
-          seedAtByEpic: state.seedAtByEpic,
-          lastSeenByArtifact: state.lastSeenByArtifact,
-        })
-      ) {
-        return "descendant";
-      }
-    }
-    return null;
-  });
+  const byReadState = useArtifactReadStateStore((state) =>
+    computeArtifactUnreadMarkerVariant({
+      epicId,
+      nodeId,
+      isArtifactKind,
+      expanded,
+      visibleIds,
+      tree: epicStoreHandle.store.getState().tree,
+      readState: state,
+    }),
+  );
+  return byTree ?? byReadState;
 }
 
 function artifactsForReadSeed(
@@ -682,7 +763,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     onToggleSelection,
   } = props;
   const { expandedIds, toggleExpanded, ensureExpanded } = expansion;
-  const node = useEpicTreeNode(nodeId);
+  const node = useArtifactRowNode(nodeId);
   const childIds = useFilteredPanelChildIds(nodeId, treeFilter);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
@@ -770,7 +851,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     nodeId,
     isArtifactKind,
     expanded,
-    selfUpdatedAt: node?.updatedAt ?? 0,
   });
 
   const Icon = EPIC_NODE_ICONS[artifactType];
