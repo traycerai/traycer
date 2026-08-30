@@ -183,14 +183,6 @@ export function createArtifactBodyLeaseBridge(options: {
   readonly docs: MainThreadBodyDocs;
   readonly budget: HotBodyBudget;
   /**
-   * Tell the worker to let go of a forward-only body.
-   *
-   * A typed function rather than the raw port, so this module keeps calling
-   * only what it is allowed to: the port here is `call`-only by design, and
-   * this leg is an EVENT with no answer.
-   */
-  readonly releaseForwardOnly: (docKey: string) => void;
-  /**
    * Where the linger's timer comes from. INJECTED rather than `setTimeout`, so
    * a suite drives the window instead of waiting out a real minute.
    */
@@ -270,11 +262,36 @@ export function createArtifactBodyLeaseBridge(options: {
       // it means giving the release an answer (which makes it a call) or
       // giving main the pin state another way, and that is a contract change
       // rather than a fix to make in passing.
-      entry.demotingGeneration = null;
-      entries.delete(docKey);
-      options.releaseForwardOnly(docKey);
-      options.budget.settleCold(docKey, 0);
-      options.docs.drop(docKey);
+      entry.demotingGeneration = entry.generation;
+      void options.bridge.call("body/release", { docKey }, NO_TRANSFER).then(
+        (answer) => {
+          const current = entries.get(docKey);
+          // A late answer for a lease since re-acquired, exactly as the demote
+          // path guards it: the doc is live again and dropping it here would
+          // take it out from under a bound editor.
+          if (current === undefined || current.demotingGeneration === null) {
+            return;
+          }
+          if (!answer.released) {
+            // REFUSED - the tier still pins this room. Same answer as a
+            // refused demote: keep the doc, keep the entry pending so a
+            // respawn resend covers it, and look again next window.
+            armLinger(docKey);
+            return;
+          }
+          current.demotingGeneration = null;
+          entries.delete(docKey);
+          // No bytes came back, so nothing to record cold - only the hot
+          // charge is released.
+          options.budget.settleCold(docKey, 0);
+          options.docs.drop(docKey);
+        },
+        () => {
+          // The worker went away mid-release. The doc stays live and the entry
+          // stays pending, exactly as for a demote: `resendUnacknowledgedDemotes`
+          // re-posts, and `postDemote` routes it back down this same branch.
+        },
+      );
       return;
     }
     const encoded = takeBytesForTransfer(options.docs.encode(docKey));

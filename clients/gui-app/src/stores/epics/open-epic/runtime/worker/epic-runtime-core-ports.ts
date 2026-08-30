@@ -76,6 +76,8 @@ export interface EpicRuntimeCorePortSource {
     frame: Uint8Array,
     localClientId: number,
   ): void;
+  /** Tier-state pins for one body - divergence or presence, never the lease. */
+  isBodyPinned(docKey: string): boolean;
   /**
    * Observe a materialized room's presence. Returns the detach.
    *
@@ -411,6 +413,12 @@ export function buildEpicRuntimeCorePorts(
       },
       heldDocKeys: () => [...heldLeases.keys()],
       release: (docKey) => {
+        // REFUSED while the tier still pins this room. A forward-only body has
+        // no settle to be refused, so this is the only channel its pins have -
+        // and without it main releases a room the tier considers occupied.
+        if (source.isBodyPinned(docKey)) {
+          return { released: false, reason: "pinned" as const };
+        }
         // The FORWARD-ONLY lifecycle's terminator, and the twin of the
         // `settlement.accepted` branch above rather than a second way into it.
         //
@@ -429,6 +437,7 @@ export function buildEpicRuntimeCorePorts(
         detachBodyObserver(docKey);
         heldLeases.get(docKey)?.();
         heldLeases.delete(docKey);
+        return { released: true, reason: null };
       },
       applyAwareness: (docKey, frame, localClientId) => {
         source.applyBodyAwareness(docKey, frame, localClientId);

@@ -544,6 +544,18 @@ export interface ArtifactRoomTier {
    */
   relayLocalUpdate(artifactRoomId: string, update: Uint8Array): boolean;
   /**
+   * Is this room pinned by TIER state - local divergence or remote presence?
+   *
+   * The lease arm is deliberately excluded, for the same reason the settle
+   * path excludes it: the caller asking is the one giving its lease up, and a
+   * predicate that counted the lease still held would answer "pinned" always.
+   *
+   * Exposed so the forward-only RELEASE path can consult the same predicate
+   * the demote path reaches through its refusal. `@1` bodies have no settle to
+   * be refused, so without this the pins simply would not reach main there.
+   */
+  isRoomPinnedByTierState(artifactRoomId: string): boolean;
+  /**
    * Observe this room's presence; returns the detach.
    *
    * The return leg of the relocation: remote peers land in this room's
@@ -1658,6 +1670,12 @@ export function createArtifactRoomTier(
       // hot, so re-test it here rather than waiting for a doc frame that may
       // never come.
       scheduleCooldown(artifactRoomId);
+    },
+    isRoomPinnedByTierState(artifactRoomId): boolean {
+      const entry = replicas.get(artifactRoomId);
+      // Not materialized: nothing to pin. A room with no replica cannot be
+      // divergent and holds no presence.
+      return entry === undefined ? false : isPinnedByTierState(entry);
     },
     relayLocalUpdate(artifactRoomId, update): boolean {
       const entry = replicas.get(artifactRoomId);

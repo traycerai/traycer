@@ -71,11 +71,15 @@ function createPorts(): EpicRuntimeCorePorts & {
         }),
       settle: (input) => {
         settles.push(`${input.docKey}:${String(input.generation)}`);
-        return Promise.resolve({ accepted: true, settledBytes: 7 });
+        return Promise.resolve({
+          accepted: true,
+          settledBytes: 7,
+          reason: null,
+        });
       },
       sendUpdate: () => Promise.resolve({ kind: "sent" }),
       applyAwareness: () => {},
-      release: () => {},
+      release: () => ({ released: true, reason: null }),
       heldDocKeys: () => [],
     },
     transport: {
@@ -125,6 +129,7 @@ describe("after dispose", () => {
     await expect(core.demoteBody(demote("artifact-1", 2))).resolves.toEqual({
       accepted: false,
       settledBytes: 0,
+      reason: "not-held",
     });
   });
 
@@ -138,6 +143,7 @@ describe("after dispose", () => {
     await expect(core.demoteBody(demote("artifact-1", 1))).resolves.toEqual({
       accepted: true,
       settledBytes: 7,
+      reason: null,
     });
   });
 });
@@ -153,7 +159,7 @@ describe("the settled-demote map — idempotence per (docKey, generation)", () =
     // demand on both copies would unsubscribe a body that is still open.
     const resend = await core.demoteBody(demote("doc-1", 2));
 
-    expect(first).toEqual({ accepted: true, settledBytes: 7 });
+    expect(first).toEqual({ accepted: true, settledBytes: 7, reason: null });
     expect(resend).toEqual(first);
     expect(ports.settles).toEqual(["doc-1:2"]);
   });
@@ -166,8 +172,15 @@ describe("the settled-demote map — idempotence per (docKey, generation)", () =
     const stale = await core.demoteBody(demote("doc-1", 2));
 
     // It belongs to a lifetime the main thread has already moved past. Its own
-    // guard drops this answer, but the worker must not RELEASE on it.
-    expect(stale).toEqual({ accepted: false, settledBytes: 0 });
+    // guard drops this answer, but the worker must not RELEASE on it - and the
+    // REASON names which refusal this is, which is the whole point of carrying
+    // it: `newer-generation` is a stale post, `not-held` would be a worker with
+    // nothing to settle into.
+    expect(stale).toEqual({
+      accepted: false,
+      settledBytes: 0,
+      reason: "newer-generation",
+    });
     expect(ports.settles).toEqual(["doc-1:3"]);
   });
 

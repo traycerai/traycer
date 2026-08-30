@@ -68,6 +68,13 @@ export function stubRuntimeWorkerCallHandlers(
       }),
     // Refused, never accepted: an unowned `true` tells the main thread to drop
     // a document whose bytes nothing stored.
+    // Refused for the same reason as the demote below: a stub that RELEASED
+    // would tell the main thread to drop a doc no core is holding.
+    "body/release": () =>
+      Promise.resolve({
+        value: { released: false, reason: "not-held" as const },
+        transfer: NO_TRANSFER,
+      }),
     "body/demote": () =>
       Promise.resolve({
         value: { accepted: false, settledBytes: 0, reason: "not-held" },

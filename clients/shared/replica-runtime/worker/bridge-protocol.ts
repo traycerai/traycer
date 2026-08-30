@@ -287,29 +287,6 @@ export type MainToWorkerEvent =
        * data. An unknown `docKey` is dropped silently at the far end for the
        * same reason - there is no answer a sender could act on.
        */
-      /**
-       * Let go of a FORWARD-ONLY body. No bytes, no identity, no answer.
-       *
-       * The counterpart to `body/demote`, and deliberately a different shape
-       * rather than a flag on it. `body/demote` NAMES an identity and settles
-       * bytes back; a forward-only body has neither, and routing it through
-       * that call would be refused on the identity it cannot supply - which is
-       * exactly why it was skipped, and why its memory then leaked.
-       *
-       * A body has exactly ONE of the two lifecycles, decided by whether its
-       * seed stated an identity: identity-named bodies settle, forward-only
-       * bodies release. Neither handler may touch the other's state.
-       *
-       * An EVENT because there is no answer to act on: main has already
-       * dropped its copy by the time this is posted, and `postMessage` FIFO
-       * puts it ahead of any re-acquire for the same key. Idempotent at the
-       * far end - a release for a key already released is a no-op, which is
-       * what makes a resend after a reconnect safe.
-       */
-      readonly kind: "body/release";
-      readonly docKey: string;
-    }
-  | {
       readonly kind: "body/awareness-out";
       readonly docKey: string;
       readonly frame: Uint8Array;
@@ -724,7 +701,6 @@ const MAIN_TO_WORKER_EVENT_COVERAGE: {
   "stream/manifest": true,
   "accounting/demote": true,
   "runtime/command": true,
-  "body/release": true,
   "body/awareness-out": true,
   shutdown: true,
 };
@@ -941,6 +917,44 @@ export interface RuntimeWorkerCallMap {
    * generation - it has already accepted a newer one, or the lease was
    * re-acquired - and the main thread must NOT drop the doc.
    */
+  /**
+   * Let go of a FORWARD-ONLY body: the worker releases its retained hold.
+   *
+   * The counterpart to `body/demote`, and deliberately a different shape
+   * rather than a flag on it. `body/demote` NAMES an identity and settles
+   * bytes back; a forward-only body has neither, and routing it through that
+   * call would be refused on the identity it cannot supply - which is why it
+   * was skipped, and why its memory then leaked.
+   *
+   * A body has exactly ONE of the two lifecycles, decided by whether its seed
+   * stated an identity: identity-named bodies settle, forward-only bodies
+   * release. Neither handler may touch the other's state.
+   *
+   * **A CALL, not an event, and the ordering argument had to be redone.** As
+   * an event its justification was `postMessage` FIFO - "a release can never
+   * overtake its replacement". That argument does not transfer as written:
+   * the worker dispatches calls with `void serve(...)`, so handlers are
+   * INVOKED in arrival order but an async one's continuation can interleave
+   * with a later handler. What makes this safe is causal rather than
+   * positional: main posts a release only for a docKey whose `body/materialize`
+   * has already RESOLVED - the grant it releases comes from that resolution -
+   * so a release can never overtake the materialize that created the hold it
+   * names. The release handler is synchronous at the worker, so once invoked
+   * it completes without interleaving at all.
+   *
+   * It answers because the tier can REFUSE it. A forward-only body still has
+   * pins that live in tier state (local divergence, remote presence), and with
+   * no settle to be refused this is the only channel they have; the reason
+   * vocabulary is shared with `body/demote` so "the tier says no" has one
+   * shape.
+   */
+  readonly "body/release": {
+    readonly request: { readonly docKey: string };
+    readonly response: {
+      readonly released: boolean;
+      readonly reason: "not-held" | "newer-generation" | "pinned" | null;
+    };
+  };
   readonly "body/demote": {
     readonly request: {
       readonly docKey: string;
@@ -1212,6 +1226,7 @@ const RUNTIME_WORKER_CALL_COVERAGE: {
 } = {
   "attachment/read": true,
   "body/materialize": true,
+  "body/release": true,
   "body/demote": true,
   "body/update": true,
   "mutation/apply": true,
@@ -1281,6 +1296,7 @@ const CALL_BUILDERS: {
 } = {
   "attachment/read": (request) => ({ kind: "attachment/read", request }),
   "body/materialize": (request) => ({ kind: "body/materialize", request }),
+  "body/release": (request) => ({ kind: "body/release", request }),
   "body/demote": (request) => ({ kind: "body/demote", request }),
   "body/update": (request) => ({ kind: "body/update", request }),
   "mutation/apply": (request) => ({ kind: "mutation/apply", request }),
@@ -1504,6 +1520,22 @@ export const CALL_RESPONSE_PARSERS: {
       return null;
     }
     return { docKey, update, docGuid, seedMode, hostStateVector };
+  },
+  "body/release": (value) => {
+    if (!isRecord(value)) return null;
+    const { released, reason } = value;
+    if (typeof released !== "boolean") return null;
+    // Same closed set as the demote's, narrowed the same way and for the same
+    // reason: a verdict this side cannot read is not one to act on.
+    if (
+      reason !== null &&
+      reason !== "not-held" &&
+      reason !== "newer-generation" &&
+      reason !== "pinned"
+    ) {
+      return null;
+    }
+    return { released, reason };
   },
   "body/demote": (value) => {
     if (!isRecord(value)) return null;

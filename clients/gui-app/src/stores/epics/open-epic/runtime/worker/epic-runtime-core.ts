@@ -53,6 +53,7 @@ interface SettledDemote {
   readonly answer: {
     readonly accepted: boolean;
     readonly settledBytes: number;
+    readonly reason: "not-held" | "newer-generation" | "pinned" | null;
   };
 }
 
@@ -90,7 +91,11 @@ export interface EpicRuntimeCorePorts {
        */
       readonly docGuid: string;
       readonly update: Uint8Array;
-    }): Promise<{ readonly accepted: boolean; readonly settledBytes: number }>;
+    }): Promise<{
+      readonly accepted: boolean;
+      readonly settledBytes: number;
+      readonly reason: "not-held" | "newer-generation" | "pinned" | null;
+    }>;
     /**
      * Let go of a FORWARD-ONLY body: release its retained lease and detach its
      * observers, settling nothing.
@@ -100,7 +105,10 @@ export interface EpicRuntimeCorePorts {
      * to; this returns MEMORY and needs no identity at all. Reading the
      * identity rule as governing both is what leaked every `@1` body.
      */
-    release(docKey: string): void;
+    release(docKey: string): {
+      readonly released: boolean;
+      readonly reason: "not-held" | "newer-generation" | "pinned" | null;
+    };
     /**
      * The docKeys whose runtime lease this port still holds.
      *
@@ -192,7 +200,8 @@ export function createEpicRuntimeWorkerCore(
       // on a refusal, so a demote that arrives during teardown costs a
       // re-send after respawn; one accepted here and never written costs the
       // edit.
-      if (!serving) return { accepted: false, settledBytes: 0 };
+      if (!serving)
+        return { accepted: false, settledBytes: 0, reason: "not-held" };
 
       // Idempotence lives HERE and not on the main thread's generation guard,
       // because `resendUnacknowledgedDemotes` deliberately re-posts the SAME
@@ -210,7 +219,11 @@ export function createEpicRuntimeWorkerCore(
         // this side must not RELEASE on it, which is why it never reaches the
         // port.
         if (input.generation < settled.generation) {
-          return { accepted: false, settledBytes: 0 };
+          return {
+            accepted: false,
+            settledBytes: 0,
+            reason: "newer-generation",
+          };
         }
       }
       const answer = await ports.bodies.settle(input);
@@ -258,12 +271,16 @@ export function createEpicRuntimeWorkerCore(
       if (!serving) return;
       ports.bodies.applyAwareness(docKey, frame, localClientId);
     },
-    releaseBody(docKey): void {
+    releaseBody(docKey): {
+      readonly released: boolean;
+      readonly reason: "not-held" | "newer-generation" | "pinned" | null;
+    } {
       // Dropped after teardown like every other member: `dispose` already
       // released every hold, so a release arriving afterwards has nothing to
       // do and must not resurrect bookkeeping the shutdown just finished.
-      if (!serving) return;
-      ports.bodies.release(docKey);
+      // `not-held` is the honest answer - there is no hold here any more.
+      if (!serving) return { released: false, reason: "not-held" };
+      return ports.bodies.release(docKey);
     },
     heldBodyDocKeysForTests(): readonly string[] {
       return ports.bodies.heldDocKeys();

@@ -58,7 +58,8 @@ function createSource(
     observeBodyDoc: () => () => {},
     applyBodyAwareness: () => {},
     observeBodyAwareness: () => () => {},
-    settleColdState: () => ({ accepted: false }),
+    isBodyPinned: () => false,
+    settleColdState: () => ({ accepted: false, reason: "not-held" as const }),
     sendBodyUpdate: () => ({ kind: "sent" }),
     renameArtifact: () => false,
     deleteArtifact: () => false,
@@ -206,7 +207,12 @@ describe("bodies.settle", () => {
 
   it("reports zero settled bytes on a refusal", async () => {
     const ports = buildPorts(
-      createSource({ settleColdState: () => ({ accepted: false }) }),
+      createSource({
+        settleColdState: () => ({
+          accepted: false,
+          reason: "not-held" as const,
+        }),
+      }),
     );
 
     await expect(
@@ -216,7 +222,11 @@ describe("bodies.settle", () => {
         docGuid: "guid-1",
         update: new Uint8Array(),
       }),
-    ).resolves.toEqual({ accepted: false, settledBytes: 0 });
+    ).resolves.toEqual({
+      accepted: false,
+      settledBytes: 0,
+      reason: "not-held",
+    });
   });
 });
 
@@ -454,7 +464,10 @@ describe("bodies.materialize — the lease it stands on", () => {
     // live doc, so the demand and tier lease it stands on are still in use.
     // Releasing here unsubscribes a body the user still has open.
     const rig = leasedSource({
-      settleColdState: () => ({ accepted: false as const }),
+      settleColdState: () => ({
+        accepted: false as const,
+        reason: "not-held" as const,
+      }),
     });
     const ports = buildPorts(rig.source);
     await ports.bodies.materialize("art-1");

@@ -197,9 +197,6 @@ function setup() {
     bridge: main,
     docs,
     budget,
-    releaseForwardOnly: (docKey) => {
-      releasedForwardOnly.push(docKey);
-    },
     scheduler,
     lingerMs: LINGER_MS,
     maxHotDocs: MAX_HOT,
@@ -254,7 +251,6 @@ describe("acquire / materialize", () => {
       bridge: createMainBridgeEndpoint(pair.main, stubMainCallHandlers({})),
       docs,
       budget: createBudget(),
-      releaseForwardOnly: () => {},
       scheduler: createScheduler(),
       lingerMs: LINGER_MS,
       maxHotDocs: MAX_HOT,
@@ -398,7 +394,6 @@ describe("constraint 2 — a worker that dies mid-demote", () => {
       bridge: createMainBridgeEndpoint(nextPair.main, stubMainCallHandlers({})),
       docs,
       budget: createBudget(),
-      releaseForwardOnly: () => {},
       scheduler: createScheduler(),
       lingerMs: LINGER_MS,
       maxHotDocs: MAX_HOT,
@@ -554,7 +549,6 @@ describe("constraint 3 (legacy @1 arm) — a room-keyed re-acquire revives the s
       bridge: main,
       docs,
       budget,
-      releaseForwardOnly: () => {},
       scheduler,
       lingerMs: LINGER_MS,
       maxHotDocs: MAX_HOT,

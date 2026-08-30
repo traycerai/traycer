@@ -71,11 +71,16 @@ function stubCore(
     readAttachmentBytes: () => Promise.resolve(null),
     materializeBody: () => Promise.resolve(null),
     applyBodyAwareness: () => {},
-    releaseBody: () => {},
+    releaseBody: () => ({ released: true, reason: null }),
     heldBodyDocKeysForTests: () => [],
     // Refused, never accepted: an unowned `true` tells the main thread to drop
     // a document whose bytes nothing stored.
-    demoteBody: () => Promise.resolve({ accepted: false, settledBytes: 0 }),
+    demoteBody: () =>
+      Promise.resolve({
+        accepted: false,
+        settledBytes: 0,
+        reason: "not-held" as const,
+      }),
     updateBody: () =>
       Promise.resolve({
         outcome: { kind: "dropped", reason: "no lane in this fixture" },

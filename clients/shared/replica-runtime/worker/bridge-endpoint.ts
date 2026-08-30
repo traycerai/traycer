@@ -533,6 +533,13 @@ async function serve(
           transfer: reply.transfer,
         };
       }
+      case "body/release": {
+        const reply = await handlers["body/release"](call.request);
+        return {
+          result: { outcome: "ok", value: reply.value },
+          transfer: reply.transfer,
+        };
+      }
       case "body/demote": {
         const reply = await handlers["body/demote"](call.request);
         return {

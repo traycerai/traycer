@@ -385,6 +385,11 @@ export interface EpicReplicaRuntime {
     localClientId: number,
   ): void;
   /**
+   * Is this body pinned by tier state? See the tier member - the lease arm is
+   * excluded, because the caller asking is the one releasing.
+   */
+  isArtifactBodyPinned(docKey: string): boolean;
+  /**
    * Observe a materialized body's presence; returns the detach.
    *
    * The inbound counterpart: remote peers land in the room's `Awareness`, and
@@ -1366,6 +1371,7 @@ export function createEpicReplicaRuntime(
         entry.doc.off("update", handler);
       };
     },
+    isArtifactBodyPinned: (docKey) => tier.isRoomPinnedByTierState(docKey),
     sendArtifactBodyAwareness: (docKey, frame, localClientId) => {
       tier.relayLocalAwareness(docKey, frame, localClientId);
     },

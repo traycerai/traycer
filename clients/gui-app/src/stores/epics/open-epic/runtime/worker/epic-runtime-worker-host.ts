@@ -97,7 +97,12 @@ export interface EpicRuntimeWorkerCore {
     /** What the caller materialized at; a moved identity is refused. */
     readonly docGuid: string;
     readonly update: Uint8Array;
-  }): Promise<{ readonly accepted: boolean; readonly settledBytes: number }>;
+  }): Promise<{
+    readonly accepted: boolean;
+    readonly settledBytes: number;
+    /** WHY, when refused. `null` when accepted. Shared with `body/release`. */
+    readonly reason: "not-held" | "newer-generation" | "pinned" | null;
+  }>;
   /**
    * A local edit from the main-thread doc, on its way to the body lane.
    *
@@ -135,7 +140,10 @@ export interface EpicRuntimeWorkerCore {
   /**
    * Let go of a forward-only body. Settles nothing; see `body/release`.
    */
-  releaseBody(docKey: string): void;
+  releaseBody(docKey: string): {
+    readonly released: boolean;
+    readonly reason: "not-held" | "newer-generation" | "pinned" | null;
+  };
   /** The retained body holds. The lifetime leak's only honest observable. */
   heldBodyDocKeysForTests(): readonly string[];
   /**
@@ -271,6 +279,31 @@ export function startEpicRuntimeWorkerHost(
   const bootstrapListeners = new Set<(facts: RuntimeWorkerBootstrap) => void>();
   let projectionRevision = 0;
 
+  /**
+   * Answer a release. Split out so the handler can stay a one-liner that is
+   * obviously synchronous under its promise - releasing touches two maps and
+   * never awaits, which is what makes the ordering argument on `body/release`
+   * hold: once invoked it completes without interleaving.
+   */
+  function releaseBodyReply(request: { readonly docKey: string }): {
+    value: {
+      readonly released: boolean;
+      readonly reason: "not-held" | "newer-generation" | "pinned" | null;
+    };
+    transfer: readonly ArrayBuffer[];
+  } {
+    // No core: nothing to release, and `not-held` says so honestly. The hold
+    // is created BY a materialize this same core answered, so a release
+    // arriving without one names nothing that exists.
+    if (core === null) {
+      return {
+        value: { released: false, reason: "not-held" },
+        transfer: NO_TRANSFER,
+      };
+    }
+    return { value: core.releaseBody(request.docKey), transfer: NO_TRANSFER };
+  }
+
   const handlers: RuntimeWorkerCallHandlers = {
     "attachment/read": async (request) => {
       const held =
@@ -396,13 +429,14 @@ export function startEpicRuntimeWorkerHost(
         transfer: NO_TRANSFER,
       };
     },
+    "body/release": (request) => Promise.resolve(releaseBodyReply(request)),
     "body/demote": async (request) => {
       // Refusing is the only safe answer without a core: the main thread keeps
       // the live doc on `accepted: false`, and an unowned `true` would tell it
       // to drop bytes nothing has stored.
       const settled =
         core === null
-          ? { accepted: false, settledBytes: 0 }
+          ? { accepted: false, settledBytes: 0, reason: "not-held" as const }
           : await core.demoteBody(request);
       return { value: settled, transfer: NO_TRANSFER };
     },
@@ -511,13 +545,6 @@ export function startEpicRuntimeWorkerHost(
       }
       case "current-user": {
         currentUserId = event.userId;
-        return;
-      }
-      case "body/release": {
-        // Dropped without a core, and safely: no core means no retained hold
-        // to release. The hold is created BY a materialize this same core
-        // answered, so a release arriving without one names nothing.
-        core?.releaseBody(event.docKey);
         return;
       }
       case "body/awareness-out": {

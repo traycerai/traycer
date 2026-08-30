@@ -23,7 +23,12 @@ function source(
   const base: InProcessRuntimeSource = {
     bodyDocKey: (artifactId) => artifactId,
     encodeColdState: () => null,
-    settleColdState: () => ({ accepted: false, settledBytes: 0 }),
+    settleColdState: () => ({
+      accepted: false,
+      reason: "not-held" as const,
+      settledBytes: 0,
+    }),
+    releaseBody: () => ({ released: true, reason: null }),
     sendBodyUpdate: (): SendOutcome => ({
       kind: "dropped",
       reason: "no lane in this fixture",
@@ -113,7 +118,13 @@ describe("body/demote", () => {
     // replica already had stores nothing new.
     const input = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]);
     const port = createInProcessRuntimePort(
-      source({ settleColdState: () => ({ accepted: true, settledBytes: 3 }) }),
+      source({
+        settleColdState: () => ({
+          accepted: true,
+          reason: null,
+          settledBytes: 3,
+        }),
+      }),
     );
 
     const answer = await port.call(
@@ -130,7 +141,11 @@ describe("body/demote", () => {
   it("passes a refusal through as accepted:false, never as a throw", async () => {
     const port = createInProcessRuntimePort(
       source({
-        settleColdState: () => ({ accepted: false, settledBytes: 0 }),
+        settleColdState: () => ({
+          accepted: false,
+          reason: "not-held" as const,
+          settledBytes: 0,
+        }),
       }),
     );
 
@@ -178,7 +193,13 @@ describe("the port's shape", () => {
     const owned = new ArrayBuffer(8);
     const bytes = new Uint8Array(owned);
     const port = createInProcessRuntimePort(
-      source({ settleColdState: () => ({ accepted: true, settledBytes: 8 }) }),
+      source({
+        settleColdState: () => ({
+          accepted: true,
+          reason: null,
+          settledBytes: 8,
+        }),
+      }),
     );
 
     await port.call(

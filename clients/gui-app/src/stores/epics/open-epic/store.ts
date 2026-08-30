@@ -127,12 +127,6 @@ export interface EpicRuntimeBinding {
    * `spawn-epic-runtime-worker`'s member of the same name.
    */
   awarenessOut(docKey: string, frame: Uint8Array, localClientId: number): void;
-  /**
-   * Let go of a forward-only body. See `spawn-epic-runtime-worker`'s member:
-   * settle returns bytes, this returns memory, and a body has exactly one of
-   * the two lifecycles.
-   */
-  releaseBody(docKey: string): void;
   /** Ends the transport while the replica lives on. */
   detach(): void;
   /** Ends the worker. */
@@ -1007,9 +1001,6 @@ export function createOpenEpicStore(
     bridge: runtime.port,
     docs: bodyDocs,
     budget: createHotBodyBudgetAdapter(options.accounting),
-    releaseForwardOnly: (docKey) => {
-      runtime.releaseBody(docKey);
-    },
     // The renderer's own clock. Constructed here rather than taken as an
     // option because the linger is an internal fact about the lifetime of
     // main's hot docs, not something a caller chooses - and every caller that

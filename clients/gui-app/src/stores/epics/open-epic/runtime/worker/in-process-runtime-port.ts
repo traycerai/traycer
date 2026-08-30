@@ -52,7 +52,20 @@ export interface InProcessRuntimeSource {
     docKey: string,
     update: Uint8Array,
     expectedDocGuid: string,
-  ): { readonly accepted: boolean; readonly settledBytes: number };
+  ): {
+    readonly accepted: boolean;
+    readonly settledBytes: number;
+    readonly reason: "not-held" | "newer-generation" | "pinned" | null;
+  };
+  /**
+   * Let go of a FORWARD-ONLY body. Refusable, because a `@1` body's pins live
+   * in tier state and this is the only channel they have - there is no settle
+   * here to be refused.
+   */
+  releaseBody(docKey: string): {
+    readonly released: boolean;
+    readonly reason: "not-held" | "newer-generation" | "pinned" | null;
+  };
   sendBodyUpdate(docKey: string, update: Uint8Array): SendOutcome;
 }
 
@@ -122,23 +135,16 @@ export function createInProcessRuntimePort(
         hostStateVector: cold.hostStateVector,
       };
     },
+    "body/release": (request) => source.releaseBody(request.docKey),
     "body/demote": (request) => {
       const settlement = source.settleColdState(
         request.docKey,
         request.update,
         request.docGuid,
       );
-      // Shaped to the wire answer rather than returned raw: the settlement's
-      // refusal arm carries no `settledBytes`, and the response's does. Kept
-      // in step with the bridge port's own mapping - both ends answer the same
-      // three reasons, and `null` means accepted.
-      return settlement.accepted
-        ? {
-            accepted: true,
-            settledBytes: settlement.settledBytes,
-            reason: null,
-          }
-        : { accepted: false, settledBytes: 0, reason: settlement.reason };
+      // Passed through: this source already answers the wire shape, so a
+      // second mapping here would be a second place for the two to drift.
+      return settlement;
     },
     "body/update": (request) => ({
       outcome: source.sendBodyUpdate(request.docKey, request.update),
