@@ -14,25 +14,31 @@ import { describe, expect, it } from "vitest";
  * module identity, so a worker importing it gets a second COPY of its state
  * rather than a second reference to one. `active-remote-sessions`' process-wide
  * `RemoteSession` cache was the second - it is why the socket never moved.
- * `process-memory-accountant`'s `let processRuntime` is the third, and it is
- * the one still open.
+ * `process-memory-accountant`'s `let processRuntime` is the third, and 4e
+ * closed it by INVERTING the dependency rather than by moving the module -
+ * which is why this file walks two entries rather than one.
  *
  * Every one of them is invisible to an in-process suite, because in-process the
  * "worker" shares the module instance and there is exactly one copy. No
  * behavioural test can find these; only the import graph can.
  *
  * A RATCHET, and today it holds the set at ZERO with an EMPTY allowlist -
- * which is stronger than the allowlist this started with. The reason is worth
- * knowing: the worker entry does not yet import the composition root, so its
- * value graph is small and reaches nothing stateful. `process-memory-accountant`
- * is reachable from `epic-replica-runtime.ts`, and that module joins this graph
- * the moment the composition is wired into the worker.
+ * which is stronger than the allowlist this started with. WHICH REASON holds
+ * it there changed at the flip, and reading the old one out of this header is
+ * how a future edit talks itself into a re-coupling: the entry DOES import the
+ * composition root now (`installEpicRuntimeCore`), so `epic-replica-runtime.ts`
+ * is squarely inside this graph and the walk is not small any more. It holds at
+ * zero because 4e INVERTED the accounting dependency - the runtime receives an
+ * `EpicRuntimeAccountingPort` through its options and no longer names
+ * `process-memory-accountant` by module identity, so that import stays on main
+ * in `process-backed-accounting-port.ts`.
  *
- * So this pin does not go red today - it goes red on the COMMIT that wires the
- * composition without 4e having landed, naming the chain. That is exactly when
- * it should fire, and it is why the allowlist is empty rather than pre-loaded
- * with a module that is not there yet: a pre-loaded entry would have made the
- * anti-rot check assert a chain that does not exist, which is a failing test
+ * So this pin is load-bearing every day rather than on some future commit. It
+ * reds on any change that re-couples the worker's graph to a process-scoped
+ * module: re-importing the accountant, or reaching `active-remote-sessions` or
+ * the mint flow from anything the composition pulls in. The allowlist stays
+ * EMPTY rather than pre-loaded, because an entry naming a chain the graph does
+ * not have makes the anti-rot check below assert nothing - a failing test
  * describing nothing.
  */
 const WORKER_DIR = path.join(
@@ -60,11 +66,13 @@ const ENTRY = path.join(WORKER_DIR, "epic-runtime-worker-entry.ts");
 /**
  * The second entry, and the one 4e actually moved.
  *
- * The worker entry above does not import the composition root yet, so its
- * graph is small. `epic-replica-runtime.ts` is the module that WILL be in the
- * worker, and before 4e it value-imported `process-memory-accountant`
- * directly. Walking it is what makes this pin load-bearing TODAY rather than
- * only on the commit that wires the composition.
+ * `epic-replica-runtime.ts` is reachable from `ENTRY` today (entry ->
+ * `install-epic-runtime-core` -> `epic-runtime-composition` -> here), so this
+ * walk no longer covers ground the first one misses. It is kept because it
+ * ISOLATES the module 4e changed: before 4e this file value-imported
+ * `process-memory-accountant` directly, and a regression re-adding that import
+ * reds here naming the RUNTIME rather than naming the whole entry graph -
+ * which is the difference between a diagnosis and a symptom.
  */
 const RUNTIME_ENTRY = path.join(WORKER_DIR, "..", "epic-replica-runtime.ts");
 

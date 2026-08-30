@@ -259,13 +259,19 @@ export function openStoreForTest(
   return {
     ...handle,
     flush: () => inProcessWorker.flush(),
-    // GETTERS, not captured values. `epic-session-provider.tsx` states the
-    // cost of getting this wrong: freezing them "leaves every consumer holding
-    // a DESTROYED `Y.Doc` and `Awareness` while the live ones are unreachable"
-    // - and a replica replacement (a viewer downgrade, a fresh snapshot, an
-    // authority-epoch change) is exactly what these suites drive. The runtime
-    // declares them as getters for this reason; re-declaring them here is what
-    // carries that through the harness.
+    // ADDED here, not carried by the spread above: `doc` and `awareness` are
+    // not members of `OpenEpicStoreHandle` at all - they left that interface
+    // when the runtime moved into the worker, and this harness is the only
+    // caller still holding the composed runtime directly, so it is the only
+    // one that can offer them.
+    //
+    // GETTERS rather than captured values, because the runtime REPLACES the
+    // replica underneath them - a viewer downgrade, a fresh snapshot, an
+    // authority-epoch change - and driving exactly those replacements is what
+    // these suites are for. Reading `runtime.doc` once here would hand a suite
+    // a doc that is destroyed the moment it exercises the behaviour it was
+    // written to cover, with the live one unreachable and no assertion able to
+    // tell the difference.
     get doc(): Y.Doc {
       return runtime.doc;
     },

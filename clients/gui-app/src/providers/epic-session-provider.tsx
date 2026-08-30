@@ -773,14 +773,6 @@ export function EpicSessionProvider(
       // or both may run.
       const handle: OpenEpicStoreHandle = {
         ...created,
-        // `doc` and `awareness` are GETTERS on `created`, and a spread does not
-        // copy a getter - it CALLS it once and copies the value. Without these
-        // two lines this wrapper freezes both to whatever existed at
-        // construction, and every replica replacement (a viewer downgrade, a
-        // fresh snapshot, a manifest change, an authority-epoch change) leaves
-        // every consumer holding a DESTROYED `Y.Doc` and `Awareness` while the
-        // live ones are unreachable. The runtime declares them as getters for
-        // exactly this reason; re-declaring them here is what carries that
         dispose: () => {
           created.dispose();
           closeSessionTransport();
