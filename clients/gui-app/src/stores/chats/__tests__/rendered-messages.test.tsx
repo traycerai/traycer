@@ -89,6 +89,7 @@ function userMessage(messageId: string): Extract<Message, { role: "user" }> {
     message: {
       kind: "user",
       content: CONTENT,
+      browserAnnotations: [],
     },
     timestamp: 1000 + messageId.length,
     sessionAnchor: null,
@@ -141,6 +142,7 @@ function steerRequestedQueueItem(
     message: {
       kind: "user",
       content: CONTENT,
+      browserAnnotations: [],
     },
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,
@@ -255,6 +257,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -399,10 +402,12 @@ const displayContext: RenderedMessagesDisplayContext = {
 const CANONICAL_RENDERED_MESSAGES_INPUT: RenderedMessagesInput = {
   messages: [],
   events: [],
+  rowContext: {},
   pendingUserMessages: [],
   liveAssistantMessage: null,
   activeTurn: null,
   runStatus: "idle",
+  setupCardWindows: [],
   ...BINDING,
 };
 
@@ -440,6 +445,41 @@ function renderRenderedMessages(patch: Partial<RenderedMessagesInput>) {
 }
 
 describe("useRenderedMessages", () => {
+  it("projects an explicitly anchored send failure into a stable inline error row", () => {
+    const failure = {
+      eventId: "queued-preparation-failure",
+      type: "send.failed",
+      timestamp: 2_000,
+      clientActionId: null,
+      actor: null,
+      message: "The queued prompt could not be prepared.",
+      turnId: null,
+      messageId: null,
+      queueItemId: "queue-item-1",
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: {
+        code: "QUEUED_PROMPT_PREPARATION_FAILED",
+        notificationAnchor: true,
+      },
+    } satisfies ChatEvent;
+    const { result } = renderRenderedMessages({ events: [failure] });
+
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0]).toMatchObject({
+      id: "chat-event:queued-preparation-failure",
+      role: "assistant",
+      segments: [
+        {
+          kind: "error",
+          message: "The queued prompt could not be prepared.",
+          code: "QUEUED_PROMPT_PREPARATION_FAILED",
+        },
+      ],
+    });
+  });
+
   it("projects persisted plan blocks into plan segments", () => {
     const assistant = assistantMessage("turn-plan", 2000);
     const planBlock = {
@@ -854,6 +894,9 @@ describe("useRenderedMessages", () => {
       reasoningEffort: "high",
       reasoningEffortLabel: "Resolved high",
       serviceTier: "priority",
+      // Null, not absent: this fixture's record carries no env credential, and
+      // that IS the claim "the profile sign-in ran the turn".
+      envCredentialVar: null,
       costUsd: null,
     });
   });
@@ -879,6 +922,66 @@ describe("useRenderedMessages", () => {
     expect(
       assistantRows.map((message) => message.assistantMeta?.profileLabel),
     ).toEqual(["Work", "Work"]);
+  });
+
+  it("takes the session anchor from the projection when the anchoring user row is cold", () => {
+    // The running `currentAnchor` walk is exactly the "look at the rows around
+    // this one" derivation a bounded window cannot make: hydrate the assistant
+    // turn alone and the walk starts with nothing, so the saved profile label
+    // disappears from a turn that had one. The host carries the anchor it used.
+    const withoutContext = renderRenderedMessages({
+      messages: [assistantMessage("turn-cold-anchor", 2000)],
+    });
+    expect(
+      withoutContext.result.current.find(
+        (message) => message.role === "assistant",
+      )?.assistantMeta?.profileLabel,
+    ).toBeNull();
+
+    const { result } = renderRenderedMessages({
+      messages: [assistantMessage("turn-cold-anchor-2", 2000)],
+      rowContext: {
+        "assistant:turn-cold-anchor-2": {
+          sessionAnchor: claudeSessionAnchor("work-profile", "Work"),
+        },
+      },
+    });
+    expect(
+      result.current.find((message) => message.role === "assistant")
+        ?.assistantMeta?.profileLabel,
+    ).toBe("Work");
+  });
+
+  it("anchors a legacy turn's elapsed counter on the projection's own anchor", () => {
+    // A turn persisted before `startedAt` existed takes its anchor from the
+    // preceding user record. A span that does not reach that record leaves the
+    // walk's `lastUserTimestamp` null, and the anchor collapses onto the
+    // assistant record's COMPLETION stamp - a row whose elapsed time reads
+    // zero. The projection carries the anchor it actually used.
+    const legacy: Extract<Message, { role: "assistant" }> = {
+      ...assistantMessage("turn-legacy-anchor", 9000),
+      startedAt: null,
+    };
+    const withoutContext = renderRenderedMessages({ messages: [legacy] });
+    expect(
+      withoutContext.result.current.find(
+        (message) => message.role === "assistant",
+      )?.createdAt,
+    ).toBe(9000);
+
+    const legacyTwo: Extract<Message, { role: "assistant" }> = {
+      ...assistantMessage("turn-legacy-anchor-2", 9000),
+      startedAt: null,
+    };
+    const { result } = renderRenderedMessages({
+      messages: [legacyTwo],
+      rowContext: {
+        "assistant:turn-legacy-anchor-2": { legacyRowAnchorAt: 4000 },
+      },
+    });
+    expect(
+      result.current.find((message) => message.role === "assistant")?.createdAt,
+    ).toBe(4000);
   });
 
   it("shows the initiating profile on the active turn before output starts", () => {
@@ -1014,6 +1117,7 @@ describe("useRenderedMessages", () => {
       message: {
         kind: "user",
         content,
+        browserAnnotations: [],
       },
       timestamp: 2002,
     };
@@ -1070,6 +1174,7 @@ describe("useRenderedMessages", () => {
       message: {
         kind: "user",
         content,
+        browserAnnotations: [],
       },
       timestamp: 2002,
     };
@@ -2953,9 +3058,14 @@ describe("useRenderedMessages", () => {
           clientActionId: "action-2",
           messageId: "m2",
           content: CONTENT,
+          attachments: [],
           sender: { type: "user", userId: "owner-1" },
           settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          deliveryPolicy: null,
           timestamp: 3000,
+          restore: { content: CONTENT, browserAnnotations: [] },
+          restoreWorktreeIntent: null,
         },
       ],
       activeTurn,
@@ -3652,9 +3762,14 @@ describe("useRenderedMessages setup card integration", () => {
           clientActionId: "action-1",
           messageId: "echo-msg",
           content: CONTENT,
+          attachments: [],
           sender: { type: "user", userId: "owner-1" },
           settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          deliveryPolicy: null,
           timestamp: 1010,
+          restore: { content: CONTENT, browserAnnotations: [] },
+          restoreWorktreeIntent: null,
         },
       ],
     });
@@ -3675,9 +3790,14 @@ describe("useRenderedMessages setup card integration", () => {
           clientActionId: "action-1",
           messageId: "m1",
           content: CONTENT,
+          attachments: [],
           sender: { type: "user", userId: "owner-1" },
           settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          deliveryPolicy: null,
           timestamp: 3000,
+          restore: { content: CONTENT, browserAnnotations: [] },
+          restoreWorktreeIntent: null,
         },
       ],
     });

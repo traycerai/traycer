@@ -25,6 +25,7 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateChannelChange,
   DesktopAppUpdateGuidance,
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
@@ -41,6 +42,7 @@ type ToastOptions = {
   duration?: number;
   action?: ToastAction;
   cancel?: ToastAction | null;
+  onDismiss?: () => void;
 };
 
 type ToastCall = (
@@ -51,12 +53,15 @@ type ToastCall = (
 const toastMock = vi.hoisted(() => {
   const actions: {
     action: (() => void) | null;
-  } = { action: null };
+    dismiss: (() => void) | null;
+  } = { action: null, dismiss: null };
   const toast = vi.fn<ToastCall>((_message, options) => {
     actions.action = options?.action?.onClick ?? null;
   });
   const error = vi.fn<ToastCall>();
-  const message = vi.fn<ToastCall>();
+  const message = vi.fn<ToastCall>((_message, options) => {
+    actions.dismiss = options?.onDismiss ?? null;
+  });
   return Object.assign(toast, {
     dismiss: vi.fn(),
     error,
@@ -77,6 +82,7 @@ const IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   currentVersion: "1.0.0",
   allowPrerelease: false,
   latestVersion: null,
+  latestCompatibilityEpoch: null,
   downloadProgress: null,
   installBlockedReason: null,
   installGuidance: null,
@@ -101,7 +107,21 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   snapshot: DesktopAppUpdateSnapshot;
   readonly downloadUpdate = vi.fn(() => Promise.resolve(this.snapshot));
   readonly installUpdate = vi.fn(() => Promise.resolve(this.snapshot));
-  readonly setAllowPrerelease = vi.fn(() => Promise.resolve(this.snapshot));
+  // Annotated with the full change type. Inference from this default narrows
+  // `outcome` to the literal `"changed"`, which then rejects a
+  // `mockResolvedValue` for `refused-update-pending` - the macOS standing
+  // refusal, which is exactly the case worth testing.
+  readonly setAllowPrerelease = vi.fn(
+    (): Promise<DesktopAppUpdateChannelChange> =>
+      Promise.resolve({ outcome: "changed", snapshot: this.snapshot }),
+  );
+  readonly resolveCompatRecovery = vi.fn(() =>
+    Promise.resolve({
+      route: "manual" as const,
+      rcCandidateVersion: null,
+      stagedVersion: null,
+    }),
+  );
   private readonly handlers = new Set<
     (snapshot: DesktopAppUpdateSnapshot) => void
   >();
@@ -145,7 +165,8 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
 
 class DelayedSnapshotAppUpdatesBridge extends FakeAppUpdatesBridge {
   private resolveSnapshot:
-    ((snapshot: DesktopAppUpdateSnapshot) => void) | null = null;
+    | ((snapshot: DesktopAppUpdateSnapshot) => void)
+    | null = null;
 
   override getSnapshot(): Promise<DesktopAppUpdateSnapshot> {
     return new Promise((resolve) => {
@@ -170,6 +191,7 @@ function readySnapshot(sequence: number): DesktopAppUpdateSnapshot {
     currentVersion: "1.0.0",
     allowPrerelease: false,
     latestVersion: "1.2.3",
+    latestCompatibilityEpoch: null,
     downloadProgress: null,
     installBlockedReason: null,
     installGuidance: null,
@@ -234,6 +256,7 @@ function availableSnapshot(sequence: number): DesktopAppUpdateSnapshot {
     sequence,
     status: "available",
     latestVersion: "1.2.3",
+    latestCompatibilityEpoch: null,
     lastCheckedAt: "2026-06-15T00:00:00.000Z",
     lastCheckIntent: "automatic",
   };
@@ -323,6 +346,8 @@ function renderWithReadiness(
 describe("desktop app update UI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    toastMock.actions.action = null;
+    toastMock.actions.dismiss = null;
     useDesktopDialogStore.getState().close();
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
   });
@@ -703,6 +728,56 @@ describe("desktop app update UI", () => {
           closeButton: true,
         }),
       );
+    });
+  });
+
+  it("keeps download progress dismissed until the current download ends", async () => {
+    const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
+    renderWithHost(<AppUpdateToastController />, bridge);
+    await waitFor(() => {
+      expect(bridge.subscriptionCount()).toBe(1);
+    });
+
+    act(() => {
+      bridge.emit(downloadingSnapshot(1, 21));
+    });
+    await waitFor(() => {
+      expect(toastMock.message).toHaveBeenCalledTimes(1);
+    });
+
+    const dismissProgress = toastMock.actions.dismiss;
+    if (dismissProgress === null) {
+      throw new Error("expected download progress to be dismissible");
+    }
+    act(() => {
+      dismissProgress();
+      bridge.emit(downloadingSnapshot(2, 22));
+    });
+
+    expect(toastMock.message).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      bridge.emit(readySnapshot(3));
+    });
+    await waitFor(() => {
+      expect(toastMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: "traycer-app-update" }),
+      );
+    });
+
+    act(() => {
+      // Sonner also calls the old toast's `onDismiss` when a terminal toast
+      // replaces it. That callback must not leak dismissal into the next
+      // download.
+      dismissProgress();
+      bridge.emit(availableSnapshot(4));
+    });
+    act(() => {
+      bridge.emit(downloadingSnapshot(5, 1));
+    });
+    await waitFor(() => {
+      expect(toastMock.message).toHaveBeenCalledTimes(2);
     });
   });
 

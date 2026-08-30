@@ -31,10 +31,13 @@ function stagedDirFor(environment: Environment): string {
 const mocks = vi.hoisted(() => ({
   platformOverride: null as "win32" | null,
   busyOverride: null as "busy" | null,
-  lifecycleCalls: [] as Array<{ bootstrap: unknown }>,
+  lifecycleCalls: [] as Array<{ bootstrap: unknown; force: boolean }>,
   lifecycleBeforeSwapShouldThrow: false,
   lifecyclePostSwapAction: "restart" as
-    "restart" | "start" | "install" | "none",
+    | "restart"
+    | "start"
+    | "install"
+    | "none",
   lifecyclePostSwapError: null as string | null,
   // `vi.mock` factories are hoisted above this file's own top-level `let
   // sandboxRoot` - a direct reference there hits a TDZ `ReferenceError`,
@@ -66,8 +69,14 @@ vi.mock("../../host/busy-check", () => ({
 }));
 
 vi.mock("../../service/install-lifecycle", () => ({
-  createServiceInstallLifecycle: (options: { bootstrap: unknown }) => {
-    mocks.lifecycleCalls.push({ bootstrap: options.bootstrap });
+  createServiceInstallLifecycle: (options: {
+    bootstrap: unknown;
+    force: boolean;
+  }) => {
+    mocks.lifecycleCalls.push({
+      bootstrap: options.bootstrap,
+      force: options.force,
+    });
     const state = {
       priorState: "running" as const,
       stoppedBeforeSwap: false,
@@ -118,7 +127,7 @@ vi.mock("../../store/paths", async () => {
   };
 });
 
-import { applyHost } from "../apply";
+import { applyHost as applyHostWithAuthority } from "../apply";
 import { currentInstallArch, currentInstallPlatform } from "../install";
 import { readHostInstallRecord } from "../../manifest/host-install";
 import {
@@ -128,6 +137,18 @@ import {
 } from "../../manifest/host-staged";
 import { writeHostInstallRecord } from "../../manifest/host-install";
 import type { HostInstallRecord } from "../../manifest/host-install";
+
+const testMutationVerifier = async (): Promise<void> => undefined;
+type ApplyOptions = Parameters<typeof applyHostWithAuthority>[0];
+const applyHost = (
+  options: Omit<ApplyOptions, "verifyMutationCapability"> &
+    Partial<Pick<ApplyOptions, "verifyMutationCapability">>,
+) =>
+  applyHostWithAuthority({
+    ...options,
+    verifyMutationCapability:
+      options.verifyMutationCapability ?? testMutationVerifier,
+  });
 
 const ENV: Environment = "production";
 
@@ -152,6 +173,7 @@ async function writeInstall(
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath,
+    executableSha256: null,
     ...overrides,
   };
   await writeHostInstallRecord(ENV, record);
@@ -179,6 +201,7 @@ async function writeStaged(
     executablePath: executableRelPath,
     platform: currentInstallPlatform(),
     arch: currentInstallArch(),
+    executableSha256: null,
     ...overrides,
   };
   await writeHostStagedRecordAt(stagedDir, record);
@@ -373,6 +396,11 @@ describe("applyHost", () => {
     });
 
     expect(result.outcome).toBe("applied");
+    // `--force` is not just the busy-check bypass above - it also has to
+    // reach the service lifecycle's pre-swap stop (service/install-
+    // lifecycle.ts's `beforeSwap`), or a busy Desktop-managed host would
+    // still deny the cooperative shutdown claim and abort anyway.
+    expect(mocks.lifecycleCalls).toEqual([{ bootstrap: null, force: true }]);
   });
 
   it("--no-service skips the busy check and the service lifecycle entirely, reporting runningActivated: false", async () => {

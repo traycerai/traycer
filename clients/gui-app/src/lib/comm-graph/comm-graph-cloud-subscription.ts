@@ -12,7 +12,9 @@ import { commGraphEventKey } from "@/lib/comm-graph/comm-graph-timeline";
 import { appLogger } from "@/lib/logger";
 
 export type CommGraphCloudAvailability =
-  "pending" | "available" | "unsupported";
+  | "pending"
+  | "available"
+  | "unsupported";
 
 const RECONNECTING_RELAY_FAILOVER_MS = 15_000;
 
@@ -228,6 +230,11 @@ export class CommGraphCloudSubscriptionManager {
 
   getSnapshot(): CommGraphSnapshot {
     return this.snapshot;
+  }
+
+  /** See `CommGraphSubscriptionManager.isAttached`. */
+  isAttached(): boolean {
+    return this.attached;
   }
 
   isInitialHistoryCaughtUp(): boolean {

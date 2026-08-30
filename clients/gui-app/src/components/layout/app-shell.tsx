@@ -1,11 +1,18 @@
 import { type ReactNode } from "react";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
+import { BrowserOverlayCoordinatorBridge } from "@/components/epic-canvas/browser-overlay-coordinator-bridge";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { TileFindOwnerBridge } from "@/components/epic-canvas/tile-find/tile-find-owner-bridge";
 import { TileSelectAllBridge } from "@/components/epic-canvas/tile-select-all-bridge";
 import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppHeader } from "@/components/layout/header/app-header";
+import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
+import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-snapshot";
+import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
+import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
+import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
+import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -15,6 +22,7 @@ import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
 import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
 
 interface AppShellProps {
@@ -29,6 +37,9 @@ interface AppShellProps {
 export function AppShell(props: AppShellProps) {
   const { children } = props;
   const activeHostId = useAddressableHostId();
+  // Phones get the hamburger navigation drawer; it is only mounted below md so
+  // desktop mounts nothing extra and stays unchanged.
+  const isMobile = useIsMobileViewport();
   // Observed, never rendered. A publication fork resolves itself now - the
   // banner and the dialog that used to read this query are gone - but the
   // per-chat `pendingFork` indicator is derived from an open fork episode and
@@ -36,14 +47,36 @@ export function AppShell(props: AppShellProps) {
   // app-wide mount supplies that edge, because an episode is a HOST fact and
   // not a property of any open tab.
   useChatForkEventQuery();
+  // App-wide rather than composer-local: every text entry in the app raises the
+  // same keyboard, and the drag that dismisses it usually starts on the content
+  // above rather than on the field itself. Self-gated on the mobile-app product
+  // flag, so desktop attaches nothing.
+  useDragToDismissKeyboard();
+  // App-wide for the same reason: the swipe answers wherever the user is, and
+  // the surface it navigates away from has no say in it. Self-gated on the
+  // mobile-app product flag, so desktop attaches nothing and keeps its arrows.
+  // Renders nothing until a swipe is actually in flight.
+  const historySwipeTransition = useMobileHistorySwipes();
 
   return (
     <PrimaryFocusCoordinatorProvider>
       <DiffWorkerPoolProvider>
-        <div className="min-h-screen bg-canvas text-canvas-foreground">
+        <div className="min-h-safe-dvh bg-canvas text-canvas-foreground">
           <RootDndProvider>
-            <div className="relative flex h-screen w-full flex-col">
+            {/* The screen, as a history swipe understands one: the header and
+              the content viewport travel together, because a transition that
+              moved only the content would leave the title of the screen you
+              are leaving sitting above the screen you are arriving at. */}
+            <div
+              className="relative flex h-safe-dvh w-full flex-col"
+              {...{ [SWIPE_NAV_SCREEN_ATTRIBUTE]: "" }}
+            >
               <AppHeader variant="app" />
+              {/* Above the session strip: a wrong clock is the CAUSE of the
+                interruption the strip reports, so if both are showing the
+                actionable one has to be read first. */}
+              <ClockSkewBanner />
+              <SessionConnectivityStrip />
               <main className="relative flex min-h-0 flex-1 flex-col">
                 {/* The app's edge-to-edge content viewport. Individual surfaces
                   own their internal overflow, including the landing terminal. */}
@@ -66,6 +99,7 @@ export function AppShell(props: AppShellProps) {
                     <LandingTerminalHost />
                   </HostScopeReady>
                 </div>
+                <BrowserOverlayCoordinatorBridge />
                 <TileFindOwnerBridge />
                 <TileSelectAllBridge />
               </main>
@@ -74,6 +108,7 @@ export function AppShell(props: AppShellProps) {
               <QuitInterceptBridge />
               <MigrationRunController />
               <MigrationBlockingModalHost />
+              {isMobile ? <MobileNavDrawer /> : null}
               {/* Test-only probe: binds the active hostId to a hidden DOM
                 attribute so the mobile-cardinality integration tests can
                 assert the runner-host auto-bind machinery without depending
@@ -85,6 +120,10 @@ export function AppShell(props: AppShellProps) {
                 data-bound-host-id={activeHostId === null ? "" : activeHostId}
                 className="sr-only"
               />
+              {/* Last child, so the frozen screens cover everything they were
+                copied from. Inside this box rather than portalled, because they
+                are this screen leaving rather than a layer over the app. */}
+              {historySwipeTransition}
             </div>
           </RootDndProvider>
         </div>

@@ -3,11 +3,15 @@ import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { REMOTE_SESSION_LINGER_MS } from "../config";
 import type { IRemoteSession } from "../remote-session";
+import type { WakeProbeTuning } from "../../host-stream-client";
+import { RemoteStreamClient } from "../remote-stream-client";
 import {
   acquireRemoteSession,
   hasReadyRemoteSession,
   remoteSessionRefCountForTest,
   retireAllRemoteSessions,
+  wakeHeldRemoteSessions,
+  type RemoteSessionAcquirePolicy,
   type RemoteSessionIdentity,
 } from "../active-remote-sessions";
 
@@ -18,6 +22,14 @@ import {
 // itself only ever calls `isReady()`/`close()` on what `createSession`
 // returns, so a fake exercising those is a faithful, isolated test double.
 //
+/**
+ * The default acquire policy for these lifecycle tests: a durable consumer,
+ * eligible for the proactive sweep. Sweep-eligibility cases build their own.
+ */
+const ELIGIBLE_POLICY: RemoteSessionAcquirePolicy = {
+  proactiveWakeEligible: true,
+};
+
 // The cache is a module-level singleton, so every test below uses its OWN
 // unique identity - shared keys would let one test's state leak into
 // another's regardless of cleanup order.
@@ -27,6 +39,20 @@ interface FakeSession extends IRemoteSession<
   VersionedStreamRpcRegistry
 > {
   readonly closeCalls: number;
+  /**
+   * Every reason `wake` was called with, in order. An accumulator rather than
+   * a `vi.fn()` reference for the same reason `closeCalls` is one: referencing
+   * a method-shorthand interface member as a value trips
+   * `@typescript-eslint/unbound-method`.
+   */
+  readonly wakeReasons: readonly string[];
+  /**
+   * The probe tuning carried by each `wake`, index-aligned with
+   * `wakeReasons`. Recorded so the sweep tests can pin that a caller's exact
+   * tuning object reaches the session - a fake that discards it would keep a
+   * sweep that drops `wakeProbe` on the floor green.
+   */
+  readonly wakeProbes: ReadonlyArray<WakeProbeTuning | null>;
   ready: boolean;
   /**
    * Mirrors a session-level fatal: the real `RemoteSession` flips itself to
@@ -38,9 +64,17 @@ interface FakeSession extends IRemoteSession<
 
 function fakeSession(): FakeSession {
   let closeCalls = 0;
+  const wakeReasons: string[] = [];
+  const wakeProbes: Array<WakeProbeTuning | null> = [];
   const session: FakeSession = {
     get closeCalls() {
       return closeCalls;
+    },
+    get wakeReasons() {
+      return wakeReasons;
+    },
+    get wakeProbes() {
+      return wakeProbes;
     },
     // Mirrors the real `RemoteSession`: not ready until it has actually
     // connected, so a fresh fake never masquerades as evidence of liveness.
@@ -57,6 +91,14 @@ function fakeSession(): FakeSession {
       throw new Error("not exercised by these tests");
     }),
     notifyBearerRotated: vi.fn(),
+    wake: (reason, probe) => {
+      wakeReasons.push(reason);
+      wakeProbes.push(probe);
+    },
+    forceReconnect: (reason) => {
+      wakeReasons.push(`forced:${reason}`);
+      wakeProbes.push(null);
+    },
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
@@ -109,8 +151,16 @@ describe("acquireRemoteSession", () => {
       return session;
     };
 
-    const first = acquireRemoteSession(identity, createSession);
-    const second = acquireRemoteSession(identity, createSession);
+    const first = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    const second = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
 
     // Only ONE underlying session was ever constructed for the two acquires.
     expect(created).toHaveLength(1);
@@ -130,7 +180,7 @@ describe("acquireRemoteSession", () => {
   it("(a) keeps the session warm for the linger window after the last release, then tears it down", () => {
     const identity = freshIdentity();
     const session = fakeSession();
-    const view = acquireRemoteSession(identity, () => session);
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
 
     expect(session.closeCalls).toBe(0);
     view.close();
@@ -150,13 +200,21 @@ describe("acquireRemoteSession", () => {
     const session = fakeSession();
     const createSession = vi.fn(() => session);
 
-    const first = acquireRemoteSession(identity, createSession);
+    const first = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     first.close();
     vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS - 1);
 
     // The whole point of the keep-warm: no fresh mint/dial/handshake - the
     // second acquire reuses the still-connected session.
-    const second = acquireRemoteSession(identity, createSession);
+    const second = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(createSession).toHaveBeenCalledTimes(1);
     expect(remoteSessionRefCountForTest(identity)).toBe(1);
 
@@ -181,14 +239,22 @@ describe("acquireRemoteSession", () => {
     const session = fakeSession();
     const createSession = vi.fn(() => session);
 
-    const during = acquireRemoteSession(identity, createSession);
+    const during = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     // Still not ready - establishment in flight.
     expect(session.ready).toBe(false);
     during.close();
     expect(session.closeCalls).toBe(0);
 
     vi.advanceTimersByTime(1_000);
-    const reacquired = acquireRemoteSession(identity, createSession);
+    const reacquired = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(createSession).toHaveBeenCalledTimes(1);
     expect(session.closeCalls).toBe(0);
     reacquired.close();
@@ -199,8 +265,16 @@ describe("acquireRemoteSession", () => {
     const session = fakeSession();
     const createSession = vi.fn(() => session);
 
-    const consumerA = acquireRemoteSession(identity, createSession);
-    const consumerB = acquireRemoteSession(identity, createSession);
+    const consumerA = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    const consumerB = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(createSession).toHaveBeenCalledTimes(1);
     expect(remoteSessionRefCountForTest(identity)).toBe(2);
 
@@ -219,8 +293,12 @@ describe("acquireRemoteSession", () => {
   it("a view's close() is idempotent - releasing twice never double-decrements or double-closes", () => {
     const identity = freshIdentity();
     const session = fakeSession();
-    const other = acquireRemoteSession(identity, () => session);
-    const view = acquireRemoteSession(identity, () => session);
+    const other = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      () => session,
+    );
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
 
     view.close();
     view.close();
@@ -241,12 +319,20 @@ describe("acquireRemoteSession", () => {
       .mockReturnValueOnce(first)
       .mockReturnValueOnce(second);
 
-    const view1 = acquireRemoteSession(identity, createSession);
+    const view1 = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     view1.close();
     expireLinger();
     expect(first.closeCalls).toBe(1);
 
-    const view2 = acquireRemoteSession(identity, createSession);
+    const view2 = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(createSession).toHaveBeenCalledTimes(2);
     expect(remoteSessionRefCountForTest(identity)).toBe(1);
 
@@ -274,13 +360,21 @@ describe("acquireRemoteSession", () => {
     // A consumer still HOLDS a reference when the session goes terminal - the
     // bricked-session incident shape: the messenger pins the entry in the
     // cache while the provider's rebuild re-acquires the same key.
-    const pinningView = acquireRemoteSession(identity, createSession);
+    const pinningView = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     dead.closedUnderneath = true;
     expect(pinningView.isClosed()).toBe(true);
 
     // The re-acquire must NOT serve the dead entry: a closed session's
     // `start()` no-ops, so it could never carry traffic again.
-    const rebuiltView = acquireRemoteSession(identity, createSession);
+    const rebuiltView = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(createSession).toHaveBeenCalledTimes(2);
     expect(rebuiltView.isClosed()).toBe(false);
     expect(remoteSessionRefCountForTest(identity)).toBe(1);
@@ -305,14 +399,18 @@ describe("acquireRemoteSession", () => {
       .mockReturnValueOnce(dead)
       .mockReturnValueOnce(fresh);
 
-    const view = acquireRemoteSession(identity, createSession);
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, createSession);
     view.close();
     // Mid-linger, the warm session hits a session-level fatal underneath.
     vi.advanceTimersByTime(1_000);
     dead.closedUnderneath = true;
 
     // The next acquire must not adopt the corpse - fresh session instead.
-    const rebuilt = acquireRemoteSession(identity, createSession);
+    const rebuilt = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(createSession).toHaveBeenCalledTimes(2);
     expect(rebuilt.isClosed()).toBe(false);
     expect(remoteSessionRefCountForTest(identity)).toBe(1);
@@ -342,8 +440,16 @@ describe("acquireRemoteSession", () => {
       .mockReturnValueOnce(sessionForUserA)
       .mockReturnValueOnce(sessionForUserB);
 
-    const viewA = acquireRemoteSession(identityA, createSession);
-    const viewB = acquireRemoteSession(identityB, createSession);
+    const viewA = acquireRemoteSession(
+      identityA,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    const viewB = acquireRemoteSession(
+      identityB,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
 
     expect(createSession).toHaveBeenCalledTimes(2);
     expect(remoteSessionRefCountForTest(identityA)).toBe(1);
@@ -380,13 +486,21 @@ describe("acquireRemoteSession", () => {
       .mockReturnValueOnce(sessionForKeyA)
       .mockReturnValueOnce(sessionForKeyB);
 
-    const viewA = acquireRemoteSession(identityKeyA, createSession);
+    const viewA = acquireRemoteSession(
+      identityKeyA,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(remoteSessionRefCountForTest(identityKeyA)).toBe(1);
 
     // The render layer rebuilds its transport for the NEW key - a genuinely
     // fresh acquire, not a hit reusing the stale (pinned-to-the-old-key)
     // session.
-    const viewB = acquireRemoteSession(identityKeyB, createSession);
+    const viewB = acquireRemoteSession(
+      identityKeyB,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(createSession).toHaveBeenCalledTimes(2);
     expect(remoteSessionRefCountForTest(identityKeyB)).toBe(1);
     // The OLD key's entry is untouched by the new key's acquire - both
@@ -428,15 +542,27 @@ describe("acquireRemoteSession", () => {
 
     // Key A is HELD when key B's acquire supersedes it: the sweep can only
     // mark it (a session is never torn out from under a live consumer).
-    const heldOldView = acquireRemoteSession(identityKeyA, createSession);
-    const viewB = acquireRemoteSession(identityKeyB, createSession);
+    const heldOldView = acquireRemoteSession(
+      identityKeyA,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    const viewB = acquireRemoteSession(
+      identityKeyB,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
 
     // A second consumer still carrying identity A re-acquires. Adopting the
     // marked entry would extend its refCount - deferring the sticky verdict's
     // "closes at its first free moment" indefinitely and carrying new work on
     // the retired connection - so the acquire must displace it and build a
     // fresh session instead.
-    const reacquiredView = acquireRemoteSession(identityKeyA, createSession);
+    const reacquiredView = acquireRemoteSession(
+      identityKeyA,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(createSession).toHaveBeenCalledTimes(3);
     expect(oldSession.closeCalls).toBe(0);
 
@@ -465,8 +591,16 @@ describe("acquireRemoteSession", () => {
       .mockReturnValueOnce(successor);
 
     // Two views share the original entry.
-    const viewA = acquireRemoteSession(identity, createSession);
-    const viewB = acquireRemoteSession(identity, createSession);
+    const viewA = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
+    const viewB = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(remoteSessionRefCountForTest(identity)).toBe(2);
 
     // Both release, and the linger window expires: the original entry fully
@@ -478,7 +612,11 @@ describe("acquireRemoteSession", () => {
 
     // A fresh acquire for the IDENTICAL identity creates a brand-new
     // successor entry - same key string, different entry object.
-    const viewC = acquireRemoteSession(identity, createSession);
+    const viewC = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      createSession,
+    );
     expect(remoteSessionRefCountForTest(identity)).toBe(1);
 
     // A stale release reaching back for the already-released, already-torn-
@@ -502,7 +640,7 @@ describe("hasReadyRemoteSession", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
-    const view = acquireRemoteSession(identity, () => session);
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
 
     expect(hasReadyRemoteSession(identity.hostId)).toBe(true);
     view.close();
@@ -526,14 +664,14 @@ describe("hasReadyRemoteSession", () => {
     const identity = freshIdentity();
     const stale = fakeSession();
     stale.ready = true;
-    const view = acquireRemoteSession(identity, () => stale);
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => stale);
     view.close();
     expect(hasReadyRemoteSession(identity.hostId)).toBe(true);
 
     const rotated = { ...identity, hostPublicKey: "pubkey-rotated" };
     const dialing = fakeSession();
     dialing.ready = false;
-    acquireRemoteSession(rotated, () => dialing);
+    acquireRemoteSession(rotated, ELIGIBLE_POLICY, () => dialing);
 
     expect(stale.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(identity.hostId)).toBe(false);
@@ -550,12 +688,16 @@ describe("hasReadyRemoteSession", () => {
     const identity = freshIdentity();
     const stale = fakeSession();
     stale.ready = true;
-    const straggler = acquireRemoteSession(identity, () => stale);
+    const straggler = acquireRemoteSession(
+      identity,
+      ELIGIBLE_POLICY,
+      () => stale,
+    );
 
     const rotated = { ...identity, hostPublicKey: "pubkey-rotated" };
     const dialing = fakeSession();
     dialing.ready = false;
-    acquireRemoteSession(rotated, () => dialing);
+    acquireRemoteSession(rotated, ELIGIBLE_POLICY, () => dialing);
 
     // Still held, so the sweep left the session alone - correct, tearing a
     // live session out from under a consumer is not the sweep's call.
@@ -589,10 +731,10 @@ describe("hasReadyRemoteSession", () => {
     const identity = freshIdentity();
     const current = fakeSession();
     current.ready = true;
-    const view = acquireRemoteSession(identity, () => current);
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => current);
 
     // A second consumer for the SAME identity is a cache hit, not a rotation.
-    const second = acquireRemoteSession(identity, () => {
+    const second = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => {
       throw new Error("must not construct a second session for one identity");
     });
 
@@ -614,7 +756,11 @@ describe("auth-recovery policy is part of the session identity", () => {
     // regain exactly the replay it opted out of.
     const durable = freshIdentity();
     const durableSession = fakeSession();
-    const view = acquireRemoteSession(durable, () => durableSession);
+    const view = acquireRemoteSession(
+      durable,
+      ELIGIBLE_POLICY,
+      () => durableSession,
+    );
     view.close(); // released, now lingering warm
 
     const oneShot: RemoteSessionIdentity = {
@@ -623,7 +769,7 @@ describe("auth-recovery policy is part of the session identity", () => {
     };
     let builtOwnSession = false;
     const oneShotSession = fakeSession();
-    acquireRemoteSession(oneShot, () => {
+    acquireRemoteSession(oneShot, ELIGIBLE_POLICY, () => {
       builtOwnSession = true;
       return oneShotSession;
     });
@@ -642,7 +788,11 @@ describe("auth-recovery policy is part of the session identity", () => {
       authRecovery: "terminal",
     };
     const oneShotSession = fakeSession();
-    const view = acquireRemoteSession(oneShot, () => oneShotSession);
+    const view = acquireRemoteSession(
+      oneShot,
+      ELIGIBLE_POLICY,
+      () => oneShotSession,
+    );
     view.close();
 
     const durable: RemoteSessionIdentity = {
@@ -651,7 +801,7 @@ describe("auth-recovery policy is part of the session identity", () => {
     };
     let builtOwnSession = false;
     const durableSession = fakeSession();
-    acquireRemoteSession(durable, () => {
+    acquireRemoteSession(durable, ELIGIBLE_POLICY, () => {
       builtOwnSession = true;
       return durableSession;
     });
@@ -672,9 +822,13 @@ describe("auth-recovery policy is part of the session identity", () => {
     const durableSession = fakeSession();
     const oneShotSession = fakeSession();
 
-    const durableView = acquireRemoteSession(durable, () => durableSession);
+    const durableView = acquireRemoteSession(
+      durable,
+      ELIGIBLE_POLICY,
+      () => durableSession,
+    );
     durableView.close();
-    acquireRemoteSession(oneShot, () => oneShotSession);
+    acquireRemoteSession(oneShot, ELIGIBLE_POLICY, () => oneShotSession);
 
     expect(durableSession.closeCalls).toBe(0);
     expect(remoteSessionRefCountForTest(oneShot)).toBe(1);
@@ -690,7 +844,7 @@ describe("auth-recovery policy is part of the session identity", () => {
     const oneShot = { ...freshIdentity(), authRecovery: "terminal" as const };
     const staleOneShot = fakeSession();
     staleOneShot.ready = true;
-    acquireRemoteSession(oneShot, () => staleOneShot).close();
+    acquireRemoteSession(oneShot, ELIGIBLE_POLICY, () => staleOneShot).close();
     expect(hasReadyRemoteSession(oneShot.hostId)).toBe(true);
 
     // The host re-keys, and it is the DURABLE transport that rebuilds first -
@@ -702,7 +856,7 @@ describe("auth-recovery policy is part of the session identity", () => {
     };
     const dialing = fakeSession();
     dialing.ready = false;
-    acquireRemoteSession(rotatedDurable, () => dialing);
+    acquireRemoteSession(rotatedDurable, ELIGIBLE_POLICY, () => dialing);
 
     expect(staleOneShot.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(oneShot.hostId)).toBe(false);
@@ -715,14 +869,14 @@ describe("auth-recovery policy is part of the session identity", () => {
     const durable = freshIdentity();
     const staleDurable = fakeSession();
     staleDurable.ready = true;
-    acquireRemoteSession(durable, () => staleDurable).close();
+    acquireRemoteSession(durable, ELIGIBLE_POLICY, () => staleDurable).close();
 
     const movedOneShot: RemoteSessionIdentity = {
       ...durable,
       relayAttachUrl: "wss://relay-moved.invalid/attach",
       authRecovery: "terminal",
     };
-    acquireRemoteSession(movedOneShot, () => fakeSession());
+    acquireRemoteSession(movedOneShot, ELIGIBLE_POLICY, () => fakeSession());
 
     expect(staleDurable.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(durable.hostId)).toBe(false);
@@ -737,7 +891,7 @@ describe("auth-recovery policy is part of the session identity", () => {
     let builds = 0;
     const firstContext = freshIdentity();
     const firstSession = fakeSession();
-    acquireRemoteSession(firstContext, () => {
+    acquireRemoteSession(firstContext, ELIGIBLE_POLICY, () => {
       builds += 1;
       return firstSession;
     }).close();
@@ -752,7 +906,7 @@ describe("auth-recovery policy is part of the session identity", () => {
       ...firstContext,
       authEpoch: "lease-2",
     };
-    acquireRemoteSession(secondContext, () => {
+    acquireRemoteSession(secondContext, ELIGIBLE_POLICY, () => {
       builds += 1;
       return fakeSession();
     });
@@ -772,7 +926,7 @@ describe("auth-recovery policy is part of the session identity", () => {
     const retired = freshIdentity();
     const staleSession = fakeSession();
     staleSession.ready = true;
-    acquireRemoteSession(retired, () => staleSession).close();
+    acquireRemoteSession(retired, ELIGIBLE_POLICY, () => staleSession).close();
     expect(hasReadyRemoteSession(retired.hostId)).toBe(true);
 
     const signedInAgain: RemoteSessionIdentity = {
@@ -781,7 +935,7 @@ describe("auth-recovery policy is part of the session identity", () => {
     };
     const dialing = fakeSession();
     dialing.ready = false;
-    acquireRemoteSession(signedInAgain, () => dialing);
+    acquireRemoteSession(signedInAgain, ELIGIBLE_POLICY, () => dialing);
 
     expect(staleSession.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(retired.hostId)).toBe(false);
@@ -795,12 +949,20 @@ describe("auth-recovery policy is part of the session identity", () => {
     const lingering = freshIdentity();
     const lingeringSession = fakeSession();
     lingeringSession.ready = true;
-    acquireRemoteSession(lingering, () => lingeringSession).close();
+    acquireRemoteSession(
+      lingering,
+      ELIGIBLE_POLICY,
+      () => lingeringSession,
+    ).close();
 
     const held = freshIdentity();
     const heldSession = fakeSession();
     heldSession.ready = true;
-    const heldView = acquireRemoteSession(held, () => heldSession);
+    const heldView = acquireRemoteSession(
+      held,
+      ELIGIBLE_POLICY,
+      () => heldSession,
+    );
 
     expect(hasReadyRemoteSession(lingering.hostId)).toBe(true);
     expect(hasReadyRemoteSession(held.hostId)).toBe(true);
@@ -826,7 +988,7 @@ describe("auth-recovery policy is part of the session identity", () => {
     // it on the spot.
     const identity = freshIdentity();
     const session = fakeSession();
-    const view = acquireRemoteSession(identity, () => session);
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
 
     session.closedUnderneath = true;
     view.close();
@@ -851,7 +1013,11 @@ describe("auth-recovery policy is part of the session identity", () => {
     };
     const staleSession = fakeSession();
     staleSession.ready = true;
-    acquireRemoteSession(previousUser, () => staleSession).close();
+    acquireRemoteSession(
+      previousUser,
+      ELIGIBLE_POLICY,
+      () => staleSession,
+    ).close();
     expect(hasReadyRemoteSession(previousUser.hostId)).toBe(true);
 
     const nextUser: RemoteSessionIdentity = {
@@ -860,7 +1026,7 @@ describe("auth-recovery policy is part of the session identity", () => {
     };
     const dialing = fakeSession();
     dialing.ready = false;
-    acquireRemoteSession(nextUser, () => dialing);
+    acquireRemoteSession(nextUser, ELIGIBLE_POLICY, () => dialing);
 
     expect(staleSession.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(previousUser.hostId)).toBe(false);
@@ -874,13 +1040,17 @@ describe("auth-recovery policy is part of the session identity", () => {
     const durable = freshIdentity();
     const durableSession = fakeSession();
     durableSession.ready = true;
-    acquireRemoteSession(durable, () => durableSession).close();
+    acquireRemoteSession(
+      durable,
+      ELIGIBLE_POLICY,
+      () => durableSession,
+    ).close();
 
     const oneShot: RemoteSessionIdentity = {
       ...durable,
       authRecovery: "terminal",
     };
-    acquireRemoteSession(oneShot, () => fakeSession());
+    acquireRemoteSession(oneShot, ELIGIBLE_POLICY, () => fakeSession());
 
     expect(durableSession.closeCalls).toBe(0);
     expect(hasReadyRemoteSession(durable.hostId)).toBe(true);
@@ -895,11 +1065,11 @@ describe("auth-recovery policy is part of the session identity", () => {
     let builds = 0;
     const identity = freshIdentity();
     const shared = fakeSession();
-    const first = acquireRemoteSession(identity, () => {
+    const first = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => {
       builds += 1;
       return shared;
     });
-    const second = acquireRemoteSession(identity, () => {
+    const second = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => {
       builds += 1;
       return fakeSession();
     });
@@ -907,5 +1077,281 @@ describe("auth-recovery policy is part of the session identity", () => {
     expect(builds).toBe(1);
     first.close();
     second.close();
+  });
+});
+
+describe("wake ownership", () => {
+  it("forwards a wake while the consumer still holds its reference", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
+
+    view.wake("app-resumed", null);
+
+    expect(session.wakeReasons).toEqual(["app-resumed"]);
+    view.close();
+  });
+
+  it("forwards a forced reconnect while held, and refuses it once released", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
+
+    view.forceReconnect("user-retry");
+    expect(session.wakeReasons).toEqual(["forced:user-retry"]);
+
+    view.close();
+    // A forced redial is strictly MORE session activity than an accelerated
+    // one, so the stale-callback guard binds it at least as hard.
+    view.forceReconnect("user-retry");
+    expect(session.wakeReasons).toEqual(["forced:user-retry"]);
+    expireLinger();
+  });
+
+  it("ignores a wake from a view whose reference was already released", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
+    view.close();
+
+    // The stale-callback case: a discarded render or a disposed binding still
+    // holding the view. Honouring it would hurry a session this consumer no
+    // longer holds - possibly one sitting at refCount 0 with nobody waiting.
+    view.wake("app-resumed", null);
+
+    expect(session.wakeReasons).toEqual([]);
+    expireLinger();
+  });
+
+  it("ignores a wake on a superseded entry even while a consumer still holds it", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
+    // The host re-keyed underneath the live reference. The entry is marked
+    // superseded but not torn out from under its holder.
+    const rotated: RemoteSessionIdentity = {
+      ...identity,
+      hostPublicKey: `${identity.hostPublicKey}-rotated`,
+    };
+    const successor = acquireRemoteSession(
+      rotated,
+      ELIGIBLE_POLICY,
+      fakeSession,
+    );
+
+    view.wake("app-resumed", null);
+
+    // Its key embeds a public key the host has moved off, so it can never
+    // re-handshake; hurrying it only spends grants against a dead identity.
+    expect(session.wakeReasons).toEqual([]);
+    view.close();
+    successor.close();
+    expireLinger();
+  });
+
+  it("ignores a wake once the session has closed underneath the view", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
+    session.closedUnderneath = true;
+
+    view.wake("app-resumed", null);
+
+    expect(session.wakeReasons).toEqual([]);
+    view.close();
+  });
+});
+
+describe("wakeHeldRemoteSessions", () => {
+  it("wakes every held entry exactly once", () => {
+    const firstIdentity = freshIdentity();
+    const secondIdentity = freshIdentity();
+    const first = fakeSession();
+    const second = fakeSession();
+    const firstView = acquireRemoteSession(
+      firstIdentity,
+      ELIGIBLE_POLICY,
+      () => first,
+    );
+    const secondView = acquireRemoteSession(
+      secondIdentity,
+      ELIGIBLE_POLICY,
+      () => second,
+    );
+    // A second consumer of the SAME session must not double its wake: the
+    // sweep walks cache entries, not consumers, which is what lets any number
+    // of React consumers share one physical session safely.
+    const firstAgain = acquireRemoteSession(
+      firstIdentity,
+      ELIGIBLE_POLICY,
+      () => first,
+    );
+
+    wakeHeldRemoteSessions("app-resumed", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
+
+    expect(first.wakeReasons).toEqual(["app-resumed"]);
+    expect(second.wakeReasons).toEqual(["app-resumed"]);
+    firstView.close();
+    firstAgain.close();
+    secondView.close();
+    expireLinger();
+  });
+
+  it("routes a forced sweep to forceReconnect instead of the probe-first wake", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
+
+    // The long-background resume: the caller's verdict is that no socket
+    // survived, so every held session drops and redials rather than probing.
+    wakeHeldRemoteSessions("wake-resume", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    expect(session.wakeReasons).toEqual(["forced:wake-resume"]);
+    view.close();
+    expireLinger();
+  });
+
+  it("carries the caller's exact probe tuning through the sweep", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
+
+    // The brief-mobile-resume verdict: short deadline, immediate redial on
+    // failure. A sweep that dropped `wakeProbe` on the floor would still
+    // wake - and every session would silently probe on the desktop deadline.
+    wakeHeldRemoteSessions("wake-resume", {
+      probeFirst: true,
+      wakeProbe: { timeoutMs: 3_000, immediateRedialOnFailure: true },
+    });
+
+    expect(session.wakeReasons).toEqual(["wake-resume"]);
+    expect(session.wakeProbes).toEqual([
+      { timeoutMs: 3_000, immediateRedialOnFailure: true },
+    ]);
+    view.close();
+    expireLinger();
+  });
+
+  it("never touches a replay-unsafe entry - neither probing nor forcing it", () => {
+    const unsafeIdentity: RemoteSessionIdentity = {
+      ...freshIdentity(),
+      // The one-shot transport's shape: terminal auth, side-effecting stream.
+      authRecovery: "terminal",
+    };
+    const eligibleIdentity = freshIdentity();
+    const unsafe = fakeSession();
+    const eligible = fakeSession();
+    const unsafeView = acquireRemoteSession(
+      unsafeIdentity,
+      { proactiveWakeEligible: false },
+      () => unsafe,
+    );
+    const eligibleView = acquireRemoteSession(
+      eligibleIdentity,
+      ELIGIBLE_POLICY,
+      () => eligible,
+    );
+
+    // A forced drop of a healthy mux would retain and REPLAY the one-shot's
+    // destructive subscribe at the next openAck (`worktree.deleteByPath`
+    // re-running its teardown), and even a probe only manufactures the loss
+    // that triggers the same replay. Both modes must skip it - while the
+    // eligible entry beside it proves the sweep itself ran.
+    wakeHeldRemoteSessions("wake-resume", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+    wakeHeldRemoteSessions("wake-resume", {
+      probeFirst: true,
+      wakeProbe: { timeoutMs: 3_000, immediateRedialOnFailure: true },
+    });
+
+    expect(unsafe.wakeReasons).toEqual([]);
+    expect(eligible.wakeReasons).toEqual(["forced:wake-resume", "wake-resume"]);
+
+    unsafeView.close();
+    eligibleView.close();
+    expireLinger();
+  });
+
+  it("skips a zero-reference entry inside its keep-warm linger", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
+    view.close();
+
+    // Still cached and still connected, but nobody holds it. Keep-warm exists
+    // so a prompt re-acquire is free, not so an abandoned session redials on
+    // wakes no consumer asked for - the adopter brings its own wake.
+    wakeHeldRemoteSessions("app-resumed", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
+
+    expect(session.wakeReasons).toEqual([]);
+    expireLinger();
+  });
+
+  it("skips superseded and closed entries", () => {
+    const supersededIdentity = freshIdentity();
+    const closedIdentity = freshIdentity();
+    const superseded = fakeSession();
+    const closed = fakeSession();
+    const supersededView = acquireRemoteSession(
+      supersededIdentity,
+      ELIGIBLE_POLICY,
+      () => superseded,
+    );
+    const successor = acquireRemoteSession(
+      { ...supersededIdentity, hostPublicKey: "rotated" },
+      ELIGIBLE_POLICY,
+      fakeSession,
+    );
+    const closedView = acquireRemoteSession(
+      closedIdentity,
+      ELIGIBLE_POLICY,
+      () => closed,
+    );
+    closed.closedUnderneath = true;
+
+    wakeHeldRemoteSessions("app-resumed", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
+
+    expect(superseded.wakeReasons).toEqual([]);
+    expect(closed.wakeReasons).toEqual([]);
+    supersededView.close();
+    successor.close();
+    closedView.close();
+    expireLinger();
+  });
+});
+
+describe("RemoteStreamClient reconnectAll routing", () => {
+  it("routes probeFirst:false to forceReconnect and probeFirst:true to wake, never both", () => {
+    const session = fakeSession();
+    const client = new RemoteStreamClient(session);
+
+    // The Retry-now path. Reverting the wrapper to always-wake leaves every
+    // lower-level force test green - only this direct pin catches it.
+    client.reconnectAll("user-retry", { probeFirst: false, wakeProbe: null });
+    expect(session.wakeReasons).toEqual(["forced:user-retry"]);
+
+    client.reconnectAll("wake-resume", {
+      probeFirst: true,
+      wakeProbe: { timeoutMs: 3_000, immediateRedialOnFailure: true },
+    });
+    expect(session.wakeReasons).toEqual(["forced:user-retry", "wake-resume"]);
+    expect(session.wakeProbes).toEqual([
+      null,
+      { timeoutMs: 3_000, immediateRedialOnFailure: true },
+    ]);
   });
 });

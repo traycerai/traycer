@@ -8,7 +8,9 @@ import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/la
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
-  JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+  | JsonPrimitive
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
 
 export interface WindowSummary {
   readonly windowId: string;
@@ -24,7 +26,8 @@ export interface OwnershipEntry {
 }
 
 export type OwnershipClaimResult =
-  { readonly ok: true } | { readonly ok: false; readonly currentOwner: string };
+  | { readonly ok: true }
+  | { readonly ok: false; readonly currentOwner: string };
 
 export interface PerWindowEpicViewTab {
   readonly id: string;
@@ -100,7 +103,9 @@ export interface PerWindowStatePatch {
 }
 
 export type DesktopAuthSessionStatus =
-  "signed-out" | "signing-in" | "signed-in";
+  | "signed-out"
+  | "signing-in"
+  | "signed-in";
 
 export interface DesktopAuthSessionProfile {
   readonly userId: string;
@@ -118,6 +123,15 @@ export type OpenEpicInNewWindowResult =
   | { readonly result: "focused"; readonly windowId: string }
   | { readonly result: "moved"; readonly windowId: string }
   | { readonly result: "queued-discard"; readonly windowId: string };
+
+/**
+ * `not-found`: the source window's per-window snapshot holds no draft with the
+ * requested id - the renderer's projection flush did not land before the call,
+ * or the draft was closed mid-flight. The renderer treats it as a refused move.
+ */
+export type OpenDraftInNewWindowResult =
+  | { readonly result: "moved"; readonly windowId: string }
+  | { readonly result: "not-found"; readonly windowId: string };
 
 export type MenuCommandId =
   | "app.openSettings"
@@ -181,7 +195,11 @@ export interface MenuCommandPayload {
 export type SupportLogTarget = "desktop" | "host";
 
 export type SupportLinkId =
-  "website" | "documentation" | "release-notes" | "discord" | "support";
+  | "website"
+  | "documentation"
+  | "release-notes"
+  | "discord"
+  | "support";
 
 export interface SupportLinkDescriptor {
   readonly id: SupportLinkId;
@@ -340,7 +358,10 @@ export interface SupportPrivateDiagnostics {
 export type SupportReportType = "bug" | "idea" | "other";
 
 export type SupportReportFrequency =
-  "once" | "sometimes" | "every_time" | "not_sure";
+  | "once"
+  | "sometimes"
+  | "every_time"
+  | "not_sure";
 
 /**
  * One attached screenshot, crossing IPC as a raw byte array (never base64 -

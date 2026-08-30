@@ -26,6 +26,7 @@ import {
   type ParamsOf,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 export class MockStreamSession<
   TFrame extends StreamFrameEnvelope,
@@ -94,11 +95,14 @@ export class MockWsStreamClient<
 
   constructor() {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {

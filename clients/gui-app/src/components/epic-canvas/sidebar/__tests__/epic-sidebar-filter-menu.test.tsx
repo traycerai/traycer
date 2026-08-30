@@ -40,7 +40,6 @@ describe("<ChatFilterMenu />", () => {
         tabId={TAB_ID}
         collapsed={false}
         canArchive={canArchive}
-        onCollapseAll={() => undefined}
       />,
     );
     // Radix's DropdownMenuTrigger opens on pointerdown, not the click event.
@@ -57,7 +56,6 @@ describe("<ChatFilterMenu />", () => {
         tabId={TAB_ID}
         collapsed={false}
         canArchive={false}
-        onCollapseAll={() => undefined}
       />,
     );
     expect(screen.getByRole("button", { name: "Filter agents" })).toBeTruthy();
@@ -84,6 +82,7 @@ describe("<ChatFilterMenu />", () => {
     expect(options).toContain("Terminal");
     expect(options).not.toContain("Chats");
     expect(options).not.toContain("Terminal Agents");
+    expect(screen.queryByText("Collapse all")).toBeNull();
   });
 
   it("offers the ownership axis: All / Mine / Others", () => {
@@ -113,7 +112,6 @@ describe("<ChatFilterMenu />", () => {
         tabId={TAB_ID}
         collapsed
         canArchive={false}
-        onCollapseAll={() => undefined}
       />,
     );
 
@@ -139,7 +137,6 @@ describe("<ChatFilterMenu />", () => {
         tabId={TAB_ID}
         collapsed
         canArchive={false}
-        onCollapseAll={() => undefined}
       />,
     );
 
@@ -154,7 +151,6 @@ describe("<ChatFilterMenu />", () => {
         tabId={TAB_ID}
         collapsed={false}
         canArchive={false}
-        onCollapseAll={() => undefined}
       />,
     );
 
@@ -218,7 +214,6 @@ describe("<ChatFilterMenu />", () => {
         tabId={TAB_ID}
         collapsed={false}
         canArchive={false}
-        onCollapseAll={() => undefined}
       />,
     );
 
@@ -278,7 +273,6 @@ describe("<ArtifactFilterMenu />", () => {
         epicId={EPIC_ID}
         tabId={TAB_ID}
         collapsed={false}
-        onCollapseAll={() => undefined}
         onMarkAllRead={() => undefined}
         markAllReadDisabled={false}
       />,
@@ -311,6 +305,7 @@ describe("<ArtifactFilterMenu />", () => {
     expect(screen.getByText("Status")).toBeTruthy();
     expect(screen.getByText("Type")).toBeTruthy();
     expect(screen.getByText("Read state")).toBeTruthy();
+    expect(screen.queryByText("Collapse all")).toBeNull();
 
     const orderingRow = screen
       .getByText("Ordering")
@@ -362,7 +357,7 @@ describe("<ArtifactFilterMenu />", () => {
 
     fireEvent.pointerDown(
       screen.getByRole("button", {
-        name: "Filter artifacts, 1 filter active, ordered by Name",
+        name: "Filter artifacts, 1 filter active, ordered by Name descending",
       }),
       { button: 0 },
     );

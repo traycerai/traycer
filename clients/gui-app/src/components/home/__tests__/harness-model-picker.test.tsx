@@ -127,6 +127,15 @@ interface QueryActivity {
   readonly subscribed: boolean;
 }
 
+interface MockHostClient {
+  readonly id: string;
+  getActiveHostId(): string | null;
+}
+
+function mockHostClientKey(client: MockHostClient): string {
+  return client.id;
+}
+
 const queryMock = vi.hoisted(() => ({
   harnesses: [] as HarnessOption[],
   catalogHarnesses: [] as CatalogHarness[],
@@ -152,6 +161,7 @@ const queryMock = vi.hoisted(() => ({
   modelsByClient: new Map<string, Map<string, ReadonlyArray<ModelOption>>>(),
   catalogHarnessesByClient: new Map<string, CatalogHarness[]>(),
   unresolvedHostIds: new Set<string>(),
+  concreteDefaultHostId: null as string | null,
   cloneCatalogOnRead: false,
   calls: {
     harnesses: [] as Array<{
@@ -227,7 +237,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   // `providerStatesByClient`, falling back to the same `providerStates` list
   // `useProvidersList` serves when a test hasn't set up a per-host override.
   useProvidersListForClient: (
-    client: string | null,
+    client: MockHostClient | null,
     activity: QueryActivity,
   ) => {
     // The picker now issues TWO `useProvidersListForClient` calls (the rail,
@@ -258,7 +268,8 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
       };
     }
     const providers =
-      queryMock.providerStatesByClient.get(client) ?? queryMock.providerStates;
+      queryMock.providerStatesByClient.get(mockHostClientKey(client)) ??
+      queryMock.providerStates;
     return {
       data: activity.enabled ? { providers } : undefined,
       isPending: false,
@@ -269,15 +280,28 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   },
 }));
 
-// Resolves to a sentinel string standing in for a `HostClient`: "default" for
-// a null host id (mirrors the real hook's app-wide-default fallback), else
-// the raw host id - lets `useProvidersListForClient` above key its
-// per-target-host response without constructing a real client.
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProviderProfileEnablementPending: () => () => false,
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+// Resolves to a small `HostClient` stand-in keyed by its requested host. A
+// null request follows the default host, which can be set concretely by a
+// test to cover focus transfer out of a following picker.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) =>
-    hostId !== null && queryMock.unresolvedHostIds.has(hostId)
-      ? null
-      : (hostId ?? "default"),
+  useHostClientForHostId: (hostId: string | null): MockHostClient | null => {
+    if (hostId !== null && queryMock.unresolvedHostIds.has(hostId)) {
+      return null;
+    }
+    return {
+      id: hostId ?? "default",
+      getActiveHostId: () =>
+        hostId ?? queryMock.concreteDefaultHostId ?? "default",
+    };
+  },
 }));
 
 // The capability gate resolves the "Create new profile" row's target host
@@ -334,7 +358,8 @@ vi.mock("react-virtuoso", async () => {
     readonly totalCount?: number;
     readonly computeItemKey?: (index: number, item: undefined) => Key;
     readonly initialTopMostItemIndex?:
-      number | { readonly index: number | "LAST" };
+      | number
+      | { readonly index: number | "LAST" };
     readonly itemContent?: (index: number, item: undefined) => ReactNode;
   }
 
@@ -440,14 +465,16 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // the `client` argument is only ever recorded, never used to branch, unless
   // a test specifically layers `queryMock.harnessesByClient` (see below).
   useGuiHarnessesQueryForClient: (
-    client: string | null,
+    client: MockHostClient | null,
     activity: QueryActivity,
   ) => {
     queryMock.calls.harnesses.push({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    queryMock.calls.harnessClients.push(client);
+    queryMock.calls.harnessClients.push(
+      client === null ? null : mockHostClientKey(client),
+    );
     // A `null` client models an unresolved run-target host: `useHostQuery`
     // disables the underlying query, so a real disabled query with no cached
     // data reports `isPending: true`/`data: undefined` forever - never the
@@ -456,8 +483,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     if (client === null) {
       return { data: undefined, isPending: true, isError: false, error: null };
     }
-    const harnesses = queryMock.harnessesByClient.has(client)
-      ? (queryMock.harnessesByClient.get(client) ?? [])
+    const clientKey = mockHostClientKey(client);
+    const harnesses = queryMock.harnessesByClient.has(clientKey)
+      ? (queryMock.harnessesByClient.get(clientKey) ?? [])
       : queryMock.harnesses;
     return {
       data: activity.enabled ? { harnesses } : undefined,
@@ -467,7 +495,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     };
   },
   useGuiHarnessModelsQueryForClient: (
-    client: string | null,
+    client: MockHostClient | null,
     harnessId: string,
     workingDirectory: string | null,
     activity: QueryActivity,
@@ -478,7 +506,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    queryMock.calls.modelClients.push(client);
+    queryMock.calls.modelClients.push(
+      client === null ? null : mockHostClientKey(client),
+    );
     // See `useGuiHarnessesQueryForClient` above: a `null` client is a
     // permanently-disabled query, never a default-host fallback.
     if (client === null) {
@@ -490,8 +520,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
         refetch: () => Promise.resolve({ data: undefined }),
       };
     }
-    const modelsByHarness = queryMock.modelsByClient.has(client)
-      ? (queryMock.modelsByClient.get(client) ??
+    const clientKey = mockHostClientKey(client);
+    const modelsByHarness = queryMock.modelsByClient.has(clientKey)
+      ? (queryMock.modelsByClient.get(clientKey) ??
         queryMock.selectedModelsByHarness)
       : queryMock.selectedModelsByHarness;
     return {
@@ -533,7 +564,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     };
   },
   useGuiHarnessCatalogForClient: (
-    client: string | null,
+    client: MockHostClient | null,
     workingDirectory: string | null,
     activity: QueryActivity,
   ) => {
@@ -542,7 +573,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    queryMock.calls.catalogClients.push(client);
+    queryMock.calls.catalogClients.push(
+      client === null ? null : mockHostClientKey(client),
+    );
     // See `useGuiHarnessesQueryForClient` above: with a `null` client the
     // underlying harnesses query is permanently disabled, so the REAL
     // composed hook reports an empty catalog (never the default host's cached
@@ -558,8 +591,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
         modelsLoading: false,
       };
     }
-    const harnesses = queryMock.catalogHarnessesByClient.has(client)
-      ? (queryMock.catalogHarnessesByClient.get(client) ?? [])
+    const clientKey = mockHostClientKey(client);
+    const harnesses = queryMock.catalogHarnessesByClient.has(clientKey)
+      ? (queryMock.catalogHarnessesByClient.get(clientKey) ?? [])
       : catalogHarnessesForRender();
     return {
       harnesses: activity.enabled ? harnesses : [],
@@ -568,8 +602,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       modelsLoading: activity.enabled && queryMock.modelsLoading,
     };
   },
-  useRefreshHarnessCatalogForClient: (client: string | null) => () => {
-    queryMock.calls.refresh.push(client);
+  useRefreshHarnessCatalogForClient: (client: MockHostClient | null) => () => {
+    queryMock.calls.refresh.push(
+      client === null ? null : mockHostClientKey(client),
+    );
     return Promise.resolve();
   },
 }));
@@ -963,6 +999,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     >
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
+          labelDisplay="responsive"
           store={store}
           withServiceTier={resolvedInput.withServiceTier ?? false}
           tuiOnly={resolvedInput.tuiOnly ?? false}
@@ -1036,6 +1073,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.modelsByClient = new Map();
     queryMock.catalogHarnessesByClient = new Map();
     queryMock.unresolvedHostIds = new Set();
+    queryMock.concreteDefaultHostId = null;
     queryMock.cloneCatalogOnRead = false;
     queryMock.calls.harnesses = [];
     queryMock.calls.harnessClients = [];
@@ -1078,6 +1116,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -1097,6 +1136,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -1427,6 +1467,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -1446,6 +1487,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -1664,7 +1706,7 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.getByRole("tab", { name: "Claude" })).not.toBeNull();
   });
 
-  it("orders the rail by provider defaults and moves degraded providers down", async () => {
+  it("orders the rail by provider defaults, keeping degraded providers in place", async () => {
     const codex = codexModels();
     const claude = claudeModels();
     queryMock.harnesses = [
@@ -1697,12 +1739,16 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     const tabs = screen.getAllByRole("tab");
 
+    // OpenRouter is degraded (setup required) yet HOLDS its canonical slot:
+    // the old degraded sink re-sorted rows when late verdicts landed, which
+    // is exactly the mid-render movement this picker no longer does. Degraded
+    // is a flag on the row, never a position.
     expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
       "Codex",
       "Claude",
+      "OpenRouter",
       "Droid",
       "Cursor",
-      "OpenRouter",
     ]);
     expect(
       screen
@@ -1967,6 +2013,67 @@ describe("<HarnessModelPicker />", () => {
     ).toBe("true");
   });
 
+  it("falls back to a RUNNABLE provider rather than the first degraded one", async () => {
+    // The last-resort branch of `resolveActiveProviderId`, reached the way a
+    // cold boot reaches it: the composer's selected provider (codex, this
+    // suite's default) has an availability probe still in flight, so the
+    // toolbar store holds the selection there while the picker cannot browse
+    // it. The picker has to choose for the user. Claude comes first in
+    // canonical order but is signed out - browse-only. Landing there would
+    // open onto a reauth panel while a provider that can actually run a turn
+    // sits one tab over.
+    //
+    // Order used to answer this by accident, since degraded providers sank to
+    // the bottom of the list this scans. Removing that sink (a late verdict
+    // must not move a row under the cursor) is why the preference is now
+    // stated in the resolver, and why this test exists.
+    const codex = codexModels();
+    const claude = claudeModels();
+    const droid = [
+      model({ harnessId: "droid", slug: "droid-core", label: "Droid Core" }),
+    ];
+    const probingCodex: HarnessOption = {
+      ...CODEX_HARNESS,
+      available: false,
+      availabilityPending: true,
+      error: null,
+    };
+    queryMock.harnesses = [probingCodex, CLAUDE_HARNESS, DROID_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(probingCodex, []),
+      catalogHarness(CLAUDE_HARNESS, claude),
+      catalogHarness(DROID_HARNESS, droid),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", claude],
+      ["droid", droid],
+    ]);
+    queryMock.providerStates = [
+      providerCliState({
+        providerId: "claude-code",
+        authStatus: "unauthenticated",
+        apiKey: { supported: false, configured: false, source: null },
+      }),
+    ];
+
+    renderPicker(undefined);
+    // The selected provider's model query is gated on its availability, so an
+    // unsettled codex leaves the trigger with nothing to name.
+    await openPickerByTriggerName("Select model");
+
+    const claudeTab = screen.getByRole("tab", { name: "Claude" });
+    const droidTab = screen.getByRole("tab", { name: "Droid" });
+    expect(droidTab.getAttribute("aria-selected")).toBe("true");
+    expect(claudeTab.getAttribute("aria-selected")).toBe("false");
+    // The degraded provider keeps both its dimming and its canonical place -
+    // the fix is about what gets LANDED on, not about moving anything.
+    expect(claudeTab.getAttribute("data-degraded")).toBe("true");
+    expect(screen.getAllByRole("tab").indexOf(claudeTab)).toBeLessThan(
+      screen.getAllByRole("tab").indexOf(droidTab),
+    );
+  });
+
   it("keeps a ready provider entirely ungated while a sibling downloads", async () => {
     preparingClaudeSetup({ status: "downloading", percent: 42 });
 
@@ -2122,6 +2229,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2163,6 +2271,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2182,6 +2291,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2331,6 +2441,7 @@ describe("<HarnessModelPicker />", () => {
     const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
     const ambientProfile = {
       profileId: "ambient",
+      enabled: true,
       kind: "ambient" as const,
       authType: "oauth" as const,
       label: "Terminal account",
@@ -2351,6 +2462,7 @@ describe("<HarnessModelPicker />", () => {
     const workProfile = {
       ...ambientProfile,
       profileId: "work-profile",
+      enabled: true,
       kind: "managed" as const,
       label: "Work",
       accentColor: initialColor,
@@ -2415,6 +2527,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2434,6 +2547,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2544,6 +2658,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2563,6 +2678,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2926,6 +3042,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2945,6 +3062,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2989,6 +3107,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3008,6 +3127,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3051,6 +3171,7 @@ describe("<HarnessModelPicker />", () => {
     return [
       {
         profileId: "ambient",
+        enabled: true,
         kind: "ambient",
         authType: "oauth",
         label: "Terminal account",
@@ -3070,6 +3191,7 @@ describe("<HarnessModelPicker />", () => {
       },
       {
         profileId: "work-profile",
+        enabled: true,
         kind: "managed",
         authType: "oauth",
         label: "Work",
@@ -3178,6 +3300,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3197,6 +3320,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3256,6 +3380,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3275,6 +3400,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3317,6 +3443,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3336,6 +3463,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3385,6 +3513,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3404,6 +3533,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3445,6 +3575,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3464,6 +3595,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3524,6 +3656,70 @@ describe("<HarnessModelPicker />", () => {
     expect(openSettingsMock).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+    });
+  });
+
+  it("opens settings on the picker's exact provider, profile, and host", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ];
+    renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: "work-profile",
+      },
+      createProfileHostId: "host-b",
+    });
+
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Provider CLI settings" }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "claude",
+      focusHostId: "host-b",
+      focusTargetHostId: "host-b",
+      focusProfileId: "work-profile",
+      startSignIn: false,
+      focusTab: "usage",
+    });
+    expect(openSettingsMock).toHaveBeenCalledWith({
+      section: "providers",
+      resetToGeneral: false,
+    });
+  });
+
+  it("opens Settings on the concrete default host behind a following picker", async () => {
+    queryMock.concreteDefaultHostId = "default-host-1";
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ];
+    renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: "work-profile",
+      },
+    });
+
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Provider CLI settings" }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "claude",
+      focusHostId: "default-host-1",
+      focusTargetHostId: "default-host-1",
+      focusProfileId: "work-profile",
     });
   });
 
@@ -3900,6 +4096,64 @@ describe("<HarnessModelPicker />", () => {
       harnessId: "claude",
       modelSlug: "claude-opus-4-7",
       profileId: null,
+    });
+  });
+
+  /**
+   * Search-on-open is a hardware-keyboard convenience, and the panel is opened
+   * on every harness or model change. On a touch pointer the same focus is a
+   * software keyboard over the list the tap was aiming at, so it stands down.
+   *
+   * Both arms are pinned because the coarse arm is invisible on every
+   * developer's machine: asserting only the focused case keeps passing after
+   * the gate is deleted.
+   */
+  describe("search autofocus", () => {
+    /**
+     * The global test shim answers every media query with `matches: false`,
+     * which is the fine-pointer arm. This narrows the coarse-pointer query
+     * alone so the rest of the app's queries keep the shim's answer.
+     */
+    function stubCoarsePointer(coarse: boolean): void {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: (query: string) => ({
+          matches: coarse && query === "(pointer: coarse)",
+          media: query,
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }),
+      });
+    }
+
+    it("focuses the search when a fine pointer is driving", async () => {
+      stubCoarsePointer(false);
+      renderPicker(undefined);
+      const input = await openPicker();
+
+      await waitFor(() => expect(document.activeElement).toBe(input));
+    });
+
+    it("leaves the search alone on a coarse pointer", async () => {
+      stubCoarsePointer(true);
+      renderPicker(undefined);
+      // A real pointer press focuses the trigger before the popover opens;
+      // jsdom's synthetic click does not, and the trigger holding focus is
+      // exactly what makes declining safe rather than stranding.
+      screen.getByRole("button", { name: /^GPT-5\.5/ }).focus();
+      const input = await openPicker();
+
+      expect(document.activeElement).not.toBe(input);
+      // Declining strands nothing here: the trigger is a still-mounted button
+      // in the composer toolbar, and closing restores the composer's caret.
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /^GPT-5\.5/ }),
+      );
     });
   });
 });

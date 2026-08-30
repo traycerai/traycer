@@ -89,7 +89,8 @@ export interface ImagePreviewProps {
    * applies its initial transform without calling it).
    */
   readonly onTransformChange:
-    ((report: ImagePreviewTransformReport) => void) | null;
+    | ((report: ImagePreviewTransformReport) => void)
+    | null;
   /**
    * Overrides the internal double-click fit/actual toggle entirely - a
    * caller linking multiple instances (`ImageDiffView`, review finding #3)

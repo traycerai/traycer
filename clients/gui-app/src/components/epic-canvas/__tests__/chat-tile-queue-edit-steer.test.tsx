@@ -19,7 +19,7 @@ import type {
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { ChatStreamClientHandle } from "@/stores/chats/chat-session-store";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -244,14 +244,13 @@ function createChatHarness(): {
             nextCallbacks.onConnectionStatus("open", null);
             emitChatSnapshot(nextCallbacks, access, queueItems);
           }, 0);
-          const client: Pick<
-            ChatStreamClient,
-            "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
-          > = {
+          const client: ChatStreamClientHandle = {
             sendAction: (frame) => {
               sent.push(frame);
             },
             sameTurnSteeringProtocolSupported: () => true,
+            requestTranscriptRange: () => undefined,
+            requestResnapshot: () => undefined,
             close: () => undefined,
           };
           return client;
@@ -314,6 +313,7 @@ function emitChatSnapshot(
                   },
                 ],
               },
+              browserAnnotations: [],
             },
             timestamp: 1,
             sessionAnchor: null,
@@ -420,6 +420,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -456,6 +457,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         attachments: [],
         settings: QUEUED_SETTINGS,
         deliveryPolicy: "after_safe_point",
+        restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
       });
       expect(accepted).toBe(true);
     });
@@ -497,6 +499,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
+          browserAnnotations: [],
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
@@ -533,6 +536,7 @@ describe("chat-tile queue edit save-and-steer routing (decision 14)", () => {
         attachments: [],
         settings: QUEUED_SETTINGS,
         deliveryPolicy: "auto",
+        restore: { content: QUEUED_CONTENT, browserAnnotations: [] },
       });
       expect(accepted).toBe(true);
     });
@@ -573,6 +577,7 @@ function renderChatTile(): void {
                 <ChatTile
                   node={CHAT_ARTIFACT}
                   viewTabId="tab-queue-edit-steer"
+                  tileId="pane-queue-edit-steer"
                   isActive
                 />
               </TabHostProvider>

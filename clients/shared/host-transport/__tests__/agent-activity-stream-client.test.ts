@@ -10,6 +10,7 @@ import type {
 import { AgentActivityStreamClient } from "../agent-activity-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 class StubSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler = () => undefined;
@@ -51,11 +52,14 @@ function makeWsStreamClient(
   session: IStreamSession,
 ): WsStreamClient<typeof hostStreamRpcRegistry> {
   const client = new WsStreamClient({
+    clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => null,
     bearer: () => null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
+    onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
     webSocketFactory: {
       create: () => {
@@ -108,8 +112,10 @@ describe("AgentActivityStreamClient", () => {
       hasBinaryPayload: false,
     });
 
-    expect(onState).toHaveBeenNthCalledWith(1, "local", localState);
-    expect(onState).toHaveBeenNthCalledWith(2, "cloud", cloudState);
+    // Neither fixture frame carries `cloudSyncStatus` (a `1.0` host's shape):
+    // the live schema defaults it to `null` - no claim - never "connected".
+    expect(onState).toHaveBeenNthCalledWith(1, "local", localState, null);
+    expect(onState).toHaveBeenNthCalledWith(2, "cloud", cloudState, null);
 
     const reason: StreamCloseReason = { kind: "caller" };
     session.emitStatus("closed", reason);

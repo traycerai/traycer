@@ -53,6 +53,11 @@ interface UseHostScopedMutationArgs<
         variables: RequestOfMethod<HostRpcRegistry, Method>,
       ) => void)
     | undefined;
+  /**
+   * Codes the caller handles inline (a confirm dialog). The default toast is
+   * skipped so the user is not told to "stop the run" AND asked to confirm.
+   */
+  readonly silentCodes?: readonly HostRpcError["code"][];
 }
 
 /**
@@ -106,6 +111,7 @@ export function useHostScopedMutationForClient<
         }
       },
       onError: (error) => {
+        if (args.silentCodes?.includes(error.code) === true) return;
         toastFromHostError(error, args.errorMessage);
       },
     },

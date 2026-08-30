@@ -2,6 +2,10 @@ import type {
   HostStatusDTO,
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
+import { readHostRuntimeStatusAwareness } from "@traycer/protocol/host/notifications/index";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
+import { hasRecentHostCheckIn } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { busyWorkPhrase } from "@/components/host/host-restart-copy";
 
 /**
  * The DTO's own reading of a host — **evidence, not a vocabulary**.
@@ -48,12 +52,24 @@ import type {
  *      about a host this client has never dialled. Which is precisely why it
  *      no longer says "Online"; see `reported-reachable` below.
  *
- * Two invariants the tests pin:
+ * That last step takes TWO inputs because the wire carries only one of them.
+ * `connectivity` is pure liveness (`connectable` / `offline` / `unknown`) —
+ * one fact about one host — while whether the account may reach a host
+ * remotely at all is an account fact (`planAllowsRemote`). This row is
+ * projected from the RAW registry DTO rather than from a directory entry, so
+ * it combines them here; `hostUnavailability` does the identical combination
+ * for entries, and the two must agree cell for cell.
+ *
+ * Three invariants the tests pin:
  *
  *   - NO green dot without live evidence. This one was WRITTEN here and
  *     violated here — see the `connectable` arm.
  *   - NEVER a false "Offline" when the cloud is blind. `unknown` is its own
- *     rendering, and `local-only` is not an outage at all.
+ *     rendering, and "Local only" is not an outage at all.
+ *   - For a plan-gated host, relay `offline` is expected even while healthy:
+ *     the attach-grant gate suppresses the host leg. A recent plan-agnostic
+ *     credential check-in therefore reads "Local only"; stale or missing
+ *     check-in evidence reads Offline.
  */
 
 export type DtoPresenceReading =
@@ -74,12 +90,20 @@ export interface DtoPresenceView {
 export interface DeriveHostPresenceOptions {
   readonly status: HostStatusDTO;
   readonly hasLiveSession: boolean;
+  /**
+   * Whether the ACCOUNT's plan includes remote hosts. The second axis
+   * `status.connectivity` deliberately no longer carries; unknown reads as
+   * `true` (allowed) at the source, never as a restriction.
+   */
+  readonly planAllowsRemote: boolean;
+  /** Explicit clock for the credential-check-in freshness decision. */
+  readonly nowMs: number;
 }
 
 export function deriveHostPresence(
   options: DeriveHostPresenceOptions,
 ): DtoPresenceView {
-  const { status, hasLiveSession } = options;
+  const { status, hasLiveSession, planAllowsRemote, nowMs } = options;
   // This client is offline: we cannot claim anything about the host's liveness.
   if (status.clientCloud === "down") {
     return {
@@ -92,6 +116,29 @@ export function deriveHostPresence(
   // session to this host renders Online regardless of everything below.
   if (hasLiveSession) {
     return { reading: "online", label: "Online", showLiveDot: true };
+  }
+  if (status.connectivity === "local-only") {
+    // Transitional value from a pre-cutover server. It carries the plan fact
+    // but no liveness evidence, so never turn it into a death claim.
+    return { reading: "local-only", label: "Local only", showLiveDot: false };
+  }
+  if (status.connectivity === "offline") {
+    if (!planAllowsRemote && hasRecentHostCheckIn(status, nowMs)) {
+      return {
+        reading: "local-only",
+        label: "Local only",
+        showLiveDot: false,
+      };
+    }
+    return { reading: "offline", label: "Offline", showLiveDot: false };
+  }
+  if (!planAllowsRemote) {
+    // `connectable` or `unknown`, the answer is the same: this host will not be
+    // reached from here, because the account's plan has no remote hosts. Not an
+    // outage — rendering it "Offline" would put a fault where there is none and
+    // imply a retry as the fix. Nothing about the machine is claimed either
+    // way, which is exactly what makes this safe under a blind liveness read.
+    return { reading: "local-only", label: "Local only", showLiveDot: false };
   }
   switch (status.connectivity) {
     // The host's own leg is up - AS OF THE LAST LEASE REFRESH, which is the
@@ -126,11 +173,6 @@ export function deriveHostPresence(
         label: "Reported reachable",
         showLiveDot: false,
       };
-    case "local-only":
-      // Not an outage: this host never attaches to a relay because the plan
-      // does not include remote hosts. Rendering it "Offline" would put a
-      // fault where there is none and imply a retry as the fix.
-      return { reading: "local-only", label: "Local only", showLiveDot: false };
     case "unknown":
       // The cloud could not read liveness. Blind is not the same as absent.
       return {
@@ -138,8 +180,6 @@ export function deriveHostPresence(
         label: "Status unknown",
         showLiveDot: false,
       };
-    case "offline":
-      return { reading: "offline", label: "Offline", showLiveDot: false };
   }
 }
 
@@ -193,15 +233,20 @@ export function deriveUpdatePill(
 
 export interface HostUpdateAffordanceView {
   /**
-   * "Waiting for N sessions" — populated only when the host is actually
-   * gated on open sessions (`updateState === "pending"` AND a LIVE session
-   * count above zero); `null` otherwise, including a `pending` host that
-   * hasn't started draining and a host with no live source at all.
+   * "Waiting for N sessions" / "Waiting for 2 agents and 1 terminal" —
+   * populated only when the host is actually gated on work
+   * (`updateState === "pending"` AND a LIVE count above zero); `null`
+   * otherwise, including a `pending` host that hasn't started draining and a
+   * host with no live source at all.
    */
   readonly waitingForSessionsLabel: string | null;
-  /** Whether to show the "Apply now — ends N sessions" drain-gate force. */
+  /** Whether to show the "Apply now" drain-gate force. */
   readonly showApplyNowForce: boolean;
-  /** "Apply now — ends N sessions", or `null` when the force isn't offered. */
+  /**
+   * "Apply now — ends 2 agents and 1 terminal" when a breakdown is present,
+   * "Apply now — ends N sessions" for a @1.1 host, or `null` when the force
+   * isn't offered.
+   */
   readonly applyNowLabel: string | null;
 }
 
@@ -249,33 +294,101 @@ export interface LiveBusySessionCountOptions {
  *
  * So three things demote a retained value to `null` — no live source:
  *
- *   - the last read ERRORED (retained ≠ current);
  *   - fetching is PAUSED (offline; nothing will correct it);
- *   - the value has gone STALE with nothing in flight to correct it.
+ *   - the value has gone STALE with nothing in flight to correct it;
+ *   - there is no live source at all (`hasLiveSource` is the route gate).
+ *
+ * A refetch in flight — including a retry after an error — keeps the last
+ * successful number on screen. `isError` used to win over `fetching` and
+ * blanked the Overview busy chip for the round trip, which is the opposite
+ * of the display/settled split: showing a slightly-behind count costs a
+ * moment of imprecision; hiding it costs a hole in the status row. Nothing
+ * destructive may be armed from a retained number; see
+ * {@link settledBusySessionCount}, which is what the force reads.
  *
  * The staleness check is the one that catches the quiet case, where nothing
  * failed loudly and the data simply stopped being refreshed.
- *
- * Stale WHILE a replacement is in flight keeps rendering the retained number,
- * and that is a display decision only. It is not a claim the number is current —
- * "the fresh answer is in flight" does not make the old one fresh — it is a
- * choice not to blank a panel for the length of a round trip. Nothing
- * destructive may be armed from it; see {@link settledBusySessionCount}, which
- * is what the force reads.
  */
+function isUsableBusySource(options: LiveBusySessionCountOptions): boolean {
+  if (!options.hasLiveSource) {
+    return false;
+  }
+  // Replacement in flight: keep the last answer, even if the previous
+  // attempt errored. Error must not blank the chip for the length of a
+  // round trip — that is what `settledBusySessionCount` refuses to arm from.
+  if (options.fetchStatus === "fetching") {
+    return true;
+  }
+  if (options.isError || options.fetchStatus === "paused") {
+    return false;
+  }
+  if (options.isStale) {
+    return false;
+  }
+  return true;
+}
+
 export function liveBusySessionCount(
   options: LiveBusySessionCountOptions,
 ): number | null {
-  if (!options.hasLiveSource) {
-    return null;
-  }
-  if (options.isError || options.fetchStatus === "paused") {
-    return null;
-  }
-  if (options.isStale && options.fetchStatus !== "fetching") {
+  if (!isUsableBusySource(options)) {
     return null;
   }
   return options.reportedCount;
+}
+
+export interface LiveBusyBreakdownOptions extends LiveBusySessionCountOptions {
+  /** `host.status@1.2`'s split, or `null` when the peer did not report one. */
+  readonly reportedBreakdown: HostBusyBreakdown | null;
+}
+
+export function liveBusyBreakdown(
+  options: LiveBusyBreakdownOptions,
+): HostBusyBreakdown | null {
+  if (!isUsableBusySource(options)) {
+    return null;
+  }
+  return options.reportedBreakdown;
+}
+
+export function settledBusyBreakdown(
+  options: LiveBusyBreakdownOptions,
+): HostBusyBreakdown | null {
+  if (options.fetchStatus !== "idle" || options.isStale) {
+    return null;
+  }
+  return liveBusyBreakdown(options);
+}
+
+export interface LiveHostBusyOptions extends LiveBusySessionCountOptions {
+  readonly reportedBusy: boolean;
+}
+
+export function liveHostBusy(options: LiveHostBusyOptions): boolean {
+  if (!isUsableBusySource(options)) {
+    return false;
+  }
+  return options.reportedBusy;
+}
+
+export function settledHostBusy(options: LiveHostBusyOptions): boolean {
+  if (options.fetchStatus !== "idle" || options.isStale) {
+    return false;
+  }
+  return liveHostBusy(options);
+}
+
+/**
+ * The typed split from a room `hostRuntimeStatus` awareness entry, or `null`
+ * when the entry is absent, malformed, or an older host that omitted the
+ * key. Absence is not a zero object.
+ */
+export function busyBreakdownFromAwareness(
+  entry: unknown,
+): HostBusyBreakdown | null {
+  const status = readHostRuntimeStatusAwareness(entry);
+  if (status === null) return null;
+  return status.busyBreakdown ?? null;
 }
 
 /**
@@ -312,12 +425,20 @@ export interface DeriveUpdateAffordanceOptions {
   /** Registry-backed, and available for an offline host. */
   readonly updateState: HostUpdateState;
   /**
-   * Open sessions blocking the drain, from a LIVE source only —
-   * `host.status@1.1` over an open connection, or the room's
+   * Open work blocking the drain, from a LIVE source only —
+   * `host.status@1.2` over an open connection, or the room's
    * `hostRuntimeStatus` awareness entry. `null` means no live source, which is
    * NOT zero: see the drain rules below.
    */
   readonly liveBusySessionCount: number | null;
+  /**
+   * Typed split of that total, from the same live source. `null` means the
+   * host did not say how the total splits (@1.1, or an awareness entry that
+   * omitted the key) — count copy is retained. Never a fabricated zero
+   * object. Read off `host.status.busyBreakdown` or
+   * {@link busyBreakdownFromAwareness}.
+   */
+  readonly liveBusyBreakdown: HostBusyBreakdown | null;
 }
 
 function pluralizeSessions(count: number): string {
@@ -334,25 +455,27 @@ function pluralizeSessions(count: number): string {
  *
  * The drain affordances are not registry-backed. "Waiting for N sessions" and,
  * far more
- * seriously, "Apply now — ends N sessions" both NAME A COUNT and, in the second
- * case, destroy that many sessions on click. The count therefore has to come
- * from a live read of the host, and `null` — no live source — must render
- * NOTHING rather than a zero:
+ * seriously, "Apply now — ends N sessions" (or "ends 2 agents and 1 terminal")
+ * both NAME WORK and, in the second case, destroy that work on click. The
+ * numbers therefore have to come from a live read of the host, and `null` —
+ * no live source — must render NOTHING rather than a zero:
  *
  *   - `null` treated as 0 would silently withdraw the drain-gate notice from a
- *     host that is genuinely waiting on sessions, making a `pending` update
+ *     host that is genuinely waiting on work, making a `pending` update
  *     look stalled for no stated reason;
  *   - and if the force button were shown anyway, it would offer to end "0
  *     sessions" while ending however many are actually open.
  *
  * These fields used to ride the cloud hosts DTO, where the number could be up
- * to a lease-interval stale. They now come from `host.status@1.1` / room
- * awareness precisely so the count on the button is the count that dies.
+ * to a lease-interval stale. They now come from `host.status@1.2` / room
+ * awareness precisely so the count on the button is the count that dies. A
+ * present `liveBusyBreakdown` names kinds; a null one keeps the count copy
+ * for old hosts. Copy must never say "sessions" when the breakdown is known.
  */
 export function deriveUpdateAffordance(
   options: DeriveUpdateAffordanceOptions,
 ): HostUpdateAffordanceView {
-  const { updateState, liveBusySessionCount } = options;
+  const { updateState, liveBusySessionCount, liveBusyBreakdown } = options;
   const noDrainAffordance = {
     waitingForSessionsLabel: null,
     showApplyNowForce: false,
@@ -364,6 +487,15 @@ export function deriveUpdateAffordance(
     return noDrainAffordance;
   }
   if (liveBusySessionCount === 0) return noDrainAffordance;
+  const named =
+    liveBusyBreakdown === null ? null : busyWorkPhrase(liveBusyBreakdown);
+  if (named !== null) {
+    return {
+      waitingForSessionsLabel: `Waiting for ${named}`,
+      showApplyNowForce: true,
+      applyNowLabel: `Apply now — ends ${named}`,
+    };
+  }
   const sessionsWord = pluralizeSessions(liveBusySessionCount);
   return {
     waitingForSessionsLabel: `Waiting for ${liveBusySessionCount} ${sessionsWord}`,

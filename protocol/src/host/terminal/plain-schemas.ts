@@ -14,12 +14,24 @@
 import { z } from "zod";
 import { isoMillisecondTimestampSchema } from "@traycer/protocol/common/schemas";
 
+export const epicPlainTerminalScopeSchema = z.strictObject({
+  kind: z.literal("epic"),
+  epicId: z.string().min(1),
+});
+export type EpicPlainTerminalScope = z.infer<
+  typeof epicPlainTerminalScopeSchema
+>;
+
+export const independentPlainTerminalScopeSchema = z.strictObject({
+  kind: z.literal("independent"),
+});
+export type IndependentPlainTerminalScope = z.infer<
+  typeof independentPlainTerminalScopeSchema
+>;
+
 export const plainTerminalScopeSchema = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("epic"),
-    epicId: z.string().min(1),
-  }),
-  z.strictObject({ kind: z.literal("independent") }),
+  epicPlainTerminalScopeSchema,
+  independentPlainTerminalScopeSchema,
 ]);
 export type PlainTerminalScope = z.infer<typeof plainTerminalScopeSchema>;
 
@@ -34,6 +46,8 @@ export type PlainTerminalLaunch = z.infer<typeof plainTerminalLaunchSchema>;
 /**
  * Durable logical record. `ownerUserId` and internal persistence keys are
  * intentionally absent; authorization comes from the request context.
+ * `hostId` is required on every projection; `(hostId, terminalId)` is the
+ * fleet identity and is immutable for a terminal's lifetime.
  */
 export const plainTerminalRecordSchema = z.strictObject({
   terminalId: z.string().min(1),
@@ -47,11 +61,51 @@ export const plainTerminalRecordSchema = z.strictObject({
 });
 export type PlainTerminalRecord = z.infer<typeof plainTerminalRecordSchema>;
 
+/**
+ * Fleet identity for a durable plain terminal. Bare `terminalId` is not a
+ * fleet key; collections, lookup maps, and mutation race bookkeeping use
+ * `(hostId, terminalId)`.
+ */
+export type PlainTerminalFleetIdentity = {
+  readonly hostId: string;
+  readonly terminalId: string;
+};
+
+export function plainTerminalFleetIdentity(
+  record: Pick<PlainTerminalRecord, "hostId" | "terminalId">,
+): PlainTerminalFleetIdentity {
+  return { hostId: record.hostId, terminalId: record.terminalId };
+}
+
+/**
+ * Canonical map key for `(hostId, terminalId)`. JSON-tuple encoding is
+ * injective over schema-valid strings, including identifiers that contain
+ * NUL or other delimiter bytes.
+ */
+export function plainTerminalFleetIdentityKey(
+  identity: PlainTerminalFleetIdentity,
+): string {
+  return JSON.stringify([identity.hostId, identity.terminalId]);
+}
+
 export const dormantPlainTerminalRuntimeSchema = z.strictObject({
   status: z.literal("dormant"),
 });
 export type DormantPlainTerminalRuntime = z.infer<
   typeof dormantPlainTerminalRuntimeSchema
+>;
+
+/**
+ * The durable record is known, but no fresh owner-host or runtime-presence
+ * observation is available. This is deliberately distinct from `dormant`:
+ * absence from an unavailable ephemeral plane is not evidence that the PTY
+ * is stopped.
+ */
+export const unknownPlainTerminalRuntimeSchema = z.strictObject({
+  status: z.literal("unknown"),
+});
+export type UnknownPlainTerminalRuntime = z.infer<
+  typeof unknownPlainTerminalRuntimeSchema
 >;
 
 /**
@@ -73,6 +127,7 @@ export type RunningPlainTerminalRuntime = z.infer<
 >;
 
 export const plainTerminalRuntimeSchema = z.discriminatedUnion("status", [
+  unknownPlainTerminalRuntimeSchema,
   dormantPlainTerminalRuntimeSchema,
   runningPlainTerminalRuntimeSchema,
 ]);
@@ -146,12 +201,117 @@ export type ListPlainTerminalsRequest = z.infer<
   typeof listPlainTerminalsRequestSchema
 >;
 
-export const listPlainTerminalsResponseSchema = z.strictObject({
+const plainTerminalListTerminalsField = {
   terminals: z.array(plainTerminalProjectionSchema),
+} as const;
+
+export const completeFleetPlainTerminalListStateSchema = z.strictObject({
+  coverage: z.literal("complete-fleet"),
+  scope: epicPlainTerminalScopeSchema,
+  ...plainTerminalListTerminalsField,
 });
-export type ListPlainTerminalsResponse = z.infer<
-  typeof listPlainTerminalsResponseSchema
+export type CompleteFleetPlainTerminalListState = z.infer<
+  typeof completeFleetPlainTerminalListStateSchema
 >;
+
+export const partialServingHostPlainTerminalListStateSchema = z.strictObject({
+  coverage: z.literal("partial-serving-host"),
+  scope: epicPlainTerminalScopeSchema,
+  servingHostId: z.string().min(1),
+  ...plainTerminalListTerminalsField,
+});
+export type PartialServingHostPlainTerminalListState = z.infer<
+  typeof partialServingHostPlainTerminalListStateSchema
+>;
+
+export const completeLocalPlainTerminalListStateSchema = z.strictObject({
+  coverage: z.literal("complete-local"),
+  scope: independentPlainTerminalScopeSchema,
+  ...plainTerminalListTerminalsField,
+});
+export type CompleteLocalPlainTerminalListState = z.infer<
+  typeof completeLocalPlainTerminalListStateSchema
+>;
+
+function plainTerminalScopesEqual(
+  left: PlainTerminalScope,
+  right: PlainTerminalScope,
+): boolean {
+  if (left.kind === "independent") {
+    return right.kind === "independent";
+  }
+  return right.kind === "epic" && right.epicId === left.epicId;
+}
+
+function refinePlainTerminalListState(
+  state:
+    | CompleteFleetPlainTerminalListState
+    | PartialServingHostPlainTerminalListState
+    | CompleteLocalPlainTerminalListState,
+  ctx: z.RefinementCtx,
+): void {
+  const seenTerminalIdsByHostId = new Map<string, Set<string>>();
+  for (let index = 0; index < state.terminals.length; index += 1) {
+    const terminal = state.terminals[index];
+    if (terminal === undefined) {
+      continue;
+    }
+    if (!plainTerminalScopesEqual(terminal.record.scope, state.scope)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["terminals", index, "record", "scope"],
+        message: "projection scope must match the list state scope",
+      });
+    }
+    if (
+      state.coverage === "partial-serving-host" &&
+      terminal.record.hostId !== state.servingHostId
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["terminals", index, "record", "hostId"],
+        message: "projection hostId must match servingHostId",
+      });
+    }
+    const hostId = terminal.record.hostId;
+    const terminalId = terminal.record.terminalId;
+    const seenTerminalIds = seenTerminalIdsByHostId.get(hostId);
+    if (seenTerminalIds === undefined) {
+      seenTerminalIdsByHostId.set(hostId, new Set([terminalId]));
+    } else if (seenTerminalIds.has(terminalId)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["terminals", index, "record"],
+        message: "duplicate (hostId, terminalId) in list state",
+      });
+    } else {
+      seenTerminalIds.add(terminalId);
+    }
+  }
+}
+
+/**
+ * Replacement collection state for `terminal.plain.list@2` and subscribe
+ * `state` frames. Coverage distinguishes an authoritative empty fleet from a
+ * degraded serving-host-only view and from a complete independent local
+ * collection. Host withdrawal is absence from a later replacement state, not
+ * a durable tombstone.
+ */
+export const plainTerminalListStateSchema = z
+  .discriminatedUnion("coverage", [
+    completeFleetPlainTerminalListStateSchema,
+    partialServingHostPlainTerminalListStateSchema,
+    completeLocalPlainTerminalListStateSchema,
+  ])
+  .superRefine(refinePlainTerminalListState);
+export type PlainTerminalListState =
+  | CompleteFleetPlainTerminalListState
+  | PartialServingHostPlainTerminalListState
+  | CompleteLocalPlainTerminalListState;
+export type PlainTerminalListCoverage = PlainTerminalListState["coverage"];
+
+export const listPlainTerminalsResponseSchema = plainTerminalListStateSchema;
+export type ListPlainTerminalsResponse = PlainTerminalListState;
 
 export const renamePlainTerminalRequestSchema = z.strictObject({
   terminalId: z.string().min(1),
@@ -190,7 +350,11 @@ export type ClosePlainTerminalRequest = z.infer<
   typeof closePlainTerminalRequestSchema
 >;
 
-/** The deletion revision orders a close against stale cached upserts. */
+/**
+ * The deletion revision orders a close against stale cached mutation
+ * results. Collection streams do not emit durable tombstones for host
+ * withdrawal; this revision remains only for explicit lifetime-delete races.
+ */
 export const closePlainTerminalResponseSchema = z.strictObject({
   terminalId: z.string().min(1),
   revision: z.number().int().nonnegative(),

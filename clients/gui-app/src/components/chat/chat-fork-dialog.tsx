@@ -33,6 +33,7 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
@@ -136,6 +137,15 @@ export interface ChatForkDialogTarget {
    * carried-question behavior ride the dedicated fields above.
    */
   readonly forkMode: ChatForkMode;
+  /**
+   * The host the picker starts on when the dialog opens: the host the user
+   * picked in the gesture that opened it (the composer's host switcher), or
+   * `null` to start on the source chat's own (tab) host — every per-message
+   * fork entry point. A preselection is a starting point only; the user can
+   * still retarget inside the dialog, and every cross-host gate (build
+   * version, publication) applies to it exactly as to a hand-picked host.
+   */
+  readonly initialHostId: string | null;
 }
 
 interface ChatForkDialogProps {
@@ -181,6 +191,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const openCancelsRef = useRef<Set<() => void> | null>(null);
   const stagingSessionRef = useRef<ForkWorkspaceStagingSession | null>(null);
+  // The title field is the first tabbable descendant, so Radix's own
+  // open-autofocus lands on it. On a touch pointer that is a request for a
+  // software keyboard, over a form whose common path is "accept the seeded
+  // title and press Fork". The pointer decides, not the viewport and not the
+  // build: a narrow desktop window types with hardware, a tablet at desktop
+  // width does not.
+  const coarsePointer = useCoarsePointer();
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const openCancels = new Set<() => void>();
@@ -206,12 +224,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 
   // Opening resets BOTH the title and the target host: a dialog reopened on a
   // different message must not inherit the last fork's machine any more than it
-  // inherits the last fork's name.
+  // inherits the last fork's name. A target carrying an `initialHostId` (the
+  // host-switch gesture) starts on that host instead of the tab's.
   if (open !== dialogState.open) {
     setDialogState({
       open,
       title: open && target !== null ? defaultTitle : dialogState.title,
-      hostId: open ? tabHostId : dialogState.hostId,
+      hostId: open ? (target?.initialHostId ?? tabHostId) : dialogState.hostId,
     });
   }
   const title = dialogState.title;
@@ -358,9 +377,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // selected one.
   //
   // A refused row is `aria-disabled` (`isHostOptionSelectable` requires an
-  // `available` surface state), so it can never BECOME `selectedHostId`. A probe
-  // gated on the selected host's refusal is therefore unreachable for the row it
-  // is about: it could only ever re-ask about the source host, while the target
+  // `available` surface state), so picking it is not a way it becomes
+  // `selectedHostId` — the one way in is a host-switch preselection
+  // (`initialHostId`), which this probe set covers just the same. A probe
+  // gated on the selected host's refusal would still be wrong for the picked
+  // case: it could only ever re-ask about the source host, while the target
   // wearing the "needs update" word is precisely the one it never touches.
   // Updating that host in place would leave its verdict stale indefinitely,
   // because the reads that would re-handshake are the ones its own refusal
@@ -451,6 +472,16 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     client: appWideClient,
     epicId,
     chatId: activeWorkspaceTarget?.sourceChatId ?? null,
+    // No tie-breaker from here, deliberately. The resolver wants the chat's
+    // OWNING host, and `tabHostId` is not reliably that: a `PublishedChatTile`
+    // renders through the host SERVING the copy, which is generally the
+    // viewer's own machine rather than the owner's (`published-chat-tile.tsx`
+    // keeps the two apart for exactly this reason). Handing it over would let
+    // a colliding `chatId` resolve to the viewer's own unrelated row - a wrong
+    // owner is worse than none, because the host TRUSTS the expectation it is
+    // given. Unambiguous lookups are unaffected; an ambiguous one degrades to
+    // settings-only, which is what it did before any tie-breaker existed.
+    sourceOwnerHostId: null,
   });
   // Cross-host, the workspace section resets to the target's own folder catalog
   // with NO seed: the source chat's paths name directories on another machine,
@@ -760,7 +791,28 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="w-[min(94vw,32rem)] gap-2 sm:max-w-[min(94vw,34rem)]"
+        // Capped and split into header / scroller / footer, the shape every
+        // dialog with a form taller than a phone uses. The cap is what keeps
+        // Fork reachable once a soft keyboard is up: both mobile shells shrink
+        // the layout viewport for the keyboard (the app resizes the web view
+        // natively, Android Chrome honours `interactive-widget=resizes-content`),
+        // so `dvh` already resolves against what is left uncovered.
+        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(94vw,32rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(94vw,34rem)]"
+        ref={contentRef}
+        onOpenAutoFocus={(event) => {
+          // Focus moves to the dialog itself rather than being merely
+          // declined: Radix leaves focus wherever it was when this is
+          // prevented, which is the trigger - outside the focus scope, and
+          // often already unmounting with the menu it lived in. The content
+          // element carries `tabIndex={-1}` for exactly this, and taking it
+          // announces the dialog to a screen reader without asking for a
+          // keyboard. Fails safe: with no element to move to, Radix's own
+          // default runs instead of being cancelled with nowhere to go.
+          if (!coarsePointer) return;
+          if (contentRef.current === null) return;
+          event.preventDefault();
+          contentRef.current.focus();
+        }}
         // Same portal rule as the worktree pickers: the host switcher's list
         // mounts outside this dialog, so a click in it reads as an interaction
         // from outside. Dismissing on that would throw away the form someone is
@@ -780,10 +832,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         {capabilityProbeEntries.map((entry) => (
           <ChatForkHostCapabilityProbe key={entry.hostId} entry={entry} />
         ))}
-        <DialogHeader>
+        <DialogHeader className="px-4 pt-4 pr-12 pb-2">
           <DialogTitle>Fork agent</DialogTitle>
         </DialogHeader>
-        <div className="flex min-w-0 flex-col gap-2">
+        <div
+          className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto px-4 pb-2"
+          data-testid="chat-fork-dialog-scroller"
+        >
           <label htmlFor={titleInputId} className="flex min-w-0 flex-col gap-2">
             <span className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
               Title
@@ -806,6 +861,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             </div>
             <div className="flex min-w-0 items-center gap-2">
               <HarnessModelPicker
+                labelDisplay="responsive"
                 key={modelPickerKey}
                 store={toolbarStore}
                 withServiceTier
@@ -846,7 +902,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             publicationNotice={publicationNotice}
           />
         </div>
-        <DialogFooter>
+        {/* `mx-0 mb-0`: the footer's own negative margins bleed it into a
+            `p-4` content, and this one is `p-0`. */}
+        <DialogFooter className="mx-0 mb-0 px-4 py-3">
           <Button
             type="button"
             variant="outline"

@@ -10,7 +10,17 @@ import { interviewDraftBindingKey, mintDraftId } from "@/lib/drafts/draft-ids";
 import { notifyDraftLocalEdit } from "@/lib/drafts/draft-local-edits";
 
 export interface StoredInterviewDraftAnswer {
+  // Stable identity of the question that owned the interaction-time indices.
+  // This full framing snapshot proves whether option indices remain exact.
+  // Missing on legacy rows, which may restore labels visibly but cannot prove
+  // exact selection.
+  readonly questionIdentity?: string;
+  // Legacy label snapshot, retained only so pre-index local rows can restore
+  // their visible choices. It is never enough to manufacture exact evidence.
   readonly selected: ReadonlyArray<string>;
+  // Interaction-time option identity. New rows always write indices; omitted
+  // means an old label-only draft whose later settlement must be neutral.
+  readonly selectedOptionIndices?: ReadonlyArray<number>;
   readonly otherText: string;
   readonly otherSelected: boolean;
 }
@@ -70,9 +80,19 @@ function parseStoredAnswer(value: unknown): StoredInterviewDraftAnswer | null {
     return null;
   }
   return {
+    questionIdentity:
+      typeof value.questionIdentity === "string"
+        ? value.questionIdentity
+        : undefined,
     selected: value.selected.filter(
       (label): label is string => typeof label === "string",
     ),
+    selectedOptionIndices: Array.isArray(value.selectedOptionIndices)
+      ? value.selectedOptionIndices.filter(
+          (index): index is number =>
+            typeof index === "number" && Number.isInteger(index) && index >= 0,
+        )
+      : undefined,
     otherText: value.otherText,
     otherSelected: value.otherSelected,
   };

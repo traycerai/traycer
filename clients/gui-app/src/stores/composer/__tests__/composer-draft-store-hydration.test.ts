@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   readComposerDraftSnapshot,
@@ -35,6 +35,7 @@ const MENTION_DRAFT: DraftState = {
     ],
   },
   selection: null,
+  browserAnnotations: [],
   resetEpoch: 0,
   revision: 0,
   draftId: null,
@@ -88,6 +89,20 @@ describe("composer draft store hydration", () => {
     expect(useComposerDraftStore.getState().drafts).toEqual({});
   });
 
+  it("returns a stable empty draft snapshot without creating store state", () => {
+    const notify = vi.fn();
+    const unsubscribe = useComposerDraftStore.subscribe(notify);
+
+    const first = readComposerDraftSnapshot("missing-task");
+    const second = readComposerDraftSnapshot("missing-task");
+
+    unsubscribe();
+    expect(first).toBe(second);
+    expect(first.browserAnnotations).toBe(second.browserAnnotations);
+    expect(useComposerDraftStore.getState().drafts).toEqual({});
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it("drops malformed entries and safely hydrates a legacy draft missing resetEpoch", async () => {
     const legacyDraft = {
       content: MENTION_DRAFT.content,
@@ -120,6 +135,7 @@ describe("composer draft store hydration", () => {
     expect(hydrated).toEqual({
       content: MENTION_DRAFT.content,
       selection: null,
+      browserAnnotations: [],
       revision: 3,
       resetEpoch: 1,
       draftId: hydrated.draftId,

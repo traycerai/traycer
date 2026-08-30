@@ -43,7 +43,9 @@ export type GlobalShortcutIntent = z.infer<typeof globalShortcutIntentSchema>;
  *   currently suppressed), so it was never offered to the OS.
  */
 export type GlobalShortcutRegistrationStatus =
-  "registered" | "rejected" | "disabled";
+  | "registered"
+  | "rejected"
+  | "disabled";
 
 export interface GlobalShortcutStatus {
   readonly id: GlobalShortcutId;

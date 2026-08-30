@@ -92,6 +92,8 @@ const RESTORE_CONTEXT: ChatRestoreContextValue = {
   restoreActionPending: false,
   restoreCheckpoint: () => null,
   accumulatedFileChanges: [],
+  undeliveredChangeCount: 0,
+  accumulatedSetComplete: true,
   revertFileChanges: () => null,
 };
 
@@ -150,7 +152,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       unanswerable: [],
       unanswerableBusy: false,
       onAnswer: () => null,
-      onError: () => null,
+      onSkip: () => null,
       onFork: null,
     },
     approvals: {

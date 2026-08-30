@@ -17,6 +17,25 @@ export const EPIC_ARTIFACTS_DIRNAME = "artifacts";
 export const EPIC_ARTIFACT_INDEX_FILENAME = "index.md";
 
 /**
+ * The two projection directories that live INSIDE an artifact folder, as
+ * siblings of its `index.md`. Neither is a chain segment: both are written
+ * (and regenerated) by file-sync from an authority elsewhere - `images/` from
+ * the durable local attachment store, `.comments/` from the artifact room's
+ * thread state - so both are exempt from the unmanaged-folder sweep. Named here
+ * rather than as bare literals at each site so the sweep exemption, the ingest
+ * rejection, and the writers cannot drift apart on the spelling.
+ *
+ * Only `.comments` is additionally RESERVED against artifact ingest (see
+ * {@link artifactLayoutFromChain}), and reserved case-insensitively, since a
+ * case-insensitive volume makes `.COMMENTS` the same directory. `images` is not
+ * reserved at all, because unlike a leading dot it is a name `slugify` can
+ * legitimately mint. That asymmetry is deliberate - the reasoning is on
+ * `artifactLayoutFromChain`.
+ */
+export const EPIC_ARTIFACT_IMAGES_DIRNAME = "images";
+export const EPIC_ARTIFACT_COMMENTS_DIRNAME = ".comments";
+
+/**
  * The structural shape recovered from an artifact `index.md` path: the chain
  * folder that directly contains the `index.md` (`folderName`) plus the chain of
  * ancestor folders above it (`parentSegments`, empty for a top-level artifact),
@@ -50,16 +69,126 @@ function normalizeArtifactPathSegments(filePath: string): string[] {
 }
 
 /**
+ * Case FOLD, not lowercase, for the reserved-name comparison below.
+ *
+ * The distinction is the whole point and cost a review round to learn. An
+ * earlier revision folded ASCII only, arguing that Unicode mappings never
+ * collide with `.comments` - having checked U+212A KELVIN SIGN (to `k`) and
+ * U+0130 (to `i` plus a combining dot), neither of which appears in the name.
+ * It missed U+017F LATIN SMALL LETTER LONG S, which folds to `s`, and
+ * `.comments` ends in one. Case-insensitive APFS folds it, so `.commentſ`
+ * addresses the projection directory.
+ *
+ * `toLowerCase` does not fix that either: `ſ` is ALREADY lowercase, so it is
+ * left alone. Folding is what collapses it, and JS has no `toCaseFold`, so
+ * upper-then-lower is the standard approximation - `ſ` uppercases to `S`,
+ * which then lowercases to `s`. Both methods are locale-independent (unlike
+ * their `toLocale*` siblings), so there is no Turkish-i hazard here.
+ *
+ * The approximation is imperfect in the safe direction: it can only ever fold
+ * MORE names onto the reserved one, and over-reserving is nearly free because
+ * `slugify` cannot mint a leading dot, so every name reaching this comparison
+ * with one was hand-authored.
+ */
+function caseFold(value: string): string {
+  return value.toUpperCase().toLowerCase();
+}
+
+/**
+ * Strip the trailing dots and spaces Win32 drops from a path component.
+ *
+ * `CreateFile(".comments.")` and `CreateFile(".comments ")` both open
+ * `.comments` - the trailing padding never reaches the filesystem. Such a name
+ * cannot easily be CREATED on Windows for the same reason, but it can be
+ * created on a case- and dot-sensitive host and then travel: the epic tree is
+ * synced, and on Windows that folder resolves onto the projection directory.
+ *
+ * Only trailing padding is stripped, never interior or leading, so `.comments`
+ * itself is untouched and `.comment.s` stays a distinct name.
+ */
+function stripWin32TrailingPadding(value: string): string {
+  return value.replace(/[. ]+$/u, "");
+}
+
+/**
+ * Whether a single directory name ADDRESSES the reserved comment-projection
+ * directory on any supported platform - not whether it is spelled that way.
+ * Normalizes Win32 trailing dot/space padding, then case-folds.
+ *
+ * Exported because "is this our projection directory?" is asked in two places
+ * that must never disagree: here, where a matching chain segment is REFUSED as
+ * an artifact, and in the host's file-sync, where a matching directory is
+ * EXEMPTED from the unmanaged-folder sweep. If the ingest side normalizes and
+ * the sweep side does not, a `.COMMENTS/` on a case-insensitive volume becomes
+ * a directory that can be neither ingested nor recognized as ours - so the
+ * sweep deletes the live projection, which has no local authority to
+ * regenerate from. Sharing the predicate is what makes that divergence
+ * unrepresentable, in the same spirit as sharing the dirname constants.
+ *
+ * Every widening here is safe against the strand-a-real-artifact failure that
+ * kept the gate one name wide: `slugify` maps every `[^a-z0-9]` run to `-`, so
+ * no minted folderName carries a leading dot, any casing, padding, or
+ * non-ASCII letter. Every name that reaches this comparison with a leading dot
+ * was therefore hand-authored, which is what makes erring toward over-reserving
+ * cheap - and erring the other way is what lets two writers share a directory.
+ */
+export function isEpicArtifactCommentsDirName(name: string): boolean {
+  // Padding first: it is positional, and folding can change length (`ß` to
+  // `ss`), so stripping a tail afterwards would be reasoning about the wrong
+  // string. The constant is already folded and unpadded.
+  return (
+    caseFold(stripWin32TrailingPadding(name)) === EPIC_ARTIFACT_COMMENTS_DIRNAME
+  );
+}
+
+/**
  * Build the `{ folderName, parentSegments }` layout from the chain of folders
  * between `artifacts/` and the trailing `index.md`. Returns `null` when the
- * chain is empty (a bare `…/artifacts/index.md` is not an artifact). The single
- * tail shared by both the root-agnostic scan and the host's root-checked
- * deriver, so the two cannot drift on how a chain maps to a layout.
+ * chain is empty (a bare `…/artifacts/index.md` is not an artifact) or when any
+ * segment is the RESERVED `.comments` projection dirname. The single tail
+ * shared by both the root-agnostic scan and the host's root-checked deriver, so
+ * the two cannot drift on how a chain maps to a layout - which is also why the
+ * reservation belongs here and not in either caller.
+ *
+ * The reservation makes the "the comment projection dir cannot collide with an
+ * artifact folder" claim TRUE rather than merely conventional: without it a
+ * stray `.comments/index.md` would be ingested as a real artifact named
+ * `.comments` and fight the projection for the same directory. It costs nothing
+ * to reserve, because `slugify` maps every `[^a-z0-9]` run to `-`, so no
+ * `epic.createArtifact` call can ever mint a leading-dot folderName.
+ *
+ * Deliberately NOT a blanket "reject every dot-prefixed segment", though that
+ * is the wider gate this started as. Nothing enforces the slug shape on a
+ * folderName that arrived by DISK INGEST rather than by minting - the
+ * persistence schema is a bare `z.string()` - so a pre-existing `.draft/`
+ * artifact is possible, and the wide gate would strand it: the GUI link
+ * pre-check (`artifact-link-path.ts`) would stop resolving it, and edits to its
+ * `index.md` would stop being ingested and get silently reverted by the next
+ * projection pass. Reserving the one name that is actually claimed keeps that
+ * artifact working.
+ *
+ * `EPIC_ARTIFACT_IMAGES_DIRNAME` is deliberately NOT reserved either, for the
+ * mirror-image reason: `images` IS a mintable slug (`slugify("Images")`), so
+ * reserving it would break a legitimately-named artifact. The `images/`
+ * ambiguity predates this gate and is left exactly as it was.
+ *
+ * The comparison folds ASCII case, because the reservation has to hold on the
+ * filesystem rather than in the string. Windows is supported and macOS volumes
+ * are case-insensitive by default, so `.COMMENTS` there NAMES the projection
+ * directory; an exact match would admit it as an artifact chain and hand the
+ * ingest path a folder the projection is already writing into. Widening to the
+ * case variants costs nothing for the same reason the base reservation does -
+ * `slugify` cannot mint a leading dot in any casing - so unlike a blanket
+ * dot-prefix gate this cannot strand a disk-ingested artifact.
+ *
+ * `.` / `..` need no backstop here - `normalizeArtifactPathSegments` consumes
+ * both before a chain is ever built, and every caller routes through it.
  */
 export function artifactLayoutFromChain(
   chain: string[],
 ): { folderName: string; parentSegments: string[] } | null {
   if (chain.length === 0) return null;
+  if (chain.some(isEpicArtifactCommentsDirName)) return null;
   return {
     folderName: chain[chain.length - 1],
     parentSegments: chain.slice(0, -1),

@@ -87,9 +87,7 @@ const INTERVIEW_HEAD: DraftHeadRecord = {
   target: { epicId: "epic-1", chatId: "chat-1", blockId: "block-1" },
   portable: {
     pageIndex: 0,
-    answers: [
-      { selected: ["a"], otherText: "", otherSelected: false },
-    ],
+    answers: [{ selected: ["a"], otherText: "", otherSelected: false }],
   },
   hostLocal: { hostId: "host-1", workspace: null },
 };

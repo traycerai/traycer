@@ -120,10 +120,26 @@ export function useNodeIconDisplay(artifactType: EpicNodeKind): {
   };
 }
 
-export function nodePadRightClass(canEdit: boolean, showAdd: boolean): string {
+/**
+ * Right padding a row reserves for its hover-revealed controls.
+ *
+ * `revealed` is for a surface whose controls never wait for hover (touch has no
+ * hover to wait for): the row must then hold the wider pad at rest, because the
+ * controls are already sitting in it. A `pointer-coarse:` variant would say the
+ * same thing less reliably - it would have to out-order the `group-hover`
+ * rules rather than replace them - so the branch is taken here, in the one
+ * place the string is built.
+ */
+export function nodePadRightClass(
+  canEdit: boolean,
+  showAdd: boolean,
+  revealed: boolean,
+): string {
   if (!canEdit) return "pr-2";
   if (showAdd) {
+    if (revealed) return "pr-14";
     return "pr-2 group-hover/tree-item:pr-14 group-focus-within/tree-item:pr-14 group-has-[[data-state=open]]/tree-item:pr-14";
   }
+  if (revealed) return "pr-8";
   return "pr-2 group-hover/tree-item:pr-8 group-focus-within/tree-item:pr-8 group-has-[[data-state=open]]/tree-item:pr-8";
 }

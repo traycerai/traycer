@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ProviderMutationCliStateV21 } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-schemas";
@@ -8,8 +8,12 @@ import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/ho
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 
+const HOST_ID = "host-1";
+const OTHER_HOST_ID = "host-2";
+
 const mocks = vi.hoisted(() => ({
   requestWithResponseTimeout: vi.fn(),
+  tabHostId: vi.fn<() => string | null>(),
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -18,12 +22,10 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   }),
 }));
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => HOST_ID,
+  useTabHostId: () => mocks.tabHostId(),
 }));
 
 import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
-
-const HOST_ID = "host-1";
 
 type ProvidersListResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -67,6 +69,32 @@ function v21Echo(
     availabilityPending: false,
     profiles: [],
     ...overrides,
+  };
+}
+
+function legacyV21Profile(): ProviderMutationCliStateV21["profiles"][number] {
+  return {
+    profileId: "managed-1",
+    kind: "managed",
+    authType: "oauth",
+    label: "Work",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: {
+      email: "work@example.test",
+      tier: "Pro",
+      accountUuid: null,
+    },
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
   };
 }
 
@@ -121,9 +149,13 @@ function makeWrapper() {
 }
 
 describe("useProvidersAwaitLogin overlay merge", () => {
+  beforeEach(() => {
+    mocks.tabHostId.mockReturnValue(HOST_ID);
+  });
   afterEach(() => {
     cleanup();
     mocks.requestWithResponseTimeout.mockReset();
+    mocks.tabHostId.mockReset();
   });
 
   // Row 8 of the terminal-login contract table: the cached `terminalLogin`
@@ -143,9 +175,25 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       "providers.list",
       { native: null },
     );
-    queryClient.setQueryData(listKey, seededProvidersList());
+    const seeded = seededProvidersList();
+    queryClient.setQueryData(listKey, {
+      ...seeded,
+      providers: seeded.providers.map((provider) => ({
+        ...provider,
+        profiles: [
+          {
+            ...legacyV21Profile(),
+            enabled: false,
+            launchCommand: {
+              command: "copilot --profile work",
+              shell: "posix" as const,
+            },
+          },
+        ],
+      })),
+    });
     mocks.requestWithResponseTimeout.mockResolvedValue({
-      state: v21Echo({}),
+      state: v21Echo({ profiles: [legacyV21Profile()] }),
       existingProfileId: null,
       codeRejected: false,
     });
@@ -161,6 +209,11 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       (p: ProviderListEntry) => p.providerId === "copilot",
     );
     expect(copilot?.loginCapability?.terminalLogin).toEqual({});
+    expect(copilot?.profiles[0]?.enabled).toBe(false);
+    expect(copilot?.profiles[0]?.launchCommand).toEqual({
+      command: "copilot --profile work",
+      shell: "posix",
+    });
     // The missing direction: `terminalLogin` staying `{}` is also what a
     // no-op merge (one that dropped the WHOLE echo, not just its
     // `loginCapability`) would produce, since the seeded cache already has
@@ -169,5 +222,162 @@ describe("useProvidersAwaitLogin overlay merge", () => {
     // "authenticated" - proving the echo is authoritative for what it models,
     // not merely inert here.
     expect(copilot?.auth.status).toBe("authenticated");
+  });
+
+  it("invalidates both harness catalogs for the awaiting host on a successful login - a sign-in can flip `available`", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(listKey, seededProvidersList());
+    const guiKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "agent.gui.listHarnesses"
+    >(HOST_ID, "agent.gui.listHarnesses", {});
+    const tuiKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "agent.tui.listHarnesses"
+    >(HOST_ID, "agent.tui.listHarnesses", {});
+    queryClient.setQueryData(guiKey, { harnesses: [] });
+    queryClient.setQueryData(tuiKey, { harnesses: [] });
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({ providerId: "copilot", profileId: null });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(guiKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(tuiKey)?.isInvalidated).toBe(true);
+  });
+});
+
+// The echo is pinned to `providerMutationCliStateSchemaV21`, whose field set
+// is the hand-frozen `providerCliStateBaseShapeV40` - strictly narrower than
+// the live `providers.list` row, and a login is exactly when the rest of that
+// row moves too (the profile list gains the new account, its ambient identity
+// resolves). So the overlay in the suite above cannot be the last word;
+// invalidating `providers.list` here is not belt-and-braces on top of it, it
+// is the only way those fields are ever refreshed after a login completes.
+describe("useProvidersAwaitLogin providers.list invalidation", () => {
+  beforeEach(() => {
+    mocks.tabHostId.mockReturnValue(HOST_ID);
+  });
+  afterEach(() => {
+    cleanup();
+    mocks.requestWithResponseTimeout.mockReset();
+    mocks.tabHostId.mockReset();
+  });
+
+  it("invalidates the awaiting host's providers.list entry after a successful login", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(listKey, seededProvidersList());
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({ providerId: "copilot", profileId: null });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
+  });
+
+  it("leaves a different host's providers.list entry untouched", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    const otherListKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "providers.list"
+    >(OTHER_HOST_ID, "providers.list", { native: null });
+    queryClient.setQueryData(listKey, seededProvidersList());
+    queryClient.setQueryData(otherListKey, seededProvidersList());
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({ providerId: "copilot", profileId: null });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(otherListKey)?.isInvalidated).toBe(false);
+  });
+
+  it("invalidates nothing when the echo carries a null state", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(listKey, seededProvidersList());
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: null,
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({ providerId: "copilot", profileId: null });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("writes and invalidates nothing when the cached host id is null", async () => {
+    mocks.tabHostId.mockReturnValue(null);
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(listKey, seededProvidersList());
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const setQueryDataSpy = vi.spyOn(queryClient, "setQueryData");
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({ providerId: "copilot", profileId: null });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(setQueryDataSpy).not.toHaveBeenCalled();
   });
 });

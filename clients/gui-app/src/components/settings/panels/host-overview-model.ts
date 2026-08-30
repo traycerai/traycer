@@ -47,7 +47,9 @@ export function customNameFromIdentityDraft(draft: string): string | null {
  *     the cloud pin is the supported control, so the UI degrades to it.
  */
 export type OverviewDegradeReason =
-  "unsupported" | "cli-unavailable" | "externally-managed";
+  | "unsupported"
+  | "cli-unavailable"
+  | "externally-managed";
 
 /**
  * Resolve a per-button capability from the tri-state method answer.
@@ -63,6 +65,31 @@ export function overviewMethodDegrade(
   supported: boolean | null,
 ): OverviewDegradeReason | null {
   return supported === false ? "unsupported" : null;
+}
+
+/**
+ * {@link overviewMethodDegrade} with the local-maintenance fallback folded in:
+ * a method the handshake definitively refused (`false`) does NOT degrade when
+ * the fallback lane can serve it — the control renders live and the decorated
+ * client answers it over the desktop CLI bridge instead.
+ *
+ * Enablement and routing must read the SAME two inputs or they tear: a button
+ * enabled here while the client would still send the RPC dispatches a call the
+ * handshake already refused, and the inverse leaves a served method behind a
+ * degrade notice. The routing half lives in
+ * `lib/host/local-maintenance-fallback-client.ts`, whose serve condition is
+ * exactly `supported === false && fallbackServes`.
+ *
+ * `null` stays "no degrade, no fallback": the tri-state discipline above is
+ * unchanged, and the fallback never triggers on ignorance — a call in flight
+ * while support is unknown goes over real RPC and resolves the handshake.
+ */
+export function resolveOverviewMethodDegrade(
+  supported: boolean | null,
+  fallbackServes: boolean,
+): OverviewDegradeReason | null {
+  if (supported !== false) return null;
+  return fallbackServes ? null : "unsupported";
 }
 
 export function describeOverviewDegrade(
@@ -92,7 +119,9 @@ export function describeOverviewDegrade(
  * broken connection for a host that answered perfectly well.
  */
 export type CliShellFailure =
-  "cli-unavailable" | "cli-failed" | "invalid-output";
+  | "cli-unavailable"
+  | "cli-failed"
+  | "invalid-output";
 
 export function describeCliShellFailure(
   failure: CliShellFailure,
@@ -160,9 +189,10 @@ export function splitDoctorIssuesByVantage(
 // difference that stopped earning its place. Neither half is actionable from
 // Settings: the pid belongs to a process this page cannot signal except through
 // the Restart button already beside it, and the relay origin is infrastructure
-// the account picked. What the row carried that anyone acts on is the session
-// count, which now renders as a chip on the identity line and comes straight
-// off `host.status.busySessionCount` — no per-kind derivation left to do.
+// the account picked. What the row carried that anyone acts on is whether the
+// host is busy, which now renders as a chip on the identity line from
+// `host.status.busyBreakdown` (falling back to `busySessionCount` on a @1.1
+// host) via `describeHostBusy` — no viewer/tile count, ever.
 //
 // The local snapshot (`LocalHostSnapshot`) was this module's only reason to
 // know about a host's locality at all, so the Overview no longer takes it.

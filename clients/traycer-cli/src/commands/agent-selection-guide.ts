@@ -8,7 +8,7 @@ import {
 } from "@traycer/protocol/agent/agent-selection-guide-format";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -29,7 +29,8 @@ export function buildAgentSelectionGuideCommand(opts: {
     const result = await toAgentCliError(
       callHostRpc("agent.selectionGuide", request),
     );
-    const response = parseHostResponse(
+    const response = parseCanonicalHostResponse(
+      "agent.selectionGuide",
       agentSelectionGuideResponseSchema,
       result,
     );

@@ -84,6 +84,9 @@ import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
+import { registerBrowserViewIpc } from "./browser-view-ipc";
+import { registerPipCaptureIpc } from "./pip-capture-ipc";
+import type { BrowserViewManager } from "../browser-view/browser-view-manager";
 import { registerMenuIpc } from "./menu-ipc";
 import { getAppUpdateSnapshot } from "../app/updater";
 import type { HostTrayCommand } from "../../ipc-contracts/host-management-types";
@@ -96,11 +99,14 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  GuardedMutationOutcome,
   HostControllerStatus,
+  LifecycleAdmissionBlock,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  LocalHostMutationIntent,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../host/host-controller-types";
@@ -128,6 +134,8 @@ export interface IpcWindowRecord {
 
 type IpcWindowRegistryChangeListener = () => void;
 
+export type IpcWindowRegistryEvent = "change" | "geometry";
+
 export interface IpcWindowRegistry {
   create(options: {
     readonly initialRoute: string | null;
@@ -143,8 +151,15 @@ export interface IpcWindowRegistry {
   getRecordByWebContentsId(webContentsId: number): IpcWindowRecord | null;
   getMruRecord(): IpcWindowRecord | null;
   mostRecentlyFocusedId(): string | null;
-  on(event: "change", listener: IpcWindowRegistryChangeListener): void;
-  off(event: "change", listener: IpcWindowRegistryChangeListener): void;
+  /** `geometry` fires on minimize/restore/(un)maximize only - see WindowRegistry. */
+  on(
+    event: IpcWindowRegistryEvent,
+    listener: IpcWindowRegistryChangeListener,
+  ): void;
+  off(
+    event: IpcWindowRegistryEvent,
+    listener: IpcWindowRegistryChangeListener,
+  ): void;
 }
 
 type IpcOwnershipChangeListener = (snapshot: readonly OwnershipEntry[]) => void;
@@ -215,6 +230,7 @@ export interface IpcAuthTokenStore {
     readonly token: string;
   }): Promise<TokenRotateResult>;
   delete(): Promise<void>;
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept">;
   subscribe(listener: (change: TokenStoreChange) => void): () => void;
   migrateLegacyCredentials(
     legacy: StoredAuthTokens,
@@ -273,6 +289,15 @@ type HostChangeListener = (
 ) => void;
 
 export const QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS = 1_000;
+
+/**
+ * Upper bound on how long the quit/close path waits for a renderer to
+ * acknowledge a browser handoff drain. A wedged renderer that never replies
+ * must not make the app unquittable (`authorizeQuitAfterFlush` awaits this)
+ * or the window unclosable (`handleWindowClose` already preventDefault'ed),
+ * so the wait resolves as "drained as far as we can tell" instead of hanging.
+ */
+export const BROWSER_HANDOFF_DRAIN_TIMEOUT_MS = 10_000;
 
 export interface QuitDecisionWaiter {
   readonly requestId: string;
@@ -360,8 +385,20 @@ export interface IpcHostLifecycle {
  * `implements` needed.
  */
 export interface IpcHostController {
+  /**
+   * The lifecycle admission verdict sampled synchronously, for a handler that
+   * must test it and submit in one stretch. `getStatus()` carries the lane
+   * half but only after awaiting disk reads, which is already too late to
+   * decide whether submitting would QUEUE behind a running intent — and it
+   * cannot see the pending-login-item revision cycle at all, which this
+   * includes. Deliberately the ONLY admission surface exposed here.
+   */
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null;
   getStatus(): Promise<HostControllerStatus>;
-  convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
+  convergeReady(
+    force: boolean,
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
     trigger: ApplyStagedTrigger,
@@ -374,16 +411,21 @@ export interface IpcHostController {
     pin: string,
     force: boolean,
   ): Promise<MutationOutcome<InstallVersionOk>>;
-  registerService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  registerService(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
-  respawn(): Promise<MutationOutcome<ActivateInstalledOk>>;
+  respawn(
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   recoverIfDown(): Promise<
     MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
   >;
   freePortAndRestart(
     pid: number | null,
     port: number | null,
-  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+    intent: LocalHostMutationIntent,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>>;
   uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>>;
   removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>>;
   isPendingRevisionRefreshQuarantined(): boolean;
@@ -424,7 +466,8 @@ export interface RunnerIpcRegistryOptions {
 }
 
 export type RunnerIpcBridgeOptions =
-  RunnerIpcOptions | RunnerIpcRegistryOptions;
+  | RunnerIpcOptions
+  | RunnerIpcRegistryOptions;
 
 interface FreshSnapshotWaiter {
   readonly windowId: string;
@@ -437,6 +480,13 @@ interface FreshSnapshotWaiter {
    * cannot reuse it without lying about freshness; they call this instead.
    */
   readonly resolveStale: () => void;
+}
+
+interface BrowserHandoffDrainWaiter {
+  readonly windowId: string;
+  readonly resolve: () => void;
+  readonly reject: (error: Error) => void;
+  readonly timer: NodeJS.Timeout;
 }
 
 /**
@@ -478,6 +528,11 @@ export class RunnerIpcBridge {
    * `setUnsyncedEditsSnapshot` pushes during the wait do NOT settle these.
    */
   readonly freshSnapshotWaiters = new Map<string, FreshSnapshotWaiter>();
+  private readonly browserHandoffDrainWaiters = new Map<
+    string,
+    BrowserHandoffDrainWaiter
+  >();
+  private browserViewManager: BrowserViewManager | null = null;
 
   constructor(options: RunnerIpcBridgeOptions) {
     this.options = options;
@@ -526,6 +581,9 @@ export class RunnerIpcBridge {
     registerAppUpdateIpc(this);
     registerGlobalShortcutsIpc(this);
     registerZoomIpc(this);
+    const primaryBrowserViewManager = registerBrowserViewIpc(this);
+    this.browserViewManager = primaryBrowserViewManager;
+    registerPipCaptureIpc(this, primaryBrowserViewManager);
     registerMenuIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.
@@ -766,6 +824,110 @@ export class RunnerIpcBridge {
     }));
   }
 
+  async drainBrowserHandoffs(): Promise<void> {
+    const windowIds = this.windowRegistry
+      .records()
+      .map((record) => record.windowId)
+      .filter((windowId) => this.canHandoffBrowserTabsForWindow(windowId));
+    await Promise.all(
+      windowIds.map((windowId) => this.handOffBrowserTabs(windowId)),
+    );
+  }
+
+  canHandoffBrowserTabsForWindow(windowId: string): boolean {
+    return (
+      this.appLifecycleReadyWindowIds.has(windowId) &&
+      this.browserViewManager?.hasNativeTabsForWindow(windowId) === true
+    );
+  }
+
+  async prepareBrowserWindowClose(windowId: string): Promise<void> {
+    const manager = this.browserViewManager;
+    if (manager === null || !this.canHandoffBrowserTabsForWindow(windowId)) {
+      return;
+    }
+    try {
+      await this.handOffBrowserTabs(windowId);
+    } finally {
+      await manager.closeNativeSessionsForWindow(windowId);
+    }
+  }
+
+  /**
+   * Hand this window's native browser tabs back to the host: flush what main
+   * owns, then wait (bounded) for the renderer to acknowledge its own drain.
+   */
+  private async handOffBrowserTabs(windowId: string): Promise<void> {
+    await this.browserViewManager?.handoff.drainForWindow(windowId);
+    await this.requestBrowserHandoffDrain([windowId]);
+  }
+
+  private async requestBrowserHandoffDrain(
+    windowIds: readonly string[],
+  ): Promise<void> {
+    await Promise.all(
+      windowIds.map(
+        (windowId) =>
+          new Promise<void>((resolve, reject) => {
+            const requestId = randomUUID();
+            const timer = setTimeout(() => {
+              if (!this.browserHandoffDrainWaiters.delete(requestId)) return;
+              log.warn("[runner-ipc] browser handoff drain timed out", {
+                windowId,
+                timeoutMs: BROWSER_HANDOFF_DRAIN_TIMEOUT_MS,
+              });
+              resolve();
+            }, BROWSER_HANDOFF_DRAIN_TIMEOUT_MS);
+            this.browserHandoffDrainWaiters.set(requestId, {
+              windowId,
+              resolve,
+              reject,
+              timer,
+            });
+            if (
+              this.safeSendToWindow(
+                windowId,
+                RunnerHostEvent.drainBrowserHandoffs,
+                { requestId },
+              )
+            ) {
+              return;
+            }
+            this.browserHandoffDrainWaiters.delete(requestId);
+            clearTimeout(timer);
+            reject(
+              new Error(
+                `Browser handoff drain request could not be delivered to window ${windowId}`,
+              ),
+            );
+          }),
+      ),
+    );
+  }
+
+  acknowledgeBrowserHandoffsDrained(windowId: string, requestId: string): void {
+    const waiter = this.browserHandoffDrainWaiters.get(requestId);
+    if (waiter?.windowId !== windowId) return;
+    this.browserHandoffDrainWaiters.delete(requestId);
+    clearTimeout(waiter.timer);
+    waiter.resolve();
+  }
+
+  markRendererUnavailable(windowId: string): void {
+    this.appLifecycleReadyWindowIds.delete(windowId);
+    this.rejectQuitDecisionWaitersForWindow(
+      windowId,
+      new Error("Renderer reset before resolving quit interception"),
+    );
+    this.settleFreshSnapshotWaitersAsStale(
+      (waiter) => waiter.windowId === windowId,
+    );
+    this.rejectBrowserHandoffDrainWaiters(
+      (waiter) => waiter.windowId === windowId,
+      new Error("Renderer reset before acknowledging browser handoff drain"),
+    );
+  }
+
   /**
    * Sends a `quitRequested` event to the renderer and resolves with the
    * renderer's decision. Used by the `before-quit` handler to coordinate the
@@ -848,6 +1010,12 @@ export class RunnerIpcBridge {
     this.syncListeners.length = 0;
     this.rejectAllQuitDecisionWaiters(
       new Error("Runner IPC bridge disposed before quit decision resolved"),
+    );
+    this.rejectBrowserHandoffDrainWaiters(
+      () => true,
+      new Error(
+        "Runner IPC bridge disposed before browser handoff drain resolved",
+      ),
     );
     // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
     // armed past dispose() would either fire its setTimeout against a bridge
@@ -1190,6 +1358,10 @@ export class RunnerIpcBridge {
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => !liveWindowIds.has(waiter.windowId),
     );
+    this.rejectBrowserHandoffDrainWaiters(
+      (waiter) => !liveWindowIds.has(waiter.windowId),
+      new Error("Browser handoff window closed before acknowledging the drain"),
+    );
   }
 
   removeQuitDecisionWaiter(requestId: string): QuitDecisionWaiter | null {
@@ -1251,6 +1423,18 @@ export class RunnerIpcBridge {
       if (predicate(waiter)) {
         waiter.resolveStale();
       }
+    }
+  }
+
+  private rejectBrowserHandoffDrainWaiters(
+    predicate: (waiter: BrowserHandoffDrainWaiter) => boolean,
+    error: Error,
+  ): void {
+    for (const [requestId, waiter] of this.browserHandoffDrainWaiters) {
+      if (!predicate(waiter)) continue;
+      this.browserHandoffDrainWaiters.delete(requestId);
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
     }
   }
 }
@@ -1327,9 +1511,15 @@ class SingleWindowRegistry implements IpcWindowRegistry {
     return this.record.windowId;
   }
 
-  on(_event: "change", _listener: IpcWindowRegistryChangeListener): void {}
+  on(
+    _event: IpcWindowRegistryEvent,
+    _listener: IpcWindowRegistryChangeListener,
+  ): void {}
 
-  off(_event: "change", _listener: IpcWindowRegistryChangeListener): void {}
+  off(
+    _event: IpcWindowRegistryEvent,
+    _listener: IpcWindowRegistryChangeListener,
+  ): void {}
 }
 
 // Default quit-state for the single-window `window:` bridge variant (and any
@@ -1360,6 +1550,10 @@ class NullAuthTokenStore implements IpcAuthTokenStore {
 
   delete(): Promise<void> {
     return Promise.resolve();
+  }
+
+  deleteIfToken(): Promise<"deleted" | "kept"> {
+    return Promise.resolve("kept");
   }
 
   subscribe(): () => void {

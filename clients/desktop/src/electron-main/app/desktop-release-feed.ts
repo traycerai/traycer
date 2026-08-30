@@ -16,7 +16,9 @@ import type {
   UpdateFileInfo,
   UpdateInfo,
 } from "electron-updater/out/types";
+import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import type { LinuxPackageType } from "./linux-update-guidance";
+import { isCanonicalReleaseCandidate } from "@traycer-clients/shared/host-version/release-line";
 
 // electron-updater's HTTP executor reads a `redirect` field the node `http`
 // `RequestOptions` type doesn't declare; model that augmentation locally rather
@@ -118,7 +120,15 @@ export function projectDesktopRelease(
     return [];
   }
   const version = match[1];
-  const isReleaseCandidate = version.includes("-rc.");
+  // The same canonical predicate the channel model derives implicit RC
+  // following from, rather than a local substring test: a tag this projection
+  // accepts as an RC is one the selector may later have to place on a release
+  // line, and two definitions of "is this an RC" is how the two would drift.
+  // EQUIVALENT, not a behavior change - the tag regex above already admits only
+  // `X.Y.Z` and `X.Y.Z-rc.N` with strict SemVer numerics, so both spellings
+  // accept exactly the same set here. The point is that there is now one
+  // definition rather than two.
+  const isReleaseCandidate = isCanonicalReleaseCandidate(version);
   // Reject inconsistent metadata rather than trusting the tag: a stable tag
   // flagged `prerelease`, or an rc tag flagged stable, is a publishing mistake
   // that must not silently ship.
@@ -156,7 +166,8 @@ export function isPlatformCompatibleRelease(
 // drawn from. `reason` is a log-only diagnostic; it is never surfaced to the
 // user (the updater sanitizes all update failures).
 export type DesktopReleaseManifestValidation =
-  { readonly ok: true } | { readonly ok: false; readonly reason: string };
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
 
 // Deep, network-informed compatibility check run during discovery: the cheap
 // `isPlatformCompatibleRelease` gate only proves the manifest/installer *assets
@@ -311,6 +322,61 @@ function releaseHasApplicableInstaller(
   });
 }
 
+/**
+ * THE one reading of `compatibilityEpoch` off an update document, wherever that
+ * document reaches us.
+ *
+ * Two callers with genuinely different shapes in hand - the updater's
+ * `update-available` / `update-downloaded` `info` object, and a channel manifest
+ * this module fetched itself during the RC probe - and they must agree to the
+ * letter, because a candidate the probe calls sufficient is one the updater will
+ * later re-read at `update-available` and must not then call insufficient.
+ *
+ * `unknown` in, narrowed here, and NOT via a cast: `UpdateInfo` declares no such
+ * member (the key survives as an unknown top-level YAML key, see
+ * `parseUpdateInfo`), and this repo bans `as any` / `as unknown`. Same shape as
+ * {@link readManifestString} directly below, deliberately.
+ *
+ * `null` is returned for absent, non-numeric, non-integer, and non-positive
+ * alike, and the caller must treat all of them as INSUFFICIENT rather than as
+ * "legacy". A build nobody has run yet has not asserted epoch 1 by omission -
+ * only a client the host observed on the wire ever gets that reading.
+ */
+export function readCompatibilityEpoch(value: unknown): number | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const candidate: unknown = value["compatibilityEpoch"];
+  // SCALAR VALIDITY comes from the protocol package, which is where the host's
+  // own admission gate reads it from. Re-deriving "positive safe integer" here
+  // is how the desktop and the CLI drifted into two copies of one rule; the
+  // record-field extraction above is the only part that is genuinely local to
+  // this carrier shape.
+  return typeof candidate === "number" && isValidCompatibilityEpoch(candidate)
+    ? candidate
+    : null;
+}
+
+/**
+ * The stamped epoch of a channel manifest, read through electron-updater's own
+ * parser.
+ *
+ * Going through {@link parseManifest} rather than a local YAML read is the
+ * point: the RC probe must see the document exactly as the updater would if the
+ * feed were pointed at this release, custom-key survival included. A manifest
+ * that does not parse reads `null` - the same conservative answer as one that
+ * carries no stamp.
+ */
+export function readManifestCompatibilityEpoch(
+  rawManifest: string,
+  channelFile: string,
+  manifestUrl: string,
+): number | null {
+  return readCompatibilityEpoch(
+    parseManifest(rawManifest, channelFile, manifestUrl),
+  );
+}
+
 export function readReleaseAssets(value: unknown): DesktopReleaseAsset[] {
   if (!Array.isArray(value)) {
     return [];
@@ -451,6 +517,22 @@ export interface ExactReleaseFeedConfig {
   ) => ExactReleaseAssetProvider;
   readonly assets: readonly DesktopReleaseAsset[];
   readonly token: string;
+  // Needed to resolve the PREVIOUS release's assets when the differential
+  // downloader asks for its blockmap; the pinned `assets` above describe the
+  // new release alone. See `ExactReleaseAssetProvider.getBlockMapFiles`.
+  readonly owner: string;
+  readonly repo: string;
+}
+
+/**
+ * The tag a desktop release is published under.
+ *
+ * One definition of the convention, so the blockmap lookup below cannot drift
+ * from it. `projectDesktopRelease`'s pattern is the parsing counterpart: this
+ * builds a tag from a version, that recognizes a version in a tag.
+ */
+export function desktopReleaseTag(version: string): string {
+  return `desktop-v${version}`;
 }
 
 // A resolved desktop feed: the generic exact-release provider for public repos,
@@ -477,7 +559,7 @@ export function buildDesktopReleaseFeed(
       url: `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(release.tag)}/`,
     };
   }
-  return privateExactReleaseFeed(release.assets, token);
+  return privateExactReleaseFeed(release.assets, token, owner, repo);
 }
 
 // The URL + headers used to fetch a candidate's channel manifest during
@@ -516,12 +598,16 @@ export function resolveDesktopManifestRequest(
 function privateExactReleaseFeed(
   assets: readonly DesktopReleaseAsset[],
   token: string,
+  owner: string,
+  repo: string,
 ): ExactReleaseFeedConfig {
   return {
     provider: "custom",
     updateProvider: ExactReleaseAssetProvider,
     assets,
     token,
+    owner,
+    repo,
   };
 }
 
@@ -535,6 +621,8 @@ function privateExactReleaseFeed(
 export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
   private readonly assets: readonly DesktopReleaseAsset[];
   private readonly token: string;
+  private readonly owner: string;
+  private readonly repo: string;
 
   constructor(
     options: ExactReleaseFeedConfig,
@@ -544,6 +632,8 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
     super(runtimeOptions);
     this.assets = options.assets;
     this.token = options.token;
+    this.owner = options.owner;
+    this.repo = options.repo;
   }
 
   // GitHub's asset API 302-redirects to a signed object-store URL; mirror
@@ -582,6 +672,23 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
     return this.assetHeaders("application/octet-stream");
   }
 
+  /**
+   * The URLs this provider resolves are `api.github.com/.../releases/assets/<id>`
+   * - an opaque id, with NO filename and NO extension in the pathname. That is
+   * GitHub's only authenticated download path, so it is not negotiable here, but
+   * two pieces of electron-updater read a filename out of that pathname and
+   * quietly get nothing:
+   *
+   *   - `Provider.getBlockMapFiles` - overridden below.
+   *   - `findFile(files, extension, not)`, which each platform updater uses to
+   *     pick its installer. Its extension filter matches nothing AND its
+   *     exclusion list excludes nothing, so it falls through to `files[0]`.
+   *     `_DebUpdater` asking for `deb` therefore receives whatever is first in
+   *     the channel manifest, and `dpkg -i` is handed an AppImage.
+   *
+   * So this provider must never be pointed at a platform that publishes more
+   * than one installer format in one channel manifest.
+   */
   resolveFiles(updateInfo: UpdateInfo): ResolvedUpdateFileInfo[] {
     return getFileList(updateInfo).map((file) => {
       const name = posix.basename(file.url).replace(/ /g, "-");
@@ -593,6 +700,86 @@ export class ExactReleaseAssetProvider extends Provider<UpdateInfo> {
       }
       return { url: new URL(asset.url), info: file };
     });
+  }
+
+  /**
+   * Blockmap URLs for the differential downloader, resolved by ASSET NAME.
+   *
+   * The base implementation suffixes `baseUrl.pathname` with `.blockmap` and
+   * derives the old one by substituting the version *inside that pathname*.
+   * Both halves are inert against an asset-API URL: there is no filename to
+   * suffix and no version to substitute, so the base returns two identical,
+   * malformed URLs and the delta download dies parsing a JSON error body as
+   * gzip (`incorrect header check`).
+   *
+   * Resolving by name needs TWO asset sets, not one. This provider is pinned to
+   * a single release, and `artifactName` carries no version
+   * (`traycer-desktop-windows-${arch}.${ext}`), so the previous release's
+   * blockmap has exactly the SAME name as the new one. Looking the name up in
+   * the pinned set would hand back the new blockmap for both sides, and the
+   * downloader would then "reconstruct" a file it already has - wasting the
+   * round trip and failing its digest. So the old release's assets are fetched
+   * by tag, which is what `GitLabProvider` does for this same reason.
+   *
+   * Throwing when either side is missing is the intended outcome rather than a
+   * failure to avoid: `differentialDownloadInstaller` wraps this whole call and
+   * falls back to a full download.
+   */
+  async getBlockMapFiles(
+    baseUrl: URL,
+    oldVersion: string,
+    newVersion: string,
+  ): Promise<URL[]> {
+    const blockMapName = `${this.assetNameForUrl(baseUrl)}.blockmap`;
+    const newBlockMap = this.assets.find((it) => it.name === blockMapName);
+    if (newBlockMap === undefined) {
+      throw new Error(
+        `Blockmap "${blockMapName}" is not published on the ${newVersion} release`,
+      );
+    }
+    const previous = await this.fetchReleaseAssets(
+      desktopReleaseTag(oldVersion),
+    );
+    const oldBlockMap = previous.find((it) => it.name === blockMapName);
+    if (oldBlockMap === undefined) {
+      throw new Error(
+        `Blockmap "${blockMapName}" is not published on the ${oldVersion} release`,
+      );
+    }
+    return [new URL(oldBlockMap.url), new URL(newBlockMap.url)];
+  }
+
+  // An asset-API URL carries only an opaque id, so the pinned asset set is the
+  // one place it can be mapped back to a filename. Both sides are normalized
+  // through `URL` so the comparison can't fail on incidental spelling.
+  private assetNameForUrl(url: URL): string {
+    const asset = this.assets.find((it) => new URL(it.url).href === url.href);
+    if (asset === undefined) {
+      throw new Error(
+        `Update file "${url.href}" is not among the desktop release assets`,
+      );
+    }
+    return asset.name;
+  }
+
+  private async fetchReleaseAssets(
+    tag: string,
+  ): Promise<DesktopReleaseAsset[]> {
+    const url = new URL(
+      `https://api.github.com/repos/${this.owner}/${this.repo}/releases/tags/${encodeURIComponent(tag)}`,
+    );
+    const raw = await this.httpRequest(
+      url,
+      this.assetHeaders("application/vnd.github+json"),
+    );
+    if (raw === null) {
+      throw new Error(`Release "${tag}" returned no body`);
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) {
+      throw new Error(`Release "${tag}" returned a malformed response`);
+    }
+    return readReleaseAssets(parsed.assets);
   }
 
   private assetHeaders(accept: string): OutgoingHttpHeaders {

@@ -127,6 +127,11 @@ export function buildConfigHostFixture(options: {
         busy: false,
         busySessionCount: 0,
         updateProgress: null,
+        busyBreakdown: null,
+        // `null` = this fixture's host did not report the durable attempt,
+        // which is exactly what host.status@1.2-and-older peers send.
+        updateOperation: null,
+        updateTransaction: null,
       };
     },
     "config.shell.get": async () => {

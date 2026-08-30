@@ -27,6 +27,7 @@ import {
   useGuiHarnessCatalogForClient,
   type GuiHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
 import { useHostBinding } from "@/lib/host";
 import { resolveSubtreeHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
@@ -344,12 +345,74 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
   );
 }
 
+/**
+ * Both subpages listed on `available` alone, which made them the last
+ * auth-blind paths into the composer: `available` is a binary-resolution/CLI
+ * probe that never consults auth, so a provider whose account is signed out
+ * was offered here indistinguishably from a live one.
+ *
+ * The picker surfaces answer this by joining against `providers.list`, but the
+ * palette has no such query - it holds a catalog and nothing else. So this is
+ * the site the row-carried `authStatus` exists for: the same definitive-only
+ * verdict the rail reads, taken straight off the row being listed. On a host
+ * below `agent.gui.listHarnesses@7.1` the field is absent, the predicate is
+ * false for every row, and both subpages look exactly as they do today.
+ */
+function providerOfferableInPalette(provider: HarnessOption): boolean {
+  return provider.available;
+}
+
+/**
+ * The row's `authStatus` is the provider's AMBIENT verdict
+ * (`peekProviderAmbientAuthStatus`, keyed on the null-profile scope) and
+ * nothing more, so it DEMOTES a row - it must never remove one.
+ *
+ * The send gate is the authority on what can actually run, and it applies the
+ * ambient verdict only when the composer's `profileId === null`; a composer
+ * pinned to a managed profile is judged on THAT profile's own auth. Filtering
+ * these rows out therefore hid every provider and model command for a
+ * configuration that runs turns perfectly well - a signed-out terminal account
+ * beside a signed-in managed profile. The palette cannot tell the two apart
+ * (`FocusedComposerEntry` carries a host client, not profile state), so it
+ * takes the reading it can defend: say so, order accordingly, and leave the
+ * verdict to the gate that has the profile in hand.
+ *
+ * The rail reads the identical signal (`railHarnessDegraded`) and reaches the
+ * same conclusion by a different route: there it dims the row and leaves it
+ * exactly where it is, because the rail is a fixed strip of ⌘-digit positions
+ * a user learns. This is a searched list with no positional memory to break,
+ * so it may additionally group the unusable rows last.
+ */
+function providerSignedOutInPalette(provider: HarnessOption): boolean {
+  return isHarnessRowSignedOut(provider);
+}
+
+/**
+ * Signed-out providers sort last, keeping catalog order within each group.
+ *
+ * Generic over the row so the caller keeps the catalog's own element type -
+ * `HarnessOption` is the narrow shape the item builders read (`id`, `label`),
+ * and collapsing to it here would drop `models`, which the model subpage
+ * needs. Same reason `sortGuiHarnessesByProviderOrder` is generic.
+ */
+function paletteProviderOrder<T extends HarnessOption>(
+  harnesses: ReadonlyArray<T>,
+): ReadonlyArray<T> {
+  return harnesses
+    .filter((provider) => providerOfferableInPalette(provider))
+    .toSorted(
+      (left, right) =>
+        Number(providerSignedOutInPalette(left)) -
+        Number(providerSignedOutInPalette(right)),
+    );
+}
+
 function useProviderSubpageItems(): ReadonlyArray<CommandItem> {
   const catalog = useFocusedComposerCatalog();
   return useMemo(
     () =>
-      catalog.harnesses.flatMap((provider) =>
-        provider.available ? [buildProviderItem(provider)] : [],
+      paletteProviderOrder(catalog.harnesses).map((provider) =>
+        buildProviderItem(provider),
       ),
     [catalog.harnesses],
   );
@@ -359,13 +422,22 @@ function useModelSubpageItems(): ReadonlyArray<CommandItem> {
   const catalog = useFocusedComposerCatalog();
   return useMemo(
     () =>
-      catalog.harnesses.flatMap((provider) =>
-        provider.available
-          ? provider.models.map((model) => buildModelItem(provider, model))
-          : [],
+      paletteProviderOrder(catalog.harnesses).flatMap((provider) =>
+        provider.models.map((model) => buildModelItem(provider, model)),
       ),
     [catalog.harnesses],
   );
+}
+
+/**
+ * `statusBadge` on an ACTIONABLE row - the qualifier reading of that field, not
+ * the non-actionable "reason" one. The row stays selectable on purpose: see
+ * {@link providerSignedOutInPalette}.
+ */
+function signedOutBadge(provider: HarnessOption): { statusBadge?: string } {
+  return providerSignedOutInPalette(provider)
+    ? { statusBadge: "Signed out" }
+    : {};
 }
 
 function buildProviderItem(provider: HarnessOption): CommandItem {
@@ -379,6 +451,7 @@ function buildProviderItem(provider: HarnessOption): CommandItem {
     shortcut: null,
     actionId: null,
     subpage: null,
+    ...signedOutBadge(provider),
     run: () => {
       const entry = getFocusedComposerControls();
       if (entry === null) return;
@@ -404,6 +477,7 @@ function buildModelItem(
     shortcut: null,
     actionId: null,
     subpage: null,
+    ...signedOutBadge(provider),
     run: () => {
       const entry = getFocusedComposerControls();
       if (entry === null) return;

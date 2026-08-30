@@ -1,3 +1,4 @@
+import { isTransitionPhase } from "../transition/types";
 import type { DurableRecord } from "../evidence";
 import type {
   InstallRecord,
@@ -119,7 +120,11 @@ export function decodeTransitionJournal(
     if (typeof obj.probeNonce !== "string") return null;
     if (obj.from !== "smappservice" && obj.from !== "raw-fallback") return null;
     if (obj.to !== "smappservice" && obj.to !== "raw-fallback") return null;
-    if (typeof obj.phase !== "string") return null;
+    // Fail CLOSED on an unrecognized phase. Accepting any string let an
+    // unknown/on-disk-future phase through as a valid journal, which every
+    // consumer then had to classify by guesswork - and Ticket 05's guess was
+    // "in-flight", producing a permanent ownership veto.
+    if (!isTransitionPhase(obj.phase)) return null;
     if (typeof obj.startedAt !== "string") return null;
     if (!Array.isArray(obj.expectedIdentities)) return null;
     if (!obj.expectedIdentities.every((x) => typeof x === "string"))

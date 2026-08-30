@@ -33,6 +33,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 function claudeStateWithoutProfile(): ProviderCliState {
   const ambient: ProviderProfile = {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",
@@ -130,7 +131,10 @@ function plainUserMessage(sessionAnchor: ChatSessionAnchor): ChatMessageModel {
 
 function renderTombstoned(accentColor: string | null) {
   return render(
-    <TombstonedProfileProvider providers={[claudeStateWithoutProfile()]}>
+    <TombstonedProfileProvider
+      providers={[claudeStateWithoutProfile()]}
+      hostId="host-1"
+    >
       <ChatExpansionTestProviders tileInstanceId="tombstone-accent-tile">
         <TooltipProvider>
           <UserMessageBody

@@ -51,7 +51,8 @@ let otherHostListCalls = 0;
 // Read behavior for the next `epic.listCommentThreads` call. Tests swap this
 // mid-flight to model an outage arriving after a successful read.
 let respondToListThreads: () =>
-  ListCommentThreadsResponse | Promise<ListCommentThreadsResponse> = () => ({
+  | ListCommentThreadsResponse
+  | Promise<ListCommentThreadsResponse> = () => ({
   threads: [],
 });
 

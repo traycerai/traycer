@@ -1,7 +1,14 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { useContext, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -47,6 +54,8 @@ import {
   HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS,
   HOST_STREAM_REOPEN_MAX_BACKOFF_MS,
 } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
+import type { HostStreamClientBinding } from "@/hooks/host/use-host-stream-client-for";
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -62,12 +71,44 @@ interface StreamState {
   useClientSupport: boolean;
 }
 
+/**
+ * Drives `useNotificationsServingHostEntry`'s fallback selection independent
+ * of `hostState` (the LOCAL host). `hasLocalHost: null` means "no
+ * `RunnerHostProvider` in the tree", which is the default every case here
+ * starts from - the local-host path must behave identically under it.
+ * `boundHostId` stands in for `useAddressableHostId()`, which is what a
+ * relay-only shell's serving host resolves through.
+ */
+interface ServingHostFallbackState {
+  hasLocalHost: boolean | null;
+  boundHostId: string | null;
+}
+
 const hostState = vi.hoisted<HostState>(() => ({ id: "host-a", client: null }));
 const streamState = vi.hoisted<StreamState>(() => ({
   client: null,
   cloudFeedSupport: null,
   useClientSupport: false,
 }));
+const servingHostFallbackState = vi.hoisted<ServingHostFallbackState>(() => ({
+  hasLocalHost: null,
+  boundHostId: null,
+}));
+
+/**
+ * Forces `useHostStreamClientBindingFor`'s mocked owner identity away from
+ * the value the real formula would compute for the entry under test - the
+ * one lever a test needs to reproduce a binding that has not caught up with
+ * a serving-host change yet. `null` ("no override") is the default: every
+ * case that never touches this field gets the real, drift-proof formula.
+ */
+interface StreamBindingOverrideState {
+  ownerIdentity: string | null;
+}
+
+const streamBindingOverrideState = vi.hoisted<StreamBindingOverrideState>(
+  () => ({ ownerIdentity: null }),
+);
 
 const mockAuth = {
   onChange: vi.fn((_handler: (status: string) => void) => ({
@@ -107,15 +148,65 @@ vi.mock("@/hooks/host/use-reactive-local-host-entry", () => ({
       : { ...mockLocalHostEntry, hostId: hostState.id },
 }));
 
-vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: (target: HostDirectoryEntry | null) =>
-    target === null ? null : streamState.client,
+vi.mock("@/hooks/host/use-host-stream-client-for", async () => {
+  // Dynamic import (not a top-level static one): `vi.mock` factories run
+  // before the module's own imports are evaluated, so reaching the real
+  // key-computation function has to go through `await import(...)` here
+  // rather than a normal `import` binding. Keeps this mock's transport key
+  // in lockstep with the production formula instead of hand-rolling it.
+  const { remoteAwareOwnerIdentityKey: computeOwnerIdentityKey } =
+    await import("@/lib/host/transport-key");
+  return {
+    useHostStreamClientBindingFor: (
+      target: HostDirectoryEntry | null,
+    ): HostStreamClientBinding | null => {
+      if (target === null || streamState.client === null) return null;
+      const ownerIdentity =
+        streamBindingOverrideState.ownerIdentity ??
+        computeOwnerIdentityKey(
+          target,
+          hostState.client === null
+            ? null
+            : hostState.client.getRequestContextUserId(),
+        );
+      if (ownerIdentity === null) return null;
+      return {
+        client: streamState.client,
+        transportKey: ownerIdentity,
+        // Lease no-ops: this suite never hands the client to a consumer that
+        // outlives the owning hook instance, so the pin count is irrelevant.
+        pin: () => {},
+        unpin: () => {},
+      };
+    },
+  };
+});
+
+// Backs `useNotificationsServingHostEntry`'s relay-only fallback: `null`
+// stands for "no `RunnerHostProvider`", which the hook treats as
+// local-capable so an undeclared shell never silently acquires the fallback.
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () =>
+    servingHostFallbackState.hasLocalHost === null
+      ? null
+      : { hasLocalHost: servingHostFallbackState.hasLocalHost },
+}));
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => servingHostFallbackState.boundHostId,
+}));
+
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: (target: HostDirectoryEntry | null) =>
+    target === null || hostState.client === null
+      ? null
+      : hostState.client.createRequester(target),
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: (hostId: string) => {
     if (hostId.length === 0) return null;
-    return mockLocalHostEntry;
+    return { ...mockLocalHostEntry, hostId };
   },
 }));
 
@@ -236,7 +327,10 @@ import {
   __resetHostNotificationsStoreForTests,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
-import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import {
+  cloudNotificationFeedId,
+  useCloudNotificationsStore,
+} from "@/stores/notifications/cloud-notifications-store";
 import {
   emitTerminalCrashedNotification,
   useAppLocalNotificationsStore,
@@ -252,6 +346,8 @@ import {
   __setAgentActivityStateForTests,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
+import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 function NotificationsSessionProvider(props: {
   readonly children: ReactNode;
@@ -332,11 +428,14 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   constructor() {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
@@ -581,6 +680,16 @@ async function renderHostNotificationsProvider(): Promise<{
   readonly queryClient: QueryClient;
   readonly streamClient: MockWsStreamClient;
 }> {
+  return renderHostNotificationsProviderWithChild(<div />);
+}
+
+async function renderHostNotificationsProviderWithChild(
+  child: ReactNode,
+): Promise<{
+  readonly markReadCalls: Array<HostNotificationsMarkReadRequest>;
+  readonly queryClient: QueryClient;
+  readonly streamClient: MockWsStreamClient;
+}> {
   const markReadCalls: Array<HostNotificationsMarkReadRequest> = [];
   const streamClient = new MockWsStreamClient();
   const queryClient = new QueryClient();
@@ -593,9 +702,7 @@ async function renderHostNotificationsProvider(): Promise<{
 
   render(
     <QueryClientProvider client={queryClient}>
-      <NotificationsSessionProvider>
-        <div />
-      </NotificationsSessionProvider>
+      <NotificationsSessionProvider>{child}</NotificationsSessionProvider>
     </QueryClientProvider>,
   );
 
@@ -618,6 +725,23 @@ async function renderHostNotificationsProvider(): Promise<{
   });
 
   return { markReadCalls, queryClient, streamClient };
+}
+
+function ExplicitNotificationConsumptionProbe(): ReactNode {
+  const consume = useContext(NotificationConsumptionContext);
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        consume?.({
+          originHostId: mockLocalHostEntry.hostId,
+          entity: { epicId: "epic-a", chatId: "chat-a" },
+        })
+      }
+    >
+      Consume chat notifications
+    </button>
+  );
 }
 
 function indicatorKey(
@@ -646,10 +770,18 @@ describe("<NotificationsSessionProvider />", () => {
   beforeEach(() => {
     window.localStorage.clear();
     hostState.id = "host-a";
-    hostState.client = null;
+    // A real client with a fixed test identity, not `null`: production
+    // `useHostClient()` never returns `null`, and the provider reads
+    // `getRequestContextUserId()` unconditionally on every render, so a
+    // `null` default here would fail every case in this suite rather than
+    // only the ones that care about the host client.
+    hostState.client = createHostClient([]);
     streamState.client = null;
     streamState.cloudFeedSupport = "unsupported";
     streamState.useClientSupport = false;
+    servingHostFallbackState.hasLocalHost = null;
+    servingHostFallbackState.boundHostId = null;
+    streamBindingOverrideState.ownerIdentity = null;
     mockAuth.onChange.mockClear();
     mockAuth.revalidateCurrentContext.mockClear();
     showNotificationMock.mockClear();
@@ -679,6 +811,56 @@ describe("<NotificationsSessionProvider />", () => {
     __setNotificationsStreamFactoryForTests(null);
     resetAuth("signed-out", null, null);
     vi.restoreAllMocks();
+  });
+
+  it("marks a restored focused entity read through the local host before effective-host selection", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    setFocusedChat("epic-startup", "chat-startup");
+
+    const markReadCalls: Array<HostNotificationsMarkReadRequest> = [];
+    const streamClient = new MockWsStreamClient();
+    const queryClient = new QueryClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    hostState.client =
+      createHostClient(markReadCalls).createRequesterForHostId(null);
+    streamState.client = streamClient;
+    useAppLocalNotificationsStore
+      .getState()
+      .activateIdentity("alice@example.com");
+    const toastSpy = vi.spyOn((await import("sonner")).toast, "error");
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toContain(
+        "host.notifications.feed.subscribe",
+      );
+    });
+    act(() => {
+      streamClient.session.emitOpen();
+    });
+
+    await waitFor(() => {
+      expect(markReadCalls).toEqual([
+        {
+          kind: "entity",
+          entity: {
+            epicId: "epic-startup",
+            chatId: "chat-startup",
+          },
+        },
+      ]);
+    });
+    expect(toastSpy).not.toHaveBeenCalled();
   });
 
   it("keeps local failures and ingests collaboration rows alongside the cloud relay", async () => {
@@ -1318,11 +1500,14 @@ describe("<NotificationsSessionProvider />", () => {
   it("keeps retained v1 rows while a rebuilt client's capability is pending offline", async () => {
     const queryClient = new QueryClient();
     const streamClient = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
@@ -1446,6 +1631,7 @@ describe("<NotificationsSessionProvider />", () => {
         },
       },
       "local",
+      "connected",
     );
     emitTerminalCrashedNotification({
       instanceId: "terminal-before-user-switch",
@@ -2425,6 +2611,23 @@ describe("<NotificationsSessionProvider />", () => {
     });
   });
 
+  it("consumes an explicitly clicked active tab even without a focus transition", async () => {
+    const { markReadCalls } = await renderHostNotificationsProviderWithChild(
+      <ExplicitNotificationConsumptionProbe />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Consume chat notifications" }),
+    );
+
+    await waitFor(() => {
+      expect(markReadCalls).toContainEqual({
+        kind: "entity",
+        entity: { epicId: "epic-a", chatId: "chat-a" },
+      });
+    });
+  });
+
   it("does not consume a needs-action-only upsert for the active entity", async () => {
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const { markReadCalls, streamClient } =
@@ -3127,5 +3330,540 @@ describe("<NotificationsSessionProvider />", () => {
     expect(view.getByTestId("child")).not.toBeNull();
     expect(streams).toHaveLength(0);
     expect(useNotificationsStore.getState().entries).toEqual([]);
+  });
+
+  // ---------------------------------------------------------------------
+  // Relay-only fallback: a shell with NO local host serves notifications from
+  // the BOUND host instead (`useNotificationsServingHostEntry`). The
+  // local-host rule covered above must hold identically whether or not this
+  // fallback exists - it is reachable only where that rule has no subject.
+  // ---------------------------------------------------------------------
+  describe("relay-only serving-host fallback", () => {
+    it("a local host wins over the bound host even on a local-capable shell, and a bound-host switch alone neither reopens nor tears down the stream", async () => {
+      const queryClient = new QueryClient();
+      const streamClient = new MockWsStreamClient();
+      hostState.id = mockLocalHostEntry.hostId;
+      streamState.client = streamClient;
+      servingHostFallbackState.hasLocalHost = true;
+      servingHostFallbackState.boundHostId = "host-b";
+
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      });
+
+      await waitFor(() => {
+        expect(streamClient.subscribedMethods).toContain(
+          "notifications.subscribe",
+        );
+      });
+      const openedSessions = streamClient.subscribedMethods.length;
+
+      // The bound host switches elsewhere in the app while a local host is
+      // present. `useNotificationsServingHostEntry` keeps returning the
+      // local entry regardless, so the resolved serving host - and
+      // therefore the stream - must not change.
+      act(() => {
+        servingHostFallbackState.boundHostId = "host-c";
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            <NotificationsSessionProvider>
+              <div />
+            </NotificationsSessionProvider>
+          </QueryClientProvider>,
+        );
+      });
+
+      expect(streamClient.subscribedMethods.length).toBe(openedSessions);
+      expect(
+        streamClient.sessionFor("notifications.subscribe").closeCount,
+      ).toBe(0);
+    });
+
+    it("a relay-only shell opens the streams against the bound host and delivers rows into the store", async () => {
+      const queryClient = new QueryClient();
+      const streamClient = new MockWsStreamClient();
+      hostState.id = null;
+      streamState.client = streamClient;
+      servingHostFallbackState.hasLocalHost = false;
+      servingHostFallbackState.boundHostId = "host-b";
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      });
+
+      await waitFor(() => {
+        expect(streamClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
+          "notifications.subscribe",
+          "host.notifications.feed.subscribe",
+        ]);
+      });
+      act(() => {
+        streamClient.session.emitOpen();
+      });
+      await waitFor(() => {
+        expect(streamClient.session.clientFrames).toHaveLength(1);
+      });
+
+      act(() => {
+        streamClient
+          .sessionFor("host.notifications.feed.subscribe")
+          .emitServerFrame({
+            kind: "snapshot",
+            hasBinaryPayload: false,
+            attention: { entries: [], nextCursor: null },
+            recent: {
+              entries: [
+                hostEntry({
+                  id: "relay-row",
+                  epicId: "epic-relay",
+                  chatId: "chat-relay",
+                  severity: "done",
+                }),
+              ],
+              nextCursor: null,
+            },
+            summary: { unreadCount: 1, attentionCount: 0 },
+          });
+      });
+
+      await waitFor(() => {
+        expect(
+          useHostNotificationsStore.getState().byId["relay-row"],
+        ).toBeDefined();
+      });
+      expect(useHostNotificationsStore.getState().summary).toEqual({
+        unreadCount: 1,
+        attentionCount: 0,
+      });
+    });
+
+    it("a serving-host switch tears down on the old client, reopens on the new one, does not duplicate rows, and leaves app-local read-state intact", async () => {
+      const queryClient = new QueryClient();
+      const firstClient = new MockWsStreamClient();
+      hostState.id = null;
+      streamState.client = firstClient;
+      servingHostFallbackState.hasLocalHost = false;
+      servingHostFallbackState.boundHostId = "host-b";
+      useAppLocalNotificationsStore
+        .getState()
+        .activateIdentity("alice@example.com");
+
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      });
+      await waitFor(() => {
+        expect(firstClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
+          "notifications.subscribe",
+          "host.notifications.feed.subscribe",
+        ]);
+      });
+      act(() => {
+        firstClient.session.emitOpen();
+      });
+      await waitFor(() => {
+        expect(firstClient.session.clientFrames).toHaveLength(1);
+      });
+      act(() => {
+        firstClient
+          .sessionFor("host.notifications.feed.subscribe")
+          .emitServerFrame({
+            kind: "snapshot",
+            hasBinaryPayload: false,
+            attention: { entries: [], nextCursor: null },
+            recent: {
+              entries: [
+                hostEntry({
+                  id: "row-host-b",
+                  epicId: "epic-relay",
+                  chatId: "chat-relay",
+                  severity: "done",
+                }),
+              ],
+              nextCursor: null,
+            },
+            summary: { unreadCount: 1, attentionCount: 0 },
+          });
+      });
+      await waitFor(() => {
+        expect(
+          useHostNotificationsStore.getState().byId["row-host-b"],
+        ).toBeDefined();
+      });
+
+      emitTerminalCrashedNotification({
+        instanceId: "relay-terminal-before-switch",
+        hostId: "host-b",
+        terminalName: "Terminal before serving-host switch",
+        target: {
+          kind: "terminal",
+          epicId: "epic-relay",
+          terminalId: "chat-relay",
+          tabId: "view-tab",
+          paneId: "pane",
+          tileInstanceId: "relay-terminal-before-switch",
+        },
+        cause: "exit",
+      });
+      const appLocalIdsBeforeSwitch = Object.keys(
+        useAppLocalNotificationsStore.getState().byId,
+      );
+      expect(appLocalIdsBeforeSwitch).not.toHaveLength(0);
+
+      // The serving (bound) host switches to a different one, with a fresh
+      // stream client - the same shape as a real host-directory-driven
+      // rebuild.
+      const secondClient = new MockWsStreamClient();
+      act(() => {
+        servingHostFallbackState.boundHostId = "host-c";
+        streamState.client = secondClient;
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            <NotificationsSessionProvider>
+              <div />
+            </NotificationsSessionProvider>
+          </QueryClientProvider>,
+        );
+      });
+
+      await waitFor(() => {
+        expect(secondClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
+          "notifications.subscribe",
+          "host.notifications.feed.subscribe",
+        ]);
+      });
+      expect(
+        firstClient.sessionFor("host.notifications.feed.subscribe").closeCount,
+      ).toBe(1);
+      // Host-owned rows reset across a genuine serving-host identity change -
+      // the old host's row must not survive into the new host's replica.
+      expect(useHostNotificationsStore.getState().byId).toEqual({});
+      // App-local read-state is owned by neither serving host; the switch
+      // must not wipe it.
+      expect(
+        Object.keys(useAppLocalNotificationsStore.getState().byId),
+      ).toEqual(appLocalIdsBeforeSwitch);
+
+      act(() => {
+        secondClient.session.emitOpen();
+      });
+      await waitFor(() => {
+        expect(secondClient.session.clientFrames).toHaveLength(1);
+      });
+      act(() => {
+        secondClient
+          .sessionFor("host.notifications.feed.subscribe")
+          .emitServerFrame({
+            kind: "snapshot",
+            hasBinaryPayload: false,
+            attention: { entries: [], nextCursor: null },
+            recent: {
+              entries: [
+                hostEntry({
+                  id: "row-host-c",
+                  epicId: "epic-relay",
+                  chatId: "chat-relay",
+                  severity: "done",
+                }),
+              ],
+              nextCursor: null,
+            },
+            summary: { unreadCount: 1, attentionCount: 0 },
+          });
+      });
+
+      await waitFor(() => {
+        expect(
+          useHostNotificationsStore.getState().byId["row-host-c"],
+        ).toBeDefined();
+      });
+      // The old host's row was not carried over (no duplication across the
+      // switch).
+      expect(
+        useHostNotificationsStore.getState().byId["row-host-b"],
+      ).toBeUndefined();
+      expect(Object.keys(useHostNotificationsStore.getState().byId)).toEqual([
+        "row-host-c",
+      ]);
+    });
+
+    it("a relay-only shell with no bound host yet opens no stream, then opens and delivers rows once one is bound", async () => {
+      const queryClient = new QueryClient();
+      const streamClient = new MockWsStreamClient();
+      hostState.id = null;
+      streamState.client = streamClient;
+      servingHostFallbackState.hasLocalHost = false;
+      servingHostFallbackState.boundHostId = null;
+
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div data-testid="child" />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      });
+
+      // Synchronous by design, same reasoning as the "no local host" case
+      // above: asserting an absence via `waitFor` would pass just as well if
+      // the stream simply had not opened yet.
+      expect(view.getByTestId("child")).not.toBeNull();
+      expect(streamClient.subscribedMethods).toEqual([]);
+      expect(useHostNotificationsStore.getState().byId).toEqual({});
+
+      act(() => {
+        servingHostFallbackState.boundHostId = "host-b";
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            <NotificationsSessionProvider>
+              <div data-testid="child" />
+            </NotificationsSessionProvider>
+          </QueryClientProvider>,
+        );
+      });
+
+      await waitFor(() => {
+        expect(streamClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
+          "notifications.subscribe",
+          "host.notifications.feed.subscribe",
+        ]);
+      });
+      act(() => {
+        streamClient.session.emitOpen();
+      });
+      await waitFor(() => {
+        expect(streamClient.session.clientFrames).toHaveLength(1);
+      });
+      act(() => {
+        streamClient
+          .sessionFor("host.notifications.feed.subscribe")
+          .emitServerFrame({
+            kind: "snapshot",
+            hasBinaryPayload: false,
+            attention: { entries: [], nextCursor: null },
+            recent: {
+              entries: [
+                hostEntry({
+                  id: "row-after-cold-start",
+                  epicId: "epic-relay",
+                  chatId: "chat-relay",
+                  severity: "done",
+                }),
+              ],
+              nextCursor: null,
+            },
+            summary: { unreadCount: 1, attentionCount: 0 },
+          });
+      });
+
+      await waitFor(() => {
+        expect(
+          useHostNotificationsStore.getState().byId["row-after-cold-start"],
+        ).toBeDefined();
+      });
+    });
+
+    it("a relay-only shell in cloud feed mode opens the cloud feed and the collaboration replica against the bound host, landing rows into the cloud store", async () => {
+      // This is the branch a production relay-only shell actually takes: once
+      // the bound host advertises cloud-feed support, `useNotificationFeedMode`
+      // resolves to "cloud" and the provider takes the cloud branch instead of
+      // `host.notifications.feed.subscribe` (cases (b)-(d) above only exercise
+      // the local/v1 branch).
+      const queryClient = new QueryClient();
+      const streamClient = new MockWsStreamClient();
+      hostState.id = null;
+      streamState.client = streamClient;
+      streamState.cloudFeedSupport = "supported";
+      servingHostFallbackState.hasLocalHost = false;
+      servingHostFallbackState.boundHostId = "host-b";
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      });
+
+      // The cloud branch deliberately keeps the collaboration
+      // (`notifications.subscribe`) replica live alongside the relay, and
+      // opens `host.notifications.cloudFeed.subscribe` rather than
+      // `host.notifications.feed.subscribe` - both against the BOUND host's
+      // client, exactly as case (b) does for the local branch.
+      await waitFor(() => {
+        expect(streamClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
+          "notifications.subscribe",
+          "host.notifications.cloudFeed.subscribe",
+        ]);
+      });
+
+      const row = cloudRow("relay-cloud-row", 7);
+      act(() => {
+        streamClient.session.emitServerFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          connectionState: "connected",
+          version: 7,
+          rows: [row],
+          summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          useCloudNotificationsStore.getState().rows[
+            cloudNotificationFeedId(row.entryId)
+          ],
+        ).toBeDefined();
+      });
+      expect(useCloudNotificationsStore.getState().hasSnapshot).toBe(true);
+      expect(useCloudNotificationsStore.getState().summary).toEqual({
+        totalCount: 1,
+        unreadCount: 1,
+        attentionCount: 0,
+      });
+    });
+
+    it("does not resubscribe on the outgoing host when the serving host advances one render ahead of its stream binding", async () => {
+      const queryClient = new QueryClient();
+      const firstClient = new MockWsStreamClient();
+      const secondClient = new MockWsStreamClient();
+      hostState.id = null;
+      streamState.client = firstClient;
+      servingHostFallbackState.hasLocalHost = false;
+      servingHostFallbackState.boundHostId = "host-b";
+
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      });
+
+      await waitFor(() => {
+        expect(firstClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
+          "notifications.subscribe",
+          "host.notifications.feed.subscribe",
+        ]);
+      });
+      act(() => {
+        firstClient.session.emitOpen();
+      });
+      await waitFor(() => {
+        expect(firstClient.session.clientFrames).toHaveLength(1);
+      });
+      expect(firstClient.isClosed()).toBe(false);
+
+      const requestUserId =
+        hostState.client === null
+          ? null
+          : hostState.client.getRequestContextUserId();
+      const hostBIdentity = remoteAwareOwnerIdentityKey(
+        { ...mockLocalHostEntry, hostId: "host-b" },
+        requestUserId,
+      );
+      if (hostBIdentity === null) {
+        throw new Error("Expected a resolvable owner identity for host-b.");
+      }
+      const subscribedBeforeSwitch = firstClient.subscribedMethods.length;
+
+      // The serving host moves to host-c while the binding still carries
+      // host-b's client AND host-b's owner identity - the shape a shared
+      // relay session produces once `RemoteStreamClient.close()` has
+      // released only this consumer's reference: the underlying session
+      // stays open for other references (or the keep-warm linger), so
+      // `isClosed()` keeps reporting `false` even though this view no
+      // longer owns it. Forcing the override reproduces that combination
+      // directly instead of racing the real effect-timing gap.
+      act(() => {
+        streamBindingOverrideState.ownerIdentity = hostBIdentity;
+        servingHostFallbackState.boundHostId = "host-c";
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            <NotificationsSessionProvider>
+              <div />
+            </NotificationsSessionProvider>
+          </QueryClientProvider>,
+        );
+      });
+
+      // The outgoing host's client receives no additional subscribe: an
+      // owner-identity mismatch is treated as "no client yet," not as a
+      // live session to hand host-c's frames to.
+      expect(firstClient.subscribedMethods.length).toBe(subscribedBeforeSwitch);
+      // Its sessions are torn down regardless - the provider must not keep
+      // serving host-c's frames off host-b's transport.
+      expect(
+        firstClient.sessionFor("host.notifications.feed.subscribe").closeCount,
+      ).toBe(1);
+      // The stale client was only released, never closed - a liveness check
+      // here would have missed this case entirely; only the identity
+      // comparison catches it.
+      expect(firstClient.isClosed()).toBe(false);
+
+      // The binding lines up on the following render: it carries host-c's
+      // client and identity, so the streams open there instead.
+      act(() => {
+        streamBindingOverrideState.ownerIdentity = null;
+        streamState.client = secondClient;
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            <NotificationsSessionProvider>
+              <div />
+            </NotificationsSessionProvider>
+          </QueryClientProvider>,
+        );
+      });
+
+      await waitFor(() => {
+        expect(secondClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
+          "notifications.subscribe",
+          "host.notifications.feed.subscribe",
+        ]);
+      });
+      expect(firstClient.subscribedMethods.length).toBe(subscribedBeforeSwitch);
+    });
   });
 });

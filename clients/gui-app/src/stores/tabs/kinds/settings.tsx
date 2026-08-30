@@ -20,12 +20,17 @@ const settingsSurface = lazy(() =>
   })),
 );
 
-function settingsRouteOptions(section: SettingsSectionId) {
+// Exported for the mobile settings gate in `use-system-tab-modal.ts`: on
+// phones there is no two-pane modal, so opening a section navigates straight
+// to its route.
+export function settingsRouteOptions(section: SettingsSectionId) {
   switch (section) {
     case "general":
       return { to: "/settings/general" } as const;
     case "appearance":
       return { to: "/settings/appearance" } as const;
+    case "app-notifications":
+      return { to: "/settings/app-notifications" } as const;
     case "providers":
       return { to: "/settings/providers" } as const;
     case "notifications":
@@ -42,6 +47,8 @@ function settingsRouteOptions(section: SettingsSectionId) {
       return { to: "/settings/host" } as const;
     case "devices":
       return { to: "/settings/devices" } as const;
+    case "link-phone":
+      return { to: "/settings/link-phone" } as const;
     case "app-diagnostics":
       return { to: "/settings/app-diagnostics" } as const;
     case "diagnostics":

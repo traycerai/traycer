@@ -2,6 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   capturePlainTerminalProjectionBarrier,
+  getPlainTerminal,
   replacePlainTerminalSnapshot,
   settlePlainTerminalSnapshot,
   upsertPlainTerminal,
@@ -400,7 +401,9 @@ describe("plain terminal presentation invalidation", () => {
     for (const queryClient of queryClients) {
       expect(
         queryClient.getQueryData<PlainTerminalCollection>(queryKey)
-          ?.pendingPresentationDeletionRevisionById[TARGET_TERMINAL_ID],
+          ?.pendingPresentationDeletionRevisionByIdentity[
+          JSON.stringify([TARGET_HOST_ID, TARGET_TERMINAL_ID])
+        ],
       ).toBeUndefined();
     }
   });
@@ -1075,14 +1078,18 @@ describe("plain terminal presentation invalidation", () => {
         },
       },
     ]);
-    useEpicCanvasStore.getState().markArtifactPendingCreate(TARGET_TERMINAL_ID);
+    useEpicCanvasStore
+      .getState()
+      .markTerminalPendingCreate(TARGET_HOST_ID, TARGET_TERMINAL_ID);
 
     const sweepAcknowledgedOmissions = (): void => {
       for (const terminalId of acknowledgedPlainTerminalPresentationIdsForScope(
         TARGET_HOST_ID,
         scope,
       )) {
-        if (settled.terminalsById[terminalId] === undefined) {
+        if (
+          getPlainTerminal(settled, TARGET_HOST_ID, terminalId) === undefined
+        ) {
           commitPlainTerminalSnapshotOmission({
             queryClient,
             queryKey,
@@ -1106,7 +1113,7 @@ describe("plain terminal presentation invalidation", () => {
 
     useEpicCanvasStore
       .getState()
-      .unmarkArtifactPendingCreate(TARGET_TERMINAL_ID);
+      .unmarkTerminalPendingCreate(TARGET_HOST_ID, TARGET_TERMINAL_ID);
     expect(
       acknowledgedPlainTerminalPresentationIdsForScope(
         TARGET_HOST_ID,

@@ -190,6 +190,8 @@ function createChatRenderer(originId: string) {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => undefined,
         };
       },

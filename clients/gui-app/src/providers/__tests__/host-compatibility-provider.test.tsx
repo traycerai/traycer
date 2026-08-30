@@ -123,7 +123,8 @@ interface StartupConsumersOptions {
     params: GetTaskContextsRequest,
   ) => Promise<GetTaskContextsResponse> | GetTaskContextsResponse;
   readonly listHarnesses: () =>
-    Promise<ListHarnessesResponse> | ListHarnessesResponse;
+    | Promise<ListHarnessesResponse>
+    | ListHarnessesResponse;
   readonly onMethod: (method: string) => void;
 }
 
@@ -139,6 +140,11 @@ const compatibleHostStatus: HostStatusResponse = {
   busy: false,
   busySessionCount: 0,
   updateProgress: null,
+  busyBreakdown: null,
+  // `null` = this fixture's host did not report the durable attempt,
+  // which is exactly what host.status@1.2-and-older peers send.
+  updateOperation: null,
+  updateTransaction: null,
 };
 
 let restoreFetch: () => void = () => undefined;
@@ -1299,7 +1305,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
     act(() => {
       useEpicCanvasStore.getState().openEpicTab(FRESH_EPIC_ID, "Fresh");
       useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale");
-      markEpicCreatedThisSession(FRESH_EPIC_ID);
+      markEpicCreatedThisSession(FRESH_EPIC_ID, "host-1");
     });
 
     await waitFor(() => {

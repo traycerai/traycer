@@ -24,9 +24,15 @@ const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // Single grid shared by the header, every row, and the add row so the column
 // edges line up exactly (the previous header/rows used different padding). The
 // last track is fixed so the row delete button and the add button never shift
-// the Name/Value boundaries.
+// the Name/Value boundaries. Below `sm` the three columns can't fit, so rows
+// restack onto two lines - name + actions, then the value field full-width
+// (see VALUE_FIELD_PLACEMENT / ROW_ACTIONS_PLACEMENT) - and the header hides.
 const GRID =
-  "grid grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)_4.75rem] items-center gap-2";
+  "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)_4.75rem]";
+const VALUE_FIELD_PLACEMENT =
+  "col-span-2 row-start-2 sm:col-span-1 sm:row-start-auto";
+const ROW_ACTIONS_PLACEMENT =
+  "col-start-2 row-start-1 justify-self-end sm:col-start-auto sm:row-start-auto sm:justify-self-center";
 
 type EnvMode = "set" | "unset";
 
@@ -48,6 +54,68 @@ function modeForValue(value: string | null): EnvMode {
 
 function isEnvMode(value: string): value is EnvMode {
   return value === "set" || value === "unset";
+}
+
+/**
+ * Whether a SET value carries leading or trailing whitespace.
+ *
+ * Surfaced rather than stripped, and the distinction is load-bearing. This
+ * value is handed to the spawned CLI byte for byte, and the providers each read
+ * it their own way: most treat `"   "` as SET and resolve a directory literally
+ * named three spaces under their own cwd, while a few (`claude-code`, `hermes`,
+ * reasonix's `REASONIX_HOME`) strip it themselves and treat it as unset. The
+ * host models each of those individually so a probe looks where the CLI looks.
+ * Normalizing here would make this editor disagree with all of them at once and
+ * hide the difference from the only person who can say which they meant - a
+ * pasted path with a stray space and a deliberately padded value look identical
+ * once trimmed. So: say what will happen, and put the fix one click away.
+ */
+function hasEdgeWhitespace(value: string): boolean {
+  return value !== value.trim();
+}
+
+/**
+ * The one line below a row: a blocking error if there is one, otherwise the
+ * whitespace notice. Shared by the edit row and the add row so the precedence
+ * is stated once.
+ */
+function EnvRowFooter(props: {
+  readonly draft: Draft;
+  readonly disabled: boolean;
+  readonly onTrim: () => void;
+}) {
+  const { draft, disabled, onTrim } = props;
+  if (draft.error !== null) {
+    return <p className="text-ui-xs text-destructive">{draft.error}</p>;
+  }
+  if (draft.mode !== "set" || !hasEdgeWhitespace(draft.value)) return null;
+  return <EnvValueWhitespaceNotice disabled={disabled} onTrim={onTrim} />;
+}
+
+function EnvValueWhitespaceNotice(props: {
+  readonly disabled: boolean;
+  readonly onTrim: () => void;
+}) {
+  const { disabled, onTrim } = props;
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-xs text-[var(--term-ansi-yellow)]">
+      <span>
+        Leading or trailing spaces are part of this value — the CLI receives it
+        exactly as written.
+      </span>
+      <button
+        type="button"
+        disabled={disabled}
+        // Keep focus in the field: a blur here would commit the untrimmed value
+        // first and this would trim it in a second write.
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={onTrim}
+        className="underline underline-offset-2 hover:no-underline disabled:opacity-50"
+      >
+        Trim spaces
+      </button>
+    </p>
+  );
 }
 
 function draftError(key: string, otherKeys: readonly string[]): string | null {
@@ -88,7 +156,7 @@ export function EnvOverrideEditor(props: {
           GRID,
           // muted-fill-ok: header band inside a border-border/60 container and
           // carrying its own border-b; a collapse loses the tint, not the row
-          "border-b border-border/40 bg-muted/30 px-3 py-2 text-ui-xs font-medium text-muted-foreground",
+          "hidden border-b border-border/40 bg-muted/30 px-3 py-2 text-ui-xs font-medium text-muted-foreground sm:grid",
         )}
       >
         <span>Name</span>
@@ -183,9 +251,8 @@ function EnvOverrideRow(props: {
     onCommitRef.current = onCommit;
   }, [onCommit]);
 
-  const commit = (): void => {
+  const commitValue = (nextValue: string | null): void => {
     const nextKey = draft.key.trim();
-    const nextValue = draft.mode === "unset" ? null : draft.value;
     const error = draftError(nextKey, otherKeys);
     if (error !== null) {
       setDraft((current) => ({ ...current, key: entry.key, error }));
@@ -195,6 +262,15 @@ function EnvOverrideRow(props: {
     if (nextKey !== entry.key || nextValue !== entry.value) {
       onCommit(entry.key, nextKey, nextValue);
     }
+  };
+
+  const commit = (): void =>
+    commitValue(draft.mode === "unset" ? null : draft.value);
+
+  const trimValue = (): void => {
+    const nextValue = draft.value.trim();
+    setDraft((current) => ({ ...current, value: nextValue }));
+    commitValue(nextValue);
   };
 
   useEffect(() => {
@@ -233,6 +309,7 @@ function EnvOverrideRow(props: {
           mode={draft.mode}
           disabled={disabled}
           ariaLabel={`Value for ${entry.key}`}
+          className={VALUE_FIELD_PLACEMENT}
           onModeChange={(mode) => setDraft((current) => ({ ...current, mode }))}
           onValueChange={(value) =>
             setDraft((current) => ({ ...current, value }))
@@ -246,14 +323,15 @@ function EnvOverrideRow(props: {
           aria-label={`Remove ${entry.key}`}
           // muted-fill-ok: hover also swings the icon to text-destructive, so
           // the state keeps a channel that no theme can collapse
-          className="flex size-8 items-center justify-center justify-self-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-destructive disabled:opacity-50"
+          className={cn(
+            ROW_ACTIONS_PLACEMENT,
+            "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-destructive disabled:opacity-50",
+          )}
         >
           <Trash2 className="size-4" />
         </button>
       </div>
-      {draft.error !== null ? (
-        <p className="text-ui-xs text-destructive">{draft.error}</p>
-      ) : null}
+      <EnvRowFooter draft={draft} disabled={disabled} onTrim={trimValue} />
     </li>
   );
 }
@@ -302,13 +380,14 @@ function EnvOverrideAddRow(props: {
           mode={draft.mode}
           disabled={disabled}
           ariaLabel="New environment variable value"
+          className={VALUE_FIELD_PLACEMENT}
           onModeChange={(mode) => setDraft((current) => ({ ...current, mode }))}
           onValueChange={(value) =>
             setDraft((current) => ({ ...current, value }))
           }
           onBlur={() => undefined}
         />
-        <div className="flex justify-self-center">
+        <div className={cn(ROW_ACTIONS_PLACEMENT, "flex")}>
           <Button
             type="button"
             size="icon-sm"
@@ -331,9 +410,13 @@ function EnvOverrideAddRow(props: {
           </Button>
         </div>
       </div>
-      {draft.error !== null ? (
-        <p className="text-ui-xs text-destructive">{draft.error}</p>
-      ) : null}
+      <EnvRowFooter
+        draft={draft}
+        disabled={disabled}
+        onTrim={() =>
+          setDraft((current) => ({ ...current, value: current.value.trim() }))
+        }
+      />
     </div>
   );
 }
@@ -343,6 +426,7 @@ function EnvValueField(props: {
   readonly mode: EnvMode;
   readonly disabled: boolean;
   readonly ariaLabel: string;
+  readonly className: string;
   readonly onModeChange: (mode: EnvMode) => void;
   readonly onValueChange: (value: string) => void;
   readonly onBlur: () => void;
@@ -352,12 +436,13 @@ function EnvValueField(props: {
     mode,
     disabled,
     ariaLabel,
+    className,
     onModeChange,
     onValueChange,
     onBlur,
   } = props;
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className={cn("flex min-w-0 items-center gap-2", className)}>
       <Select
         value={mode}
         disabled={disabled}

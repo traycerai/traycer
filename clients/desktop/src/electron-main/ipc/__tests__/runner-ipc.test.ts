@@ -12,26 +12,12 @@ import {
 import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
 import type { UnsyncedEditsSnapshotEntry } from "../../../ipc-contracts/app-lifecycle-types";
 import type {
-  IpcHostController,
   IpcHostLifecycle,
   IpcManagedWindow,
   IpcPerWindowState,
   IpcWindowRecord,
   IpcWindowRegistry,
 } from "../runner-ipc-bridge";
-import type {
-  ActivateInstalledOk,
-  ApplyStagedOk,
-  ApplyStagedTrigger,
-  ConvergeReadyOk,
-  HostControllerStatus,
-  InstallVersionOk,
-  MutationOutcome,
-  MutationProgress,
-  RemoveTraycerOk,
-  ServiceRegistrationOk,
-  UninstallOk,
-} from "../../host/host-controller-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import {
@@ -48,6 +34,7 @@ import type {
   WindowSummary,
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { FakeHostController } from "./fake-host-controller";
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
 const readFeatureSettingsMock = vi.hoisted(() =>
@@ -122,6 +109,7 @@ vi.mock("electron", () => ({
   },
   shell: {
     openExternal: vi.fn(() => Promise.resolve()),
+    openPath: vi.fn(() => Promise.resolve("")),
   },
   dialog: {
     showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })),
@@ -219,110 +207,6 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
   async enableLinger(): Promise<void> {}
   async getRecentLogTail(_maxLines: number): Promise<string | null> {
     return null;
-  }
-}
-
-const FAKE_HOST_CONTROLLER_STATUS: HostControllerStatus = {
-  download: null,
-  mutation: null,
-  installedVersion: "1.0.0",
-  latestVersion: "1.0.0",
-  stagedVersion: null,
-  installedRuntimeVersion: "1.0.0",
-  runningRuntimeVersion: "1.0.0",
-  updateReady: false,
-  activation: "activated",
-  reachable: true,
-  removedByUser: false,
-  checkedAt: "2026-01-01T00:00:00.000Z",
-};
-
-/**
- * Structural double for `IpcHostController` - these tests exercise the
- * bridge's window/tray/auth/lifecycle IPC surface, not `HostController`
- * itself (see `host-controller.test.ts` for that), so every method just
- * resolves a plausible "ok" outcome. `respawnCalls` lets the one test that
- * cares (`requestHostRespawn`) assert without a real controller instance.
- */
-class FakeHostController implements IpcHostController {
-  respawnCalls = 0;
-
-  async getStatus(): Promise<HostControllerStatus> {
-    return FAKE_HOST_CONTROLLER_STATUS;
-  }
-  async convergeReady(
-    _force: boolean,
-  ): Promise<MutationOutcome<ConvergeReadyOk>> {
-    return { kind: "ok", value: { running: true, version: "1.0.0" } };
-  }
-  async stageLatest(): Promise<void> {}
-  async applyStaged(
-    _trigger: ApplyStagedTrigger,
-    _force: boolean,
-  ): Promise<MutationOutcome<ApplyStagedOk>> {
-    return {
-      kind: "ok",
-      value: { appliedVersion: "1.0.0", runningActivated: true },
-    };
-  }
-  async activateInstalled(
-    _force: boolean,
-  ): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return { kind: "ok", value: { activated: true } };
-  }
-  async installVersion(
-    pin: string,
-    _force: boolean,
-  ): Promise<MutationOutcome<InstallVersionOk>> {
-    return {
-      kind: "ok",
-      value: { installedVersion: pin, runningActivated: true },
-    };
-  }
-  async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return { kind: "ok", value: { registered: true } };
-  }
-  async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
-    return { kind: "ok", value: { registered: false } };
-  }
-  async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
-    this.respawnCalls += 1;
-    return { kind: "ok", value: { activated: true } };
-  }
-  async recoverIfDown(): Promise<
-    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
-  > {
-    return { kind: "suppressed" };
-  }
-  async freePortAndRestart(
-    _pid: number | null,
-    _port: number | null,
-  ): Promise<MutationOutcome<ActivateInstalledOk>> {
-    return { kind: "ok", value: { activated: true } };
-  }
-  async uninstallHost(_all: boolean): Promise<MutationOutcome<UninstallOk>> {
-    return {
-      kind: "ok",
-      value: { removedInstallDir: true, deregisteredService: true },
-    };
-  }
-  async removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>> {
-    return {
-      kind: "ok",
-      value: {
-        removedHost: true,
-        deregisteredService: true,
-        removedLoginItem: false,
-      },
-    };
-  }
-  isPendingRevisionRefreshQuarantined(): boolean {
-    return false;
-  }
-  onMutationProgress(
-    _listener: (progress: MutationProgress) => void,
-  ): () => void {
-    return () => undefined;
   }
 }
 
@@ -657,12 +541,14 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.deviceFlowStart,
         RunnerHostInvoke.deviceFlowPollNow,
         RunnerHostInvoke.deviceFlowCancel,
-        // §3 FileTokenStore IPC seam (get/signIn/rotate/delete); §6 adds the
-        // one-time legacy→file migration channel.
+        // §3 FileTokenStore IPC seam (get/signIn/rotate/delete, plus the
+        // atomic conditional delete); §6 adds the one-time legacy→file
+        // migration channel.
         RunnerHostInvoke.authTokenStoreGet,
         RunnerHostInvoke.authTokenStoreSignIn,
         RunnerHostInvoke.authTokenStoreRotate,
         RunnerHostInvoke.authTokenStoreDelete,
+        RunnerHostInvoke.authTokenStoreDeleteIfToken,
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
         // Remote Host Support: host-registry read (§7) and version-policy
         // write (§13, T16) run in main for the renderer-origin CORS reason.
@@ -680,6 +566,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.getRegisteredUrlSchemes,
         RunnerHostInvoke.requestMicrophoneAccess,
         RunnerHostInvoke.openMicrophoneSettings,
+        RunnerHostInvoke.notificationOpenSystemSettings,
         RunnerHostInvoke.requestHostRespawn,
         RunnerHostInvoke.lastKnownLocalHostId,
         RunnerHostInvoke.localHostSnapshot,
@@ -690,11 +577,19 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.acknowledgeQuitRequest,
         RunnerHostInvoke.respondToQuitRequest,
         RunnerHostInvoke.freshUnsyncedSnapshotResponse,
+        RunnerHostInvoke.browserHandoffsDrained,
         RunnerHostInvoke.unsyncableWorkAcrossWindows,
         RunnerHostInvoke.appUpdateCheck,
         RunnerHostInvoke.appUpdateDownload,
         RunnerHostInvoke.appUpdateGetSnapshot,
         RunnerHostInvoke.appUpdateInstall,
+        RunnerHostInvoke.appUpdateResolveCompatRecovery,
+        // Previously absent from this list because it was never registered at
+        // all: the preload and renderer halves shipped while the main handler
+        // went with the removed Settings channel toggle, so `setAllowPrerelease`
+        // rejected as an unhandled channel. The compatibility-recovery RC opt-in
+        // is the one caller that reaches it now.
+        RunnerHostInvoke.appUpdateSetAllowPrerelease,
         RunnerHostInvoke.globalShortcutsGetSnapshot,
         RunnerHostInvoke.globalShortcutsSet,
         RunnerHostInvoke.windowsList,
@@ -702,6 +597,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.windowsRequestFocus,
         RunnerHostInvoke.windowsRequestClose,
         RunnerHostInvoke.windowsRequestOpenEpicInNewWindow,
+        RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
         RunnerHostInvoke.ownershipSnapshot,
         RunnerHostInvoke.ownershipClaim,
         RunnerHostInvoke.ownershipRelease,
@@ -764,7 +660,19 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerServiceDeregister,
         RunnerHostInvoke.traycerRegistryCheck,
         RunnerHostInvoke.traycerFreePortAndRestart,
+        RunnerHostInvoke.traycerFreePortAndRestartIfIdle,
         RunnerHostInvoke.traycerCliManifestRead,
+        // The maintenance-RPC projections the GUI's local fallback serves
+        // when a local host too old for the v1.2.0 `host.*` maintenance
+        // family negotiated it away. Registered by the same
+        // `registerHostManagementIpc` call as the block above.
+        RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+        RunnerHostInvoke.traycerMaintenanceDoctor,
+        RunnerHostInvoke.traycerMaintenanceInstallationInfo,
+        RunnerHostInvoke.traycerMaintenanceInstallVersion,
+        RunnerHostInvoke.traycerHostRestartIfIdle,
+        RunnerHostInvoke.traycerDoctorRepairQueued,
+        RunnerHostInvoke.traycerDoctorRepairIfIdle,
         // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
         // which is now invoked from `RunnerIpcBridge.install()` rather than
         // wired by the host. They cover recent docs, window effects, GPU,
@@ -780,6 +688,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.diagnosticsTakeHeapSnapshot,
         RunnerHostInvoke.diagnosticsTraceStart,
         RunnerHostInvoke.diagnosticsTraceStop,
+        RunnerHostInvoke.rendererCrashPersist,
         RunnerHostInvoke.systemPreferencesAccentColor,
         RunnerHostInvoke.systemPreferencesAppearance,
         RunnerHostInvoke.systemPreferencesAccessibilityTheme,
@@ -808,6 +717,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.fileDropCopyTemporary,
         RunnerHostInvoke.fileDropReadNativeClipboardPaths,
         RunnerHostInvoke.fileSave,
+        RunnerHostInvoke.fileOpenSaved,
         RunnerHostInvoke.clipboardWriteImage,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
@@ -821,6 +731,32 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.zoomStepIn,
         RunnerHostInvoke.zoomStepOut,
         RunnerHostInvoke.zoomReset,
+        RunnerHostInvoke.browserViewEnsureTab,
+        RunnerHostInvoke.browserViewAcceptTab,
+        RunnerHostInvoke.browserViewAttachSurface,
+        RunnerHostInvoke.browserViewDetachSurface,
+        RunnerHostInvoke.browserViewReleaseTab,
+        RunnerHostInvoke.browserViewControlElectronTab,
+        RunnerHostInvoke.browserViewElectronTabCdpDispatch,
+        RunnerHostInvoke.browserViewUpdateBounds,
+        RunnerHostInvoke.browserViewOverlayPaintAck,
+        RunnerHostInvoke.browserViewSetReservedChords,
+        RunnerHostInvoke.browserViewOccludeForOverlay,
+        RunnerHostInvoke.browserViewReleaseOverlay,
+        RunnerHostInvoke.browserViewCapturePage,
+        RunnerHostInvoke.browserViewFindInPage,
+        RunnerHostInvoke.browserViewStopFindInPage,
+        RunnerHostInvoke.browserViewCancelDownload,
+        RunnerHostInvoke.browserViewTrustCertificate,
+        RunnerHostInvoke.browserViewStartAnnotation,
+        RunnerHostInvoke.browserViewCancelAnnotation,
+        RunnerHostInvoke.browserViewSetAnnotationTargetChatLabel,
+        RunnerHostInvoke.browserViewAnnotationAttachResult,
+        RunnerHostInvoke.browserViewGetDebugSnapshot,
+        RunnerHostInvoke.browserViewPrimaryProfileCapture,
+        RunnerHostInvoke.browserViewCookieCryptoStateGet,
+        RunnerHostInvoke.pipCaptureStart,
+        RunnerHostInvoke.pipCaptureStop,
         // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
         RunnerHostInvoke.selectionAttach,
         RunnerHostInvoke.selectionReportEvidence,
@@ -984,7 +920,7 @@ describe("RunnerIpcBridge", () => {
         type: "image/png",
         bytes: new Uint8Array([1, 2, 3]).buffer,
       }),
-    ).resolves.toBe("diagram.png");
+    ).resolves.toEqual({ name: "diagram.png", path: target });
     expect(showSaveDialog).toHaveBeenCalledWith({
       defaultPath: "mermaid-diagram.png",
       filters: [{ name: "PNG image", extensions: ["png"] }],
@@ -1023,6 +959,63 @@ describe("RunnerIpcBridge", () => {
         bytes: new Uint8Array([1, 2, 3]).buffer,
       }),
     ).resolves.toBeNull();
+    bridge.dispose();
+  });
+
+  it("opens only files the native save dialog wrote, and surfaces OS open failures", async () => {
+    const mod = await import("../register-runner-ipc");
+    const electron = await import("electron");
+    const dir = await mkdtemp(join(tmpdir(), "traycer-file-open-"));
+    const target = join(dir, "usage.png");
+    vi.mocked(electron.dialog.showSaveDialog).mockResolvedValue({
+      canceled: false,
+      filePath: target,
+    });
+    const openPath = vi.mocked(electron.shell.openPath);
+    openPath.mockClear();
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const save = ipcMainState.handlers.get(RunnerHostInvoke.fileSave);
+    const open = ipcMainState.handlers.get(RunnerHostInvoke.fileOpenSaved);
+    if (save === undefined || open === undefined) {
+      throw new Error("file save/open handlers missing");
+    }
+
+    // A path nothing saved is refused without touching the OS - the
+    // renderer cannot turn this channel into "open any file".
+    await expect(open(bareEvent(), target)).rejects.toThrow(
+      "path was not saved by this session",
+    );
+    await expect(open(bareEvent(), 42)).rejects.toThrow(
+      "path was not saved by this session",
+    );
+    expect(openPath).not.toHaveBeenCalled();
+
+    await save(bareEvent(), {
+      name: "usage.png",
+      type: "image/png",
+      bytes: new Uint8Array([9]).buffer,
+    });
+    await expect(open(bareEvent(), target)).resolves.toBeUndefined();
+    expect(openPath).toHaveBeenCalledWith(target);
+
+    // `shell.openPath` reports failure as a non-empty string, not a throw.
+    openPath.mockResolvedValueOnce("No application knows how to open it");
+    await expect(open(bareEvent(), target)).rejects.toThrow(
+      "No application knows how to open it",
+    );
+
+    await rm(dir, { recursive: true, force: true });
     bridge.dispose();
   });
 
@@ -3109,6 +3102,297 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  it("waits beyond 2.5 seconds for the matching browser handoff acknowledgement from every window", async () => {
+    vi.useFakeTimers();
+    try {
+      const mod = await import("../register-runner-ipc");
+      const { BrowserViewManager } =
+        await import("../../browser-view/browser-view-manager");
+      const hasNativeTabs = vi
+        .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
+        .mockReturnValue(true);
+      const registry = new FakeWindowRegistry();
+      const windowA = buildWindow();
+      const windowB = buildWindow();
+      registry.add("window-a", 101, windowA);
+      registry.add("window-b", 202, windowB);
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+      bridge.appLifecycleReadyWindowIds.add("window-a");
+      bridge.appLifecycleReadyWindowIds.add("window-b");
+      windowA.sentMessages.length = 0;
+      windowB.sentMessages.length = 0;
+
+      const drain = bridge.drainBrowserHandoffs();
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      const requestA = windowA.sentMessages.find(
+        (message) => message.channel === RunnerHostEvent.drainBrowserHandoffs,
+      );
+      const requestB = windowB.sentMessages.find(
+        (message) => message.channel === RunnerHostEvent.drainBrowserHandoffs,
+      );
+      const responseHandler = ipcMainState.handlers.get(
+        RunnerHostInvoke.browserHandoffsDrained,
+      );
+      if (requestA === undefined || requestB === undefined) {
+        throw new Error("browser handoff drain requests missing");
+      }
+      if (responseHandler === undefined) {
+        throw new Error("browser handoff drain response handler missing");
+      }
+      const requestIdA = (requestA.payload as { readonly requestId: string })
+        .requestId;
+      const requestIdB = (requestB.payload as { readonly requestId: string })
+        .requestId;
+
+      const pending = Symbol("pending");
+      await expect(
+        Promise.race([drain, Promise.resolve(pending)]),
+      ).resolves.toBe(pending);
+
+      await responseHandler(sender(202), { requestId: requestIdA });
+      await expect(
+        Promise.race([drain, Promise.resolve(pending)]),
+      ).resolves.toBe(pending);
+
+      await responseHandler(sender(101), { requestId: requestIdA });
+      await expect(
+        Promise.race([drain, Promise.resolve(pending)]),
+      ).resolves.toBe(pending);
+
+      await responseHandler(sender(202), { requestId: requestIdB });
+      await expect(drain).resolves.toBeUndefined();
+      hasNativeTabs.mockRestore();
+      bridge.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves a browser handoff drain after the timeout when the renderer never acknowledges", async () => {
+    vi.useFakeTimers();
+    try {
+      const mod = await import("../register-runner-ipc");
+      const { BROWSER_HANDOFF_DRAIN_TIMEOUT_MS } =
+        await import("../runner-ipc-bridge");
+      const { BrowserViewManager } =
+        await import("../../browser-view/browser-view-manager");
+      const hasNativeTabs = vi
+        .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
+        .mockReturnValue(true);
+      const registry = new FakeWindowRegistry();
+      const window = buildWindow();
+      registry.add("window-a", 101, window);
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+      bridge.appLifecycleReadyWindowIds.add("window-a");
+      window.sentMessages.length = 0;
+
+      const drain = bridge.drainBrowserHandoffs();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(
+        window.sentMessages.some(
+          (message) => message.channel === RunnerHostEvent.drainBrowserHandoffs,
+        ),
+      ).toBe(true);
+
+      const pending = Symbol("pending");
+      await expect(
+        Promise.race([drain, Promise.resolve(pending)]),
+      ).resolves.toBe(pending);
+
+      await vi.advanceTimersByTimeAsync(
+        BROWSER_HANDOFF_DRAIN_TIMEOUT_MS - 3_000,
+      );
+
+      await expect(drain).resolves.toBeUndefined();
+      hasNativeTabs.mockRestore();
+      bridge.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes a window's native sessions only after its handoff is acknowledged", async () => {
+    const mod = await import("../register-runner-ipc");
+    const { BrowserViewManager } =
+      await import("../../browser-view/browser-view-manager");
+    const { BrowserViewHandoff } =
+      await import("../../browser-view/manager/browser-view-handoff");
+    const calls: string[] = [];
+    const hasNativeTabs = vi
+      .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
+      .mockReturnValue(true);
+    const drainForWindow = vi
+      .spyOn(BrowserViewHandoff.prototype, "drainForWindow")
+      .mockImplementation(() => {
+        calls.push("handoff");
+        return Promise.resolve();
+      });
+    const closeForWindow = vi
+      .spyOn(BrowserViewManager.prototype, "closeNativeSessionsForWindow")
+      .mockImplementation(() => {
+        calls.push("close");
+        return Promise.resolve();
+      });
+    const registry = new FakeWindowRegistry();
+    const window = buildWindow();
+    registry.add("window-a", 101, window);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    bridge.appLifecycleReadyWindowIds.add("window-a");
+    window.sentMessages.length = 0;
+
+    const close = bridge.prepareBrowserWindowClose("window-a");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(calls).toEqual(["handoff"]);
+    const request = window.sentMessages.find(
+      (message) => message.channel === RunnerHostEvent.drainBrowserHandoffs,
+    );
+    const responseHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.browserHandoffsDrained,
+    );
+    if (request === undefined || responseHandler === undefined) {
+      throw new Error("browser handoff drain request missing");
+    }
+    await responseHandler(sender(101), {
+      requestId: (request.payload as { readonly requestId: string }).requestId,
+    });
+
+    await expect(close).resolves.toBeUndefined();
+    expect(calls).toEqual(["handoff", "close"]);
+    expect(bridge.canHandoffBrowserTabsForWindow("window-a")).toBe(true);
+    bridge.markRendererUnavailable("window-a");
+    expect(bridge.canHandoffBrowserTabsForWindow("window-a")).toBe(false);
+    closeForWindow.mockRestore();
+    drainForWindow.mockRestore();
+    hasNativeTabs.mockRestore();
+    bridge.dispose();
+  });
+
+  it("rejects a browser handoff drain when its renderer window closes before replying", async () => {
+    const mod = await import("../register-runner-ipc");
+    const { BrowserViewManager } =
+      await import("../../browser-view/browser-view-manager");
+    const hasNativeTabs = vi
+      .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
+      .mockReturnValue(true);
+    const registry = new FakeWindowRegistry();
+    const window = buildWindow();
+    registry.add("window-a", 101, window);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    bridge.appLifecycleReadyWindowIds.add("window-a");
+    window.sentMessages.length = 0;
+
+    const drain = bridge.drainBrowserHandoffs();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(
+      window.sentMessages.some(
+        (message) => message.channel === RunnerHostEvent.drainBrowserHandoffs,
+      ),
+    ).toBe(true);
+
+    await registry.closeById("window-a");
+
+    await expect(drain).rejects.toThrow(
+      "Browser handoff window closed before acknowledging the drain",
+    );
+    hasNativeTabs.mockRestore();
+    bridge.dispose();
+  });
+
+  it("rejects an outstanding browser handoff drain when the IPC bridge is disposed", async () => {
+    const mod = await import("../register-runner-ipc");
+    const { BrowserViewManager } =
+      await import("../../browser-view/browser-view-manager");
+    const hasNativeTabs = vi
+      .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
+      .mockReturnValue(true);
+    const window = buildWindow();
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window,
+    });
+    bridge.install();
+    bridge.appLifecycleReadyWindowIds.add("primary");
+    window.sentMessages.length = 0;
+
+    const drain = bridge.drainBrowserHandoffs();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(
+      window.sentMessages.some(
+        (message) => message.channel === RunnerHostEvent.drainBrowserHandoffs,
+      ),
+    ).toBe(true);
+
+    bridge.dispose();
+
+    await expect(drain).rejects.toThrow(
+      "Runner IPC bridge disposed before browser handoff drain resolved",
+    );
+    hasNativeTabs.mockRestore();
+  });
+
   it("falls back to the cached ambient snapshot after the fresh-query timeout", async () => {
     vi.useFakeTimers();
     try {
@@ -3578,6 +3862,7 @@ describe("RunnerIpcBridge", () => {
           status: "idle",
           currentVersion: "1.0.0",
           latestVersion: null,
+          latestCompatibilityEpoch: null,
           downloadProgress: null,
           installBlockedReason: null,
           installGuidance: null,

@@ -36,6 +36,7 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
 import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
 
@@ -435,9 +436,11 @@ function PromptStashEntryRowView(props: {
                 }}
               >
                 <span>Insert</span>
-                <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
-                  ↵
-                </Kbd>
+                <ShortcutHint>
+                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
+                    ↵
+                  </Kbd>
+                </ShortcutHint>
               </button>
               <button
                 type="button"
@@ -451,9 +454,11 @@ function PromptStashEntryRowView(props: {
                 onClick={props.onDelete}
               >
                 <span>Delete</span>
-                <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
-                  D
-                </Kbd>
+                <ShortcutHint>
+                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
+                    D
+                  </Kbd>
+                </ShortcutHint>
               </button>
             </>
           )}
@@ -467,7 +472,7 @@ function PromptStashRowMetadata(props: { readonly children: ReactNode }) {
   return (
     <div
       data-slot="prompt-stash-row-metadata"
-      className="pointer-events-none col-start-2 row-start-1 flex h-6 w-full items-center justify-end gap-1 text-[11px] leading-none text-muted-foreground transition-opacity group-hover/stash:opacity-0 group-focus-within/stash:opacity-0 group-data-selected/stash:opacity-0"
+      className="pointer-events-none col-start-2 row-start-1 flex h-6 w-full items-center justify-end gap-1 text-[11px] leading-none text-muted-foreground transition-opacity group-hover/stash:opacity-0 group-focus-within/stash:opacity-0 group-data-[selected=true]/stash:opacity-0"
     >
       {props.children}
     </div>
@@ -478,7 +483,7 @@ function PromptStashRowActions(props: { readonly children: ReactNode }) {
   return (
     <div
       data-slot="prompt-stash-row-actions"
-      className="pointer-events-none col-start-2 row-start-1 flex h-6 w-full items-center justify-end opacity-0 transition-opacity duration-150 group-hover/stash:opacity-100 group-focus-within/stash:opacity-100 group-data-selected/stash:opacity-100"
+      className="pointer-events-none col-start-2 row-start-1 flex h-6 w-full items-center justify-end opacity-0 transition-opacity duration-150 group-hover/stash:opacity-100 group-focus-within/stash:opacity-100 group-data-[selected=true]/stash:opacity-100"
     >
       {props.children}
     </div>
@@ -584,9 +589,11 @@ function PromptStashUnavailableRowView(props: {
                 onClick={props.onDelete}
               >
                 <span>Delete</span>
-                <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
-                  D
-                </Kbd>
+                <ShortcutHint>
+                  <Kbd className="h-4 min-w-4 rounded px-1 font-mono text-[10px]">
+                    D
+                  </Kbd>
+                </ShortcutHint>
               </button>
             </>
           )}

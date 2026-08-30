@@ -531,11 +531,7 @@ export function draftDialectKindOf(kind: DraftKind): DraftDialectKind {
 }
 
 export function draftSurfaceKindOf(kind: DraftKind): DraftSurfaceKind | null {
-  if (
-    kind === "landing" ||
-    kind === "new-chat" ||
-    kind === "chat-composer"
-  ) {
+  if (kind === "landing" || kind === "new-chat" || kind === "chat-composer") {
     return kind;
   }
   return null;

@@ -29,6 +29,7 @@ function fakeStatus(
     updateReady: false,
     activation: "activated",
     reachable: true,
+    localAttempt: null,
     removedByUser: false,
     checkedAt: new Date().toISOString(),
   };
@@ -59,6 +60,7 @@ function fakeHostController(withMutationStatus: boolean): FakeHostController {
   >();
   let statusReads = 0;
   const base: FakeHostController = {
+    lifecycleAdmissionBlock: null,
     status: fakeStatus(null),
     getStatusError: null,
     getStatusCallCount(): number {

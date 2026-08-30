@@ -2,6 +2,7 @@ import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
 import { HostControllerStatusListener } from "@/components/layout/bridges/host-controller-status-listener";
+import { LinkLoginDeepLinkBridge } from "@/components/layout/bridges/link-login-deep-link-bridge";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
@@ -44,6 +45,7 @@ import { NotificationsSessionProvider } from "@/providers/notifications-session-
 import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
 import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
 import { LandingDraftMirrorMount } from "@/hooks/drafts/use-landing-draft-mirror";
+import { ProvidersChangedStreamMount } from "@/providers/providers-changed-stream-mount";
 import { RateLimitQueueProvider } from "@/providers/rate-limit-queue-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { SupportContextRegistryBridge } from "@/providers/support-context-registry-bridge";
@@ -51,12 +53,14 @@ import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
 import { ResourceTelemetryBridge } from "@/providers/resource-telemetry-bridge";
+import { STARTUP_NAVIGATION_INTENT_KEY } from "@/lib/host/startup-navigation-intent";
 import { createAppRouter, type AppRouter } from "@/router";
 // Side-effect import: installs the WCO → `.wco` class bridge at module
 // load (mirrors `theme-applier.ts`). The class drives the `wco:`
 // Tailwind variant so titlebar insets toggle on fullscreen.
 import "@/lib/window-controls-overlay";
 import { startMainThreadBlockProbe } from "@/lib/perf/main-thread-block-probe";
+import { appLogger, describeLogError } from "@/lib/logger";
 
 // Surface renderer main-thread stalls (Long Tasks) so slow-feeling RPCs caused
 // by a busy main thread are visible directly. Gated to dev / opt-in.
@@ -75,6 +79,31 @@ const ReactQueryDevtools = import.meta.env.DEV
       })),
     )
   : null;
+
+// Evaluation-only canvas fixture seeding. The guard is statically analysable
+// and the module is reached ONLY through this dynamic import, so a production
+// build eliminates both the branch and the module - which is checked by
+// grepping the built artifact for `SEED_FIXTURE_SENTINEL`, after first proving
+// the grep can find it on a build where the seeder is deliberately retained.
+// A runtime flag would leave the seeder present-but-dormant, and dormancy is a
+// claim about invocation that has to be re-proven for every path ever added.
+// `import.meta.env.MODE !== "test"` keeps it out of Vitest, where `DEV` is also
+// true: a module-scope floating import there pulls the canvas and landing-draft
+// stores in asynchronously, mid-test, for no benefit. The `DEV` conjunct is what
+// the production build eliminates on, so narrowing does not weaken the bundle
+// exclusion - proven separately by the sentinel grep with a positive control.
+if (import.meta.env.DEV && import.meta.env.MODE !== "test") {
+  void import("@/dev/seed-canvas-fixture")
+    .then((module) => {
+      module.installSeedFixtureBridge();
+    })
+    .catch((error: unknown) => {
+      // Never let an eval-only harness surface as an unhandled rejection.
+      appLogger.warn("[seed-fixture] bridge install failed", {
+        error: describeLogError(error),
+      });
+    });
+}
 
 export interface TraycerAppProps {
   readonly runnerHost: IRunnerHost;
@@ -121,15 +150,33 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
     () => createAppRouter(props.initialRoute ?? null, desktopWindowId),
     [desktopWindowId, props.initialRoute],
   );
+  // Both escape hatches DECLARE themselves as user intent in history state.
+  // They can be taken on a boot surface, before the app or the route bridge
+  // exists, and the marker is what stops the desktop's restored-route replay
+  // from overwriting them - without it that replay cannot tell a user's
+  // navigation from the transient `/` a cold launch redirects to on its own.
+  // See `startup-navigation-intent.ts`.
   const configureShell = useCallback(() => {
-    void router.navigate({ to: "/settings/shell" });
+    void router.navigate({
+      to: "/settings/shell",
+      state: (previous) => ({
+        ...previous,
+        [STARTUP_NAVIGATION_INTENT_KEY]: true,
+      }),
+    });
   }, [router]);
   // The host-unavailable card's escape hatch. `/settings/host` rather than the
   // settings index: the card is shown when no host can be reached, and that is
   // the page that manages them. Settings bypasses the readiness gate, so this
   // stays reachable from inside a full-screen block.
   const openSettings = useCallback(() => {
-    void router.navigate({ to: "/settings/host" });
+    void router.navigate({
+      to: "/settings/host",
+      state: (previous) => ({
+        ...previous,
+        [STARTUP_NAVIGATION_INTENT_KEY]: true,
+      }),
+    });
   }, [router]);
   // THE FIRST of a launch's three boot surfaces - see
   // `HostRuntimeBootFallback` for why it is the same card as the other two and
@@ -169,7 +216,10 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                         onConfigureShell={configureShell}
                         onOpenSettings={openSettings}
                       >
-                        <RootErrorBoundary router={router}>
+                        <RootErrorBoundary
+                          router={router}
+                          crashTelemetry={props.runnerHost.crashTelemetry}
+                        >
                           <TraycerAuthenticatedRuntime router={router} />
                         </RootErrorBoundary>
                       </HostReadinessControllerProvider>
@@ -227,6 +277,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                             <HostStreamProvider>
                               <HostScopeReady scope="default-host">
                                 <WorktreeChangedStreamMount />
+                                <ProvidersChangedStreamMount />
                                 <ChatRecordsStreamMount />
                                 <LandingDraftMirrorMount />
                               </HostScopeReady>
@@ -271,6 +322,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <RunnerHostBridges />
       <HostControllerStatusListener />
       <AppUpdateToastController />
+      <LinkLoginDeepLinkBridge />
       <WorktreeDeleteProgressToastBridge />
       <HarnessCatalogPrefetcher />
       <RateLimitQueueProvider />

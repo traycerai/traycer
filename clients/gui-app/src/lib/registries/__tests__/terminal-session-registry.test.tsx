@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { StrictMode, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -65,7 +65,11 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
 }));
 
 import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
-import { disposeAllTerminalSessions } from "@/lib/registries/terminal-session-registry";
+import {
+  __getTerminalSessionRegistryForTests,
+  __setTerminalStreamClientFactoryForTests,
+  disposeAllTerminalSessions,
+} from "@/lib/registries/terminal-session-registry";
 
 /** Matches `createRequestContextFixture`'s default identity. */
 const FIXTURE_USER_ID = "user-fixture-1";
@@ -84,6 +88,8 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     transportDialability: "dialable",
     publicKey,
     relayFuseGrace: false,
+    recentHostCheckIn: false,
+    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -136,6 +142,7 @@ function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
     isClosed: () => false,
     notifyBearerRotated: () => undefined,
     reconnectAll: () => undefined,
+    isReady: () => true,
     getMethodSupport: () => "unknown",
     subscribeMethodSupport: () => () => undefined,
     getMethodSchemaVersion: () => null,
@@ -243,8 +250,284 @@ describe("useTerminalSessionHandle owner identity (R-1)", () => {
       expect(result.current).not.toBe(firstHandle);
     });
 
-    expect(tracked.records()).toHaveLength(2);
+    // Effect cleanup releases the lease first (keep-warm retags cache and
+    // reopens subscribe — a new transport), then the remounted effect sees
+    // the owner-identity mismatch, force-releases, and acquires a fresh
+    // presentation stream.
+    expect(tracked.records()).toHaveLength(3);
     expect(tracked.records()[0].closeCount).toBe(1);
-    expect(tracked.records()[1].closeCount).toBe(0);
+    expect(tracked.records()[1].closeCount).toBe(1);
+    expect(tracked.records()[2].closeCount).toBe(0);
+  });
+});
+
+describe("useTerminalSessionHandle acquire-time defunct guard", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllTerminalSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    __setTerminalStreamClientFactoryForTests(null);
+  });
+
+  it("replaces a warm terminal-agent handle a reacquire finds already 'lost'", async () => {
+    globalClientRef.value = buildGlobalClient();
+    __setTerminalStreamClientFactoryForTests(() => ({
+      sendAction: () => undefined,
+      close: () => undefined,
+    }));
+
+    const { result, rerender } = renderHook(
+      (enabled: boolean) =>
+        useTerminalSessionHandle({
+          hostId: "host-1",
+          scope: { kind: "epic", epicId: "epic-1" },
+          sessionId: "terminal-1",
+          instanceId: "inst-lost",
+          cols: 80,
+          rows: 24,
+          reattachMode: "fresh",
+          kind: "terminal-agent",
+          enabled,
+        }),
+      { wrapper, initialProps: true },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const firstHandle = result.current;
+    if (firstHandle === null) throw new Error("expected initial handle");
+
+    // A transient transport drop (not a definitive TERMINAL_NOT_FOUND) maps
+    // to the recoverable "lost" status; a terminal-agent's lease-free entry
+    // is deliberately kept warm through it (the host PTY may still be
+    // running) - see `TerminalSessionRegistry`'s own coverage of this.
+    act(() => {
+      firstHandle.store.setState({ status: "lost" });
+    });
+
+    // The tile disables (e.g. its tab hides) - releasing the lease leaves the
+    // lost-but-warm entry registered, lease-free, under the same instance id.
+    rerender(false);
+    await waitFor(() => {
+      expect(result.current).toBeNull();
+    });
+
+    // Re-enabling re-runs the acquire effect against that SAME instance id.
+    // Without the acquire-time guard this would silently resurrect the dead
+    // "lost" handle instead of building a fresh one.
+    rerender(true);
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    expect(result.current).not.toBe(firstHandle);
+    expect(result.current?.store.getState().status).not.toBe("lost");
+  });
+
+  it("replaces an existing handle a second acquisition finds already 'reaped'", async () => {
+    globalClientRef.value = buildGlobalClient();
+    __setTerminalStreamClientFactoryForTests(() => ({
+      sendAction: () => undefined,
+      close: () => undefined,
+    }));
+
+    const sharedArgs = {
+      hostId: "host-1",
+      scope: { kind: "epic" as const, epicId: "epic-1" },
+      sessionId: "terminal-1",
+      instanceId: "inst-reaped",
+      cols: 80,
+      rows: 24,
+      reattachMode: "fresh" as const,
+      kind: "terminal-agent" as const,
+      enabled: true,
+    };
+
+    const first = renderHook(() => useTerminalSessionHandle(sharedArgs), {
+      wrapper,
+    });
+    await waitFor(() => {
+      expect(first.result.current).not.toBeNull();
+    });
+    const firstHandle = first.result.current;
+    if (firstHandle === null) throw new Error("expected initial handle");
+
+    // The host confirms via TERMINAL_NOT_FOUND that the PTY addressed by this
+    // handle is gone, while the first consumer is still mounted/leased -
+    // the registry entry itself is untouched until that consumer's own
+    // recovery effect gets around to releasing it.
+    act(() => {
+      firstHandle.store.setState({ status: "reaped" });
+    });
+
+    // A second acquisition of the SAME instance id (its owner racing a
+    // remount against the still-mounted first consumer) must not adopt the
+    // confirmed-dead handle - it force-releases and builds fresh instead.
+    const second = renderHook(() => useTerminalSessionHandle(sharedArgs), {
+      wrapper,
+    });
+    await waitFor(() => {
+      expect(second.result.current).not.toBeNull();
+    });
+
+    expect(second.result.current).not.toBe(firstHandle);
+    expect(second.result.current?.store.getState().status).not.toBe("reaped");
+  });
+
+  it("reuses a healthy warm terminal-agent handle across a disable/re-enable cycle", async () => {
+    globalClientRef.value = buildGlobalClient();
+    __setTerminalStreamClientFactoryForTests(() => ({
+      sendAction: () => undefined,
+      close: () => undefined,
+    }));
+
+    const { result, rerender } = renderHook(
+      (enabled: boolean) =>
+        useTerminalSessionHandle({
+          hostId: "host-1",
+          scope: { kind: "epic", epicId: "epic-1" },
+          sessionId: "terminal-1",
+          instanceId: "inst-healthy",
+          cols: 80,
+          rows: 24,
+          reattachMode: "fresh",
+          kind: "terminal-agent",
+          enabled,
+        }),
+      { wrapper, initialProps: true },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const firstHandle = result.current;
+    if (firstHandle === null) throw new Error("expected initial handle");
+    expect(firstHandle.store.getState().status).not.toBe("lost");
+    expect(firstHandle.store.getState().status).not.toBe("reaped");
+
+    rerender(false);
+    await waitFor(() => {
+      expect(result.current).toBeNull();
+    });
+
+    // No status transition happened while lease-free - the guard must leave
+    // a healthy warm handle alone and simply reuse it.
+    rerender(true);
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    expect(result.current).toBe(firstHandle);
+  });
+});
+
+describe("useTerminalSessionHandle transport-loss release", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllTerminalSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+  });
+
+  function strictWrapper(props: { readonly children: ReactNode }): ReactNode {
+    return <StrictMode>{wrapper(props)}</StrictMode>;
+  }
+
+  function throwingWhenHostGoneOpenTransport(): {
+    readonly records: () => ReadonlyArray<TrackedTransportRecord>;
+  } {
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = (hostId) => {
+      if (hostEntryRef.value === null) {
+        throw new Error(`No directory entry for host ${hostId}`);
+      }
+      return tracked.openTransport(hostId);
+    };
+    return tracked;
+  }
+
+  it("does not throw from effect cleanup when the host leaves the directory; disposes instead of retagging cache", async () => {
+    const tracked = throwingWhenHostGoneOpenTransport();
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("pubkey-a");
+
+    const { result, rerender } = renderHook(
+      () =>
+        useTerminalSessionHandle({
+          hostId: REMOTE_HOST_ID,
+          scope: { kind: "epic", epicId: "epic-1" },
+          sessionId: "terminal-1",
+          instanceId: "inst-transport-loss",
+          cols: 80,
+          rows: 24,
+          reattachMode: "fresh",
+          kind: "terminal-agent",
+          enabled: true,
+        }),
+      { wrapper: strictWrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const recordsBeforeLoss = tracked.records().length;
+    expect(recordsBeforeLoss).toBeGreaterThan(0);
+
+    hostEntryRef.value = null;
+    expect(() => {
+      rerender();
+    }).not.toThrow();
+
+    await waitFor(() => {
+      expect(result.current).toBeNull();
+    });
+    expect(tracked.records()).toHaveLength(recordsBeforeLoss);
+    expect(
+      __getTerminalSessionRegistryForTests().get("inst-transport-loss"),
+    ).toBeNull();
+  });
+
+  it("still retags cache on a live keep-warm release", async () => {
+    const tracked = throwingWhenHostGoneOpenTransport();
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("pubkey-a");
+
+    const { result, rerender } = renderHook(
+      (enabled: boolean) =>
+        useTerminalSessionHandle({
+          hostId: REMOTE_HOST_ID,
+          scope: { kind: "epic", epicId: "epic-1" },
+          sessionId: "terminal-1",
+          instanceId: "inst-keep-warm",
+          cols: 80,
+          rows: 24,
+          reattachMode: "fresh",
+          kind: "terminal-agent",
+          enabled,
+        }),
+      { wrapper: strictWrapper, initialProps: true },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const firstHandle = result.current;
+    if (firstHandle === null) {
+      throw new Error("expected initial handle");
+    }
+    const recordsBeforeRelease = tracked.records().length;
+
+    rerender(false);
+    await waitFor(() => {
+      expect(result.current).toBeNull();
+    });
+
+    expect(tracked.records().length).toBeGreaterThan(recordsBeforeRelease);
+    expect(__getTerminalSessionRegistryForTests().get("inst-keep-warm")).toBe(
+      firstHandle,
+    );
+    expect(firstHandle.store.getState().viewer).toBe("cache");
   });
 });

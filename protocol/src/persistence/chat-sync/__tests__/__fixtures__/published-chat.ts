@@ -300,7 +300,10 @@ function addressBytes(bytes: string): {
 } {
   return {
     bytes,
-    part: { sha256: sha256Hex(bytes), byteLength: Buffer.byteLength(bytes, "utf8") },
+    part: {
+      sha256: sha256Hex(bytes),
+      byteLength: Buffer.byteLength(bytes, "utf8"),
+    },
   };
 }
 

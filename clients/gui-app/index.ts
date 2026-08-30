@@ -1,5 +1,10 @@
 export { TraycerApp, type TraycerAppProps } from "@/traycer-app";
 export {
+  isMobileApp,
+  setMobileApp,
+  setMobileAppPlatform,
+} from "@/lib/mobile-app";
+export {
   hostRpcRegistry,
   type HostRpcRegistry,
   type MessengerFactory,

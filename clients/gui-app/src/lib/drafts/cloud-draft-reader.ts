@@ -36,7 +36,8 @@ export type CloudDraftReadOutcome =
   | {
       readonly kind: "corrupt";
       readonly reason:
-        DraftHeadDocumentCorruptionReason | "head-digest-mismatch";
+        | DraftHeadDocumentCorruptionReason
+        | "head-digest-mismatch";
       readonly message: string;
       readonly diagnostic: string;
     };

@@ -52,7 +52,9 @@ describe("workspace shared search sources", () => {
       results: [{ kind: "file" as const, relPath: "src/a.ts", name: "a.ts" }],
       truncated: false,
     };
-    expect(workspaceSearchPathsResponseSchema.parse(response)).toEqual(response);
+    expect(workspaceSearchPathsResponseSchema.parse(response)).toEqual(
+      response,
+    );
 
     const textRequest = {
       epicId: "epic-1",
@@ -67,7 +69,9 @@ describe("workspace shared search sources", () => {
       },
       limit: 10,
     };
-    expect(workspaceSearchTextRequestSchema.parse(textRequest)).toEqual(textRequest);
+    expect(workspaceSearchTextRequestSchema.parse(textRequest)).toEqual(
+      textRequest,
+    );
 
     const textResponse = {
       epicId: "epic-1",
@@ -83,7 +87,9 @@ describe("workspace shared search sources", () => {
       ],
       truncated: false,
     };
-    expect(workspaceSearchTextResponseSchema.parse(textResponse)).toEqual(textResponse);
+    expect(workspaceSearchTextResponseSchema.parse(textResponse)).toEqual(
+      textResponse,
+    );
   });
 
   it("adds opaque Epic-artifact source variants without a mirror path", () => {

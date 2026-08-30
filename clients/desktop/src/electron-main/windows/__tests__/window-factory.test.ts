@@ -58,7 +58,8 @@ vi.mock("electron", () => ({
     setTitleCalls: string[] = [];
     private readyToShow: (() => void) | null = null;
     private pageTitleUpdated:
-      ((event: { preventDefault(): void }) => void) | null = null;
+      | ((event: { preventDefault(): void }) => void)
+      | null = null;
     readonly webContents = {
       setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
       setWindowOpenHandler: vi.fn(),

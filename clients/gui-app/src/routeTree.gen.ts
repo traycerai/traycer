@@ -19,12 +19,14 @@ import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
 import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
 import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
+import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.app-notifications";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
+import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-phone";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
@@ -83,6 +85,12 @@ const SettingsAppDiagnosticsRoute = SettingsAppDiagnosticsRouteImport.update({
   path: "/app-diagnostics",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsAppNotificationsRoute =
+  SettingsAppNotificationsRouteImport.update({
+    id: "/app-notifications",
+    path: "/app-notifications",
+    getParentRoute: () => SettingsRoute,
+  } as any);
 const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   id: "/appearance",
   path: "/appearance",
@@ -111,6 +119,11 @@ const SettingsHostRoute = SettingsHostRouteImport.update({
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   id: "/keybindings",
   path: "/keybindings",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsLinkPhoneRoute = SettingsLinkPhoneRouteImport.update({
+  id: "/link-phone",
+  path: "/link-phone",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
@@ -158,12 +171,14 @@ export interface FileRoutesByFullPath {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
+  "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
@@ -181,12 +196,14 @@ export interface FileRoutesByTo {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
+  "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
@@ -207,12 +224,14 @@ export interface FileRoutesById {
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
+  "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
@@ -234,12 +253,14 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/app-diagnostics"
+    | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/providers"
     | "/settings/service"
@@ -257,12 +278,14 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/app-diagnostics"
+    | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/providers"
     | "/settings/service"
@@ -282,12 +305,14 @@ export interface FileRouteTypes {
     | "/draft/new"
     | "/settings/agents"
     | "/settings/app-diagnostics"
+    | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/providers"
     | "/settings/service"
@@ -380,6 +405,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsAppDiagnosticsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/app-notifications": {
+      id: "/settings/app-notifications";
+      path: "/app-notifications";
+      fullPath: "/settings/app-notifications";
+      preLoaderRoute: typeof SettingsAppNotificationsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/appearance": {
       id: "/settings/appearance";
       path: "/appearance";
@@ -420,6 +452,13 @@ declare module "@tanstack/react-router" {
       path: "/keybindings";
       fullPath: "/settings/keybindings";
       preLoaderRoute: typeof SettingsKeybindingsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/link-phone": {
+      id: "/settings/link-phone";
+      path: "/link-phone";
+      fullPath: "/settings/link-phone";
+      preLoaderRoute: typeof SettingsLinkPhoneRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/notifications": {
@@ -489,12 +528,14 @@ const EpicsRouteWithChildren = EpicsRoute._addFileChildren(EpicsRouteChildren);
 interface SettingsRouteChildren {
   SettingsAgentsRoute: typeof SettingsAgentsRoute;
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
+  SettingsAppNotificationsRoute: typeof SettingsAppNotificationsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
+  SettingsLinkPhoneRoute: typeof SettingsLinkPhoneRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
@@ -507,12 +548,14 @@ interface SettingsRouteChildren {
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
+  SettingsAppNotificationsRoute: SettingsAppNotificationsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHostRoute: SettingsHostRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsLinkPhoneRoute: SettingsLinkPhoneRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsServiceRoute: SettingsServiceRoute,

@@ -94,6 +94,17 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
     };
 
     const reposition = (): void => {
+      // A zero rect means there is no active row to anchor to (the row is
+      // not rendered yet, or the query missed). Anchoring to it would make
+      // floating-ui measure availability from the viewport ORIGIN - a point
+      // has a whole viewport of room beside it, so the fit gate passes and
+      // the panel paints over whatever occupies the corner. No anchor, no
+      // panel.
+      const anchorRect = activeRowRect();
+      if (anchorRect.width === 0 && anchorRect.height === 0) {
+        setFits(false);
+        return;
+      }
       void computePosition(virtualReference, panel, {
         placement: "right-start",
         middleware: [
@@ -135,6 +146,7 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
     <div
       ref={panelRef}
       data-slot="mention-preview-panel"
+      data-browser-overlay="mention-preview-panel"
       role="presentation"
       aria-hidden
       className={cn(

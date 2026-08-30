@@ -6,6 +6,14 @@ import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
 import { notifyDraftLocalEdit } from "@/lib/drafts/draft-local-edits";
+import {
+  collectDraftAnnotationImageHashes,
+  mergeBrowserAnnotationRecords,
+  parseBrowserAnnotationRecords,
+  type BrowserAnnotationRecord,
+} from "@/lib/browser-view/annotation/browser-annotation-record";
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 
 export interface DraftSelection {
   readonly from: number;
@@ -15,11 +23,18 @@ export interface DraftSelection {
 export interface DraftState {
   readonly content: JsonContent;
   readonly selection: DraftSelection | null;
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /**
    * Bumped only when the draft is replaced from outside the editor
    * (queue-edit restore, failed-send handoff, submit-clear). The composer
    * watches this counter to push the new content into Tiptap; routine
    * keystroke snapshots from the editor never bump it.
+   *
+   * The sidecar array (`browserAnnotations`) deliberately does NOT bump it:
+   * it is not the DOCUMENT, so a bump there would replay a stale
+   * content+selection into a live editor for a change the document does not
+   * contain. The attachment strip subscribes to `browserAnnotations`
+   * directly.
    */
   readonly resetEpoch: number;
   /**
@@ -29,6 +44,12 @@ export interface DraftState {
    * adapter captures this alongside the chatId as a compare-and-swap token:
    * a stash only clears this draft when the revision it captured still
    * matches, so an edit made while the stash was durably saving is kept.
+   *
+   * The sidecar mutation bumps it too, unlike `resetEpoch`: the stash carries
+   * only the DOCUMENT, while the `clearDraft` it performs on a matching token
+   * wipes `browserAnnotations` as well. An annotation attached while that
+   * IndexedDB save was in flight would otherwise be destroyed with nothing
+   * holding it.
    */
   readonly revision: number;
   /** Client-minted host row id; null until the first local edit. */
@@ -74,18 +95,37 @@ interface ComposerDraftStore {
     content: JsonContent,
     selection: DraftSelection | null,
   ) => void;
+  readonly addBrowserAnnotation: (
+    chatId: string,
+    record: BrowserAnnotationRecord,
+  ) => void;
+  readonly removeBrowserAnnotation: (
+    chatId: string,
+    annotationId: string,
+  ) => void;
   /**
-   * Resets a chat's draft to empty via the same `replaceDraft` broadcast used
-   * by queue-edit restore / failed-send handoff, instead of deleting the map
-   * entry. A delete can't reliably notify every mounted composer for this
-   * `chatId` (split panes, keep-alive tabs): a sibling's `resetEpoch` selector
-   * falls back to the same `?? 0` whether the entry never existed or was just
-   * removed, so a delete after routine (non-bumping) keystrokes produces no
-   * observable change and the sibling's stale Tiptap document never clears.
-   * Bumping `resetEpoch` in place is the only way every mounted
-   * `useChatComposerDraft` for this `chatId` reliably observes the clear. The
-   * explicit empty-document caret applies the reset without invoking
-   * `setContent(..., null)`'s focus-at-end behavior in sibling composers.
+   * Rejected-send restore: put records back without duplicating an id that
+   * is already on the draft (the user may have re-attached while the send
+   * was in flight).
+   */
+  readonly restoreBrowserAnnotations: (
+    chatId: string,
+    records: ReadonlyArray<BrowserAnnotationRecord>,
+  ) => void;
+  /**
+   * Resets a chat's draft to empty in place - empty annotations, then the
+   * same `replaceDraft` broadcast used by queue-edit restore / failed-send
+   * handoff - instead of deleting the map entry. A delete can't reliably
+   * notify every mounted composer for this `chatId` (split panes, keep-alive
+   * tabs): a sibling's `resetEpoch` selector falls back to the same `?? 0`
+   * whether the entry never existed or was just removed, so a delete after
+   * routine (non-bumping) keystrokes produces no observable change and the
+   * sibling's stale Tiptap document never clears. Bumping `resetEpoch` in
+   * place is the only way every mounted `useChatComposerDraft` for this
+   * `chatId` reliably observes the clear. The explicit empty-document caret
+   * applies the reset without invoking `setContent(..., null)`'s focus-at-end
+   * behavior in sibling composers. Going through `replaceDraft` is also what
+   * routes the clear to the host mirror.
    */
   readonly clearDraft: (chatId: string) => void;
   readonly bindTarget: (chatId: string, epicId: string) => void;
@@ -99,6 +139,7 @@ const EMPTY_COMPOSER_SELECTION: DraftSelection = { from: 1, to: 1 };
 export const EMPTY_COMPOSER_DRAFT: DraftState = {
   content: EMPTY_COMPOSER_CONTENT,
   selection: null,
+  browserAnnotations: [],
   resetEpoch: 0,
   revision: 0,
   draftId: null,
@@ -177,12 +218,85 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
         });
         notifyDraftLocalEdit(draftId);
       },
+      addBrowserAnnotation: (chatId, record) => {
+        set((state) => {
+          const current = ensureDraft(state.drafts, chatId);
+          const next = mergeBrowserAnnotationRecords(
+            current.browserAnnotations,
+            [record],
+          );
+          if (next === current.browserAnnotations) return state;
+          return {
+            drafts: {
+              ...state.drafts,
+              [chatId]: {
+                ...current,
+                browserAnnotations: next,
+                revision: current.revision + 1,
+              },
+            },
+          };
+        });
+      },
+      removeBrowserAnnotation: (chatId, annotationId) => {
+        set((state) => {
+          const current = ensureDraft(state.drafts, chatId);
+          const next = current.browserAnnotations.filter(
+            (record) => record.annotationId !== annotationId,
+          );
+          if (next.length === current.browserAnnotations.length) return state;
+          return {
+            drafts: {
+              ...state.drafts,
+              [chatId]: {
+                ...current,
+                browserAnnotations: next,
+                revision: current.revision + 1,
+              },
+            },
+          };
+        });
+      },
+      restoreBrowserAnnotations: (chatId, records) => {
+        set((state) => {
+          const current = ensureDraft(state.drafts, chatId);
+          const next = mergeBrowserAnnotationRecords(
+            current.browserAnnotations,
+            records,
+          );
+          if (next === current.browserAnnotations) return state;
+          return {
+            drafts: {
+              ...state.drafts,
+              [chatId]: {
+                ...current,
+                browserAnnotations: next,
+                revision: current.revision + 1,
+              },
+            },
+          };
+        });
+      },
       clearDraft: (chatId) => {
+        // Sidecar first, document second: `replaceDraft` is the broadcast
+        // (resetEpoch bump + host notify), and the sidecar wipe must already
+        // be in the state that broadcast is observed against.
+        set((state) => {
+          const current = ensureDraft(state.drafts, chatId);
+          if (current.browserAnnotations.length === 0) return state;
+          return {
+            drafts: {
+              ...state.drafts,
+              [chatId]: { ...current, browserAnnotations: [] },
+            },
+          };
+        });
         get().replaceDraft(
           chatId,
           EMPTY_COMPOSER_CONTENT,
           EMPTY_COMPOSER_SELECTION,
         );
+        scheduleLandingImageReconcile();
       },
       bindTarget: (chatId, epicId) => {
         const current = ensureDraft(get().drafts, chatId);
@@ -223,6 +337,9 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           drafts[taskId] = {
             content: value.content,
             selection: value.selection,
+            browserAnnotations: parseBrowserAnnotationRecords(
+              value.browserAnnotations,
+            ),
             resetEpoch: normalizedLegacyResetEpoch(value) + 1,
             revision: normalizedLegacyRevision(value),
             draftId: normalizedDraftId(value) ?? mintDraftId(),
@@ -503,3 +620,8 @@ function normalizedNonNegative(value: unknown): number {
     ? value
     : 0;
 }
+
+registerExtraImageRootSource({
+  hashes: () =>
+    collectDraftAnnotationImageHashes(useComposerDraftStore.getState().drafts),
+});

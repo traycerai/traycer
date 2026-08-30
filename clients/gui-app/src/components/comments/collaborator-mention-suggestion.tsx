@@ -151,6 +151,7 @@ function MentionSuggestionListContent({
       role="listbox"
       aria-label="Mention collaborator"
       data-slot="mention-suggestion"
+      data-browser-overlay="mention-suggestion"
       className={cn(
         "absolute top-0 left-0 z-50 w-[min(80vw,18rem)] max-h-[min(40vh,18rem)] overflow-y-auto rounded-md border border-border bg-popover p-1 text-ui-sm text-popover-foreground shadow-md outline-none",
       )}

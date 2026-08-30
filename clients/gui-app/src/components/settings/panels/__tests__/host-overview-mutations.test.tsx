@@ -379,7 +379,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2, blockers: null },
+            verdict: {
+              busySessionCount: 2,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -489,7 +493,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
           transitionIds.push(req.transitionId);
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           });
         },
       },
@@ -554,7 +562,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2, blockers: null },
+            verdict: {
+              busySessionCount: 2,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -612,7 +624,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 3, blockers: null },
+            verdict: {
+              busySessionCount: 3,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -660,7 +676,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2, blockers: null },
+            verdict: {
+              busySessionCount: 2,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -672,10 +692,10 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     // legitimate force through instead of passing because it never ran.
     localHostIdMock.current = "host-local";
     scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
-    const restartHost = vi.fn(() =>
+    const restartHostIfIdle = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
     );
-    const management = buildOverviewManagement({ restartHost });
+    const management = buildOverviewManagement({ restartHostIfIdle });
     render(
       <QueryClientProvider
         client={
@@ -707,13 +727,16 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       "2 sessions are still keeping this host busy. Nothing was interrupted; try again when the work finishes. Force restart ends it immediately.",
     );
     // Nothing has been killed yet: reaching the dialog is not consenting to it.
-    expect(restartHost).not.toHaveBeenCalled();
+    expect(restartHostIfIdle).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("host-busy-force"));
 
     await waitFor(() => {
-      expect(restartHost).toHaveBeenCalledTimes(1);
+      expect(restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: "host-local",
+      });
     });
+    expect(management.restartHost).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
@@ -744,7 +767,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 3, blockers: null },
+            verdict: {
+              busySessionCount: 3,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -752,10 +779,10 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     hostBindingMock.current = bindingWith(fixture.client);
     localHostIdMock.current = "host-local";
     scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
-    const restartHost = vi.fn(() =>
+    const restartHostIfIdle = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
     );
-    const management = buildOverviewManagement({ restartHost });
+    const management = buildOverviewManagement({ restartHostIfIdle });
     render(
       <QueryClientProvider
         client={
@@ -787,7 +814,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     });
     // The whole point: nothing was killed. Not the old host, and above all not
     // the new one, which this page never asked and never counted.
-    expect(restartHost).not.toHaveBeenCalled();
+    expect(restartHostIfIdle).not.toHaveBeenCalled();
     expect(toast.info).toHaveBeenCalledWith("Host changed", {
       description:
         "This machine's host was replaced while this dialog was open, so " +
@@ -810,7 +837,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -818,10 +849,10 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     hostBindingMock.current = bindingWith(fixture.client);
     localHostIdMock.current = "host-local";
     scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
-    const restartHost = vi.fn(() =>
+    const restartHostIfIdle = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
     );
-    const management = buildOverviewManagement({ restartHost });
+    const management = buildOverviewManagement({ restartHostIfIdle });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
@@ -853,7 +884,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
-    expect(restartHost).not.toHaveBeenCalled();
+    expect(restartHostIfIdle).not.toHaveBeenCalled();
   });
 
   it("Defer answers the offer without respawning, and Restart re-asks the host", async () => {
@@ -870,7 +901,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
           attempt += 1;
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: attempt, blockers: null },
+            verdict: {
+              busySessionCount: attempt,
+              blockers: null,
+              busyBreakdown: null,
+            },
           });
         },
       },
@@ -878,10 +913,10 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
-    const restartHost = vi.fn(() =>
+    const restartHostIfIdle = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
     );
-    const management = buildOverviewManagement({ restartHost });
+    const management = buildOverviewManagement({ restartHostIfIdle });
     render(
       <QueryClientProvider
         client={
@@ -909,7 +944,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
-    expect(restartHost).not.toHaveBeenCalled();
+    expect(restartHostIfIdle).not.toHaveBeenCalled();
 
     // The second ask carries the SECOND verdict, so the dialog is describing
     // the host as it is now rather than replaying the answer just declined.
@@ -922,7 +957,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     expect(reopened.textContent).toContain(
       "2 sessions are still keeping this host busy",
     );
-    expect(restartHost).not.toHaveBeenCalled();
+    expect(restartHostIfIdle).not.toHaveBeenCalled();
   });
 
   it("a declined force restart closes the offer and shows an informational toast, not an error", async () => {
@@ -933,20 +968,24 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 4, blockers: null },
+            verdict: {
+              busySessionCount: 4,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
     recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
-    const restartHost = vi.fn(() =>
+    const restartHostIfIdle = vi.fn(() =>
       Promise.resolve({
         kind: "declined" as const,
         message: "Another Traycer process holds the management lock.",
       }),
     );
-    const management = buildOverviewManagement({ restartHost });
+    const management = buildOverviewManagement({ restartHostIfIdle });
     render(
       <QueryClientProvider
         client={
@@ -973,8 +1012,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     fireEvent.click(screen.getByTestId("host-busy-force"));
 
     await waitFor(() => {
-      expect(restartHost).toHaveBeenCalledTimes(1);
+      expect(restartHostIfIdle).toHaveBeenCalledWith({
+        expectedHostId: "host-local",
+      });
     });
+    expect(management.restartHost).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(toast.info).toHaveBeenCalledWith(
         "Host not restarted",
@@ -1011,11 +1053,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     const gate = new Promise<void>((resolve) => {
       releaseForceRestart = resolve;
     });
-    const restartHost = vi.fn(async () => {
+    const restartHostIfIdle = vi.fn(async () => {
       await gate;
       return { kind: "restarted" as const };
     });
-    const management = buildOverviewManagement({ restartHost });
+    const management = buildOverviewManagement({ restartHostIfIdle });
     const runnerHost = makeRunnerHostWithManagement(management);
 
     const fixtureA = buildOverviewHostFixture({
@@ -1026,7 +1068,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -1065,8 +1111,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
 
     fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
-      expect(restartHost).toHaveBeenCalledTimes(1);
+      expect(restartHostIfIdle).toHaveBeenCalledTimes(1);
     });
+    expect(management.restartHost).not.toHaveBeenCalled();
 
     // Move the scope to another host WHILE the force restart is still
     // killing and relaunching the local bridge process.
@@ -1084,7 +1131,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       expect(toast.success).toHaveBeenCalledWith("Host restart requested");
     });
     expect(toast.success).toHaveBeenCalledTimes(1);
-    expect(restartHost).toHaveBeenCalledTimes(1);
+    expect(restartHostIfIdle).toHaveBeenCalledTimes(1);
   });
 
   it("Force restart armed on host A stays counted after a remount to host B, locking B's lifecycle writes until it settles", async () => {
@@ -1104,11 +1151,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     const gate = new Promise<void>((resolve) => {
       releaseForceRestart = resolve;
     });
-    const restartHost = vi.fn(async () => {
+    const restartHostIfIdle = vi.fn(async () => {
       await gate;
       return { kind: "restarted" as const };
     });
-    const management = buildOverviewManagement({ restartHost });
+    const management = buildOverviewManagement({ restartHostIfIdle });
     const runnerHost = makeRunnerHostWithManagement(management);
 
     const fixtureA = buildOverviewHostFixture({
@@ -1119,7 +1166,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -1155,8 +1206,9 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
 
     fireEvent.click(screen.getByTestId("host-busy-force"));
     await waitFor(() => {
-      expect(restartHost).toHaveBeenCalledTimes(1);
+      expect(restartHostIfIdle).toHaveBeenCalledTimes(1);
     });
+    expect(management.restartHost).not.toHaveBeenCalled();
 
     // Move the scope to host B WHILE the force restart is still killing and
     // relaunching the local bridge process.
@@ -1207,17 +1259,21 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2, blockers: null },
+            verdict: {
+              busySessionCount: 2,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
     recordNegotiatedHostMethods("host-local", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFromWithLocality("host-local", fixture, true);
-    const restartHost = vi.fn(() =>
+    const restartHostIfIdle = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
     );
-    const management = buildOverviewManagement({ restartHost });
+    const management = buildOverviewManagement({ restartHostIfIdle });
     render(
       <QueryClientProvider
         client={
@@ -1253,7 +1309,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
     await waitFor(() => {
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
-    expect(restartHost).not.toHaveBeenCalled();
+    expect(restartHostIfIdle).not.toHaveBeenCalled();
   });
 });
 
@@ -1267,6 +1323,8 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>

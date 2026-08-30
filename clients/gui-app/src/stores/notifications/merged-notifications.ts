@@ -76,7 +76,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRow,
+  type HostNotificationsCloudFeedRowV11,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsCloudFeedMarkAllReadRequest,
   type HostNotificationsCloudFeedClearAllRequest,
@@ -95,7 +95,10 @@ import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 export type MergedNotificationSource =
-  "host" | "app-local" | "global" | "cloud";
+  | "host"
+  | "app-local"
+  | "global"
+  | "cloud";
 
 export interface MergedNotificationRow {
   readonly feedId: string;
@@ -106,6 +109,10 @@ export interface MergedNotificationRow {
   readonly title: string;
   readonly body: string;
   readonly payload: NotificationPayload | null;
+  /** Presentation identity of an agent lifecycle row. Kept separately from
+   * the normalized navigation payload, where GUI chats and TUI agents both
+   * intentionally route through a chat-shaped target. */
+  readonly agentSurface?: "gui" | "tui" | null;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
   readonly globalEntry: NotificationEntry | null;
@@ -245,8 +252,9 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
       const rows: MergedNotificationRow[] = [
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRow => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV11 => row !== undefined,
           )
+          .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
         ...appLocalIds.map((id) => rowFromAppLocalEntry(appLocalById[id])),
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
@@ -256,9 +264,9 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
     }
     if (feedMode === "upgrade-required") return [];
     const rows: MergedNotificationRow[] = [
-      ...hostIds.map((id) =>
-        rowFromHostEntryForOrigin(hostById[id], activeHostId),
-      ),
+      ...hostIds
+        .filter((id) => !isAutomaticAgentRecovery(hostById[id]))
+        .map((id) => rowFromHostEntryForOrigin(hostById[id], activeHostId)),
       ...appLocalIds.map((id) => rowFromAppLocalEntry(appLocalById[id])),
       ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
     ];
@@ -416,7 +424,9 @@ function rowFromLocalFeedId(input: {
 }): MergedNotificationRow | null {
   switch (input.parsed.source) {
     case "host":
-      return input.feedMode !== "local" || input.hostEntry === null
+      return input.feedMode !== "local" ||
+        input.hostEntry === null ||
+        isAutomaticAgentRecovery(input.hostEntry)
         ? null
         : rowFromHostEntryForOrigin(input.hostEntry, input.hostOriginId);
     case "app-local":
@@ -435,10 +445,33 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRow | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV11 | undefined;
 }): MergedNotificationRow | null {
-  if (input.feedMode !== "cloud" || input.cloudRow === undefined) return null;
+  if (
+    input.feedMode !== "cloud" ||
+    input.cloudRow === undefined ||
+    isAutomaticAgentRecovery(input.cloudRow.entry)
+  )
+    return null;
   return rowFromCloudFeedRow(input.cloudRow);
+}
+
+/** A successful non-human turn advances terminal glyph chronology but is not
+ * itself notification history. The durable row must reach cloud indicator
+ * projection, so presentation filters it here instead of deleting it from the
+ * feed upstream. */
+function isAutomaticAgentRecovery(entry: {
+  readonly kind: string;
+  readonly payload: unknown;
+}): boolean {
+  if (entry.kind !== "agent.stopped") return false;
+  const payload = entry.payload;
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "automaticRecovery" in payload &&
+    payload.automaticRecovery === true
+  );
 }
 
 export function useMergedNotificationRow(
@@ -1063,7 +1096,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRow =>
+              (row): row is HostNotificationsCloudFeedRowV11 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -1302,6 +1335,7 @@ function rowFromHostEntryForOrigin(
     title: presentation.title,
     body: presentation.body,
     payload: payloadFromHostEntry(entry),
+    agentSurface: agentSurfaceFromHostEntry(entry),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -1366,11 +1400,13 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRow,
+  row: HostNotificationsCloudFeedRowV11,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
-    row.presentation.chatTitle ?? row.presentation.epicTitle ?? fallback.title;
+    nonEmptyCloudPresentationTitle(row.presentation.epicTitle) ??
+    nonEmptyCloudPresentationTitle(row.presentation.chatTitle) ??
+    fallback.title;
   const providerPackAttribution = parseProviderPackNotificationAttribution(
     row.entry.payload,
   );
@@ -1384,6 +1420,7 @@ export function rowFromCloudFeedRow(
     title,
     body: fallback.body,
     payload: payloadFromHostEntry(row.entry),
+    agentSurface: agentSurfaceFromHostEntry(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -1395,6 +1432,10 @@ export function rowFromCloudFeedRow(
     providerPackAttribution,
     category: categoryForNotificationSource("cloud"),
   };
+}
+
+function nonEmptyCloudPresentationTitle(title: string | null): string | null {
+  return title !== null && title.length > 0 ? title : null;
 }
 
 function parseFeedId(feedId: string): ParsedFeedId | null {
@@ -1510,16 +1551,47 @@ function payloadFromHostEntry(
   return known === null ? null : navigationPayloadFromKnown(known);
 }
 
+function agentSurfaceFromHostEntry(
+  entry: HostNotificationFeedEntry,
+): "gui" | "tui" | null {
+  const known = parseKnownHostNotificationPayloadForKind(
+    entry.kind,
+    entry.payload,
+  );
+  if (known === null) return null;
+  if (known.kind === "epic") return "tui";
+  if (
+    known.kind === "chat" ||
+    known.kind === "agent_stalled" ||
+    known.kind === "workspace_operation_failed"
+  ) {
+    return "gui";
+  }
+  return null;
+}
+
 function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
   switch (known.kind) {
-    case "chat":
+    case "chat": {
+      // A final, unqualified Done describes the current end-state, so it
+      // always opens at the end of the transcript. Failures and qualified
+      // Done rows retain their occurrence anchor.
+      const includeTranscriptAnchor =
+        known.outcome === "errored" || known.backgroundWorkRunning === true;
+      const scrollToEnd =
+        known.outcome === "completed" && known.backgroundWorkRunning !== true;
       return {
         kind: "chat",
         epicId: known.epicId,
         chatId: known.chatId ?? undefined,
+        ...(known.hostId === undefined ? {} : { hostId: known.hostId }),
+        messageId: includeTranscriptAnchor ? known.messageId : undefined,
+        eventId: includeTranscriptAnchor ? known.eventId : undefined,
+        ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
       };
+    }
     case "agent_stalled":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     case "workspace_operation_failed":

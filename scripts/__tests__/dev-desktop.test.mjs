@@ -79,14 +79,8 @@ describe("dev-desktop slot resolution", () => {
   });
 
   it("derives a deterministic sanitized slot from the repo root when no override is given", async () => {
-    const slotA = await devDesktop.resolveDevDesktopSlot(
-      ["bun", "script"],
-      {},
-    );
-    const slotB = await devDesktop.resolveDevDesktopSlot(
-      ["bun", "script"],
-      {},
-    );
+    const slotA = await devDesktop.resolveDevDesktopSlot(["bun", "script"], {});
+    const slotB = await devDesktop.resolveDevDesktopSlot(["bun", "script"], {});
     expect(slotA).toBe(slotB);
     expect(slotA).toMatch(/^[a-z0-9-]+-[a-f0-9]{8}$/);
   });
@@ -131,9 +125,7 @@ describe("dev-desktop concurrent stack entries", () => {
     expect(electronEntry.command).toBe(
       "DEV_DESKTOP_SLOT='example-slot' PORT='19123' bun run --cwd clients/desktop dev",
     );
-    expect(hostEntry?.command).toContain(
-      "/tmp/traycer/example-slot/host.log",
-    );
+    expect(hostEntry?.command).toContain("/tmp/traycer/example-slot/host.log");
   });
 
   it("makes concurrent shutdown triggers await the same teardown", async () => {

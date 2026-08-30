@@ -5,6 +5,7 @@ import {
   FolderGit2,
   GitBranch,
   GitPullRequest,
+  Globe2,
   Layers,
 } from "lucide-react";
 import { memo, type ReactElement, type ReactNode } from "react";
@@ -98,8 +99,10 @@ function ChatUserMessageMentionChipImpl({
   // Both facts it needs are already on the attachment - the `#12` / `repo#12`
   // label the composer chip used, and the `org/repo#12 · title` description.
   const isGithub = isGithubMentionContextType(mention.contextType);
+  const isBrowserTab = mention.contextType === "browser-tab";
   const usesLabel =
     isGithub ||
+    isBrowserTab ||
     mention.contextType === "git" ||
     mention.contextType === "worktree" ||
     "epicId" in mention;
@@ -108,7 +111,10 @@ function ChatUserMessageMentionChipImpl({
     : basenameOfPath(mention.path) || mention.path;
   const filename = basenameOfPath(mention.path) || mention.path;
   const tooltip =
-    isGithub || mention.contextType === "git" || "epicId" in mention
+    isGithub ||
+    isBrowserTab ||
+    mention.contextType === "git" ||
+    "epicId" in mention
       ? mention.description
       : (mention.absolutePath ?? mention.path);
   return (
@@ -118,6 +124,7 @@ function ChatUserMessageMentionChipImpl({
       sideOffset={undefined}
       align={undefined}
     >
+      {/* muted-fill-ok: transcript chip on bg-background, bordered besides */}
       <span
         className="mx-px inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90"
         data-composer-chip="mention"
@@ -160,6 +167,9 @@ function MentionChipIcon({
   }
   if (mention.contextType === "github_issue") {
     return <CircleDot className={MENTION_ICON_CLASS} aria-hidden />;
+  }
+  if (mention.contextType === "browser-tab") {
+    return <Globe2 className={MENTION_ICON_CLASS} aria-hidden />;
   }
   if (
     mention.contextType === "chat" ||

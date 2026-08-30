@@ -21,7 +21,8 @@ export interface PromptStashDestinationIdentity {
 }
 
 export type PromptStashDestinationResult =
-  { readonly status: "accepted" } | { readonly status: "stale" };
+  | { readonly status: "accepted" }
+  | { readonly status: "stale" };
 
 export interface PromptStashMaterializedContent {
   readonly content: JsonContent;

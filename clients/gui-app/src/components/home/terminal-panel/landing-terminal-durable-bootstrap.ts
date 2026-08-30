@@ -2,17 +2,23 @@ import { useEffect, useRef, useState } from "react";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 
 export type LandingTerminalDurableBootstrapAction =
-  "create" | "ensure-running" | "none";
+  | "create"
+  | "ensure-running"
+  | "none";
 
 export function resolveLandingTerminalDurableBootstrapAction(input: {
-  readonly projectionStatus: "running" | "dormant" | "missing";
+  readonly projectionStatus: "running" | "dormant" | "unknown" | "missing";
   readonly pendingCreate: boolean;
   readonly active: boolean;
 }): LandingTerminalDurableBootstrapAction {
   if (input.projectionStatus === "missing") {
     return input.pendingCreate ? "create" : "none";
   }
-  if (input.projectionStatus === "dormant" && input.active) {
+  if (
+    (input.projectionStatus === "dormant" ||
+      input.projectionStatus === "unknown") &&
+    input.active
+  ) {
     return "ensure-running";
   }
   return "none";
@@ -32,7 +38,7 @@ export interface LandingTerminalDurableLifecycleResult {
  * stable dormant failure.
  */
 export function useLandingTerminalDurableLifecycle(args: {
-  readonly projectionStatus: "running" | "dormant" | "missing";
+  readonly projectionStatus: "running" | "dormant" | "unknown" | "missing";
   readonly pendingCreate: boolean;
   readonly active: boolean;
   readonly canMutate: boolean;

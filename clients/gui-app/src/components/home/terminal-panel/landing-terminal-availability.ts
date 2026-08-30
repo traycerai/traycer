@@ -1,7 +1,10 @@
 import { classifyHostRequestFailure } from "@traycer-clients/shared/host-transport/host-messenger";
 
 export type LandingTerminalAvailability =
-  "supported" | "unsupported" | "unknown" | "no-active-host";
+  | "supported"
+  | "unsupported"
+  | "unknown"
+  | "no-active-host";
 
 export function resolveLandingTerminalAvailability(
   activeHostId: string | null,

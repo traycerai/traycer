@@ -48,11 +48,11 @@ const {
     sessions.push(session);
     return handle;
   });
-  // Defaults to the latest negotiated minor (@1.2) the monitor itself
+  // Defaults to the latest negotiated minor (@1.3) the monitor itself
   // targets - every existing test in this file exercises a fully-current
   // host, so this preserves prior behavior. Mixed-version negotiation is
   // covered by its own dedicated tests, which override this per-test.
-  const getMethodSchemaVersionMock = vi.fn(() => ({ major: 1, minor: 2 }));
+  const getMethodSchemaVersionMock = vi.fn(() => ({ major: 1, minor: 3 }));
   return {
     subscribeMock,
     getMethodSchemaVersionMock,
@@ -365,6 +365,76 @@ describe("role awareness frames (negotiated @1.1)", () => {
   });
 });
 
+describe("stop initiator notices (negotiated @1.3)", () => {
+  function emitCancelledNotice(
+    stopInitiator:
+      | { readonly type: "user" }
+      | {
+          readonly type: "agent";
+          readonly agentId: string;
+          readonly agentTitle: string | null;
+        },
+  ): void {
+    sessions[0].serverFrame?.({
+      kind: "notice",
+      hasBinaryPayload: false,
+      notice: {
+        kind: "inactivity",
+        senderAgentId: "a1",
+        responseId: "response-1",
+        receiverAgentId: "receiver-1",
+        receiverTitle: "Worker",
+        receiverHarnessId: "codex",
+        epicId: "e1",
+        reason: "receiver-cancelled",
+        detail: null,
+        droppedReceivers: null,
+        stopInitiator,
+        noticedAt: 123,
+      },
+    });
+  }
+
+  it("names the agent responsible for a stop", async () => {
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    await flush(0);
+
+    emitCancelledNotice({
+      type: "agent",
+      agentId: "5b8d8768-1d43-42ef-bd99-d57a066e86f2",
+      agentTitle: "Review",
+    });
+
+    const output = stdoutSpy.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain(
+      "was stopped by agent Review (5b8d8768-1d43-42ef-bd99-d57a066e86f2)",
+    );
+    expect(output).not.toContain("stopped by the user");
+
+    stdoutSpy.mockRestore();
+    void result;
+  });
+
+  it("keeps human-initiated stops attributed to the user", async () => {
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    await flush(0);
+
+    emitCancelledNotice({ type: "user" });
+
+    const output = stdoutSpy.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("was stopped by the user");
+
+    stdoutSpy.mockRestore();
+    void result;
+  });
+});
+
 describe("mixed-version inbox message frames", () => {
   it("parses and prints an old-host (@1.0-negotiated) message frame with no eventId, and never calls agent.inbox.ack for it", async () => {
     getMethodSchemaVersionMock.mockReturnValueOnce({ major: 1, minor: 0 });
@@ -415,7 +485,8 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          (() => void) | undefined;
+          | (() => void)
+          | undefined;
         cb?.();
         return true;
       });
@@ -464,7 +535,8 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          (() => void) | undefined;
+          | (() => void)
+          | undefined;
         cb?.();
         return true;
       });
@@ -506,7 +578,8 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          (() => void) | undefined;
+          | (() => void)
+          | undefined;
         cb?.();
         return true;
       });
@@ -568,7 +641,8 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          ((error: Error) => void) | undefined;
+          | ((error: Error) => void)
+          | undefined;
         cb?.(new Error("EPIPE: broken pipe"));
         return true;
       });

@@ -19,6 +19,7 @@ import type {
   NotificationHooksStatusQuery,
   NotificationHooksTestMutation,
 } from "@/hooks/host/use-notification-hooks-query";
+import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
 
 type HookEntry = NonNullable<
@@ -420,10 +421,15 @@ function HookRow(props: {
     testHook.isPending && testHook.variables.hookId === hook.id;
   return (
     <div
-      className="flex flex-wrap items-center gap-3 px-3 py-3"
+      className={cn(
+        "flex flex-wrap items-center gap-3 px-3 py-3",
+        SETTINGS_ROW_STACK.container,
+      )}
       data-testid={`notification-hook-row-${hook.id}`}
     >
-      <div className="min-w-0 flex-1 space-y-0.5">
+      <div
+        className={cn("min-w-0 flex-1 space-y-0.5", SETTINGS_ROW_STACK.label)}
+      >
         <div className="flex flex-wrap items-center gap-2">
           <span className="truncate text-ui-sm font-medium text-foreground">
             {hook.name ?? hook.id}

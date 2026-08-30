@@ -87,12 +87,58 @@ describe("useHistoryNavAvailable", () => {
 });
 
 describe("useHistoryNavState", () => {
-  it("reports disabled state under memory history", () => {
+  it("reports disabled state on a fresh session under memory history", () => {
     const router = makeRouter(createMemoryHistory({ initialEntries: ["/"] }));
     const { result } = renderHook(() => useHistoryNavState(), {
       wrapper: wrapperFor(router),
     });
     expect(result.current).toEqual({ canGoBack: false, canGoForward: false });
+  });
+
+  // The one navigability question a plain history answers, read off the index
+  // the router stamps into each entry: the session has moved, so there is
+  // somewhere behind it.
+  it("enables back on a plain history once the session has navigated", () => {
+    const router = makeRouter(
+      createMemoryHistory({ initialEntries: ["/", "/settings/general"] }),
+    );
+    const { result } = renderHook(() => useHistoryNavState(), {
+      wrapper: wrapperFor(router),
+    });
+    expect(result.current).toEqual({ canGoBack: true, canGoForward: false });
+  });
+
+  // Deliberate, and NOT a claim that there is nothing ahead: this stack has an
+  // entry the cursor could move to, and a plain history exposes no way to know
+  // that. Reporting it as available would light up a control that may lead
+  // nowhere, so the state stays false while the ACTION remains attemptable.
+  it("keeps forward unavailable on a plain history even mid-stack", () => {
+    const history = createMemoryHistory({
+      initialEntries: ["/", "/settings/general"],
+    });
+    history.back();
+    const router = makeRouter(history);
+    const { result } = renderHook(() => useHistoryNavState(), {
+      wrapper: wrapperFor(router),
+    });
+    expect(result.current.canGoForward).toBe(false);
+  });
+
+  // The history's own subscription is what stands in for the controller store,
+  // so a push has to move the reported state with no controller anywhere.
+  it("re-reads a plain history when it navigates", () => {
+    const history = createMemoryHistory({ initialEntries: ["/"] });
+    const router = makeRouter(history);
+    const { result } = renderHook(() => useHistoryNavState(), {
+      wrapper: wrapperFor(router),
+    });
+    expect(result.current.canGoBack).toBe(false);
+
+    act(() => {
+      history.push("/settings/general");
+    });
+
+    expect(result.current.canGoBack).toBe(true);
   });
 
   it("derives canGoBack/canGoForward from the seeded stack position", () => {

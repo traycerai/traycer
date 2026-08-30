@@ -110,10 +110,9 @@ export type { EpicTreeNodeType };
  * has a label. Identity-stable via `recordForArtifact` / `recordForChat`
  * caches keyed by source projection identity.
  *
- * `hostId` is the host hosting the artifact (per CLAUDE.md
- * tab-bound-to-host-for-life). Tui-agent rows pull it from the
- * `TuiAgentProjection` that already carries it; chat / artifact rows
- * inherit it from the host hosting the open-epic projection.
+ * `hostId` is the host the opened tile binds to for life. Chat and tui-agent
+ * rows preserve their projected owner host; artifacts and legacy / optimistic
+ * chats inherit the host serving the open-epic projection.
  */
 export interface EpicTreeRecord {
   readonly id: string;
@@ -192,6 +191,19 @@ export function useEpicSyncPillState(): EpicSyncPillState {
       hasConnectedOnce: s.hasConnectedOnce,
     }),
   );
+}
+
+/**
+ * Input 3 of the sync-pill derivation on its own: `true` only after a genuine
+ * `cloudSyncStatus` frame in the CURRENT subscription cycle (reset atomically
+ * with the transport reaching `open`). The pill's escalation clock reads it
+ * directly because recovery is this evidence, not a state label - a legacy
+ * host that never sends the dirty snapshot derives `connected` even for a
+ * fully evidenced recovery, and the label alone cannot tell that apart from a
+ * handshake-only `connected` with no evidence behind it.
+ */
+export function useEpicHasFreshCloudSyncStatus(): boolean {
+  return useEpicStore((s) => s.hasFreshCloudSyncStatus);
 }
 
 export function useEpicPermissionRole(): PermissionRole | null {
@@ -396,7 +408,11 @@ function recordForArtifact(
   return record;
 }
 
-function recordForChat(c: ChatProjection, hostId: string): EpicTreeRecord {
+function recordForChat(
+  c: ChatProjection,
+  fallbackHostId: string,
+): EpicTreeRecord {
+  const hostId = c.hostId ?? fallbackHostId;
   const cached = chatRecordCache.get(c);
   if (cached !== undefined && cached.hostId === hostId) return cached;
   const record: EpicTreeRecord = {
@@ -466,14 +482,10 @@ export function epicNodeRefForNodeId(
 
 export function useEpicArtifactRecords(): ReadonlyArray<EpicTreeRecord> {
   const handle = useOpenEpicHandle();
-  // Chat / artifact projections do not yet carry a hostId (only tui-agents
-  // do). The host that SERVES this projection is the Epic session's host - the
-  // one `handle` was acquired against - not the app-wide addressable host:
-  // during an A→B re-point the A-backed Epic stays rendered while the
-  // addressable host already answers B, and every record stamped here is
-  // copied by its consumers (`AgentReferenceChip`, the route-focus opener) into
-  // a tile ref that is bound for life. Tui-agent rows override with their
-  // projected hostId.
+  // Artifacts and legacy / optimistic chats fall back to the host that SERVES
+  // this projection: the Epic session's, not the app-wide addressable host.
+  // Persisted chats keep their own immutable owner host, just like tui-agents;
+  // consumers copy this field into tile refs that are bound for life.
   const fallbackHostId =
     getEpicSessionHandleHostId(handle) ?? UNKNOWN_HOST_PLACEHOLDER;
   return useStore(
@@ -748,21 +760,41 @@ export function useRegisteredEpicLiveArtifactTitle(
   );
 }
 
-export interface RegisteredEpicArtifactTitleRef {
+export interface RegisteredEpicAgentRef {
   readonly epicId: string;
-  readonly artifactId: string | null;
+  /** Chat or terminal-agent id; `null` for a ref with no agent to resolve. */
+  readonly agentId: string | null;
 }
 
 /**
- * Reactive live titles for a dynamic collection of artifacts. Global list
- * surfaces cannot call the single-artifact hook in a data-dependent loop, so
- * this subscribes once to the registry and every currently referenced epic.
+ * What an epic's live projection knows about one agent: which slice it lives
+ * in (`chats` → `chat`, `tuiAgents` → `terminal-agent`), its Y.Doc title
+ * (`null` while untitled) and its recorded host (`null` for a legacy chat
+ * that predates the field).
  */
-export function useRegisteredEpicLiveArtifactTitles(
-  refs: readonly RegisteredEpicArtifactTitleRef[],
-): readonly (string | null)[] {
+export interface RegisteredEpicLiveAgent {
+  readonly kind: "chat" | "terminal-agent";
+  readonly title: string | null;
+  readonly hostId: string | null;
+}
+
+/**
+ * Reactive live agent projections for a dynamic collection of agent refs.
+ * Global list surfaces (the resource monitor) live outside any
+ * `EpicSessionProvider` and cannot call a per-agent hook in a data-dependent
+ * loop, so this subscribes once to the registry and every currently
+ * referenced epic. `null` for a ref whose epic is not mounted in this window
+ * or whose id names no agent in that epic's projection.
+ *
+ * This is the same Y.Doc-backed source a canvas tab reads, so it is also the
+ * authority on whether an agent EXISTS - a client-local record list cannot be:
+ * an agent created by another window, device or agent never enters one.
+ */
+export function useRegisteredEpicLiveAgents(
+  refs: readonly RegisteredEpicAgentRef[],
+): readonly (RegisteredEpicLiveAgent | null)[] {
   const registry = getOpenEpicRegistry();
-  const encodedTitles = useSyncExternalStore(
+  const encodedAgents = useSyncExternalStore(
     (listener) => {
       const unsubscribeByHandle = new Map<object, () => void>();
       const reconcileHandleSubscriptions = () => {
@@ -791,40 +823,72 @@ export function useRegisteredEpicLiveArtifactTitles(
         for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
       };
     },
-    () => registeredArtifactTitlesSnapshot(registry, refs),
-    () => JSON.stringify(refs.map(() => [0, null])),
+    () => registeredAgentsSnapshot(registry, refs),
+    () => JSON.stringify(refs.map(() => null)),
   );
-  return useMemo(
-    () => decodeRegisteredArtifactTitles(encodedTitles),
-    [encodedTitles],
-  );
+  return useMemo(() => decodeRegisteredAgents(encodedAgents), [encodedAgents]);
 }
 
-function registeredArtifactTitlesSnapshot(
+/**
+ * Encoded per-ref tuples (`[kind, title, hostId]`, or `null`) so
+ * `useSyncExternalStore` compares by value: the registry and every store
+ * notify on unrelated changes, and a fresh array per notification would
+ * re-render the whole list surface each time.
+ */
+function registeredAgentsSnapshot(
   registry: OpenEpicSessionRegistry,
-  refs: readonly RegisteredEpicArtifactTitleRef[],
+  refs: readonly RegisteredEpicAgentRef[],
 ): string {
   return JSON.stringify(
     refs.map((ref) => {
-      const handle = registry.peek(ref.epicId);
-      return [
-        handle === null ? 0 : 1,
-        liveArtifactTitleFromHandle(handle, ref.artifactId),
-      ];
+      const agent = liveAgentFromHandle(registry.peek(ref.epicId), ref.agentId);
+      return agent === null ? null : [agent.kind, agent.title, agent.hostId];
     }),
   );
 }
 
-function decodeRegisteredArtifactTitles(
-  encodedTitles: string,
-): readonly (string | null)[] {
-  const decoded: unknown = JSON.parse(encodedTitles);
+function decodeRegisteredAgents(
+  encodedAgents: string,
+): readonly (RegisteredEpicLiveAgent | null)[] {
+  const decoded: unknown = JSON.parse(encodedAgents);
   if (!Array.isArray(decoded)) return [];
-  return decoded.map((entry) => {
+  return decoded.map((entry): RegisteredEpicLiveAgent | null => {
     if (!Array.isArray(entry)) return null;
+    const kind: unknown = entry[0];
     const title: unknown = entry[1];
-    return typeof title === "string" ? title : null;
+    const hostId: unknown = entry[2];
+    if (kind !== "chat" && kind !== "terminal-agent") return null;
+    return {
+      kind,
+      title: typeof title === "string" ? title : null,
+      hostId: typeof hostId === "string" ? hostId : null,
+    };
   });
+}
+
+function liveAgentFromHandle(
+  handle: OpenEpicStoreHandle | null,
+  agentId: string | null,
+): RegisteredEpicLiveAgent | null {
+  if (handle === null || agentId === null) return null;
+  const state = handle.store.getState();
+  if (Object.hasOwn(state.chats.byId, agentId)) {
+    const chat = state.chats.byId[agentId];
+    return {
+      kind: "chat",
+      title: chat.title.length > 0 ? chat.title : null,
+      hostId: chat.hostId,
+    };
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, agentId)) {
+    const agent = state.tuiAgents.byId[agentId];
+    return {
+      kind: "terminal-agent",
+      title: agent.title.length > 0 ? agent.title : null,
+      hostId: agent.hostId,
+    };
+  }
+  return null;
 }
 
 function liveArtifactTitleFromHandle(
@@ -1447,6 +1511,30 @@ export function useEpicNodeHostId(nodeId: string): string | null {
     }
     return null;
   });
+}
+
+/**
+ * Batched counterpart to {@link useEpicNodeHostId} for surfaces that must
+ * group notification reads by each row's owning host. The shallow array keeps
+ * the caller stable through unrelated projection churn while preserving the
+ * input order for a direct `nodeIds[index]` pairing.
+ */
+export function useEpicNodeHostIds(
+  nodeIds: ReadonlyArray<string>,
+): ReadonlyArray<string | null> {
+  return useEpicStore(
+    useShallow((s) =>
+      nodeIds.map((nodeId) => {
+        if (Object.hasOwn(s.chats.byId, nodeId)) {
+          return s.chats.byId[nodeId].hostId;
+        }
+        if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+          return s.tuiAgents.byId[nodeId].hostId;
+        }
+        return null;
+      }),
+    ),
+  );
 }
 
 /**

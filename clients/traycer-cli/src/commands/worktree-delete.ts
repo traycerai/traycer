@@ -4,9 +4,10 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import {
-  worktreeDeleteByPathServerFrameSchema,
+  worktreeDeleteByPathServerFrameSchemaV12,
   type WorktreeDeleteOutputChannel,
 } from "@traycer/protocol/host/worktree-delete-stream";
+import type { WorktreeBusyHolders } from "@traycer/protocol/framework/worktree-busy-holders";
 import type {
   WorktreeDeleteBatchOutputChannel,
   WorktreeDeleteBatchPhase,
@@ -31,6 +32,8 @@ import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
 import { writeStderr } from "../runner/std-write";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { CLI_CLIENT_IDENTITY } from "../cli-version";
+import { clientCompatibilityRecoveryHint } from "../host/compat-recovery";
 
 // Stream timing knobs, mirroring `traycer monitor`. A worktree delete is a
 // one-shot: it runs a teardown script (which can be slow) then removes the
@@ -46,12 +49,6 @@ const MAX_BACKOFF_MS = 30_000;
 
 export interface WorktreeDeleteCommandOpts {
   readonly worktreePath: string;
-  // The delete is destructive, so it is a capability boundary - not merely a
-  // hidden command - in the readonly agent surface. Commander's `hidden` flag
-  // still runs the action when the subcommand is typed explicitly, so the
-  // command itself refuses up front (before any network/stream work) when this
-  // is true. Resolved from `TRAYCER_AGENT_CLI_SURFACE` at registration.
-  readonly readonlySurface: boolean;
 }
 
 /**
@@ -59,8 +56,14 @@ export interface WorktreeDeleteCommandOpts {
  * (busy-check -> teardown script -> `git worktree remove`). Teardown/remove
  * output is relayed live as it streams; the terminal frame carries the final
  * `deleted` flag, and a failure (busy path, unexpected host error) surfaces as
- * a clean non-zero CliError. Hidden in the `readonly` CLI surface (registered
- * like `agent create`).
+ * a clean non-zero CliError.
+ *
+ * The delete is destructive, so it is a capability boundary in the readonly
+ * agent surface, not merely a hidden command. That refusal is no longer made
+ * here: `READONLY_REFUSED_COMMANDS` lists `worktree delete`, and `withRunner`
+ * enforces the whole table before any command body runs (CLI-019). One
+ * mechanism covers this command and every gated agent mutation, so nothing
+ * reaches this function on a readonly surface.
  *
  * On a host that has `worktree.deleteBatchByPath` this runs as a ONE-TARGET
  * command, so the CLI's delete queues on the same host-wide scheduler as every
@@ -71,15 +74,6 @@ export function buildWorktreeDeleteCommand(
   opts: WorktreeDeleteCommandOpts,
 ): CommandFn {
   return async (ctx) => {
-    if (opts.readonlySurface) {
-      throw cliError({
-        code: CLI_ERROR_CODES.FORBIDDEN,
-        message:
-          "traycer: worktree delete is not available in the readonly agent surface - remove worktrees from Settings ▸ Worktrees, or run this from a full-surface session.",
-        details: null,
-        exitCode: 1,
-      });
-    }
     const worktreePath = opts.worktreePath.trim();
     if (worktreePath.length === 0) {
       throw cliError({
@@ -136,6 +130,7 @@ async function runWorktreeDelete(
     endpoint: () => endpoint,
     bearer: () => lease,
     auth: null,
+    clock: null,
     // Provisioning rides along here too. It used to be opted out because a
     // one-shot command must not interrupt with an email-OTP challenge; now that
     // the mint is silent there is nothing to interrupt, and only a host that
@@ -147,7 +142,13 @@ async function runWorktreeDelete(
       // rotation during the delete must not leave the mint on a dead bearer.
       bearer: () => readLeaseBearer(lease),
       diag: (message) => relayStatus(ctx, message),
+      signal: null,
+      unavailableNote:
+        "continuing without a host credential — it will stop working when this connection ends.",
+      onUnauthorized: null,
     }),
+    // Provisioning here is opportunistic; adoption is never verified.
+    onHostCredentialState: null,
     // The CLI has no selection authority to feed: it holds no lease
     // state and never fails a window over.
     evidence: NO_TRANSPORT_EVIDENCE,
@@ -158,6 +159,7 @@ async function runWorktreeDelete(
     pongTimeoutMs: PONG_TIMEOUT_MS,
     initialBackoffMs: INITIAL_BACKOFF_MS,
     maxBackoffMs: MAX_BACKOFF_MS,
+    clientIdentity: CLI_CLIENT_IDENTITY,
   });
 
   const attempt = await runDeleteCommand(worktreePath, ctx, client);
@@ -241,7 +243,7 @@ function runDeleteCommand(
           finish({
             kind: "settled",
             deleted: false,
-            error: deleteFailedCliError(reason),
+            error: deleteFailedCliError(reason, null),
           }),
         // With one target this normally arrives after its terminal frame and
         // is a no-op under the settled guard. It matters when it does NOT: an
@@ -257,7 +259,7 @@ function runDeleteCommand(
           finish({
             kind: "settled",
             deleted: false,
-            error: deleteFailedCliError(reason),
+            error: deleteFailedCliError(reason, null),
           }),
         onUnsupported: () => finish({ kind: "unsupported" }),
         onConnectionStatus: (
@@ -319,7 +321,13 @@ async function runLegacyDeleteStream(
       act();
     };
     session.onServerFrame((envelope) => {
-      const parsed = worktreeDeleteByPathServerFrameSchema.safeParse(envelope);
+      // The CANONICAL v1.2 frame, not a frozen earlier schema. v1.1 added
+      // `holders` to the `failed` arm; v1.2 added optional `code` and
+      // `holdersRevision`. Those fields are optional-with-catch so an older
+      // envelope still parses, and a stale v1.1 decode would silently drop
+      // the 1.2 fields instead of failing.
+      const parsed =
+        worktreeDeleteByPathServerFrameSchemaV12.safeParse(envelope);
       if (!parsed.success) return;
       const frame = parsed.data;
       switch (frame.kind) {
@@ -341,7 +349,9 @@ async function runLegacyDeleteStream(
           finish(() => resolve(frame.deleted));
           return;
         case "failed":
-          finish(() => reject(deleteFailedCliError(frame.reason)));
+          finish(() =>
+            reject(deleteFailedCliError(frame.reason, frame.holders ?? null)),
+          );
           return;
         case "pong":
           return;
@@ -428,11 +438,25 @@ function relayOutput(
 }
 
 /** The host reported this delete as failed, with a displayable reason. */
-function deleteFailedCliError(reason: string): CliError {
+/**
+ * `holders` is the host's typed inventory of what still holds the worktree,
+ * present only on a busy refusal from a v1.1+ host (`null` otherwise). It rides
+ * `details` so `--json` callers get the structured list, and the human message
+ * names the holders rather than leaving "worktree is busy" for the user to
+ * investigate by hand.
+ */
+function deleteFailedCliError(
+  reason: string,
+  holders: WorktreeBusyHolders | null,
+): CliError {
+  const named =
+    holders === null || holders.length === 0
+      ? ""
+      : ` Held by ${holders.map((holder) => holder.label).join(", ")}.`;
   return cliError({
     code: CLI_ERROR_CODES.UNEXPECTED,
-    message: `traycer: worktree delete failed - ${reason}`,
-    details: null,
+    message: `traycer: worktree delete failed - ${reason}${named}`,
+    details: holders === null ? null : { holders },
     exitCode: 1,
   });
 }
@@ -462,7 +486,13 @@ function streamDroppedCliError(): CliError {
  * A host that simply lacks the newer method never reaches here - that is an
  * `onUnsupported` hand-off to the released stream, not a failure.
  */
-function fatalCloseToCliError(details: FatalErrorDetails): CliError {
+/**
+ * Exported for its own suite: the message this builds is the ONLY thing a CLI
+ * user sees when a worktree-delete stream is fatally closed, and its epoch arm
+ * is a sentence that has to not contradict the host's own reason. Driving that
+ * through the whole stream harness would test the harness.
+ */
+export function fatalCloseToCliError(details: FatalErrorDetails): CliError {
   if (details.code === "UNAUTHORIZED") {
     return cliError({
       code: CLI_ERROR_CODES.AUTH_REJECTED,
@@ -476,9 +506,26 @@ function fatalCloseToCliError(details: FatalErrorDetails): CliError {
     details.code === "INCOMPATIBLE" ||
     details.code === "DOWNGRADE_UNSUPPORTED"
   ) {
+    // AN EPOCH REJECTION MUST NOT GET THE GENERIC TAIL. The host's own reason
+    // on that path says, verbatim, "Updating the host again will not help" -
+    // and the generic tail then says "update the host or CLI", in the same
+    // sentence. The user is told two opposite things and the wrong one is
+    // actionable.
+    //
+    // The structured hint replaces the tail rather than adding to it: it
+    // already names the observed version, the required generation and the
+    // build to install, which is strictly more than "the versions do not
+    // match". The generic tail stays for every OTHER incompatibility, where
+    // either side genuinely may be the stale one.
+    const epochHint = clientCompatibilityRecoveryHint(
+      details.clientCompatibilityRequirement ?? null,
+    );
     return cliError({
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
-      message: `traycer: ${details.reason} - update the host or CLI so their worktree delete versions match.`,
+      message:
+        epochHint === null
+          ? `traycer: ${details.reason} - update the host or CLI so their worktree delete versions match.`
+          : `traycer: ${details.reason} - ${epochHint}.`,
       details: null,
       exitCode: 1,
     });

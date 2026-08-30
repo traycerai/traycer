@@ -292,9 +292,9 @@ describe("<SelectedRepoChanges /> module groups", () => {
     ).toBeDefined();
     await expectModuleHeaderPreview(
       screen.getByTestId("git-module-header-traycer"),
-      "pinned commit out of date",
+      "Checkout differs from parent reference",
     );
-    expect(screen.queryByText("pinned commit out of date")).toBeNull();
+    expect(screen.getByText("Differs from parent")).toBeDefined();
     expect(screen.getByTestId("file-list-/repo/traycer")).toBeDefined();
     expect(screen.getByText("src/submodule.ts")).toBeDefined();
     expect(screen.queryByText("Submodule reference:")).toBeNull();
@@ -324,9 +324,16 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(rootGroup.getAttribute("data-file-body-expanded")).toBe("false");
     expect(submoduleGroup.getAttribute("data-file-body-expanded")).toBe("true");
     expect(submoduleGroup.className).toContain("flex-none");
-    expect(submoduleGroup.className).not.toContain("ml-5");
-    expect(submoduleGroup.className).not.toContain("border-l");
-    expect(within(submoduleGroup).getByText("submodule")).toBeDefined();
+    const nestedBody = submoduleGroup.querySelector<HTMLElement>(
+      '[style*="--git-section-sticky-top"]',
+    );
+    expect(nestedBody?.className).toContain("ml-3");
+    expect(nestedBody?.className).toContain("bg-foreground/[0.03]");
+    expect(nestedBody?.className).not.toContain("rounded");
+    expect(nestedBody?.className).not.toContain("border");
+    expect(
+      within(submoduleGroup).getByTestId("git-module-kind-traycer"),
+    ).toBeDefined();
     expect(submoduleGroup.className).not.toContain("flex-1");
     expect(submoduleGroup.className).not.toContain("basis-0");
     expect(body.className).toContain("overflow-visible");
@@ -375,9 +382,9 @@ describe("<SelectedRepoChanges /> module groups", () => {
 
     await expectModuleHeaderPreview(
       screen.getByTestId("git-module-header-traycer"),
-      "pinned commit out of date",
+      "Checkout differs from parent reference",
     );
-    expect(screen.queryByText("pinned commit out of date")).toBeNull();
+    expect(screen.getByText("Differs from parent")).toBeDefined();
     expect(screen.getByTestId("git-module-count-traycer").textContent).toBe(
       "0 files",
     );
@@ -408,12 +415,15 @@ describe("<SelectedRepoChanges /> module groups", () => {
       header,
       "details unavailable",
     );
-    expect(previewText.match(/Status:/g)).toHaveLength(1);
+    expect(previewText.match(/Parent reference:/g)).toHaveLength(1);
     expect(screen.queryByText("details unavailable")).toBeNull();
     expect(header.querySelectorAll(".lucide-triangle-alert")).toHaveLength(1);
-    expect(
-      screen.getByTestId("git-module-parent-reference-traycer").className,
-    ).toContain("text-warning");
+    const statusLabel = screen.getByTestId(
+      "git-module-parent-reference-traycer",
+    );
+    expect(statusLabel.className).toContain("text-warning");
+    expect(statusLabel.className.split(/\s+/)).toContain("shrink");
+    expect(statusLabel.className.split(/\s+/)).not.toContain("shrink-0");
     expect(screen.getByTestId("git-submodule-unavailable")).toBeDefined();
   });
 
@@ -474,7 +484,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.queryByTestId("git-diff-empty-refresh")).toBeNull();
   });
 
-  it("turns an unmatched dirty gitlink into an unavailable module group", () => {
+  it("turns an unmatched dirty gitlink into an unavailable module group", async () => {
     renderChanges({
       snapshot: snapshotResult(
         response({ files: [file("traycer", normalPointer)], submodules: [] }),
@@ -487,6 +497,11 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.getByTestId("git-submodule-unavailable")).toBeDefined();
     expect(screen.queryByText("Submodule reference:")).toBeNull();
     expect(screen.queryByTestId("file-row-/repo-traycer")).toBeNull();
+    const previewText = await expectModuleHeaderPreview(
+      screen.getByTestId("git-module-header-traycer"),
+      "Location in workspace: traycer",
+    );
+    expect(previewText).not.toContain("Repository location:");
   });
 
   it("renders old-host parent-only snapshots without submodule metadata as root file rows", () => {

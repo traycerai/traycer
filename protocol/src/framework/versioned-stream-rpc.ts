@@ -17,8 +17,9 @@ import { z } from "zod";
  * The framework mirrors every structural invariant of the RPC framework:
  * `{ major, minor }` versioning, `latestMinor` must be the highest installed
  * minor in its line, contracts must line up with their registry slot and
- * registry key. In v1 there are **no cross-major downgrade bridges** for
- * streams - stream clients are expected to reconnect on a mismatched major.
+ * registry key. Stream major changes do not need cross-major payload
+ * transforms: when two peers retain an installed major, their handshake
+ * selects that shared line before subscribing.
  *
  * Schema compatibility is evaluated **separately** for each of the three
  * sub-schemas (open request, server frame, client frame):
@@ -112,8 +113,8 @@ declare const validatedVersionedStreamRpcRegistryBrand: unique symbol;
  * or `defineVersionedStreamRpcRegistry`.
  */
 export type StreamMethodVersionRegistry<
-  Registry extends
-    UncheckedStreamMethodVersionRegistry = UncheckedStreamMethodVersionRegistry,
+  Registry extends UncheckedStreamMethodVersionRegistry =
+    UncheckedStreamMethodVersionRegistry,
 > = Registry & {
   readonly [validatedStreamMethodVersionRegistryBrand]: true;
 };
@@ -122,11 +123,12 @@ export type StreamMethodVersionRegistry<
  * Validated multi-method stream registry.
  */
 export type VersionedStreamRpcRegistry<
-  Registry extends
-    UncheckedVersionedStreamRpcRegistry = UncheckedVersionedStreamRpcRegistry,
+  Registry extends UncheckedVersionedStreamRpcRegistry =
+    UncheckedVersionedStreamRpcRegistry,
 > = {
-  readonly [Method in keyof Registry &
-    string]: StreamMethodVersionRegistry<Registry[Method]>;
+  readonly [Method in keyof Registry & string]: StreamMethodVersionRegistry<
+    Registry[Method]
+  >;
 } & {
   readonly [validatedVersionedStreamRpcRegistryBrand]: true;
 };
@@ -375,9 +377,7 @@ function flattenToFieldMap(schema: z.ZodType, context: string): FieldMap {
       const discriminatorValue = literalValues[0];
 
       if (typeof discriminatorValue !== "string") {
-        throw new Error(
-          `${context}: discriminator literal must be a string`,
-        );
+        throw new Error(`${context}: discriminator literal must be a string`);
       }
 
       for (const [field, fieldSchema] of Object.entries(option.shape)) {
@@ -400,9 +400,7 @@ function flattenObjectShape(schema: z.ZodObject, context: string): FieldMap {
 
   for (const [field, fieldSchema] of Object.entries(schema.shape)) {
     if (!(fieldSchema instanceof z.ZodType)) {
-      throw new Error(
-        `${context}: field '${field}' is not a zod schema`,
-      );
+      throw new Error(`${context}: field '${field}' is not a zod schema`);
     }
 
     out[field] = JSON.stringify(z.toJSONSchema(fieldSchema));

@@ -29,6 +29,12 @@ export interface ManagedCommandOutputOlderWindow {
   readonly reachedStart: boolean;
 }
 
+export interface ManagedCommandOutputLiveFrame {
+  readonly lines: readonly ManagedCommandLogLine[];
+  /** Exact log boundary immediately before the first line. */
+  readonly start: ManagedCommandLogPosition;
+}
+
 /**
  * Typed handlers for a `managedCommand.subscribeOutput@1.0` session - one
  * command's log as an interleaved timeline of output and lifecycle records.
@@ -39,7 +45,7 @@ export interface ManagedCommandOutputOlderWindow {
  */
 export interface ManagedCommandOutputStreamCallbacks {
   readonly onSnapshot: (snapshot: ManagedCommandOutputSnapshot) => void;
-  readonly onOutput: (lines: readonly ManagedCommandLogLine[]) => void;
+  readonly onOutput: (frame: ManagedCommandOutputLiveFrame) => void;
   readonly onOlder: (window: ManagedCommandOutputOlderWindow) => void;
   readonly onStatus: (command: ManagedCommand) => void;
   readonly onDeleted: () => void;
@@ -58,8 +64,8 @@ export interface ManagedCommandOutputStreamClientOptions {
 
 /**
  * Typed wrapper over the host stream client for
- * `managedCommand.subscribeOutput@1.0`. The one upstream frame is `loadOlder`,
- * which pages backwards from a position the host itself minted.
+ * `managedCommand.subscribeOutput@1.0`. Upstream frames page backwards from a
+ * host-minted position or request a fresh tail after the reader detached.
  */
 export class ManagedCommandOutputStreamClient {
   private readonly session: IStreamSession;
@@ -87,6 +93,15 @@ export class ManagedCommandOutputStreamClient {
     this.session.sendClientFrame(frame, null);
   }
 
+  /** Replaces a detached historical window with a fresh live-tail snapshot. */
+  resnapshot(): void {
+    if (this.closed) return;
+    this.session.sendClientFrame(
+      { kind: "resnapshot", hasBinaryPayload: false },
+      null,
+    );
+  }
+
   /** Tears down the underlying session. Idempotent. */
   close(): void {
     if (this.closed) return;
@@ -110,7 +125,7 @@ export class ManagedCommandOutputStreamClient {
         return;
       }
       case "output": {
-        this.callbacks.onOutput(frame.lines);
+        this.callbacks.onOutput({ lines: frame.lines, start: frame.start });
         return;
       }
       case "older": {

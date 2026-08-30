@@ -17,14 +17,20 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { clearChatForkWorkspacesForEpic } from "@/lib/worktree/chat-fork-workspace-staging";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  InterviewDeliveryRetryIdentity,
+} from "@/stores/chats/chat-session-store";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatForkDialogTarget } from "@/components/chat/chat-fork-dialog";
 import type { ChatSurfaceNode } from "./chat-tile-types";
 import {
-  hasUndoableFileEditsFromMessage,
-  scopedArtifactCountFromMessage,
+  editSubmitNeedsRevertPrompt,
+  resolveRevertScope,
+  revertPromptArtifactCount,
+  type RevertScope,
 } from "@/lib/chat/file-edits-below-message";
+import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   buildSubmittedChatJSONContent,
   type SlashCommandCatalog,
@@ -50,6 +56,7 @@ export interface ChatMessageActionsInput {
   readonly activeInlineEdit: InlineEditState | null;
   readonly canModifyMessages: boolean;
   readonly canAct: boolean;
+  readonly interviewDeliveryRetryProtocolSupported: boolean;
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
   /**
@@ -67,8 +74,17 @@ export interface ChatMessageActionsInput {
   readonly chatParentId: string | null;
   readonly messages: ChatSessionState["messages"];
   readonly events: ChatSessionState["events"];
+  /**
+   * The hydration state behind `messages`/`events`, or `null` on the legacy
+   * line where those two ARE the whole transcript. Read only by the
+   * revert-scope resolution, which is the one thing here that scans DOWNWARD
+   * from a message and so cannot treat the two arrays as complete.
+   */
+  readonly transcriptWindow: TranscriptWindow | null;
   readonly profile: AuthProfile | null;
   readonly chatActions: ChatActions;
+  readonly pendingActions: ChatSessionState["pendingActions"];
+  readonly acceptedActions: ChatSessionState["acceptedActions"];
   readonly confirmingDeleteMessageId: string | null;
   readonly setForkTarget: (target: ChatForkDialogTarget | null) => void;
   // The source chat's live binding, used to seed the fork dialog's workspace
@@ -95,18 +111,29 @@ export interface ChatMessageActionsResult {
    * carried questions re-opened as answerable). Used by pending and resolved
    * interview actions; the per-message fork buttons route through the same
    * seed.
+   *
+   * `initialHostId` preselects the dialog's host picker — the host-switch
+   * gesture passes the host the user picked there; every per-message entry
+   * point passes `null` (open on the source chat's own host).
    */
   readonly forkAtAssistantMessage: (
     assistantMessageId: string,
     mode: ChatForkMode,
     interviewBlockId: string | null,
+    initialHostId: string | null,
   ) => void;
   readonly revertOnEdit: {
     readonly open: boolean;
     readonly onOpenChange: (open: boolean) => void;
     readonly onRevert: (revertArtifacts: boolean) => void;
     readonly onDontRevert: () => void;
-    readonly artifactCount: number;
+    /**
+     * `null` when the transcript below the edit point is not fully hydrated, so
+     * the count would be an under-count rather than a measurement. The dialog
+     * renders the artifact opt-out without a number in that case - see
+     * {@link RevertScope}.
+     */
+    readonly artifactCount: number | null;
     readonly queuedCount: number;
   };
 }
@@ -129,6 +156,7 @@ export function useChatMessageActions(
     activeInlineEdit,
     canModifyMessages,
     canAct,
+    interviewDeliveryRetryProtocolSupported,
     currentComposerSettings,
     editSettings,
     slashCatalog,
@@ -140,12 +168,40 @@ export function useChatMessageActions(
     chatParentId,
     messages,
     events,
+    transcriptWindow,
     profile,
     chatActions,
+    pendingActions,
+    acceptedActions,
     confirmingDeleteMessageId,
     setForkTarget,
     worktreeBinding,
   } = input;
+
+  /**
+   * What a revert from the message being edited would touch.
+   *
+   * Resolved once for both readers below - the submit gate and the dialog's
+   * artifact count - because they are two halves of one prompt and must not be
+   * able to disagree about its scope.
+   */
+  // Keyed on the target id alone, NOT on `activeInlineEdit`: that object gets a
+  // fresh identity on every `updateInlineEditContent`, i.e. per keystroke,
+  // while the scope depends only on which message is being edited. Widening it
+  // back would re-run three transcript passes for each character typed.
+  const inlineEditTargetMessageId = activeInlineEdit?.targetMessageId ?? null;
+  const revertScope = useMemo<RevertScope | null>(
+    () =>
+      inlineEditTargetMessageId === null
+        ? null
+        : resolveRevertScope({
+            messages,
+            events,
+            transcriptWindow,
+            fromMessageId: inlineEditTargetMessageId,
+          }),
+    [inlineEditTargetMessageId, events, messages, transcriptWindow],
+  );
 
   const beginInlineEdit = useCallback(
     (message: ChatMessageModel) => {
@@ -226,15 +282,14 @@ export function useChatMessageActions(
     if (activeInlineEdit === null) return;
     if (!canModifyMessages) return;
     if (userMessageSenderForProfile(profile) === null) return;
-    // Editing a previous message with reversible edits below it prompts for
-    // a revert first; otherwise submit straight through.
-    if (
-      hasUndoableFileEditsFromMessage(
-        messages,
-        events,
-        activeInlineEdit.targetMessageId,
-      )
-    ) {
+    // Editing a previous message with reversible edits below it - or a history
+    // this side cannot see the bottom of - prompts for a revert first;
+    // otherwise submit straight through. See `editSubmitNeedsRevertPrompt`.
+    //
+    // Null only when there is no active edit, which the guard above already
+    // returned on - the memo is keyed by the same value.
+    if (revertScope === null) return;
+    if (editSubmitNeedsRevertPrompt(revertScope)) {
       dispatchUi({ type: "setRevertOnEditOpen", open: true });
       return;
     }
@@ -243,10 +298,9 @@ export function useChatMessageActions(
     activeInlineEdit,
     canModifyMessages,
     dispatchUi,
-    events,
-    messages,
     performEditSubmit,
     profile,
+    revertScope,
   ]);
 
   const deleteMessageSuffix = useCallback(
@@ -277,6 +331,7 @@ export function useChatMessageActions(
       assistantMessageId: string,
       mode: ChatForkMode,
       interviewBlockId: string | null,
+      initialHostId: string | null,
     ) => {
       const sourceStagingKey: WorktreeStagingKey = {
         surface: "owner",
@@ -322,6 +377,7 @@ export function useChatMessageActions(
         // plain fork of a completed message — no streaming interview to carry.
         carriedInterviews: mode === "ab-worktree" ? "pending" : "settled",
         forkMode: mode,
+        initialHostId,
       });
     },
     [
@@ -339,6 +395,28 @@ export function useChatMessageActions(
 
   const messageActionsFor = useCallback(
     (message: ChatMessageModel): ChatMessageActions | null => {
+      const interviewDeliveryRetry =
+        canAct && interviewDeliveryRetryProtocolSupported
+          ? {
+              isPending: (identity: InterviewDeliveryRetryIdentity): boolean =>
+                [
+                  ...Object.values(pendingActions),
+                  ...Object.values(acceptedActions),
+                ].some((action) => {
+                  const pendingIdentity = action.interviewDeliveryRetry;
+                  return (
+                    pendingIdentity !== null &&
+                    pendingIdentity.blockId === identity.blockId &&
+                    pendingIdentity.settlementId === identity.settlementId &&
+                    pendingIdentity.deliveryId === identity.deliveryId &&
+                    pendingIdentity.generation === identity.generation
+                  );
+                }),
+              onRetry: (identity: InterviewDeliveryRetryIdentity): void => {
+                chatActions.interviewDeliveryRetry(identity);
+              },
+            }
+          : null;
       // A completed assistant message exposes the plain footer fork. A stable
       // message with a resolved interview also exposes its Q&A fork icons while
       // the rest of that assistant turn may still be running.
@@ -365,8 +443,17 @@ export function useChatMessageActions(
                 assistantMessageId,
                 mode,
                 interviewBlockId,
+                null,
               ),
           },
+          interviewDeliveryRetry,
+        };
+      }
+      if (message.role === "assistant" && interviewDeliveryRetry !== null) {
+        return {
+          type: "assistant",
+          fork: null,
+          interviewDeliveryRetry,
         };
       }
       const persistentMessageId = editablePersistentMessageId(message);
@@ -433,7 +520,11 @@ export function useChatMessageActions(
       editSettings,
       fallbackToGlobalMentionRoots,
       forkAtAssistantMessage,
+      interviewDeliveryRetryProtocolSupported,
       mentionRoots,
+      pendingActions,
+      acceptedActions,
+      chatActions,
       submitInlineEdit,
       updateInlineEdit,
     ],
@@ -446,17 +537,7 @@ export function useChatMessageActions(
     [dispatchUi],
   );
 
-  const revertOnEditArtifactCount = useMemo(
-    () =>
-      activeInlineEdit === null
-        ? 0
-        : scopedArtifactCountFromMessage(
-            messages,
-            events,
-            activeInlineEdit.targetMessageId,
-          ),
-    [activeInlineEdit, events, messages],
-  );
+  const revertOnEditArtifactCount = revertPromptArtifactCount(revertScope);
 
   return {
     messageActionsFor,

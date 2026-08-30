@@ -43,6 +43,12 @@ vi.mock("@/components/epic-canvas/tile-find/tile-find-owner-bridge", () => ({
   TileFindOwnerBridge: () => <div data-testid="tile-find-owner-bridge" />,
 }));
 
+vi.mock("@/components/epic-canvas/browser-overlay-coordinator-bridge", () => ({
+  BrowserOverlayCoordinatorBridge: () => (
+    <div data-testid="browser-overlay-coordinator" />
+  ),
+}));
+
 vi.mock("@/components/migration/migration-run-controller", () => ({
   MigrationRunController: () => null,
 }));
@@ -66,6 +72,12 @@ vi.mock("@/components/layout/header/windows-menu-bar", () => ({
   WindowsMenuBar: () => null,
 }));
 
+// NOTE: there is deliberately NO stub for `use-epic-open-in-new-window` here.
+// `RootDndProvider` used to call that flow, which reaches `useRouterState` and
+// throws without a router, so this provider-light test needed a stub. The flow
+// now lives in `TabDetachOwner`, mounted in the ROUTE tree - so it never mounts
+// here at all. If a stub for it ever becomes necessary again, the dependency
+// has moved back into the provider and the fix has regressed.
 vi.mock("@/components/resources/resource-monitor-popover", () => ({
   ResourceMonitorPopover: () => (
     <div data-testid="resource-monitor-header-button" />
@@ -172,6 +184,7 @@ describe("<AppShell />", () => {
     expect(screen.getByTestId("resource-monitor-header-button")).not.toBeNull();
     expect(screen.getByTestId("app-shell-child")).not.toBeNull();
     expect(screen.getByTestId("tile-find-owner-bridge")).not.toBeNull();
+    expect(screen.getByTestId("browser-overlay-coordinator")).not.toBeNull();
     const routeLayer = screen.getByTestId("route-adapter-layer");
     expect(routeLayer.className).toContain("pointer-events-none");
     expect(routeLayer.className).toContain("[&>*]:pointer-events-auto");

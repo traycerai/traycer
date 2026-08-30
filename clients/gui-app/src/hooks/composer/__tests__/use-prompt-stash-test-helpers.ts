@@ -147,7 +147,8 @@ export interface MutableDestination extends PromptStashDestinationAdapter {
     PromptStashDestinationAdapter["importAndInsert"]
   >;
   readonly materialize:
-    Mock<NonNullable<PromptStashDestinationAdapter["materialize"]>> | undefined;
+    | Mock<NonNullable<PromptStashDestinationAdapter["materialize"]>>
+    | undefined;
   setIdentity: (identity: string | null) => void;
   setSurface: (surface: string) => void;
   /**

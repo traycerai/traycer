@@ -6,12 +6,15 @@ import {
   AnalyticsEvent,
   type AnalyticsUsageImageExportSource,
 } from "@/lib/analytics";
-import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
+import { toastSavedFile } from "@/lib/files/saved-file-toast";
+import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { copyImageBlobPromiseToClipboard } from "@/lib/images/copy-image-to-clipboard";
 import { captureUsageExportImageBlob } from "@/lib/usage-analytics/usage-export-image";
 import { appLogger } from "@/lib/logger";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 
 export interface UseUsageImageExportParams {
   /**
@@ -46,13 +49,13 @@ export type UsageImageExportInput =
   | { readonly action: "download"; readonly node: HTMLElement };
 
 /**
- * The saved file name on a completed download, `null` on a copy (nothing is
- * named) and on a download the user cancelled out of the save picker.
- * Callers discriminate on the VARIABLES, never on this - both no-name cases
+ * The saved file on a completed download, `null` on a copy (nothing is
+ * saved) and on a download the user cancelled out of the save picker.
+ * Callers discriminate on the VARIABLES, never on this - both no-file cases
  * are the same `null`.
  */
 export type UsageImageExportMutation = UseMutationResult<
-  string | null,
+  SavedFile | null,
   Error,
   UsageImageExportInput
 >;
@@ -68,8 +71,8 @@ export interface UseUsageImageExportResult {
  * dialog's summary region (headline, tiles, trend chart) to a PNG, then
  * hand it to the clipboard or the save-to-disk path. Both legs reuse the
  * app-wide runtime-aware plumbing - `copyImageBlobPromiseToClipboard` falls
- * back to the desktop nativeImage bridge, `saveBlobToDisk` to the native save
- * dialog - so this hook only owns capture + toasts.
+ * back to the desktop nativeImage bridge, `saveBlobToDisk` to whichever save
+ * route this shell owns - so this hook only owns capture + toasts.
  *
  * ONE mutation carries both legs, discriminated by its variables: a capture
  * is an expensive full-region rasterisation, so two of them must never be in
@@ -88,7 +91,9 @@ export function useUsageImageExport(
     analyticsSource,
   } = params;
 
-  const mutation = useMutation<string | null, Error, UsageImageExportInput>({
+  const fileSave = useFileSaveHost();
+  const openSaved = useOpenSavedFile();
+  const mutation = useMutation<SavedFile | null, Error, UsageImageExportInput>({
     mutationKey: imageMutationKeys.usageExport(),
     mutationFn: async (input) => {
       if (input.action === "copy") {
@@ -102,7 +107,7 @@ export function useUsageImageExport(
         heading,
         subheading,
       });
-      return saveBlobToDisk(blob, fileName);
+      return saveBlobToDisk(blob, fileName, fileSave);
     },
     onSuccess: (saved, input) => {
       if (input.action === "copy") {
@@ -119,7 +124,7 @@ export function useUsageImageExport(
           action: "download",
           source: analyticsSource,
         });
-        toast.success(`Saved ${saved}`);
+        toastSavedFile(saved, openSaved.mutate, fileSave);
       }
     },
     onError: (err, input) => {

@@ -3,14 +3,19 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { SelectionIncompatibility } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import {
   WindowHostModal,
   type WindowHostModalProps,
 } from "@/components/layout/dialogs/window-host-modal";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useDesktopDialogStore.setState({ reportIssueAvailable: false });
+});
 
 function buildProgress(overrides: Partial<HostProgressView>): HostProgressView {
   return {
@@ -117,6 +122,7 @@ describe("<WindowHostModal />", () => {
       code: "protocol-major-behind",
       hostVersion: "1.0.0",
       minSupportedVersion: "1.2.0",
+      clientCompatibility: null,
     };
     renderModal(
       baseProps({
@@ -140,6 +146,7 @@ describe("<WindowHostModal />", () => {
       code: "protocol-major-behind",
       hostVersion: "1.0.0",
       minSupportedVersion: "1.2.0",
+      clientCompatibility: null,
     };
     const onUpdateHost = vi.fn();
     renderModal(
@@ -167,6 +174,7 @@ describe("<WindowHostModal />", () => {
       code: "protocol-major-behind",
       hostVersion: "1.0.0",
       minSupportedVersion: "1.2.0",
+      clientCompatibility: null,
     };
     renderModal(
       baseProps({
@@ -194,6 +202,7 @@ describe("<WindowHostModal />", () => {
       code: "protocol-major-behind",
       hostVersion: "1.0.0",
       minSupportedVersion: "1.2.0",
+      clientCompatibility: null,
     };
     renderModal(
       baseProps({
@@ -253,5 +262,105 @@ describe("<WindowHostModal />", () => {
     fireEvent.pointerDown(document.body);
     fireEvent.pointerUp(document.body);
     expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+  });
+});
+
+describe("<WindowHostModal /> update-client (epoch rejection)", () => {
+  // Typed at the CONTRACT rather than inferred: a `typeof requirement`
+  // override type narrows every member to the literal this fixture happens to
+  // use, so the "host could not read a version" case below - the whole point
+  // of the second arm - would not type-check.
+  const requirement: ClientCompatibilityRequirement = {
+    minimumCompatibilityEpoch: 2,
+    observedCompatibilityEpoch: 1,
+    failure: "below-minimum",
+    observedClientKind: "desktop",
+    observedClientAppVersion: "1.1.10",
+    observedClientAppVersionStatus: "valid",
+    // oxlint-disable-next-line typescript/no-deprecated -- Required null placeholder retained for shipped-client wire compatibility.
+    minimumKnownClientAppVersion: null,
+    // oxlint-disable-next-line typescript/no-deprecated -- Required null placeholder retained for shipped-client wire compatibility.
+    upgradeChannel: null,
+    hostReleaseChannel: "rc",
+  };
+
+  function updateClientProps(
+    overrides: Partial<ClientCompatibilityRequirement>,
+  ): WindowHostModalProps {
+    return baseProps({
+      variant: {
+        kind: "update-client",
+        hostId: "host-a",
+        isTargetHost: true,
+        requirement: { ...requirement, ...overrides },
+      },
+      // The narrator withholds this on the update-client arm; passed as `null`
+      // here so the assertion below is about the COMPONENT's own refusal to
+      // draw a host action, not about the caller happening not to supply one.
+      onUpdateHost: null,
+    });
+  }
+
+  it("titles the app update and names the observed version plus the generic remedy", () => {
+    renderModalWithProviders(updateClientProps({}));
+    expect(screen.getByTestId("window-host-modal-title").textContent).toBe(
+      "Update Traycer to continue",
+    );
+    const description = screen.getByTestId(
+      "window-host-modal-description",
+    ).textContent;
+    expect(description).toContain("1.1.10");
+    expect(description).toContain("the latest version");
+    expect(description).not.toContain("1.2.0-rc.2");
+  });
+
+  it("says so plainly when the host could not read a version", () => {
+    renderModalWithProviders(
+      updateClientProps({
+        observedClientAppVersion: null,
+        observedClientAppVersionStatus: "invalid",
+      }),
+    );
+    expect(
+      screen.getByTestId("window-host-modal-description").textContent,
+    ).toBe(
+      "This Traycer installation is too old to identify a compatible generation. Install the latest Traycer app.",
+    );
+  });
+
+  it("offers an app-update action and NEVER an Update host button", () => {
+    renderModalWithProviders(updateClientProps({}));
+    // The host is the newer leg by construction here, so re-installing it can
+    // only fail while implying the user is fixing the right machine.
+    expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+    expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
+    // No update bridge in this shell, so the remedy is the first-party
+    // download page - the arm that guarantees this surface is never a dead end.
+    expect(
+      screen.getByTestId("client-update-required-download-page"),
+    ).toBeTruthy();
+  });
+
+  it("keeps Report issue available as a secondary action", () => {
+    // The shell decides whether reporting exists at all; this arm's job is to
+    // ASK for it (`showReportIssue`), which is invisible unless the store says
+    // the affordance is available.
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderModalWithProviders(updateClientProps({}));
+    expect(screen.getByRole("button", { name: /report issue/i })).toBeTruthy();
+  });
+
+  it("puts the epoch numbers in the detail block, not the headline", () => {
+    renderModalWithProviders(updateClientProps({}));
+    const detail = screen.getByTestId(
+      "window-host-modal-client-compatibility-detail",
+    ).textContent;
+    // Users act on an application update, not on an internal protocol
+    // generation - so the numbers belong where support reads them.
+    expect(detail).toContain("host needs 2");
+    expect(detail).toContain("this app declares 1");
+    expect(
+      screen.getByTestId("window-host-modal-title").textContent,
+    ).not.toContain("generation 2");
   });
 });

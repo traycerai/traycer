@@ -7,6 +7,7 @@ import type {
   HostServiceRegisterResponse,
   HostServiceStatusResponse,
 } from "@traycer/protocol/host/maintenance/index";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import type { OsServiceSectionProps } from "@/components/settings/panels/host-overview-advanced";
 import type { OverviewDegradeReason } from "@/components/settings/panels/host-overview-model";
 import {
@@ -52,11 +53,13 @@ export function useOverviewOsService(input: {
   /** Refetches `host.service.status`; called when a restart window expires. */
   readonly refetchStatus: () => void;
   /**
-   * What the host said about open sessions, `null` while it has not settled -
+   * What the host said is working, `null`/false while it has not settled -
    * the register CONFIRM names it, because re-registering bootouts the very
-   * job running those sessions (macOS) and must not read as a safe repair.
+   * job running that work (macOS) and must not read as a safe repair.
    */
+  readonly settledBusy: boolean;
   readonly settledBusySessionCount: number | null;
+  readonly settledBusyBreakdown: HostBusyBreakdown | null;
 }): OsServiceSectionProps {
   const { hostName } = input;
   const register = useHostServiceRegister(input.client);
@@ -95,7 +98,9 @@ export function useOverviewOsService(input: {
     nothingToDeregister: ok?.state === "not-installed",
     registerPending: register.isPending || registerRestartLikely,
     deregisterPending: deregister.isPending || deregisterAccepted,
+    settledBusy: input.settledBusy,
     settledBusySessionCount: input.settledBusySessionCount,
+    settledBusyBreakdown: input.settledBusyBreakdown,
     busy: input.busy || statusUnresolved,
     onRegister: () => {
       register.mutate(undefined, {

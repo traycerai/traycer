@@ -127,6 +127,10 @@ export function useBridgeShellConfigController(props: {
       void configQuery.refetch();
     },
     shells: shellListQuery.data ?? [],
+    refreshShells: () => {
+      void shellListQuery.refetch();
+    },
+    shellsRefreshing: shellListQuery.isFetching,
     overrides: envListQuery.data ?? [],
     shellPending:
       setMutation.isPending ||

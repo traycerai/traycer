@@ -583,6 +583,7 @@ describe("DraftMirrorSession", () => {
         "chat-x": {
           content: typed,
           selection: { from: 1, to: 8 },
+          browserAnnotations: [],
           resetEpoch: 3,
           revision: 2,
           draftId: "draft-x",
@@ -720,6 +721,7 @@ describe("DraftMirrorSession", () => {
         "chat-x": {
           content: typed,
           selection: { from: 1, to: 13 },
+          browserAnnotations: [],
           resetEpoch: 3,
           revision: 2,
           draftId: "draft-x",

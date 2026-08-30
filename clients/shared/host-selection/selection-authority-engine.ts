@@ -197,6 +197,29 @@ class BoundedIdSet {
 export const RETURN_TO_TARGET_STABILITY_MS = 20_000;
 
 /**
+ * Ceiling on the COLD-START HOLD (see `deriveDesiredEffective`): how long a
+ * process that has never served may answer ∅ for a `restarting-expected`
+ * LOCAL target before falling through to a usable fallback.
+ *
+ * The hold cannot ride the episode's own bounds, because they are not
+ * uniformly short: a restart tombstone lapses in 60s, but the local
+ * mutation-lane signal holds `restarting-expected` for up to
+ * {@link LOCAL_EXPECTED_OUTAGE_CEILING_MS} (15 minutes) - a converge that
+ * hangs must not hold the startup screen hostage for its whole ceiling when
+ * a working remote sits in the fleet.
+ *
+ * Deliberately EQUAL to {@link RETURN_TO_TARGET_STABILITY_MS}, because that
+ * equality is the argument for the hold itself: adopting a fallback at t=0
+ * puts the user on the target no earlier than boot + the return window, so
+ * waiting up to that same window for the boot is never slower to the
+ * target - it only trades at most 20s of fallback availability for zero
+ * hop churn in the common case where the boot is seconds. Past the
+ * ceiling the fallback is adopted exactly as before the hold existed.
+ */
+export const COLD_START_LOCAL_RESTART_HOLD_CEILING_MS =
+  RETURN_TO_TARGET_STABILITY_MS;
+
+/**
  * The minimal window on a candidate switch made WHILE already failed over
  * (M6). Short by design - it is not protecting a working arrangement, only
  * bounding a hop cascade: when a network drop makes several remotes report
@@ -308,6 +331,44 @@ export const silentAuthorityLog: AuthorityLog = {
 };
 
 /**
+ * What the authority DID with one dial report - the complete, closed set of
+ * exits from {@link SelectionAuthorityEngineImpl.ingestDial}.
+ *
+ * It exists because "the refusal streak never reached the threshold" was not
+ * answerable from a production log. Six of these seven exits used to be
+ * indistinguishable from outside: two logged at `debug` (which the renderer
+ * drops in production, where the default level is `info`) and four logged
+ * nothing at all. A report that advances no counter and leaves no trace is
+ * the same observation as a report that never arrived, and those two have
+ * opposite fixes - one is a classification bug in the transport, the other is
+ * a missing dial.
+ *
+ * Exhaustive by construction: `ingestDial` funnels EVERY exit through
+ * {@link SelectionAuthorityEngineImpl.recordDialDisposition}, so a new arm
+ * added without a disposition fails to compile rather than going dark.
+ */
+export type DialDisposition =
+  /** Streak advanced. The only disposition that can ever reach death. */
+  | "counted"
+  /** Streak advanced AND crossed {@link CONFIRMED_DEATH_REFUSAL_STREAK}. */
+  | "counted-reached-death"
+  /** A dial succeeded: proof of life, streak reset to zero. */
+  | "cleared-by-success"
+  /** `indeterminate` - inert by contract, advances nothing. */
+  | "inert-indeterminate"
+  /** A live session for this host outranks the failure (invariant 5). */
+  | "suppressed-live-session"
+  /** The host is not in the answered fleet. */
+  | "dropped-outside-fleet"
+  /** This (incarnation, attemptId) was already ingested. */
+  | "dropped-duplicate-attempt";
+
+/** Whether a disposition moved the host closer to a death verdict. */
+function dispositionCounts(disposition: DialDisposition): boolean {
+  return disposition === "counted" || disposition === "counted-reached-death";
+}
+
+/**
  * Incarnation ids identify a client instance to the engine that minted them;
  * they never cross a trust boundary and are never persisted, so a process
  * -local counter is sufficient and keeps tests deterministic.
@@ -333,7 +394,8 @@ export function createIncrementingIncarnationIds(): () => string {
  * no account whose choice could be remembered.
  */
 export type PreferredHostSaveResult =
-  { ok: true } | { ok: false; reason: string };
+  | { ok: true }
+  | { ok: false; reason: string };
 
 export interface PreferredHostStore {
   /**
@@ -462,6 +524,21 @@ interface HostEvidence {
   /** Authority-local deadline of the current tombstone episode, if any. */
   restartEpisodeEndsAt: number | null;
   /**
+   * Whether this host has EVER answered this process - any of the four proof
+   * kinds that funnel through {@link
+   * SelectionAuthorityEngineImpl.onHostProvedAlive} (a dial success, a session
+   * appearing, an announcement, a successful ensure).
+   *
+   * Unlike every other field here it is a LATCH, never cleared by later
+   * evidence: it records that the host was reachable once, which is what
+   * separates "deliberately cycling machine that works" from "machine this
+   * process has never reached". The D5/M6 restart hold is unbounded only for
+   * the former; see `deriveDesiredEffective`. A host leaving the fleet prunes
+   * the record, and an identity transition clears it, so neither carries a
+   * stale claim.
+   */
+  provedAliveAtLeastOnce: boolean;
+  /**
    * When this host's last live session ended WHILE IT WAS THE EFFECTIVE HOST,
    * or null (B1/C6). Only armed for the host the app is actually pointed at:
    * an idle host nobody is talking to produces no evidence either, and
@@ -479,6 +556,7 @@ function emptyHostEvidence(): HostEvidence {
     lastCountedRefusalDetail: null,
     compat: null,
     restartEpisodeEndsAt: null,
+    provedAliveAtLeastOnce: false,
     effectiveSessionLostAt: null,
   };
 }
@@ -685,6 +763,22 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   private readonly reporters = new Map<string, ReporterRecord>();
   private readonly evidence = new Map<string, HostEvidence>();
   /**
+   * Per host, consecutive dial reports that taught the authority NOTHING - a
+   * drop, a dedup, an inert `indeterminate`, or a live-session suppression.
+   * Reset by any success or counted refusal.
+   *
+   * PURELY DIAGNOSTIC, and deliberately its own map rather than a field on
+   * {@link HostEvidence}: that map's emptiness for a host is read as
+   * "never dialed" ({@link SelectionAuthorityEngineImpl.isLocalNeverDialed}),
+   * so hanging a counter off it would materialise records for hosts whose
+   * evidence was DROPPED and silently change which hosts the launch-time
+   * ensure considers. It shares `evidence`'s lifecycle exactly - pruned in
+   * {@link SelectionAuthorityEngineImpl.pruneEvidenceOutsideFleet}, cleared in
+   * the identity transition - so it can neither leak nor outlive the fleet it
+   * describes.
+   */
+  private readonly dialStalls = new Map<string, number>();
+  /**
    * The next observation ordinal to hand out. The ordinals themselves live on
    * the ATTACHMENT that observed them (see {@link AttachmentRecord}); this
    * counter is global so ranks stay comparable across incarnations, which is
@@ -715,6 +809,18 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    * two can never disagree about which move is waiting.
    */
   private pendingDampingDeadline: number | null = null;
+  /**
+   * The host the cold-start hold is waiting on and when that wait began, or
+   * null while the hold is not engaged (see `deriveDesiredEffective`).
+   *
+   * Keyed by host because the local identity can be REPLACED mid-hold - the
+   * desktop fleet port republishes when its local host id changes - and the
+   * new host deserves its own bounded window rather than the remainder of the
+   * old one's. Cleared whenever the premise stops holding, so a later episode
+   * measures its own window; kept across a lapsed ceiling, so the same boot
+   * cannot re-arm a fresh one.
+   */
+  private coldStartHold: { hostId: string; startedAt: number } | null = null;
   /**
    * The in-flight local `ensure`, or null (D14).
    *
@@ -1326,9 +1432,19 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    */
   private onHostProvedAlive(hostId: string): void {
     const evidence = this.hostEvidence(hostId);
+    // The latch, set at the one funnel every proof kind already passes
+    // through, so no producer has to remember it separately.
+    evidence.provedAliveAtLeastOnce = true;
     evidence.refusalStreak = 0;
     evidence.lastCountedRefusalDetail = null;
     evidence.restartEpisodeEndsAt = null;
+    // The dial-stall counter retires with the streak, and HERE rather than
+    // only on a dial success, because this is the single funnel every kind of
+    // proof already passes through. A session appearing, an announcement or a
+    // successful ensure all mean the authority learned something; leaving the
+    // counter set would let inert reports from before the recovery combine
+    // with one after it to warn about an episode that had already ended.
+    this.dialStalls.delete(hostId);
     // Proof of life is proof of life: it retires the corpse deadline for the
     // same reason it clears the streak. This is the ONLY producer that needs
     // to know about the deadline, because every kind of proof already funnels
@@ -1351,31 +1467,145 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     report: Extract<SelectionEvidenceReport, { kind: "dial" }>,
   ): void {
     const hostId = report.hostId;
-    if (this.dropsAsOutsideFleet(hostId, report.kind)) return;
+    if (this.dropsAsOutsideFleet(hostId, report.kind)) {
+      this.recordDialDisposition(report, "dropped-outside-fleet");
+      return;
+    }
     const key = attemptKey(attachment.incarnationId, report.attemptId);
-    if (attachment.seenAttemptIds.has(key)) return;
+    if (attachment.seenAttemptIds.has(key)) {
+      this.recordDialDisposition(report, "dropped-duplicate-attempt");
+      return;
+    }
     attachment.seenAttemptIds.add(key);
     if (report.outcome === "success") {
       this.onHostProvedAlive(hostId);
+      this.recordDialDisposition(report, "cleared-by-success");
       return;
     }
     // `indeterminate` is inert by contract: a liveness-read failure or an
     // attempt abandoned for unrelated reasons is not evidence about the host.
-    if (report.outcome === "indeterminate") return;
+    if (report.outcome === "indeterminate") {
+      this.recordDialDisposition(report, "inert-indeterminate");
+      return;
+    }
     if (this.hasLiveSession(hostId)) {
       // Recorded for diagnostics, never accumulated: a live session anywhere
       // in the app outranks every other evidence class (invariant 5). The
       // streak resumes only once the session set for this host empties.
-      this.options.log.debug(
-        "[selection-authority] dial failure suppressed by live session",
-        { hostId, outcome: report.outcome },
-      );
+      this.recordDialDisposition(report, "suppressed-live-session");
       return;
     }
     const evidence = this.hostEvidence(hostId);
     evidence.refusalStreak += 1;
     evidence.lastCountedRefusalDetail =
       report.outcome === "confirmed-refusal" ? report.refusalDetail : null;
+    this.recordDialDisposition(
+      report,
+      // Equality, not `>=`: this names the ONE report that crossed, which is
+      // what a reader is looking for. The lease decision itself stays `>=` -
+      // a host at or above the threshold IS dead, and it stays dead - but a
+      // label that re-announced the crossing on every later refusal would
+      // report a prolonged outage as an endless series of deaths.
+      evidence.refusalStreak === CONFIRMED_DEATH_REFUSAL_STREAK
+        ? "counted-reached-death"
+        : "counted",
+    );
+  }
+
+  /**
+   * The single exit every dial report leaves by, and the whole instrumentation
+   * of this path.
+   *
+   * ONE REPORT IN, ONE LINE OUT. The question this answers is "a host stopped
+   * answering and never reached `dead` - where did its refusals go?", and that
+   * was previously unanswerable: a dropped, deduplicated or inert report was
+   * byte-identical, in the log, to a report that was never sent. Distinguishing
+   * "the transport classified it as `indeterminate`" from "nothing dialed the
+   * host at all" is the difference between a transport bug and a missing
+   * subscriber, and no amount of reading the code settles which one a given
+   * install hit.
+   *
+   * `streakAfter` is read WITHOUT creating an evidence record
+   * (`this.evidence.get`, never `hostEvidence`): the map's emptiness for a host
+   * is load-bearing state - {@link SelectionAuthorityEngineImpl.isLocalNeverDialed}
+   * reads `!this.evidence.has(hostId)` to gate the launch-time ensure - so
+   * instrumentation that materialised a record here would change which hosts
+   * get provisioned. A diagnostic that alters the thing it measures is worse
+   * than no diagnostic.
+   *
+   * LEVELS. Every report logs at `debug`, which is the complete picture when
+   * someone reproduces with the level raised. The `warn` is reserved for the
+   * pathology itself: {@link CONFIRMED_DEATH_REFUSAL_STREAK} consecutive
+   * FAILED dials that the authority learned nothing from. That is silent on a
+   * healthy fleet by construction - a success or a counted refusal both reset
+   * it - and it fires exactly when a host is failing while its lease cannot
+   * move, which is the state that strands a pinned surface.
+   *
+   * It fires ONCE per stall episode, at the crossing. The alternative - warn
+   * while the counter sits at or above the threshold - turns the longest
+   * outages into the loudest ones and buries the transition under its own
+   * repetitions; the counter still climbs, and the `debug` line still carries
+   * every individual report. A later success or counted refusal clears the
+   * stall, so a host that recovers and stalls again warns again.
+   */
+  private recordDialDisposition(
+    report: Extract<SelectionEvidenceReport, { kind: "dial" }>,
+    disposition: DialDisposition,
+  ): void {
+    const hostId = report.hostId;
+    const streakAfter = this.evidence.get(hostId)?.refusalStreak ?? 0;
+    this.options.log.debug("[selection-authority] dial evidence", {
+      hostId,
+      disposition,
+      outcome: report.outcome,
+      transportKind: report.transportKind,
+      attemptId: report.attemptId,
+      refusalStreak: streakAfter,
+      deathThreshold: CONFIRMED_DEATH_REFUSAL_STREAK,
+    });
+    // Evidence for a host outside the fleet is DROPPED, so there is no stall
+    // to track: this host has no lease to strand a surface on. Creating an
+    // entry here would also grow the map once per distinct unknown id between
+    // fleet snapshots, and - worse - survive a prune, because an in-flight
+    // report landing after `pruneEvidenceOutsideFleet` recreates the entry,
+    // and the NEXT prune sees a durable id that has since re-registered and
+    // keeps it. The re-registered host would then inherit a stall it never
+    // earned and warn early.
+    if (disposition === "dropped-outside-fleet") {
+      this.dialStalls.delete(hostId);
+      return;
+    }
+    // A success is proof of life and a counted refusal is progress toward a
+    // verdict; either way the authority learned something, so the stall ends.
+    //
+    // Keyed off the report's OUTCOME rather than the disposition alone, because
+    // a success that arrives twice is classified `dropped-duplicate-attempt`
+    // before its outcome is ever examined. Counting that as a stalled failure
+    // would let a replayed SUCCESS raise "dial failures are not advancing".
+    if (report.outcome === "success" || dispositionCounts(disposition)) {
+      this.dialStalls.delete(hostId);
+      return;
+    }
+    const stalled = (this.dialStalls.get(hostId) ?? 0) + 1;
+    this.dialStalls.set(hostId, stalled);
+    // Exactly at the crossing, not `>=`. A prolonged outage is precisely when
+    // this fires, and it is also when dials are most frequent, so a `>=` here
+    // would warn on EVERY subsequent report and bury the transition it exists
+    // to mark. The counter keeps climbing either way; the `debug` line above
+    // carries each individual report for anyone reading the whole history.
+    if (stalled !== CONFIRMED_DEATH_REFUSAL_STREAK) return;
+    this.options.log.warn(
+      "[selection-authority] dial failures are not advancing the death streak",
+      {
+        hostId,
+        disposition,
+        outcome: report.outcome,
+        transportKind: report.transportKind,
+        consecutiveNonCounting: stalled,
+        refusalStreak: streakAfter,
+        deathThreshold: CONFIRMED_DEATH_REFUSAL_STREAK,
+      },
+    );
   }
 
   private ingestSession(
@@ -1594,6 +1824,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     for (const hostId of Array.from(this.seenTombstoneIds.keys())) {
       if (!present.has(hostId)) this.seenTombstoneIds.delete(hostId);
     }
+    for (const hostId of Array.from(this.dialStalls.keys())) {
+      if (!present.has(hostId)) this.dialStalls.delete(hostId);
+    }
   }
 
   /**
@@ -1683,6 +1916,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     this.options.preferredStore.save(outgoingIdentityKey, null);
     this.preferredHostId = this.options.preferredStore.load(this.identityKey);
     this.mruEffectiveHostIds.length = 0;
+    // The cold-start hold's window belongs to the identity that armed it; the
+    // incoming account's first boot measures its own. (The per-host
+    // proved-alive latch that exempts a restart from it rides `this.evidence`,
+    // which this transition clears a few lines below.)
+    this.coldStartHold = null;
     for (const record of this.reporters.values()) {
       // Generation high-waters survive (rule 4); only the attachment dies -
       // and with it any handover ceiling that was waiting to retire it. Plain
@@ -1694,6 +1932,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     }
     this.evidence.clear();
     this.seenTombstoneIds.clear();
+    this.dialStalls.clear();
     this.nextSessionOrdinal = 0;
     // The local expected-outage hold is PORT STATE, not evidence: the
     // HostController mutation lane does not stop being in flight because the
@@ -1810,6 +2049,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
       targetHostId,
       localHostId,
       leases,
+      now,
     );
     return {
       preferredHostId,
@@ -1833,6 +2073,7 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     targetHostId: string | null,
     localHostId: string | null,
     leases: readonly HostLeaseSnapshot[],
+    now: number,
   ): string | null {
     // THE D5/M6 HOLD, and the reason derivation is no longer a pure function
     // of the leases alone. A host that is deliberately cycling keeps serving:
@@ -1842,13 +2083,92 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // third machine and dragged back 15-30s later. The exemption is a property
     // of the CURRENT EFFECTIVE lease, not of the preferred host - that is
     // exactly what M6 corrected.
+    //
+    // AT FULL (UNBOUNDED) STRENGTH ONLY FOR A HOST THIS PROCESS HAS ACTUALLY
+    // REACHED. That is what the hold is for: a working machine the user would
+    // otherwise be thrown off of, and dragged back to 15-30s later. A host
+    // that has never once answered is not that - it is a boot that may never
+    // finish - so it falls to the bounded hold below.
     const effectiveHostId = this.selection.effectiveHostId;
-    if (
+    const restartingIncumbentHostId =
       effectiveHostId !== null &&
       this.leaseFor(effectiveHostId, leases)?.status === "restarting-expected"
+        ? effectiveHostId
+        : null;
+    if (
+      restartingIncumbentHostId !== null &&
+      this.hasProvedAliveAtLeastOnce(restartingIncumbentHostId)
     ) {
-      return effectiveHostId;
+      this.coldStartHold = null;
+      return restartingIncumbentHostId;
     }
+    // THE COLD-START HOLD: a restarting host worth waiting for, but only for
+    // a bounded window, because nothing has proved it can serve anyone.
+    //
+    // Two shapes reach it - the same situation seen from either side of the
+    // first derivation, which is why one rule covers both:
+    //
+    //  - the local TARGET is cycling and nothing is effective yet: answer ∅,
+    //    which the window narrator's pre-serve grace renders as a start in
+    //    progress (`deriveWindowNarration`'s cold-start arm) rather than as a
+    //    verdict. Adopting a usable remote instead buys a guaranteed second
+    //    move - the return-to-target window drags every window back ~20s
+    //    later, re-pointing every following surface twice.
+    //  - the UNPROVEN INCUMBENT is cycling: keep it, for the same reason and
+    //    the same bounded span. It narrates as cold-start too (an effective
+    //    host that has never served this window).
+    //
+    // Why proof of life and not "has anything been effective": `noteEffective`
+    // records a host the moment derivation picks it, and the local host is
+    // picked while it reads `connecting` under the engine's OWN in-flight
+    // ensure - i.e. while nothing has reached it. Gating on that would let a
+    // launch that hangs AFTER the fleet resolved take the unbounded arm above
+    // and pin the startup card for the outage ceiling's 15 minutes, with a
+    // usable remote sitting in the fleet. `onHostProvedAlive` is the one
+    // funnel all four proof kinds pass through, so the latch it sets is the
+    // honest form of the question.
+    //
+    // Keyed by the awaited host, so a fleet update that replaces the local
+    // identity gives the NEW host its own window instead of inheriting the
+    // old one's elapsed time; kept across a lapse, so the same host cannot
+    // re-arm a fresh window; cleared the moment the premise stops holding.
+    //
+    // LOCAL target only on the second arm, on purpose: the grace card exists
+    // only where a local host is expected, so holding ∅ for a cycling REMOTE
+    // target would show "no usable host" over a working fallback.
+    //
+    // WHO IS BEING WAITED ON is a question about the LEASES, and is answered
+    // first and separately from whether this pass may wait. That split is not
+    // tidiness: `coldStartHold` is the record of a restart EPISODE, so its
+    // lifetime has to follow the episode rather than follow the arm. Deciding
+    // both at once destroyed the record whenever the arm happened not to
+    // apply, and a destroyed record is an ARMABLE one - the same still-cycling
+    // host could then be granted a second full window later in the same
+    // episode (cold start holds L, ceiling lapses, R is adopted and clears the
+    // record, R dies, and ∅ with L still restarting arms a fresh 20s wait
+    // while a usable Q sits in the fleet). The record now dies with the
+    // restart itself, so a lapse is permanent for that episode and the NEXT
+    // restart still gets its own window.
+    const targetAwaitedHostId =
+      targetHostId !== null &&
+      targetHostId === localHostId &&
+      this.leaseFor(targetHostId, leases)?.status === "restarting-expected"
+        ? targetHostId
+        : null;
+    const awaitedHostId = restartingIncumbentHostId ?? targetAwaitedHostId;
+    if (awaitedHostId === null) {
+      this.coldStartHold = null;
+    } else if (
+      this.coldStartArmApplies(restartingIncumbentHostId) &&
+      this.holdsForColdStart(awaitedHostId, now)
+    ) {
+      // An incumbent keeps serving as itself; the target arm can only have
+      // been reached from ∅, so its null STAYS at ∅ rather than taking
+      // anything away, and the startup card narrates the boot.
+      return restartingIncumbentHostId !== null ? awaitedHostId : null;
+    }
+    // Ceiling lapsed: the boot is no longer something to wait for, and the
+    // arms below pick a fallback exactly as they did before this hold existed.
     if (targetHostId !== null && this.isUsable(targetHostId, leases)) {
       return targetHostId;
     }
@@ -1945,6 +2265,69 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // quiet would never be returned to.
     this.pendingDampingDeadline = admissibleAt;
     return effectiveHostId;
+  }
+
+  /**
+   * Whether this host has ever answered this process. See
+   * {@link HostEvidence.provedAliveAtLeastOnce}; absence of a record means
+   * nothing was ever reported for the host, which is not proof of anything.
+   */
+  private hasProvedAliveAtLeastOnce(hostId: string): boolean {
+    return this.evidence.get(hostId)?.provedAliveAtLeastOnce === true;
+  }
+
+  /**
+   * Whether THIS PASS may wait at all - the policy half, kept apart from the
+   * "who is cycling" half so the hold record can outlive a pass that declines.
+   *
+   * The incumbent arm always applies: it hands a serving host back to itself,
+   * so waiting costs the user nothing.
+   *
+   * The target arm is a COLD-START arm and is held to that literally - only
+   * from ∅, and only before derivation has ever named a host:
+   *
+   *  - from ∅, because the whole thing it buys is skipping a hop the engine
+   *    would immediately undo. With something already effective there is no
+   *    hop to skip, and answering ∅ would take a working host away.
+   *  - never after derivation has named one, because ∅ is not narrated the
+   *    same way twice. The window narrator softens ∅ to "starting" only
+   *    before the window has been served; afterwards ∅ is the hard
+   *    "No host is available" card. A hold that engages later would sit that
+   *    card in front of a user for the ceiling with a usable host in the
+   *    fleet - the hold buying a modal instead of preventing a flicker.
+   *
+   * `mruEffectiveHostIds` is the honest question HERE even though the
+   * unbounded arm above must not read it. There it would mean "has served",
+   * which it does not (derivation records a host the moment it picks one,
+   * including a local host that is merely `connecting` under our own ensure).
+   * Here it means "has derivation ever pointed anywhere", which is exactly
+   * what it is, and it is used only to make this arm fire LESS.
+   */
+  private coldStartArmApplies(
+    restartingIncumbentHostId: string | null,
+  ): boolean {
+    if (restartingIncumbentHostId !== null) return true;
+    return (
+      this.selection.effectiveHostId === null &&
+      this.mruEffectiveHostIds.length === 0
+    );
+  }
+
+  /**
+   * Whether the cold-start hold may still wait on `hostId`, arming or
+   * re-keying its window as a side effect.
+   *
+   * Re-keying on a different host is what stops a replacement local identity
+   * from inheriting the old host's elapsed time; keeping the stamp once the
+   * ceiling has lapsed is what stops the same host from re-arming a fresh
+   * window on the very next pass.
+   */
+  private holdsForColdStart(hostId: string, now: number): boolean {
+    const hold = this.coldStartHold;
+    const startedAt =
+      hold !== null && hold.hostId === hostId ? hold.startedAt : now;
+    this.coldStartHold = { hostId, startedAt };
+    return now < startedAt + COLD_START_LOCAL_RESTART_HOLD_CEILING_MS;
   }
 
   private leaseFor(
@@ -2605,6 +2988,16 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // unrelated report happened to arrive.
     const damping = this.pendingDampingDeadline;
     if (damping !== null) consider(damping);
+    // The cold-start hold's own ceiling: its lapse is what un-sticks the
+    // startup screen when the boot outlives the wait, and on a quiet engine
+    // no report is coming to re-derive it - the same shape as the damping
+    // deadline above.
+    const coldStartHold = this.coldStartHold;
+    if (coldStartHold !== null) {
+      consider(
+        coldStartHold.startedAt + COLD_START_LOCAL_RESTART_HOLD_CEILING_MS,
+      );
+    }
     // A failed ensure holds the local lease dead for a cooldown; the lapse is
     // a lease change with no new evidence behind it, and it is what lets the
     // engine ask again.

@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
-import { RefreshCwIcon } from "lucide-react";
-
+import { RefreshIcon } from "@/components/refresh-icon";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -132,15 +131,7 @@ function RefreshButton(props: {
           }}
           onClick={spinner.trigger}
         >
-          {spinner.refreshing ? (
-            <AgentSpinningDots
-              testId={undefined}
-              variant="orbit"
-              className="text-muted-foreground/70"
-            />
-          ) : (
-            <RefreshCwIcon className="size-3.5" />
-          )}
+          <RefreshIcon refreshing={spinner.refreshing} className="size-3.5" />
         </Button>
       </span>
     </TooltipWrapper>

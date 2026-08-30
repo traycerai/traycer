@@ -52,7 +52,8 @@ export interface ChatTimelineFollowLatch {
   readonly followEndIfPermitted: () => void;
   /** Explicit controller transition (pill click / navigation fallback). */
   readonly setFollowIntent: (isFollowing: boolean) => void;
-  /** Cancels any app-owned correction before a real reader gesture. */
+  /** Cancels any app-owned correction and supersedes a pending LegendList
+   *  end command before a real reader gesture. */
   readonly noteReaderGesture: (intent: ChatTimelineReaderGestureIntent) => void;
   /** Owns an explicit animated/non-animated "go live" operation. */
   readonly beginOwnedEndNavigation: () => void;
@@ -70,7 +71,9 @@ export interface ChatTimelineFollowLatch {
 }
 
 export type ChatTimelineReaderScrollDirection =
-  "away-from-end" | "toward-end" | "indeterminate";
+  | "away-from-end"
+  | "toward-end"
+  | "indeterminate";
 
 export interface ChatTimelineReaderGestureIntent {
   readonly direction: ChatTimelineReaderScrollDirection;
@@ -109,7 +112,8 @@ export const CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS = 5;
 interface ChatTimelineFollowLatchOptions {
   readonly onFollowIntentChange: ((isFollowing: boolean) => void) | undefined;
   readonly onReaderGesture:
-    ((intent: ChatTimelineReaderGestureIntent) => void) | undefined;
+    | ((intent: ChatTimelineReaderGestureIntent) => void)
+    | undefined;
   readonly isCorrectionSuppressed: (() => boolean) | undefined;
   readonly resolveSuppressedEndLanding: (() => boolean) | undefined;
 }
@@ -170,10 +174,12 @@ function canReaderGestureMove(
  *   Its intermediate non-bottom scroll reports cannot revoke permission;
  *   validation reissues after two-frame measurement windows with a bounded
  *   retry budget. Wheel/touch/key/pointer intent cancels ownership before its
- *   scroll report. Scroll direction during an owned correction is never used
- *   as reader-intent evidence because MVCP, ResizeObserver delivery, browser
- *   clamping, and content-inset compensation can all move `scrollTop` in the
- *   opposite direction without reader input.
+ *   scroll report. A movable publishing gesture also supersedes any pending
+ *   LegendList `scrollToEnd` at the live offset so a queued end command cannot
+ *   restore the tail before that report. Scroll direction during an owned
+ *   correction is never used as reader-intent evidence because MVCP,
+ *   ResizeObserver delivery, browser clamping, and content-inset compensation
+ *   can all move `scrollTop` in the opposite direction without reader input.
  * - `followEndIfPermitted` is the one automatic path that turns permission
  *   into an actual scroll. Explicit go-live navigation declares its own
  *   ownership through the same latch and uses the same fresh-DOM authority.
@@ -209,6 +215,7 @@ export function useChatTimelineFollowLatch(
   const readerGestureGenerationRef = useRef(0);
   const armedReaderDepartureRef = useRef<ArmedReaderDeparture>(null);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
+  const pendingEndCorrectionScrollRef = useRef<Promise<void> | null>(null);
   const readerEndCandidateRef = useRef<ReaderEndCandidate | null>(null);
   const lastTouchClientYRef = useRef<number | null>(null);
 
@@ -227,6 +234,23 @@ export function useChatTimelineFollowLatch(
     }
     activeCorrectionRef.current = null;
   }, []);
+
+  const supersedePendingEndCorrection = useCallback(
+    (offset: number): void => {
+      if (pendingEndCorrectionScrollRef.current === null) return;
+      // LegendList queues scrollToEnd behind data/layout readiness and
+      // invalidates that command only when a newer imperative scroll starts.
+      // Clearing retry bookkeeping is not enough: bump the library token with
+      // the reader's live offset so a stale end command cannot restore the
+      // tail after this gesture has already moved scrollTop.
+      pendingEndCorrectionScrollRef.current = null;
+      void listRef.current?.scrollToOffset({
+        offset,
+        animated: false,
+      });
+    },
+    [listRef],
+  );
 
   const setFollowIntent = useCallback(
     (isFollowing: boolean): void => {
@@ -252,6 +276,10 @@ export function useChatTimelineFollowLatch(
       cancelActiveCorrection();
       const node = listRef.current?.getScrollableNode();
       const geometry = node ? readScrollGeometry(node) : null;
+      const blocksAutomaticCorrection =
+        geometry === null ||
+        !isChatTimelineGeometryMeasurable(geometry) ||
+        canReaderGestureMove(geometry, intent.direction);
       armedReaderDepartureRef.current = intent.publishesReaderPosition
         ? {
             source: "gesture",
@@ -259,10 +287,7 @@ export function useChatTimelineFollowLatch(
             // Unknown/hidden geometry cannot safely prove a no-op. When it is
             // measurable, an edge-directed gesture that cannot move must not
             // strand follow if no native scroll event is emitted.
-            blocksAutomaticCorrection:
-              geometry === null ||
-              !isChatTimelineGeometryMeasurable(geometry) ||
-              canReaderGestureMove(geometry, intent.direction),
+            blocksAutomaticCorrection,
           }
         : null;
       readerEndCandidateRef.current =
@@ -277,9 +302,17 @@ export function useChatTimelineFollowLatch(
               ),
             }
           : null;
+      if (
+        intent.publishesReaderPosition &&
+        blocksAutomaticCorrection &&
+        geometry !== null &&
+        isChatTimelineGeometryMeasurable(geometry)
+      ) {
+        supersedePendingEndCorrection(geometry.scrollTop);
+      }
       onReaderGestureRef.current?.(intent);
     },
-    [cancelActiveCorrection, listRef],
+    [cancelActiveCorrection, listRef, supersedePendingEndCorrection],
   );
 
   const createActiveCorrection = useCallback((): ActiveEndCorrection => {
@@ -342,7 +375,14 @@ export function useChatTimelineFollowLatch(
           return;
         }
         correction.attempts += 1;
-        void list.scrollToEnd({ animated: false });
+        const pendingScroll = list.scrollToEnd({ animated: false });
+        pendingEndCorrectionScrollRef.current = pendingScroll;
+        const clearPendingScroll = (): void => {
+          if (pendingEndCorrectionScrollRef.current === pendingScroll) {
+            pendingEndCorrectionScrollRef.current = null;
+          }
+        };
+        void pendingScroll.then(clearPendingScroll, clearPendingScroll);
         scheduleValidation();
       };
 
@@ -464,7 +504,13 @@ export function useChatTimelineFollowLatch(
     }
     if (tryReattachReader(node, geometry)) return;
     if (!permissionRef.current) return;
-    if (armedReaderDepartureRef.current !== null) {
+    const armedDeparture = armedReaderDepartureRef.current;
+    if (armedDeparture !== null) {
+      if (armedDeparture.source === "gesture") {
+        // Backstop if arm-time geometry was unmeasurable or a later native
+        // report is the first moment the reader's offset is known.
+        supersedePendingEndCorrection(geometry.scrollTop);
+      }
       armedReaderDepartureRef.current = null;
       setFollowIntent(false);
       return;
@@ -482,6 +528,7 @@ export function useChatTimelineFollowLatch(
     reconcileStrictBottom,
     setFollowIntent,
     startEndCorrection,
+    supersedePendingEndCorrection,
     tryReattachReader,
   ]);
 

@@ -7,6 +7,10 @@ import {
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/ws-protocol";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import {
+  clientHandshakeIdentitySchema,
+  type ClientHandshakeIdentity,
+} from "@traycer/protocol/framework/client-identity";
 import { isoMillisecondTimestampSchema } from "@traycer/protocol/common/schemas";
 
 /**
@@ -84,11 +88,17 @@ export const hostCredentialStateSchema = z.enum([
  */
 export const STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE = "STREAM_SUBSCRIBE_TIMEOUT";
 
-/** First frame sent by the client: bearer token + per-method canonicals. */
+/** First frame sent by the client: bearer token + per-method version manifest. */
 export type ClientStreamOpenFrame = {
   readonly kind: "open";
   readonly token: string;
   readonly manifest: ConnectionManifest;
+  /**
+   * Who is connecting - see {@link ClientHandshakeIdentity}. The `/stream`
+   * socket authenticates independently of `/rpc`, so it gates independently
+   * too and carries its own copy of the same process-constant identity.
+   */
+  readonly clientIdentity?: ClientHandshakeIdentity;
 };
 
 /**
@@ -193,6 +203,8 @@ export const clientStreamOpenFrameSchema = z.object({
   kind: z.literal("open"),
   token: z.string(),
   manifest: connectionManifestSchema,
+  // Additive/optional in both directions - same rule as the unary open frame.
+  clientIdentity: clientHandshakeIdentitySchema.optional(),
 });
 
 export const clientStreamSubscribeFrameSchema = z.object({

@@ -8,6 +8,11 @@ import type {
   StepUpChallengeFetchResult,
   RetainedStepUpVerifyFetchResult,
 } from "../auth/devices-sessions-fetcher";
+import type {
+  LinkLoginStatusFetchResult,
+  MintLinkLoginCodeFetchResult,
+  RespondLinkLoginFetchResult,
+} from "../auth/link-login";
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { HostListFetchResult } from "../host-client/remote-fetcher";
 import type { HostListResponse } from "@traycer/protocol/host/host-status";
@@ -19,8 +24,51 @@ import type {
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
 import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+import type {
+  HostDoctorIssue as MaintenanceDoctorIssue,
+  HostGetInstallationInfoResponse,
+  HostUpdateCheckResponseV11,
+} from "@traycer/protocol/host/maintenance/index";
+import type {
+  HostUpdateAttemptContinuation,
+  HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
+import type { BrowserViewBridge } from "./browser-view";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
+
+export interface RendererCrashTelemetryInput {
+  readonly appVersion: string | null;
+  readonly buildRevision: string | null;
+  readonly componentStack: string | null;
+  readonly correlationId: string;
+  readonly fingerprint: string;
+  readonly timestamp: number;
+}
+
+export interface IRendererCrashTelemetryHost {
+  persist(input: RendererCrashTelemetryInput): Promise<void>;
+}
+
+/**
+ * What a shell can say about the wake it is reporting through
+ * `IRunnerHost.onSystemResumed`.
+ */
+export type SystemResumeEvent = {
+  /**
+   * How long the runtime was demonstrably suspended before this resume, in
+   * milliseconds - or `null` when the shell cannot measure it (desktop
+   * `powerMonitor` reports no sleep duration; a mobile shell that never saw
+   * the background edge has no stamp to measure from).
+   *
+   * The number changes what a wake consumer should DO with the sockets the
+   * freeze left behind: a brief measured suspend deserves a short probe of a
+   * socket that may have survived, a long one means the OS has torn the
+   * socket down and probing it only delays the redial. `null` keeps the
+   * conservative desktop-calibrated behavior.
+   */
+  readonly backgroundedForMs: number | null;
+};
 
 /**
  * Composite runner-host surface consumed by `gui-app` on standalone desktop
@@ -55,6 +103,16 @@ export type { StoredCredentials } from "@traycer/protocol/config/credentials";
  * register it through module-level globals.
  */
 export interface IRunnerHost {
+  /**
+   * Durable renderer-crash sink. Desktop forwards directly to its main-process
+   * file logger so a dying renderer cannot lose the boundary's component stack.
+   * Shells without a local durable sink omit the capability.
+   */
+  readonly crashTelemetry?: IRendererCrashTelemetryHost;
+
+  /** Complete native browser capability, or null on shells without one. */
+  readonly browserView: BrowserViewBridge | null;
+
   /**
    * Browser-safe sign-in URL the shell wants `gui-app` to open when the
    * user initiates auth. Shells embed their own callback scheme (custom
@@ -161,6 +219,71 @@ export interface IRunnerHost {
   requestStepUpChallenge(
     bearerToken: string,
   ): Promise<StepUpChallengeFetchResult>;
+
+  /**
+   * Mints a one-time link-login code under the user bearer — the "Link a
+   * phone" QR surface. The RESULT carries the raw code back into the renderer
+   * by necessity: the QR that must display it renders there. The code is
+   * short-lived and single-use, and the surface re-mints while open, so the
+   * renderer never holds a long-lived secret.
+   */
+  mintLinkLoginCode(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<MintLinkLoginCodeFetchResult>;
+
+  /**
+   * The minting surface's view of its own code — whether a phone has claimed
+   * it, and the server-observed claimant metadata for the confirmation
+   * prompt. Owner-only on the server.
+   */
+  linkLoginStatus(
+    bearerToken: string,
+    code: string,
+    signal: AbortSignal,
+  ): Promise<LinkLoginStatusFetchResult>;
+
+  /**
+   * The minting surface's decision on a claimed code. Approval is the step
+   * that authorizes the phone's session; a scan alone never does.
+   */
+  respondLinkLogin(
+    bearerToken: string,
+    code: string,
+    approve: boolean,
+  ): Promise<RespondLinkLoginFetchResult>;
+
+  /**
+   * Native QR scanner for the link-login sign-in path, or `null` where no
+   * camera scanner exists (desktop, plain browser, tests). A capability, not
+   * identity (see `lib/mobile-app.ts` in gui-app): the paste-the-code
+   * fallback must render regardless, because a null scanner — and a denied
+   * camera permission on a non-null one — are both ordinary states of the
+   * same surface.
+   */
+  readonly linkCodeScanner: ILinkCodeScanner | null;
+
+  /**
+   * Self-description of the DEVICE for human-facing prompts — the link-login
+   * approver card and the session row. Present only where the shell knows
+   * something better than the browser UA (the mobile app reads the hardware
+   * model natively); `null` elsewhere, and consumers fall back to
+   * `navigator.userAgent`. Descriptive, never identity.
+   */
+  readonly deviceDescriber: IDeviceDescriber | null;
+
+  /**
+   * Link-login codes the OS handed this shell as a launch/open URL — a QR
+   * scanned by the system camera rather than by the in-app scanner. `null`
+   * wherever the OS never delivers one (desktop, plain browser, tests).
+   *
+   * A capability alongside `linkCodeScanner`, not a replacement for it: this
+   * one is not initiated by the user inside the app, so it can arrive before
+   * any surface is mounted and it can arrive while already signed in. Both are
+   * the consumer's problem, and the port's contract is what makes them
+   * solvable — see `ILinkLoginDeepLinkSource`.
+   */
+  readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
 
   /**
    * Verifies a step-up OTP and retains the short-TTL bearer credential inside
@@ -282,6 +405,13 @@ export interface IRunnerHost {
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
   /**
+   * How this shell commits a blob the user asked to keep, or `null` where it
+   * owns no native route and the caller falls back to the browser save APIs.
+   * A capability, not an identity: a plain desktop browser tab is `null` here
+   * without being any less of a desktop.
+   */
+  readonly fileSave: IFileSaveHost | null;
+  /**
    * Desktop display-zoom surface. Present on desktop shells and `null` on
    * shells that do not own a native app-scale control.
    */
@@ -346,12 +476,28 @@ export interface IRunnerHost {
    * offline within seconds instead of waiting out the stream heartbeat.
    *
    * Desktop bridges Electron `powerMonitor` `resume`/`unlock-screen` through
-   * the preload IPC bridge. Shells with no OS wake signal (mobile, web, tests)
+   * the preload IPC bridge. Mobile raises it when the app returns to the
+   * foreground (the DOM visibility edge and the native app-state edge,
+   * deduplicated) - "the machine woke" means the OS un-suspended its WebView.
+   * Shells with no wake signal at all (web, tests)
    * install a no-op whose handler never fires; consumers still pair this with
    * the cross-platform `window` `online` event, so wake recovery degrades
    * gracefully where no native signal exists.
    */
-  onSystemResumed(handler: () => void): Disposable;
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
+
+  /**
+   * Subscribes to network-path changes the shell can observe natively:
+   * connectivity coming back, or the interface type changing under live
+   * connectivity (Wi-Fi -> cellular). Both are moments an existing socket is
+   * dead or about to behave like it, without any DOM `online` event firing -
+   * the network never went "offline", it moved. Mobile raises this from the
+   * OS reachability API and suppresses it while the app is backgrounded (the
+   * resume edge owns recovery there). Desktop and web install a no-op whose
+   * handler never fires: their consumers already cover the equivalent cases
+   * with `window 'online'` and the OS-wake signal.
+   */
+  onNetworkPathChanged(handler: () => void): Disposable;
 
   /**
    * Asks the shell to re-spawn its detached local host. Desktop delegates
@@ -476,6 +622,47 @@ export interface IRunnerHost {
    * tray clicks route through the same host-management surface as Settings.
    */
   readonly hostTray: IHostTray | null;
+
+  /**
+   * OS push permission of the DEVICE running this renderer - the phone's own
+   * notification switch, not anything host-scoped. Present on shells where OS
+   * push exists (the native mobile shells) and `null` everywhere else
+   * (desktop, dev web, tests), where the GUI hides the surface entirely.
+   */
+  readonly pushPermission: IPushPermissionHost | null;
+}
+
+/**
+ * The three states the GUI reasons about. Deliberately platform-neutral:
+ * Capacitor's fourth state (`prompt-with-rationale`, Android's "we may ask
+ * once more") collapses to `prompt` at the mobile boundary, so plugin
+ * vocabulary never reaches shared code.
+ */
+export type PushPermissionState = "prompt" | "granted" | "denied";
+
+/**
+ * Read/repair surface for the device's OS push permission, backing the
+ * Settings → Notifications "this phone" row. Only reachable where
+ * `IRunnerHost.pushPermission` is non-null.
+ */
+export interface IPushPermissionHost {
+  /** Local OS read; never prompts. */
+  get(): Promise<PushPermissionState>;
+  /**
+   * Raises the OS prompt if the OS still allows one (before the first ask, or
+   * Android's single rationale retry) and resolves the resulting state. A
+   * grant here also registers the device token immediately, through the same
+   * narrow path a late grant from the OS Settings app takes.
+   */
+  request(): Promise<PushPermissionState>;
+  /** Jumps to this app's notification page in the OS Settings app. */
+  openSettings(): Promise<void>;
+  /**
+   * Fires when the state MAY have changed - a foreground resume (the person
+   * may have just changed it in OS Settings) or a completed `request()`.
+   * Subscribers re-read via `get()`; the signal carries no state itself.
+   */
+  onChange(handler: () => void): Disposable;
 }
 
 /**
@@ -509,6 +696,47 @@ export interface IFileDropHost {
    * paste event whose DOM clipboard has no usable content.
    */
   readNativeClipboardFilePaths(): Promise<readonly string[]>;
+}
+
+/** The bytes and their identity, as handed to `IFileSaveHost.saveFile`. */
+export interface FileSaveRequest {
+  readonly name: string;
+  readonly type: string;
+  readonly bytes: ArrayBuffer;
+}
+
+/**
+ * Where a completed save landed. `name` is display copy for the confirmation;
+ * `path` is the absolute location, which only a shell whose save mechanism
+ * REPORTS one can fill in - a native save dialog names the file it wrote,
+ * while a share sheet hands the bytes to another app and never says where they
+ * went. `path` is `null` there, and no "open it" affordance is possible.
+ */
+export interface SavedFileLocation {
+  readonly name: string;
+  readonly path: string | null;
+}
+
+/**
+ * The shell's native "put these bytes somewhere the user keeps files"
+ * capability, or `null` on `IRunnerHost.fileSave` where the shell has none and
+ * the caller must fall back to the web save APIs (a plain browser tab, tests).
+ *
+ * The two shells that have one reach it very differently - Electron opens a
+ * native save dialog and learns a path, a phone writes a temporary file and
+ * offers it to the OS share sheet - so this contract states only what both can
+ * honour: the bytes go out, the user may dismiss the surface, and a path comes
+ * back only when the mechanism produced one.
+ */
+export interface IFileSaveHost {
+  /** `null` when the user dismissed the dialog or sheet without saving. */
+  saveFile(request: FileSaveRequest): Promise<SavedFileLocation | null>;
+  /**
+   * Re-opens a file this shell saved, by the `path` it reported, with the OS
+   * default application. `null` where the shell never learns a path, which is
+   * also every case where `saveFile` reports `path: null`.
+   */
+  readonly openSavedFile: ((path: string) => Promise<void>) | null;
 }
 
 /**
@@ -574,7 +802,11 @@ export interface TraycerPidMetadata {
 }
 
 export type BootstrapPhase =
-  "starting" | "exited" | "crashed" | "killed" | "failed-to-spawn";
+  | "starting"
+  | "exited"
+  | "crashed"
+  | "killed"
+  | "failed-to-spawn";
 
 export interface BootstrapMarkerEntry {
   readonly timestamp: string;
@@ -610,6 +842,14 @@ export interface TraycerDetectedShell {
   readonly isDefault: boolean;
   readonly source: "detected" | "added";
   readonly missing: boolean;
+  /**
+   * Present only on a Windows `wsl.exe` row whose WSL cannot host a terminal:
+   * `"not-installed"` = wsl.exe is just the OS installer stub (spawning it
+   * prints usage and exits), `"no-distro"` = WSL works but no distribution is
+   * registered. Mirrors `DetectedShell.wslHealth`; absent from CLIs predating
+   * the probe.
+   */
+  readonly wslHealth?: "not-installed" | "no-distro";
 }
 
 /**
@@ -726,6 +966,87 @@ export interface IServiceHost {
 }
 
 /**
+ * One attempt of the native link-login QR scan. `scanned` carries the RAW
+ * decoded text — parsing it into a code (`parseLinkLoginInput`) is the
+ * caller's job, so a QR that is not a Traycer payload surfaces as a visible
+ * "not a link code" state rather than being silently swallowed here.
+ * `permission-denied` is a first-class outcome, not an error: the surface
+ * falls back to manual code entry.
+ */
+export type LinkCodeScanResult =
+  | { readonly kind: "scanned"; readonly text: string }
+  | { readonly kind: "permission-denied" }
+  | { readonly kind: "canceled" }
+  | { readonly kind: "error" };
+
+/**
+ * Marketing-grade device self-description ("iPhone 16 Pro", "Pixel 9").
+ * Best-effort: resolves `null` when nothing better than the browser UA is
+ * known, and must never throw.
+ */
+export interface IDeviceDescriber {
+  describe(): Promise<string | null>;
+}
+
+/**
+ * A native camera QR scanner. Present only on shells that physically have one
+ * (`IRunnerHost.linkCodeScanner`); `scan()` owns the whole native interaction
+ * including the permission prompt and the fullscreen scan UI.
+ */
+export interface ILinkCodeScanner {
+  scan(): Promise<LinkCodeScanResult>;
+}
+
+/**
+ * Link codes delivered by the OS as an app launch or open URL
+ * (`IRunnerHost.linkLoginDeepLinks`).
+ *
+ * Two properties the in-app scanner does not need, both forced by the fact
+ * that the SYSTEM camera — not the app — starts this flow:
+ *
+ * 1. RETENTION. A cold start delivers the URL before the GUI exists at all;
+ *    the shell captures it at bootstrap and this subscription REPLAYS it. So
+ *    a late subscriber still receives the code, and "the app was launched by
+ *    the scan" is not a race the consumer has to win.
+ * 2. ONE SUBSCRIBER. A retained code is delivered once and then consumed, so
+ *    a second subscriber would either steal it or double-claim it. The GUI
+ *    subscribes in exactly one place and routes from there.
+ *
+ * The code is already NORMALIZED and shape-checked (`parseLinkLoginInput`) —
+ * unlike `LinkCodeScanResult`, which carries raw scanned text. Nothing else
+ * the OS opens reaches the handler: the shell drops every URL that is not a
+ * link-login payload, including the payload-free `traycer://auth/callback`
+ * return link, because there is no surface to show "that wasn't a code" to
+ * when the user never asked for a scan.
+ *
+ * DEDUPE IS THE SHELL'S JOB, AND ONLY THE SHELL'S. It alone can tell one
+ * arrival announced twice by the OS from a person scanning twice, because only
+ * it sees how the URL was delivered and when. Every delivery that reaches a
+ * consumer is therefore one the shell has already judged intentional, and the
+ * consumer must act on all of them — including a repeat of a code it has seen
+ * before, which is what a deliberate rescan of a still-live QR looks like.
+ */
+export interface ILinkLoginDeepLinkSource {
+  onLinkLoginCode(
+    handler: (delivery: LinkLoginDeepLinkDelivery) => void,
+  ): Disposable;
+}
+
+/**
+ * One accepted arrival of a link code.
+ *
+ * `deliveryId` exists so a consumer can say "have I acted on THIS arrival"
+ * without using the code as its own identity. The distinction is the whole
+ * point: two arrivals of one code are a rescan the second time, and a
+ * value-keyed guard cannot see the difference. Unique and increasing within a
+ * shell's lifetime; carries no meaning beyond identity.
+ */
+export interface LinkLoginDeepLinkDelivery {
+  readonly code: string;
+  readonly deliveryId: number;
+}
+
+/**
  * Authorization details returned by `/device/authorize`, surfaced to the GUI so
  * it can display the human-handled `userCode` + `verificationUri` (or rely on
  * the shell opening `verificationUriComplete`) and show poll progress / expiry.
@@ -794,7 +1115,9 @@ export interface IDeviceFlowHost {
    * process. Resolves with a `DeviceFlowSession` once authorization succeeds,
    * or `null` when authorization itself fails (network/5xx) or the shell has no
    * device-flow backend - the caller surfaces a launch-style failure and may
-   * retry. The shell supplies its own `client_id` (`"desktop"`) and host label.
+   * retry. The shell supplies its own client kind as `client_id` - the kind it
+   * signs sessions in as (`"desktop"` for the desktop app, `"mobile"` for the
+   * phone shell) - and its host label.
    */
   start(): Promise<DeviceFlowSession | null>;
 }
@@ -980,6 +1303,15 @@ export interface ITokenStore {
     readonly token: string;
   }): Promise<TokenRotateResult>;
   delete(): Promise<void>;
+  /**
+   * Conditional delete for undoing a superseded sign-in's write: removes the
+   * stored pair ONLY if it still holds exactly `expectedToken`, with the
+   * comparison and the delete atomic at the store's own authority (the
+   * main-process file lock) — never composed from `get()` + `delete()` by a
+   * caller. `kept` means the store held nothing or someone else's pair.
+   * Rejects when the store cannot decide or the delete cannot land.
+   */
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept">;
   subscribe(listener: (change: TokenStoreChange) => void): Disposable;
   /**
    * One-time migration of the legacy per-window localStorage token pair onto the
@@ -1009,7 +1341,9 @@ export interface ITokenStore {
  *   platform must not retry forever.
  */
 export type NotificationShowOutcome =
-  "presented" | "duplicate" | "undeliverable";
+  | "presented"
+  | "duplicate"
+  | "undeliverable";
 
 /**
  * Which feed produced the notification being shown - delivery provenance,
@@ -1022,6 +1356,12 @@ export type NotificationShowOutcome =
 export type NotificationFeedSource = "host" | "cloud" | "app-local" | "global";
 
 export interface INotificationHost {
+  /**
+   * Native OS notification preferences for this desktop app. Phones expose
+   * their richer read/request/repair surface through `pushPermission` instead;
+   * browser/dev shells leave this null.
+   */
+  readonly systemSettings: INotificationSystemSettingsHost | null;
   show(
     title: string,
     body: string,
@@ -1035,6 +1375,11 @@ export interface INotificationHost {
   onForegroundDisplay(
     handler: (display: NotificationForegroundDisplay) => void,
   ): Disposable;
+}
+
+export interface INotificationSystemSettingsHost {
+  /** Opens the OS notification preferences owned by this application. */
+  open(): Promise<void>;
 }
 
 /**
@@ -1150,7 +1495,10 @@ export interface HostInstallResult {
   readonly previousVersion: string | null;
   readonly serviceLifecycle: {
     readonly priorServiceState:
-      "running" | "stopped" | "not-installed" | "externally-managed";
+      | "running"
+      | "stopped"
+      | "not-installed"
+      | "externally-managed";
     readonly stoppedBeforeSwap: boolean;
     readonly postSwapAction: "install" | "restart" | "start" | "none";
     readonly postSwapError: string | null;
@@ -1184,11 +1532,21 @@ export interface HostRemovalState {
 
 // Result of the in-app "Remove Traycer" action. The desktop stops + removes
 // the host service, the host install, and (on macOS) the SMAppService login
-// item, while preserving all `~/.traycer` user data. Each flag reports what
-// the teardown actually accomplished so the renderer can confirm.
+// item, while preserving all `~/.traycer` user data.
 export interface TraycerUninstallResult {
   readonly removedHost: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - NOT that
+   * the registration is provably gone. See `HostUninstallResult` for why no
+   * platform can verify absence.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the post-teardown readback observed: `true` = definitely still
+   * registered, `null` = nothing could confirm either way. Read this rather
+   * than `deregisteredService` when you need certainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
 }
 
@@ -1233,7 +1591,18 @@ export interface HostAvailableSnapshot {
 }
 
 export interface HostAvailableVersionsInput {
-  readonly includePreReleases: boolean;
+  /**
+   * The catalog override, tri-state: `true` explicitly includes release
+   * candidates, `false` explicitly excludes them, and `undefined` asks the CLI
+   * to derive inclusion from the installed host.
+   *
+   * `boolean | undefined` rather than an optional property, so a caller must
+   * state which of the three it means. Read it with `=== undefined`; the
+   * absent state is a real request, not a missing argument, and collapsing it
+   * to `false` is what would make an RC host's default catalog silently
+   * stable-only again.
+   */
+  readonly includePreReleases: boolean | undefined;
 }
 
 export type HostDoctorSeverity = "info" | "warning" | "error" | "fatal";
@@ -1325,9 +1694,55 @@ export interface DownloadLaneStatus {
 }
 
 export type HostActivationState =
-  "activated" | "pendingActivation" | "activationUnknown" | "unavailable";
+  | "activated"
+  | "pendingActivation"
+  | "activationUnknown"
+  | "unavailable";
+
+/**
+ * The durable attempt record's facts, read from disk by desktop main.
+ *
+ * ## Why FACTS and not a projected view (Ticket 07 §5.2.7 / T6 Q1(b))
+ *
+ * The gap this closes is the host-DOWN window: with no host to answer
+ * `host.status`, the renderer had no observation at all, so an attempt sitting
+ * on disk rendered as a blank "state unknown" and the user could not tell
+ * "an update is mid-flight and the host is unreachable" from "nothing is
+ * happening".
+ *
+ * Desktop main can read that record without a host. What it must NOT do is
+ * decide what it MEANS: the qualified-stale vocabulary (`kind` / `qualified` /
+ * `lastKnownKind`) lives with the renderer's projector, and a second copy of it
+ * here would be the duplicated-policy class this epic has paid for repeatedly.
+ * So this carries the record's facts and nothing else; the renderer feeds them
+ * through the SAME projector it already uses for live reads.
+ *
+ * `updatedAt` is presentation only. Attempt ordering is
+ * `attemptId + generation + sequence` — never a timestamp, so two clocks can
+ * never disagree about which attempt is newer.
+ */
+export interface LocalAttemptFacts {
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly sequence: number;
+  readonly targetVersion: string;
+  readonly phase: HostUpdateAttemptPhase;
+  // `HostUpdateAttemptContinuation` already includes `null`.
+  readonly continuation: HostUpdateAttemptContinuation;
+  readonly updatedAt: string;
+}
 
 export interface HostControllerStatus {
+  /**
+   * The durable attempt on THIS machine, or `null` when there is none or the
+   * record could not be read.
+   *
+   * `null` is deliberately not "no attempt": an unreadable record is also
+   * `null`, and the renderer must treat absence as "we cannot say" rather than
+   * as "nothing is running". Fabricating idleness from a failed read is how a
+   * mid-flight update becomes invisible.
+   */
+  readonly localAttempt: LocalAttemptFacts | null;
   readonly download: DownloadLaneStatus | null;
   readonly mutation: MutationLaneStatus | null;
   readonly installedVersion: string | null;
@@ -1405,7 +1820,23 @@ export type ApplyStagedTrigger = "launch" | "manual";
 
 export interface HostUninstallResult {
   readonly removedInstallDir: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - NOT that
+   * the registration is provably gone. No platform can verify absence:
+   * Windows maps every `schtasks /Query` failure to `not-installed`, Linux
+   * re-reads the manifest the uninstall just deleted, and macOS's
+   * `launchctl print` probe tolerates non-zero while an unloaded SMAppService
+   * record is invisible to it. It IS false when the readback positively found
+   * the registration still present.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the post-teardown readback observed. `true` = definitely still
+   * registered, `null` = nothing could confirm either way, `false` = verified
+   * absent (no platform produces this today). Read this rather than
+   * `deregisteredService` when you need certainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
 }
 
 export interface HostLogsTailResult {
@@ -1475,6 +1906,100 @@ export interface CliInstallManifestSnapshot {
   } | null;
 }
 
+/** Which Doctor repair to run; both are controller lifecycle intents. */
+export type DoctorRepairIntent = "converge-ready" | "register-service";
+
+/**
+ * The recovery console's repairs, which QUEUE rather than refusing.
+ *
+ * The same four Doctor fix actions the WATCHED sheet sends through its
+ * refusing dispatches — install and service-install to
+ * `runDoctorRepairIfIdle`, start and restart to `restartHostIfIdle` — minus
+ * the admission test. This console repairs a host that is already down, so
+ * waiting behind whatever is running is the point, and a surface reachable
+ * when Settings cannot render must never learn to say no.
+ *
+ * That exemption is about TIMING only. Identity is a separate question and is
+ * enforced here exactly as it is everywhere else — the console outlives the
+ * host it names, and a replacement must not inherit repairs aimed at its
+ * predecessor.
+ */
+export type QueuedDoctorRepair =
+  | "converge-ready"
+  | "register-service"
+  | "restart";
+
+/**
+ * `declined` covers both "nothing was enqueued because this is no longer that
+ * host" and the HOST's own refusal of a restart — one informational,
+ * self-clearing arm, mapped in main so the renderer has no second place to get
+ * the taxonomy wrong. A repair that could not run for any other reason rejects.
+ */
+export type QueuedDoctorRepairResult =
+  | { readonly kind: "applied" }
+  | { readonly kind: "declined"; readonly message: string };
+
+/**
+ * A Doctor repair's answer. `lane-busy` and `host-changed` mean NOTHING was
+ * enqueued — the caller renders the message as information, the same way a
+ * host's own refusal is rendered.
+ */
+export type DoctorRepairDispatch =
+  | { readonly kind: "lane-busy"; readonly message: string }
+  | { readonly kind: "host-changed"; readonly message: string }
+  | { readonly kind: "dispatched"; readonly outcome: MutationOutcome<null> };
+
+/**
+ * What an atomic maintenance install submission answers.
+ *
+ * `lane-busy` is main's verdict that the exclusive mutation lane was already
+ * occupied at submission time, so NOTHING was enqueued — the compatibility
+ * lane maps it to the protocol's `already-updating`. Every other arm is the
+ * controller's own per-intent outcome, unchanged and mapped as before.
+ */
+export type MaintenanceInstallDispatch =
+  | {
+      readonly kind: "lane-busy";
+      /**
+       * Whether the lane is occupied by UPDATE work (an install or an apply)
+       * as opposed to anything else that takes the same exclusive lane — a
+       * service registration, a restart, a removal, a free-port repair, or
+       * the pending login-item refresh.
+       *
+       * The distinction is not cosmetic. The compatibility lane maps a busy
+       * lane to the protocol's `already-updating`, and that answer arms the
+       * caller's accepted-update latch to wait on `host.status.updateProgress`
+       * — a field these pre-1.2.0 hosts do not publish, and which an unrelated
+       * service cycle would never populate even if they did. Reporting a
+       * service registration as "already updating" therefore both lies and
+       * hangs the surface on progress that cannot arrive.
+       */
+      readonly updateInFlight: boolean;
+      /** Main's rendered reason, for the surfaces that show one. */
+      readonly message: string;
+    }
+  | {
+      readonly kind: "dispatched";
+      readonly outcome: MutationOutcome<InstallVersionOk>;
+    };
+
+/**
+ * `host.doctor` as the desktop lane can honestly answer it: the CLI's issue
+ * list (validated against the protocol issue schema) or the shared CLI-shell
+ * failure taxonomy — but WITHOUT `triviallyGreenIssueCodes`. That field is a
+ * statement about the transport the report travelled over, which the desktop
+ * main process cannot see; the consumer that knows its vantage supplies the
+ * set (see `doctorTriviallyGreenIssueCodesForVantage` in the protocol).
+ */
+export type MaintenanceDoctorProjection =
+  | {
+      readonly status: "ok";
+      readonly issues: readonly MaintenanceDoctorIssue[];
+    }
+  | { readonly status: "cli-unavailable" }
+  | { readonly status: "cli-failed" }
+  | { readonly status: "invalid-output" };
+
 /**
  * Renderer-facing host management surface. Each method either resolves
  * with the CLI's final NDJSON `result.data` payload (query commands), or -
@@ -1535,10 +2060,37 @@ export interface IHostManagement {
   // `IRunnerHost.requestHostRespawn`: resolves `declined` when the host
   // was deliberately not restarted; rejects only on genuine failures.
   readonly restartHost: () => Promise<HostRestartRequestResult>;
+  /**
+   * This machine's host log.
+   *
+   * Carries `expectedHostId` for the same reason the maintenance block below
+   * does, and it is the one READ in that set: the log is host-scoped content
+   * rendered under a named host, so when local host A is replaced by B while
+   * A's Doctor report is still on screen, an unfenced read puts B's log —
+   * paths, ports, workspace names — under A's name. Main compares against the
+   * live local identity and refuses a mismatch.
+   *
+   * An EMPTY string is the fail-CLOSED value, not an opt-out: it matches no
+   * host that can name itself, so it is refused everywhere except a legacy
+   * install with no identity machinery at all — exactly the population where
+   * there is no second host to confuse this one with.
+   */
   readonly getHostLogs: (input: {
     readonly tailLines: number;
+    readonly expectedHostId: string;
   }) => Promise<HostLogsTailResult>;
-  readonly runDoctor: () => Promise<HostDoctorReport>;
+  /**
+   * This machine's Doctor report.
+   *
+   * Fenced for the same reason `getHostLogs` is: the report is host-scoped
+   * content rendered under a named host, and its issues carry the port and pid
+   * numbers the repairs then act on. A report produced for a replacement host
+   * but shown under its predecessor hands someone another machine's repair
+   * inputs.
+   */
+  readonly runDoctor: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostDoctorReport>;
   readonly availableVersions: (
     input: HostAvailableVersionsInput,
   ) => Promise<HostAvailableSnapshot>;
@@ -1556,10 +2108,131 @@ export interface IHostManagement {
   readonly registryCheck: (input: {
     readonly force: boolean;
   }) => Promise<HostRegistryUpdateState>;
+  /**
+   * Kill the process holding the host's port and restart it, QUEUEING behind
+   * whatever the lane is running. The down-host recovery console's route: it
+   * repairs a host that is already not answering, where waiting is the point.
+   *
+   * Fenced on identity even though it queues. The consent this carries out
+   * was given for a SPECIFIC host's port and pid, and those numbers describe
+   * the machine as the report saw it - running them against a replacement
+   * kills whatever now holds that port. The lane exemption is about WHEN the
+   * repair may run, not about WHICH host it may run against.
+   */
   readonly freePortAndRestart: (
-    input: FreePortAndRestartInput,
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
   ) => Promise<FreePortAndRestartInput>;
+  /**
+   * The refusing twin, for the Doctor sheet a person is WATCHING.
+   *
+   * Same reasoning as `restartHostIfIdle` and `runDoctorRepairIfIdle`: the
+   * renderer's own gate can only see what it last rendered, so a lifecycle
+   * write that arms in main after that snapshot still lets a confirm through,
+   * and this repair QUEUES rather than refusing - the kill then lands after
+   * the competing write, against a host in a state nobody approved. Main
+   * tests the lane and submits with no await between.
+   */
+  readonly freePortAndRestartIfIdle: (
+    input: FreePortAndRestartInput & { readonly expectedHostId: string },
+  ) => Promise<DoctorRepairDispatch>;
   readonly cliManifest: () => Promise<CliInstallManifestSnapshot | null>;
+  // The four `maintenance*` members below serve ONE consumer: the GUI's
+  // local-maintenance fallback, which answers the v1.2.0 `host.*` maintenance
+  // RPCs over this bridge for a LOCAL host too old to have them (≤ 1.1.11 —
+  // a frozen population; delete these when the supported fleet floor reaches
+  // the maintenance-RPC host version). Unlike the query members above, they
+  // return PROTOCOL response shapes: the desktop main process projects the
+  // same CLI JSON / on-disk records the host's own resolvers project, and it
+  // classifies CLI failures into the wire taxonomy there because an Electron
+  // invoke rejection loses its error shape crossing the boundary — the
+  // renderer could no longer tell "no CLI" from "CLI crashed".
+  //
+  // EVERY member below carries `expectedHostId`: the host the caller believes
+  // is local. These operate on "this machine's host" implicitly, so without it
+  // a request aimed at host A silently lands on its replacement B — the local
+  // identity can change under a scope that froze A's id, and an id nothing
+  // checks is worse than no id at all. Main compares against the live local
+  // identity and refuses a mismatch.
+  /** `host.update.check`'s answer from this machine's bundled CLI. */
+  readonly maintenanceUpdateCheck: (
+    input: HostAvailableVersionsInput & { readonly expectedHostId: string },
+  ) => Promise<HostUpdateCheckResponseV11>;
+  /** `host.doctor`'s answer, minus the caller-owned transport vantage. */
+  readonly maintenanceDoctor: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<MaintenanceDoctorProjection>;
+  /** `host.getInstallationInfo`'s answer from the shared on-disk records. */
+  readonly maintenanceInstallationInfo: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostGetInstallationInfoResponse>;
+  /**
+   * `host.update.install`'s dispatch, refused when the mutation lane is
+   * already occupied.
+   *
+   * Distinct from {@link installVersion} because the REFUSAL has to be atomic
+   * with the submission. The lane is exclusive but it does not reject a
+   * distinct intent — it QUEUES it — so a renderer that reads
+   * `getHostControllerStatus` and then submits has a window in which the
+   * banner, the tray or the background reconciler can take the lane, and its
+   * install lands right after that one finishes (retargeting, possibly
+   * downgrading, a host nobody asked to move). Main tests the lane and
+   * submits in one synchronous stretch, which is what closes it.
+   *
+   * `installVersion` keeps its queueing semantics for the surfaces that want
+   * them; only the compatibility lane, whose caller has no other way to see
+   * the refusal, takes this one.
+   */
+  readonly maintenanceInstallVersion: (input: {
+    readonly version: string;
+    readonly force: boolean;
+    readonly expectedHostId: string;
+  }) => Promise<MaintenanceInstallDispatch>;
+  /**
+   * Respawn the local host, REFUSED (not queued) when the desktop's exclusive
+   * mutation lane already owns an intent.
+   *
+   * `restartHost` queues behind whatever is running, and stays that way for
+   * the tray and menu deliberately — those are RECOVERY surfaces, the ones
+   * still reachable when Settings cannot render, so they must never learn to
+   * say no (they confirm first, exactly like Settings does). Queueing IS
+   * wrong for a Settings restart the person is watching: by the time an
+   * install or service cycle finishes, the kill they authorised is aimed at a
+   * host in a different state, and the update they were waiting for has
+   * already restarted it once. Force overrides the HOST's veto (busy work, a
+   * live claim); it was never meant to override the desktop's own
+   * serialization.
+   *
+   * A lane refusal arrives as `declined` with a message, the same arm a host's
+   * own refusal uses — informational, self-clearing, retryable.
+   */
+  readonly restartHostIfIdle: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostRestartRequestResult>;
+  /**
+   * The down-host recovery console's four lifecycle repairs, identity-fenced
+   * and QUEUEING. See {@link QueuedDoctorRepair} for why those two properties
+   * belong together rather than being traded off.
+   */
+  readonly runDoctorRepairQueued: (input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }) => Promise<QueuedDoctorRepairResult>;
+  /**
+   * The WATCHED Doctor sheet's two lifecycle repairs, refused when the
+   * exclusive lane is occupied or this machine's host is no longer the
+   * expected one.
+   *
+   * `convergeReady` converges to LATEST and `registerService` adds a service
+   * cycle; both QUEUE behind a running intent rather than being refused, so a
+   * repair clicked during a pinned install would otherwise land after it and
+   * override the version the person actually chose. That sheet's start/restart
+   * take `restartHostIfIdle` above, not this method; the down-host console
+   * keeps the queueing path for all four via `runDoctorRepairQueued`.
+   */
+  readonly runDoctorRepairIfIdle: (input: {
+    readonly repair: DoctorRepairIntent;
+    readonly expectedHostId: string;
+  }) => Promise<DoctorRepairDispatch>;
   readonly getHostName: () => Promise<HostNameSettings>;
   readonly setHostName: (input: {
     readonly customName: string | null;

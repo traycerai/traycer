@@ -262,13 +262,14 @@ function assertSchemaCompatibility(
         const previous = schemas[name][major][previousMinor];
         const current = schemas[name][major][currentMinor];
 
-        // Records stay lenient on value growth: readers are versioned
-        // through the same upgrade-chain discipline, and record history
-        // predates the response-lane strictness.
+        // Persisted readers can outlive or roll back behind writers. Growing a
+        // closed enum/union within a major therefore breaks a shipped reader
+        // just like removing a field does; require a major with explicit
+        // migration/downgrade behavior.
         const violation = findAdditivityViolation(
           previous,
           current,
-          "lenient",
+          "no-value-growth",
           toUnknownKeyTree(line.versions[previousMinor].contract.schema),
           toUnknownKeyTree(line.versions[currentMinor].contract.schema),
         );
@@ -290,7 +291,19 @@ function assertSchemaCompatibility(
       const currentLatest =
         schemas[name][currentMajor][currentLine.latestMinor];
 
+      const valueGrowth = findAdditivityViolation(
+        previousLatest,
+        currentLatest,
+        "no-value-growth",
+        toUnknownKeyTree(
+          previousLine.versions[previousLine.latestMinor].contract.schema,
+        ),
+        toUnknownKeyTree(
+          currentLine.versions[currentLine.latestMinor].contract.schema,
+        ),
+      );
       if (
+        valueGrowth === null &&
         findBreakingChange(
           previousLatest,
           currentLatest,
@@ -481,17 +494,11 @@ export function getRecordSchema<
 export function getRecordSchema<
   Registry extends VersionedRecordRegistry,
   Name extends keyof Registry & string,
->(
-  registry: Registry,
-  name: Name,
-  version: VersionSelector,
-): z.ZodType {
+>(registry: Registry, name: Name, version: VersionSelector): z.ZodType {
   const recordRegistry = registry[name];
 
   if (!recordRegistry) {
-    throw new Error(
-      `Record '${String(name)}' is not defined in the registry`,
-    );
+    throw new Error(`Record '${String(name)}' is not defined in the registry`);
   }
 
   if (version === "latest") {
@@ -513,11 +520,7 @@ export function getRecordSchema<
 export function parseRecord<
   Registry extends VersionedRecordRegistry,
   Name extends keyof Registry & string,
->(
-  registry: Registry,
-  name: Name,
-  data: unknown,
-): RecordValue<Registry, Name> {
+>(registry: Registry, name: Name, data: unknown): RecordValue<Registry, Name> {
   const schema = getRecordSchema(registry, name, "latest");
   return schema.parse(data) as RecordValue<Registry, Name>;
 }
@@ -549,9 +552,7 @@ export function loadRecord<
   const recordRegistry = registry[name];
 
   if (!recordRegistry) {
-    throw new Error(
-      `Record '${String(name)}' is not defined in the registry`,
-    );
+    throw new Error(`Record '${String(name)}' is not defined in the registry`);
   }
 
   const fromSchema = getRecordSchema(registry, name, fromVersion);
@@ -563,9 +564,7 @@ export function loadRecord<
   const latestVersion = installedVersions[installedVersions.length - 1];
 
   if (latestVersion === undefined) {
-    throw new Error(
-      `Record '${String(name)}' has no installed versions`,
-    );
+    throw new Error(`Record '${String(name)}' has no installed versions`);
   }
 
   return upgradeRecordToVersion(
@@ -598,8 +597,9 @@ export function upgradeRecordToVersion<
   const installedVersions = listInstalledVersions(registry);
   const fromIndex = findVersionIndex(installedVersions, fromVersion);
   const toIndex = findVersionIndex(installedVersions, toVersion);
-  let current: Parameters<RuntimeRecordUpgradePath<Registry>["upgradeRecord"]>[0] =
-    record;
+  let current: Parameters<
+    RuntimeRecordUpgradePath<Registry>["upgradeRecord"]
+  >[0] = record;
 
   for (let index = fromIndex + 1; index <= toIndex; index += 1) {
     const nextVersion = installedVersions[index];
@@ -643,8 +643,7 @@ export function downgradeRecordAcrossMajors<
     // assertion. With `fromMajor === toMajor` the schemas resolve to
     // the same instance, so parse is an effective identity check.
     const targetLine = getMajorLine(registry, toMajor);
-    const targetContract =
-      targetLine.versions[targetLine.latestMinor].contract;
+    const targetContract = targetLine.versions[targetLine.latestMinor].contract;
     type ToValue = ValueOf<LatestMajorContract<Registry, ToMajor>>;
     const parsed: ToValue = targetContract.schema.parse(record) as ToValue;
     return { ok: true, value: parsed };

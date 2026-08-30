@@ -1,6 +1,8 @@
 import type {
   BlankTileRef,
+  BrowserSessionTileRef,
   CommGraphTileRef,
+  DeletedArtifactsTileRef,
   EpicArtifactRef,
   EpicTerminalRef,
   GitDiffTileRef,
@@ -29,11 +31,13 @@ export interface TileKindToRefMap {
   readonly story: EpicArtifactRef;
   readonly review: EpicArtifactRef;
   readonly terminal: EpicTerminalRef;
+  readonly "browser-session": BrowserSessionTileRef;
   readonly "workspace-file": WorkspaceFileRef;
   readonly "git-diff": GitDiffTileRef;
   readonly "snapshot-diff": SnapshotDiffTileRef;
   readonly "managed-command-output": ManagedCommandOutputTileRef;
   readonly "comm-graph": CommGraphTileRef;
+  readonly "deleted-artifacts": DeletedArtifactsTileRef;
   readonly "published-chat": PublishedChatTileRef;
   readonly "pr-detail": PrDetailTileRef;
   readonly "pr-diff": PrDiffTileRef;

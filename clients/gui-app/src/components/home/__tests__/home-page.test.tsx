@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -14,6 +14,7 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -26,6 +27,25 @@ import {
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  focusActiveComposer,
+  registerComposerFocus,
+} from "@/lib/composer/composer-focus-registry";
+import {
+  registerTerminalFocus,
+  resetTerminalFocusRegistryForTests,
+} from "@/lib/terminals/terminal-focus-registry";
+import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
+import { isMobileApp, setMobileApp } from "@/lib/mobile-app";
+import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
+import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
+import {
+  PaneActivationFocusIntentContext,
+  type PaneActivationFocusIntent,
+  usePaneActivationFocusIntent,
+} from "@/components/epic-canvas/pane-activation";
 
 /**
  * Commit-level observation of the mocked LandingComposer's mount identity.
@@ -65,6 +85,20 @@ const homeMocks = vi.hoisted(() => ({
   })),
   composerCommits: [] as ComposerCommit[],
   nextInstanceId: 0,
+  isMobile: false,
+  tabActivity: { visible: true, focused: true },
+  delayComposerRegistration: false,
+}));
+
+// Drive the viewport branch directly. jsdom reports a desktop width, so this
+// only makes the default explicit - the phone case flips it per test.
+vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
+  useIsMobileViewport: () => homeMocks.isMobile,
+  isMobileViewport: () => homeMocks.isMobile,
+}));
+
+vi.mock("@/components/layout/tab-surface-activity-hooks", () => ({
+  useTabSurfaceActivity: () => homeMocks.tabActivity,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -161,6 +195,9 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
     // The real composer reads surface activity from context (provided by
     // HomePage); the mock mirrors that so the gating stays observable.
     const activityEnabled = useSurfaceActivity();
+    const paneActivationFocusIntent = usePaneActivationFocusIntent();
+    const composerRef = useRef<HTMLButtonElement | null>(null);
+    const delayComposerRegistration = homeMocks.delayComposerRegistration;
     const actions = useLandingComposerActions(useTestPlacementTarget());
     const draftId = props.draftId;
     const pendingCreateId = props.pendingCreateId;
@@ -171,6 +208,43 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
       instanceIdRef.current = homeMocks.nextInstanceId;
     }
     const instanceId = instanceIdRef.current;
+
+    useLayoutEffect(() => {
+      if (delayComposerRegistration) return;
+      const composer = composerRef.current;
+      if (composer === null) return;
+      return registerComposerFocus(
+        `landing-test-${instanceId}`,
+        {
+          focus: () => composer.focus(),
+          containsActiveElement: (activeElement) => activeElement === composer,
+          isEligible: () => composer.isConnected,
+        },
+        activityEnabled,
+      );
+    }, [activityEnabled, delayComposerRegistration, instanceId]);
+    useEffect(() => {
+      if (delayComposerRegistration) return;
+      const composer = composerRef.current;
+      const focusScope =
+        composer === null
+          ? null
+          : composer.closest("[data-primary-focus-scope='true']");
+      if (
+        activityEnabled &&
+        // Mirrors the real editor's own gate: becoming active is not a user
+        // gesture, so the installed mobile app never takes focus from it. The
+        // mock carries it so a surface-driven focus is the only thing left that
+        // could raise the keyboard here.
+        !isMobileApp() &&
+        !paneActivationFocusIntent.shouldYieldAutoFocus() &&
+        (focusScope === null ||
+          document.activeElement === null ||
+          !focusScope.contains(document.activeElement))
+      ) {
+        focusActiveComposer();
+      }
+    }, [activityEnabled, delayComposerRegistration, paneActivationFocusIntent]);
 
     // Instance lifetime (keyed remounts). `instanceId` is allocated once per
     // React key identity; depend only on it so prop updates do not fake unmounts.
@@ -241,6 +315,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
         data-instance-id={String(instanceId)}
       >
         <button
+          ref={composerRef}
           type="button"
           data-testid="landing-submit"
           onClick={handleClick}
@@ -280,14 +355,47 @@ vi.mock("@/components/epics/epics-list-panel", () => ({
 }));
 
 vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
-  LandingTerminalPanel: () => <div data-testid="landing-terminal-panel-slot" />,
+  LandingTerminalPanel: () => {
+    const terminalRef = useRef<HTMLButtonElement | null>(null);
+    useLayoutEffect(() => {
+      const terminal = terminalRef.current;
+      if (terminal === null) return;
+      return registerTerminalFocus(
+        "landing-terminal-focus-test",
+        () => terminal.focus(),
+        (activeElement) => activeElement === terminal,
+        () => terminal.isConnected,
+      );
+    }, []);
+    return (
+      <button
+        ref={terminalRef}
+        type="button"
+        data-testid="landing-terminal-panel-slot"
+      >
+        Terminal input
+      </button>
+    );
+  },
 }));
+
+vi.mock(
+  "@/components/home/terminal-panel/landing-terminal-gesture-provider",
+  () => ({
+    LandingTerminalGestureProvider: (props: { readonly children: ReactNode }) =>
+      props.children,
+  }),
+);
 import { HomePage } from "@/components/home/home-page";
 
 // The workspace-folders store buckets by host; every fixture in this suite
 // resolves the active host through `homeMocks.getActiveHostId()`, so seed and
 // read that same host's bucket.
 const TEST_HOST_ID = "host-home";
+const INITIAL_TAB_LAYOUT = {
+  items: useTabsStore.getState().items,
+  activeItemId: useTabsStore.getState().activeItemId,
+};
 
 function setGlobalWorkspaceFolders(
   folders: ReadonlyArray<string>,
@@ -302,9 +410,12 @@ function setGlobalWorkspaceFolders(
 
 describe("<HomePage />", () => {
   beforeEach(() => {
+    homeMocks.tabActivity = { visible: true, focused: true };
+    homeMocks.delayComposerRegistration = false;
     __resetTabNavigationControllerForTesting();
     window.localStorage.clear();
     homeMocks.systemModalOpen = false;
+    homeMocks.isMobile = false;
     homeMocks.navigate.mockReset();
     homeMocks.request.mockReset();
     homeMocks.getActiveHostId.mockReset();
@@ -320,6 +431,8 @@ describe("<HomePage />", () => {
     });
     homeMocks.composerCommits.length = 0;
     homeMocks.nextInstanceId = 0;
+    useLandingTerminalStore.getState().resetForTests();
+    useTabsStore.setState(INITIAL_TAB_LAYOUT);
     useAuthStore.setState({
       status: "signed-in",
       profile: {
@@ -342,6 +455,10 @@ describe("<HomePage />", () => {
 
   afterEach(() => {
     cleanup();
+    resetTerminalFocusRegistryForTests();
+    resetPrimaryFocusCoordinatorForTests();
+    useLandingTerminalStore.getState().resetForTests();
+    useTabsStore.setState(INITIAL_TAB_LAYOUT);
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useEpicCanvasStore.setState({
       tabsById: {},
@@ -350,6 +467,8 @@ describe("<HomePage />", () => {
       mostRecentTabIdByEpicId: {},
     });
     useWorkspaceFoldersStore.setState({ byHost: {} });
+    useMobileNavStore.setState({ open: false });
+    setMobileApp(false);
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -394,6 +513,59 @@ describe("<HomePage />", () => {
     expect(screen.getByTestId("landing-composer").dataset.activityEnabled).toBe(
       "false",
     );
+    queryClient.clear();
+  });
+
+  it("drops the embedded epics list at phone width, keeping the hero and composer", () => {
+    homeMocks.isMobile = true;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    // The hamburger drawer already carries "Recent tasks" + "View all" off the
+    // same useHistoryQuery, so the inline copy is pure duplication here.
+    expect(screen.queryByTestId("epics-list-panel")).toBeNull();
+    expect(screen.getByTestId("home-hero")).not.toBeNull();
+    expect(screen.getByTestId("landing-composer")).not.toBeNull();
+    queryClient.clear();
+  });
+
+  it("opens the nav drawer from the phone-only View history link", () => {
+    homeMocks.isMobile = true;
+    useMobileNavStore.setState({ open: false });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("home-view-history"));
+
+    // Same drawer the header hamburger opens - that is where "Recent tasks"
+    // lives once the embedded list is dropped at this width.
+    expect(useMobileNavStore.getState().open).toBe(true);
+    queryClient.clear();
+  });
+
+  it("keeps the View history link off the desktop landing page", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByTestId("home-view-history")).toBeNull();
     queryClient.clear();
   });
 
@@ -624,6 +796,191 @@ describe("<HomePage />", () => {
     function mounts(): ReadonlyArray<ComposerCommit> {
       return homeMocks.composerCommits.filter((c) => c.phase === "mount");
     }
+
+    const noPaneFocusIntent: PaneActivationFocusIntent = {
+      mark: () => undefined,
+      shouldYieldAutoFocus: () => false,
+    };
+
+    function seedFocusedLandingTerminal(maximized: boolean): void {
+      useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+      useLandingDraftStore.getState().setActiveDraft("draft-a");
+      useTabsStore.setState({
+        items: [
+          {
+            kind: "tab",
+            id: "item-draft-a",
+            ref: { kind: "draft", id: "draft-a" },
+          },
+        ],
+        activeItemId: "item-draft-a",
+      });
+      const terminalStore = useLandingTerminalStore.getState();
+      terminalStore.addTab({
+        instanceId: "landing-terminal-focus-test",
+        sessionId: "terminal-session-test",
+        hostId: TEST_HOST_ID,
+        cwd: "/tmp",
+        name: "Terminal",
+        titleSource: "default",
+      });
+      terminalStore.setPanelOpen("draft-a", true);
+      terminalStore.setPanelMaximized("draft-a", maximized);
+    }
+
+    function renderLandingFocusHarness(focusIntent: PaneActivationFocusIntent) {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const tree = () => (
+        <PrimaryFocusCoordinatorProvider>
+          <QueryClientProvider client={queryClient}>
+            <button type="button" data-testid="other-tab-control">
+              Other tab
+            </button>
+            <PaneActivationFocusIntentContext.Provider value={focusIntent}>
+              <HomePage />
+            </PaneActivationFocusIntentContext.Provider>
+            <LandingTerminalHost />
+          </QueryClientProvider>
+        </PrimaryFocusCoordinatorProvider>
+      );
+      const view = render(tree());
+      return { queryClient, tree, view };
+    }
+
+    it("restores terminal focus through the real landing portal after tab reactivation", async () => {
+      seedFocusedLandingTerminal(false);
+      const { queryClient, tree, view } =
+        renderLandingFocusHarness(noPaneFocusIntent);
+      const terminal = await screen.findByTestId("landing-terminal-panel-slot");
+      expect(
+        screen.getByTestId("landing-draft-surface").contains(terminal),
+      ).toBe(true);
+      terminal.focus();
+      expect(document.activeElement).toBe(terminal);
+
+      homeMocks.tabActivity = { visible: false, focused: false };
+      view.rerender(tree());
+      screen.getByTestId("other-tab-control").focus();
+
+      homeMocks.tabActivity = { visible: true, focused: true };
+      view.rerender(tree());
+
+      expect(document.activeElement).toBe(terminal);
+      queryClient.clear();
+    });
+
+    it("focuses the active terminal when a maximized landing surface mounts already focused", async () => {
+      seedFocusedLandingTerminal(true);
+      const { queryClient } = renderLandingFocusHarness(noPaneFocusIntent);
+
+      expect(document.activeElement).toBe(
+        await screen.findByTestId("landing-terminal-panel-slot"),
+      );
+      queryClient.clear();
+    });
+
+    it("does not focus a retained inactive composer while the focused editor registers asynchronously", async () => {
+      useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+      useLandingDraftStore.getState().setActiveDraft("draft-a");
+      homeMocks.delayComposerRegistration = true;
+      const inactiveComposer = document.createElement("button");
+      inactiveComposer.type = "button";
+      document.body.append(inactiveComposer);
+      const unregisterInactive = registerComposerFocus(
+        "retained-inactive-split-partner",
+        {
+          focus: () => inactiveComposer.focus(),
+          containsActiveElement: (activeElement) =>
+            activeElement === inactiveComposer,
+          isEligible: () => inactiveComposer.isConnected,
+        },
+        false,
+      );
+
+      const { queryClient, tree, view } =
+        renderLandingFocusHarness(noPaneFocusIntent);
+
+      expect(document.activeElement).not.toBe(inactiveComposer);
+
+      homeMocks.delayComposerRegistration = false;
+      view.rerender(tree());
+      await waitFor(() => {
+        expect(document.activeElement).toBe(
+          screen.getByTestId("landing-submit"),
+        );
+      });
+
+      unregisterInactive();
+      inactiveComposer.remove();
+      queryClient.clear();
+    });
+
+    // The installed mobile app's rule: only a gesture may raise the software
+    // keyboard. The landing surface reaches both endpoints through their focus
+    // registries, so neither endpoint's own guard is on this path - the guard
+    // has to be here, and these two cases are what hold it.
+    it("takes no focus on the mobile app when the landing surface becomes focused", async () => {
+      setMobileApp(true);
+      useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+      useLandingDraftStore.getState().setActiveDraft("draft-a");
+      const { queryClient } = renderLandingFocusHarness(noPaneFocusIntent);
+
+      // The composer IS registered and active - without that this would pass on
+      // a surface that simply had no endpoint to focus.
+      const submit = await screen.findByTestId("landing-submit");
+      expect(document.activeElement).not.toBe(submit);
+      expect(document.body.contains(submit)).toBe(true);
+      queryClient.clear();
+    });
+
+    it("leaves a maximized landing terminal unfocused on the mobile app", async () => {
+      setMobileApp(true);
+      seedFocusedLandingTerminal(true);
+      const { queryClient } = renderLandingFocusHarness(noPaneFocusIntent);
+
+      const terminal = await screen.findByTestId("landing-terminal-panel-slot");
+      expect(document.activeElement).not.toBe(terminal);
+      queryClient.clear();
+    });
+
+    it("restores the maximized terminal after a system modal closes", async () => {
+      seedFocusedLandingTerminal(true);
+      const { queryClient, tree, view } =
+        renderLandingFocusHarness(noPaneFocusIntent);
+      const terminal = await screen.findByTestId("landing-terminal-panel-slot");
+      expect(document.activeElement).toBe(terminal);
+
+      homeMocks.systemModalOpen = true;
+      view.rerender(tree());
+      screen.getByTestId("other-tab-control").focus();
+
+      homeMocks.systemModalOpen = false;
+      view.rerender(tree());
+
+      expect(document.activeElement).toBe(terminal);
+      queryClient.clear();
+    });
+
+    it("yields restoration to the control that activates an unfocused draft pane", () => {
+      seedFocusedLandingTerminal(false);
+      const focusIntent: PaneActivationFocusIntent = {
+        mark: () => undefined,
+        shouldYieldAutoFocus: () => true,
+      };
+      homeMocks.tabActivity = { visible: true, focused: false };
+      const { queryClient, tree, view } =
+        renderLandingFocusHarness(focusIntent);
+      const activatingControl = screen.getByTestId("landing-change-twice");
+      activatingControl.focus();
+
+      homeMocks.tabActivity = { visible: true, focused: true };
+      view.rerender(tree());
+
+      expect(document.activeElement).toBe(activatingControl);
+      queryClient.clear();
+    });
 
     it("never commits a null-draft frame still keyed by a pending-created draft id", () => {
       const queryClient = renderHome();

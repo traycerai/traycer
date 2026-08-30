@@ -95,4 +95,52 @@ describe("SettingsRow", () => {
     expect(control.className).toContain("w-80");
     expect(control.className).not.toContain("max-w-full");
   });
+
+  it("floors the label below md so a wide control takes its own line", () => {
+    // SETTINGS_ROW_STACK is the shared narrow-width half of this geometry. Flex
+    // line-breaking reads an item's basis clamped by its own min-width, so
+    // raising the label's floor to 70% below md is what decides which controls
+    // stack: anything wider than the remaining third is pushed onto a line of
+    // its own BEFORE any shrinking happens, while a switch-sized control still
+    // fits beside the label - which is where a settings toggle belongs.
+    //
+    // Every responsive override it contributes carries a max-md: variant - bar
+    // the flex-wrap the mechanism acts through, which this row already
+    // declares - so it only ever LAYERS ONTO the desktop rules asserted above;
+    // it must never remove ml-auto/justify-end, which are what keep the
+    // control trailing-aligned.
+    render(
+      <SettingsRow
+        label="Some label"
+        control={<div data-testid="control">Control</div>}
+      />,
+    );
+
+    const label = screen.getByText("Some label");
+    const labelBlock = label.parentElement;
+    if (labelBlock === null) throw new Error("expected label block parent");
+
+    const row = labelBlock.parentElement;
+    if (row === null) throw new Error("expected settings row container");
+    // The floor does nothing without the wrap it acts through.
+    expect(row.className).toContain("flex-wrap");
+    expect(row.className).toContain("max-md:gap-y-3");
+
+    // Both floors coexist: the desktop half-row one, and the narrower-viewport
+    // one that supersedes it only below the breakpoint.
+    expect(labelBlock.className).toContain("min-w-[50%]");
+    expect(labelBlock.className).toContain("max-md:min-w-[70%]");
+
+    const control = screen.getByTestId("control");
+    const controlWrapper = control.parentElement;
+    if (controlWrapper === null) {
+      throw new Error("expected SettingsRow control wrapper");
+    }
+    // Holds its intrinsic width rather than shrinking into the label's.
+    expect(controlWrapper.className).toContain("max-md:shrink-0");
+    // The trailing-edge contract survives: these are additions guarded by
+    // max-md:, not replacements.
+    expect(controlWrapper.className).toContain("ml-auto");
+    expect(controlWrapper.className).toContain("justify-end");
+  });
 });

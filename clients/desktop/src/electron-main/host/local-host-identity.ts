@@ -59,7 +59,28 @@ export async function readEnrolledHostId(
 }
 
 /**
- * The last known local `hostId`, or null when nothing on disk can answer.
+ * What this machine's identity files can say about which host lives here.
+ *
+ * `named` carries the id. The two anonymous cases are DIFFERENT facts and are
+ * kept apart because a caller enforcing an identity fence must treat them
+ * differently:
+ *
+ *  - `unverifiable` — the enrollment record EXISTS but cannot answer. This
+ *    install has enrollment machinery, so an unreadable record is exactly what
+ *    a re-enrollment or a replacement mid-write looks like; a fence that
+ *    treats it as "no change" fails open onto whichever host lands next.
+ *  - `unenrolled` — nothing on disk names a host at all (no enrollment record,
+ *    no pid file): a legacy install that predates the record. There is no
+ *    identity machinery here for a replacement to have gone through, so a
+ *    fence has nothing to compare and nothing contradicting the caller.
+ */
+export type LocalHostIdentity =
+  | { readonly kind: "named"; readonly hostId: string }
+  | { readonly kind: "unverifiable" }
+  | { readonly kind: "unenrolled" };
+
+/**
+ * The last known local host identity, classified.
  *
  * The ENROLLMENT record decides, and `pid.json` is only the fallback. Which
  * is the reverse of what "the file describing the running host" suggests, and
@@ -79,17 +100,34 @@ export async function readEnrolledHostId(
  *
  * A running host's `pid.json` agrees with enrollment, so preferring enrollment
  * costs nothing when both answer. The pid fallback is reserved for `absent`
- * alone. An `unusable` record answers null WITHOUT consulting pid: the record
- * existing proves this install enrolls, so its content being unreadable right
- * now must not hand the decision to the very source whose staleness this
- * ordering exists to outrank.
+ * alone. An `unusable` record answers `unverifiable` WITHOUT consulting pid:
+ * the record existing proves this install enrolls, so its content being
+ * unreadable right now must not hand the decision to the very source whose
+ * staleness this ordering exists to outrank.
+ */
+export async function classifyLocalHostIdentity(
+  files: LocalHostIdentityFiles,
+): Promise<LocalHostIdentity> {
+  const enrollment = await readEnrolledHostId(files.identityEnrollmentFile);
+  if (enrollment.kind === "enrolled") {
+    return { kind: "named", hostId: enrollment.hostId };
+  }
+  if (enrollment.kind === "unusable") return { kind: "unverifiable" };
+  const metadata = await readPidMetadata(files.pidMetadataFile);
+  return metadata === null
+    ? { kind: "unenrolled" }
+    : { kind: "named", hostId: metadata.hostId };
+}
+
+/**
+ * The last known local `hostId`, or null when nothing on disk can answer.
+ * A projection of `classifyLocalHostIdentity` for the callers (the renderer
+ * seed, the fleet port) that only need the id — the same source in the same
+ * order, so the two can never disagree about which host is local.
  */
 export async function readLastKnownLocalHostId(
   files: LocalHostIdentityFiles,
 ): Promise<string | null> {
-  const enrollment = await readEnrolledHostId(files.identityEnrollmentFile);
-  if (enrollment.kind === "enrolled") return enrollment.hostId;
-  if (enrollment.kind === "unusable") return null;
-  const metadata = await readPidMetadata(files.pidMetadataFile);
-  return metadata === null ? null : metadata.hostId;
+  const identity = await classifyLocalHostIdentity(files);
+  return identity.kind === "named" ? identity.hostId : null;
 }

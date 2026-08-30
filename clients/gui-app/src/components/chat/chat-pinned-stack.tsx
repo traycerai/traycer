@@ -10,7 +10,10 @@ import { useMemo, useState } from "react";
 import { ChatAccumulatedChangesPanel } from "@/components/chat/chat-accumulated-changes-panel";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
-import { hasChatPinnedStackContent } from "@/components/chat/chat-pinned-stack-utils";
+import {
+  chatChangesPanelHasContent,
+  hasChatPinnedStackContent,
+} from "@/components/chat/chat-pinned-stack-utils";
 import { LivePulse } from "@/components/ui/live-pulse";
 import {
   Collapsible,
@@ -41,7 +44,10 @@ export function PinnedStackSections(props: {
   readonly separated: boolean;
 }) {
   const { restore, todo } = props;
-  const showChanges = restore.accumulatedFileChanges.length > 0;
+  // The same predicate `hasChatPinnedStackContent` gates the whole stack on -
+  // shared rather than restated, because a stack that mounts and a section
+  // that renders nothing is an empty bordered box.
+  const showChanges = chatChangesPanelHasContent(restore);
   if (todo === null && !showChanges) return null;
 
   return (

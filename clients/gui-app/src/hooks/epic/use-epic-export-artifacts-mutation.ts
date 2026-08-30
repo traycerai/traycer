@@ -1,14 +1,16 @@
 import { useMutation } from "@tanstack/react-query";
-import { toast } from "sonner";
 import {
   createArtifactExport,
   type ArtifactExportFormat,
 } from "@/lib/artifacts/artifact-export";
-import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
+import { toastSavedFile } from "@/lib/files/saved-file-toast";
+import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { appLogger } from "@/lib/logger";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface ArtifactExportSelection {
@@ -25,8 +27,10 @@ export interface EpicExportArtifactsInput {
 
 export function useEpicExportArtifacts() {
   const epicHandle = useOpenEpicHandle();
+  const fileSave = useFileSaveHost();
+  const openSaved = useOpenSavedFile();
 
-  return useMutation<string | null, Error, EpicExportArtifactsInput>({
+  return useMutation<SavedFile | null, Error, EpicExportArtifactsInput>({
     mutationKey: epicMutationKeys.exportArtifacts(),
     mutationFn: async (input) => {
       const firstArtifact = input.artifacts.at(0);
@@ -55,13 +59,17 @@ export function useEpicExportArtifacts() {
           archiveTitle: input.archiveTitle ?? firstArtifact.title,
         });
         // The blob is fully built, so the fragments are dead from here on.
-        // Release before the save dialog: `saveBlobToDisk` blocks on native OS
-        // UI the user may leave open for minutes, and a leased room can never
-        // be cooled - holding them across the dialog would pin every exported
-        // body for that whole time. Releases are idempotent, so the `finally`
-        // stays as the throw-path backstop.
+        // Release before the save surface: `saveBlobToDisk` blocks on native OS
+        // UI (a save dialog, a share sheet) the user may leave open for
+        // minutes, and a leased room can never be cooled - holding them across
+        // it would pin every exported body for that whole time. Releases are
+        // idempotent, so the `finally` stays as the throw-path backstop.
         releases.forEach((release) => release());
-        return await saveBlobToDisk(output.blob, output.suggestedName);
+        return await saveBlobToDisk(
+          output.blob,
+          output.suggestedName,
+          fileSave,
+        );
       } finally {
         releases.forEach((release) => release());
       }
@@ -72,7 +80,7 @@ export function useEpicExportArtifacts() {
           format: input.format,
           artifact_count: input.artifacts.length,
         });
-        toast.success(`Saved ${saved}`);
+        toastSavedFile(saved, openSaved.mutate, fileSave);
       }
     },
     onError: (error, input) => {

@@ -32,6 +32,7 @@ import {
   type EpicCanvasDropTargetData,
   type EpicCanvasLeftPanelRailDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import {
   useLeftPanelRailDropPreview,
   useLeftPanelSectionDragSource,
@@ -508,6 +509,7 @@ function RailGroupButton(props: RailGroupButtonProps) {
     }),
     [primaryPanel.id, tabId],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     listeners,
     setNodeRef: dragRef,
@@ -515,6 +517,7 @@ function RailGroupButton(props: RailGroupButtonProps) {
   } = useDraggable({
     id: getPaneScopedDndId(tabId, getLeftPanelRailDragId(primaryPanel.id)),
     data: dragData,
+    disabled: dragDisabled,
   });
   const dropData = useMemo<EpicCanvasDropTargetData>(
     () => ({

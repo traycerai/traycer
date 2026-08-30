@@ -39,7 +39,11 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
  * Already-restored events are tracked by `eventId` so a stale snapshot or a
  * `setup.failed` echoed across reconnects does not re-restore a draft the
  * user may have edited. The ref is keyed per `nodeId`/`chatId` so opening
- * the same chat again starts with a fresh dedupe set.
+ * the same chat again starts with a fresh dedupe set. That guard carries more
+ * weight on the windowed line, where the interruption is not an event the
+ * client can watch arrive once but a VALUE re-delivered on every snapshot -
+ * `eventId` is then the only thing distinguishing "a new failure" from "the
+ * same failure, restated".
  */
 interface ChatSetupFailureRestoreDriverOptions {
   readonly handle: ChatSessionStoreHandle;
@@ -51,9 +55,33 @@ export function useChatSetupFailureRestoreDriver(
 ): void {
   const { handle, nodeId } = options;
   const events = useStore(handle.store, (state) => state.events);
+  // Both inputs are subscribed separately and combined in a memo rather than
+  // selected in one `useStore` call, because the selector BUILDS its result on
+  // the legacy path - a fresh object every invocation would fail
+  // `useSyncExternalStore`'s stability requirement and re-render forever. Here
+  // the memo's output is stable while its two inputs are, and on the windowed
+  // line it is a property read off the snapshot's own payload.
+  const transcriptDerived = useStore(
+    handle.store,
+    (state) => state.transcriptDerived,
+  );
+  // The third input, and the one that makes the windowed answer live rather
+  // than as-of-the-last-snapshot: the records the host pushed since. Subscribed
+  // as the window itself, whose identity the store replaces whenever any of
+  // this moves, rather than as `.liveEvents` - a selector returning a nested
+  // array is stable only by luck of the reducer.
+  const transcriptWindow = useStore(
+    handle.store,
+    (state) => state.transcriptWindow,
+  );
   const interruption = useMemo(
-    () => selectRestorableSetupInterruption({ events }),
-    [events],
+    () =>
+      selectRestorableSetupInterruption({
+        events,
+        transcriptDerived,
+        transcriptWindow,
+      }),
+    [events, transcriptDerived, transcriptWindow],
   );
   const replaceDraft = useComposerDraftStore((state) => state.replaceDraft);
   // Dedupe set is keyed alongside the chat-session handle so opening a
@@ -73,8 +101,7 @@ export function useChatSetupFailureRestoreDriver(
 
   useEffect(() => {
     if (interruption === null) return;
-    if (interruption.messageId === null) return;
-    const eventId = interruption.event.eventId;
+    const eventId = interruption.eventId;
     if (dedupe.ids.has(eventId)) return;
     dedupe.ids.add(eventId);
     const restored = handle.store
@@ -92,7 +119,7 @@ export function useChatSetupFailureRestoreDriver(
     // re-announce a stale failure. Path-ful failures render an inline failure
     // card, so they need no toast.
     if (
-      interruption.event.type === "setup.failed" &&
+      interruption.eventType === "setup.failed" &&
       (interruption.workspacePath === null ||
         interruption.workspacePath.length === 0)
     ) {

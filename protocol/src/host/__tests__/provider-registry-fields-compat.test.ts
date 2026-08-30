@@ -35,7 +35,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
- * Provider pack registry protocol ticket coverage (T3): the managed-install
+ * Provider pack registry protocol coverage: the managed-install
  * lifecycle, aggregated version-visibility, and dormant Phase-2 advisory
  * fields are additive on the live `ProviderCliState` shape only - a host that
  * predates the provider pack registry (or any already-frozen v1.0/v2.0/v3.0
@@ -137,7 +137,7 @@ describe("cliBinaryResolved additive field (binary-absent explanation)", () => {
     for (const target of [2, 3] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         target,
         providersListResponseSchema.parse({
           providers: [state],
@@ -333,7 +333,7 @@ describe("old-client behavior on the error arm", () => {
     (targetMajor) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         targetMajor,
         providersListResponseSchema.parse({
           providers: [erroredState],
@@ -528,7 +528,7 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v2.0 downgrade never leaks the new fields to a v2.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       2,
       providersListResponseSchema.parse({
         providers: [stateWithRegistryFields],
@@ -547,7 +547,7 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v3.0 downgrade never leaks the new fields to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       3,
       providersListResponseSchema.parse({
         providers: [stateWithRegistryFields],
@@ -656,7 +656,7 @@ describe("providers.list v6.0 is frozen against the registry fields", () => {
     // an older major's table is kept for the record, not consulted.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       6,
       // `native` is required here and absent from the major-6 cases above
       // because the live response shape carries it - v6.0 froze before it
@@ -700,7 +700,7 @@ describe("providers.list v5.0 is frozen against the registry fields", () => {
     // cannot reach it.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       5,
       providersListResponseSchema.parse({
         providers: [stateWithRegistryFields],
@@ -729,8 +729,9 @@ describe("providers.list v5.0 is frozen against the registry fields", () => {
 // The provider.* state-echo mutations never carry the registry fields on ANY
 // line. Both their released majors are pinned to frozen shapes that don't
 // model them, so a host whose in-memory state carries the fields (every host
-// after T3) still emits the exact wire a released 2.0/2.1 peer expects. This
-// is what `providers.list` - the sole carrier, properly versioned at v6.0 -
+// after the compatibility change) still emits the exact wire a released
+// 2.0/2.1 peer expects. This is what `providers.list` - the sole carrier,
+// properly versioned at v6.0 -
 // exists for; see `providerMutationCliStateSchemaV21`'s comment.
 describe("provider.* mutation lines never carry the provider-pack-registry fields", () => {
   it("providerMutationCliStateSchemaV20 drops the unmodeled keys on parse", () => {

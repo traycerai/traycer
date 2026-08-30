@@ -38,6 +38,18 @@ type ParsedHistoryState = HistoryState & {
  */
 export interface PersistentHistoryController {
   getEntries(): ReadonlyArray<string>;
+  /**
+   * The stable identity of each entry, positionally parallel to `getEntries`.
+   *
+   * An entry's KEY survives what its INDEX does not: `restampIndices` renumbers
+   * `__TSR_index` after every structural mutation (prune, cap, collapse), and a
+   * push after a back reuses the truncated position for a different entry - so
+   * state a caller files against an index can silently start naming a
+   * different screen. State filed against the key cannot. `null` for an entry
+   * whose state carries no readable key, which a caller must treat as
+   * unaddressable rather than inventing an identity for it.
+   */
+  getEntryKeys(): ReadonlyArray<string | null>;
   getIndex(): number;
   canGoBack(): boolean; // index > 0 over the live stack
   canGoForward(): boolean; // index < entries.length - 1
@@ -78,6 +90,7 @@ function isPersistentHistoryController(
   if (!isRecord(value)) return false;
   return (
     typeof value.getEntries === "function" &&
+    typeof value.getEntryKeys === "function" &&
     typeof value.getIndex === "function" &&
     typeof value.canGoBack === "function" &&
     typeof value.canGoForward === "function" &&
@@ -405,7 +418,13 @@ function collapseAdjacentDuplicates(
       return [...collapsed, entry];
     }
     if (entry.wasCurrent) {
-      collapsed[collapsed.length - 1] = { ...previous, wasCurrent: true };
+      // The CURRENT entry wins the collapse wholesale - state and key, not
+      // only the marker. The prune is load-free, so the router's cached
+      // location keeps carrying the current entry's key; a survivor wearing
+      // the earlier entry's key would make everything filed against the
+      // cached identity (frozen-screen snapshots among it) unreachable, and
+      // could resurface whatever was filed under the earlier one instead.
+      collapsed[collapsed.length - 1] = entry;
     }
     return collapsed;
   }, []);
@@ -455,10 +474,27 @@ function computeSeededStack(
 }
 
 /**
- * Creates a router history seeded from the explicit `initialRoute` override
- * merged into this window's `localStorage` history, or from that history alone
- * when the shell provides no route. Intended for the Electron renderer only -
- * the browser web app should use TanStack's default browser history.
+ * Creates a router history the app OWNS - entries, index, and the controller
+ * brand that lets `goBack` / `goForward` step it semantically - for the two
+ * shells that have no browser to own one for them.
+ *
+ * `windowId` selects between them, and it is the only switch:
+ *
+ * - **A window id (Electron renderer)** - seeded from the explicit
+ *   `initialRoute` override merged into that window's `localStorage` history,
+ *   or from that history alone when the shell provides no route, and written
+ *   back on every navigation. The renderer's scheme drops the path on relaunch,
+ *   so this is what boots it at the last visited route with no async gate.
+ * - **`null` (the installed mobile app)** - in-memory and SESSION-scoped.
+ *   `loadPersistedState` and `persistState` both refuse a null window, so
+ *   nothing is read at boot and nothing is written. That is deliberate, not an
+ *   oversight to tidy up: a phone's process outlives every navigation in one
+ *   sitting, so the stack already survives a resume, while a stack restored
+ *   across a COLD launch would hand the first back swipe a surface from
+ *   yesterday.
+ *
+ * The browser web app uses neither - it has a URL bar and its own back button,
+ * so TanStack's default browser history is correct there.
  */
 export function createPersistentMemoryHistory(
   initialRoute: string | null,
@@ -560,21 +596,22 @@ export function createPersistentMemoryHistory(
       // so the state passed to THIS replace survives - the stack stays in
       // agreement with the location TanStack caches after a replace, instead
       // of diverging until the next real navigation.
-      let collapsedNeighbour = false;
       if (index > 0 && entries[index - 1] === path) {
         entries.splice(index - 1, 1);
         states.splice(index - 1, 1);
         index -= 1;
-        collapsedNeighbour = true;
       }
       if (index < entries.length - 1 && entries[index + 1] === path) {
         entries.splice(index + 1, 1);
         states.splice(index + 1, 1);
-        collapsedNeighbour = true;
       }
-      if (collapsedNeighbour) {
-        restampIndices(states);
-      }
+      // Unconditionally, not only after a collapse: the replaced state arrives
+      // carrying TanStack's CACHED `__TSR_index`, which a prior load-free
+      // `prune` (it never calls `history.notify()`) may have left stale - the
+      // same reason the push path re-stamps unconditionally. Without this, a
+      // non-collapsing replace stores the stale index and an array position
+      // diverges from its stamp until the next structural mutation.
+      restampIndices(states);
       persistState(windowId, entries, index);
       notifyController();
     },
@@ -602,6 +639,13 @@ export function createPersistentMemoryHistory(
 
   const controller: PersistentHistoryController = {
     getEntries: () => [...entries],
+    getEntryKeys: () =>
+      states.map((entryState) => {
+        if (typeof entryState.__TSR_key === "string") {
+          return entryState.__TSR_key;
+        }
+        return typeof entryState.key === "string" ? entryState.key : null;
+      }),
     getIndex: () => index,
     canGoBack: () => index > 0,
     canGoForward: () => index < entries.length - 1,

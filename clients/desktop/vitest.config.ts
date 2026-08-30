@@ -1,5 +1,6 @@
 import path from "path";
 import { defineConfig } from "vitest/config";
+import { ZOD_INLINE_SERVER_DEPS } from "./vitest.shared";
 
 export default defineConfig({
   resolve: {
@@ -39,6 +40,7 @@ export default defineConfig({
     ],
   },
   test: {
+    server: ZOD_INLINE_SERVER_DEPS,
     include: ["**/__tests__/**/*.test.ts"],
     globals: false,
     // jsdom provides `self` / `window` / `localStorage` so the renderer-shell

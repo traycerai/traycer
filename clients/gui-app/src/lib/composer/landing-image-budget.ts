@@ -57,16 +57,22 @@ export function registerLandingDraftRootSource(
   draftRootSource = source;
 }
 
-const extraRootHashSources: Array<() => Iterable<string>> = [];
-
 /**
- * Additional GC roots for draft images that live in the landing
- * partition but are referenced by composer / new-chat / stash rows.
+ * Extra content hashes that must survive landing GC: chat-composer annotation
+ * crops (hash + filename on the draft record, not present in landing draft
+ * content) and the images referenced by composer / new-chat / stash rows,
+ * which live in this same partition.
  */
-export function registerExtraImageRootHashSource(
-  source: () => Iterable<string>,
+export interface ExtraImageRootSource {
+  hashes(): ReadonlyArray<string>;
+}
+
+const extraRootSources: ExtraImageRootSource[] = [];
+
+export function registerExtraImageRootSource(
+  source: ExtraImageRootSource,
 ): void {
-  extraRootHashSources.push(source);
+  extraRootSources.push(source);
 }
 
 function currentDrafts(): ReadonlyArray<LandingDraftTab> {
@@ -120,8 +126,8 @@ export function landingLiveImageRootHashes(): Set<string> {
     for (const hash of imageHashesOf(draft.content)) roots.add(hash);
   }
   for (const hash of draftRuntimeRegistry.liveImageRoots()) roots.add(hash);
-  for (const source of extraRootHashSources) {
-    for (const hash of source()) roots.add(hash);
+  for (const source of extraRootSources) {
+    for (const hash of source.hashes()) roots.add(hash);
   }
   return roots;
 }

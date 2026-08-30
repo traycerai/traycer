@@ -83,6 +83,7 @@ const READY_STATUS: HostControllerStatus = {
   updateReady: true,
   activation: "activated",
   reachable: true,
+  localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
 };
@@ -135,6 +136,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       Promise.resolve({
         removedInstallDir: true,
         deregisteredService: true,
+        serviceRegistrationRetained: null,
       }),
     ),
     restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
@@ -142,6 +144,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       Promise.resolve({
         removedHost: true,
         deregisteredService: true,
+        serviceRegistrationRetained: null,
         removedLoginItem: false,
       }),
     ),
@@ -170,6 +173,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       Promise.resolve({
         checkedAt: null,
         latestVersion: null,
+        latestCompatibilityEpoch: null,
         installedVersion: null,
         updateAvailable: false,
         reachable: false,
@@ -177,7 +181,34 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       }),
     ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    runDoctorRepairQueued: vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    ),
+    freePortAndRestartIfIdle: vi.fn(() =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
+    ),
     cliManifest: vi.fn(() => Promise.resolve(null)),
+    maintenanceUpdateCheck: vi.fn(() =>
+      Promise.reject(new Error("maintenanceUpdateCheck not implemented")),
+    ),
+    maintenanceDoctor: vi.fn(() =>
+      Promise.reject(new Error("maintenanceDoctor not implemented")),
+    ),
+    maintenanceInstallationInfo: vi.fn(() =>
+      Promise.reject(new Error("maintenanceInstallationInfo not implemented")),
+    ),
+    maintenanceInstallVersion: vi.fn(() =>
+      Promise.reject(new Error("maintenanceInstallVersion not implemented")),
+    ),
+    restartHostIfIdle: vi.fn(() =>
+      Promise.reject(new Error("restartHostIfIdle not implemented")),
+    ),
+    runDoctorRepairIfIdle: vi.fn(() =>
+      Promise.reject(new Error("runDoctorRepairIfIdle not implemented")),
+    ),
     getHostName: vi.fn(() =>
       Promise.resolve({
         systemName: "test-host",
@@ -280,6 +311,9 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
     // The consolidation is deliberate: the OLD `management.restartHost()`
     // bridge call must never fire from this surface any more.
     expect(management.restartHost).not.toHaveBeenCalled();
+    // Queueing twin, not the refusing one: a tray restart is "do it when
+    // you can". `restartHostIfIdle` belongs to Settings surfaces that watch.
+    expect(management.restartHostIfIdle).not.toHaveBeenCalled();
   });
 
   it("previews the version, submits applyStaged after confirm when a stage is updateReady", async () => {

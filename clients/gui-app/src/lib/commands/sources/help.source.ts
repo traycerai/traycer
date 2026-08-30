@@ -4,6 +4,7 @@
  */
 import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { isSettingsSectionVisible } from "@/lib/settings-sections";
 
 export const helpSource: ReactCommandSource = {
   id: "help",
@@ -11,6 +12,10 @@ export const helpSource: ReactCommandSource = {
     const reportIssueAvailable = useDesktopDialogStore(
       (s) => s.reportIssueAvailable,
     );
+    // The row navigates straight into a settings section, so it exists only
+    // where that section does - otherwise it is the one entry point that
+    // routes around the navigation, and its destination redirects elsewhere.
+    const keybindingsAvailable = isSettingsSectionVisible("keybindings");
     const keybindings: CommandItem = {
       id: "help:keybindings",
       label: "Open keybindings reference",
@@ -24,9 +29,10 @@ export const helpSource: ReactCommandSource = {
       run: (ctx) => ctx.router.navigateSettingsSection("keybindings"),
       subpage: null,
     };
-    if (!reportIssueAvailable) return [keybindings];
+    const keybindingsItems = keybindingsAvailable ? [keybindings] : [];
+    if (!reportIssueAvailable) return keybindingsItems;
     return [
-      keybindings,
+      ...keybindingsItems,
       {
         id: "help:report-issue",
         label: "Report issue",

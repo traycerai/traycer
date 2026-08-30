@@ -14,6 +14,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,7 +83,8 @@ vi.mock("electron-log", () => ({
 type FetchHandler = (
   input: unknown,
   init:
-    { readonly method?: string; readonly body?: BodyInit | null } | undefined,
+    | { readonly method?: string; readonly body?: BodyInit | null }
+    | undefined,
 ) => Promise<Response>;
 
 function installFetch(handler: FetchHandler): () => void {
@@ -193,6 +195,36 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       readFileSync(credentialsPath(), "utf8"),
     ) as StoredCredentials;
     expect(onDisk.user).toEqual(IDENTITY);
+  });
+
+  it("startup drains a quarantined credential before any read is served", async () => {
+    // A previous launch requested this pair's conditional delete but died
+    // before it landed: the pair is durable and its digest is quarantined.
+    const seed = makeStore();
+    await seed.signIn({ token: "tok-zombie", refreshToken: "rt-z" }, IDENTITY);
+    seed.dispose();
+    writeFileSync(
+      `${credentialsPath()}.quarantine.json`,
+      JSON.stringify({
+        tokenDigests: [
+          createHash("sha256").update("tok-zombie", "utf8").digest("hex"),
+        ],
+      }),
+    );
+    // The "relaunch": a fresh store over the same files. Its first read
+    // waits on the recovery gate, whose drain completes the delete — the
+    // zombie is never served and does not survive the launch.
+    const relaunched = makeStore();
+    expect(await relaunched.get()).toBeNull();
+    // BOTH files inside the wait: the drain removes the pair and clears its
+    // sidecar as one recovery, and the sidecar is not guaranteed gone at the
+    // instant the pair is. Asserting it outside passes on timing rather than
+    // on the invariant.
+    await vi.waitFor(() => {
+      expect(existsSync(credentialsPath())).toBe(false);
+      expect(existsSync(`${credentialsPath()}.quarantine.json`)).toBe(false);
+    });
+    expect(await relaunched.get()).toBeNull();
   });
 
   it("rotate with a matching expected token spends once and returns applied", async () => {

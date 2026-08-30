@@ -85,6 +85,10 @@ import {
 } from "@/hooks/notifications/use-notification-activation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 
 function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -170,6 +174,7 @@ describe("useNotificationActivation", () => {
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
     });
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
   });
 
   it("routes with an explicitly owned router outside ambient router context", () => {
@@ -619,6 +624,100 @@ describe("useNotificationActivation", () => {
     );
   });
 
+  it("parks a question jump at its interview block", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-question", "Question task");
+    store.openTileInTab(tabId, {
+      id: "chat-question",
+      instanceId: "chat-question-instance",
+      type: "chat",
+      name: "Question agent",
+      hostId: "stub-host",
+    });
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "interview",
+          epicId: "epic-question",
+          chatId: "chat-question",
+          interviewBlockId: "interview-block-1",
+        },
+        originHostId: "stub-host",
+        receivedAt: 904,
+        feedId: "host:question",
+        onResult: null,
+      });
+    });
+
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey("stub-host", "chat-question")
+      ]?.target,
+    ).toEqual({ kind: "block", blockId: "interview-block-1" });
+  });
+
+  it("parks an anchored jump while opening a fresh chat", () => {
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-fresh",
+          chatId: "chat-fresh",
+          messageId: "assistant-message-1",
+        },
+        originHostId: "stub-host",
+        receivedAt: 905,
+        feedId: "host:fresh-chat",
+        onResult: null,
+      });
+    });
+
+    expect(navigateSpy.mock.calls[0][0]).toMatchObject({
+      params: { epicId: "epic-fresh" },
+      search: { focusArtifactId: "chat-fresh" },
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey("stub-host", "chat-fresh")
+      ]?.target,
+    ).toEqual({ kind: "message", messageId: "assistant-message-1" });
+  });
+
+  it("parks an explicit end jump for a final Done notification", () => {
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-final-done",
+          chatId: "chat-final-done",
+          scrollToEnd: true,
+        },
+        originHostId: "stub-host",
+        receivedAt: 906,
+        feedId: "host:final-done",
+        onResult: null,
+      });
+    });
+
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey("stub-host", "chat-final-done")
+      ]?.target,
+    ).toEqual({ kind: "end" });
+  });
+
   it("routes TUI agent notifications to the exact open terminal-agent tile", () => {
     const store = useEpicCanvasStore.getState();
     const notifiedTabId = store.openEpicTab("epic-tui", "TUI task");
@@ -1009,5 +1108,45 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
       focusTileInstanceId: "host-b-shared-chat",
     });
     expect(onResult).toHaveBeenCalledWith("success");
+  });
+
+  it("routes a failure to the chat host when the feed row was written by another host", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-origin", "Retained chat");
+    store.openTileInTab(tabId, {
+      id: "chat-shared",
+      instanceId: "host-a-shared-chat",
+      type: "chat",
+      name: "Host A chat",
+      hostId: hostA.hostId,
+    });
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-origin",
+          chatId: "chat-shared",
+          hostId: hostA.hostId,
+          messageId: "provider-error-message",
+        },
+        receivedAt: 106,
+        feedId: "cloud:failure-written-by-host-b",
+        originHostId: hostB.hostId,
+        onResult: null,
+      });
+    });
+
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(hostA.hostId, "chat-shared")
+      ]?.target,
+    ).toEqual({
+      kind: "message",
+      messageId: "provider-error-message",
+    });
   });
 });

@@ -80,7 +80,14 @@ This prints one `SupportMatrixEntry` object literal (the full per-method
 with the label you passed). Paste it as a new element appended to the
 `supportMatrix` array in
 `protocol/src/host/__tests__/__fixtures__/support-matrix.ts` - append only,
-never edit or reorder existing entries in the same change. The fixture file's
+never edit or reorder existing entries in the same change.
+
+An additive minor on an existing method (for example `host.status` 1.1 → 1.2
+or `host.restart` 1.1 → 1.2) is the prescribed path for a field addition and
+does **not** need a support-matrix snapshot in the same change. The
+current-vs-historical two-sided check already exercises the new
+`upgradeFromPreviousVersion` chain against every seeded historical
+manifest. Snapshot the matrix at the next release cut. The fixture file's
 own header has the full procedure and explains why only `host-v1.0.0` is
 seeded today (it's the same baseline `released-method-names.ts` already
 freezes, captured from the exact commit - `fd65a24`, PR #84 - that produced

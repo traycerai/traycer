@@ -10,6 +10,12 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  adoptDraftImageHandoff,
+  draftImageHashes,
+} from "@/lib/composer/landing-image-move";
+import { appLogger, describeLogError } from "@/lib/logger";
+import { isMobileApp } from "@/lib/mobile-app";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import {
   selectWorkspaceFoldersBucket,
@@ -126,9 +132,18 @@ export interface LandingDraftWorkspaceSnapshot {
 interface LandingDraftStoreState {
   readonly drafts: ReadonlyArray<LandingDraftTab>;
   readonly activeDraftId: string | null;
-  /** Always creates a fresh draft, sets it as active, returns its id. */
+  /**
+   * Returns an active draft id. Desktop/browser: always creates a fresh
+   * draft and sets it active. In the INSTALLED MOBILE APP (`isMobileApp()`),
+   * returns the newest existing draft instead - the phone has one stable
+   * composer.
+   */
   createDraft: (settings: ChatRunSettings | null) => string;
-  /** Coordinator-only stable-id source creation. */
+  /**
+   * Coordinator-only stable-id source creation (restore/sync, landing
+   * null-draft mount key stability) - explicit ids always mint, on every
+   * shell.
+   */
   createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
   /**
    * Put a start-task draft away. A non-empty draft is retained (`closed:
@@ -185,6 +200,8 @@ interface LandingDraftStoreState {
   ) => ReadonlyArray<string>;
   removeDraftFolder: (id: string, folderPath: string) => void;
   setDraftWorkspacePrimary: (id: string, folderPath: string) => void;
+  /** Replace the draft workspace with one host's remembered folder bucket. */
+  restoreDraftWorkspaceForHost: (id: string, hostId: string | null) => void;
 }
 
 export const LANDING_DRAFT_PERSIST_KEY = persistKey(STORE_KEYS.landingDraft);
@@ -194,6 +211,15 @@ let localPersistenceEnabled = true;
 let desktopProjectionBridge: DesktopPerWindowProjectionBridge | null = null;
 let applyingDesktopProjection = false;
 let hasAppliedDesktopProjection = false;
+/**
+ * Draft ids whose image-handoff adoption has been attempted this session.
+ * Deliberately NOT "first projection only": adoption must run for whichever
+ * projection first carries a given draft, and nothing guarantees that is the
+ * first projection overall (subscription order vs the seeded snapshot is an
+ * ordering fact, not an invariant). Adoption is already self-gating on
+ * locally-missing hashes; this set only stops per-draft re-probing.
+ */
+const imageAdoptionAttemptedDraftIds = new Set<string>();
 
 const landingDraftStorage: StateStorage = {
   getItem: (name) => window.localStorage.getItem(name),
@@ -214,6 +240,7 @@ export function setLandingDraftDesktopProjectionBridge(
 ): void {
   desktopProjectionBridge = bridge;
   hasAppliedDesktopProjection = false;
+  imageAdoptionAttemptedDraftIds.clear();
   setLandingDraftLocalPersistenceEnabled(bridge === null);
 }
 
@@ -261,6 +288,29 @@ export function applyLandingDraftDesktopProjection(
     applyingDesktopProjection = false;
   }
   hasAppliedDesktopProjection = true;
+  // A draft MOVED here from another window arrives with hash-only content
+  // whose bytes live in the SOURCE window's partition; the source staged them
+  // in a per-draft handoff DB before the move. Adoption is self-gating (it
+  // only opens the handoff when a hash is actually missing locally), so this
+  // is a no-op for ordinary restores; the attempted-set just keeps it to one
+  // probe per draft per session. A FAILED probe releases its entry: an
+  // IndexedDB read that lost to a transient error must be retried on the next
+  // projection, otherwise a moved draft's images stay unavailable for the rest
+  // of the session even though the handoff is still sitting there.
+  for (const draft of drafts) {
+    if (imageAdoptionAttemptedDraftIds.has(draft.id)) continue;
+    imageAdoptionAttemptedDraftIds.add(draft.id);
+    void adoptDraftImageHandoff(
+      draft.id,
+      draftImageHashes(draft.content),
+    ).catch((error: unknown) => {
+      imageAdoptionAttemptedDraftIds.delete(draft.id);
+      appLogger.warn("[landing-draft] draft-move image adoption failed", {
+        draftId: draft.id,
+        error: describeLogError(error),
+      });
+    });
+  }
   // [B2] A non-empty authoritative snapshot confirms the landing roots are real,
   // so the GC's deleting sweep may run (reaping genuine orphans) without risking
   // freshly-restored bytes.
@@ -427,6 +477,39 @@ function destroyLandingDraft(
   scheduleLandingImageReconcile();
 }
 
+/**
+ * Content-derived emptiness: no typed text AND no image atoms. An image-only
+ * draft is real content - discarding or replacing it would drop the image.
+ */
+export function isLandingDraftEmpty(draft: LandingDraftTab): boolean {
+  return isEmptyLandingDraftContent(draft.content);
+}
+
+/**
+ * Newest OPEN landing draft, for the installed mobile app's single stable
+ * composer: an id-less "new draft" activation reuses this instead of minting
+ * (see `createDraft`). `null` when no open draft exists. A closed draft is
+ * retained-but-hidden (see `closeDraft`) and is never resurrected implicitly;
+ * it comes back only through `openDraft`.
+ */
+export function newestLandingDraftId(): string | null {
+  return newestDraft(useLandingDraftStore.getState().drafts);
+}
+
+function newestDraft(drafts: ReadonlyArray<LandingDraftTab>): string | null {
+  let newest: LandingDraftTab | null = null;
+  for (const draft of drafts) {
+    if (!isOpenLandingDraft(draft)) continue;
+    // >= so the LATER array entry wins a millisecond tie: drafts are
+    // append-ordered, and same-ms timestamps are realistic (restore paths
+    // stamp several drafts in one tick).
+    if (newest === null || draft.lastTouchedAt >= newest.lastTouchedAt) {
+      newest = draft;
+    }
+  }
+  return newest === null ? null : newest.id;
+}
+
 export const useLandingDraftStore = create<LandingDraftStoreState>()(
   persist(
     (set, get) => ({
@@ -434,6 +517,21 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       activeDraftId: null,
 
       createDraft: (settings) => {
+        // The installed mobile app has ONE stable composer: its header has
+        // no tab strip, so a second draft tab could never be closed. "New
+        // task" therefore lands back on the existing draft - whatever its
+        // content - instead of minting another. Keyed on the PRODUCT flag,
+        // never the viewport (see `@/lib/mobile-app`): a responsively-narrow
+        // desktop browser keeps normal multi-draft behavior. Explicit-id
+        // creation (`createDraftWithId`) is a restore/sync path and always
+        // mints exactly that draft.
+        if (isMobileApp()) {
+          const existing = newestDraft(get().drafts);
+          if (existing !== null) {
+            set({ activeDraftId: existing });
+            return existing;
+          }
+        }
         return get().createDraftWithId(uuidv4(), settings);
       },
 
@@ -631,6 +729,24 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           ),
         }));
         notifyDraftLocalEdit(id);
+      },
+
+      restoreDraftWorkspaceForHost: (id, hostId) => {
+        const bucket = selectWorkspaceFoldersBucket(
+          useWorkspaceFoldersStore.getState(),
+          hostId,
+        );
+        set((state) =>
+          updateDraftWorkspace(state, id, () =>
+            normalizeLandingDraftWorkspace({
+              folders: [...bucket.folders],
+              folderInfoByPath: copyWorkspaceFolderInfoByPath(
+                bucket.folderInfoByPath,
+              ),
+              primaryPath: bucket.primaryPath,
+            }),
+          ),
+        );
       },
 
       addDraftResolvedFolders: (id, folders) => {

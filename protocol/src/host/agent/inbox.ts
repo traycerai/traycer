@@ -149,10 +149,11 @@ export const agentInboxNoticeSchema = z.object({
    *   - `awaiting-input` - the receiver is mid-turn but blocked on a human
    *     (asked a question / requested approval); it will not reply until a
    *     person responds. The prompt summary is in `detail`.
-   *   - `receiver-cancelled` - the user stopped the receiver agent outright,
-   *     so this message was dropped undelivered and the thread is closed.
-   *     Informational only: the sender must not re-send or spawn a
-   *     replacement (contrast `user-stopped`, where the thread stays open).
+   *   - `receiver-cancelled` - an authenticated user or agent stopped the
+   *     receiver agent outright, so this message was dropped undelivered and
+   *     the thread is closed. Informational only: the sender must not re-send
+   *     or spawn a replacement (contrast `user-stopped`, where the thread
+   *     stays open).
    */
   reason: z.enum([
     "turn-ended",
@@ -187,7 +188,28 @@ export const agentInboxNoticeSchema = z.object({
   /** Epoch millis the notice fired. */
   noticedAt: z.number().int(),
 });
-export type AgentInboxNotice = z.infer<typeof agentInboxNoticeSchema>;
+export type AgentInboxNoticeV12 = z.infer<typeof agentInboxNoticeSchema>;
+
+/** Authenticated actor that initiated an `agent.stop` cancellation. */
+export const agentStopInitiatorSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("user") }),
+  z.object({
+    type: z.literal("agent"),
+    agentId: z.string(),
+    agentTitle: z.string().nullable(),
+  }),
+]);
+
+/**
+ * `@1.3` notice shape: adds structured stop provenance. A distinct schema
+ * preserves the frozen @1.0-@1.2 trees; older monitors ignore the additive
+ * field while current renderers can name the responsible agent.
+ */
+export const agentInboxNoticeSchemaV13 = agentInboxNoticeSchema.extend({
+  /** Non-null only for `receiver-cancelled`. */
+  stopInitiator: agentStopInitiatorSchema.nullable(),
+});
+export type AgentInboxNotice = z.infer<typeof agentInboxNoticeSchemaV13>;
 
 // ─── Frozen agent.inbox.subscribe@1.0 shape (as shipped) ──────────────────
 //
@@ -289,9 +311,36 @@ export const agentInboxSubscribeServerFrameSchemaV12 = z.discriminatedUnion(
   ],
 );
 
+// ─── agent.inbox.subscribe@1.3 - additive: stop initiator provenance ──────
+
+export const agentInboxSubscribeServerFrameSchemaV13 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("message"),
+      ...textFrameFields,
+      item: agentInboxMessageSchemaV12,
+    }),
+    z.object({
+      kind: z.literal("notice"),
+      ...textFrameFields,
+      notice: agentInboxNoticeSchemaV13,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+    z.object({
+      kind: z.literal("role-awareness"),
+      ...textFrameFields,
+      event: roleAwarenessEventSchema,
+    }),
+  ],
+);
+
 /** The latest installed shape. Host code builds frames against this. */
 export const agentInboxSubscribeServerFrameSchema =
-  agentInboxSubscribeServerFrameSchemaV12;
+  agentInboxSubscribeServerFrameSchemaV13;
 export type AgentInboxSubscribeServerFrame = z.infer<
   typeof agentInboxSubscribeServerFrameSchema
 >;
@@ -330,6 +379,14 @@ export const agentInboxSubscribeV12 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: agentInboxSubscribeOpenRequestSchema,
   serverFrameSchema: agentInboxSubscribeServerFrameSchemaV12,
+  clientFrameSchema: agentInboxSubscribeClientFrameSchema,
+});
+
+export const agentInboxSubscribeV13 = defineStreamRpcContract({
+  method: "agent.inbox.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: agentInboxSubscribeOpenRequestSchema,
+  serverFrameSchema: agentInboxSubscribeServerFrameSchemaV13,
   clientFrameSchema: agentInboxSubscribeClientFrameSchema,
 });
 

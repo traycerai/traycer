@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useReducer, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import { TerminalStreamClient } from "@traycer-clients/shared/host-transport/terminal-stream-client";
 import { useHostClient } from "@/lib/host";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -18,7 +18,7 @@ import {
 } from "@/stores/terminals/terminal-session-store";
 import { TerminalSessionRegistry } from "@/stores/terminals/terminal-session-registry";
 import type {
-  ListTerminalsResponseV22,
+  ListTerminalsResponseV23,
   TerminalSessionKind,
   TerminalScope,
 } from "@traycer/protocol/host/terminal/unary-schemas";
@@ -129,6 +129,16 @@ export function useTerminalSessionHandle(
     null,
   );
 
+  // The previous acquire effect's cleanup runs AFTER this commit's layout
+  // effects, so a disappearing `transportKey` is visible to `release` as
+  // `transportAlive: false`. The captured effect-local key is still the
+  // old non-null value; a render-time ref write is forbidden (`react-hooks/refs`).
+  const transportReadyRef = useRef(false);
+  useLayoutEffect(() => {
+    transportReadyRef.current =
+      transportKey !== null && ownerIdentityKey !== null;
+  }, [transportKey, ownerIdentityKey]);
+
   useEffect(() => {
     creationConfigRef.current = {
       cols: args.cols,
@@ -169,22 +179,20 @@ export function useTerminalSessionHandle(
       const existingHostId = handleHostIds.get(existing) ?? null;
       const existingOwnerIdentityKey =
         handleOwnerIdentityKeys.get(existing) ?? null;
+      const existingStatus = existing.store.getState().status;
       if (
         existingHostId !== args.hostId ||
-        existingOwnerIdentityKey !== ownerIdentityKey
+        existingOwnerIdentityKey !== ownerIdentityKey ||
+        existingStatus === "lost" ||
+        existingStatus === "reaped"
       ) {
         registry.forceRelease(args.instanceId);
       }
     }
 
-    const factory: TerminalStreamClientFactory = (
-      sessionId,
-      cols,
-      rows,
-      callbacks,
-    ) => {
+    const factory: TerminalStreamClientFactory = (streamArgs) => {
       if (streamClientFactoryOverride !== null) {
-        return streamClientFactoryOverride(sessionId, cols, rows, callbacks);
+        return streamClientFactoryOverride(streamArgs);
       }
       // The session OWNS this transport (built here, torn down by `close()`), so
       // it survives tile unmount for warm terminal-agent sessions instead of
@@ -198,10 +206,11 @@ export function useTerminalSessionHandle(
         (ws) =>
           new TerminalStreamClient({
             wsStreamClient: ws,
-            sessionId,
-            cols,
-            rows,
-            callbacks,
+            sessionId: streamArgs.sessionId,
+            cols: streamArgs.cols,
+            rows: streamArgs.rows,
+            viewer: streamArgs.viewer,
+            callbacks: streamArgs.callbacks,
           }),
       );
       return {
@@ -210,24 +219,28 @@ export function useTerminalSessionHandle(
       };
     };
 
-    const next = registry.acquire(args.instanceId, () => {
-      const creationConfig = creationConfigRef.current;
-      return createTerminalSessionStore({
-        scope,
-        sessionId: args.sessionId,
-        cols: creationConfig.cols,
-        rows: creationConfig.rows,
-        reattachMode: creationConfig.reattachMode,
-        kind: args.kind,
-        streamClientFactory: factory,
-      });
-    });
+    const next = registry.acquire(
+      args.instanceId,
+      () => {
+        const creationConfig = creationConfigRef.current;
+        return createTerminalSessionStore({
+          scope,
+          sessionId: args.sessionId,
+          cols: creationConfig.cols,
+          rows: creationConfig.rows,
+          reattachMode: creationConfig.reattachMode,
+          kind: args.kind,
+          streamClientFactory: factory,
+        });
+      },
+      args.hostId,
+    );
     handleHostIds.set(next, args.hostId);
     handleOwnerIdentityKeys.set(next, ownerIdentityKey);
     setHandle(next);
 
     return () => {
-      registry.release(args.instanceId);
+      registry.release(args.instanceId, next, transportReadyRef.current);
     };
     // `openTransport` is referentially stable and reads its deps live;
     // `transportKey` already encodes user + host + endpoint identity;
@@ -278,7 +291,7 @@ export function useTerminalSessionHandle(
         // looped forever, bouncing the PTY stream and leaving reattached
         // terminals blank. (An explicitly justified `setQueriesData`:
         // stream-pushed state IS the response state.)
-        queryClient.setQueriesData<ListTerminalsResponseV22>(
+        queryClient.setQueriesData<ListTerminalsResponseV23>(
           { queryKey: hostQueryKeys.methodScope(args.hostId, "terminal.list") },
           (data) => {
             if (data === undefined) return undefined;

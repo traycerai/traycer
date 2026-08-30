@@ -12,6 +12,7 @@ import {
   listTerminalsResponseSchema,
   listTerminalsResponseSchemaV21,
   listTerminalsResponseSchemaV22,
+  listTerminalsResponseSchemaV23,
   type CanonicalTerminalSessionInfo,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 
@@ -71,9 +72,7 @@ describe("terminal.list@2.2 currentCwd", () => {
       sessions: [{ ...base, currentCwd: base.cwd }],
       homeCwd: "/Users/dev",
     });
-    expect(
-      upgradeResponseToVersion(listRegistry, V21, V22, response),
-    ).toEqual({
+    expect(upgradeResponseToVersion(listRegistry, V21, V22, response)).toEqual({
       sessions: [{ ...base, currentCwd: base.cwd }],
       homeCwd: "/Users/dev",
     });
@@ -111,7 +110,12 @@ describe("terminal.list@2.2 currentCwd", () => {
       listRegistry,
       2,
       1,
-      response,
+      listTerminalsResponseSchemaV23.parse({
+        sessions: [
+          { ...base, currentCwd: "/work/live", lifecycleOwner: "registry" },
+        ],
+        homeCwd: "/Users/dev",
+      }),
     );
     expect(acrossMajors.ok).toBe(true);
     if (!acrossMajors.ok) return;

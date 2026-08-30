@@ -86,6 +86,7 @@ const REPRESENTATIVE_MUX_FRAMES: readonly EncodeMuxFrameInput[] = [
     chunked: false,
     chunkFirst: false,
     chunkLast: false,
+    compressed: false,
     json: { bearer: "secret-bearer-marker" },
     binary: null,
   },
@@ -97,6 +98,7 @@ const REPRESENTATIVE_MUX_FRAMES: readonly EncodeMuxFrameInput[] = [
     chunked: false,
     chunkFirst: false,
     chunkLast: false,
+    compressed: false,
     json: { requestId: "req-1", method: "host.status" },
     binary: null,
   },
@@ -108,6 +110,7 @@ const REPRESENTATIVE_MUX_FRAMES: readonly EncodeMuxFrameInput[] = [
     chunked: true,
     chunkFirst: false,
     chunkLast: false,
+    compressed: false,
     json: null,
     binary: new Uint8Array([1, 2, 3, 4, 5, 250, 251, 252]),
   },
@@ -119,6 +122,7 @@ const REPRESENTATIVE_MUX_FRAMES: readonly EncodeMuxFrameInput[] = [
     chunked: true,
     chunkFirst: false,
     chunkLast: true,
+    compressed: false,
     json: { credits: 65536 },
     binary: new Uint8Array(512).fill(0xab),
   },
@@ -130,13 +134,16 @@ const REPRESENTATIVE_MUX_FRAMES: readonly EncodeMuxFrameInput[] = [
     chunked: false,
     chunkFirst: false,
     chunkLast: false,
+    compressed: false,
     json: { details: { code: "STREAM_SEQ_MISMATCH" } },
     binary: null,
   },
 ];
 
 describe("AEAD associated-data invariant: no mux field is externalized without AD", () => {
-  it.each(REPRESENTATIVE_MUX_FRAMES.map((frame, index) => [index, frame] as const))(
+  it.each(
+    REPRESENTATIVE_MUX_FRAMES.map((frame, index) => [index, frame] as const),
+  )(
     "frame #%i: the transport wire frame's only plaintext bytes are [v, counter] — every mux field requires the session key to recover",
     async (_index, frame) => {
       const { initiator, responder } = await establishSessionPair();

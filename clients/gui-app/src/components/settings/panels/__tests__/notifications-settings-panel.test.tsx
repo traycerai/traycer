@@ -58,6 +58,17 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
+function Providers(props: {
+  readonly queryClient: QueryClient;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <QueryClientProvider client={props.queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+}
+
 type NotificationConfig = ResponseOfMethod<
   HostRpcRegistry,
   "host.notifications.getConfig"
@@ -100,6 +111,18 @@ afterEach(() => {
 });
 
 describe("<NotificationsSettingsPanel /> severity policy", () => {
+  it("keeps app-local notification sound controls out of the host panel", async () => {
+    renderNotificationsSettings(undefined);
+
+    expect(
+      screen.queryByRole("combobox", { name: "Needs action sound" }),
+    ).toBeNull();
+    expect(screen.queryByTestId("push-permission-section")).toBeNull();
+    await screen.findByRole("switch", {
+      name: "Needs action In-app notifications",
+    });
+  });
+
   it("renders three single-channel severity rows, not a channel matrix", async () => {
     renderNotificationsSettings(undefined);
 
@@ -257,9 +280,9 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
       },
     });
     render(
-      <QueryClientProvider client={queryClient}>
+      <Providers queryClient={queryClient}>
         <NotificationsSettingsPanelForClient client={null} />
-      </QueryClientProvider>,
+      </Providers>,
     );
 
     expect(
@@ -570,9 +593,9 @@ describe("<NotificationsSettingsPanel /> notification hooks manager", () => {
     // React bails out of the whole subtree and never re-reads the mutated
     // scope mock, so the flip under test silently would not happen.
     const makeUi = () => (
-      <QueryClientProvider client={queryClient}>
+      <Providers queryClient={queryClient}>
         <NotificationsSettingsPanel />
-      </QueryClientProvider>
+      </Providers>
     );
     const view = render(makeUi());
     return {
@@ -755,9 +778,7 @@ function renderNotificationsSettings(
     },
   });
   const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-    <QueryClientProvider client={queryClient}>
-      {props.children}
-    </QueryClientProvider>
+    <Providers queryClient={queryClient}>{props.children}</Providers>
   );
 
   render(<NotificationsSettingsPanelForClient client={client} />, {
@@ -826,9 +847,7 @@ function renderNotificationsSettingsWithDeferredRefetch(): {
     },
   });
   const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-    <QueryClientProvider client={queryClient}>
-      {props.children}
-    </QueryClientProvider>
+    <Providers queryClient={queryClient}>{props.children}</Providers>
   );
 
   render(<NotificationsSettingsPanelForClient client={client} />, {
@@ -887,9 +906,7 @@ describe("<NotificationsSettingsPanel /> host scope changes", () => {
       },
     });
     const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
+      <Providers queryClient={queryClient}>{props.children}</Providers>
     );
 
     hostScopeMocks.client = client;

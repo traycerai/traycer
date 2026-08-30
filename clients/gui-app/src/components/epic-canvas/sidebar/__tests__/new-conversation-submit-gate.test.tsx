@@ -30,7 +30,7 @@ const DIRTY_CONTENT: JsonContent = {
 };
 
 const testState = vi.hoisted(() => ({
-  createChat: vi.fn(),
+  createChat: vi.fn(() => Promise.resolve({ initialTurnStarted: false })),
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
   ingesting: false,
@@ -101,7 +101,7 @@ vi.mock("@/lib/host", () => ({
   // the binding; null = no active host, so memory reads fall to the legacy tier
   // and writes no-op - inert here.
   //
-  // This comment used to name `useReactiveActiveHostId` as the subscriber. That
+  // This comment used to name `useAddressableHostId` as the subscriber. That
   // hook no longer exists anywhere in the tree; the sentence is left describing
   // the binding it actually mocks rather than being re-pointed at a successor
   // nobody has verified. What is asserted here is the `null`, not the reader.
@@ -215,7 +215,8 @@ vi.mock("@/lib/composer/workspace-composer-availability", () => ({
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicCreateChatForHostClient: () => ({
     isPending: false,
-    mutate: testState.createChat,
+    // `mutateAsync`, matching the modal - see `new-conversation-placement`.
+    mutateAsync: testState.createChat,
   }),
 }));
 
@@ -270,7 +271,7 @@ vi.mock("@/stores/epics/initial-chat-handoff-store", () => ({
     getState: () => ({
       register: vi.fn(),
       markInitialTurnStarted: vi.fn(),
-      markFailed: vi.fn(),
+      markFailedByAction: vi.fn(),
     }),
   },
 }));

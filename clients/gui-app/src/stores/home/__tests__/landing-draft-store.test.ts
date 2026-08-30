@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMobileApp } from "@/lib/mobile-app";
 import {
   applyLandingDraftDesktopProjection,
   emptyLandingDraftWorkspaceSnapshot,
@@ -13,6 +14,7 @@ import {
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
 import * as landingImageGc from "@/lib/composer/landing-image-gc";
+import * as landingImageMove from "@/lib/composer/landing-image-move";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -1488,6 +1490,81 @@ describe("useLandingDraftStore", () => {
     });
   });
 
+  describe("draft-move image adoption", () => {
+    it("adopts for a draft whenever it FIRST appears, not only on the first projection, and once per draft", () => {
+      // The regression this pins: adoption gated on "is this the first
+      // projection". Subscription order vs the seeded snapshot is an ordering
+      // fact, not an invariant - an empty snapshot arriving first must not
+      // permanently skip a moved draft that lands on the next one.
+      const adopt = vi
+        .spyOn(landingImageMove, "adoptDraftImageHandoff")
+        .mockImplementation(() => Promise.resolve());
+      const snapshot = emptyWindowSnapshot({
+        landingDrafts: [
+          {
+            id: "draft-adopt-late",
+            content: desktopTextContent("moved here"),
+            selection: null,
+            lastTouchedAt: 1,
+            settings: null,
+            composerMode: null,
+            workspace: null,
+            closed: null,
+          },
+        ],
+        activeLandingDraftId: "draft-adopt-late",
+      });
+
+      applyLandingDraftDesktopProjection(emptyWindowSnapshot({}));
+      expect(adopt).not.toHaveBeenCalled();
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledWith("draft-adopt-late", []);
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries a draft whose adoption FAILED - a transient IndexedDB error must not skip it for the session", async () => {
+      const adopt = vi
+        .spyOn(landingImageMove, "adoptDraftImageHandoff")
+        .mockImplementationOnce(() => Promise.reject(new Error("idb closing")))
+        .mockImplementation(() => Promise.resolve());
+      // `spyOn` hands back the spy the sibling test above already installed,
+      // call history included - this suite restores no mocks between tests.
+      adopt.mockClear();
+      const snapshot = emptyWindowSnapshot({
+        landingDrafts: [
+          {
+            id: "draft-adopt-retry",
+            content: desktopTextContent("moved here"),
+            selection: null,
+            lastTouchedAt: 1,
+            settings: null,
+            composerMode: null,
+            workspace: null,
+            closed: null,
+          },
+        ],
+        activeLandingDraftId: "draft-adopt-retry",
+      });
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(1);
+      // Let the rejection reach the handler that releases the attempted-set.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(2);
+
+      // The retry succeeded, so the draft is settled and probed no further.
+      await Promise.resolve();
+      applyLandingDraftDesktopProjection(snapshot);
+      expect(adopt).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe("[B1] empty-inbound clobber guard", () => {
     it("preserves non-empty in-memory drafts on empty inbound and re-projects outbound", () => {
       // Stub the GC gates (no call-through): this suite has no idb-keyval mock,
@@ -1614,6 +1691,52 @@ describe("useLandingDraftStore", () => {
       } finally {
         markReady.mockRestore();
       }
+    });
+  });
+
+  describe("mobile app draft model", () => {
+    afterEach(() => {
+      // Module-level product flag - must not leak across tests.
+      setMobileApp(false);
+    });
+
+    it("never mints a second draft in the mobile app, even over real content", () => {
+      setMobileApp(true);
+      const { createDraft, setDraftContent } = useLandingDraftStore.getState();
+      const first = createDraft(null);
+      setDraftContent(first, textContent("half-typed task"), null);
+      // The phone's one stable composer: New task lands back on it.
+      const again = createDraft(null);
+      expect(again).toBe(first);
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      expect(useLandingDraftStore.getState().activeDraftId).toBe(first);
+    });
+
+    it("returns the newest draft on a lastTouchedAt tie (later entry wins)", () => {
+      setMobileApp(true);
+      const { createDraft, createDraftWithId } =
+        useLandingDraftStore.getState();
+      // Restore paths can stamp several drafts within one millisecond;
+      // drafts are append-ordered, so the later entry is the newer one.
+      createDraftWithId("restored-older", null);
+      createDraftWithId("restored-newer", null);
+      const sameStamp = useLandingDraftStore
+        .getState()
+        .drafts.map((draft) => ({ ...draft, lastTouchedAt: 1_000 }));
+      useLandingDraftStore.setState({ drafts: sameStamp });
+      const reused = createDraft(null);
+      expect(reused).toBe("restored-newer");
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(2);
+    });
+
+    it("still honors explicit restore ids in the mobile app", () => {
+      setMobileApp(true);
+      const { createDraft, createDraftWithId } =
+        useLandingDraftStore.getState();
+      createDraft(null);
+      const restored = createDraftWithId("restored-draft", null);
+      expect(restored).toBe("restored-draft");
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(2);
     });
   });
 });

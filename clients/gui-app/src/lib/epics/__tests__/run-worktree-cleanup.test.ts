@@ -11,6 +11,7 @@ import {
   type WorktreeCleanupOutcome,
 } from "@/lib/epics/run-worktree-cleanup";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 // The current-host path: ONE `worktree.deleteBatchByPath` command per cleanup.
 // Recording every construction is what lets a test assert the migration's core
@@ -30,6 +31,8 @@ const commandMock = vi.hoisted(() => ({
 const legacyMock = vi.hoisted(() => ({
   paths: [] as string[],
   callbacksByPath: new Map<string, WorktreeDeleteStreamCallbacks>(),
+  stopOwnersByPath: new Map<string, boolean>(),
+  expectedHoldersRevisionByPath: new Map<string, string | undefined>(),
   /** Paths whose stream fails to open, driving `deleteOneWorktree`'s catch. */
   throwForPaths: new Set<string>(),
   closeCount: 0,
@@ -85,9 +88,19 @@ vi.mock(
     WorktreeDeleteStreamClient: class {
       constructor(options: {
         readonly worktreePath: string;
+        readonly stopOwners: boolean;
+        readonly expectedHoldersRevision: string | undefined;
         readonly callbacks: WorktreeDeleteStreamCallbacks;
       }) {
         legacyMock.paths.push(options.worktreePath);
+        legacyMock.stopOwnersByPath.set(
+          options.worktreePath,
+          options.stopOwners,
+        );
+        legacyMock.expectedHoldersRevisionByPath.set(
+          options.worktreePath,
+          options.expectedHoldersRevision,
+        );
         if (legacyMock.throwForPaths.has(options.worktreePath)) {
           throw new Error("could not open the delete stream");
         }
@@ -119,11 +132,14 @@ function legacyCallbacksFor(path: string): WorktreeDeleteStreamCallbacks {
 function stubOpenStreamTransport(): (hostId: string) => DurableStreamTransport {
   return () => ({
     wsStreamClient: new WsStreamClient<HostStreamRpcRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
+      onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
       webSocketFactory: {
         create: () => {
@@ -149,12 +165,13 @@ function reachHost(): void {
 function runTaskCleanup(
   paths: ReadonlyArray<string>,
 ): Promise<WorktreeCleanupOutcome> {
-  return runWorktreeCleanup(
-    stubOpenStreamTransport(),
-    "host-1",
+  return runWorktreeCleanup(stubOpenStreamTransport(), {
+    hostId: "host-1",
     paths,
-    "task_cleanup",
-  );
+    source: "task_cleanup",
+    stopOwnersPaths: new Set(),
+    expectedHoldersRevisionByPath: new Map(),
+  });
 }
 
 /** Hands the whole cleanup to the older-host fan-out. */
@@ -168,6 +185,8 @@ beforeEach(() => {
   commandMock.closeCount = 0;
   legacyMock.paths = [];
   legacyMock.callbacksByPath.clear();
+  legacyMock.stopOwnersByPath.clear();
+  legacyMock.expectedHoldersRevisionByPath.clear();
   legacyMock.throwForPaths.clear();
   legacyMock.closeCount = 0;
   loggerMock.throwForMessages.clear();
@@ -203,12 +222,13 @@ describe("runWorktreeCleanup on a current host", () => {
   });
 
   it("preserves task_sweep as distinct durable command provenance", async () => {
-    const promise = runWorktreeCleanup(
-      stubOpenStreamTransport(),
-      "host-1",
-      ["/wt/sweep"],
-      "task_sweep",
-    );
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/sweep"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(),
+      expectedHoldersRevisionByPath: new Map(),
+    });
 
     expect(commandMock.commands).toHaveLength(1);
     expect(commandMock.commands[0]?.source).toBe("task_sweep");
@@ -222,6 +242,7 @@ describe("runWorktreeCleanup on a current host", () => {
       removed: ["/wt/sweep"],
       failed: [],
       uncertain: [],
+      holdersChanged: [],
     });
   });
 
@@ -230,6 +251,7 @@ describe("runWorktreeCleanup on a current host", () => {
       removed: [],
       failed: [],
       uncertain: [],
+      holdersChanged: [],
     });
     expect(commandMock.commands).toEqual([]);
     expect(legacyMock.paths).toEqual([]);
@@ -243,7 +265,7 @@ describe("runWorktreeCleanup on a current host", () => {
     // A decline is `deleted: false`, not a thrown failure - both are failures
     // for the tally, and neither stops its siblings.
     callbacks.onTargetComplete("/wt/declined", false);
-    callbacks.onTargetFailed("/wt/busy", "worktree is busy");
+    callbacks.onTargetFailed("/wt/busy", "worktree is busy", undefined);
     callbacks.onCommandComplete({
       requestedCount: 3,
       deletedCount: 1,
@@ -254,6 +276,7 @@ describe("runWorktreeCleanup on a current host", () => {
       removed: ["/wt/removed"],
       failed: ["/wt/declined", "/wt/busy"],
       uncertain: [],
+      holdersChanged: [],
     });
   });
 
@@ -273,6 +296,7 @@ describe("runWorktreeCleanup on a current host", () => {
       removed: ["/wt/seen"],
       failed: [],
       uncertain: ["/wt/missed"],
+      holdersChanged: [],
     });
   });
 
@@ -286,6 +310,7 @@ describe("runWorktreeCleanup on a current host", () => {
       removed: ["/wt/a"],
       failed: [],
       uncertain: ["/wt/b"],
+      holdersChanged: [],
     });
     // Detach, not cancel, and not restart: exactly one command was ever opened,
     // its session was released, and no destructive fallback was started behind
@@ -305,6 +330,7 @@ describe("runWorktreeCleanup on a current host", () => {
       removed: [],
       failed: ["/wt/a"],
       uncertain: [],
+      holdersChanged: [],
     });
     expect(legacyMock.paths).toEqual([]);
   });
@@ -318,6 +344,7 @@ describe("runWorktreeCleanup on a current host", () => {
       removed: [],
       failed: ["/wt/a", "/wt/b"],
       uncertain: [],
+      holdersChanged: [],
     });
     // `command.failed` means no work ran or will run - re-running it per target
     // would be this client inventing a deletion the host declined.
@@ -339,6 +366,7 @@ describe("runWorktreeCleanup on a current host", () => {
       removed: ["/wt/a"],
       failed: [],
       uncertain: [],
+      holdersChanged: [],
     });
   });
 });
@@ -356,12 +384,18 @@ describe("runWorktreeCleanup on an older host", () => {
     await vi.waitFor(() => expect(legacyMock.paths).toHaveLength(3));
 
     legacyCallbacksFor("/wt/b").onComplete(false);
-    legacyCallbacksFor("/wt/c").onFailed("busy");
+    legacyCallbacksFor("/wt/c").onFailed(
+      "busy",
+      undefined,
+      undefined,
+      undefined,
+    );
 
     await expect(promise).resolves.toEqual({
       removed: ["/wt/a"],
       failed: ["/wt/b", "/wt/c"],
       uncertain: [],
+      holdersChanged: [],
     });
     // The batch attempt started nothing, so the fan-out is the only deletion.
     expect(commandMock.commands).toHaveLength(1);
@@ -382,6 +416,7 @@ describe("runWorktreeCleanup on an older host", () => {
       removed: [],
       failed: ["/wt/a"],
       uncertain: [],
+      holdersChanged: [],
     });
     expect(legacyMock.paths).toEqual(["/wt/a"]);
     expect(legacyMock.closeCount).toBe(1);
@@ -396,6 +431,7 @@ describe("runWorktreeCleanup on an older host", () => {
       removed: [],
       failed: ["/wt/a"],
       uncertain: [],
+      holdersChanged: [],
     });
   });
 
@@ -430,6 +466,7 @@ describe("runWorktreeCleanup on an older host", () => {
       removed: [],
       failed: [],
       uncertain: ["/wt/a", "/wt/b"],
+      holdersChanged: [],
     });
   });
 
@@ -444,6 +481,232 @@ describe("runWorktreeCleanup on an older host", () => {
       removed: ["/wt/a"],
       failed: [],
       uncertain: [],
+      holdersChanged: [],
+    });
+  });
+});
+
+describe("runWorktreeCleanup stopOwners paths", () => {
+  it("sends in-use paths through deleteByPath with stopOwners and leaves others on the batch command", async () => {
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/idle", "/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/busy"]),
+      expectedHoldersRevisionByPath: new Map(),
+    });
+
+    expect(commandMock.commands).toHaveLength(0);
+    expect(legacyMock.paths).toEqual(["/wt/busy"]);
+    expect(legacyMock.stopOwnersByPath.get("/wt/busy")).toBe(true);
+    legacyCallbacksFor("/wt/busy").onComplete(true);
+    await vi.waitFor(() => expect(commandMock.commands).toHaveLength(1));
+    expect(commandMock.commands[0]?.targets).toEqual([
+      { worktreePath: "/wt/idle", scripts: null },
+    ]);
+
+    commandCallbacks().onTargetComplete("/wt/idle", true);
+    commandCallbacks().onCommandComplete({
+      requestedCount: 1,
+      deletedCount: 1,
+      failedCount: 0,
+    });
+
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/idle", "/wt/busy"],
+      failed: [],
+      uncertain: [],
+      holdersChanged: [],
+    });
+  });
+
+  it("reports a drop after a forced deleteByPath reached the host as unconfirmed", async () => {
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/busy"]),
+      expectedHoldersRevisionByPath: new Map(),
+    });
+
+    expect(commandMock.commands).toHaveLength(0);
+    expect(legacyMock.paths).toEqual(["/wt/busy"]);
+    legacyCallbacksFor("/wt/busy").onConnectionStatus("open", null);
+    legacyCallbacksFor("/wt/busy").onConnectionStatus("reconnecting", null);
+
+    await expect(promise).resolves.toEqual({
+      removed: [],
+      failed: [],
+      uncertain: ["/wt/busy"],
+      holdersChanged: [],
+    });
+    expect(legacyMock.closeCount).toBe(1);
+  });
+
+  it("returns HOLDERS_CHANGED without starting the batch delete", async () => {
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/idle", "/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/busy"]),
+      expectedHoldersRevisionByPath: new Map([
+        [
+          "/wt/busy",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ],
+      ]),
+    });
+
+    expect(legacyMock.paths).toEqual(["/wt/busy"]);
+    legacyCallbacksFor("/wt/busy").onFailed(
+      "Holders changed",
+      [
+        {
+          ownerRef: {
+            epicId: "epic-1",
+            ownerKind: "chat",
+            ownerId: "chat-1",
+          },
+          holdKind: "chat-turn",
+          activity: "working",
+          label: "new actor",
+          holderId: "epic-1:chat:chat-1",
+        },
+      ],
+      "WORKTREE_HOLDERS_CHANGED",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+
+    await expect(promise).resolves.toEqual({
+      removed: [],
+      failed: [],
+      uncertain: [],
+      holdersChanged: [
+        {
+          worktreePath: "/wt/busy",
+          holders: [
+            {
+              ownerRef: {
+                epicId: "epic-1",
+                ownerKind: "chat",
+                ownerId: "chat-1",
+              },
+              holdKind: "chat-turn",
+              activity: "working",
+              label: "new actor",
+              holderId: "epic-1:chat:chat-1",
+            },
+          ],
+          holdersRevision:
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+      ],
+    });
+    expect(commandMock.commands).toHaveLength(0);
+  });
+
+  it("keeps settled force outcomes and does not start the idle batch on mixed HOLDERS_CHANGED", async () => {
+    const digest =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/idle", "/wt/ok", "/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/ok", "/wt/busy"]),
+      expectedHoldersRevisionByPath: new Map([
+        ["/wt/ok", digest],
+        ["/wt/busy", digest],
+      ]),
+    });
+
+    expect(legacyMock.paths.sort()).toEqual(["/wt/busy", "/wt/ok"]);
+    expect(commandMock.commands).toHaveLength(0);
+    legacyCallbacksFor("/wt/ok").onComplete(true);
+    legacyCallbacksFor("/wt/busy").onFailed(
+      "Holders changed",
+      [
+        {
+          ownerRef: {
+            epicId: "epic-1",
+            ownerKind: "chat",
+            ownerId: "chat-1",
+          },
+          holdKind: "chat-turn",
+          activity: "working",
+          label: "new actor",
+          holderId: "epic-1:chat:chat-1",
+        },
+      ],
+      "WORKTREE_HOLDERS_CHANGED",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+
+    await expect(promise).resolves.toMatchObject({
+      removed: ["/wt/ok"],
+      failed: [],
+      uncertain: [],
+      holdersChanged: [{ worktreePath: "/wt/busy" }],
+    });
+    expect(commandMock.commands).toHaveLength(0);
+  });
+
+  it("forwards a valid holdersRevision with stopOwners", async () => {
+    const digest =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/busy"]),
+      expectedHoldersRevisionByPath: new Map([["/wt/busy", digest]]),
+    });
+    expect(legacyMock.stopOwnersByPath.get("/wt/busy")).toBe(true);
+    expect(legacyMock.expectedHoldersRevisionByPath.get("/wt/busy")).toBe(
+      digest,
+    );
+    legacyCallbacksFor("/wt/busy").onComplete(true);
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/busy"],
+      failed: [],
+      uncertain: [],
+      holdersChanged: [],
+    });
+  });
+
+  it("omits expectedHoldersRevision when stopOwners is false", async () => {
+    const promise = runTaskCleanup(["/wt/a"]);
+    reportUnsupported();
+    expect(legacyMock.stopOwnersByPath.get("/wt/a")).toBe(false);
+    expect(
+      legacyMock.expectedHoldersRevisionByPath.get("/wt/a"),
+    ).toBeUndefined();
+    legacyCallbacksFor("/wt/a").onComplete(true);
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/a"],
+      failed: [],
+      uncertain: [],
+      holdersChanged: [],
+    });
+  });
+
+  it("omits an invalid holdersRevision even with stopOwners", async () => {
+    const promise = runWorktreeCleanup(stubOpenStreamTransport(), {
+      hostId: "host-1",
+      paths: ["/wt/busy"],
+      source: "task_sweep",
+      stopOwnersPaths: new Set(["/wt/busy"]),
+      expectedHoldersRevisionByPath: new Map([["/wt/busy", "not-a-digest"]]),
+    });
+    expect(legacyMock.stopOwnersByPath.get("/wt/busy")).toBe(true);
+    expect(
+      legacyMock.expectedHoldersRevisionByPath.get("/wt/busy"),
+    ).toBeUndefined();
+    legacyCallbacksFor("/wt/busy").onComplete(true);
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/busy"],
+      failed: [],
+      uncertain: [],
+      holdersChanged: [],
     });
   });
 });

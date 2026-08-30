@@ -8,6 +8,8 @@ import {
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import type { HostOverviewUpdatesSummary } from "@/components/settings/panels/host-overview-updates-state";
+import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
+import { cn } from "@/lib/utils";
 
 /**
  * The card body's whole update surface: one sentence and up to two buttons.
@@ -34,14 +36,30 @@ export function HostOverviewUpdatesRegion(props: {
       className="flex flex-col border-t border-border/40"
       data-testid="host-overview-updates"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-2.5 text-ui-sm">
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-3 px-5 py-2.5 text-ui-sm",
+          SETTINGS_ROW_STACK.container,
+        )}
+      >
         {/* `role="status"`: the check runs on its own now, so this sentence
             changes with no user action to anchor it — a live region is the
             only way a screen-reader user learns a check started or failed. */}
-        <span role="status" className="min-w-0 flex-1 text-muted-foreground">
+        <span
+          role="status"
+          className={cn(
+            "min-w-0 flex-1 text-muted-foreground",
+            SETTINGS_ROW_STACK.label,
+          )}
+        >
           {summary.description}
         </span>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div
+          className={cn(
+            "flex flex-wrap items-center justify-end gap-2",
+            SETTINGS_ROW_STACK.control,
+          )}
+        >
           {summary.updatableVersion === null ? null : (
             <Button
               type="button"

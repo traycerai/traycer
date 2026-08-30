@@ -6,8 +6,8 @@ import {
 } from "@/lib/keybindings/chord";
 import {
   dispatchAction,
+  findActionMatchForChord,
   type DigitActionMatch,
-  findActionForChord,
   isExternallyHandled,
   isRepeatSensitiveAction,
   matchDigitAction,
@@ -15,8 +15,10 @@ import {
   resolveLeaderOwner,
 } from "@/lib/keybindings/dispatch";
 import { subscribeLeaderScopes } from "@/lib/keybindings/leader-scope";
-import { getHistoryController } from "@/lib/history-navigation";
+import { historyNavChromeAvailable } from "@/lib/history-navigation";
 import type { ActionId } from "@/lib/keybindings/actions";
+import { ACTION_META, type TerminalPolicy } from "@/lib/keybindings/actions";
+import { isMac } from "@/lib/keybindings/platform";
 import {
   routerAdapterFor,
   type KeybindingRouterSource,
@@ -30,6 +32,7 @@ import {
   isDiffsEditorEvent,
   isEditableEventTarget,
 } from "@/lib/keybindings/editable-target";
+import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 
 interface KeybindingProviderProps {
   readonly router: KeybindingRouterSource;
@@ -86,6 +89,12 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
   useEffect(() => {
     const adapter = routerAdapterFor(router);
+    const armedRef = {
+      current: useScreencastArmedStore.getState().ownerId !== null,
+    };
+    const unsubscribeArmed = useScreencastArmedStore.subscribe((state) => {
+      armedRef.current = state.ownerId !== null;
+    });
 
     const clearHintTimer = () => {
       if (hintTimerRef.current === null) return;
@@ -286,17 +295,31 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       hideLeaderHints(pathname);
     };
 
+    // Reserved v1 list is empty - OS-level chords live in the Electron menu
+    // and never reach this listener. No action-id list.
+    const skipAppActions = (
+      event: KeyboardEvent,
+      pathname: string,
+    ): boolean => {
+      if (isAnyDialogOpen()) {
+        if (hasLeaderModifier(event)) spendHintSession(pathname);
+        else resetHintSession(pathname);
+        return true;
+      }
+      if (!armedRef.current) return false;
+      if (hasLeaderModifier(event)) spendHintSession(pathname);
+      else resetHintSession(pathname);
+      resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
+      return true;
+    };
+
     const handleKeyDown = (event: KeyboardEvent) => {
       const pathname = adapter.getPathname();
       if (allLeaderModifiersReleased(event)) {
         resetHintSession(pathname);
       }
 
-      if (isAnyDialogOpen()) {
-        if (hasLeaderModifier(event)) spendHintSession(pathname);
-        else resetHintSession(pathname);
-        return;
-      }
+      if (skipAppActions(event, pathname)) return;
 
       const cleanModifier = cleanLeaderModifierFromEvent(event);
       if (isBareModifierEvent(event)) {
@@ -324,22 +347,30 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // digit-by-number flow. `matchDigitAction` only succeeds when a digit
       // is the primary key + at least one modifier is held.
       const digitMatch = matchDigitAction(event);
-      if (digitMatch !== null) {
-        event.preventDefault();
-        event.stopPropagation();
-        handleDigitMatch(digitMatch, digitSequenceRef, digitSequenceTimerRef);
+      if (
+        handleDigitKeyDown(
+          event,
+          digitMatch,
+          digitSequenceRef,
+          digitSequenceTimerRef,
+        )
+      )
         return;
-      }
 
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
 
       const actionId = resolveReservedAction(event);
       if (actionId === null) return;
+      if (
+        shouldPassCtrlChordToFocusedTerminal(event, actionId.terminalPolicy)
+      ) {
+        return;
+      }
 
       // Toggles (e.g. the model picker) must act once per physical press. Still
       // reserve the chord on OS key-repeat so the browser default can't run,
       // but skip re-dispatch so a held chord doesn't flip the toggle rapidly.
-      if (event.repeat && isRepeatSensitiveAction(actionId)) {
+      if (event.repeat && isRepeatSensitiveAction(actionId.actionId)) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -351,18 +382,19 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // (Cmd+Alt+Left/Right = history back/forward on Chrome+Safari).
       event.preventDefault();
       event.stopPropagation();
-      dispatchAction(actionId, adapter);
+      dispatchAction(actionId.actionId, adapter);
     };
 
-    // Mouse back/forward (buttons 3/4). Desktop-only: gated on the current
-    // router carrying a persistent-history controller, so the browser/web build
-    // never intercepts these. `preventDefault()` runs only when handled, so the
-    // shell's native back/forward stays intact off-desktop.
+    // Mouse back/forward (buttons 3/4). Desktop-only, on the shared chrome
+    // predicate rather than the controller brand alone: the mobile app carries
+    // the brand too, and these buttons are chrome for a device that has them.
+    // `preventDefault()` runs only when handled, so the shell's native
+    // back/forward stays intact everywhere else.
     // NOTE: Windows may instead surface these as a main-process `app-command`
     // (`browser-backward`/`browser-forward`); that path is a verify-and-extend
     // follow-up tracked in the tech plan (§4.4).
     const handleMouseNav = (event: MouseEvent) => {
-      if (getHistoryController(router.history) === null) return;
+      if (!historyNavChromeAvailable(router.history)) return;
       if (event.button === 3) {
         event.preventDefault();
         adapter.goBack();
@@ -431,6 +463,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     return () => {
       clearHintTimer();
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
+      unsubscribeArmed();
       unsubscribeHistory();
       unsubscribeScopes();
       unregisterBaseScope();
@@ -457,23 +490,48 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
  * OUTSIDE this dispatcher (e.g. dictation, owned by a capture-phase hook) -
  * reserving those would swallow the key when the owner is inactive.
  */
-function resolveReservedAction(event: KeyboardEvent): ActionId | null {
+interface ReservedAction {
+  readonly actionId: ActionId;
+  readonly terminalPolicy: TerminalPolicy;
+}
+
+function resolveReservedAction(event: KeyboardEvent): ReservedAction | null {
   const chord = resolveMatchingChord(event);
   if (chord === null) return null;
-  const actionId = findActionForChord(chord);
-  if (actionId === null) return null;
+  const match = findActionMatchForChord(chord);
+  if (match === null) return null;
   // Cmd+Left/Right is browser history on macOS, but it is also the native
   // beginning/end-of-line command in text fields. Keep the familiar global
   // navigation binding without breaking editing. The same safeguard applies
   // if a non-Mac user explicitly remaps history to Ctrl+Left/Right.
   if (
-    (actionId === "nav.back" || actionId === "nav.forward") &&
+    (match.actionId === "nav.back" || match.actionId === "nav.forward") &&
     (chord === "mod+arrowleft" || chord === "mod+arrowright") &&
     (isEditableEventTarget(event.target) || isDiffsEditorEvent(event))
   ) {
     return null;
   }
-  return isExternallyHandled(actionId) ? null : actionId;
+  if (isExternallyHandled(match.actionId)) return null;
+  return match;
+}
+
+function shouldPassCtrlChordToFocusedTerminal(
+  event: KeyboardEvent,
+  terminalPolicy: TerminalPolicy,
+): boolean {
+  return (
+    !isMac() &&
+    event.ctrlKey &&
+    terminalPolicy === "shell" &&
+    isTerminalEventTarget(event.target)
+  );
+}
+
+function isTerminalEventTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    target.closest("[data-terminal-host]") !== null
+  );
 }
 
 function isDiffsHistoryShortcut(event: KeyboardEvent): boolean {
@@ -569,6 +627,27 @@ function handleDigitMatch(
   }
 
   scheduleDigitSequenceCommit(sequenceRef, timerRef);
+  return true;
+}
+
+function handleDigitKeyDown(
+  event: KeyboardEvent,
+  match: DigitActionMatch | null,
+  sequenceRef: RefBox<DigitSequenceSession | null>,
+  timerRef: RefBox<number | null>,
+): boolean {
+  if (match === null) return false;
+  if (
+    shouldPassCtrlChordToFocusedTerminal(
+      event,
+      ACTION_META[match.actionId].terminalPolicy,
+    )
+  )
+    return true;
+
+  event.preventDefault();
+  event.stopPropagation();
+  handleDigitMatch(match, sequenceRef, timerRef);
   return true;
 }
 

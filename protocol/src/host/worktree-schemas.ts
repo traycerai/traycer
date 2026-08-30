@@ -10,6 +10,32 @@
  * folders.
  */
 import { z } from "zod";
+import {
+  HOLDERS_REVISION_DIGEST_PATTERN,
+  worktreeBusyHoldersSchema,
+  worktreeBusyOwnerRefSchema,
+} from "@traycer/protocol/framework/worktree-busy-holders";
+export {
+  HOLDERS_REVISION_DIGEST_PATTERN,
+  worktreeBusyErrorDetailsSchema,
+  worktreeBusyHoldKindSchema,
+  worktreeBusyHolderActivitySchema,
+  worktreeBusyHolderSchema,
+  worktreeBusyHoldersSchema,
+  worktreeBusyOwnerKindSchema,
+  worktreeBusyOwnerRefSchema,
+  worktreeHoldersChangedErrorDetailsSchema,
+} from "@traycer/protocol/framework/worktree-busy-holders";
+export type {
+  WorktreeBusyErrorDetails,
+  WorktreeBusyHoldKind,
+  WorktreeBusyHolder,
+  WorktreeBusyHolderActivity,
+  WorktreeBusyHolders,
+  WorktreeBusyOwnerKind,
+  WorktreeBusyOwnerRef,
+  WorktreeHoldersChangedErrorDetails,
+} from "@traycer/protocol/framework/worktree-busy-holders";
 
 // Inlined to avoid a circular import with `epic-schemas.ts` (which
 // references `worktreeIntentSchema`). Structurally compatible with
@@ -839,11 +865,120 @@ export const worktreeDeleteRequestSchema = z.object({
 });
 export type WorktreeDeleteRequest = z.infer<typeof worktreeDeleteRequestSchema>;
 
+/**
+ * `worktree.delete@1.1` request. `stopOwners` defaults to `false` so a 1.1
+ * parse of a 1.0-shaped request is refuse-on-busy — today's behavior.
+ * `true` asks the host to stop enumerated holders, then delete.
+ *
+ * Degrade: a 1.0 host's request schema strips `stopOwners`, so an old host
+ * always refuses on busy. A 1.0 client talking to a 1.1 host is upgraded
+ * with `stopOwners: false`.
+ */
+export const worktreeDeleteRequestSchemaV11 =
+  worktreeDeleteRequestSchema.extend({
+    stopOwners: z.boolean().default(false),
+  });
+export type WorktreeDeleteRequestV11 = z.infer<
+  typeof worktreeDeleteRequestSchemaV11
+>;
+
+/**
+ * Present consent must be a real digest — empty and non-digest
+ * strings are rejected rather than silently treated as "no consent".
+ */
+export const expectedHoldersRevisionFieldSchema = z
+  .string()
+  .regex(HOLDERS_REVISION_DIGEST_PATTERN)
+  .optional();
+
+/**
+ * A consent revision without `stopOwners: true` can never be honored
+ * (absent-revision + stopOwners false is T7 refuse-on-busy; a present
+ * revision with stopOwners false would be silently ignored). Refuse
+ * at parse instead.
+ */
+export function refineConsentRevisionRequiresStopOwners(
+  value: {
+    readonly stopOwners: boolean;
+    readonly expectedHoldersRevision?: string;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.expectedHoldersRevision === undefined) return;
+  if (value.stopOwners) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["expectedHoldersRevision"],
+    message: "expectedHoldersRevision requires stopOwners to be true",
+  });
+}
+
+/**
+ * `worktree.delete@1.2` request. `expectedHoldersRevision` is the
+ * digest of the inventory the caller reviewed. When present with
+ * `stopOwners: true`, the host compares it to a fresh inventory
+ * digest before teardown; mismatch refuses with
+ * `WORKTREE_HOLDERS_CHANGED` and does not stop or delete. Absent
+ * reproduces @1.1 (stop whatever the fresh read finds). Present-empty
+ * and non-digest values, and a revision with `stopOwners: false`,
+ * fail parse.
+ *
+ * Degrade: a 1.1 host's request schema strips
+ * `expectedHoldersRevision`. A 1.1 client talking to a 1.2 host is
+ * upgraded with the field absent.
+ */
+export const worktreeDeleteRequestSchemaV12 = worktreeDeleteRequestSchemaV11
+  .extend({
+    expectedHoldersRevision: expectedHoldersRevisionFieldSchema,
+  })
+  .superRefine(refineConsentRevisionRequiresStopOwners);
+export type WorktreeDeleteRequestV12 = z.infer<
+  typeof worktreeDeleteRequestSchemaV12
+>;
+
 export const worktreeDeleteResponseSchema = z.object({
   deleted: z.boolean(),
 });
 export type WorktreeDeleteResponse = z.infer<
   typeof worktreeDeleteResponseSchema
+>;
+
+/**
+ * `worktree.listHolders@1.0` — path-scoped holder inventory with an optional
+ * owner filter. Bridges the host's holder-inventory engine:
+ *
+ * - `owner` absent/null: holders of `worktreePath`
+ *   (`listHoldersForWorktreePath`).
+ * - `owner` present: that owner's holders (`listHoldersForOwner`). The path
+ *   is still required so the method stays path-scoped on the wire; it does
+ *   not filter the owner inventory (rebind disclosure needs dropped-path
+ *   holders too).
+ *
+ * Unknown path or owner → `{ holders: [] }`. Brand-new method, outside the
+ * released floor: an old host simply lacks it (`degrade: unsupported`) and
+ * an old client never calls it.
+ */
+export const worktreeListHoldersRequestSchema = z.object({
+  worktreePath: z.string(),
+  owner: worktreeBusyOwnerRefSchema.nullable().default(null),
+});
+export type WorktreeListHoldersRequest = z.infer<
+  typeof worktreeListHoldersRequestSchema
+>;
+
+export const worktreeListHoldersResponseSchema = z.object({
+  holders: worktreeBusyHoldersSchema,
+  /**
+   * Host-computed digest of `holders`. Optional so a pre-revision
+   * response still parses; a current host always emits it. Present
+   * values must match `HOLDERS_REVISION_DIGEST_PATTERN` so a client
+   * can echo the field as `expectedHoldersRevision` without a parse
+   * round-trip failing.
+   */
+  holdersRevision: z.string().regex(HOLDERS_REVISION_DIGEST_PATTERN).optional(),
+});
+export type WorktreeListHoldersResponse = z.infer<
+  typeof worktreeListHoldersResponseSchema
 >;
 
 /**
@@ -1087,6 +1222,18 @@ export const worktreeHostEntrySchemaV15 = worktreeHostEntrySchemaV14.extend({
 export type WorktreeHostEntryV15 = z.infer<typeof worktreeHostEntrySchemaV15>;
 
 /**
+ * `worktree.listAllForHost` v1.6 entry. `gitUnreadable` is `true` when the
+ * worktree's `.git` gitlink exists but git cannot resolve the repository it
+ * points at (main repo missing / moved / re-cloned, or admin entry pruned).
+ * The row IS resolved; its branch and dirty count are unknowable, so clients
+ * must not treat it as clean.
+ */
+export const worktreeHostEntrySchemaV16 = worktreeHostEntrySchemaV15.extend({
+  gitUnreadable: z.boolean(),
+});
+export type WorktreeHostEntryV16 = z.infer<typeof worktreeHostEntrySchemaV16>;
+
+/**
  * `worktree.listAllForHost` v1.1 request. Adds `includeActivity`: the git
  * probes (reflog, ahead/behind, merged) add per-worktree cost, so the Settings
  * tab passes `false` (or stays on v1.0) to keep the panel snappy while the
@@ -1247,6 +1394,22 @@ export const worktreeListAllForHostResponseSchemaV15 = z.object({
 });
 export type WorktreeListAllForHostResponseV15 = z.infer<
   typeof worktreeListAllForHostResponseSchemaV15
+>;
+
+/**
+ * `worktree.listAllForHost` v1.6 request. Unchanged from v1.5; this minor
+ * adds the response `gitUnreadable` fact only.
+ */
+export const worktreeListAllForHostRequestSchemaV16 =
+  worktreeListAllForHostRequestSchemaV15;
+export type WorktreeListAllForHostRequestV16 = WorktreeListAllForHostRequestV15;
+
+export const worktreeListAllForHostResponseSchemaV16 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV16),
+  nextCursor: z.string().nullable(),
+});
+export type WorktreeListAllForHostResponseV16 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV16
 >;
 
 /**

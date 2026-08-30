@@ -1,42 +1,23 @@
 import { useState, type ReactNode } from "react";
-import { toast } from "sonner";
 import {
   AlertTriangle,
-  ChevronRight,
   Eye,
   EyeOff,
   LogIn,
   Plus,
-  RefreshCw,
   Settings2,
-  Trash2,
   X,
 } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
   type ProviderProfile,
-  type ProviderProfileAccentColor,
 } from "@traycer/protocol/host/provider-schemas";
-import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { redactEmail } from "@/lib/providers/redact-email";
-import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-profile-mutation";
-import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
-import { useRecolorProviderProfile } from "@/hooks/providers/use-recolor-provider-profile-mutation";
-import { ProviderProfileCard } from "@/components/providers/provider-profile-card";
 import {
   ProfileDropdown,
   type ProfileDropdownShortcutHint,
@@ -45,12 +26,12 @@ import {
   EmbeddedProviderRateLimitForProvider,
   ProviderProfilesRefreshButton,
 } from "./provider-rate-limit-section";
-import { ProviderProfileReauthPanel } from "./provider-profile-reauth-panel";
+import { ProfileEditDialog } from "./provider-profile-edit-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog";
 import {
   duplicateProfileLabel,
-  orderProfiles,
+  profileEligibilityToggleDisabledReason,
   profileAuthStatusText,
   profileCommitId,
   profileDisplayLabel,
@@ -61,20 +42,6 @@ import {
 } from "@/lib/rate-limit-providers";
 
 type ProviderId = ProviderCliState["providerId"];
-
-const TERMINAL_PROFILE_REMOVE_DISABLED_REASON =
-  "This profile uses your default CLI login and cannot be removed.";
-
-const PROFILE_REMOVE_PRESENTATION = {
-  ambient: {
-    ariaLabel: `Remove profile. ${TERMINAL_PROFILE_REMOVE_DISABLED_REASON}`,
-    disabledReason: TERMINAL_PROFILE_REMOVE_DISABLED_REASON,
-  },
-  managed: {
-    ariaLabel: "Remove profile",
-    disabledReason: null,
-  },
-} as const;
 
 // Stable module-level reference (not a fresh closure per render) - Settings
 // has no picker leader scope, so every row opts out of the shortcut hint.
@@ -123,6 +90,82 @@ interface ProviderProfileScopedSectionProps {
    *  profile via `AddProviderProfileDialog`'s `onProfileCreated`. */
   readonly selectedProfileId: string | null;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileStatusRefreshAvailable: boolean;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
+  readonly onSetProfileEnabled: (
+    profileId: string | null,
+    enabled: boolean,
+  ) => void;
+}
+
+function ProfileScopedSectionMessages(props: {
+  readonly selectedProfile: ProviderProfile;
+  readonly addProfileDisabled: boolean;
+  readonly addProfileDisabledReason: string | null;
+  readonly failedAttempt: FailedProviderProfileAttempt | null;
+  readonly onAddProfile: () => void;
+  readonly onDismissFailedAttempt: () => void;
+  readonly driftDismissed: boolean;
+  readonly onDismissDrift: () => void;
+  readonly duplicateLabel: string | null;
+}): ReactNode {
+  return (
+    <>
+      {props.addProfileDisabled ? (
+        <p className="text-ui-xs text-muted-foreground">
+          {props.addProfileDisabledReason}
+        </p>
+      ) : null}
+      {props.failedAttempt !== null ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive">
+          <span className="min-w-0">
+            Sign-in did not finish for{" "}
+            {PROVIDER_DISPLAY_NAMES[props.failedAttempt.providerId]}.
+          </span>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={props.onAddProfile}
+            >
+              Retry
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={props.onDismissFailedAttempt}
+            >
+              Dismiss
+            </Button>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Provider sign-in failed",
+                message: "Sign-in did not finish for a provider profile.",
+                code: null,
+                source: "Provider sign-in",
+              })}
+              presentation="icon"
+              className={undefined}
+            />
+          </div>
+        </div>
+      ) : null}
+      {props.selectedProfile.kind === "ambient" &&
+      props.selectedProfile.ambientDriftNotice !== null &&
+      !props.driftDismissed ? (
+        <AmbientDriftNotice
+          profile={props.selectedProfile}
+          onDismiss={props.onDismissDrift}
+        />
+      ) : null}
+      {props.duplicateLabel !== null ? (
+        <ProfileWarning>Same account as {props.duplicateLabel}</ProfileWarning>
+      ) : null}
+    </>
+  );
 }
 
 /**
@@ -153,6 +196,10 @@ export function ProviderProfileScopedSection(
     onDismissFailedAttempt,
     selectedProfileId,
     onSelectedProfileIdChange,
+    profileEnablementAvailable,
+    profileStatusRefreshAvailable,
+    profileEnablementPending,
+    onSetProfileEnabled,
   } = props;
   const profiles = state.profiles;
   const [dismissedDriftKeys, setDismissedDriftKeys] = useState<
@@ -160,17 +207,16 @@ export function ProviderProfileScopedSection(
   >([]);
   const [editProfileOpen, setEditProfileOpen] = useState(startInReauth);
   const [editSessionId, setEditSessionId] = useState(0);
-  const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(
+  const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(() =>
     startInReauth ? "sign-in" : "manage",
   );
 
   if (profiles.length === 0) return null;
 
-  const orderedProfiles = orderProfiles(profiles);
   const selectedProfile =
-    orderedProfiles.find(
+    profiles.find(
       (candidate) => profileCommitId(candidate) === selectedProfileId,
-    ) ?? orderedProfiles[0];
+    ) ?? profiles[0];
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile || !isSelectedHostLocal;
   // `TooltipWrapper` degrades to a passthrough Slot for both `null` and
@@ -236,12 +282,13 @@ export function ProviderProfileScopedSection(
                 state,
                 selectedProfile,
               )}
+              maintenanceAvailable={profileStatusRefreshAvailable}
             />
           </div>
         </div>
         <ProfileDropdown
           providerLabel={providerLabel}
-          profiles={orderedProfiles}
+          profiles={profiles}
           activeProfileId={selectedProfileId}
           onSelectProfile={onSelectedProfileIdChange}
           onCreateProfile={onAddProfile}
@@ -252,11 +299,31 @@ export function ProviderProfileScopedSection(
           contentContainer={null}
           onCloseAutoFocus={null}
           usagePresentation={null}
+          profileEnablementPending={profileEnablementPending}
+          eligibilityControls={
+            profileEnablementAvailable
+              ? {
+                  pending: profileEnablementPending,
+                  disabledReason: (profile) =>
+                    profileEligibilityToggleDisabledReason(
+                      state.enabled,
+                      profile,
+                      profiles,
+                    ),
+                  onSetEnabled: onSetProfileEnabled,
+                }
+              : null
+          }
           admissionByProfileId={null}
         />
         <div
           data-slot="profile-summary-actions"
-          className="flex min-w-0 items-center justify-end gap-2"
+          // Wraps because every item except the email is a fixed-width chip:
+          // in a single-line row a narrow viewport collapses the email to
+          // nothing and then pushes the chips into one another, since none of
+          // them can shrink. Wrapping drops the buttons onto their own line
+          // instead, keeping every chip whole.
+          className="flex min-w-0 flex-wrap items-center justify-end gap-2"
         >
           <ProfileSummary
             key={selectedProfile.profileId}
@@ -303,60 +370,17 @@ export function ProviderProfileScopedSection(
           </TooltipWrapper>
         </div>
 
-        {addProfileDisabled ? (
-          <p className="text-ui-xs text-muted-foreground">
-            {addProfileDisabledReason}
-          </p>
-        ) : null}
-        {failedAttempt !== null ? (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive">
-            <span className="min-w-0">
-              Sign-in did not finish for{" "}
-              {PROVIDER_DISPLAY_NAMES[failedAttempt.providerId]}.
-            </span>
-            <div className="flex shrink-0 items-center gap-1">
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={onAddProfile}
-              >
-                Retry
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={onDismissFailedAttempt}
-              >
-                Dismiss
-              </Button>
-              <ReportIssueAction
-                context={createReportIssueContext({
-                  title: "Provider sign-in failed",
-                  message: "Sign-in did not finish for a provider profile.",
-                  code: null,
-                  source: "Provider sign-in",
-                })}
-                presentation="icon"
-                className={undefined}
-              />
-            </div>
-          </div>
-        ) : null}
-
-        {selectedProfile.kind === "ambient" &&
-        selectedProfile.ambientDriftNotice !== null &&
-        !driftDismissed ? (
-          <AmbientDriftNotice
-            profile={selectedProfile}
-            onDismiss={dismissDrift}
-          />
-        ) : null}
-
-        {duplicateLabel !== null ? (
-          <ProfileWarning>Same account as {duplicateLabel}</ProfileWarning>
-        ) : null}
+        <ProfileScopedSectionMessages
+          selectedProfile={selectedProfile}
+          addProfileDisabled={addProfileDisabled}
+          addProfileDisabledReason={addProfileDisabledReason}
+          failedAttempt={failedAttempt}
+          onAddProfile={onAddProfile}
+          onDismissFailedAttempt={onDismissFailedAttempt}
+          driftDismissed={driftDismissed}
+          onDismissDrift={dismissDrift}
+          duplicateLabel={duplicateLabel}
+        />
 
         <EmbeddedProviderRateLimitForProvider
           providerId={state.providerId}
@@ -375,10 +399,13 @@ export function ProviderProfileScopedSection(
         startInReauth={editIntent === "sign-in"}
         open={editProfileOpen}
         onOpenChange={setEditProfileOpen}
-        remainingProfilesAfterRemoval={orderedProfiles.filter(
+        remainingProfilesAfterRemoval={profiles.filter(
           (candidate) => candidate.profileId !== selectedProfile.profileId,
         )}
         onSelectedProfileIdChange={onSelectedProfileIdChange}
+        profileEnablementAvailable={profileEnablementAvailable}
+        profileEnablementPending={profileEnablementPending}
+        onSetProfileEnabled={onSetProfileEnabled}
       />
     </section>
   );
@@ -400,8 +427,17 @@ function ProfileSummary({
     tier === null || tier === undefined || tier.length === 0 ? null : tier;
 
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-2 text-ui-xs text-muted-foreground">
-      <div className="flex min-w-0 flex-1 items-center gap-1">
+    <div className="flex min-w-0 flex-auto flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
+      {/* The email (and its reveal toggle) is the one shrinkable item; the
+          badges are whole-or-nothing chips. `flex-auto`, not `flex-1`: the
+          wrap threshold is computed from each unit's flex BASIS, and `flex-1`
+          zeroes it - a zero-basis email reserves no width during line
+          collection, so the fixed chips would stay on the line and still
+          paint over the toggle. With its content as its basis the email
+          claims its width first, whole chips move down when the line cannot
+          hold everything, and the email truncates only once it has a line
+          largely to itself. */}
+      <div className="flex min-w-0 flex-auto items-center gap-1">
         <TooltipWrapper
           label={emailRevealed ? email : null}
           side="top"
@@ -493,361 +529,5 @@ function ProfileWarning({
       <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
       <span className="min-w-0">{children}</span>
     </div>
-  );
-}
-
-function ProfileEditErrors({
-  renameError,
-  recolorError,
-  removeError,
-}: {
-  readonly renameError: Error | null;
-  readonly recolorError: Error | null;
-  readonly removeError: Error | null;
-}): ReactNode {
-  const editError = renameError ?? recolorError;
-
-  return (
-    <>
-      {editError !== null ? (
-        <p className="text-ui-xs text-destructive">{editError.message}</p>
-      ) : null}
-      {removeError !== null ? (
-        <p className="text-ui-xs text-destructive">{removeError.message}</p>
-      ) : null}
-    </>
-  );
-}
-
-function profileEditDialogCopy(
-  profile: ProviderProfile,
-  startInReauth: boolean,
-) {
-  if (startInReauth) {
-    return {
-      title: `Sign in to ${profileDisplayLabel(profile)}`,
-      description: "Reconnect this profile without changing its name or color.",
-    };
-  }
-  return {
-    title: "Edit profile",
-    description: `Update how ${profileDisplayLabel(profile)} appears and which account it uses.`,
-  };
-}
-
-/** Carries the confirmation the suppressed identity card used to. Redacted to
- *  match every other Providers surface that prints a profile's email - the
- *  card behind it offered a reveal toggle, a toast cannot, so the redacted
- *  form is the only honest one here. */
-function signedInMessage(profile: ProviderProfile): string {
-  const email = profile.identity?.email ?? null;
-  if (email !== null) return `Signed in as ${redactEmail(email)}`;
-  return `Signed in to ${profileDisplayLabel(profile)}`;
-}
-
-function ProfileEditDialog({
-  state,
-  profile,
-  profiles,
-  canOauth,
-  startInReauth,
-  open,
-  onOpenChange,
-  remainingProfilesAfterRemoval,
-  onSelectedProfileIdChange,
-}: {
-  readonly state: ProviderCliState;
-  readonly profile: ProviderProfile;
-  readonly profiles: readonly ProviderProfile[];
-  readonly canOauth: boolean;
-  readonly startInReauth: boolean;
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
-  /** The provider's other profiles, ordered - what stays once `profile` is
-   *  removed. Lets a successful removal land the section on a profile that
-   *  still exists instead of leaving `selectedProfileId` pointed at the one
-   *  just deleted. */
-  readonly remainingProfilesAfterRemoval: ReadonlyArray<ProviderProfile>;
-  readonly onSelectedProfileIdChange: (profileId: string | null) => void;
-}): ReactNode {
-  const providerId = state.providerId;
-  const removeProfile = useRemoveProviderProfile();
-  const renameProfile = useRenameProviderProfile();
-  const recolorProfile = useRecolorProviderProfile();
-  const [switchingAccount, setSwitchingAccount] = useState(startInReauth);
-  const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
-  const [label, setLabel] = useState(profile.label);
-  const [committedLabel, setCommittedLabel] = useState(profile.label);
-  const [accentColor, setAccentColor] =
-    useState<ProviderProfileAccentColor | null>(profile.accentColor);
-  const [committedAccentColor, setCommittedAccentColor] =
-    useState<ProviderProfileAccentColor | null>(profile.accentColor);
-  const trimmedLabel = label.trim();
-  const savePending = renameProfile.isPending || recolorProfile.isPending;
-  const changed =
-    trimmedLabel !== committedLabel || accentColor !== committedAccentColor;
-  const invalid = trimmedLabel.length === 0;
-  const removeProfilePresentation = PROFILE_REMOVE_PRESENTATION[profile.kind];
-  const removeProfileDisabledReason = removeProfilePresentation.disabledReason;
-  const isTerminalProfile = removeProfileDisabledReason !== null;
-  const dialogCopy = profileEditDialogCopy(profile, startInReauth);
-
-  const commitProfile = (onSuccess: () => void): void => {
-    if (savePending || invalid) return;
-    const recolorIfNeeded = (): void => {
-      if (accentColor === null || accentColor === committedAccentColor) {
-        onSuccess();
-        return;
-      }
-      recolorProfile.mutate(
-        {
-          providerId,
-          profileId: profile.profileId,
-          accentColor,
-        },
-        {
-          onSuccess: () => {
-            setCommittedAccentColor(accentColor);
-            onSuccess();
-          },
-        },
-      );
-    };
-    if (trimmedLabel !== committedLabel) {
-      renameProfile.mutate(
-        {
-          providerId,
-          profileId: profile.profileId,
-          label: trimmedLabel,
-        },
-        {
-          onSuccess: () => {
-            setCommittedLabel(trimmedLabel);
-            recolorIfNeeded();
-          },
-        },
-      );
-      return;
-    }
-    recolorIfNeeded();
-  };
-
-  const closeEditor = (): void => {
-    onOpenChange(false);
-  };
-
-  const switchAccount = (): void => {
-    setSwitchingAccount(true);
-  };
-
-  /** Sign-in intent opened this dialog *for* the sign-in, so once the sign-in
-   *  settles there is nothing here left to save - close the whole thing
-   *  instead of handing back an edit form whose only exit is Cancel. Both
-   *  settlements below take this route; they differ only in what confirms it.
-   *
-   *  `switchingAccount` deliberately stays true: clearing it here would swap
-   *  the edit form (and its footer) back in for the length of the dialog's
-   *  exit animation. Nothing leaks, because the section keys this dialog by
-   *  edit session - reopening remounts it with a fresh `switchingAccount`. */
-  const closeAfterSignIn = (): void => {
-    onOpenChange(false);
-  };
-
-  /** The SAME account reconnecting, settled without an acknowledgment step.
-   *  The toast stands in for the card that no longer renders - it is the only
-   *  confirmation left, so this path is the one that needs it. */
-  const finishSignIn = (signedIn: ProviderProfile): void => {
-    closeAfterSignIn();
-    toast.success(signedInMessage(signedIn));
-  };
-
-  const requestRemove = (): void => {
-    onOpenChange(false);
-    setConfirmRemoveOpen(true);
-  };
-
-  return (
-    <>
-      <Dialog
-        open={open}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen && (savePending || switchingAccount)) return;
-          onOpenChange(nextOpen);
-        }}
-      >
-        <DialogContent
-          className="max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] gap-0 overflow-y-auto p-0 sm:max-w-none"
-          showCloseButton={!switchingAccount}
-        >
-          <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
-            <DialogTitle className="text-ui font-semibold leading-snug">
-              {dialogCopy.title}
-            </DialogTitle>
-            <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
-              {dialogCopy.description}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex flex-col gap-5 px-5 pb-5">
-            <ProviderProfileCard
-              key={profile.profileId}
-              profile={profile}
-              profiles={profiles}
-              label={label}
-              onLabelChange={setLabel}
-              selectedColor={accentColor}
-              onSelectColor={setAccentColor}
-              disabled={savePending || switchingAccount}
-            />
-
-            {switchingAccount ? (
-              <ProviderProfileReauthPanel
-                state={state}
-                profile={profile}
-                onSameAccountReconnected={startInReauth ? finishSignIn : null}
-                onCancel={() => setSwitchingAccount(false)}
-                // A CHANGED account still stops for its amber notice, but
-                // acknowledging it ends a sign-in-intent dialog too - landing
-                // that user on the edit form would rebuild the same Cancel-only
-                // dead end one step later. No toast: they just read and
-                // confirmed the notice, so nothing was taken away to replace.
-                // The "Switch account" entry keeps returning to its form, which
-                // still holds their uncommitted name and color.
-                onDone={
-                  startInReauth
-                    ? closeAfterSignIn
-                    : () => setSwitchingAccount(false)
-                }
-              />
-            ) : (
-              <TooltipWrapper
-                label={
-                  canOauth
-                    ? null
-                    : "Switch account requires a local host with browser sign-in available."
-                }
-                side="top"
-                sideOffset={6}
-                align={undefined}
-              >
-                {/* `flex w-full` on the span, not `inline-flex`: the button it
-                    guards is full-width, and an inline-flex wrapper would
-                    collapse the row. */}
-                <span className="flex w-full">
-                  <button
-                    type="button"
-                    aria-label="Switch account"
-                    className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={!canOauth || savePending || invalid}
-                    onClick={switchAccount}
-                  >
-                    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:text-foreground">
-                      <RefreshCw className="size-4" />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-ui-sm font-medium text-foreground">
-                        Switch account
-                      </span>
-                      <span className="block text-ui-xs text-muted-foreground">
-                        Sign in with a different account for this profile.
-                      </span>
-                    </span>
-                    <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                  </button>
-                </span>
-              </TooltipWrapper>
-            )}
-
-            <ProfileEditErrors
-              renameError={renameProfile.error}
-              recolorError={recolorProfile.error}
-              removeError={removeProfile.error}
-            />
-          </div>
-
-          <DialogFooter
-            className={
-              switchingAccount
-                ? "hidden"
-                : "mx-0 mb-0 rounded-b-xl border-t border-border/70 bg-foreground/3 px-5 py-3"
-            }
-          >
-            <div className="flex w-full flex-wrap items-center justify-between gap-2">
-              <TooltipWrapper
-                label={removeProfileDisabledReason}
-                side="top"
-                sideOffset={6}
-                align="start"
-              >
-                <span className="inline-flex">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    aria-label={removeProfilePresentation.ariaLabel}
-                    disabled={
-                      isTerminalProfile ||
-                      removeProfile.isPending ||
-                      savePending
-                    }
-                    onClick={requestRemove}
-                    className="text-ui-sm text-destructive"
-                  >
-                    <Trash2 className="size-3.5" />
-                    Remove profile
-                  </Button>
-                </span>
-              </TooltipWrapper>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  disabled={savePending}
-                  onClick={closeEditor}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  disabled={savePending || invalid || !changed}
-                  onClick={() => commitProfile(closeEditor)}
-                >
-                  {savePending ? <MutedAgentSpinner /> : null}
-                  Save changes
-                </Button>
-              </div>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <ConfirmDestructiveDialog
-        open={confirmRemoveOpen}
-        onOpenChange={setConfirmRemoveOpen}
-        title={`Remove ${profileDisplayLabel(profile)}?`}
-        description={`Agents that ran on ${profileDisplayLabel(profile)} will show it as removed. Running sessions on this profile must be stopped first.`}
-        cascadeSummary={null}
-        actionLabel="Remove"
-        isPending={removeProfile.isPending}
-        onConfirm={() =>
-          removeProfile.mutate(
-            { providerId, profileId: profile.profileId },
-            {
-              onSuccess: () => {
-                setConfirmRemoveOpen(false);
-                const nextProfile = remainingProfilesAfterRemoval.at(0);
-                onSelectedProfileIdChange(
-                  nextProfile === undefined
-                    ? null
-                    : profileCommitId(nextProfile),
-                );
-              },
-            },
-          )
-        }
-      />
-    </>
   );
 }

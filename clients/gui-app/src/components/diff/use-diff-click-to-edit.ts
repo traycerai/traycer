@@ -151,7 +151,11 @@ export function useDiffClickToEdit(props: {
 
   const activate = useCallback(
     (event: MouseEvent | PointerEvent, caret: DiffEditCaret): void => {
-      if (!propsRef.current.enabled || !isDiffEditActivationGesture(event)) {
+      if (
+        !propsRef.current.enabled ||
+        attachedEditorRef.current !== null ||
+        !isDiffEditActivationGesture(event)
+      ) {
         return;
       }
       activateWithCaret(caret);

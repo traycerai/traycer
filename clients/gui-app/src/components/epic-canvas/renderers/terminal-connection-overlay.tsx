@@ -18,11 +18,6 @@ import type { TerminalConnectionOverlayState } from "./terminal-connection-overl
  *   automatically (see `useTerminalSessionRecovery`).
  * - `lost` - automatic recovery gave up (the respawn kept failing); offer a
  *   manual retry ("reattachable" - the session may still exist, Architecture §8).
- * - `sessionLost` - the host confirmed (`TERMINAL_NOT_FOUND`) this session is
- *   definitively gone (linger expired + reaped, or lost across a host
- *   restart) - a final state (Journey 4: "Scroll back to see how it
- *   finished"); no retry affordance, only Close.
- *
  * Keystrokes are already blocked from the dead PTY at the store
  * (`writeInput` returns null while `status` is `"lost"`/`"reaped"` or the
  * connection is not open), so the overlay does not steal focus; it covers
@@ -31,8 +26,6 @@ import type { TerminalConnectionOverlayState } from "./terminal-connection-overl
 export interface TerminalConnectionOverlayProps {
   readonly state: TerminalConnectionOverlayState;
   readonly onReconnect: () => void;
-  /** Only invoked from the `sessionLost` state's Close action. */
-  readonly onClose: () => void;
   readonly testId: string;
 }
 
@@ -40,27 +33,9 @@ export function TerminalConnectionOverlay(
   props: TerminalConnectionOverlayProps,
 ): ReactNode {
   const isLost = props.state === "lost";
-  const isSessionLost = props.state === "sessionLost";
-  const isAlert = isLost || isSessionLost;
+  const isAlert = isLost;
   let content: ReactNode;
-  if (isSessionLost) {
-    content = (
-      <>
-        <p className="max-w-md">
-          This terminal&apos;s session ended while you were away. Scroll back to
-          see how it finished.
-        </p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={props.onClose}
-        >
-          Close
-        </Button>
-      </>
-    );
-  } else if (isLost) {
+  if (isLost) {
     content = (
       <>
         <p className="max-w-md">

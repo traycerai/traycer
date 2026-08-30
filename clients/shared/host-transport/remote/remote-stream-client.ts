@@ -3,7 +3,10 @@ import type {
   SchemaVersion,
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
-import type { IHostStreamClient } from "../host-stream-client";
+import type {
+  IHostStreamClient,
+  ReconnectAllOptions,
+} from "../host-stream-client";
 import type { IStreamSession } from "../i-stream-session";
 import type { ParamsOf, StreamMethodSupport } from "../ws-stream-client";
 import type { IRemoteSession } from "./remote-session";
@@ -79,16 +82,59 @@ export class RemoteStreamClient<
   }
 
   /**
-   * No-op (see {@link IHostStreamClient.reconnectAll}): a remote session's
-   * attach endpoint is the relay's fixed WS URL, never a per-host address that
-   * moves on respawn, so there is nothing to nudge. The session's own
-   * resume/backoff loop (Architecture §3) already owns reconnection.
+   * Reconnects THIS client's session and no other (see
+   * {@link IRemoteSession.wake} / {@link IRemoteSession.forceReconnect}).
+   *
+   * There is no endpoint to re-resolve - a remote session's attach address is
+   * the relay's fixed WS URL, never a per-host one that moves on respawn - but
+   * `probeFirst` still names two genuinely different demands. Probe-first
+   * forwards to the session's own wake: poke the socket, re-dial only on a
+   * failed verdict, pull a stale backoff wait forward. Forced
+   * (`probeFirst: false`) is a caller declaring the current socket not worth
+   * probing - a person tapping Retry now, an endpoint-change sweep - and it
+   * drops the socket and re-dials with no backoff delay. It used to be
+   * flattened into `wake`, which made Retry-now a spectator to the very 10s
+   * probe window the person was trying to cut short.
+   *
+   * Scope is the whole point, and it is why this is NOT the cache-wide sweep.
+   * The caller here is asking about a connection it can name - a user tapping
+   * Retry on a banner that told them about ONE session - and a verdict and its
+   * remedy must share scope. A button that reports session A and then dials A,
+   * B and C is lying about at least two of them. Runtime resume is a different
+   * question with a different answer (`wakeHeldRemoteSessions`): there the
+   * evidence is about the whole process, so the whole cache is in scope.
+   *
+   * Production builds this over an ACQUIRED view, so a client whose consumer
+   * has released inherits that view's ownership guard and this becomes a no-op
+   * rather than hurrying a session nobody holds.
    */
-  reconnectAll(_reason: string): void {}
+  reconnectAll(reason: string, options: ReconnectAllOptions): void {
+    if (options.probeFirst) {
+      this.session.wake(reason, options.wakeProbe);
+    } else {
+      this.session.forceReconnect(reason);
+    }
+  }
 
   /**
-   * Bridges the session's ready-boundary transition (full attach + every
-   * live stream restored; see
+   * Whether the session backing THIS client is carrying traffic right now
+   * (see {@link IRemoteSession.isReady}) - full attach, restore evidence
+   * accepted for every live stream (a delivered frame or an in-flight chunk;
+   * completed delivery stays each stream's own status), and the host still
+   * attached at the relay.
+   *
+   * Exact by construction: one client, one shared session, no lookup by host.
+   * A ready one-shot session or a lingering keep-warm one for the same host
+   * cannot answer here, which is the whole reason a surface speaking for one
+   * connection must ask its client rather than scan the cache.
+   */
+  isReady(): boolean {
+    return this.session.isReady();
+  }
+
+  /**
+   * Bridges the session's ready-boundary transition (full attach + accepted
+   * restore evidence for every live stream; see
    * `RemoteSession.subscribeAvailabilityRecovered`) to availability-recovered
    * listeners - the same "endpoint recovered" evidence `WsStreamClient`
    * surfaces when a session re-opens after a drop, PLUS the clean first open

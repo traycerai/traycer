@@ -204,7 +204,7 @@ export function usePrDetailSubscription(args: {
     [queryClient, activeArgs],
   );
 
-  const { subscription, sendRefresh } = useSharedStreamSubscription({
+  const { lastEvent, sendRefresh } = useSharedStreamSubscription({
     registry: subscriptions,
     sessionKey,
     enabled: stableArgs.enabled && stableArgs.methodSupported,
@@ -230,7 +230,6 @@ export function usePrDetailSubscription(args: {
     enabled: false,
   });
 
-  const lastEvent = subscription?.lastEvent ?? null;
   const errorEvent = lastEvent?.kind === "error" ? lastEvent : null;
   const data = queryData ?? null;
 
@@ -318,10 +317,15 @@ function createSharedSubscription(
   session.onStatusChange((status, reason) => {
     if (sessionClosed) return;
     if (status !== "closed") return;
+    const closeMessage = describeStreamClose(reason);
+    // `null` means the close was retryable: the client is already reconnecting
+    // and a fresh snapshot is coming, so marking the surface TERMINAL here
+    // would turn ordinary reconnection into a dead panel.
+    if (closeMessage === null) return;
     markTerminal({
       kind: "error",
       hasBinaryPayload: false,
-      message: describeStreamClose(reason),
+      message: closeMessage,
       isFatal: true,
     });
   });
@@ -329,7 +333,20 @@ function createSharedSubscription(
   return shared;
 }
 
-function describeStreamClose(reason: StreamCloseReason | null): string {
+function describeStreamClose(reason: StreamCloseReason | null): string | null {
+  // A RETRYABLE close is the transport reconnecting, not a failure the user
+  // has to see: the client re-subscribes on its own backoff and the next
+  // snapshot repopulates this surface. Returning `null` keeps the panel in
+  // its pending state - "visibly retrying" - instead of flashing an error
+  // that resolves itself, which is what an overnight sleep used to do to
+  // every open panel at once.
+  if (
+    reason !== null &&
+    reason.kind === "fatalError" &&
+    reason.details.retryable === true
+  ) {
+    return null;
+  }
   if (reason === null || reason.kind === "caller") {
     return "The PR detail stream closed unexpectedly.";
   }

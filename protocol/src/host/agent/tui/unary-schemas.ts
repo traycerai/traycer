@@ -4,7 +4,10 @@ import {
   tuiHarnessIdSchema,
 } from "@traycer/protocol/host/agent/shared";
 import { GENERATE_TITLE_SOURCE_TEXT_MAX_CHARS } from "@traycer/protocol/host/epic/unary-schemas";
-import { worktreeBindingWorkspaceModeSchema } from "@traycer/protocol/host/worktree-schemas";
+import {
+  worktreeBindingWorkspaceModeSchema,
+  worktreeIntentSchema,
+} from "@traycer/protocol/host/worktree-schemas";
 
 // ─── Catalog rows (per-surface) ───────────────────────────────────────────
 //
@@ -180,7 +183,7 @@ export type ValidateTuiForkProfileRequest = z.infer<
 // candidate-specific profile-lifecycle rejection (unknown/tombstoned/
 // setup-pending/unsupported-provider) that is NOT a `TuiForkScopeGuardError` -
 // the bulk resolver reshapes that error family into its own verdict row
-// (amend-01, T3 review) rather than aborting the whole batch.
+// rather than aborting the whole batch.
 //
 // `SOURCE_NOT_READY` (follow-up fix): a Claude source's `harnessSessionId` is
 // minted synchronously at launch, before any turn writes its transcript to
@@ -381,6 +384,30 @@ export const tuiAgentPromptSubmittedRequestSchema = z.object({
 });
 export type TuiAgentPromptSubmittedRequest = z.infer<
   typeof tuiAgentPromptSubmittedRequestSchema
+>;
+
+/**
+ * `agent.tui.promptSubmitted@1.1` - optional submit-time workspace-binding
+ * intent, same `worktreeIntent` shape the rebind mutations (`worktree.create`
+ * folder intents) already use and that `chat.subscribe` `send` /
+ * `editUserMessage` already carry. Applied at commit per W5; absent/`null`
+ * ⇒ binding-as-stored (today).
+ *
+ * Degrade: a 1.0 host's request schema strips `worktreeIntent`, so an old
+ * host keeps binding-as-stored. A 1.0 client talking to a 1.1 host is
+ * upgraded with `worktreeIntent: null`. The method stays
+ * `degrade: unsupported` on the floor — absence of the method itself still
+ * falls back to `recordActivity`.
+ */
+export const tuiAgentPromptSubmittedRequestSchemaV11 =
+  tuiAgentPromptSubmittedRequestSchema.extend({
+    // Optional (not defaulted) so a 1.0-shaped constructor — the CLI hook
+    // that predates this field — remains assignable to the latest request
+    // type. Absent/undefined/`null` all mean binding-as-stored.
+    worktreeIntent: worktreeIntentSchema.nullable().optional(),
+  });
+export type TuiAgentPromptSubmittedRequestV11 = z.infer<
+  typeof tuiAgentPromptSubmittedRequestSchemaV11
 >;
 
 export const tuiAgentPromptSubmittedResponseSchema = z.object({

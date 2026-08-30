@@ -51,6 +51,10 @@ vi.mock("@/lib/images/copy-image-to-clipboard", () => ({
 
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
   saveBlobToDisk: mocks.saveBlobToDisk,
+  // Browser-runtime shape: the picker never reports a path, so the saved
+  // toast has no "Open file" action to offer.
+  canOpenSavedFile: () => false,
+  openSavedFile: vi.fn(),
 }));
 
 afterEach(() => {
@@ -317,7 +321,10 @@ describe("<UsageSummaryPanel /> image export", () => {
     const user = userEvent.setup();
     const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
     mocks.captureUsageExportImageBlob.mockResolvedValue(blob);
-    mocks.saveBlobToDisk.mockResolvedValue("traycer-usage-30d.png");
+    mocks.saveBlobToDisk.mockResolvedValue({
+      name: "traycer-usage-30d.png",
+      path: null,
+    });
     renderPanel(usageSummaryResponse);
     await screen.findByTestId("usage-cost-figure");
     const exportRegion = screen.getByTestId("usage-export-region");
@@ -328,6 +335,9 @@ describe("<UsageSummaryPanel /> image export", () => {
       expect(mocks.saveBlobToDisk).toHaveBeenCalledWith(
         blob,
         expect.stringMatching(/^traycer-usage-30d\.png$/),
+        // This harness mounts no runner host, so there is no native save
+        // route and the save falls through to the browser APIs.
+        null,
       );
     });
     expect(mocks.captureUsageExportImageBlob).toHaveBeenCalledWith({

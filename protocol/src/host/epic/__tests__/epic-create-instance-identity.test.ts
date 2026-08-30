@@ -18,8 +18,7 @@ import {
  * consumer side, so protocol's own tests stay within the protocol package.
  */
 describe("epic.create instance identity", () => {
-  const hostContract =
-    hostRpcRegistry["epic.create"][1].versions[0].contract;
+  const hostContract = hostRpcRegistry["epic.create"][1].versions[0].contract;
 
   it("host request schema is the canonical createEpicRequestSchema instance", () => {
     expect(hostContract.requestSchema).toBe(createEpicRequestSchema);

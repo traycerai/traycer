@@ -5,6 +5,8 @@ import { Switch } from "@/components/ui/switch";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { cn } from "@/lib/utils";
 import type { UpdateHostVersionPolicyMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
+import { busyWorkPhrase } from "@/components/host/host-restart-copy";
 import {
   deriveUpdateAffordance,
   deriveUpdatePill,
@@ -114,7 +116,7 @@ export function HostUpdateDrainGateRow(props: {
   readonly item: HostListItem;
   readonly mutation: UpdateHostVersionPolicyMutation;
   /**
-   * Open sessions blocking the drain, from `host.status` over the live
+   * Open work blocking the drain, from `host.status` over the live
    * connection. `null` when this client has no live read of the host — NOT
    * zero.
    *
@@ -122,16 +124,28 @@ export function HostUpdateDrainGateRow(props: {
    */
   readonly liveBusySessionCount: number | null;
   /**
+   * Typed split of that total, or `null` when the host did not say. Names
+   * kinds on the button when present; count copy is retained otherwise.
+   */
+  readonly liveBusyBreakdown: HostBusyBreakdown | null;
+  /**
    * The same count from a SETTLED read — nothing in flight, not aged out.
    * Drives the drain force's arm/confirm path, which needs a number it can
    * stand behind rather than one that is merely the best available.
    */
   readonly settledBusySessionCount: number | null;
+  /**
+   * The settled typed split, or `null` when the host did not say / the read
+   * is not settled. Captured on arm with the count so a same-total category
+   * swap (2 agents → 2 terminals) is a moved promise, not a confirm.
+   */
+  readonly settledBusyBreakdown: HostBusyBreakdown | null;
 }): ReactNode {
   const { item, mutation } = props;
   const affordance = deriveUpdateAffordance({
     updateState: item.status.updateState,
     liveBusySessionCount: props.liveBusySessionCount,
+    liveBusyBreakdown: props.liveBusyBreakdown,
   });
   if (affordance.applyNowLabel === null) return null;
   return (
@@ -145,6 +159,7 @@ export function HostUpdateDrainGateRow(props: {
         label={affordance.applyNowLabel}
         mutation={mutation}
         settledBusySessionCount={props.settledBusySessionCount}
+        settledBusyBreakdown={props.settledBusyBreakdown}
       />
     </div>
   );
@@ -168,6 +183,13 @@ function ApplyNowControl(props: {
    * number that is merely retained is the whole failure this split closes.
    */
   readonly settledBusySessionCount: number | null;
+  /**
+   * The settled split captured with the count. A same-total category swap is
+   * a moved promise: arming "ends 2 agents" must not confirm after those
+   * agents finish and two terminals start. `null` is unknown, not a zero
+   * object — a read that becomes null is lost, not idle-by-kind.
+   */
+  readonly settledBusyBreakdown: HostBusyBreakdown | null;
 }): ReactNode {
   const { hostId, label, mutation } = props;
   // The TARGET is captured when the dialog is armed, not read when it is
@@ -180,12 +202,13 @@ function ApplyNowControl(props: {
   // confirming then ended the sessions of a host the dialog never named. The
   // copy says "this host"; this is what makes that true.
   const [armedHostId, setArmedHostId] = useState<string | null>(null);
-  // The COUNT is captured with the target, for the same reason and against a
-  // sharper failure. This dialog names a number and then destroys that many
-  // sessions, and it can stand open while the number moves underneath it.
-  // Confirming then ends a quantity nobody was shown. Re-checking at confirm
-  // time against what was ARMED is what makes "ends 2 sessions" a promise
-  // rather than an estimate.
+  // The COUNT and the BREAKDOWN are captured with the target, for the same
+  // reason and against a sharper failure. This dialog names work and then
+  // destroys it, and it can stand open while that work moves underneath it
+  // — a different number, or the same number of a different kind. Confirming
+  // then ends a quantity or a category nobody was shown. Re-checking at
+  // confirm time against what was ARMED is what makes "ends 2 agents" a
+  // promise rather than an estimate.
   //
   // Both ways the number can move now reach this guard, and the `null` arm is
   // the one that changed. A changed count (2 → 3) always did.
@@ -198,18 +221,23 @@ function ApplyNowControl(props: {
   // reads instead: a settled count is also lost for the duration of every
   // refetch, while the label keeps rendering the retained number and this stays
   // mounted. So the `null` arms below are live, load-bearing, and the reason
-  // this component takes a different number from the one on its own button.
+  // this component takes a different snapshot from the one on its own button.
   const [armedCount, setArmedCount] = useState<number | null>(null);
+  const [armedBreakdown, setArmedBreakdown] =
+    useState<HostBusyBreakdown | null>(null);
   const open = armedHostId !== null;
   const targetMoved = armedHostId !== null && armedHostId !== hostId;
   // `null` covers "the live source is gone", "it never reported", and "a
   // replacement read is in flight" — the same answer in all three: we cannot
-  // currently stand behind the number.
+  // currently stand behind the number. A lost breakdown is the same: null is
+  // not a zero object.
   const countMoved =
     open &&
     (props.settledBusySessionCount === null ||
       props.settledBusySessionCount !== armedCount);
-  const refuse = targetMoved || countMoved;
+  const breakdownMoved =
+    open && !sameBusyBreakdown(armedBreakdown, props.settledBusyBreakdown);
+  const refuse = targetMoved || countMoved || breakdownMoved;
 
   return (
     <>
@@ -220,6 +248,7 @@ function ApplyNowControl(props: {
         onClick={() => {
           setArmedHostId(hostId);
           setArmedCount(props.settledBusySessionCount);
+          setArmedBreakdown(props.settledBusyBreakdown);
         }}
         // Arming is refused, not merely refused at confirm time, while the
         // count is unsettled. The dialog would open naming a number it would
@@ -240,17 +269,20 @@ function ApplyNowControl(props: {
         description={describeApplyNowConfirmation({
           targetMoved,
           countMoved,
+          breakdownMoved,
           armedCount,
           currentCount: props.settledBusySessionCount,
+          armedBreakdown,
+          currentBreakdown: props.settledBusyBreakdown,
         })}
         cascadeSummary={null}
         actionLabel="Apply now"
         isPending={mutation.isPending}
         onConfirm={() => {
-          // Refuse rather than retarget. A destructive action whose subject OR
-          // magnitude changed after it was armed has no safe interpretation:
-          // the person agreed to end a named number of sessions on a named
-          // host, and we no longer have both.
+          // Refuse rather than retarget. A destructive action whose subject,
+          // magnitude, or KIND changed after it was armed has no safe
+          // interpretation: the person agreed to end named work on a named
+          // host, and we no longer have that.
           if (refuse) return;
           mutation.mutate(
             { updatePolicy: undefined, desiredVersion: undefined, force: true },
@@ -282,16 +314,45 @@ function ApplyNowControl(props: {
 function describeApplyNowConfirmation(input: {
   readonly targetMoved: boolean;
   readonly countMoved: boolean;
+  readonly breakdownMoved: boolean;
   readonly armedCount: number | null;
   readonly currentCount: number | null;
+  readonly armedBreakdown: HostBusyBreakdown | null;
+  readonly currentBreakdown: HostBusyBreakdown | null;
 }): string {
   if (input.targetMoved) {
     return "The host this was aimed at is no longer the one selected. Close this and try again on the host you mean.";
   }
-  if (input.countMoved) {
-    return input.currentCount === null || input.armedCount === null
-      ? "We can't currently see how many sessions are open on this host, so we can't say what applying now would end. Close this and try again once the count is back."
-      : `The number of open sessions changed since you opened this — it is no longer ${input.armedCount}. Close this and try again so you can see what applying now would end.`;
+  if (input.countMoved || input.breakdownMoved) {
+    const lost =
+      input.currentCount === null ||
+      (input.armedBreakdown !== null && input.currentBreakdown === null);
+    if (lost) {
+      return input.armedBreakdown === null
+        ? "We can't currently see how many sessions are open on this host, so we can't say what applying now would end. Close this and try again once the count is back."
+        : "We can't currently see what is working on this host, so we can't say what applying now would end. Close this and try again once that is visible again.";
+    }
+    if (input.breakdownMoved) {
+      const was =
+        input.armedBreakdown === null
+          ? `${input.armedCount} sessions`
+          : (busyWorkPhrase(input.armedBreakdown) ?? "that work");
+      return `The work applying now would end changed since you opened this — it is no longer ${was}. Close this and try again so you can see what applying now would end.`;
+    }
+    return `The number of open sessions changed since you opened this — it is no longer ${input.armedCount}. Close this and try again so you can see what applying now would end.`;
   }
   return "This ends every open terminal and agent session on this host so the update can apply immediately. Sessions can be reopened once the host is back.";
+}
+
+function sameBusyBreakdown(
+  left: HostBusyBreakdown | null,
+  right: HostBusyBreakdown | null,
+): boolean {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  return (
+    left.workingAgents === right.workingAgents &&
+    left.activeTerminalAgents === right.activeTerminalAgents &&
+    left.busyTerminals === right.busyTerminals
+  );
 }

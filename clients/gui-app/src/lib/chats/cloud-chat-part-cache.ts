@@ -145,7 +145,8 @@ export function resolveChatPartCache(
  * the clear has nothing to do.
  */
 export function browserChatPartCacheStorage():
-  ChatPartCacheStorage | undefined {
+  | ChatPartCacheStorage
+  | undefined {
   return typeof globalThis.caches === "undefined"
     ? undefined
     : globalThis.caches;

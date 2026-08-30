@@ -30,6 +30,11 @@ export {
 export { CommentSidebar, type CommentSidebarProps } from "./comment-sidebar";
 
 export {
+  CommentSidebarPanel,
+  type CommentSidebarPanelProps,
+} from "./comment-sidebar-panel";
+
+export {
   FloatingDraftPopover,
   type FloatingDraftPopoverProps,
 } from "./floating-draft-popover";

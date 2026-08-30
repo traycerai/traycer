@@ -14,6 +14,7 @@ import type {
 } from "@/lib/commands/types";
 
 const spies = vi.hoisted(() => ({
+  deletedArtifactsAvailable: false,
   openTileIntoTargetGroup:
     vi.fn<
       (args: {
@@ -21,6 +22,14 @@ const spies = vi.hoisted(() => ({
         readonly groupId: string | null;
       }) => void
     >(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => "host-1",
+}));
+
+vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
+  useDeletedArtifactsAvailable: () => spies.deletedArtifactsAvailable,
 }));
 
 const DEEPEST_SUBPAGE: CommandSubpage = {
@@ -159,6 +168,7 @@ import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  spies.deletedArtifactsAvailable = false;
 });
 
 /**
@@ -185,12 +195,87 @@ describe("PaneOpener", () => {
     expect(screen.getByText("Category")).not.toBeNull();
   });
 
+  it("fuzzy-finds deleted artifacts when recovery is available", () => {
+    spies.deletedArtifactsAvailable = true;
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-deleted"
+        groupId="group-deleted"
+        active={false}
+      />,
+    );
+
+    fireEvent.change(searchInput(), { target: { value: "restore" } });
+
+    expect(
+      screen.getByRole("option", { name: "Deleted artifacts" }),
+    ).not.toBeNull();
+    expect(screen.queryByRole("option", { name: "Open Leaf" })).toBeNull();
+  });
+
+  it("hides deleted artifacts when the epic host lacks recovery RPCs", () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-no-deleted"
+        groupId="group-no-deleted"
+        active={false}
+      />,
+    );
+
+    fireEvent.change(searchInput(), { target: { value: "restore" } });
+
+    expect(
+      screen.queryByRole("option", { name: "Deleted artifacts" }),
+    ).toBeNull();
+  });
+
   it("focuses the search input when the pane is the active group", () => {
     const { container } = render(
       <PaneOpener epicId="epic-1" tabId="tab-f" groupId="group-f" active />,
     );
     const input = container.querySelector('input[data-slot="command-input"]');
     expect(document.activeElement).toBe(input);
+  });
+
+  /**
+   * The global test shim answers every media query with `matches: false`,
+   * which is the fine-pointer arm. This narrows the coarse-pointer query alone
+   * so the rest of the app's queries keep the shim's answer.
+   */
+  function stubCoarsePointer(coarse: boolean): void {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: coarse && query === "(pointer: coarse)",
+        media: query,
+        onchange: null,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        dispatchEvent: () => false,
+      }),
+    });
+  }
+
+  // Opening an empty pane on a touch device is a tap on a layout, not a
+  // request to type: focusing the opener's search would raise a software
+  // keyboard over the very list of things to open. The INPUT decides, not the
+  // width - a desktop window snapped narrow still types with hardware.
+  it("leaves the search alone on a coarse pointer", () => {
+    stubCoarsePointer(true);
+    render(
+      <PaneOpener epicId="epic-1" tabId="tab-c" groupId="group-c" active />,
+    );
+    stubCoarsePointer(false);
+
+    expect(document.activeElement).not.toBe(searchInput());
+    // The opener is inline chrome, not a Radix layer, so nothing was going to
+    // be focused on its behalf and focus is left exactly where it was.
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("does not steal focus when the pane is not the active group", () => {

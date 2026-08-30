@@ -125,10 +125,18 @@ if (runsFirstShard) {
       "src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx",
     ),
   );
+  runVitest(
+    "vitest.react-compiler.config.ts",
+    "src/hooks/terminal/__tests__/use-epic-terminal-durable-create.test.tsx",
+  );
   if (runsBrowserRegressions) {
     exitCode = firstFailure(
       exitCode,
       runBrowserRegression("scripts/diff-edit-browser-regression.mjs"),
+    );
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/pierre-tree-zoom-browser-regression.mjs"),
     );
     // Same gate, same reason: the claim is "after Cancel the window is usable
     // again", and jsdom has no hit testing, so only a real layout engine can
@@ -142,6 +150,17 @@ if (runsFirstShard) {
     exitCode = firstFailure(
       exitCode,
       runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs"),
+    );
+    // Same gate again, and the strongest case for it in this list: the boot
+    // card's escape hatch is lost to an INPUT-DISPATCH rule - a press whose
+    // element is removed before release emits no click at all - and jsdom
+    // dispatches `click` directly, so every jsdom test of that button passes
+    // on the broken build. Ablated before wiring: reverting the button to
+    // `onClick` turns this red (0 activations) while its ordinary-click
+    // premise stays green.
+    exitCode = firstFailure(
+      exitCode,
+      runBrowserRegression("scripts/boot-escape-hatch-press-browser.mjs"),
     );
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the

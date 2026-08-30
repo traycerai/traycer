@@ -25,6 +25,7 @@ import {
   type ComposerEditorIncarnation,
 } from "@/lib/composer/composer-editor-incarnation";
 import type { MentionAttachment } from "@/lib/composer/types";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import {
   focusActiveComposer,
@@ -313,6 +314,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onEditorReadyRef = useRef(onEditorReady);
   const initialSelectionRef = useRef(normalizedInitial.selection);
+  const initialAutofocusSelectionPreparedRef = useRef(false);
   useEffect(() => {
     onSubmitRef.current = onSubmit;
     onDocumentChangeRef.current = onDocumentChange;
@@ -364,7 +366,10 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     {
       extensions,
       content: normalizedInitial.content,
-      autofocus: isActive ? "end" : false,
+      // Initial focus is coordinated by the guarded effect below. Tiptap's
+      // intrinsic autofocus runs after its deferred mount and bypasses pane
+      // activation / restored-terminal ownership checks.
+      autofocus: false,
       immediatelyRender: false,
       editable: !disabled,
       editorProps: {
@@ -439,8 +444,30 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   useEffect(() => {
     if (editor === null) return;
     if (!isActive) return;
+    // Becoming the active composer is not a user gesture. On the installed
+    // mobile app that alone must not raise the software keyboard; the explicit
+    // focus paths (tapping the composer, restoring a draft, editing a message)
+    // still do.
+    if (isMobileApp()) return;
     if (editor.isFocused) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
+    const focusScope = editor.view.dom.closest(
+      "[data-primary-focus-scope='true']",
+    );
+    if (
+      focusScope !== null &&
+      document.activeElement !== null &&
+      focusScope.contains(document.activeElement)
+    ) {
+      return;
+    }
+    if (
+      !initialAutofocusSelectionPreparedRef.current &&
+      initialSelectionRef.current === null
+    ) {
+      editor.commands.setTextSelection(editor.state.doc.content.size);
+    }
+    initialAutofocusSelectionPreparedRef.current = true;
     focusActiveComposer();
   }, [editor, isActive, paneActivationFocusIntent]);
 

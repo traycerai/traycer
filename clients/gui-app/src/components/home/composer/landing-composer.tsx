@@ -43,6 +43,8 @@ import { createComposerPickerStore } from "@/components/chat/composer/picker/com
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
 import { useProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 import { ProfileRateLimitSwitchBanner } from "@/components/chat/composer/profile-rate-limit-switch-banner";
+import { ProfileDisabledBanner } from "@/components/chat/composer/profile-disabled-banner";
+import { useProfileEligibilityGate } from "@/components/chat/composer/use-profile-eligibility-gate";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
@@ -65,7 +67,11 @@ import {
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import {
+  readStagedWorktreeIntent,
+  useWorktreeIntentStagingStore,
+} from "@/stores/worktree/worktree-intent-staging-store";
+import { toastRepointedStagingReset } from "@/lib/composer/repointed-staging-toast";
 import {
   draftRuntimeRegistry,
   EMPTY_DRAFT_RUNTIME_CONTENT,
@@ -87,13 +93,13 @@ import {
   nextComposerMode,
   type ComposerMode,
 } from "@/components/home/data/landing-options";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
-import {
-  ComposerHostNotice,
-  type ComposerHostNoticeState,
-} from "@/components/home/composer/composer-host-notice";
+import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
+import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
+import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
@@ -138,6 +144,25 @@ function promptStashIsDisabled(
   attachmentPending: boolean,
 ): boolean {
   return isSubmitting || attachmentPending;
+}
+
+function landingComposerCanSubmit(args: {
+  readonly isSubmitting: boolean;
+  readonly attachmentPending: boolean;
+  readonly submitBlocked: boolean;
+  readonly workspaceCanStart: boolean;
+  readonly hasSubmittableContent: boolean;
+  /** Another host owns this draft (replica view); claim before submitting. */
+  readonly readOnly: boolean;
+}): boolean {
+  return (
+    !args.isSubmitting &&
+    !args.attachmentPending &&
+    !args.submitBlocked &&
+    args.workspaceCanStart &&
+    args.hasSubmittableContent &&
+    !args.readOnly
+  );
 }
 
 export function LandingComposer(props: LandingComposerProps) {
@@ -188,6 +213,10 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const composerMode = draftComposerMode ?? globalComposerMode;
   const chatComposerActive = activityEnabled && composerMode === "chat";
+  // Phones collapse the composer toolbar into a single options-sheet trigger.
+  // Only the toolbar slot swaps, so the editor keeps its position in the tree
+  // and never remounts when the viewport crosses the breakpoint.
+  const isMobile = useIsMobileViewport();
 
   useEffect(() => {
     return () => {
@@ -259,6 +288,12 @@ export function LandingComposer(props: LandingComposerProps) {
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
+  const profileEligibility = useProfileEligibilityGate(
+    hostClient,
+    harnessId,
+    profileId,
+    chatComposerActive,
+  );
   const mentionRoots = useLandingComposerMentionRoots(draftId);
   useComposerPickerItems({
     pickerStore,
@@ -608,24 +643,25 @@ export function LandingComposer(props: LandingComposerProps) {
     workspaceDisabledHint: workspaceAvailability.disabledHint,
     packPreparingHint: packGate.hint,
     packBlocked: packGate.blocked,
+    profileDisabled: profileEligibility.disabled,
   });
-  const canSubmit =
-    !isSubmitting &&
-    !attachmentPending &&
-    !submitBlocked &&
-    workspaceCanStart &&
-    hasSubmittableContent &&
-    !authority.readOnly;
+  const canSubmit = landingComposerCanSubmit({
+    isSubmitting,
+    attachmentPending,
+    submitBlocked,
+    workspaceCanStart,
+    hasSubmittableContent,
+    readOnly: authority.readOnly,
+  });
 
-  // Submit-time refusal copy (selection model §54) and the G4 re-point notice
-  // share one slot: both say "this composer's device is not what you think",
-  // and showing two stacked banners about the same host would be noise.
-  const [hostNotice, setHostNotice] = useState<ComposerHostNoticeState | null>(
-    null,
-  );
-  const dismissHostNotice = useCallback(() => {
-    setHostNotice(null);
-  }, []);
+  // Submit-time refusal copy (selection model §54). The G4 re-point used to
+  // share this slot; it narrates as a toast now, and only when it actually
+  // reset staged intent — see the effect below.
+  const {
+    notice: hostNotice,
+    raise: raiseHostNotice,
+    dismiss: dismissHostNotice,
+  } = useComposerHostNotice(resolvedHostId);
   // G4: this composer FOLLOWS the effective host only when nothing else
   // answered its placement - no override, no pin IN FORCE - and only then
   // does a derivation move re-point it and its host-dependent state must not
@@ -644,15 +680,30 @@ export function LandingComposer(props: LandingComposerProps) {
   // blip. The folders re-resolve against the new host through the picker's
   // existing absent-row + Locate affordance, which names the dangle instead of
   // hiding it - and submit re-validation stands behind both.
+  //
+  // Narrated as a toast, and ONLY when the move reset something: the switch
+  // itself is `toastSelectionSwitched`'s to tell, and a persistent banner
+  // here outlived the condition it described — a startup failover round trip
+  // left it announcing the user's own host as news over an empty composer.
   useEffect(() => {
     return subscribeFollowingSurfaceReset(({ nextEffectiveHostId }) => {
       if (!composerFollowsEffective) return;
-      useWorktreeIntentStagingStore
-        .getState()
-        .clear({ surface: "landing", hostId: activeHostId, draftId });
-      setHostNotice({ kind: "repointed", hostId: nextEffectiveHostId });
+      const stagingKey = {
+        surface: "landing",
+        hostId: activeHostId,
+        draftId,
+      } as const;
+      // Checked at the SAME breadth this clears at - one bucket, the host the
+      // composer is leaving. The modal's equivalent asks across every host
+      // because it clears across every host; pairing the two is what keeps
+      // "we warn exactly when we destroyed something" true on both surfaces.
+      const hadStagedIntent = readStagedWorktreeIntent(stagingKey) !== null;
+      useWorktreeIntentStagingStore.getState().clear(stagingKey);
+      if (hadStagedIntent) {
+        toastRepointedStagingReset(hostLabelFromDirectory(nextEffectiveHostId));
+      }
     });
-  }, [activeHostId, composerFollowsEffective, draftId]);
+  }, [activeHostId, composerFollowsEffective, draftId, hostLabelFromDirectory]);
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -691,6 +742,13 @@ export function LandingComposer(props: LandingComposerProps) {
           // will create on.
           .getGlobalRunSettings(activeHostId),
       );
+      // `createDraftWithId` has non-composer callers and therefore seeds from
+      // the app-wide active host. This unbound composer can be pinned to a
+      // different placement host, so replace that seed synchronously before
+      // publishing the new draft id or accepting a submit.
+      useLandingDraftStore
+        .getState()
+        .restoreDraftWorkspaceForHost(createdDraftId, activeHostId);
       createdUnboundDraftIdRef.current = createdDraftId;
       // The workspace picker's staging key is keyed by this draft id
       // (`{surface:"landing", draftId}`), so minting it here flips that key
@@ -751,20 +809,20 @@ export function LandingComposer(props: LandingComposerProps) {
     // Nothing was created when a refusal comes back - the draft, its content
     // and its staged workspace are exactly as the user left them, and the
     // reason is stated inline above the composer rather than as a toast.
-    setHostNotice(
+    raiseHostNotice(
       refusal === null ? null : { kind: "refused", message: refusal.message },
     );
-  }, [actions, canSubmit, draftId, pickerStore, toolbarStore]);
+  }, [actions, canSubmit, draftId, pickerStore, raiseHostNotice, toolbarStore]);
 
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!workspaceCanStart || isSubmitting) return;
       const refusal = actions.selectTerminalAgent(launch, draftId);
-      setHostNotice(
+      raiseHostNotice(
         refusal === null ? null : { kind: "refused", message: refusal.message },
       );
     },
-    [actions, draftId, isSubmitting, workspaceCanStart],
+    [actions, draftId, isSubmitting, raiseHostNotice, workspaceCanStart],
   );
 
   const handleRemoveImage = useCallback(
@@ -809,6 +867,7 @@ export function LandingComposer(props: LandingComposerProps) {
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-start">{switcher}</div>}
+      toolbarLayout={isMobile ? "collapsed" : "full"}
       topBanner={
         <>
           {authority.readOnly ? (
@@ -824,10 +883,20 @@ export function LandingComposer(props: LandingComposerProps) {
           ) : null}
           <ComposerHostNotice
             notice={hostNotice}
-            hostLabelFor={hostLabelFromDirectory}
             onDismiss={dismissHostNotice}
           />
-          {rateLimitPrompt.kind === "visible" ? (
+          {profileEligibility.disabled ? (
+            <ProfileDisabledBanner
+              profileLabel={profileEligibility.profileLabel}
+              enablePending={profileEligibility.enablePending}
+              onEnableProfile={profileEligibility.enableProfile}
+              onChooseProfile={() => {
+                toggleActiveModelPicker();
+              }}
+            />
+          ) : null}
+          {!profileEligibility.disabled &&
+          rateLimitPrompt.kind === "visible" ? (
             <ProfileRateLimitSwitchBanner
               key={rateLimitPrompt.warningKey}
               harnessId={harnessId}
@@ -901,13 +970,18 @@ function resolveLandingSubmitBlock(args: {
   readonly workspaceDisabledHint: string | null;
   readonly packPreparingHint: string | null;
   readonly packBlocked: boolean;
+  readonly profileDisabled: boolean;
 }): {
   readonly submitBlocked: boolean;
   readonly submitBlockedHint: string | null;
 } {
   return {
-    submitBlocked: args.packBlocked,
-    submitBlockedHint: args.workspaceDisabledHint ?? args.packPreparingHint,
+    submitBlocked: args.profileDisabled || args.packBlocked,
+    submitBlockedHint:
+      args.workspaceDisabledHint ??
+      (args.profileDisabled
+        ? "Profile disabled — enable it or choose another profile"
+        : args.packPreparingHint),
   };
 }
 

@@ -45,6 +45,7 @@ import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
+import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
 import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -61,6 +62,11 @@ import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { createComposerPickerStore } from "./picker/composer-picker-store";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
 import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
+import { ProfileDisabledBanner } from "./profile-disabled-banner";
+import {
+  useProfileEligibilityGate,
+  type ProfileEligibilityGate,
+} from "./use-profile-eligibility-gate";
 import { ChatComposerBannerPortal } from "./chat-composer-banner-portal";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
 import { useChatComposerSubmit } from "./use-chat-composer-submit";
@@ -90,6 +96,7 @@ import {
 } from "./use-chat-prompt-stash-adapters";
 import { PromptStashControl } from "./prompt-stash-control";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
+import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -125,7 +132,8 @@ interface ChatComposerProps {
   readonly settingsSeed: ChatRunSettings | null;
   readonly fallbackSettingsSeed: ChatRunSettings | null;
   readonly onSubmitMessage:
-    ((input: ChatComposerSubmitInput) => boolean) | null;
+    | ((input: ChatComposerSubmitInput) => boolean)
+    | null;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   /**
@@ -179,6 +187,11 @@ export interface ChatComposerSubmitInput {
   readonly attachments: ReadonlyArray<Attachment>;
   readonly settings: ChatRunSettings;
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+  /**
+   * Editor document without submit-only crop atoms, plus the annotation cards
+   * that left with the send.
+   */
+  readonly restore: ChatSendRestore;
 }
 
 function composerUtilityNeedsClearance(args: {
@@ -188,6 +201,14 @@ function composerUtilityNeedsClearance(args: {
 }): boolean {
   const triggerVisible = args.rowCount > 0 || args.saving;
   return triggerVisible && args.connectedUpperSurface;
+}
+
+/** Kept out of `ChatComposerImpl` so its complexity stays inside the lint cap. */
+function composerAttachmentPending(
+  pastePending: boolean,
+  annotationPreparationPending: boolean,
+): boolean {
+  return pastePending || annotationPreparationPending;
 }
 
 function ComposerUtilityClearanceFill(props: {
@@ -202,6 +223,21 @@ function ComposerUtilityClearanceFill(props: {
     >
       <div className="size-full bg-muted/30" />
     </div>
+  );
+}
+
+function ProfileDisabledRecovery(props: {
+  readonly eligibility: ProfileEligibilityGate;
+  readonly onChooseProfile: () => void;
+}): ReactNode {
+  if (!props.eligibility.disabled) return null;
+  return (
+    <ProfileDisabledBanner
+      profileLabel={props.eligibility.profileLabel}
+      enablePending={props.eligibility.enablePending}
+      onEnableProfile={props.eligibility.enableProfile}
+      onChooseProfile={props.onChooseProfile}
+    />
   );
 }
 
@@ -338,6 +374,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     focused,
     seedSource.kind,
   );
+  const profileEligibility = useProfileEligibilityGate(
+    hostClient,
+    harnessId,
+    profileId,
+    focused,
+  );
   // Managed-pack gate, scoped to the TAB's host - a tab bound to another host
   // must gate on that host's packs, never the app-wide default's. Same shape as
   // the reauth gate above: block send and say why, so a doomed turn can't
@@ -348,6 +390,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     signedOut: reauthGate.signedOut,
     packPreparingHint: packGate.hint,
     packBlocked: packGate.blocked,
+    profileDisabled: profileEligibility.disabled,
     sendDisabled,
     sendDisabledHint,
   });
@@ -421,7 +464,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isIngestingImages,
     isResolvingFilePaths,
   } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
-  const attachmentPending = isAttachmentIngestPending({
+  const pastePending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
   });
@@ -443,7 +486,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const promptStash = usePromptStash({
     active: focused,
-    disabled: attachmentPending,
+    disabled: pastePending,
     editorRef,
     readHashImage: readPromptStashImage,
     source: promptStashSource,
@@ -457,23 +500,28 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
-  const { submitDraft, steerConflict } = useChatComposerSubmit({
-    taskId,
-    editorRef,
-    pickerStore,
-    toolbarStore,
-    activeTurnStatus,
-    steerCapable,
-    steerEnabled,
-    steerProtocolSupported,
-    getActiveTurnForSteer,
-    hasPendingApprovals,
-    sendDisabled: sendBlocked,
-    workspaceBlocked,
-    imagesUnsupported,
-    attachmentPreparationPending: attachmentPending,
-    onSubmitMessage,
-  });
+  const { submitDraft, steerConflict, annotationPreparationPending } =
+    useChatComposerSubmit({
+      taskId,
+      editorRef,
+      pickerStore,
+      toolbarStore,
+      activeTurnStatus,
+      steerCapable,
+      steerEnabled,
+      steerProtocolSupported,
+      getActiveTurnForSteer,
+      hasPendingApprovals,
+      sendDisabled: sendBlocked,
+      workspaceBlocked,
+      imagesUnsupported,
+      attachmentPreparationPending: pastePending,
+      onSubmitMessage,
+    });
+  const attachmentPending = composerAttachmentPending(
+    pastePending,
+    annotationPreparationPending,
+  );
   const ambientDrift = useAmbientDriftGate(
     hostClient,
     reauthGate.state,
@@ -502,6 +550,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
   const topBannerKind = resolveComposerTopBannerKind({
+    profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
     ambientDriftVisible: ambientDrift.pendingNotice !== null,
     rateLimitVisible:
@@ -581,6 +630,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
             topSpacing === "normal" ? "pt-4" : "pt-0",
           )}
         >
+          <ProfileDisabledRecovery
+            eligibility={profileEligibility}
+            onChooseProfile={toggleActiveModelPicker}
+          />
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}
@@ -636,6 +689,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 }
                 attachmentsStrip={
                   <ChatComposerAttachmentsStrip
+                    taskId={taskId}
                     content={draftContent}
                     editingQueueItemId={editingQueueItemId}
                     onCancelQueueEdit={onCancelQueueEdit}
@@ -830,6 +884,7 @@ function resolveSendBlock(args: {
   readonly signedOut: boolean;
   readonly packPreparingHint: string | null;
   readonly packBlocked: boolean;
+  readonly profileDisabled: boolean;
   readonly sendDisabled: boolean | undefined;
   readonly sendDisabledHint: string | null | undefined;
 }): {
@@ -838,7 +893,10 @@ function resolveSendBlock(args: {
 } {
   return {
     sendBlocked:
-      args.sendDisabled === true || args.signedOut || args.packBlocked,
+      args.sendDisabled === true ||
+      args.profileDisabled ||
+      args.signedOut ||
+      args.packBlocked,
     sendBlockedHint: resolveSendBlockedHint(args),
   };
 }
@@ -852,11 +910,15 @@ function resolveSendBlock(args: {
 function resolveSendBlockedHint(args: {
   readonly workspaceDisabledHint: string | null;
   readonly signedOut: boolean;
+  readonly profileDisabled: boolean;
   readonly packPreparingHint: string | null;
   readonly sendDisabled: boolean | undefined;
   readonly sendDisabledHint: string | null | undefined;
 }): string | null {
   if (args.workspaceDisabledHint !== null) return args.workspaceDisabledHint;
+  if (args.profileDisabled) {
+    return "Profile disabled — enable it or choose another profile";
+  }
   if (args.signedOut) {
     return "Signed out of the provider — sign in to send messages";
   }

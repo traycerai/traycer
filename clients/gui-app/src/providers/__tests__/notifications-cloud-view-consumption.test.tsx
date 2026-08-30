@@ -77,7 +77,14 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: () => null,
+  useHostStreamClientBindingFor: () => null,
+}));
+
+// Visit-to-clear still acknowledges local rows through the local host client.
+// This fixture supplies that client directly rather than mounting the broader
+// host runtime, which cloud-feed consumption does not otherwise exercise.
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: () => requireHostClient(),
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({

@@ -52,6 +52,7 @@ const BASE = {
   hasLiveSession: false,
   lease: null,
   authorityAttached: false,
+  planAllowsRemote: true,
   nowMs: NOW_MS,
 };
 
@@ -74,6 +75,7 @@ describe("deriveHostHealth — the two actionable local states", () => {
             code: "HOST_INCOMPATIBLE",
             hostVersion: "1.0.0",
             minSupportedVersion: "2.0.0",
+            clientCompatibility: null,
           },
         },
       },
@@ -203,10 +205,11 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
     expect(health.tone).toBe("idle");
   });
 
-  it("maps local-only to its own state, labelled Local only, and never Offline", () => {
+  it("maps a plan-gated connectable host to Local only, and never Offline", () => {
     const health = deriveHostHealth({
       ...BASE,
-      item: registryItem("local-only"),
+      item: registryItem("connectable"),
+      planAllowsRemote: false,
       isLocalMachine: false,
       service: undefined,
     });
@@ -217,6 +220,26 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
     expect(health.live).toBe(false);
     // Not a fault: idle tone, not warn.
     expect(health.tone).toBe("idle");
+  });
+
+  it("maps a plan-gated offline host with a recent credential check-in to Local only", () => {
+    const item = registryItem("offline");
+    const health = deriveHostHealth({
+      ...BASE,
+      item: {
+        ...item,
+        status: {
+          ...item.status,
+          lastSeenAt: new Date(NOW_MS - 20 * 60 * 1000).toISOString(),
+        },
+      },
+      planAllowsRemote: false,
+      isLocalMachine: false,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("local-only");
+    expect(health.label).toBe("Local only");
   });
 
   it("maps unknown to Status unknown, and never Offline", () => {

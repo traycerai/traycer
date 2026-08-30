@@ -118,7 +118,10 @@ function encodeWorkspace(workspace: DraftWorkspaceSnapshot): JsonObject {
         repoIdentifier:
           info.repoIdentifier === null
             ? null
-            : { owner: info.repoIdentifier.owner, repo: info.repoIdentifier.repo },
+            : {
+                owner: info.repoIdentifier.owner,
+                repo: info.repoIdentifier.repo,
+              },
         hostId: info.hostId,
       },
       enumerable: true,

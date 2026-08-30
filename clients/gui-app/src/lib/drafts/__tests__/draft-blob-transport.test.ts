@@ -29,8 +29,8 @@ describe("draft blob transport", () => {
   it("treats a withheld blob store as an old host, not a failure", async () => {
     const hash = await putImage(pngBytes());
     let calls = 0;
-    const client = {
-      request: ((_method, _params) => {
+    const client: Pick<HostRequester<HostRpcRegistry>, "request"> = {
+      request: (_method, _params) => {
         calls += 1;
         return Promise.reject(
           new HostRpcError({
@@ -41,7 +41,7 @@ describe("draft blob transport", () => {
             fatalDetails: null,
           }),
         );
-      }) as HostRequester<HostRpcRegistry>["request"],
+      },
     };
     const first = await putDraftBlobs(HOST, client, [hash]);
     expect(first).toEqual([]);

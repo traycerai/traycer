@@ -34,16 +34,12 @@ export type ErasedConditionPollPolicy<
   readonly resetLaneIds: ReadonlySet<string>;
 };
 
-export type HostMethodPollPolicy<
-  Method extends keyof HostRpcRegistry & string,
-> =
+type HostMethodPollPolicy<Method extends keyof HostRpcRegistry & string> =
   | null
   | { readonly kind: "fixed"; readonly intervalMs: number }
   | ErasedConditionPollPolicy<Method>;
 
-export type HostMethodScheduling<
-  Method extends keyof HostRpcRegistry & string,
-> = {
+type HostMethodScheduling<Method extends keyof HostRpcRegistry & string> = {
   readonly mode:
     | RpcSchedulingMode
     | ((params: RequestOfMethod<HostRpcRegistry, Method>) => RpcSchedulingMode);
@@ -51,7 +47,7 @@ export type HostMethodScheduling<
   readonly poll: HostMethodPollPolicy<Method>;
 };
 
-export type HostMethodPolicyTable = {
+type HostMethodPolicyTable = {
   readonly [
     Method in keyof HostRpcRegistry & string
   ]: HostMethodScheduling<Method>;
@@ -350,8 +346,9 @@ const LATEST_SCHEDULING = {
 
 export const HOST_METHOD_POLL_TABLE = {
   // Opt-in polling (`poll: true`), for one caller: the Overview's drain
-  // affordance. Its `busySessionCount` is the number "Apply now — ends N
-  // sessions" promises and then destroys, so the question is not whether the
+  // affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
+  // — ends 2 agents and 1 terminal" (or "ends N sessions" on a @1.1 host)
+  // promises and then destroys, so the question is not whether the
   // cached value may be reused but whether it is still TRUE. Going stale does
   // not refetch on its own, so without a cadence a focused Overview served the
   // count it read on mount indefinitely.
@@ -428,6 +425,14 @@ export const HOST_METHOD_POLL_TABLE = {
   "providers.consumeRateLimitResetCredit": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // An explicit human maintenance action may probe one disabled profile.
+  // It can spawn the same long-running CLI usage probe as the ordinary read,
+  // but is never polled or coalesced with another profile's action.
+  "providers.refreshProfileStatus": {
+    mode: "fifo",
+    joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
     poll: null,
   },
   "host.notifications.list": { ...LATEST_SCHEDULING, poll: null },
@@ -518,6 +523,17 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The on-demand body behind a windowed chat's accumulated-change summary.
+  // Latest-wins is safe because a newer click for the same summary supersedes
+  // an older one, and it is deliberately never polled: the live
+  // `chat.subscribe` snapshot pushes summary freshness while the UI fetches
+  // bodies only for the file the person opens.
+  "chat.readAccumulatedFileChange": { ...LATEST_SCHEDULING, poll: null },
+  // Where a cross-tile jump target sits, asked once when the target row is
+  // cold. Latest-wins for the same reason as the read above - a newer jump
+  // supersedes an older one - and never polled: the answer is a position in a
+  // transcript the live subscription is already reporting changes to.
+  "chat.locateRow": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.getLocalStorageSize": { ...LATEST_SCHEDULING, poll: null },
   "snapshots.readSnapshotDiff": { ...LATEST_SCHEDULING, poll: null },
   // Clearing snapshots destructively removes locally retained data.
@@ -528,6 +544,10 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Killing a process tree from the resource monitor is a destructive command.
   "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "resources.listLocalServers": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 3 * SECOND_MS },
+  },
   // Shell lifecycle from the Shells list and the output window header. `fifo`
   // is what buys these three the guarantees the
   // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
@@ -763,6 +783,35 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "epic.artifactVersions.list": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersions.getBlob": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersions.restore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.deletedArtifacts.list": { ...LATEST_SCHEDULING, poll: null },
+  "epic.deletedArtifacts.revive": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.get": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersionSettings.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.setRetentionPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.clearHistory": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Deleting an artifact permanently removes its document node.
   "epic.deleteArtifact": {
     mode: "fifo",
@@ -981,6 +1030,10 @@ export const HOST_METHOD_POLL_TABLE = {
   // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
   // interval here would re-fetch megabytes to re-learn a constant.
   "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // Like the chat attachment read, artifact attachment bytes are addressed by
+  // their content hash and the image cache owns retry after a transient miss.
+  // Polling this unary method would only re-fetch immutable bytes.
+  "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork
@@ -1034,6 +1087,17 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.getChatRunSettings": {
     ...LATEST_SCHEDULING,
     poll: null,
+  },
+  // The terminal-agent RECORD read (TUI eviction), the sibling of
+  // `epic.listChatRecords` above and polled at its exact cadence for its
+  // exact reasons: the facts it serves are committed to the host's registry
+  // and written nowhere the renderer already listens per-epic, there is no
+  // response field a condition policy could classify "about to change" from,
+  // and the client's own mutations invalidate the key on success so nothing
+  // user-initiated waits on the interval.
+  "epic.listTuiAgents": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
   },
   // The publisher's own convergence sweep is 30s, so a 45s local read is
   // responsive without asking faster than the underlying state can change.
@@ -1367,6 +1431,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Profile eligibility is persisted provider configuration.
+  "providers.setProfileEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Native MCP/plugins/skills mutations write provider config files, so they
   // are `fifo` for the same reason as the classic provider mutations above:
   // two rapid toggles must both land, in order, not be coalesced into one.
@@ -1464,6 +1534,9 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "worktree.listBindingsForEpic": { ...LATEST_SCHEDULING, poll: null },
+  // Pure holder read for teardown disclosures - fetched at gesture time by
+  // the delete/rebind confirm flows, never on a cadence.
+  "worktree.listHolders": { ...LATEST_SCHEDULING, poll: null },
   "speech.getModelStatus": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("speech.getModelStatus", {
@@ -1564,7 +1637,7 @@ export const hostRpcSchedulingPolicy: RpcSchedulingPolicy<HostRpcRegistry> = {
   },
 };
 
-export type HostRpcMethodMeta<Method extends keyof HostRpcRegistry & string> = {
+type HostRpcMethodMeta<Method extends keyof HostRpcRegistry & string> = {
   readonly hostRpcMethod: Method;
 };
 

@@ -256,6 +256,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,
@@ -336,6 +337,7 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
     seedIntentOverride: null,
     carriedInterviews: "settled",
     forkMode: "plain",
+    initialHostId: null,
   };
 }
 

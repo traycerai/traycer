@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Lets one test force the raw `readFile` release() performs to fail with a
+// Lets one test force the descriptor-bound raw read release() performs to fail with a
 // transient, non-ENOENT error (EIO-shaped) for the exact lock path, while
 // every other read proxies straight through to the real implementation -
 // see the "aborts release ... transient error" test below.
@@ -33,13 +33,14 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
-    readFile: async (path: PathLike, encoding: "utf8") => {
+    open: async (path: PathLike, flags: string | number) => {
+      const handle = await actual.open(path, flags);
       if (path === mocks.forceReadFileErrorForPath) {
-        throw Object.assign(new Error("simulated read failure"), {
-          code: "EIO",
-        });
+        vi.spyOn(handle, "readFile").mockRejectedValueOnce(
+          Object.assign(new Error("simulated read failure"), { code: "EIO" }),
+        );
       }
-      return actual.readFile(path, encoding);
+      return handle;
     },
   };
 });

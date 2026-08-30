@@ -5,7 +5,7 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { registerExtraImageRootHashSource } from "@/lib/composer/landing-image-budget";
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import {
   forgetBlobUnsupportedHost,
   putDraftBlobs,
@@ -735,23 +735,27 @@ export async function ingestCloudDraftSummary(input: {
   await applyHostDocument(input.document);
 }
 
-registerExtraImageRootHashSource(() => {
-  const hashes: string[] = [];
-  for (const draft of Object.values(useComposerDraftStore.getState().drafts)) {
-    if (draft === undefined) continue;
-    hashes.push(...blobHashesFromContent(draft.content));
-  }
-  for (const patch of Object.values(
-    useNewConversationModalStore.getState().draftPatchesByEpicId,
-  )) {
-    if (patch === undefined || patch.content === null) continue;
-    hashes.push(...blobHashesFromContent(patch.content));
-  }
-  for (const row of usePromptStashStore.getState().rows) {
-    if (row.kind !== "entry") continue;
-    hashes.push(...row.entry.blobHashes);
-  }
-  return hashes;
+registerExtraImageRootSource({
+  hashes: () => {
+    const hashes: string[] = [];
+    for (const draft of Object.values(
+      useComposerDraftStore.getState().drafts,
+    )) {
+      if (draft === undefined) continue;
+      hashes.push(...blobHashesFromContent(draft.content));
+    }
+    for (const patch of Object.values(
+      useNewConversationModalStore.getState().draftPatchesByEpicId,
+    )) {
+      if (patch === undefined || patch.content === null) continue;
+      hashes.push(...blobHashesFromContent(patch.content));
+    }
+    for (const row of usePromptStashStore.getState().rows) {
+      if (row.kind !== "entry") continue;
+      hashes.push(...row.entry.blobHashes);
+    }
+    return hashes;
+  },
 });
 
 export type { DraftWrite };

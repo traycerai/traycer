@@ -7,13 +7,17 @@ import {
   defineRpcContract,
   defineUpgradePath,
   defineVersionedRpcRegistry,
+  SERVES_EVERY_INSTALLED_MAJOR,
 } from "@traycer/protocol/framework/index";
 import { check } from "@traycer/protocol/framework/compatibility-checker";
 import {
   defineStreamRpcContract,
   defineVersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { checkStreamCompatibility } from "@traycer/protocol/framework/stream-compat";
+import {
+  buildStreamManifest,
+  checkStreamCompatibility,
+} from "@traycer/protocol/framework/stream-compat";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -587,6 +591,17 @@ describe("stream bridging mirrors the shipped stream checker", () => {
     });
   }
 
+  function streamRegistryAtBothMajors() {
+    const majorOne = streamRegistryAt(1)["demo.subscribe"][1];
+    const majorTwo = streamRegistryAt(2)["demo.subscribe"][2];
+    return defineVersionedStreamRpcRegistry({
+      "demo.subscribe": {
+        1: majorOne,
+        2: majorTwo,
+      },
+    });
+  }
+
   it("treats a cross-major stream mismatch as breaking, mirroring checkStreamCompatibility's per-method verdict", () => {
     const mineRegistry = streamRegistryAt(2);
     const theirsRegistry = streamRegistryAt(1);
@@ -616,6 +631,61 @@ describe("stream bridging mirrors the shipped stream checker", () => {
       mineRegistry,
       manifestFromSurface(mine, "stream"),
       manifestFromSurface(theirs, "stream"),
+      "client",
+    );
+    expect(verdict.ok).toBe(false);
+  });
+
+  it("accepts canonical-major skew when the current surface retains the released major", () => {
+    const mineRegistry = streamRegistryAtBothMajors();
+    const theirsRegistry = streamRegistryAt(1);
+    const mine = buildProtocolSurface({
+      unary: {},
+      unaryFloorMethodNames: [],
+      stream: mineRegistry,
+    });
+    const theirs = buildProtocolSurface({
+      unary: {},
+      unaryFloorMethodNames: [],
+      stream: theirsRegistry,
+    });
+
+    const blocking = checkSurfaceCompatibility({
+      mine,
+      theirs,
+      theirsLabel: "released",
+      exceptions: [],
+    }).blocking;
+    expect(blocking).toEqual([]);
+
+    const verdict = checkStreamCompatibility(
+      mineRegistry,
+      buildStreamManifest(mineRegistry, SERVES_EVERY_INSTALLED_MAJOR),
+      manifestFromSurface(theirs, "stream"),
+      "client",
+    );
+    expect(verdict).toEqual({ ok: true });
+  });
+
+  it("refuses a shared major that is neither side's canonical", () => {
+    // Mine installs {1,2} (canonical 2), theirs installs {1,3} (canonical
+    // 3): the only shared line is 1, and a manifest entry names a concrete
+    // minor only for its canonical major - so neither side can verify what
+    // would be spoken on line 1. `canBridgeStream` must refuse, not
+    // green-light the pairing and let subscribe-time selection guess.
+    const majorOne = streamRegistryAt(1)["demo.subscribe"][1];
+    const majorTwo = streamRegistryAt(2)["demo.subscribe"][2];
+    const majorThree = streamRegistryAt(3)["demo.subscribe"][3];
+    const mineRegistry = defineVersionedStreamRpcRegistry({
+      "demo.subscribe": { 1: majorOne, 2: majorTwo },
+    });
+    const theirsRegistry = defineVersionedStreamRpcRegistry({
+      "demo.subscribe": { 1: majorOne, 3: majorThree },
+    });
+    const verdict = checkStreamCompatibility(
+      mineRegistry,
+      buildStreamManifest(mineRegistry, SERVES_EVERY_INSTALLED_MAJOR),
+      buildStreamManifest(theirsRegistry, SERVES_EVERY_INSTALLED_MAJOR),
       "client",
     );
     expect(verdict.ok).toBe(false);
@@ -681,7 +751,8 @@ describe("same-version wire-schema evolution rules", () => {
       exceptions: [],
     });
     const requestFinding = result.findings.find(
-      (finding) => finding.payload === "request" && finding.path === "properties.extra",
+      (finding) =>
+        finding.payload === "request" && finding.path === "properties.extra",
     );
     expect(requestFinding?.severity).toBe("advisory");
   });
@@ -849,16 +920,13 @@ describe("same-version wire-schema evolution rules", () => {
   });
 });
 
-
 describe("direction-aware enum/union addition severity", () => {
   const catalogRequest = z.object({});
   const catalogResponseV10 = z.object({
     harnesses: z.array(z.object({ id: z.enum(["claude", "cursor"]) })),
   });
   const catalogResponseV10PlusDevin = z.object({
-    harnesses: z.array(
-      z.object({ id: z.enum(["claude", "cursor", "devin"]) }),
-    ),
+    harnesses: z.array(z.object({ id: z.enum(["claude", "cursor", "devin"]) })),
   });
 
   function catalogRegistry(response: z.ZodType) {
@@ -934,7 +1002,10 @@ describe("direction-aware enum/union addition severity", () => {
           versions: {
             0: {
               contract: v20,
-              upgradeFromPreviousVersion: defineUpgradePath<typeof v10, typeof v20>({
+              upgradeFromPreviousVersion: defineUpgradePath<
+                typeof v10,
+                typeof v20
+              >({
                 from: { major: 1, minor: 0 },
                 to: { major: 2, minor: 0 },
                 upgradeRequest: (request) => request,
@@ -982,12 +1053,16 @@ describe("direction-aware enum/union addition severity", () => {
       mode: z.enum(["x", "y"]),
     });
     const result = checkSurfaceCompatibility({
-      mine: surfaceOfUnary(defineVersionedRpcRegistry({
-        "host.echo": unaryV10(requestV10Plus, baseResponse),
-      })),
-      theirs: surfaceOfUnary(defineVersionedRpcRegistry({
-        "host.echo": unaryV10(requestV10, baseResponse),
-      })),
+      mine: surfaceOfUnary(
+        defineVersionedRpcRegistry({
+          "host.echo": unaryV10(requestV10Plus, baseResponse),
+        }),
+      ),
+      theirs: surfaceOfUnary(
+        defineVersionedRpcRegistry({
+          "host.echo": unaryV10(requestV10, baseResponse),
+        }),
+      ),
       theirsLabel: "released",
       exceptions: [],
     });

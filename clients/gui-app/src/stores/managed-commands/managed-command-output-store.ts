@@ -23,14 +23,14 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
  *
  * The retained log runs to tens of megabytes, so the window holds only what it
  * has actually been served - the opening tail plus whatever the human scrolled
- * back to. Nothing is trimmed from the head in return: `start` is the host's
- * own cursor for "the oldest line you hold", and dropping lines behind it would
- * open a gap the wire has no way to express.
+ * back to. While following, old frames are trimmed at host-positioned
+ * boundaries; `start` advances with the cut, so the discarded gap remains
+ * reachable through the ordinary load-older path.
  */
 
 export type ManagedCommandOutputStreamClientHandle = Pick<
   ManagedCommandOutputStreamClient,
-  "loadOlder" | "close"
+  "loadOlder" | "resnapshot" | "close"
 > & {
   /**
    * Where this window reads what its bound host can serve: the negotiated
@@ -51,6 +51,10 @@ export type ManagedCommandOutputStreamClientFactory = (
 /** One scroll-up page. Well under the wire's 2,000-line ceiling. */
 export const MANAGED_COMMAND_OLDER_PAGE_LINES = 500;
 
+/** Hysteresis keeps a loud shell from slicing the timeline on every frame. */
+export const MANAGED_COMMAND_OUTPUT_RETENTION_MAX_LINES = 20_000;
+export const MANAGED_COMMAND_OUTPUT_RETENTION_TARGET_LINES = 15_000;
+
 /**
  * A log line plus the identity the viewer needs and the wire does not carry.
  * Log lines have no id and repeat verbatim, so a row is identified by its
@@ -62,6 +66,8 @@ export const MANAGED_COMMAND_OLDER_PAGE_LINES = 500;
  */
 export interface ManagedCommandTimelineLine extends ManagedCommandLogLine {
   readonly seq: number;
+  /** Present only on the first row of a host-positioned wire frame. */
+  readonly frameStart: ManagedCommandLogPosition | null;
 }
 
 export interface ManagedCommandOutputState {
@@ -79,6 +85,14 @@ export interface ManagedCommandOutputState {
    */
   readonly reachedStart: boolean;
   readonly loadingOlder: boolean;
+  /** The held window no longer reaches the live tail and needs a resnapshot. */
+  readonly detached: boolean;
+  /** A fresh live-tail snapshot has been requested but has not landed yet. */
+  readonly resyncPending: boolean;
+  /** At least one live output frame arrived after the reader detached. */
+  readonly newOutputAvailable: boolean;
+  /** Increments whenever a snapshot replaces the entire timeline. */
+  readonly timelineGeneration: number;
   /** The command was deleted while this window was open. */
   readonly deleted: boolean;
   /**
@@ -89,6 +103,8 @@ export interface ManagedCommandOutputState {
    */
   readonly fatalClose: FatalErrorDetails | null;
   readonly loadOlder: () => void;
+  /** Reader intent controls whether head retention is allowed to advance. */
+  readonly setFollowing: (following: boolean) => void;
   readonly dispose: () => void;
 }
 
@@ -137,19 +153,87 @@ export function createManagedCommandOutputStore(
   // backwards, so every row keeps one identity for as long as the window lives.
   let nextAppendSeq = 0;
   let nextPrependSeq = -1;
+  let following = true;
+  let receivedSnapshot = false;
 
   const numberForward = (
     lines: readonly ManagedCommandLogLine[],
+    frameStart: ManagedCommandLogPosition,
   ): readonly ManagedCommandTimelineLine[] =>
-    lines.map((line) => ({ ...line, seq: nextAppendSeq++ }));
+    lines.map((line, index) => ({
+      ...line,
+      seq: nextAppendSeq++,
+      frameStart: index === 0 ? frameStart : null,
+    }));
 
   const numberBackward = (
     lines: readonly ManagedCommandLogLine[],
-  ): readonly ManagedCommandTimelineLine[] =>
-    [...lines]
+    frameStart: ManagedCommandLogPosition,
+  ): readonly ManagedCommandTimelineLine[] => {
+    const numbered: ManagedCommandTimelineLine[] = [...lines]
       .reverse()
-      .map((line) => ({ ...line, seq: nextPrependSeq-- }))
+      .map((line) => ({ ...line, seq: nextPrependSeq--, frameStart: null }))
       .reverse();
+    if (numbered.length === 0) return numbered;
+    numbered[0] = { ...numbered[0], frameStart };
+    return numbered;
+  };
+
+  const trimFollowingTimeline = (
+    state: ManagedCommandOutputState,
+  ): {
+    readonly lines: readonly ManagedCommandTimelineLine[];
+    readonly start: ManagedCommandLogPosition;
+    readonly reachedStart: false;
+  } | null => {
+    if (
+      !following ||
+      state.loadingOlder ||
+      state.lines.length <= MANAGED_COMMAND_OUTPUT_RETENTION_MAX_LINES
+    ) {
+      return null;
+    }
+    const earliestCut =
+      state.lines.length - MANAGED_COMMAND_OUTPUT_RETENTION_TARGET_LINES;
+    for (let index = earliestCut; index < state.lines.length; index += 1) {
+      const frameStart = state.lines[index].frameStart;
+      if (frameStart === null) continue;
+      return {
+        lines: state.lines.slice(index),
+        start: frameStart,
+        reachedStart: false,
+      };
+    }
+    // A single wire frame is indivisible: retaining it is the only way to keep
+    // the cursor honest. The host bounds live frames, so this overflow is also
+    // bounded and the next positioned frame supplies a cut point.
+    return null;
+  };
+
+  const trimDetachedTimeline = (
+    state: ManagedCommandOutputState,
+  ): ManagedCommandOutputState => {
+    if (
+      following ||
+      state.lines.length <= MANAGED_COMMAND_OUTPUT_RETENTION_MAX_LINES
+    ) {
+      return state;
+    }
+    // A detached reader is paging toward older output. Keep the oldest side
+    // they just asked for and evict the stale newest side; returning to live
+    // replaces the entire window with a fresh positioned snapshot anyway.
+    return {
+      ...state,
+      lines: state.lines.slice(
+        0,
+        MANAGED_COMMAND_OUTPUT_RETENTION_TARGET_LINES,
+      ),
+      // Even a quiet command is now missing its retained tail. There is no
+      // forward-page cursor, so returning live must replace this history
+      // window exactly like returning after discarded live output.
+      detached: true,
+    };
+  };
 
   const store = create<ManagedCommandOutputState>()((set, get) => ({
     connectionStatus: "connecting",
@@ -158,11 +242,30 @@ export function createManagedCommandOutputStore(
     start: null,
     reachedStart: false,
     loadingOlder: false,
+    detached: false,
+    resyncPending: false,
+    newOutputAvailable: false,
+    timelineGeneration: 0,
     deleted: false,
     fatalClose: null,
+    setFollowing: (nextFollowing) => {
+      following = nextFollowing;
+      if (!following) return;
+      const state = store.getState();
+      if (state.detached) {
+        if (state.resyncPending) return;
+        pendingOlderRequestId = null;
+        store.setState({ resyncPending: true, loadingOlder: false });
+        streamClient?.resnapshot();
+        return;
+      }
+      store.setState((current) => trimFollowingTimeline(current) ?? current);
+    },
     loadOlder: () => {
       const state = get();
-      if (state.reachedStart || state.loadingOlder) return;
+      if (state.reachedStart || state.loadingOlder || state.resyncPending) {
+        return;
+      }
       // Nothing can be paged in behind a shell the host has dropped or a
       // stream it has closed for good; asking would send a frame into a dead
       // session and leave the spinner waiting on a reply that never comes.
@@ -194,32 +297,74 @@ export function createManagedCommandOutputStore(
     onSnapshot: (snapshot) => {
       if (disposed) return;
       pendingOlderRequestId = null;
-      nextAppendSeq = 0;
-      nextPrependSeq = -1;
-      store.setState({
+      // A replacement snapshot (reconnect or explicit resnapshot) restores
+      // live-follow intent. The first snapshot preserves any reading anchor
+      // the tile restored before it arrived.
+      if (receivedSnapshot) following = true;
+      receivedSnapshot = true;
+      store.setState((state) => ({
         command: snapshot.command,
-        lines: numberForward(snapshot.lines),
+        lines: numberForward(snapshot.lines, snapshot.start),
         start: snapshot.start,
         reachedStart: snapshot.reachedStart,
         loadingOlder: false,
-      });
-    },
-    onOutput: (lines) => {
-      if (disposed || lines.length === 0) return;
-      store.setState((state) => ({
-        lines: [...state.lines, ...numberForward(lines)],
+        detached: false,
+        resyncPending: false,
+        newOutputAvailable: false,
+        timelineGeneration: state.timelineGeneration + 1,
       }));
+    },
+    onOutput: (frame) => {
+      if (disposed || frame.lines.length === 0) return;
+      store.setState((state) => {
+        if (!following || state.detached || state.resyncPending) {
+          if (state.detached && state.newOutputAvailable) return state;
+          return {
+            ...state,
+            detached: true,
+            newOutputAvailable: true,
+          };
+        }
+        const appended = {
+          ...state,
+          lines: [...state.lines, ...numberForward(frame.lines, frame.start)],
+        };
+        // A stalled backward page must not suspend the live-window bound. If
+        // output crosses the ceiling while that request is in flight, abandon
+        // the page before advancing `start`; accepting its old-before window
+        // afterward would splice a gap into the retained timeline.
+        const trimmable =
+          appended.loadingOlder &&
+          appended.lines.length > MANAGED_COMMAND_OUTPUT_RETENTION_MAX_LINES
+            ? { ...appended, loadingOlder: false }
+            : appended;
+        if (trimmable !== appended) pendingOlderRequestId = null;
+        const trimmed = trimFollowingTimeline(trimmable);
+        return trimmed === null ? trimmable : { ...trimmable, ...trimmed };
+      });
     },
     onOlder: (window) => {
       if (disposed) return;
       if (window.requestId !== pendingOlderRequestId) return;
       pendingOlderRequestId = null;
-      store.setState((state) => ({
-        lines: [...numberBackward(window.lines), ...state.lines],
-        start: window.start,
-        reachedStart: window.reachedStart,
-        loadingOlder: false,
-      }));
+      store.setState((state) => {
+        const prepended = {
+          ...state,
+          lines: [
+            ...numberBackward(window.lines, window.start),
+            ...state.lines,
+          ],
+          start: window.start,
+          reachedStart: window.reachedStart,
+          loadingOlder: false,
+        };
+        const followingTrim = trimFollowingTimeline(prepended);
+        return trimDetachedTimeline(
+          followingTrim === null
+            ? prepended
+            : { ...prepended, ...followingTrim },
+        );
+      });
     },
     onStatus: (command) => {
       if (disposed) return;

@@ -42,8 +42,8 @@ import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-stor
  * `useChatById` / `useEpicTerminalAgent` (rules-of-hooks - the id argument
  * gates only which one resolves a record, not whether the hook itself
  * runs). Both read `useEpicStore()` -> `useOpenEpicHandle()`, which throws
- * outside `<EpicSessionProvider>`. That per-Epic Y.doc chain is unrelated to
- * PR-detail behavior under test here (every fixture's `owners` is empty),
+ * outside `<EpicSessionProvider>`. That per-Epic projection chain is unrelated
+ * to PR-detail behavior under test here (every fixture's `owners` is empty),
  * so it is stubbed the same way `pr-panel-body.test.tsx` stubs it for
  * `PrListRow`'s identical dependency - `importActual` keeps every other
  * selector in the module real.
@@ -86,8 +86,8 @@ vi.mock("@/lib/epic-selectors", async (importActual) => ({
   useEpicTerminalAgent: () => null,
   // The quote-target picker enumerates the epic's chats and terminal agents.
   // Both selectors reach the same `useOpenEpicHandle()` chain the two above do,
-  // so they are stubbed for the same reason: that per-epic Y.doc is unrelated
-  // to the PR-detail behaviour under test.
+  // so they are stubbed for the same reason: that per-epic projection is
+  // unrelated to the PR-detail behaviour under test.
   useEpicChatRecords: () => chatRecordsRef.value,
   useEpicTerminalAgentRecords: () => EMPTY_EPIC_RECORDS,
 }));
@@ -130,10 +130,15 @@ const tileNavigationMock = vi.hoisted(() => ({
 import { PrDetailBody } from "@/components/epic-canvas/pr/pr-detail-body";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
+import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import {
   __resetPrDetailSubscriptionsForTesting,
   type PrDetailSubscriptionData,
 } from "@/hooks/pr/use-pr-detail-subscription";
+import {
+  __resetPrListSubscriptionsForTesting,
+  usePrListSubscription,
+} from "@/hooks/pr/use-pr-list-subscription";
 
 type MockWsStreamClient =
   SharedMockWsStreamClient<PrSubscribeDetailServerFrame>;
@@ -141,6 +146,16 @@ type MockWsStreamClient =
 // suite's frame type, so `new MockWsStreamClient()` needs no argument.
 const MockWsStreamClient =
   SharedMockWsStreamClient<PrSubscribeDetailServerFrame>;
+
+function VisiblePrListSubscription(props: { readonly epicId: string }): null {
+  usePrListSubscription({
+    hostId: "host1",
+    epicId: props.epicId,
+    mode: "foreground",
+    enabled: true,
+  });
+  return null;
+}
 
 function buildPrDetailCore(overrides: Partial<PrDetailCore>): PrDetailCore {
   return {
@@ -313,8 +328,39 @@ describe("PrDetailBody", () => {
     );
   };
 
+  const renderBodyWithVisibleList = (props: {
+    epicId: string;
+    githubHost: string;
+    owner: string;
+    repo: string;
+    prNumber: number;
+    isActive: boolean;
+  }) => {
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <StreamRuntimeContext.Provider
+          value={{ wsStreamClient: mockWsStreamClient, hostId: "host1" }}
+        >
+          <VisiblePrListSubscription epicId={props.epicId} />
+          <TabHostProvider hostId="host1">
+            <PrDetailBody
+              epicId={props.epicId}
+              viewTabId="tab-1"
+              githubHost={props.githubHost}
+              owner={props.owner}
+              repo={props.repo}
+              prNumber={props.prNumber}
+              isActive={props.isActive}
+            />
+          </TabHostProvider>
+        </StreamRuntimeContext.Provider>
+      </QueryClientProvider>,
+    );
+  };
+
   beforeEach(() => {
     __resetPrDetailSubscriptionsForTesting();
+    __resetPrListSubscriptionsForTesting();
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -325,10 +371,52 @@ describe("PrDetailBody", () => {
   afterEach(() => {
     cleanup();
     __resetPrDetailSubscriptionsForTesting();
+    __resetPrListSubscriptionsForTesting();
     queryClient.clear();
     wsStreamClientRef.value = null;
     chatRecordsRef.value = [];
     tileNavigationMock.openTileInTab.mockClear();
+  });
+
+  it("sends only one detail refresh frame while a PR list is visible", async () => {
+    renderBodyWithVisibleList({
+      epicId: "epic-1",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 7,
+      isActive: true,
+    });
+
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(2);
+    });
+    const detailSession = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-1",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 7,
+    });
+    const listSession = mockWsStreamClient.getSession(
+      "pr.subscribeListForEpic",
+      { epicId: "epic-1", mode: "foreground" },
+    );
+    expect(detailSession).toBeDefined();
+    expect(listSession).toBeDefined();
+    if (detailSession === undefined || listSession === undefined) return;
+
+    detailSession.emitFrame(buildPrDetailFrame({}));
+    await screen.findByTestId("pr-detail-body");
+    fireEvent.click(screen.getByTestId("pr-detail-refresh"));
+
+    await waitFor(() => {
+      expect(detailSession.sentClientFrames).toEqual([
+        { kind: "refresh", hasBinaryPayload: false },
+      ]);
+    });
+    expect(listSession.sentClientFrames).toEqual([]);
+    expect(mockWsStreamClient.subscribeCallCount).toBe(2);
   });
 
   it("(b) GHES/unknown-host cache-only PR shows Not live, refresh sends exactly one client frame with zero new subscribe calls, and a cache-only re-emit updates content without a new subscribe", async () => {

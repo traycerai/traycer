@@ -58,6 +58,7 @@ import {
 } from "@traycer/protocol/notifications/notification-room";
 import type {
   HostNotificationEntry,
+  HostNotificationEntryV21,
   HostNotificationsCloudFeedRow,
 } from "@traycer/protocol/host/notifications/contracts";
 import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-category";
@@ -65,6 +66,13 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toast } from "sonner";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+
+/**
+ * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
+ * stamps it onto every entry at projection time. These fixtures describe an
+ * entitled account unless a case says otherwise.
+ */
+const PLAN_ALLOWS_REMOTE = true;
 
 const reconnectEngine = createHostReconnectEngine();
 
@@ -462,6 +470,7 @@ function offlineRemoteOrigin(
       updatePolicy: "manual",
     },
     "wss://relay.example.test/attach",
+    PLAN_ALLOWS_REMOTE,
   );
 }
 
@@ -536,7 +545,7 @@ function threadEntryWithState(state: ThreadEntryState): NotificationEntry {
 }
 
 function applyHostSnapshot(
-  entries: ReadonlyArray<HostNotificationEntry>,
+  entries: ReadonlyArray<HostNotificationEntryV21>,
   summary: { readonly unreadCount: number; readonly attentionCount: number },
 ): void {
   useHostNotificationsStore.getState().applySnapshot({
@@ -738,6 +747,8 @@ describe("NotificationsPopover", () => {
     const status = await screen.findByTestId("notifications-feed-status");
     expect(status.textContent).toContain("Loading notifications");
     expect(status.textContent).toContain("Fetching your notification history.");
+    expect(status.getAttribute("data-tone")).toBe("neutral");
+    expect(status.className).not.toContain("bg-warning/10");
     expect(
       screen.getByTestId("notifications-feed-status-spinner"),
     ).toBeDefined();
@@ -758,8 +769,10 @@ describe("NotificationsPopover", () => {
     renderRouter(router);
 
     const status = await screen.findByTestId("notifications-feed-status");
-    expect(status.textContent).toContain("Notifications unavailable");
+    expect(status.textContent).toContain("Cloud notifications unavailable");
     expect(status.textContent).toContain("We’ll keep trying to reconnect.");
+    expect(status.getAttribute("data-tone")).toBe("degraded");
+    expect(status.className).toContain("bg-warning/10");
     expect(
       screen.queryByTestId("notifications-feed-status-spinner"),
     ).toBeNull();
@@ -785,10 +798,12 @@ describe("NotificationsPopover", () => {
     renderRouter(router);
 
     const status = await screen.findByTestId("notifications-feed-status");
-    expect(status.textContent).toContain("Reconnecting to notifications");
+    expect(status.textContent).toContain("Reconnecting to cloud notifications");
     expect(status.textContent).toContain(
-      "Refreshing your notification history.",
+      "Showing notifications already on this device until it’s back.",
     );
+    expect(status.getAttribute("data-tone")).toBe("degraded");
+    expect(status.className).toContain("bg-warning/10");
     expect(
       screen.getByTestId("notifications-feed-status-spinner"),
     ).toBeDefined();
@@ -815,7 +830,9 @@ describe("NotificationsPopover", () => {
 
     expect(await screen.findByTestId("notification-entry")).toBeDefined();
     const status = screen.getByTestId("notifications-feed-status");
-    expect(status.textContent).toContain("Reconnecting to notifications");
+    expect(status.textContent).toContain("Reconnecting to cloud notifications");
+    expect(status.getAttribute("data-tone")).toBe("degraded");
+    expect(status.className).toContain("bg-warning/10");
   });
 
   it("shows caught up only after an authoritative empty cloud snapshot", async () => {
@@ -1244,6 +1261,88 @@ describe("NotificationsPopover", () => {
     expect(timestamp.textContent).toBe("2m ago");
   });
 
+  it("uses workspace glyphs for worktree lifecycle notifications", async () => {
+    applyHostSnapshot(
+      [
+        {
+          id: "worktree.deletion:command-1",
+          updatedAt: 200,
+          readAt: null,
+          kind: "host.operation.finished",
+          sourceRef: "command-1",
+          severity: "done",
+          outcome: "completed",
+          epicId: null,
+          chatId: null,
+          payload: {
+            kind: "worktree_deletion",
+            operation: "worktree.deletion",
+            title: "Worktree deleted",
+            message: "Deleted 1 worktree.",
+            commandId: "command-1",
+            source: "settings",
+            requestedCount: 1,
+            deletedCount: 1,
+            failedCount: 0,
+          },
+        },
+        {
+          id: "workspace.operation.failed:event-1",
+          updatedAt: 100,
+          readAt: null,
+          kind: "workspace.operation.failed",
+          sourceRef: "event-1",
+          severity: "failure",
+          outcome: "errored",
+          epicId: "epic-1",
+          chatId: "chat-1",
+          payload: {
+            kind: "workspace_operation_failed",
+            epicId: "epic-1",
+            chatId: "chat-1",
+            chatTitle: "Agent",
+            taskTitle: TASK_TITLE,
+            operation: "provision",
+            title: "Worktree creation failed",
+            message: "Worktree creation failed.",
+            outcome: "errored",
+          },
+        },
+      ],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    await screen.findByText("Worktree deleted");
+    const rows = screen.getAllByTestId("notification-entry");
+    const deletionRow = rows.find(
+      (row) =>
+        row.dataset.notificationId === "host:worktree.deletion:command-1",
+    );
+    const creationFailureRow = rows.find(
+      (row) =>
+        row.dataset.notificationId ===
+        "host:workspace.operation.failed:event-1",
+    );
+    expect(deletionRow?.querySelector(".lucide-trash-2")).not.toBeNull();
+    expect(
+      deletionRow?.querySelector(".lucide-message-square-check"),
+    ).toBeNull();
+    expect(
+      creationFailureRow?.querySelector(".lucide-folder-x"),
+    ).not.toBeNull();
+    expect(
+      creationFailureRow?.querySelector(".lucide-message-square-x"),
+    ).toBeNull();
+  });
+
   it("renders Attention before Recent and omits Attention when empty", async () => {
     applyHostSnapshot(
       [hostPrompt("prompt", 100, null), hostDone("done", 90, null)],
@@ -1670,6 +1769,8 @@ describe("NotificationsPopover", () => {
 
     expect(failed?.dataset.notificationSeverity).toBe("failure");
     expect(failed?.textContent).toContain(TASK_TITLE);
+    expect(failed?.querySelector(".lucide-message-square-x")).not.toBeNull();
+    expect(failed?.querySelector(".lucide-square-terminal")).toBeNull();
     expect(completed?.dataset.notificationSeverity).toBe("done");
     expect(completed?.textContent).toContain(TASK_TITLE);
     expect(stalled?.dataset.notificationSeverity).toBe("failure");
@@ -1837,6 +1938,45 @@ describe("NotificationsPopover", () => {
     expect(captured.epicId).toBe("epic-tui");
     expect(captured.focusArtifactId).toBe("tui-1");
     expect(onNavigate).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders a TUI agent failure with the terminal glyph", async () => {
+    applyHostSnapshot(
+      [
+        {
+          id: "agent.failed:tui-1",
+          updatedAt: 10,
+          readAt: null,
+          kind: "agent.stopped",
+          sourceRef: "tui-1",
+          severity: "failure",
+          outcome: "errored",
+          epicId: "epic-tui",
+          chatId: "tui-1",
+          payload: {
+            kind: "epic",
+            epicId: "epic-tui",
+            tuiAgentId: "tui-1",
+            agentName: "Terminal agent",
+            taskTitle: "TUI task",
+            outcome: "errored",
+          },
+        },
+      ],
+      { unreadCount: 1, attentionCount: 1 },
+    );
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const entry = await screen.findByTestId("notification-entry");
+    expect(entry.querySelector(".lucide-square-terminal")).not.toBeNull();
+    expect(entry.querySelector(".lucide-message-square-x")).toBeNull();
   });
 
   it("marks every notification as read when Mark all read is clicked", async () => {

@@ -24,7 +24,8 @@ const testState = vi.hoisted(() => ({
   resolvingPaths: false,
   /** Captures the real-ish pending job runner used by in-place landing paste. */
   runPendingImageJob: null as
-    ((job: (signal: AbortSignal) => Promise<void>) => void) | null,
+    | ((job: (signal: AbortSignal) => Promise<void>) => void)
+    | null,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -74,6 +75,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     // (reusing a pre-minted pendingCreateId when present) rather than
     // createDraft directly.
     createDraftWithId: vi.fn(() => "draft-for-test"),
+    restoreDraftWorkspaceForHost: vi.fn(),
     setDraftContent: vi.fn(),
   };
   const useLandingDraftStore = Object.assign(
@@ -211,6 +213,15 @@ vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
     blocked: false,
     hint: null,
     preparing: null,
+  }),
+}));
+
+vi.mock("@/components/chat/composer/use-profile-eligibility-gate", () => ({
+  useProfileEligibilityGate: () => ({
+    disabled: false,
+    profileLabel: null,
+    enablePending: false,
+    enableProfile: vi.fn(),
   }),
 }));
 

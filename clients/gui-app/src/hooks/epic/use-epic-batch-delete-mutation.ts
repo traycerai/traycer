@@ -168,12 +168,13 @@ export function useEpicBatchDelete(): UseMutationResult<
           // is frozen from `onMutate` so a host swap mid-flight can't redirect
           // the cleanup or its cache invalidation to the wrong scope.
           const hostId = ctx.hostId;
-          void runWorktreeCleanup(
-            openStreamTransport,
+          void runWorktreeCleanup(openStreamTransport, {
             hostId,
-            eligibleWorktreePaths,
-            "task_cleanup",
-          ).then((outcome) => {
+            paths: eligibleWorktreePaths,
+            source: "task_cleanup",
+            stopOwnersPaths: new Set(),
+            expectedHoldersRevisionByPath: new Map(),
+          }).then((outcome) => {
             emitTaskDeleteSummaryToast(epicToast, outcome);
             invalidateWorktreeCachesForHost(queryClient, hostId);
           });

@@ -51,6 +51,21 @@ vi.mock("../../installer", () => ({
   },
 }));
 
+// `commitHostInstallSourceWithAttempt` (update-mutation.ts) imports
+// `commitHostInstallSource` straight from `../../installer/install`, not
+// the barrel above - that direct import bypasses the barrel mock, so the
+// REAL committer (and the real attempt-lock machinery it drives) would
+// otherwise run against this process's actual host home. Mirror the same
+// fake here.
+vi.mock("../../installer/install", () => ({
+  commitHostInstallSource: async (
+    ...callArgs: Parameters<typeof mocks.commitHostInstallSourceMock>
+  ) => {
+    mocks.callOrder.push("commit");
+    return mocks.commitHostInstallSourceMock(...callArgs);
+  },
+}));
+
 vi.mock("../../manifest/host-install", () => ({
   readHostInstallRecord: mocks.readHostInstallRecordMock,
 }));
@@ -84,6 +99,18 @@ vi.mock("../../store/cli-lock", () => ({
 
 vi.mock("../busy-check", () => ({
   assertHostNotBusy: mocks.assertHostNotBusyMock,
+}));
+
+// The real `publishHostStartAdoption` waits (up to 30s) for a service-
+// manager child to ack a spawn that never happens under a stubbed
+// controller. This suite pins `provisionHost`'s orchestration, not the
+// adoption handshake (that's `host-start-adoption.test.ts`), so replace it
+// with an immediately-satisfied lease.
+vi.mock("../host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => undefined,
+    cancel: async () => undefined,
+  }),
 }));
 
 // Finding D: `provisionHost` constructs a registry yank-lookup up front. The
@@ -142,6 +169,8 @@ function makeOpts(
     lockReason: "test-provision",
     onProgress: null,
     force: false,
+    adoption: undefined,
+    beforeMutate: null,
     ...overrides,
   };
 }
@@ -160,6 +189,7 @@ function sampleRecord(version: string): HostInstallRecord {
     signatureKeyId: "test-key",
     sizeBytes: 1,
     executablePath: "/tmp/traycer-host",
+    executableSha256: null,
   };
 }
 
@@ -232,6 +262,7 @@ describe("provisionHost - Finding 1: lost fast-path prediction never stages insi
       },
       install: vi.fn(),
       start: vi.fn(),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
     });
 
     let installRecordCall = 0;
@@ -285,6 +316,7 @@ describe("provisionHost - Finding 1: lost fast-path prediction never stages insi
       }),
       install: vi.fn(),
       start: vi.fn(),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
     });
     // Fast read: not installed at all - predicts the install branch, so
     // staging happens up front, outside any lock.
@@ -344,6 +376,7 @@ describe("provisionHost - Finding D: implicit-registry-minimum satisfaction", ()
       }),
       install: vi.fn(),
       start: vi.fn(),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
     };
   }
 
@@ -392,5 +425,131 @@ describe("provisionHost - Finding D: implicit-registry-minimum satisfaction", ()
     expect(result.action).toBe("installed");
     // The `less` ordering short-circuits before the advisory yank lookup.
     expect(isVersionYankedMock).not.toHaveBeenCalled();
+  });
+});
+
+// Reviewer finding (host-ensure): `beforeMutate` must fire ONLY once this
+// call has committed to mutating the host, never on the lock-free no-op
+// fast path - `host ensure` hangs its sign-in pre-flight there precisely so
+// a signed-out operator whose host is already healthy is never prompted
+// for a command that then does nothing. The command-level suite
+// (`commands/__tests__/host-ensure.test.ts`) only proves `host-ensure.ts`
+// THREADS a callback into `ensureHost`'s options; it mocks `ensureHost`
+// wholesale, so it cannot prove `provisionHost` itself gates the call. This
+// suite pins the gate directly, against the real fast-path/install-branch
+// code paths above.
+describe("provisionHost - beforeMutate gate", () => {
+  beforeEach(() => {
+    mocks.callOrder = [];
+    mocks.lockHeld = false;
+    mocks.lockAcquisitions = 0;
+    serviceLabelForMock.mockReturnValue({
+      id: "ai.traycer.host",
+      environment: "production",
+    });
+    assertHostNotBusyMock.mockResolvedValue(undefined);
+    discardStagedHostInstallSourceMock.mockResolvedValue(undefined);
+    createServiceInstallLifecycleMock.mockReturnValue(sampleLifecycleHandle());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not invoke beforeMutate when the lock-free fast path is already satisfied (noop)", async () => {
+    createServiceControllerMock.mockReturnValue({
+      status: async () => ({
+        state: "running",
+        version: "host",
+        listenUrl: "ws://127.0.0.1:7100/rpc",
+        pid: 4242,
+      }),
+      install: vi.fn(),
+      start: vi.fn(),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
+    });
+    // Installed at the exact target version, registered and running - the
+    // fast path's `isSatisfied` is true, so this returns before ever
+    // reaching the `beforeMutate` call site in `provisionHost`.
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("2.0.0"));
+    const beforeMutateMock = vi.fn().mockResolvedValue(undefined);
+
+    const result = await provisionHost(
+      makeOpts({ beforeMutate: beforeMutateMock }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(beforeMutateMock).not.toHaveBeenCalled();
+  });
+
+  it("invokes beforeMutate before the install branch's work, and before staging, when work is required", async () => {
+    createServiceControllerMock.mockReturnValue({
+      status: async () => ({
+        state: "not-installed",
+        version: null,
+        listenUrl: null,
+        pid: null,
+      }),
+      install: vi.fn(),
+      start: vi.fn(),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
+    });
+    // Nothing installed - the fast path predicts (and the locked re-read
+    // confirms) the install branch, so `beforeMutate` must run before
+    // `prepareInstallStage` (network staging) and before the locked commit.
+    readHostInstallRecordMock.mockResolvedValue(null);
+    stageHostInstallSourceMock.mockResolvedValue(sampleStaged("2.0.0"));
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+    const beforeMutateMock = vi.fn(async () => {
+      mocks.callOrder.push("before-mutate");
+    });
+
+    const result = await provisionHost(
+      makeOpts({ beforeMutate: beforeMutateMock }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(beforeMutateMock).toHaveBeenCalledTimes(1);
+    // "before-mutate" precedes "stage" (staging outside any lock), which in
+    // turn precedes the lock span that commits the install - beforeMutate
+    // runs before BOTH the install work and staging, exactly where
+    // `host/provision.ts` places the call: above `prepareInstallStage` and
+    // the locked commit.
+    expect(mocks.callOrder).toEqual([
+      "before-mutate",
+      "stage",
+      "lock-enter",
+      "commit",
+      "lock-exit",
+    ]);
+  });
+
+  it("beforeMutate: null does not crash a mutating run", async () => {
+    createServiceControllerMock.mockReturnValue({
+      status: async () => ({
+        state: "not-installed",
+        version: null,
+        listenUrl: null,
+        pid: null,
+      }),
+      install: vi.fn(),
+      start: vi.fn(),
+      hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
+    });
+    readHostInstallRecordMock.mockResolvedValue(null);
+    stageHostInstallSourceMock.mockResolvedValue(sampleStaged("2.0.0"));
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+
+    const result = await provisionHost(makeOpts({ beforeMutate: null }));
+
+    expect(result.action).toBe("installed");
   });
 });

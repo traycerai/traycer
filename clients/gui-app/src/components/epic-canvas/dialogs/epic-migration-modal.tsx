@@ -6,6 +6,7 @@ import type { EpicMigrationPhase } from "@traycer/protocol/host/epic/subscribe";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { useBlockingLayerClaim } from "@/components/layout/shell/blocking-layer-claim";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 import {
@@ -64,7 +65,16 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
   const retryMigration = useEpicRetryMigration();
   const navigate = useNavigate();
   const modalRootRef = useRef<HTMLDivElement | null>(null);
-  useInertEpicShell(modalRootRef, migration.status !== "idle");
+  const blocking = migration.status !== "idle";
+  useInertEpicShell(modalRootRef, blocking);
+  // The containment above is LOCAL - it inerts this epic's shell and nothing
+  // else, which is what keeps the rest of the app usable behind a per-tab
+  // migration. Document-level recognizers cannot see it, so this says out loud
+  // what the `inert` attribute only says to one subtree: a surface the user is
+  // required to address is up, and a gesture aimed past it is not theirs to
+  // answer. Mounting the primitive with `modal={false}` is what makes this
+  // necessary - the barrier every ordinary dialog raises is never raised here.
+  useBlockingLayerClaim(blocking);
 
   if (migration.status === "idle") {
     return null;
@@ -105,6 +115,7 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
+          data-browser-overlay="migration-dialog"
           data-testid="epic-migration-modal"
           aria-describedby={undefined}
           onEscapeKeyDown={(event) => {

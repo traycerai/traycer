@@ -17,6 +17,7 @@ import { ChatTimeline } from "@/components/chat/chat-timeline";
 import { PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
+import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
@@ -167,7 +168,7 @@ function renderTimeline(options: RenderTimelineOptions) {
       }}
     >
       <ChatTimeline
-        messages={messages}
+        rows={transcriptListRows({ window: null, rendered: messages })}
         taskTitle={options.taskTitle ?? "Test transcript"}
         backgroundToolBlockIds={backgroundToolBlockIds}
         getMessageActions={getMessageActions}
@@ -615,7 +616,7 @@ describe("ChatTimeline", () => {
     return (
       <div style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}>
         <ChatTimeline
-          messages={messages}
+          rows={transcriptListRows({ window: null, rendered: messages })}
           taskTitle="Test transcript"
           backgroundToolBlockIds={new Set<string>()}
           getMessageActions={() => null}
@@ -1211,9 +1212,84 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
     await settleLegendList();
     expect(legendListPolicyProps.last).not.toBeNull();
     expect(legendListPolicyProps.last?.maintainScrollAtEndThreshold).toBe(0);
-    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toBe(
-      true,
-    );
+    // MVCP's size channel is unconditional; the data channel rides the key
+    // sequence and is off for a settled transcript - see the prop's own
+    // comment, and the two cases below for each arm.
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
+      data: false,
+      size: true,
+    });
     expect(legendListPolicyProps.last?.maintainScrollAtEnd).toBeUndefined();
+  });
+
+  it("keeps the MVCP data channel off while a streaming row changes in place", async () => {
+    const messages = makeMessages(6);
+    const { rerenderMessages } = renderTimeline({ messages });
+    await settleLegendList();
+
+    // A token: same rows in the same order, one row's content replaced. Fresh
+    // objects throughout, which is what the store hands over on every update.
+    const streamed = messages.map((message, index) =>
+      index === messages.length - 1
+        ? { ...message, content: `${message.content} more` }
+        : { ...message },
+    );
+    act(() => {
+      rerenderMessages(streamed, undefined);
+    });
+
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
+      data: false,
+      size: true,
+    });
+  });
+
+  it("turns the MVCP data channel on for the commit that changes the key sequence", async () => {
+    const messages = makeMessages(6);
+    const { rerenderMessages } = renderTimeline({ messages });
+    await settleLegendList();
+
+    // A row above the tail disappears - the shape a settled-row deletion, a
+    // steer nesting into its assistant turn, or a moved setup card produces.
+    const withRowRemoved = messages.filter((_, index) => index !== 1);
+    act(() => {
+      rerenderMessages(withRowRemoved, undefined);
+    });
+
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
+      data: true,
+      size: true,
+    });
+  });
+
+  it("retires the data channel once the moved sequence has been rendered", async () => {
+    const messages = makeMessages(6);
+    const { rerenderMessages } = renderTimeline({ messages });
+    await settleLegendList();
+
+    const withRowRemoved = messages.filter((_, index) => index !== 1);
+    act(() => {
+      rerenderMessages(withRowRemoved, undefined);
+    });
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
+      data: true,
+      size: true,
+    });
+
+    // A token on top of the new sequence. The baseline advanced when the
+    // removal COMMITTED, so this is content-only and needs no anchor.
+    const streamed = withRowRemoved.map((message, index) =>
+      index === withRowRemoved.length - 1
+        ? { ...message, content: `${message.content} more` }
+        : { ...message },
+    );
+    act(() => {
+      rerenderMessages(streamed, undefined);
+    });
+
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
+      data: false,
+      size: true,
+    });
   });
 });

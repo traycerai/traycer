@@ -11,9 +11,11 @@ import {
 
 function fakeControllerWithRecoverOutcome(
   outcome:
-    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" },
+    | MutationOutcome<ActivateInstalledOk>
+    | { readonly kind: "suppressed" },
 ): IpcHostController {
   return {
+    lifecycleAdmissionBlock: null,
     async recoverIfDown() {
       return outcome;
     },

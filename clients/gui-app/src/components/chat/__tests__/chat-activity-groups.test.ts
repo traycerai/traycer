@@ -36,6 +36,17 @@ function toolInputFields(toolName: string, input: unknown) {
 }
 
 describe("chat activity grouping", () => {
+  it("summarizes the Traycer browser REPL as browser activity", () => {
+    const timeline = buildCompleteTimeline([
+      toolSegment("browser-1", "traycer-browser/repl", {
+        title: "Inspect checkout",
+        code: "await page.snapshot()",
+      }),
+    ]);
+
+    expect(soleGroup(timeline, 0).summary).toBe("Browsed 1 page");
+  });
+
   it("groups operational runs between narrative text blocks", () => {
     const timeline = buildCompleteTimeline([
       textSegment("text-1", "First"),
@@ -1076,7 +1087,7 @@ describe("chat activity grouping", () => {
     expect(timeline.map((item) => item.kind)).toEqual(["activity_group"]);
   });
 
-  it("renders matched interviews as answered-question items and suppresses the raw question tool", () => {
+  it("renders matched interviews as terminal segments and suppresses the raw question tool", () => {
     const timeline = buildCompleteTimeline([
       toolSegment("tool-1", "question", {
         questions: [{ question: "Where?", options: [] }],
@@ -1085,14 +1096,14 @@ describe("chat activity grouping", () => {
     ]);
 
     expect(timeline).toHaveLength(1);
-    expect(timeline[0]?.kind).toBe("answered_questions");
-    if (timeline[0]?.kind !== "answered_questions") {
-      throw new Error("Expected answered questions item");
+    expect(timeline[0]?.kind).toBe("segment");
+    if (timeline[0]?.kind !== "segment") {
+      throw new Error("Expected interview segment item");
     }
-    expect(timeline[0].summary).toBe("Answered 1 question");
+    expect(timeline[0].segment.kind).toBe("interview");
   });
 
-  it("summarizes partially answered interviews by answered and total counts", () => {
+  it("keeps partially answered interviews as ordinary terminal segments", () => {
     const timeline = buildCompleteTimeline([
       {
         ...interviewSegment("tool-1:interview"),
@@ -1118,23 +1129,25 @@ describe("chat activity grouping", () => {
             question: "Where?",
             values: ["Here"],
             notes: null,
+            selection: null,
           },
           {
             questionId: "q2",
             question: "Why?",
             values: [],
             notes: null,
+            selection: null,
           },
         ],
       },
     ]);
 
     expect(timeline).toHaveLength(1);
-    expect(timeline[0]?.kind).toBe("answered_questions");
-    if (timeline[0]?.kind !== "answered_questions") {
-      throw new Error("Expected answered questions item");
+    expect(timeline[0]?.kind).toBe("segment");
+    if (timeline[0]?.kind !== "segment") {
+      throw new Error("Expected interview segment item");
     }
-    expect(timeline[0].summary).toBe("Answered 1/2 questions");
+    expect(timeline[0].segment.kind).toBe("interview");
   });
 
   it("suppresses Claude RequestUserInput tools once the interview segment exists", () => {
@@ -1149,7 +1162,7 @@ describe("chat activity grouping", () => {
     ]);
 
     expect(timeline).toHaveLength(1);
-    expect(timeline[0]?.kind).toBe("answered_questions");
+    expect(timeline[0]?.kind).toBe("segment");
   });
 
   it("suppresses A2A request_user_input tools even when the interview block id does not match", () => {
@@ -1164,7 +1177,7 @@ describe("chat activity grouping", () => {
     ]);
 
     expect(timeline).toHaveLength(1);
-    expect(timeline[0]?.kind).toBe("answered_questions");
+    expect(timeline[0]?.kind).toBe("segment");
   });
 
   it("suppresses orphan A2A request_user_input tools when a separate completed interview exists", () => {
@@ -1190,17 +1203,18 @@ describe("chat activity grouping", () => {
             question: "Continue?",
             values: ["Yes"],
             notes: null,
+            selection: null,
           },
         ],
       },
     ]);
 
     expect(timeline).toHaveLength(1);
-    expect(timeline[0]?.kind).toBe("answered_questions");
-    if (timeline[0]?.kind !== "answered_questions") {
-      throw new Error("Expected answered questions item");
+    expect(timeline[0]?.kind).toBe("segment");
+    if (timeline[0]?.kind !== "segment") {
+      throw new Error("Expected interview segment item");
     }
-    expect(timeline[0].summary).toBe("Answered 1 question");
+    expect(timeline[0].segment.kind).toBe("interview");
   });
 
   it("does not suppress unmatched question tools", () => {
@@ -1564,9 +1578,14 @@ function interviewSegment(
         question: "Where?",
         values: ["Here"],
         notes: null,
+        selection: null,
       },
     ],
+    draftAnswers: [],
+    outcome: null,
+    settlement: null,
     error: null,
+    delivery: null,
     forkedWithoutAnswer: false,
   };
 }

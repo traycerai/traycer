@@ -2,6 +2,7 @@ import { CornerUpLeft, File } from "lucide-react";
 import type { ReactElement } from "react";
 import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
 import type {
+  BrowserTabMentionEntry,
   EpicAgentMentionEntry,
   EpicMentionEntry,
   EpicTerminalMentionEntry,
@@ -39,6 +40,7 @@ import {
 } from "./step-chrome";
 import {
   artifactsIcon,
+  browserTabCategoryIcon,
   descriptionForSuggestion,
   detailForSuggestion,
   epicIcon,
@@ -77,6 +79,7 @@ export type MentionProviderId =
   | "issues"
   | "epic"
   | "chat"
+  | "browser-tab"
   | "terminals"
   | "artifacts";
 
@@ -149,6 +152,14 @@ export interface MentionMenuEntry {
    */
   readonly archived: boolean;
   /**
+   * Renders the row's dormant Moon glyph - a browser tab whose backing
+   * runtime is not currently attached (see `BrowserTabMentionEntry.dormant`).
+   * Set only for `browser-tab` rows; every other kind is always `false`.
+   * Purely a display/ranking hint - the row stays fully mentionable, since
+   * `page.attachTab` auto-wakes a dormant session before leasing it.
+   */
+  readonly dormant: boolean;
+  /**
    * Full, untruncated preview content for the side preview panel. `null` for
    * `Back` and category-navigate rows, which have nothing to preview.
    */
@@ -166,7 +177,8 @@ export type WorkspaceGitMentionMethod =
   | "workspace.mentionGitCommits";
 
 export type WorkspaceMentionMethod =
-  WorkspacePathMentionMethod | WorkspaceGitMentionMethod;
+  | WorkspacePathMentionMethod
+  | WorkspaceGitMentionMethod;
 
 export type EpicMentionMethod =
   | "epic.mentionEpics"
@@ -251,6 +263,14 @@ export interface ComposerMentionProviderContext {
   readonly agentEntries: ReadonlyArray<EpicAgentMentionEntry>;
   /** Every plain terminal the open Task's Terminals panel lists. */
   readonly terminalEntries: ReadonlyArray<EpicTerminalMentionEntry>;
+  /**
+   * Every attachable browser tab across every browser session, sourced live
+   * from `useMaybeBrowserSessionsContext()` and then filtered to sessions
+   * whose `hostId` matches the chat's own host - the context itself is bound
+   * to the canvas host, which is not necessarily the chat's host (see
+   * `BrowserTabMentionEntry`).
+   */
+  readonly browserTabEntries: ReadonlyArray<BrowserTabMentionEntry>;
   /**
    * The subset of `roots` demonstrably attached to `currentEpicId` on this
    * host (a binding running dir or resolved workspace folder). File/folder
@@ -775,6 +795,48 @@ class AgentMentionProvider extends ComposerMentionProvider {
 }
 
 /**
+ * The one **Browser** category. Lists every attachable tab across every
+ * browser session on the chat's host, flat (no per-session grouping) - the
+ * design calls for one drill-in list, title plus url subtitle, ranked with
+ * the co-located tab first. No `stepChromeCapability`: the source is a live
+ * React context subscription, not a request the picker has to refresh.
+ */
+class BrowserTabMentionProvider extends ComposerMentionProvider {
+  readonly id = "browser-tab" as const;
+  readonly rootOrder = 46;
+  protected readonly label = "Browser";
+  protected readonly description = "Browser tabs";
+
+  rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
+    if (context.browserTabEntries.length === 0) return null;
+    return providerEntry({
+      id: "provider:browser-tab",
+      label: this.label,
+      description: this.description,
+      icon: browserTabCategoryIcon(),
+      step: this.providerStep("root", null),
+    });
+  }
+
+  rootSearchEntries(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    return browserTabSuggestionEntries(context);
+  }
+
+  stepEntries(
+    _step: MentionFlowStep,
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<MentionMenuEntry> {
+    return [backEntry("Mentions"), ...browserTabSuggestionEntries(context)];
+  }
+
+  menuCopy(_step: MentionFlowStep): MentionMenuCopy {
+    return { header: "Browser tabs", empty: "No browser tabs available" };
+  }
+}
+
+/**
  * Plain interactive terminals in the open Task - the shells themselves, not
  * Agents reached through one. A separate category from **Agents** because the
  * two are not interchangeable: an Agent can be messaged, a terminal can only be
@@ -1103,6 +1165,7 @@ function githubRowEntry(args: {
     // time slot as well would render the age twice on the same row.
     updatedAt: null,
     archived: false,
+    dormant: false,
     icon: githubMentionRowIcon(row),
     action: {
       kind: "complete",
@@ -1275,6 +1338,7 @@ export const mentionProviderRegistry = new MentionProviderRegistry([
   new GithubMentionProvider("issues"),
   new EpicMentionProvider(),
   new AgentMentionProvider(),
+  new BrowserTabMentionProvider(),
   new TerminalMentionProvider(),
   new ArtifactMentionProvider(),
 ]);
@@ -1308,6 +1372,7 @@ function navigateEntry(args: NavigateEntryArgs): MentionMenuEntry {
     action: { kind: "navigate", step: args.step },
     updatedAt: null,
     archived: false,
+    dormant: false,
     preview: null,
   };
 }
@@ -1325,6 +1390,7 @@ function backEntry(description: string): MentionMenuEntry {
     action: { kind: "back" },
     updatedAt: null,
     archived: false,
+    dormant: false,
     preview: null,
   };
 }
@@ -1353,6 +1419,7 @@ function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {
       action: { kind: "complete", mention },
       updatedAt: isAgent && !entry.archived ? entry.updatedAt : null,
       archived: isAgent ? entry.archived : false,
+      dormant: entry.kind === "browser-tab" && entry.dormant,
       preview: previewForSuggestion(entry),
     },
   ];
@@ -1377,6 +1444,71 @@ function terminalSuggestionEntries(
     context.query,
     context.limit,
   ).flatMap((entry) => suggestionEntry(entry));
+}
+
+function browserTabSuggestionEntries(
+  context: ComposerMentionProviderContext,
+): ReadonlyArray<MentionMenuEntry> {
+  return rankBrowserTabEntries(
+    context.browserTabEntries,
+    context.query,
+    context.limit,
+  ).flatMap((entry) => suggestionEntry(entry));
+}
+
+/**
+ * Browser-tab ranking: match quality first, then `coLocated` (see
+ * `BrowserTabMentionEntry`'s doc for what that flag actually proxies), then
+ * `dormant` as a late tiebreak demotion (mirrors how `rankAgentEntries`
+ * demotes `archived` - a dormant tab never outranks a live one of equal
+ * match quality and co-location, but never overrides either of those), then
+ * session recency.
+ */
+function rankBrowserTabEntries(
+  entries: ReadonlyArray<BrowserTabMentionEntry>,
+  query: string,
+  limit: number,
+): ReadonlyArray<BrowserTabMentionEntry> {
+  const normalizedQuery = query.trim().toLowerCase();
+  return entries
+    .flatMap((entry) => {
+      const score = scoreBrowserTabEntry(entry, normalizedQuery);
+      if (score === null) return [];
+      return [{ entry, score }];
+    })
+    .toSorted((left, right) => {
+      if (left.score !== right.score) return left.score - right.score;
+      if (left.entry.coLocated !== right.entry.coLocated) {
+        return left.entry.coLocated ? -1 : 1;
+      }
+      if (left.entry.dormant !== right.entry.dormant) {
+        return left.entry.dormant ? 1 : -1;
+      }
+      return right.entry.lastActivityAt - left.entry.lastActivityAt;
+    })
+    .map((item) => item.entry)
+    .slice(0, limit);
+}
+
+/** Root-search matches both the title and the url, per the design. */
+function scoreBrowserTabEntry(
+  entry: BrowserTabMentionEntry,
+  normalizedQuery: string,
+): number | null {
+  if (normalizedQuery.length === 0) return 0;
+  const label = entry.label.toLowerCase();
+  const url = entry.url.toLowerCase();
+  if (label === normalizedQuery || url === normalizedQuery) return 0;
+  if (label.startsWith(normalizedQuery)) return 100;
+  if (label.includes(normalizedQuery)) return 200;
+  if (url.includes(normalizedQuery)) return 300;
+  if (
+    isSubsequence(normalizedQuery, label) ||
+    isSubsequence(normalizedQuery, url)
+  ) {
+    return 400 + label.length;
+  }
+  return null;
 }
 
 /**

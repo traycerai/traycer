@@ -3,6 +3,7 @@ import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import { splitConnectionManifest } from "@traycer/protocol/framework/index";
 import {
   hostRpcRegistry,
@@ -114,9 +115,7 @@ const INTERVIEW_DOCUMENT = {
   workspace: null,
   portable: {
     pageIndex: 1,
-    answers: [
-      { selected: ["yes"], otherText: "", otherSelected: false },
-    ],
+    answers: [{ selected: ["yes"], otherText: "", otherSelected: false }],
   },
   ownerHostId: "host-1",
   origin: "own" as const,
@@ -179,9 +178,9 @@ describe("drafts unary contracts", () => {
       draftsReadBlobV10,
     );
     for (const method of UNARY_METHODS) {
-      expect(hostRpcRegistry[method][1].versions[0].contract.schemaVersion).toEqual(
-        { major: 1, minor: 0 },
-      );
+      expect(
+        hostRpcRegistry[method][1].versions[0].contract.schemaVersion,
+      ).toEqual({ major: 1, minor: 0 });
     }
   });
 
@@ -189,12 +188,17 @@ describe("drafts unary contracts", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     for (const method of UNARY_METHODS) {
       expect(hostRpcRegistry[method].degrade).toEqual({ kind: "unsupported" });
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
       expect(split.manifest[method]).toBeUndefined();
-      expect(split.optionalManifest[method]).toEqual({ major: 1, minor: 0 });
+      expect(split.optionalManifest[method]).toEqual({
+        major: 1,
+        minor: 0,
+        supportedMajors: [1],
+      });
     }
   });
 });
@@ -351,9 +355,14 @@ describe("drafts.subscribe@1.0 contract", () => {
   it("declares the method at 1.0 and registers it in the stream registry", () => {
     expect(draftsSubscribeV10.method).toBe(STREAM_METHOD);
     expect(draftsSubscribeV10.schemaVersion).toEqual({ major: 1, minor: 0 });
-    expect(buildStreamManifest(hostStreamRpcRegistry)[STREAM_METHOD]).toEqual({
+    expect(
+      buildStreamManifest(hostStreamRpcRegistry, SERVES_EVERY_INSTALLED_MAJOR)[
+        STREAM_METHOD
+      ],
+    ).toEqual({
       major: 1,
       minor: 0,
+      supportedMajors: [1],
     });
   });
 
@@ -367,7 +376,10 @@ describe("drafts.subscribe@1.0 contract", () => {
   });
 
   it("is compatible with itself on the stream handshake", () => {
-    const manifest = buildStreamManifest(hostStreamRpcRegistry);
+    const manifest = buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
     const result = checkStreamMethodCompatibility(
       hostStreamRpcRegistry,
       manifest,

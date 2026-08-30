@@ -9,6 +9,9 @@ import {
 import {
   StrictMode,
   useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -27,6 +30,10 @@ import {
   ChatMessages,
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
+import {
+  TileFindContext,
+  type TileFindContextValue,
+} from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX } from "@/components/chat/chat-messages-scroll-helpers";
 import { captureChatFreeScrollingOffset } from "@/components/chat/chat-scroll-restoration";
 import {
@@ -38,6 +45,11 @@ import {
 } from "@/stores/chats/chat-tab-state-cache";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
 import { flushChatTabViewportHandoff } from "@/stores/chats/chat-tab-viewport-handoff";
+import type {
+  OrdinalRange,
+  TranscriptWindow,
+} from "@/stores/chats/transcript-window";
+import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
   HOSTED_TILE_PANE_ID_ATTRIBUTE,
@@ -55,6 +67,8 @@ import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { InterviewSegment } from "@/stores/composer/chat-store";
+import type { TileFindAdapter } from "@/stores/tile-find";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -74,6 +88,10 @@ const VIEWPORT_WIDTH_PX = 800;
 const LEGEND_LIST_HEADER_PX = 40;
 const DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX = 80;
 
+function noOpOnVisibleOrdinalRangeChange(_range: OrdinalRange | null): void {
+  return undefined;
+}
+
 const platformMock = vi.hoisted(() => ({ isMac: true }));
 // Default false matches an empty canvas store (existing tests never seed live
 // tiles). Ticket 5 remount-save tests flip this true so unmount commits to the
@@ -83,6 +101,12 @@ const tileLiveness = vi.hoisted(() => ({ live: false }));
 const activityGroupOpenIds = vi.hoisted(() => ({
   lastOpenIds: new Set<string>(),
   setOpenCalls: [] as Array<{ groupId: string; open: boolean }>,
+}));
+const legendListItemSizeChanges = vi.hoisted(() => ({ count: 0 }));
+const legendListViewabilityProbe = vi.hoisted(() => ({
+  enabled: false,
+  start: 0,
+  end: 0,
 }));
 
 vi.mock("@/lib/keybindings/platform", async (importOriginal) => {
@@ -104,10 +128,22 @@ vi.mock("@/components/chat/chat-message", () => ({
   ChatMessage: function MockChatMessage(props: {
     message: ChatMessageModel;
   }): ReactElement {
+    const interview = props.message.segments.find(
+      (segment): segment is InterviewSegment => segment.kind === "interview",
+    );
+    const answer = interview?.answers[0]?.values[0] ?? null;
+    const interviewUnitId =
+      interview === undefined || answer === null
+        ? null
+        : `interview:${interview.id}:question:0:answer:value:0`;
     return (
       <div data-testid={`mock-message-${props.message.id}`}>
         {props.message.role}:{props.message.id}
-        {props.message.content}
+        {interviewUnitId === null ? (
+          props.message.content
+        ) : (
+          <span data-chat-find-unit={interviewUnitId}>{answer}</span>
+        )}
       </div>
     );
   },
@@ -131,7 +167,8 @@ const legendListRefHolder = vi.hoisted(() => ({
 vi.mock("@legendapp/list/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@legendapp/list/react")>();
   const TeedLegendList: typeof actual.LegendList = (props) => {
-    const { ref, ...rest } = props;
+    const { ref, onItemSizeChanged, ...rest } = props;
+    const installedViewabilityCallback = useRef(props.onViewableItemsChanged);
     const teeRef = useCallback(
       (instance: import("@legendapp/list/react").LegendListRef | null) => {
         legendListRefHolder.current = instance;
@@ -143,7 +180,32 @@ vi.mock("@legendapp/list/react", async (importOriginal) => {
       },
       [ref],
     );
-    return <actual.LegendList {...rest} ref={teeRef} />;
+    useLayoutEffect(() => {
+      if (!legendListViewabilityProbe.enabled) return;
+      installedViewabilityCallback.current?.({
+        changed: [],
+        end: legendListViewabilityProbe.end,
+        endBuffered: legendListViewabilityProbe.end,
+        start: legendListViewabilityProbe.start,
+        startBuffered: legendListViewabilityProbe.start,
+        viewableItems: [],
+      });
+    }, [props.data]);
+    // Match LegendList 3.3.4: a changed callback prop is installed only after
+    // the new-data layout pass has already had a chance to publish indexes.
+    useEffect(() => {
+      installedViewabilityCallback.current = props.onViewableItemsChanged;
+    }, [props.onViewableItemsChanged]);
+    return (
+      <actual.LegendList
+        {...rest}
+        onItemSizeChanged={(info) => {
+          legendListItemSizeChanges.count += 1;
+          onItemSizeChanged?.(info);
+        }}
+        ref={teeRef}
+      />
+    );
   };
   return { ...actual, LegendList: TeedLegendList };
 });
@@ -203,6 +265,53 @@ function makeTranscript(count: number): ChatMessageModel[] {
   return Array.from({ length: count }, (_unused, index) =>
     makeMessage(index, index % 2 === 0 ? "user" : "assistant"),
   );
+}
+
+function makeInterviewFindTranscript(count: number): ChatMessageModel[] {
+  const target: ChatMessageModel = {
+    ...makeMessage(0, "assistant"),
+    id: "msg-interview-find",
+    segments: [
+      {
+        id: "interview-find",
+        kind: "interview",
+        status: "completed",
+        toolName: "AskUserQuestion",
+        title: null,
+        description: null,
+        questions: [
+          {
+            questionId: "q1",
+            question: "Which detail?",
+            header: null,
+            options: [],
+            multiSelect: false,
+          },
+        ],
+        answers: [
+          {
+            questionId: "q1",
+            question: "Which detail?",
+            values: ["offscreen interview detail"],
+            notes: null,
+            selection: null,
+          },
+        ],
+        draftAnswers: [],
+        outcome: "answered",
+        settlement: null,
+        error: null,
+        delivery: null,
+        forkedWithoutAnswer: false,
+      },
+    ],
+  };
+  return [
+    target,
+    ...Array.from({ length: Math.max(count - 1, 0) }, (_unused, index) =>
+      makeMessage(index + 1, index % 2 === 0 ? "user" : "assistant"),
+    ),
+  ];
 }
 
 function appendAssistant(
@@ -686,11 +795,21 @@ interface RenderChatMessagesOptions {
   readonly freshOpen?: boolean;
   /** `ChatSessionState.transcriptBaselineEpoch`; see `ChatMessages`. */
   readonly baselineEpoch?: number;
+  /** `ChatSessionState.transcriptHydrationSequence`; see `ChatMessages`. */
+  readonly hydrationSequence?: number;
+  /** `ChatSessionState.coldRewrittenMessageIds`; see `ChatMessages`. */
+  readonly coldRewrittenMessageIds?: ReadonlySet<string>;
+  /** Test-only seam: captures the adapter registered by ChatMessages. */
+  readonly tileFindContext?: TileFindContextValue;
+  readonly transcriptWindow?: TranscriptWindow | null;
+  readonly onVisibleOrdinalRangeChange?: (range: OrdinalRange | null) => void;
 }
 
 interface ChatMessagesRenderState {
   messages: ReadonlyArray<ChatMessageModel>;
   baselineEpoch: number;
+  hydrationSequence: number;
+  coldRewrittenMessageIds: ReadonlySet<string>;
   /** Mutable: a chat is auto-titled after its first turn and can be renamed. */
   taskTitle: string;
   systemOverlayActive: boolean;
@@ -699,6 +818,8 @@ interface ChatMessagesRenderState {
   visible: boolean;
   tileActive: boolean;
   composerOverlayHeight: number;
+  transcriptWindow: TranscriptWindow | null;
+  onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
 }
 
 /** Synthetic dual-key identity for tests (ticket 15). */
@@ -715,6 +836,41 @@ function makeDefaultTestIdentity(
   tileInstanceId: string,
 ): ChatTabPersistenceIdentity {
   return makeTestIdentity(tileInstanceId, "epic-1", "task-1");
+}
+
+/**
+ * The mutable slice `rerenderWith` patches, with every default applied.
+ *
+ * Extracted from `renderChatMessages` rather than inlined there: each `??` is
+ * a branch, and the harness was already at the complexity ceiling.
+ */
+function initialRenderState(
+  options: RenderChatMessagesOptions,
+): ChatMessagesRenderState {
+  return {
+    messages: options.messages,
+    // Default 0: these rows arrived on a hydrated connection, which is what
+    // every non-announcement test wants. The announcement suite drives this
+    // explicitly to model mount hydration and reconnect backfill.
+    baselineEpoch: options.baselineEpoch ?? 0,
+    // Default 0 for the same reason: no range has seated anything, so every
+    // row these tests render arrived live.
+    hydrationSequence: options.hydrationSequence ?? 0,
+    // Empty by default: a row is exempt from the history rule only when the
+    // store recorded it as rewritten while cold, which no ordinary test models.
+    coldRewrittenMessageIds: options.coldRewrittenMessageIds ?? new Set(),
+    taskTitle: options.taskTitle ?? "Test chat",
+    systemOverlayActive: options.systemOverlayActive ?? false,
+    scrollRequest: options.scrollRequest ?? null,
+    backgroundItems: options.backgroundItems,
+    visible: options.visible ?? true,
+    tileActive: options.tileActive ?? true,
+    composerOverlayHeight:
+      options.composerOverlayHeight ?? DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX,
+    transcriptWindow: options.transcriptWindow ?? null,
+    onVisibleOrdinalRangeChange:
+      options.onVisibleOrdinalRangeChange ?? noOpOnVisibleOrdinalRangeChange,
+  };
 }
 
 function renderChatMessages(options: RenderChatMessagesOptions) {
@@ -741,21 +897,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
     });
   }
 
-  const state: ChatMessagesRenderState = {
-    messages: options.messages,
-    // Default 0: these rows arrived on a hydrated connection, which is what
-    // every non-announcement test wants. The announcement suite drives this
-    // explicitly to model mount hydration and reconnect backfill.
-    baselineEpoch: options.baselineEpoch ?? 0,
-    taskTitle: options.taskTitle ?? "Test chat",
-    systemOverlayActive: options.systemOverlayActive ?? false,
-    scrollRequest: options.scrollRequest ?? null,
-    backgroundItems: options.backgroundItems,
-    visible: options.visible ?? true,
-    tileActive: options.tileActive ?? true,
-    composerOverlayHeight:
-      options.composerOverlayHeight ?? DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX,
-  };
+  const state = initialRenderState(options);
 
   const hostedPaneId = options.hostedPaneId;
   const scopeAttributes: Record<string, string> =
@@ -795,6 +937,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           hostId={null}
           messages={state.messages}
           baselineEpoch={state.baselineEpoch}
+          hydrationSequence={state.hydrationSequence}
           backgroundItems={state.backgroundItems}
           getMessageActions={() => null}
           nextStepActions={null}
@@ -803,16 +946,28 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           systemOverlayActive={state.systemOverlayActive}
           scrollRequest={state.scrollRequest}
           composerOverlayHeight={state.composerOverlayHeight}
+          transcriptWindow={state.transcriptWindow}
+          onVisibleOrdinalRangeChange={state.onVisibleOrdinalRangeChange}
+          coldRewrittenMessageIds={state.coldRewrittenMessageIds}
         />
       </div>
       {options.withSiblingChrome === true ? siblingChrome() : null}
     </div>
   );
+  const contentWithFindContext = (): ReactNode => {
+    const rendered = content();
+    if (options.tileFindContext === undefined) return rendered;
+    return (
+      <TileFindContext.Provider value={options.tileFindContext}>
+        {rendered}
+      </TileFindContext.Provider>
+    );
+  };
   const jsx = (): ReactNode =>
     options.strictMode === true ? (
-      <StrictMode>{content()}</StrictMode>
+      <StrictMode>{contentWithFindContext()}</StrictMode>
     ) : (
-      content()
+      contentWithFindContext()
     );
 
   const result = render(jsx());
@@ -840,12 +995,46 @@ async function waitForPillVisible(): Promise<void> {
   });
 }
 
+function installChatFindHighlights(): void {
+  const previousCss = Object.getOwnPropertyDescriptor(globalThis, "CSS");
+  const previousHighlight = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "Highlight",
+  );
+  Object.defineProperty(globalThis, "CSS", {
+    configurable: true,
+    value: { highlights: new Map<string, object>() },
+  });
+  Object.defineProperty(globalThis, "Highlight", {
+    configurable: true,
+    value: class TestHighlight {
+      constructor(..._ranges: ReadonlyArray<Range>) {}
+    },
+  });
+  onTestFinished(() => {
+    if (previousCss === undefined) {
+      Reflect.deleteProperty(globalThis, "CSS");
+    } else {
+      Object.defineProperty(globalThis, "CSS", previousCss);
+    }
+    if (previousHighlight === undefined) {
+      Reflect.deleteProperty(globalThis, "Highlight");
+    } else {
+      Object.defineProperty(globalThis, "Highlight", previousHighlight);
+    }
+  });
+}
+
 describe("ChatMessages scroll policy", () => {
   beforeEach(() => {
     activityGroupOpenIds.lastOpenIds = new Set();
     activityGroupOpenIds.setOpenCalls = [];
     platformMock.isMac = true;
     tileLiveness.live = false;
+    legendListItemSizeChanges.count = 0;
+    legendListViewabilityProbe.enabled = false;
+    legendListViewabilityProbe.start = 0;
+    legendListViewabilityProbe.end = 0;
     installLegendListViewportMetrics();
     vi.useRealTimers();
     useSettingsStore.setState({
@@ -868,6 +1057,98 @@ describe("ChatMessages scroll policy", () => {
     // harness default epic so later tests' freshOpen paths see a true empty
     // chat-key cache rather than a leftover following-end/free-scrolling seed.
     evictChatTabPersistenceForEpic("epic-1");
+  });
+
+  it("reports ordinals from the rows committed with a child layout callback", () => {
+    const reported: Array<OrdinalRange | null> = [];
+    const initialMessage = makeMessage(0, "assistant");
+    const { rerenderWith } = renderChatMessages({
+      messages: [initialMessage],
+      instanceId: "windowed-viewability-layout-order",
+      onVisibleOrdinalRangeChange: (range) => reported.push(range),
+    });
+    const skeletonEntry = {
+      rowId: initialMessage.id,
+      createdAt: initialMessage.createdAt,
+      role: "assistant" as const,
+      byteLength: 80,
+      bodyDigest: "digest-0",
+    };
+    const transcriptWindow: TranscriptWindow = {
+      ...emptyTranscriptWindow(),
+      rowCount: 1,
+      skeleton: [skeletonEntry],
+      skeletonComplete: true,
+      skeletonStreamCoveredThrough: 1,
+      indexRevisionRebuilding: false,
+    };
+
+    legendListViewabilityProbe.enabled = true;
+    rerenderWith({ transcriptWindow });
+
+    expect(reported.at(-1)).toEqual({ fromOrdinal: 0, toOrdinal: 1 });
+  });
+
+  it("re-syncs a virtualized find highlight from row mount without a resize", async () => {
+    installChatFindHighlights();
+    const messages = makeInterviewFindTranscript(200);
+    let registeredAdapter: TileFindAdapter | null = null;
+    const tileFindContext: TileFindContextValue = {
+      tileInstanceId: "chat-messages-find-mount",
+      registerAdapter: (adapter) => {
+        registeredAdapter = adapter;
+        return () => {
+          if (registeredAdapter === adapter) registeredAdapter = null;
+        };
+      },
+    };
+
+    renderChatMessages({
+      messages,
+      instanceId: "chat-messages-find-mount",
+      tileFindContext,
+    });
+    await settleLegendList();
+    await waitFor(() => {
+      expect(registeredAdapter).not.toBeNull();
+    });
+    const getRegisteredAdapter = (): TileFindAdapter => {
+      if (registeredAdapter === null) throw new Error("adapter not registered");
+      return registeredAdapter;
+    };
+
+    // The initial bottom-following viewport has recycled the target row out;
+    // this search asks the real ChatMessages controller to reveal it. No test
+    // reaches into the controller or invokes its mount callback directly.
+    expect(
+      document.querySelector(
+        '[data-chat-find-unit="interview:interview-find:question:0:answer:value:0"]',
+      ),
+    ).toBeNull();
+    const itemSizeChangesBeforeSearch = legendListItemSizeChanges.count;
+
+    await act(async () => {
+      await getRegisteredAdapter().search({
+        requestId: 1,
+        query: "offscreen interview detail",
+        matchCase: false,
+      });
+    });
+    await settleLegendList();
+    await settleLegendList();
+
+    await waitFor(() => {
+      expect(
+        document.querySelector(
+          '[data-chat-find-unit="interview:interview-find:question:0:answer:value:0"]',
+        ),
+      ).not.toBeNull();
+      expect(getRegisteredAdapter().getSnapshot()).toMatchObject({
+        activeUnitId: "interview:interview-find:question:0:answer:value:0",
+        exactHighlight: "painted",
+      });
+    });
+    expect(legendListItemSizeChanges.count).toBe(itemSizeChangesBeforeSearch);
   });
 
   it("starts following-end (no jump pill) when scroll cache is bottom-following", async () => {
@@ -1368,6 +1649,165 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
 
       expect(live?.textContent ?? "").toBe("");
+    });
+
+    it("does not announce settled rows a range hydrated into unloaded history", async () => {
+      const knownUser = makeMessage(5, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(6, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderWith } = renderChatMessages({
+        messages: [knownUser, knownAssistant],
+        baselineEpoch: 0,
+        hydrationSequence: 0,
+        scrollStateKey: "aria-range-hydration-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Scrolling up on the windowed line hydrates older spans. Those rows are
+      // settled turns from days ago that were always there - the reader
+      // travelled backwards to reach them. The connection never dropped, so
+      // `baselineEpoch` cannot say so; the hydration counter is what does.
+      rerenderWith({
+        hydrationSequence: 1,
+        messages: [
+          {
+            ...makeMessage(1, "assistant"),
+            completedAt: 1_699_990_000_000,
+            stopped: null,
+            runState: null,
+            showCompletionFooter: true,
+          },
+          {
+            ...makeMessage(2, "assistant"),
+            completedAt: 1_699_991_000_000,
+            stopped: null,
+            runState: null,
+            showCompletionFooter: true,
+          },
+          knownUser,
+          knownAssistant,
+        ],
+      });
+      await settleLegendList();
+
+      expect(live?.textContent ?? "").toBe("");
+    });
+
+    it("keeps a cold-rewrite exemption when the hydrated row is not announceable yet", async () => {
+      // The exemption exists so a row REWRITTEN while evicted is not mistaken
+      // for history when it hydrates. It is single-use, so what it is spent on
+      // matters: a row that first hydrates while still RUNNING has nothing to
+      // announce, and consuming the claim there leaves the completion - the one
+      // announcement it was reserved for - to be read as history and dropped.
+      const rewritten = "cold-rewritten-row";
+      const running: ChatMessageModel = {
+        ...makeMessage(3, "assistant"),
+        id: rewritten,
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const { rerenderWith } = renderChatMessages({
+        messages: [makeMessage(1, "user")],
+        baselineEpoch: 0,
+        hydrationSequence: 0,
+        coldRewrittenMessageIds: new Set([rewritten]),
+        scrollStateKey: "aria-cold-rewrite-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+      const live = document.querySelector('[aria-live="polite"]');
+
+      // First hydration: the row appears, still running. Nothing to say.
+      rerenderWith({
+        hydrationSequence: 1,
+        messages: [makeMessage(1, "user"), running],
+      });
+      await settleLegendList();
+      expect(live?.textContent ?? "").toBe("");
+
+      // It is evicted again - the reader scrolled away and its span was
+      // reclaimed. The row leaves `messages`, so the next pass sees it as
+      // unknown again, which is what puts it back on the exemption path.
+      rerenderWith({
+        hydrationSequence: 2,
+        messages: [makeMessage(1, "user")],
+      });
+      await settleLegendList();
+
+      // It completed while evicted, so it arrives on a LATER hydration already
+      // settled. Its exemption must still be unspent.
+      rerenderWith({
+        hydrationSequence: 3,
+        messages: [
+          makeMessage(1, "user"),
+          {
+            ...running,
+            completedAt: 1_700_000_000_000,
+            runState: null,
+            showCompletionFooter: true,
+          },
+        ],
+      });
+      await settleLegendList();
+
+      expect(live?.textContent ?? "").not.toBe("");
+    });
+
+    it("still announces a live turn settling in the commit that hydrates history", async () => {
+      // The absorption is scoped to rows that FIRST APPEAR under a hydration
+      // bump. A row already on screen that reaches a settled state is news
+      // whatever else landed alongside it - otherwise a turn finishing while
+      // the reader happens to be scrolling would go unannounced.
+      const knownUser = makeMessage(5, "user");
+      const running: ChatMessageModel = {
+        ...makeMessage(6, "assistant"),
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const { rerenderWith } = renderChatMessages({
+        messages: [knownUser, running],
+        baselineEpoch: 0,
+        hydrationSequence: 0,
+        scrollStateKey: "aria-range-hydration-live-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      rerenderWith({
+        hydrationSequence: 1,
+        messages: [
+          {
+            ...makeMessage(1, "assistant"),
+            completedAt: 1_699_990_000_000,
+            stopped: null,
+            runState: null,
+            showCompletionFooter: true,
+          },
+          knownUser,
+          {
+            ...running,
+            completedAt: 1_700_000_005_000,
+            runState: null,
+            showCompletionFooter: true,
+          },
+        ],
+      });
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
     });
 
     it("announces a turn that arrives whole past every known message", async () => {
@@ -2691,6 +3131,28 @@ describe("ChatMessages scroll policy", () => {
   });
 
   describe("scrollRequest wiring (coverage restore)", () => {
+    it("routes an explicit end request through the go-live navigation", async () => {
+      const { rerenderWith } = renderChatMessages({
+        messages: makeCompletedTranscript(30),
+        scrollStateKey: "scroll-req-end",
+      });
+      await settleLegendList();
+
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      const scrollToEnd = vi.spyOn(list, "scrollToEnd");
+      try {
+        rerenderWith({
+          scrollRequest: { kind: "end", requestId: 40 },
+        });
+
+        expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      } finally {
+        scrollToEnd.mockRestore();
+      }
+    });
+
     it("routes row-only external jumps through navigation and highlights for three seconds", async () => {
       const messages = makeCompletedTranscript(6);
       const target = messages[2];
@@ -2704,6 +3166,7 @@ describe("ChatMessages scroll policy", () => {
       try {
         rerenderWith({
           scrollRequest: {
+            kind: "message",
             messageId: target.id,
             blockId: null,
             requestId: 41,
@@ -2749,6 +3212,7 @@ describe("ChatMessages scroll policy", () => {
 
       rerenderWith({
         scrollRequest: {
+          kind: "message",
           messageId: target.id,
           blockId: null,
           requestId: 42,
@@ -2815,6 +3279,7 @@ describe("ChatMessages scroll policy", () => {
         messages,
         scrollStateKey: "scroll-req",
         scrollRequest: {
+          kind: "message",
           messageId: assistant.id,
           blockId: commandId,
           requestId: 42,
@@ -2847,6 +3312,7 @@ describe("ChatMessages scroll policy", () => {
           } satisfies BackgroundItem,
         ],
         scrollRequest: {
+          kind: "message",
           messageId: assistant.id,
           blockId: commandId,
           requestId: 42,
@@ -2900,6 +3366,7 @@ describe("ChatMessages scroll policy", () => {
         messages,
         scrollStateKey: "scroll-req-open-state",
         scrollRequest: {
+          kind: "message",
           messageId: assistant.id,
           blockId: commandId,
           requestId: 77,
@@ -3107,7 +3574,7 @@ describe("ChatMessages scroll policy", () => {
         // tile instanceId (ticket 15).
         const saved = restoreChatTabState(
           makeDefaultTestIdentity(instanceId),
-          messages,
+          messages.map((message) => message.id),
         );
         expect(saved.mode).toBe("free-scrolling");
         expect(saved.anchorMessageId).not.toBeNull();
@@ -3205,7 +3672,12 @@ describe("ChatMessages scroll policy", () => {
       // geometry is not a reader decision and must not become last-writer-wins.
       bootstrap.unmount();
 
-      expect(restoreChatTabState(identity, messages)).toEqual(expected);
+      expect(
+        restoreChatTabState(
+          identity,
+          messages.map((message) => message.id),
+        ),
+      ).toEqual(expected);
     });
 
     it(
@@ -3249,7 +3721,7 @@ describe("ChatMessages scroll policy", () => {
         // transcript shape) and the position is lost.
         const saved = restoreChatTabState(
           makeDefaultTestIdentity(instanceId),
-          messages,
+          messages.map((message) => message.id),
         );
         expect(saved.mode).toBe("free-scrolling");
         expect(saved.anchorMessageId).not.toBeNull();
@@ -3288,7 +3760,10 @@ describe("ChatMessages scroll policy", () => {
 
       // restoreChatTabState keeps mode, drops the stale anchor.
       expect(
-        restoreChatTabState(makeDefaultTestIdentity(scrollStateKey), messages),
+        restoreChatTabState(
+          makeDefaultTestIdentity(scrollStateKey),
+          messages.map((message) => message.id),
+        ),
       ).toEqual({
         mode: "free-scrolling",
         anchorMessageId: null,
@@ -3312,7 +3787,10 @@ describe("ChatMessages scroll policy", () => {
         offset: 12,
       });
       expect(
-        restoreChatTabState(makeDefaultTestIdentity(followKey), messages),
+        restoreChatTabState(
+          makeDefaultTestIdentity(followKey),
+          messages.map((message) => message.id),
+        ),
       ).toEqual({
         mode: "following-end",
         anchorMessageId: null,
@@ -3358,9 +3836,12 @@ describe("ChatMessages scroll policy", () => {
       // (a liveness guard that fully skips saving on close was the original
       // bug - it left reopens with either nothing, or a stale earlier
       // durable entry).
-      expect(restoreChatTabState(identity, messages).mode).toBe(
-        "free-scrolling",
-      );
+      expect(
+        restoreChatTabState(
+          identity,
+          messages.map((message) => message.id),
+        ).mode,
+      ).toBe("free-scrolling");
 
       // What the guard must still prevent: resurrecting the TAB-key entry.
       // Proof: dropping ONLY the durable entry must make the saved state
@@ -3580,6 +4061,7 @@ describe("ChatMessages scroll policy", () => {
         // (scrollToTimelineLocationSuppressingFollowRestore).
         rerenderWith({
           scrollRequest: {
+            kind: "message",
             requestId: 10_001,
             messageId: targetId,
             blockId: "",
@@ -3634,6 +4116,7 @@ describe("ChatMessages scroll policy", () => {
 
       rerenderWith({
         scrollRequest: {
+          kind: "message",
           requestId: 10_002,
           messageId: targetId,
           blockId: "",
@@ -3778,7 +4261,10 @@ describe("ChatMessages scroll policy", () => {
       // "free-scrolling"`. Assert the full triple is internally coherent -
       // a real, non-null anchor with an index the offset was actually
       // captured relative to.
-      const restoredTriple = restoreChatTabState(reopenedIdentity, messages);
+      const restoredTriple = restoreChatTabState(
+        reopenedIdentity,
+        messages.map((message) => message.id),
+      );
       expect(restoredTriple.mode).toBe("free-scrolling");
       expect(restoredTriple.anchorMessageId).not.toBeNull();
       expect(restoredTriple.anchorIndex).not.toBeNull();
@@ -3798,9 +4284,12 @@ describe("ChatMessages scroll policy", () => {
       second.unmount();
 
       // Sanity: the closed tab-key alone is not what restored us.
-      expect(restoreChatTabState(closedIdentity, messages).mode).toBe(
-        "free-scrolling",
-      ); // durable still answers for same chat
+      expect(
+        restoreChatTabState(
+          closedIdentity,
+          messages.map((message) => message.id),
+        ).mode,
+      ).toBe("free-scrolling"); // durable still answers for same chat
     });
 
     // Ticket 15 review (live pass S5 round 3): a small (16-row) transcript
@@ -3856,7 +4345,10 @@ describe("ChatMessages scroll policy", () => {
       // whatever row `scrolledActiveUserMessageIdRef` last held (row 0,
       // pre-scroll) combined with an offset computed against the live
       // scrollTop, clamping the reopen far from row 50.
-      const restoredTriple = restoreChatTabState(reopenedIdentity, messages);
+      const restoredTriple = restoreChatTabState(
+        reopenedIdentity,
+        messages.map((message) => message.id),
+      );
       expect(restoredTriple.mode).toBe("free-scrolling");
       expect(restoredTriple.anchorMessageId).not.toBeNull();
       expect(restoredTriple.anchorIndex).toBeGreaterThan(RACE_TARGET_ROW - 2);
@@ -3905,7 +4397,10 @@ describe("ChatMessages scroll policy", () => {
       tileLiveness.live = false;
       first.unmount();
 
-      const restoredTriple = restoreChatTabState(reopenedIdentity, messages);
+      const restoredTriple = restoreChatTabState(
+        reopenedIdentity,
+        messages.map((message) => message.id),
+      );
       expect(restoredTriple.mode).toBe("free-scrolling");
       expect(restoredTriple.anchorMessageId).not.toBeNull();
       expect(restoredTriple.anchorIndex).toBeGreaterThan(RACE_TARGET_ROW - 2);
@@ -4206,6 +4701,7 @@ describe("ChatMessages scroll policy", () => {
             hostId={null}
             messages={messages}
             baselineEpoch={0}
+            hydrationSequence={0}
             backgroundItems={undefined}
             getMessageActions={() => null}
             nextStepActions={null}
@@ -4214,6 +4710,9 @@ describe("ChatMessages scroll policy", () => {
             systemOverlayActive={false}
             scrollRequest={null}
             composerOverlayHeight={80}
+            transcriptWindow={null}
+            onVisibleOrdinalRangeChange={noOpOnVisibleOrdinalRangeChange}
+            coldRewrittenMessageIds={new Set()}
           />
         </Parent>
       );
@@ -4254,7 +4753,10 @@ describe("ChatMessages scroll policy", () => {
         // that is still the harness/cache-miss default following-end seed,
         // not the live 360px position currently on screen - the audit's own
         // `initialize:stale` probe finding, reproduced directly.
-        const staleRestore = restoreChatTabState(identity, messages);
+        const staleRestore = restoreChatTabState(
+          identity,
+          messages.map((message) => message.id),
+        );
         expect(staleRestore.mode).toBe("following-end");
 
         // The fix: a structural-mutation action creator (drag/split-wrap/
@@ -4262,7 +4764,10 @@ describe("ChatMessages scroll policy", () => {
         // BEFORE its own `set()` - simulated here immediately before the
         // type-swap rerender that stands in for that `set()`.
         flushChatTabViewportHandoff([instanceId]);
-        const freshRestore = restoreChatTabState(identity, messages);
+        const freshRestore = restoreChatTabState(
+          identity,
+          messages.map((message) => message.id),
+        );
         expect(freshRestore.mode).toBe("free-scrolling");
         expect(freshRestore.anchorMessageId).not.toBeNull();
 
@@ -4331,7 +4836,10 @@ describe("ChatMessages scroll policy", () => {
         // this into an ordinary unmount-capture check that stays green
         // either way.
         flushChatTabViewportHandoff([instanceId]);
-        const saved = restoreChatTabState(identity, messages);
+        const saved = restoreChatTabState(
+          identity,
+          messages.map((message) => message.id),
+        );
         expect(saved.mode).toBe("free-scrolling");
         expect(saved.anchorMessageId).not.toBeNull();
         // The stale mirror (unserviced since before this scroll) points at
@@ -4994,7 +5502,7 @@ describe("ChatMessages scroll policy", () => {
       );
       const clampedPartial = restoreChatTabState(
         closedIdentity,
-        partialMessages,
+        partialMessages.map((message) => message.id),
       );
       expect(clampedPartial.anchorIndex).toBe(partialMessages.length - 1);
 
@@ -5416,7 +5924,7 @@ describe("ChatMessages scroll policy", () => {
       );
       const clampedPartial = restoreChatTabState(
         closedIdentity,
-        partialMessages,
+        partialMessages.map((message) => message.id),
       );
       expect(clampedPartial.anchorIndex).toBe(partialMessages.length - 1);
 
@@ -5749,7 +6257,7 @@ describe("ChatMessages scroll policy", () => {
 
     const capture = restoreChatTabState(
       makeDefaultTestIdentity(instanceId),
-      messages,
+      messages.map((message) => message.id),
     );
     expect(capture.mode).toBe("free-scrolling");
     expect(capture.anchorMessageId).not.toBeNull();
@@ -6053,7 +6561,10 @@ describe("ChatMessages scroll policy", () => {
       rerenderWith({ visible: false });
       await settleLegendList();
 
-      const persisted = restoreChatTabState(identity, messages);
+      const persisted = restoreChatTabState(
+        identity,
+        messages.map((message) => message.id),
+      );
       expect(persisted.mode).toBe("free-scrolling");
       // With the gate stuck, the capture no-ops and the second hide republishes
       // the stale anchor-20 snapshot; a released gate persists the real move.
@@ -6305,7 +6816,10 @@ describe("ChatMessages scroll policy", () => {
       // Same clamp math remount uses: pin to the neighbor at clamped index,
       // offset resets to 0 (the substituted row's prior pixel offset is
       // meaningless for a different anchor).
-      const expectedReplay = restoreChatTabState(identity, remaining);
+      const expectedReplay = restoreChatTabState(
+        identity,
+        remaining.map((message) => message.id),
+      );
       expect(expectedReplay).toEqual({
         mode: "free-scrolling",
         anchorMessageId: remaining[anchorIndex]?.id ?? null,

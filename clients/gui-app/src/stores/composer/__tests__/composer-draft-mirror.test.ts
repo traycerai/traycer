@@ -52,6 +52,7 @@ describe("composer draft host-mirror bookkeeping", () => {
         "chat-x": {
           content: TYPED,
           selection: { from: 1, to: 8 },
+          browserAnnotations: [],
           resetEpoch: 3,
           revision: 2,
           draftId: "draft-x",

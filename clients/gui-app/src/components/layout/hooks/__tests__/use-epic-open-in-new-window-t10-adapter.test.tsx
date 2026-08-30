@@ -110,7 +110,8 @@ interface DeferredWrite {
  * instead of inferred from timing. */
 function installControllableDesktopTabsPersistence(): DeferredWrite {
   let resolveLatest:
-    ((ack: DesktopPerWindowStateUpdateAcknowledgement) => void) | null = null;
+    | ((ack: DesktopPerWindowStateUpdateAcknowledgement) => void)
+    | null = null;
   let rejectLatest: ((error: Error) => void) | null = null;
   installDesktopTabsPersistence(
     {
@@ -155,7 +156,8 @@ function createControllableWindowsBridge(): ControllableWindowsBridge {
   const openInNewWindowCalls: ControllableWindowsBridge["openInNewWindowCalls"] =
     [];
   let resolveLatest:
-    ((result: DesktopOpenEpicInNewWindowResult) => void) | null = null;
+    | ((result: DesktopOpenEpicInNewWindowResult) => void)
+    | null = null;
   const bridge: DesktopWindowsBridge = {
     windowId: "window-a",
     list: () => Promise.resolve([]),

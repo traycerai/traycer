@@ -4,7 +4,7 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -39,7 +39,8 @@ export function buildAgentStopCommand(opts: {
       cascade: opts.cascade,
     });
     const result = await toAgentCliError(callHostRpc("agent.stop", request));
-    const { stoppedAgentIds } = parseHostResponse(
+    const { stoppedAgentIds } = parseCanonicalHostResponse(
+      "agent.stop",
       stopAgentResponseSchema,
       result,
     );

@@ -21,6 +21,7 @@ import type {
   LocalHostSnapshot,
   RegisteredHostsChange,
   StoredAuthTokens,
+  SystemResumeEvent,
   StoredCredentials,
   StoredCredentialsIdentity,
   TokenRotateResult,
@@ -50,6 +51,14 @@ import {
   type RevokeUserSessionFetchResult,
   type StepUpChallengeFetchResult,
 } from "../../auth/devices-sessions-fetcher";
+import {
+  linkLoginStatusViaHttp,
+  mintLinkLoginCodeViaHttp,
+  respondLinkLoginViaHttp,
+  type LinkLoginStatusFetchResult,
+  type MintLinkLoginCodeFetchResult,
+  type RespondLinkLoginFetchResult,
+} from "../../auth/link-login";
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import {
   credentialsIdentityFromAuthenticatedUser,
@@ -143,6 +152,7 @@ function sameFlags(a: readonly string[], b: readonly string[]): boolean {
  * fire, matching the production invariant.
  */
 export class MockRunnerHost implements IRunnerHost {
+  readonly browserView = null;
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
   // Fixed test-only value: no test constructs a real remote transport against
@@ -171,6 +181,12 @@ export class MockRunnerHost implements IRunnerHost {
     (change: TokenStoreChange) => void
   >();
   private tokenStoreRevision = 0;
+  // Mirrors the real store authority's quarantine: a token whose conditional
+  // delete was requested but has not landed is never served by `get` and
+  // never advertised present by the change fan-out. Tests inject
+  // `tokenStoreConditionalDeleteError` to make the delete fail.
+  readonly tokenStoreQuarantinedTokens = new Set<string>();
+  tokenStoreConditionalDeleteError: Error | null = null;
 
   private readonly authCallbackHandlers = new Set<() => void>();
   private readonly localHostHandlers = new Set<
@@ -182,7 +198,10 @@ export class MockRunnerHost implements IRunnerHost {
   private readonly notificationForegroundDisplayHandlers = new Set<
     (display: NotificationForegroundDisplay) => void
   >();
-  private readonly systemResumedHandlers = new Set<() => void>();
+  private readonly systemResumedHandlers = new Set<
+    (event: SystemResumeEvent) => void
+  >();
+  private readonly networkPathChangedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
   /** `undefined` means "derive from `localHost`"; `null` means "no id on disk". */
   private readonly explicitLastKnownLocalHostId: string | null | undefined;
@@ -266,12 +285,17 @@ export class MockRunnerHost implements IRunnerHost {
     },
     readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
+  // No native save surface to stand in for: this shell runs in a browser tab,
+  // where gui-app's own File System Access / `<a download>` legs are already
+  // the real answer.
+  readonly fileSave: null = null;
   readonly service: null = null;
   readonly traycerCli: ITraycerCli | null;
   readonly migration: null = null;
   readonly hostManagement: IHostManagement | null;
   readonly hostTray: null = null;
   readonly zoom: null = null;
+  readonly pushPermission: null = null;
   readonly deviceFlow: MockDeviceFlowHost = new MockDeviceFlowHost();
 
   /**
@@ -452,7 +476,12 @@ export class MockRunnerHost implements IRunnerHost {
   ): Promise<MintHostCredentialFetchResult> {
     // The caller's own bearer: the mint is not step-up gated, so this double
     // must not substitute a retained step-up credential either.
-    return mintHostCredentialViaHttp(this.authnBaseUrl, bearerToken, request);
+    return mintHostCredentialViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      request,
+      null,
+    );
   }
 
   requestStepUpChallenge(
@@ -460,6 +489,37 @@ export class MockRunnerHost implements IRunnerHost {
   ): Promise<StepUpChallengeFetchResult> {
     return requestStepUpChallengeViaHttp(this.authnBaseUrl, bearerToken);
   }
+
+  mintLinkLoginCode(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<MintLinkLoginCodeFetchResult> {
+    return mintLinkLoginCodeViaHttp(this.authnBaseUrl, bearerToken, signal);
+  }
+  linkLoginStatus(
+    bearerToken: string,
+    code: string,
+    signal: AbortSignal,
+  ): Promise<LinkLoginStatusFetchResult> {
+    return linkLoginStatusViaHttp(this.authnBaseUrl, bearerToken, code, signal);
+  }
+
+  respondLinkLogin(
+    bearerToken: string,
+    code: string,
+    approve: boolean,
+  ): Promise<RespondLinkLoginFetchResult> {
+    return respondLinkLoginViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      code,
+      approve,
+    );
+  }
+
+  readonly linkCodeScanner = null;
+  readonly deviceDescriber = null;
+  readonly linkLoginDeepLinks = null;
 
   async verifyStepUpChallenge(
     bearerToken: string,
@@ -561,7 +621,10 @@ export class MockRunnerHost implements IRunnerHost {
   readonly tokenStore: ITokenStore = {
     get: async (): Promise<StoredCredentials | null> => {
       const value = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY);
-      return value === undefined ? null : value;
+      if (value === undefined) return null;
+      // Quarantine suppression, exactly as the real store authority: a pair
+      // whose conditional delete is pending is served to NO reader.
+      return this.tokenStoreQuarantinedTokens.has(value.token) ? null : value;
     },
     signIn: async (
       tokens: StoredAuthTokens,
@@ -582,7 +645,14 @@ export class MockRunnerHost implements IRunnerHost {
       // In-memory analogue of the locked rotate: the same guards, then a real
       // (test-faked) refresh HTTP call — no file, no lock. Lets gui-app tests
       // drive every rotate outcome by stubbing `fetch` on the authn base URL.
-      const stored = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY) ?? null;
+      // Quarantine-filtered like the real authority's mutation view: a pair
+      // whose conditional delete is pending can never be returned as
+      // `superseded` nor refreshed into a successor.
+      const raw = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY) ?? null;
+      const stored =
+        raw !== null && this.tokenStoreQuarantinedTokens.has(raw.token)
+          ? null
+          : raw;
       if (stored === null) {
         return { outcome: "deleted", pair: null };
       }
@@ -618,6 +688,27 @@ export class MockRunnerHost implements IRunnerHost {
     delete: async (): Promise<void> => {
       this.tokenStoreEntries.delete(MOCK_TOKEN_STORE_KEY);
       this.notifyTokenStoreChangedAfterMutation();
+    },
+    deleteIfToken: async (
+      expectedToken: string,
+    ): Promise<"deleted" | "kept"> => {
+      // In-memory analogue of the store-authority conditional delete: the
+      // compare and delete are synchronous over the map, hence atomic — and
+      // the token is QUARANTINED before the attempt, so a failed delete
+      // leaves it suppressed for every reader until a retry lands.
+      this.tokenStoreQuarantinedTokens.add(expectedToken);
+      if (this.tokenStoreConditionalDeleteError !== null) {
+        throw this.tokenStoreConditionalDeleteError;
+      }
+      const stored = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY) ?? null;
+      if (stored === null || stored.token !== expectedToken) {
+        this.tokenStoreQuarantinedTokens.delete(expectedToken);
+        return "kept";
+      }
+      this.tokenStoreEntries.delete(MOCK_TOKEN_STORE_KEY);
+      this.tokenStoreQuarantinedTokens.delete(expectedToken);
+      this.notifyTokenStoreChangedAfterMutation();
+      return "deleted";
     },
     subscribe: (listener: (change: TokenStoreChange) => void): Disposable => {
       this.tokenStoreChangeListeners.add(listener);
@@ -678,7 +769,13 @@ export class MockRunnerHost implements IRunnerHost {
    */
   notifyTokenStoreChanged(): void {
     this.tokenStoreRevision += 1;
-    const stored = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY);
+    const raw = this.tokenStoreEntries.get(MOCK_TOKEN_STORE_KEY);
+    // The fan-out is quarantine-aware like the real authority's: a pending
+    // conditional delete is never advertised as a present credential.
+    const stored =
+      raw !== undefined && this.tokenStoreQuarantinedTokens.has(raw.token)
+        ? undefined
+        : raw;
     const change: TokenStoreChange = {
       present: stored !== undefined,
       userId: stored?.user.id ?? null,
@@ -701,6 +798,7 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   readonly notifications: INotificationHost = {
+    systemSettings: null,
     show: async (
       title: string,
       body: string,
@@ -775,11 +873,20 @@ export class MockRunnerHost implements IRunnerHost {
     return Promise.resolve(this.localHost?.hostId ?? null);
   }
 
-  onSystemResumed(handler: () => void): Disposable {
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     this.systemResumedHandlers.add(handler);
     return {
       dispose: () => {
         this.systemResumedHandlers.delete(handler);
+      },
+    };
+  }
+
+  onNetworkPathChanged(handler: () => void): Disposable {
+    this.networkPathChangedHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.networkPathChangedHandlers.delete(handler);
       },
     };
   }
@@ -806,8 +913,15 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   /** Test helper: fire the OS-wake signal to every `onSystemResumed` subscriber. */
-  emitSystemResumed(): void {
+  emitSystemResumed(event: SystemResumeEvent): void {
     for (const handler of this.systemResumedHandlers) {
+      handler(event);
+    }
+  }
+
+  /** Test helper: fire the network-path signal to every subscriber. */
+  emitNetworkPathChanged(): void {
+    for (const handler of this.networkPathChangedHandlers) {
       handler();
     }
   }
