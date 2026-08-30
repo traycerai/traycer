@@ -13,7 +13,10 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
+import type {
+  TuiAgentProjection,
+  TuiAgentProjectionOrigin,
+} from "@/stores/epics/open-epic/types";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -185,6 +188,22 @@ export type TerminalAgentForkIntent = "fork" | "continue";
  */
 export type ForkableTuiAgent = TuiAgentProjection & {
   readonly harnessId: TuiHarnessId;
+  /**
+   * And it must not be a CLOUD REPLICA. Narrowing `harnessId` alone was not
+   * enough: a replica whose row does carry a harness satisfied that half, so
+   * the dialog would open for one and sit at `canSubmit === false` forever -
+   * the fork needs a `harnessSessionId`, which never leaves the machine
+   * running the provider CLI.
+   *
+   * Structural rather than another runtime check because the no-fork rule for
+   * replicas is a type-level fact (decision 2), and the toolbar that builds a
+   * target is where it can be proven once.
+   *
+   * `harnessSessionId` is deliberately NOT narrowed here as well: a Codex
+   * source can legitimately reach this dialog before `thread/started` has
+   * back-filled its id, and the submit gate already handles that.
+   */
+  readonly origin: Exclude<TuiAgentProjectionOrigin, "cloud">;
 };
 
 export interface TerminalAgentForkDialogTarget {

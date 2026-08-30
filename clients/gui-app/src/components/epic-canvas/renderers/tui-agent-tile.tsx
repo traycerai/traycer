@@ -83,10 +83,12 @@ import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
+import { mayRestartAfterWorkspaceBindingChange } from "./tui-agent-workspace-restart";
 import {
   buildForkWorkspaceSeed,
   buildForkWorkspaceSeedFromWorkspaceFolders,
 } from "@/lib/worktree/fork-workspace-seed";
+import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import {
   pendingForkTerminalAgentStagingKey,
   useWorktreeIntentStagingStore,
@@ -95,6 +97,7 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import {
   TerminalAgentForkDialog,
+  type TerminalAgentForkDialogTarget,
   type TerminalAgentForkIntent,
 } from "./terminal-agent-fork-dialog";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
@@ -597,13 +600,26 @@ function TuiAgentTileLive(
   // effect below act once presence settles.
   const pendingRestartRef = useRef(false);
   const restartAfterWorkspaceBindingChange = useCallback((): void => {
+    // A CLOUD REPLICA never restarts anything. The kill below targets the PTY
+    // by session id, and that PTY lives on the OWNER's machine - so a rebind
+    // committed here would kill a terminal running somewhere else and then
+    // try to recreate it locally. The host refuses the rebind itself
+    // (TARGET_NOT_LOCAL), but the kill is dispatched client-side first and
+    // would land regardless.
+    //
+    // The toolbar does not offer workspace mutation for a replica at all, so
+    // in the shipped UI nothing calls this. It is guarded anyway because the
+    // affordance's absence is a rendering decision and this is the mutation:
+    // the two should not be able to drift apart. `pendingRestartRef` is set
+    // only below this line, so the deferred path cannot arm either.
+    if (!mayRestartAfterWorkspaceBindingChange(agent?.origin ?? null)) return;
     if (hostHasSession === true) {
       performRestartKill();
       return;
     }
     pendingRestartRef.current = true;
     retryTerminal();
-  }, [hostHasSession, performRestartKill, retryTerminal]);
+  }, [agent?.origin, hostHasSession, performRestartKill, retryTerminal]);
   useEffect(() => {
     if (!pendingRestartRef.current) return;
     if (hostHasSession === true) {
@@ -877,6 +893,43 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
   );
 }
 
+/**
+ * The dialog's target, or `null` when this agent cannot be a fork source.
+ *
+ * Two narrowings `ForkableTuiAgent` asks for, done together at the one site
+ * that builds a target - so the dialog's own type carries the rule and no
+ * consumer re-derives it.
+ *
+ * A projection's harness can be `null` (a cross-host replica whose cloud row
+ * predates `runSettingsSummary`), and such an agent has nothing to fork WITH:
+ * no provider to look up, no harness to create under.
+ *
+ * The ORIGIN is the other half, and it is not implied by the first. A replica
+ * whose row DOES carry a harness passes the harness test, and a target built
+ * from it opens a dialog that can never submit - the fork needs a
+ * `harnessSessionId` that structurally cannot cross to this machine.
+ *
+ * Module-level rather than inline in the toolbar because the toolbar sits at
+ * the complexity ceiling, and because a narrowing is the kind of thing worth
+ * reading in one piece.
+ */
+function buildForkTarget(input: {
+  readonly agent: TuiAgentProjection;
+  readonly intent: TerminalAgentForkIntent | null;
+  readonly forkDisabled: boolean;
+  readonly workspaceSeed: ForkWorkspaceSeed;
+}): TerminalAgentForkDialogTarget | null {
+  const harnessId = input.agent.harnessId;
+  const origin = input.agent.origin;
+  if (input.intent === null || input.forkDisabled) return null;
+  if (harnessId === null || origin === "cloud") return null;
+  return {
+    sourceAgent: { ...input.agent, harnessId, origin },
+    workspaceSeed: input.workspaceSeed,
+    intent: input.intent,
+  };
+}
+
 interface TerminalAgentPreLaunchToolbarProps {
   readonly hostId: string;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
@@ -1009,54 +1062,57 @@ function TerminalAgentPreLaunchToolbar(
     },
     [onWorkspaceBindingCommitted],
   );
-  // The harness narrowing the dialog's target type asks for. A projection can
-  // carry `null` (a cross-host replica whose cloud row predates
-  // `runSettingsSummary`), and such an agent has nothing to fork WITH - no
-  // provider to look up, no harness to create under. `forkDisabled` already
-  // covers it in practice, since a null harness only ever occurs on a replica
-  // and a replica has no `harnessSessionId` either; this is what states it.
-  const forkSourceHarnessId = props.agent.harnessId;
-  const forkTarget =
-    forkDialogIntent !== null && !forkDisabled && forkSourceHarnessId !== null
-      ? {
-          sourceAgent: { ...props.agent, harnessId: forkSourceHarnessId },
-          workspaceSeed: forkWorkspaceSeed,
-          intent: forkDialogIntent,
-        }
-      : null;
+  const forkTarget = buildForkTarget({
+    agent: props.agent,
+    intent: forkDialogIntent,
+    forkDisabled,
+    workspaceSeed: forkWorkspaceSeed,
+  });
   return (
     <div
       className="flex min-w-0 shrink-0 flex-wrap items-center gap-2 border-b border-canvas-border/70 px-3 py-1.5"
       data-testid="terminal-agent-pre-launch-toolbar"
     >
-      <HostWorkspaceSelector
-        disabled={false}
-        surface={{
-          kind: "terminal-agent",
-          hostId: props.hostId,
-          epicId: props.epicId,
-          tabId: props.viewTabId,
-          ownerId: props.agent.id,
-          binding,
-          isOwnerActive: props.isOwnerActive,
-          // Terminal agents have no background-work-outlives-the-turn concept
-          // distinct from PTY output (unlike chat), so there's no narrower
-          // signal to distinguish - this field is unread for this surface kind
-          // (the notice text is fixed regardless), kept equal for consistency.
-          hasActiveTurn: props.isOwnerActive,
-          ownerLabel: props.agent.title,
-          // Surfaced on the chip as a per-folder "missing on disk" indicator.
-          // The host-computed signal on `worktree.getBinding` — the actual
-          // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this
-          // gives the user a proactive, owner-scoped visual matching chat.
-          missingWorktreePaths: bindingQuery.data?.missingWorktreePaths ?? [],
-          bindingResolved: bindingQuery.isSuccess,
-          onBindingCommitted: handleWorkspaceBindingCommitted,
-          // Terminal agents cannot fork — the host section is `locked`, so
-          // the switch gesture this handles is unreachable here anyway.
-          onForkOnHost: null,
-        }}
-      />
+      {/* NO WORKSPACE AFFORDANCE for a cross-host replica, on the same
+          reasoning as the fork block below - absent, not disabled.
+
+          A rebind is a MUTATION, and decision 3 makes a replica read-only.
+          The chip would also be lying before it was clicked: the binding it
+          renders is read with `worktree.getBinding` against THIS host for an
+          agent bound to another one, so there is nothing here to show and
+          nothing here to change. Committing one killed the remote PTY
+          client-side before the host's `TARGET_NOT_LOCAL` refusal could be
+          seen; `mayRestartAfterWorkspaceBindingChange` is the other half. */}
+      {props.agent.origin === "cloud" ? null : (
+        <HostWorkspaceSelector
+          disabled={false}
+          surface={{
+            kind: "terminal-agent",
+            hostId: props.hostId,
+            epicId: props.epicId,
+            tabId: props.viewTabId,
+            ownerId: props.agent.id,
+            binding,
+            isOwnerActive: props.isOwnerActive,
+            // Terminal agents have no background-work-outlives-the-turn concept
+            // distinct from PTY output (unlike chat), so there's no narrower
+            // signal to distinguish - this field is unread for this surface kind
+            // (the notice text is fixed regardless), kept equal for consistency.
+            hasActiveTurn: props.isOwnerActive,
+            ownerLabel: props.agent.title,
+            // Surfaced on the chip as a per-folder "missing on disk" indicator.
+            // The host-computed signal on `worktree.getBinding` — the actual
+            // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this
+            // gives the user a proactive, owner-scoped visual matching chat.
+            missingWorktreePaths: bindingQuery.data?.missingWorktreePaths ?? [],
+            bindingResolved: bindingQuery.isSuccess,
+            onBindingCommitted: handleWorkspaceBindingCommitted,
+            // Terminal agents cannot fork — the host section is `locked`, so
+            // the switch gesture this handles is unreachable here anyway.
+            onForkOnHost: null,
+          }}
+        />
+      )}
       {/* NO FORK AFFORDANCE AT ALL for a cross-host replica - not a disabled
           one. Decision 2 is that a replica is never clonable, and the absence
           is the honest rendering of a structural fact: forking needs the

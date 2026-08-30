@@ -279,6 +279,7 @@ vi.mock("../terminal-agent-fork-dialog", () => ({
 }));
 
 import { TuiAgentTile } from "../tui-agent-tile";
+import { mayRestartAfterWorkspaceBindingChange } from "../tui-agent-workspace-restart";
 import { TabHostProvider } from "../../tab-host-provider";
 
 function withQueryClient(node: ReactNode): ReactNode {
@@ -454,5 +455,67 @@ describe("<TuiAgentTile /> cross-host replica", () => {
     await waitFor(() => {
       expect(screen.getByRole("group", { name: "Fork actions" })).toBeDefined();
     });
+  });
+
+  it("offers NO workspace-binding affordance on a RUNNING cloud-origin agent", async () => {
+    // `hostHasSession: true` for the same reason the fork case needs it: a
+    // replica with no remote PTY renders the banner, which has no toolbar at
+    // all, so the assertion would hold there whether or not the gate existed.
+    //
+    // A rebind is a MUTATION and a replica is read-only, but the concrete harm
+    // is sharper than the principle: committing one calls back into the tile,
+    // which kills the PTY by session id and recreates it - and that PTY is
+    // running on the OWNER's machine. The host would refuse the rebind with
+    // `TARGET_NOT_LOCAL`, but the kill is dispatched client-side first.
+    tileMocks.origin = "cloud";
+    tileMocks.hostHasSession = true;
+    renderTile();
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("terminal-agent-pre-launch-toolbar"),
+      ).toBeDefined();
+    });
+    expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
+  });
+
+  it("keeps the workspace affordance on a running registry-origin agent", async () => {
+    // The control: a local agent's rebind-and-restart is a supported gesture.
+    tileMocks.origin = "registry";
+    tileMocks.hostHasSession = true;
+    renderTile();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("host-workspace-selector")).toBeDefined();
+    });
+  });
+});
+
+/**
+ * The other half of the affordance's absence, tested where a test can reach
+ * it: the mutation itself.
+ *
+ * There is deliberately no component test invoking the commit callback on a
+ * replica, because there is nothing to invoke it WITH - the toolbar renders no
+ * workspace affordance for a cloud row at all (above), so no rendered gesture
+ * can drive that path. Driving it would mean re-adding the very affordance the
+ * fix removes. The rule the callback consults is exported instead, so the
+ * refusal is a checkable fact rather than a line resting on the rendering
+ * decision staying as it is.
+ */
+describe("mayRestartAfterWorkspaceBindingChange", () => {
+  it("refuses a cloud replica", () => {
+    expect(mayRestartAfterWorkspaceBindingChange("cloud")).toBe(false);
+  });
+
+  it("permits the two local origins", () => {
+    expect(mayRestartAfterWorkspaceBindingChange("registry")).toBe(true);
+    expect(mayRestartAfterWorkspaceBindingChange("doc")).toBe(true);
+  });
+
+  it("permits a tile whose projection has not landed yet", () => {
+    // No agent means no binding to commit and no mounted toolbar to commit
+    // from; refusing here would be a refusal of nothing.
+    expect(mayRestartAfterWorkspaceBindingChange(null)).toBe(true);
   });
 });
