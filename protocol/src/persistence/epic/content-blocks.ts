@@ -103,12 +103,39 @@ const artifactKindSchema = getRecordSchema(
 // the persistence-layer's broad `harnessIdSchema`, not the host layer's
 // narrower `GuiHarnessId` (persistence cannot import that layer - the
 // dependency runs host -> persistence); mirrors `planSourceSchema.harnessId`.
+// `harness_message` is the generic arm: a status line the harness itself
+// routed to the user that is not model output and carries no structured
+// facts (Claude Code's `system/informational` banners - hook feedback, blank
+// prompt, and whatever else that channel grows). It is deliberately
+// metadata-less; the other three name a specific provider behaviour and each
+// has a `providerNoticeNormalizedMetadataSchema` variant.
 export const providerNoticeKindSchema = z.enum([
   "model_rerouted",
   "model_verification",
   "safety_buffering",
+  "harness_message",
 ]);
 export type ProviderNoticeKind = z.infer<typeof providerNoticeKindSchema>;
+
+/**
+ * The notice kinds as every RELEASED line shipped them - `host-v1.2.0`, which
+ * carries epic record `2.0` and `chat.subscribe@1.0`-`1.6`.
+ *
+ * An enum VALUE addition is the one growth a frozen `z.object` copy does not
+ * absorb on its own: a released peer strips an unknown KEY, but strict-decodes
+ * an unknown value and fails the whole block (`COMPATIBILITY.md`, "Same-major
+ * changes"). So this is hand-frozen and bound into the pre-Reasonix copies
+ * below - which reused the LIVE kind enum, since no kind had ever been added
+ * when they were written - rather than left pointing at a schema that grows.
+ *
+ * Exported for `host/agent/gui/agent-runtime.ts`, whose frozen
+ * `provider_notice.upsert` event carries the same enum on the same lines.
+ */
+export const providerNoticeKindSchemaPreHarnessMessage = z.enum([
+  "model_rerouted",
+  "model_verification",
+  "safety_buffering",
+]);
 
 export const providerNoticeToneSchema = z.enum(["info", "warning"]);
 export type ProviderNoticeTone = z.infer<typeof providerNoticeToneSchema>;
@@ -1364,10 +1391,13 @@ const planBlockSchemaPreReasonix = z.object({
   metadata: z.record(z.string(), z.unknown()).nullable().default(null),
 });
 
+// Carries a SECOND freeze the name does not record: `noticeKind` is pinned to
+// the three kinds these lines shipped, so `harness_message` never reaches a
+// released decoder. See `providerNoticeKindSchemaPreHarnessMessage`.
 export const providerNoticeMetadataSchemaPreReasonix = z
   .object({
     harnessId: harnessIdSchemaPreReasonix,
-    noticeKind: providerNoticeKindSchema,
+    noticeKind: providerNoticeKindSchemaPreHarnessMessage,
     tone: providerNoticeToneSchema,
     title: z.string(),
     message: z.string().nullable(),
