@@ -249,14 +249,50 @@ export function LandingComposer(props: LandingComposerProps) {
   const setDraftSettings = useLandingDraftStore(
     (state) => state.setDraftSettings,
   );
+  // Hoisted above the toolbar wiring so the settings handler can consult it:
+  // every control that mutates the persisted draft - the editor, the mode
+  // switcher, the workspace controls, the run-settings toolbar, the
+  // attachment strip - is held while another host owns the draft. A
+  // foreign-owned draft must not change under its owner before a claim.
+  const landingOwnerHostId = useLandingDraftStore((state) => {
+    if (draftId === null) return null;
+    return (
+      state.drafts.find((entry) => entry.id === draftId)?.ownerHostId ?? null
+    );
+  });
+  const landingOrigin = useLandingDraftStore((state) => {
+    if (draftId === null) return null;
+    return state.drafts.find((entry) => entry.id === draftId)?.origin ?? null;
+  });
+  const landingPublication = useLandingDraftStore((state) => {
+    if (draftId === null) return null;
+    return (
+      state.drafts.find((entry) => entry.id === draftId)?.publication ?? null
+    );
+  });
+  const authority = useDraftAuthorityControl({
+    draftId,
+    ownerHostId: landingOwnerHostId,
+    origin: landingOrigin,
+    tabHostId: resolvedHostId,
+    client: hostClient,
+    publication: landingPublication,
+  });
   const handleToolbarSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
+      if (authority.readOnly) return;
       setGlobalRunSettings(activeHostId, settings, Date.now());
       if (draftId !== null) {
         setDraftSettings(draftId, settings);
       }
     },
-    [activeHostId, draftId, setDraftSettings, setGlobalRunSettings],
+    [
+      activeHostId,
+      authority.readOnly,
+      draftId,
+      setDraftSettings,
+      setGlobalRunSettings,
+    ],
   );
   const settingsSeed = useMemo(
     () =>
@@ -315,6 +351,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // they could not give.
   const actions = useLandingComposerActions(submitTarget);
   const isSubmitting = runtimeState.isSubmitting || actions.isPending;
+  const mutationsDisabled = isSubmitting || authority.readOnly;
 
   const hasSubmittableContent = contentIsSubmittable(runtimeState.content);
   const draftWorkspace = useLandingDraftStore((state) => {
@@ -608,35 +645,6 @@ export function LandingComposer(props: LandingComposerProps) {
     destination: promptStashDestination,
     hostId: resolvedHostId,
   });
-  const landingOwnerHostId = useLandingDraftStore((state) => {
-    if (draftId === null) return null;
-    return (
-      state.drafts.find((entry) => entry.id === draftId)?.ownerHostId ?? null
-    );
-  });
-  const landingOrigin = useLandingDraftStore((state) => {
-    if (draftId === null) return null;
-    return state.drafts.find((entry) => entry.id === draftId)?.origin ?? null;
-  });
-  const landingPublication = useLandingDraftStore((state) => {
-    if (draftId === null) return null;
-    return (
-      state.drafts.find((entry) => entry.id === draftId)?.publication ?? null
-    );
-  });
-  const authority = useDraftAuthorityControl({
-    draftId,
-    ownerHostId: landingOwnerHostId,
-    origin: landingOrigin,
-    tabHostId: resolvedHostId,
-    client: hostClient,
-    publication: landingPublication,
-  });
-  // Every control that mutates the persisted draft - not only the editor -
-  // is held while another host owns it: the mode switcher and the workspace
-  // controls write `composerMode` and `workspace` onto the draft, and a
-  // foreign-owned draft must not change under its owner before a claim.
-  const mutationsDisabled = isSubmitting || authority.readOnly;
   // Send-time gate for the selected provider's managed binary pack. Folded
   // into `canSubmit` rather than checked separately at submit, so the button
   // and its hint can never disagree - the user is told why BEFORE pressing,
@@ -844,14 +852,14 @@ export function LandingComposer(props: LandingComposerProps) {
 
   const handleRemoveImage = useCallback(
     (id: string) => {
-      if (isSubmitting) return;
+      if (mutationsDisabled) return;
       Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
         kind: "image",
         surface: "draft",
       });
       editorRef.current?.removeImageAttachmentById(id);
     },
-    [isSubmitting],
+    [mutationsDisabled],
   );
 
   const switcher = (

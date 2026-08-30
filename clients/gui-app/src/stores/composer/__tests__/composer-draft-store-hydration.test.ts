@@ -104,6 +104,32 @@ describe("composer draft store hydration", () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it("keeps an explicit draftId null through hydration", async () => {
+    // `detachSubmittedDraft` writes null so the NEXT edit mints a fresh host
+    // row; resurrecting the derived legacy id here would publish new content
+    // under the row being tombstoned.
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          drafts: {
+            detached: {
+              content: MENTION_DRAFT.content,
+              selection: null,
+              draftId: null,
+            },
+          },
+        },
+      }),
+    );
+
+    await useComposerDraftStore.persist.rehydrate();
+    expect(useComposerDraftStore.getState().drafts.detached?.draftId).toBe(
+      null,
+    );
+  });
+
   it("gives a legacy draft the same id in every window that hydrates it", async () => {
     // `merge` output is never persisted back, so a second window hydrates
     // the same id-less legacy draft again. A minted id would differ per

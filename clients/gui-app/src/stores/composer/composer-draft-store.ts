@@ -375,8 +375,14 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             revision: normalizedLegacyRevision(value),
             // Deterministic, not minted: this merged state is never persisted
             // back, so a second window hydrating the same legacy draft must
-            // arrive at the same id or both would publish.
-            draftId: normalizedDraftId(value) ?? legacyComposerDraftId(taskId),
+            // arrive at the same id or both would publish. Only an ABSENT
+            // field is legacy - an explicit null is `detachSubmittedDraft`'s
+            // "mint fresh on the next edit", and re-deriving the old id here
+            // would publish new content under a row being tombstoned.
+            draftId:
+              "draftId" in value
+                ? normalizedDraftId(value)
+                : legacyComposerDraftId(taskId),
             hostRevision: normalizedNonNegative(value.hostRevision),
             targetEpicId: normalizedNullableId(value.targetEpicId),
             lastTouchedAt: normalizedNonNegative(value.lastTouchedAt),
