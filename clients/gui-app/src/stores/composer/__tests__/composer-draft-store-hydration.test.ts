@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { legacyComposerDraftId } from "@/lib/drafts/draft-ids";
 
 import {
   readComposerDraftSnapshot,
@@ -101,6 +102,31 @@ describe("composer draft store hydration", () => {
     expect(first.browserAnnotations).toBe(second.browserAnnotations);
     expect(useComposerDraftStore.getState().drafts).toEqual({});
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("gives a legacy draft the same id in every window that hydrates it", async () => {
+    // `merge` output is never persisted back, so a second window hydrates
+    // the same id-less legacy draft again. A minted id would differ per
+    // window and both would publish; the derived id converges.
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        state: {
+          drafts: {
+            legacy: { content: MENTION_DRAFT.content, selection: null },
+          },
+        },
+      }),
+    );
+
+    await useComposerDraftStore.persist.rehydrate();
+    const first = useComposerDraftStore.getState().drafts.legacy?.draftId;
+    await useComposerDraftStore.persist.rehydrate();
+    const second = useComposerDraftStore.getState().drafts.legacy?.draftId;
+
+    expect(first).toBe(legacyComposerDraftId("legacy"));
+    expect(second).toBe(first);
   });
 
   it("drops malformed entries and safely hydrates a legacy draft missing resetEpoch", async () => {

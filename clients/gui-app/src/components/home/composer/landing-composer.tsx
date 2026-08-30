@@ -632,6 +632,11 @@ export function LandingComposer(props: LandingComposerProps) {
     client: hostClient,
     publication: landingPublication,
   });
+  // Every control that mutates the persisted draft - not only the editor -
+  // is held while another host owns it: the mode switcher and the workspace
+  // controls write `composerMode` and `workspace` onto the draft, and a
+  // foreign-owned draft must not change under its owner before a claim.
+  const mutationsDisabled = isSubmitting || authority.readOnly;
   // Send-time gate for the selected provider's managed binary pack. Folded
   // into `canSubmit` rather than checked separately at submit, so the button
   // and its hint can never disagree - the user is told why BEFORE pressing,
@@ -852,7 +857,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const switcher = (
     <ComposerModeSwitcher
       composerMode={composerMode}
-      disabled={isSubmitting}
+      disabled={mutationsDisabled}
       onSwitch={() => {
         const next = nextComposerMode(composerMode);
         setGlobalComposerMode(next);
@@ -945,7 +950,7 @@ export function LandingComposer(props: LandingComposerProps) {
           onRemoveImage={handleRemoveImage}
         />
       }
-      workspaceControls={props.workspaceControls(isSubmitting)}
+      workspaceControls={props.workspaceControls(mutationsDisabled)}
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}

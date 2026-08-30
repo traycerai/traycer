@@ -4,7 +4,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
-import { mintDraftId } from "@/lib/drafts/draft-ids";
+import { legacyComposerDraftId, mintDraftId } from "@/lib/drafts/draft-ids";
 import { notifyDraftLocalEdit } from "@/lib/drafts/draft-local-edits";
 import {
   collectDraftAnnotationImageHashes,
@@ -373,7 +373,10 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             ),
             resetEpoch: normalizedLegacyResetEpoch(value) + 1,
             revision: normalizedLegacyRevision(value),
-            draftId: normalizedDraftId(value) ?? mintDraftId(),
+            // Deterministic, not minted: this merged state is never persisted
+            // back, so a second window hydrating the same legacy draft must
+            // arrive at the same id or both would publish.
+            draftId: normalizedDraftId(value) ?? legacyComposerDraftId(taskId),
             hostRevision: normalizedNonNegative(value.hostRevision),
             targetEpicId: normalizedNullableId(value.targetEpicId),
             lastTouchedAt: normalizedNonNegative(value.lastTouchedAt),
