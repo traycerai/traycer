@@ -18,11 +18,12 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { dispatchEpicWriteCommand } from "@/stores/epics/open-epic/runtime/epic-write-command-dispatch";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -36,7 +37,7 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 
 const mocks = vi.hoisted(() => ({
-  handle: { current: null as OpenEpicStoreHandle | null },
+  handle: { current: null as OpenedStoreForTest | null },
   chatCalls: [] as { readonly chatId: string; readonly title: string }[],
   tuiCalls: [] as { readonly tuiAgentId: string; readonly title: string }[],
   artifactCalls: [] as {
@@ -212,7 +213,7 @@ function buildCommandRequester(): HostRequester<HostRpcRegistry> {
   return spine.createRequester(entry);
 }
 
-function newSession(): OpenEpicStoreHandle {
+function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -225,17 +226,22 @@ function newSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
-    // Explicit, not omitted: the write-command gate refuses a send with no
-    // requester, and an omitted (optional) field would silently reproduce
-    // that as "no host" rather than exercising the real queue send path.
-    commandRequester: buildCommandRequester(),
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    writeCommand: (commandId, intent) =>
+      dispatchEpicWriteCommand(
+        { epicId: EPIC_ID, requester: () => buildCommandRequester() },
+        commandId,
+        intent,
+      ),
   });
   if (captured.value === null) throw new Error("factory not invoked");
   // Transport must reach "open" BEFORE the root snapshot lands - see the

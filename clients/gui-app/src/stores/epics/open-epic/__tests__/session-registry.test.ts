@@ -5,11 +5,11 @@ import {
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
 import { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 // ── No-op stream-client factory ───────────────────────────────────────────────
 // Honestly-typed, zero-implementation factory. No snapshots arrive; the
@@ -25,27 +25,31 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 // ── TestHandle ────────────────────────────────────────────────────────────────
-// Wraps a real OpenEpicStoreHandle so the registry tests can:
+// Wraps a real OpenedStoreForTest so the registry tests can:
 //   - observe dispose() calls via the `disposed` flag
 //   - override isClean() via the `clean` flag (simulates dirty / reconnecting
 //     without actually needing a live Y.Doc update cycle)
 //   - fire store subscribers via notify() to exercise auto-prune
 
 interface TestHandle {
-  readonly handle: OpenEpicStoreHandle;
+  readonly handle: OpenedStoreForTest;
   disposed: boolean;
   clean: boolean;
   notify: () => void;
 }
 
 function buildTestHandle(id: string, clean: boolean): TestHandle {
-  const base = createOpenEpicStore({
+  const base = openStoreForTest({
     epicId: id,
-    streamClientFactory: noopStreamClientFactory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
 
   let disposed = false;
@@ -60,7 +64,7 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
   // Wrap isClean so tests can flip `clean` independently of Y.Doc state.
   let isCleanOverride = clean;
 
-  const wrappedHandle: OpenEpicStoreHandle = {
+  const wrappedHandle: OpenedStoreForTest = {
     get epicId() {
       return base.epicId;
     },
@@ -110,8 +114,8 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
   return testHandle;
 }
 
-// Convenience: extract the OpenEpicStoreHandle from a TestHandle.
-function h(t: TestHandle): OpenEpicStoreHandle {
+// Convenience: extract the OpenedStoreForTest from a TestHandle.
+function h(t: TestHandle): OpenedStoreForTest {
   return t.handle;
 }
 
@@ -369,29 +373,34 @@ function buildRetentionHandle(
   epicId: string,
   dirty: boolean,
   queueSize: number,
-): { handle: OpenEpicStoreHandle; closed: () => boolean } {
+): { handle: OpenedStoreForTest; closed: () => boolean } {
   let closeCount = 0;
-  const handle = createOpenEpicStore({
-    epicId,
-    streamClientFactory: () => ({
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => {
-        closeCount += 1;
-      },
-    }),
+  const handle = openStoreForTest({
+    epicId: epicId,
     userId: null,
-    onAuthError: null,
-    laneSelection: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: () => ({
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          closeCount += 1;
+        },
+      }),
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   handle.store.setState({ isDirty: dirty, unsyncedQueueSize: queueSize });
   return { handle, closed: () => closeCount > 0 };
 }
 
-function seedEpicTitle(handle: OpenEpicStoreHandle, title: string): void {
+function seedEpicTitle(handle: OpenedStoreForTest, title: string): void {
   handle.doc.getMap("epic").set("title", title);
 }
 
@@ -405,8 +414,8 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
 
   function repoint(
     registry: OpenEpicSessionRegistry,
-    previous: OpenEpicStoreHandle,
-    next: OpenEpicStoreHandle,
+    previous: OpenedStoreForTest,
+    next: OpenedStoreForTest,
     identity: { hostStamp: string | null; ownerIdentityKey: string | null },
   ): boolean {
     // Every arm in this describe is the F10 shape: a re-point with no
@@ -536,7 +545,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
    * pins assert scheduling instead of sequence.
    */
   function deferredSource(epicId: string): {
-    readonly handle: OpenEpicStoreHandle;
+    readonly handle: OpenedStoreForTest;
     readonly settle: (outcome: "resolve" | "reject") => void;
     readonly disposed: () => number;
     readonly transportClosed: () => boolean;
@@ -545,7 +554,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     let release: ((bytes: Uint8Array) => void) | null = null;
     let fail: ((cause: unknown) => void) | null = null;
     let disposeCount = 0;
-    const handle: OpenEpicStoreHandle = {
+    const handle: OpenedStoreForTest = {
       ...built.handle,
       encodeRootState: () =>
         new Promise<Uint8Array>((resolve, reject) => {
@@ -649,7 +658,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
     const built = buildRetentionHandle(EPIC, true, 6);
     built.handle.store.setState({ isDirty: true, unsyncedQueueSize: 6 });
-    const outgoing: OpenEpicStoreHandle = {
+    const outgoing: OpenedStoreForTest = {
       ...built.handle,
       get epicId() {
         return built.handle.epicId;

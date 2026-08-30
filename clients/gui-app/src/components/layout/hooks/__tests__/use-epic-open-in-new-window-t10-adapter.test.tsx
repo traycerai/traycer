@@ -31,10 +31,11 @@ import type {
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   clearDesktopTabsPersistence,
   installDesktopTabsPersistence,
@@ -77,13 +78,17 @@ const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 function registerDirtySession(epicId: string): void {
-  const handle = createOpenEpicStore({
-    epicId,
-    streamClientFactory: fakeStreamClientFactory,
+  const handle = openStoreForTest({
+    epicId: epicId,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: fakeStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   handle.store.setState({ isDirty: true });
   __getOpenEpicRegistryForTests().acquire(epicId, () => handle);

@@ -28,11 +28,11 @@ import {
   __getOpenEpicRegistryForTests,
   __setEpicStreamClientFactoryForTests,
 } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -70,14 +70,18 @@ const fakeFactory: EpicStreamClientFactory = () => ({
   close: () => {},
 });
 
-function registerSession(epicId: string): OpenEpicStoreHandle {
-  const handle = createOpenEpicStore({
-    epicId,
-    streamClientFactory: fakeFactory,
+function registerSession(epicId: string): OpenedStoreForTest {
+  const handle = openStoreForTest({
+    epicId: epicId,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: fakeFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   __getOpenEpicRegistryForTests().acquire(epicId, () => handle);
   return handle;

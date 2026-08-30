@@ -1,4 +1,5 @@
 import { use, useEffect } from "react";
+import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   afterEach,
@@ -492,6 +493,40 @@ function installOwnerIdentityRows(): (
   };
 }
 
+/**
+ * Seed a LOCAL root edit without reaching for a `Y.Doc`.
+ *
+ * The handle a provider hands back no longer exposes one, and that is the
+ * relocation rather than an omission: the replica lives on the worker thread
+ * and a `Y.Doc` cannot cross a structured clone. `applyRootUpdate(update,
+ * true)` is the production member that puts local bytes into the root
+ * replica - the same one a session-to-session transfer uses - so these tests
+ * now seed through the surface production actually has.
+ */
+async function seedLocalRootEdit(
+  handle: { applyRootUpdate: (u: Uint8Array, l: boolean) => Promise<boolean> },
+  key: string,
+  value: string,
+): Promise<void> {
+  const donor = new Y.Doc();
+  donor.getMap("epic").set(key, value);
+  await handle.applyRootUpdate(Y.encodeStateAsUpdate(donor), true);
+  donor.destroy();
+}
+
+/** Read one root-map key back through `encodeRootState`, the read twin. */
+async function readRootEdit(
+  handle: { encodeRootState: () => Promise<Uint8Array> } | undefined,
+  key: string,
+): Promise<unknown> {
+  if (handle === undefined) return undefined;
+  const scratch = new Y.Doc();
+  Y.applyUpdate(scratch, await handle.encodeRootState());
+  const value: unknown = scratch.getMap("epic").get(key);
+  scratch.destroy();
+  return value;
+}
+
 describe("<EpicSessionProvider />", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -858,9 +893,9 @@ describe("<EpicSessionProvider />", () => {
     if (firstHandle === undefined) {
       throw new Error("expected initial handle");
     }
-    act(() => {
+    await act(async () => {
       deliverSnapshot(streams[0], "room-a");
-      firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+      await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
     });
 
     act(() => {
@@ -895,9 +930,9 @@ describe("<EpicSessionProvider />", () => {
     expect(streams).toHaveLength(2);
     expect(streams[0].closeCount).toBe(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
-    expect(
-      seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
-    ).toBe("pending");
+    expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
+      "pending",
+    );
   });
 
   it("uses a plain swap when the replacement reports a different room", async () => {
@@ -925,9 +960,9 @@ describe("<EpicSessionProvider />", () => {
 
     await waitFor(() => expect(seenHandles).toHaveLength(1));
     const firstHandle = seenHandles[0];
-    act(() => {
+    await act(async () => {
       deliverSnapshot(streams[0], "room-a");
-      firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+      await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       hostState.id = "host-b";
       view.rerender(
         <EpicSessionProvider
@@ -955,7 +990,7 @@ describe("<EpicSessionProvider />", () => {
     // times over, its DERIVATION not once.
     expect(__getOpenEpicRegistryForTests().getUnsyncedEdits()).toHaveLength(1);
     expect(
-      seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
+      await readRootEdit(seenHandles.at(-1), "local-repoint-edit"),
     ).toBeUndefined();
   });
 
@@ -1514,8 +1549,13 @@ describe("<EpicSessionProvider />", () => {
     });
     expect(seenHandles[0].userId).toBe(sessionUserId);
 
-    act(() => {
-      seenHandles[0].store.getState().setEpicTitle("Generated history title");
+    await act(async () => {
+      // `setEpicTitle` is gone: the epic title is a WRITE COMMAND now, and its
+      // optimistic half is the overlay stamp the projector folds - the same
+      // observable this assertion reads.
+      await seenHandles[0].store
+        .getState()
+        .beginEpicTitleMutation("Generated history title");
     });
 
     await waitFor(() => {
@@ -1753,9 +1793,9 @@ describe("<EpicSessionProvider />", () => {
       const view = render(providerBody((handle) => seenHandles.push(handle)));
       await waitFor(() => expect(seenHandles).toHaveLength(1));
       const firstHandle = seenHandles[0];
-      act(() => {
+      await act(async () => {
         deliverSnapshot(streams[0], "room-a");
-        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+        await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       });
 
       act(() => {
@@ -1776,9 +1816,9 @@ describe("<EpicSessionProvider />", () => {
       // commit pairs host-b's handle with host-a's key, the next render reads
       // host-b's key, and the mismatch takes the hard-rebuild arm - disposing
       // the handle that is holding the merge.
-      expect(
-        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
-      ).toBe("pending");
+      expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
+        "pending",
+      );
       expect(streams).toHaveLength(2);
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
     });
@@ -1801,9 +1841,9 @@ describe("<EpicSessionProvider />", () => {
       const view = render(providerBody((handle) => seenHandles.push(handle)));
       await waitFor(() => expect(seenHandles).toHaveLength(1));
       const firstHandle = seenHandles[0];
-      act(() => {
+      await act(async () => {
         deliverSnapshot(streams[0], "room-a");
-        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+        await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       });
 
       act(() => {
@@ -1817,9 +1857,9 @@ describe("<EpicSessionProvider />", () => {
       await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
       await act(() => Promise.resolve());
 
-      expect(
-        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
-      ).toBe("pending");
+      expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
+        "pending",
+      );
       expect(streams).toHaveLength(2);
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
     });
@@ -1841,9 +1881,9 @@ describe("<EpicSessionProvider />", () => {
       const view = render(providerBody((handle) => seenHandles.push(handle)));
       await waitFor(() => expect(seenHandles).toHaveLength(1));
       const firstHandle = seenHandles[0];
-      act(() => {
+      await act(async () => {
         deliverSnapshot(streams[0], "room-a");
-        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+        await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       });
 
       act(() => {
@@ -1862,9 +1902,9 @@ describe("<EpicSessionProvider />", () => {
       await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
       await act(() => Promise.resolve());
 
-      expect(
-        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
-      ).toBe("pending");
+      expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
+        "pending",
+      );
       expect(streams).toHaveLength(2);
     });
 
@@ -1888,9 +1928,9 @@ describe("<EpicSessionProvider />", () => {
       const view = render(providerBody((handle) => seenHandles.push(handle)));
       await waitFor(() => expect(seenHandles).toHaveLength(1));
       const firstHandle = seenHandles[0];
-      act(() => {
+      await act(async () => {
         deliverSnapshot(streams[0], "room-a");
-        firstHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+        await seedLocalRootEdit(firstHandle, "local-repoint-edit", "pending");
       });
 
       act(() => {
@@ -1912,9 +1952,9 @@ describe("<EpicSessionProvider />", () => {
       await act(() => Promise.resolve());
 
       expect(seenHandles.at(-1)).toBe(mergedHandle);
-      expect(
-        seenHandles.at(-1)?.doc.getMap("epic").get("local-repoint-edit"),
-      ).toBe("pending");
+      expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
+        "pending",
+      );
       expect(streams).toHaveLength(2);
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
 
@@ -1978,9 +2018,9 @@ describe("<EpicSessionProvider />", () => {
       );
       await waitFor(() => expect(firstMountHandles).toHaveLength(1));
       const warmHandle = firstMountHandles[0];
-      act(() => {
+      await act(async () => {
         deliverSnapshot(streams[0], "room-a");
-        warmHandle.doc.getMap("epic").set("local-repoint-edit", "pending");
+        await seedLocalRootEdit(warmHandle, "local-repoint-edit", "pending");
       });
 
       // Tab closes; the MRU registry keeps the session warm (mounted refs

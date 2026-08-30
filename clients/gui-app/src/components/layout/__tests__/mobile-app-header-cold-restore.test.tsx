@@ -23,11 +23,12 @@ import {
   __getOpenEpicRegistryForTests,
   __setEpicStreamClientFactoryForTests,
 } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { dispatchEpicWriteCommand } from "@/stores/epics/open-epic/runtime/epic-write-command-dispatch";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { tabItemId } from "@/stores/tabs/layout";
@@ -83,14 +84,18 @@ const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 /** The session the epic surface's provider has registered by now. */
-function registerSession(title: string): OpenEpicStoreHandle {
-  const handle = createOpenEpicStore({
+function registerSession(title: string): OpenedStoreForTest {
+  const handle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: fakeStreamClientFactory,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: fakeStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   handle.store.setState({
     epic: { title, updatedAt: 1 },
@@ -117,7 +122,7 @@ function encodeBase64(bytes: Uint8Array): string {
  * that gate, so a rename fired against it would sit "queued" forever.
  */
 function registerCommittableSession(title: string): {
-  readonly handle: OpenEpicStoreHandle;
+  readonly handle: OpenedStoreForTest;
   readonly titleCalls: () => readonly UpdateEpicRequest[];
   readonly settleTitleUpdate: () => void;
 } {
@@ -168,13 +173,22 @@ function registerCommittableSession(title: string): {
   const commandRequester: HostRequester<HostRpcRegistry> =
     spine.createRequester(entry);
 
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: EPIC_ID,
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
-    laneSelection: null,
-    commandRequester,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    writeCommand: (commandId, intent) =>
+      dispatchEpicWriteCommand(
+        { epicId: EPIC_ID, requester: () => commandRequester },
+        commandId,
+        intent,
+      ),
   });
   if (captured.value === null) throw new Error("factory not invoked");
   // Seeded into the real Y.Doc BEFORE the snapshot lands, so the FULL

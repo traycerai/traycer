@@ -52,10 +52,11 @@ import type {
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import { artifactSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import {} from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicLaneSelectionSources } from "@/stores/epics/open-epic/runtime/epic-replica-runtime";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
@@ -125,7 +126,7 @@ function rootDocNamingArtifactRoom(): Uint8Array {
  * two arm-shaped suites again.
  */
 interface AvailabilityArm {
-  readonly handle: OpenEpicStoreHandle;
+  readonly handle: OpenedStoreForTest;
   /** Bring the session up to the point a tile could mount. */
   open(): void;
   /** The host is serving this body. */
@@ -152,7 +153,7 @@ interface AvailabilityArm {
 }
 
 /** What the tile actually reads. Both readers, because both are consumed. */
-function availabilityAsTileSeesIt(handle: OpenEpicStoreHandle): {
+function availabilityAsTileSeesIt(handle: OpenedStoreForTest): {
   readonly projected: EpicArtifactRoomAvailability | undefined;
   readonly derived: EpicArtifactRoomAvailability;
 } {
@@ -178,14 +179,17 @@ function createLegacyArm(): AvailabilityArm {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: "epic-availability-legacy",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
-    // The pin that this really is the `@1` arm: with no lane sources the
-    // verdict is `"legacy"` before any manifest is read.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   function live(): EpicStreamCallbacks {
     if (callbacks === null) throw new Error("no legacy stream client");
@@ -265,32 +269,32 @@ function createLaneArm(): AvailabilityArm {
     statusStreamClientFactory: statusFactory,
     artifactStreamClientFactory: artifactFactory,
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: "epic-availability-lanes",
-    // "Must not open UNTIL a required lane is refused" - which is the true
-    // guard, and stronger than the `never` it replaces. Every row but the
-    // refusal one runs with `legacyMayOpen === false`, so a lane arm that
-    // speculatively opened `@1` fails that row loudly instead of passing
-    // quietly; and the refusal row proves the fallback really does open it.
-    streamClientFactory: () => {
-      if (!legacyMayOpen) {
-        throw new Error(
-          "the legacy stream must not open on the lane arm before a required lane is refused",
-        );
-      }
-      legacyOpens += 1;
-      return {
-        applyUpdate: () => undefined,
-        awareness: () => undefined,
-        applyArtifactRoomUpdate: () => undefined,
-        artifactRoomAwareness: () => undefined,
-        retryMigration: () => undefined,
-        close: () => undefined,
-      };
-    },
     userId: null,
-    onAuthError: null,
-    laneSelection,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: () => {
+        if (!legacyMayOpen) {
+          throw new Error(
+            "the legacy stream must not open on the lane arm before a required lane is refused",
+          );
+        }
+        legacyOpens += 1;
+        return {
+          applyUpdate: () => undefined,
+          awareness: () => undefined,
+          applyArtifactRoomUpdate: () => undefined,
+          artifactRoomAwareness: () => undefined,
+          retryMigration: () => undefined,
+          close: () => undefined,
+        };
+      },
+      laneSelection: laneSelection,
+    },
+    writeCommand: null,
   });
 
   function liveBody(): ArtifactStreamCallbacks {
@@ -380,7 +384,7 @@ const ARMS: ReadonlyArray<{
 ];
 
 describe.each(ARMS)("body availability is identical on $name", ({ build }) => {
-  const opened: OpenEpicStoreHandle[] = [];
+  const opened: OpenedStoreForTest[] = [];
 
   afterEach(() => {
     for (const handle of opened.splice(0)) handle.dispose();

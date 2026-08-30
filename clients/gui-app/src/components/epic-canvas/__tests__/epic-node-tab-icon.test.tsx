@@ -7,11 +7,11 @@ import {
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   __resetAppLocalNotificationsStoreForTests,
   emitTerminalCrashedNotification,
@@ -242,15 +242,19 @@ function publishWorking(agentIds: readonly string[]): void {
   ]);
 }
 
-function registerEpicSession(epicId: string): OpenEpicStoreHandle {
+function registerEpicSession(epicId: string): OpenedStoreForTest {
   return __getOpenEpicRegistryForTests().acquire(epicId, () =>
-    createOpenEpicStore({
-      epicId,
+    openStoreForTest({
+      epicId: epicId,
       userId: null,
-      streamClientFactory: fakeStreamClientFactory,
-      onAuthError: null,
-      // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-      laneSelection: null,
+      // The factories go to the COMPOSITION now: the store stopped
+      // constructing a runtime, so a `streamClientFactory` has nowhere
+      // else to go.
+      factories: {
+        streamClientFactory: fakeStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
     }),
   );
 }

@@ -20,11 +20,11 @@ import {
   MIN_SIDEBAR_WIDTH_PX,
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 const sidebarRenderCounts = vi.hoisted(() => ({
   liveHost: 0,
@@ -109,14 +109,18 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-function buildSessionHandle(epicId: string): OpenEpicStoreHandle {
-  return createOpenEpicStore({
-    epicId,
-    streamClientFactory: noopStreamClientFactory,
+function buildSessionHandle(epicId: string): OpenedStoreForTest {
+  return openStoreForTest({
+    epicId: epicId,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
 }
 
@@ -130,7 +134,7 @@ function renderColumn() {
   );
 }
 
-function renderColumnWithSession(handle: OpenEpicStoreHandle) {
+function renderColumnWithSession(handle: OpenedStoreForTest) {
   return render(
     <TooltipProvider>
       <EpicSessionContext.Provider value={handle}>

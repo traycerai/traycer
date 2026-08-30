@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
  * CHARACTERIZATION - `hasUnsyncedEdits` and `getUnsyncedEdits` must answer the
@@ -35,13 +36,17 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 function makeHandle(epicId: string, title: string) {
-  const handle = createOpenEpicStore({
-    epicId,
-    streamClientFactory: noopStreamClientFactory,
+  const handle = openStoreForTest({
+    epicId: epicId,
     userId: null,
-    onAuthError: null,
-    // No lane stream clients in this suite - the legacy @1 arm, which is what these tests drive.
-    laneSelection: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   handle.doc.getMap("epic").set("title", title);
   // Normalised to CLEAN on purpose. Seeding the title is a `Y.Doc` mutation,
