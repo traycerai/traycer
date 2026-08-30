@@ -233,6 +233,24 @@ describe("startSideChat", () => {
       expect(handoff?.status).toBe("sending");
     });
 
+    it("invalidates the handoff when the caller cancels before the create answers", () => {
+      const recorder = createChatRecorder();
+      const cancel = startSideChat(
+        baseArgs({ createChat: recorder.createChat }),
+      );
+
+      // The tile unmounted while the create was still in flight. Without this
+      // the handoff outlives it and a late answer still opens + sends.
+      cancel();
+      recorder.calls[0].onSuccess({ chatId: "forked-chat" });
+
+      const handoff = selectInitialChatHandoff(
+        useInitialChatHandoffStore.getState(),
+        scope,
+      );
+      expect(handoff?.status).toBe("failed");
+    });
+
     it("leaves the handoff non-sending when initialTurnStarted is absent", () => {
       const recorder = createChatRecorder();
       startSideChat(baseArgs({ createChat: recorder.createChat }));

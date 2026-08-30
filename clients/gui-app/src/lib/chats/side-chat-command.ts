@@ -198,7 +198,14 @@ export function sideChatTitle(
   return source.length === 0 ? "" : `Side - ${source}`;
 }
 
+/**
+ * Counted and cut in CODE POINTS, not UTF-16 units: `slice` can land between
+ * the halves of a surrogate pair (an emoji, or anything outside the BMP) and
+ * leave an unpaired half that renders as `�` in the sidebar.
+ */
 function truncateTitle(text: string): string {
-  if (text.length <= SIDE_CHAT_TITLE_MAX_LENGTH) return text;
-  return `${text.slice(0, SIDE_CHAT_TITLE_MAX_LENGTH - 1).trimEnd()}…`;
+  const points = Array.from(text);
+  if (points.length <= SIDE_CHAT_TITLE_MAX_LENGTH) return text;
+  const kept = points.slice(0, SIDE_CHAT_TITLE_MAX_LENGTH - 1).join("");
+  return `${kept.trimEnd()}…`;
 }

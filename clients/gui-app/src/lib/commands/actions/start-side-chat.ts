@@ -210,6 +210,22 @@ export function startSideChat(args: StartSideChatArgs): CancelFn {
       projectionCancel();
       projectionCancel = null;
     }
+    // The handoff is registered BEFORE the create and lives in a global store,
+    // so cancelling only the projection would leave it behind: a create answer
+    // arriving after the source tile unmounted would still eager-open the tab
+    // and send the question. `markFailedByAction` is terminal for exactly the
+    // handoff carrying these ids - a later create in this epic has replaced the
+    // {user, epic} entry with its own and must not be failed by this cancel.
+    if (hasMessage) {
+      useInitialChatHandoffStore
+        .getState()
+        .markFailedByAction(
+          scope,
+          chatId,
+          clientActionId,
+          "The side chat was cancelled.",
+        );
+    }
   };
 }
 

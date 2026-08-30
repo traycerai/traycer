@@ -265,4 +265,15 @@ describe("sideChatTitle", () => {
     expect(sideChatTitle("", "")).toBe("");
     expect(sideChatTitle("   ", "   ")).toBe("");
   });
+
+  it("truncates by code point so an emoji at the boundary is never split", () => {
+    // 58 plain chars puts a 2-unit emoji astride the 59-code-unit cut, which
+    // `String.slice` would halve into an unpaired surrogate (renders as `�`).
+    const title = sideChatTitle(`${"x".repeat(58)}🙂 tail`, "Source");
+    expect(title).toBe(`Side - ${"x".repeat(58)}🙂…`);
+    for (const char of title) {
+      const code = char.codePointAt(0) ?? 0;
+      expect(code >= 0xd800 && code <= 0xdfff).toBe(false);
+    }
+  });
 });
