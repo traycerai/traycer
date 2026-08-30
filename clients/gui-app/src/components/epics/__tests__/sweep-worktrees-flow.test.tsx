@@ -341,19 +341,31 @@ describe("SweepWorktreesFlow", () => {
 
   it("keeps asking rather than telling a person there is nothing to sweep", () => {
     state.connectableHostIds = ["host-a", "host-b"];
-    // host-b stops being dialable between the pick and the render that
-    // follows it - deregistered, or the credential lease released.
-    state.unresolvableHostIds = ["host-b"];
-    render(flow(new Set(["host-b"])));
-
+    // host-b is pickable HERE, so the click really does enter the `picked`
+    // phase. Making it unresolvable up front would only prove the row refusal
+    // above: the button would be disabled, `onPick` would never fire, and this
+    // case would pass without reaching the branch it exists for.
+    const view = render(flow(new Set(["host-b"])));
     fireEvent.click(screen.getByTestId("sweep-host-picker-option-host-b"));
+    expect(lastOpenDialogHostId()).toBe("host-b");
+
+    // NOW the client stops resolving - the credential lease released, or the
+    // entry left the directory - with a confirmation already open on it.
+    state.unresolvableHostIds = ["host-b"];
+    view.rerender(flow(new Set(["host-b"])));
 
     // The confirmation would have read the null client as an empty census and
     // said "No worktrees on this host for the selected tasks" - a claim about
-    // that machine's disk we never got to make. The question stays up instead,
-    // so the other host is still one click away.
-    expect(sweepDialogEverOpened()).toBe(false);
+    // that machine's disk we never got to make. It withdraws instead (which is
+    // not a re-point: no other host's rows are ever shown under that proof),
+    // and the question comes back with host-b now refused on its own row.
+    expect(captured.dialog.at(-1)?.epicIds ?? null).toBeNull();
     expect(screen.getByTestId("sweep-host-picker-dialog")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("sweep-host-picker-option-host-b")
+        .hasAttribute("disabled"),
+    ).toBe(true);
   });
 
   it("does not decide the fleet's shape before the directory has answered", () => {
