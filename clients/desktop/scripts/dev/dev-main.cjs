@@ -96,7 +96,6 @@ const electronArgs = [];
 const ozonePlatform = decideOzonePlatform({
   platform: process.platform,
   ozonePlatformOverride: childEnv.TRAYCER_DESKTOP_OZONE_PLATFORM,
-  electronOzoneHint: childEnv.ELECTRON_OZONE_PLATFORM_HINT,
   display: childEnv.DISPLAY,
   waylandDisplay: childEnv.WAYLAND_DISPLAY,
 });
