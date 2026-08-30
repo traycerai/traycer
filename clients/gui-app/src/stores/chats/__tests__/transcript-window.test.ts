@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatEvent,
+  ImageResolutionEntry,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
@@ -2209,10 +2210,15 @@ describe("stale spans", () => {
       "row-0",
     ]);
 
-    const rewritten = streamWindowMessage(rebased, "m-0", (message) => ({
-      ...message,
-      timestamp: message.timestamp + 1,
-    }));
+    const rewritten = streamWindowMessage(
+      rebased,
+      "m-0",
+      (message) => ({
+        ...message,
+        timestamp: message.timestamp + 1,
+      }),
+      null,
+    );
 
     expect(rewritten.held).toBe(true);
     const held = hydratedRecords(rewritten.window).messages.find(
@@ -2852,10 +2858,14 @@ describe("stale spans", () => {
     );
     // The local in-place rewrite, bumping the host's write counter the way
     // `accumulateTurnContent` does.
-    const rewritten = updateWindowMessage(seeded, "a-settled", (message) =>
-      message.role !== "assistant"
-        ? message
-        : { ...message, blocksVersion: 2, timestamp: 99 },
+    const rewritten = updateWindowMessage(
+      seeded,
+      "a-settled",
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : { ...message, blocksVersion: 2, timestamp: 99 },
+      null,
     );
     expect(rewritten.held).toBe(true);
 
@@ -2953,12 +2963,31 @@ describe("stale spans", () => {
 
   function settledWithImages(
     messageId: string,
-    entries: readonly ReturnType<typeof imageEntry>[],
+    entries: readonly ImageResolutionEntry[],
   ): Extract<Message, { role: "assistant" }> {
     return {
       ...assistantMessage(messageId, `t-${messageId}`, 5),
       blocksVersion: 3,
       imageResolutions: [...entries],
+    };
+  }
+
+  // Distinct RESOLVED content per (source, version) - unlike `imageEntry`'s
+  // fixed pending/resolved pair, this gives a multi-write scenario as many
+  // uniquely-matchable contents per source as it needs, so every witnessed
+  // occurrence stays unambiguous under `servedStamp`'s unique-content match.
+  function versionedImageEntry(
+    source: string,
+    version: number,
+  ): ImageResolutionEntry {
+    return {
+      source,
+      canonicalSource: source,
+      width: 10,
+      height: 10,
+      state: "resolved" as const,
+      attachmentHash: `${version}`.padStart(64, "0"),
+      mediaType: "image/png" as const,
     };
   }
 
@@ -2985,10 +3014,14 @@ describe("stale spans", () => {
       witnesses,
     );
     const applied = witnesses.record("a-w", resolvedEntry);
-    const upserted = updateWindowMessage(seeded, "a-w", (message) =>
-      message.role !== "assistant"
-        ? message
-        : { ...message, imageResolutions: [resolvedEntry] },
+    const upserted = updateWindowMessage(
+      seeded,
+      "a-w",
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : { ...message, imageResolutions: [resolvedEntry] },
+      null,
     );
     expect(upserted.held).toBe(true);
     witnesses.stampRewrittenCopies(upserted.window, "a-w", source, applied);
@@ -3035,10 +3068,14 @@ describe("stale spans", () => {
       null,
       witnesses,
     );
-    const upserted = updateWindowMessage(seeded, "a-uw", (message) =>
-      message.role !== "assistant"
-        ? message
-        : { ...message, imageResolutions: [imageEntry("resolved", source)] },
+    const upserted = updateWindowMessage(
+      seeded,
+      "a-uw",
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : { ...message, imageResolutions: [imageEntry("resolved", source)] },
+      null,
     );
     expect(upserted.held).toBe(true);
 
@@ -3253,10 +3290,14 @@ describe("stale spans", () => {
       witnesses,
     );
     const mApplied = witnesses.record("a-m", mNew);
-    const mRewritten = updateWindowMessage(window, "a-m", (message) =>
-      message.role !== "assistant"
-        ? message
-        : { ...message, imageResolutions: [mNew] },
+    const mRewritten = updateWindowMessage(
+      window,
+      "a-m",
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : { ...message, imageResolutions: [mNew] },
+      null,
     );
     witnesses.stampRewrittenCopies(mRewritten.window, "a-m", sm, mApplied);
     const nApplied = witnesses.record("a-n", nNew);
@@ -3267,6 +3308,7 @@ describe("stale spans", () => {
         message.role !== "assistant"
           ? message
           : { ...message, imageResolutions: [nNew] },
+      null,
     );
     witnesses.stampRewrittenCopies(nRewritten.window, "a-n", sn, nApplied);
     window = nRewritten.window;
@@ -3353,10 +3395,14 @@ describe("stale spans", () => {
       "t-a-act",
       witnesses,
     );
-    const upserted = updateWindowMessage(seeded, "a-act", (message) =>
-      message.role !== "assistant"
-        ? message
-        : { ...message, imageResolutions: [imageEntry("resolved", source)] },
+    const upserted = updateWindowMessage(
+      seeded,
+      "a-act",
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : { ...message, imageResolutions: [imageEntry("resolved", source)] },
+      null,
     );
     expect(upserted.held).toBe(true);
 
@@ -3374,6 +3420,207 @@ describe("stale spans", () => {
 
     const rendered = hydratedRecords(delayed).messages.find(
       (message) => message.messageId === "a-act",
+    );
+    expect(
+      rendered !== undefined && rendered.role === "assistant"
+        ? rendered.imageResolutions[0].state
+        : "missing",
+    ).toBe("resolved");
+  });
+
+  it("multi-source dominance survives alternating applies across two sources", () => {
+    // Rule 2's held-wins arm requires EVERY differing source to carry a
+    // held-later verdict (dominance). Before `carryRewrittenCopy`, each
+    // `updateWindowMessage` rewrite minted a fresh record object and
+    // `stampRewrittenCopies` seeded a BRAND NEW evidence map on it, discarding
+    // whatever the previous object held - so alternating writes across two
+    // sources (S1, S2, S1, S2) stranded the OTHER source's stamp at every
+    // step, and by W4 only S2 carried a stamp at all. S1 then reads
+    // `heldStamp` 0 - silent - which breaks dominance outright, and the
+    // held-wins arm becomes unreachable for any record with two or more
+    // differing sources. `carryRewrittenCopy` fixes this by copying the
+    // discarded object's stamps onto its replacement at every swap, so each
+    // rewrite's `stampRewrittenCopies` call only ever MERGES its one source's
+    // stamp into what the carry already restored.
+    const witnesses = createImageWitnessStore();
+    const s1 = "https://example.test/dom-s1.png";
+    const s2 = "https://example.test/dom-s2.png";
+    const recordWith = (
+      s1Entry: ImageResolutionEntry,
+      s2Entry: ImageResolutionEntry,
+    ): Extract<Message, { role: "assistant" }> => ({
+      ...assistantMessage("a-dom", "t-a-dom", 5),
+      blocksVersion: 3,
+      imageResolutions: [s1Entry, s2Entry],
+    });
+    const rewriteBoth =
+      (s1Entry: ImageResolutionEntry, s2Entry: ImageResolutionEntry) =>
+      (message: Message): Message =>
+        message.role !== "assistant"
+          ? message
+          : { ...message, imageResolutions: [s1Entry, s2Entry] };
+
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [
+          recordWith(versionedImageEntry(s1, 0), versionedImageEntry(s2, 0)),
+        ],
+      }),
+      null,
+      witnesses,
+    );
+
+    // W1(S1)
+    const w1 = witnesses.record("a-dom", versionedImageEntry(s1, 1));
+    const afterW1 = updateWindowMessage(
+      seeded,
+      "a-dom",
+      rewriteBoth(versionedImageEntry(s1, 1), versionedImageEntry(s2, 0)),
+      witnesses,
+    );
+    expect(afterW1.held).toBe(true);
+    witnesses.stampRewrittenCopies(afterW1.window, "a-dom", s1, w1);
+
+    // W2(S2)
+    const w2 = witnesses.record("a-dom", versionedImageEntry(s2, 1));
+    const afterW2 = updateWindowMessage(
+      afterW1.window,
+      "a-dom",
+      rewriteBoth(versionedImageEntry(s1, 1), versionedImageEntry(s2, 1)),
+      witnesses,
+    );
+    witnesses.stampRewrittenCopies(afterW2.window, "a-dom", s2, w2);
+
+    // W3(S1)
+    const w3 = witnesses.record("a-dom", versionedImageEntry(s1, 2));
+    const afterW3 = updateWindowMessage(
+      afterW2.window,
+      "a-dom",
+      rewriteBoth(versionedImageEntry(s1, 2), versionedImageEntry(s2, 1)),
+      witnesses,
+    );
+    witnesses.stampRewrittenCopies(afterW3.window, "a-dom", s1, w3);
+
+    // W4(S2)
+    const w4 = witnesses.record("a-dom", versionedImageEntry(s2, 2));
+    const afterW4 = updateWindowMessage(
+      afterW3.window,
+      "a-dom",
+      rewriteBoth(versionedImageEntry(s1, 2), versionedImageEntry(s2, 2)),
+      witnesses,
+    );
+    witnesses.stampRewrittenCopies(afterW4.window, "a-dom", s2, w4);
+
+    // The delayed slice carries W1's S1 content and W2's S2 content - each
+    // uniquely witnessed (versions 0/1/2 per source are each recorded exactly
+    // once), so rule 2 has a servedStamp for both differing sources.
+    const delayed = applyRangeResponse(
+      afterW4.window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [
+          recordWith(versionedImageEntry(s1, 1), versionedImageEntry(s2, 1)),
+        ],
+      }),
+      null,
+      witnesses,
+    );
+
+    const rendered = hydratedRecords(delayed).messages.find(
+      (message) => message.messageId === "a-dom",
+    );
+    // The held copy (W3's S1 content, W4's S2 content) must win on BOTH
+    // sources - the delayed, older slice must not displace either.
+    expect(
+      rendered !== undefined && rendered.role === "assistant"
+        ? rendered.imageResolutions.map((entry) => entry.attachmentHash)
+        : [],
+    ).toEqual([
+      versionedImageEntry(s1, 2).attachmentHash,
+      versionedImageEntry(s2, 2).attachmentHash,
+    ]);
+  });
+
+  it("a non-image rewrite carries the held copy's image evidence across the swap", () => {
+    // W1(S1) stamps the held copy with an exact apply sequence. A LATER
+    // rewrite that touches an unrelated field (`reasoningEffort`, never
+    // `imageResolutions`) still swaps the record object - `updateWindowMessage`
+    // always mints a new copy via spread - and before `carryRewrittenCopy`
+    // that swap stranded W1's stamp on the discarded object: nothing re-seeds
+    // evidence for a rewrite that is not itself a witnessed image apply, so
+    // `heldStamp` reads 0 for S1 on the new object, rule 2 goes silent, and
+    // dominance is unreachable. An unrelated edit (a block delta, a steer
+    // remap) would then silently revert a correctly-applied image resolution
+    // back to its pre-write state on the next delayed serve.
+    const witnesses = createImageWitnessStore();
+    const s1 = "https://example.test/nonimg.png";
+    const preWrite = imageEntry("pending", s1);
+    const postWrite = imageEntry("resolved", s1);
+    // W0: witnessed BEFORE the seed, so the served (pre-write) side gets its
+    // own exact stamp later - mirrors "witnesses recorded while the record
+    // was unheld stamp its first hydration" above.
+    witnesses.record("a-nonimg", preWrite);
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(30),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-nonimg", [preWrite])],
+      }),
+      null,
+      witnesses,
+    );
+
+    // W1(S1): the witnessed image apply, exact stamp.
+    const w1 = witnesses.record("a-nonimg", postWrite);
+    const afterImageWrite = updateWindowMessage(
+      seeded,
+      "a-nonimg",
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : { ...message, imageResolutions: [postWrite] },
+      witnesses,
+    );
+    expect(afterImageWrite.held).toBe(true);
+    witnesses.stampRewrittenCopies(afterImageWrite.window, "a-nonimg", s1, w1);
+
+    // A NON-image rewrite of the same record - `imageResolutions` untouched,
+    // and no `witnesses.record`/`stampRewrittenCopies` call accompanies it,
+    // exactly as a real block delta or metadata rewrite would not.
+    const afterNonImageWrite = updateWindowMessage(
+      afterImageWrite.window,
+      "a-nonimg",
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : { ...message, reasoningEffort: "high" },
+      witnesses,
+    );
+    expect(afterNonImageWrite.held).toBe(true);
+
+    // The delayed slice serves the PRE-W1 content, uniquely witnessed by W0.
+    const delayed = applyRangeResponse(
+      afterNonImageWrite.window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 5,
+        rowIds: ["row-5"],
+        messages: [settledWithImages("a-nonimg", [preWrite])],
+      }),
+      null,
+      witnesses,
+    );
+
+    const rendered = hydratedRecords(delayed).messages.find(
+      (message) => message.messageId === "a-nonimg",
     );
     expect(
       rendered !== undefined && rendered.role === "assistant"
@@ -4425,7 +4672,7 @@ describe("the record ledger", () => {
     expect(merged.spans).toHaveLength(1);
 
     // The tail's row streams far past the cap with its charge DEFERRED.
-    const grown = streamWindowMessage(seedTail(), "m-tail6", grow).window;
+    const grown = streamWindowMessage(seedTail(), "m-tail6", grow, null).window;
     const stayedApart = withAdjacent(grown);
     expect(stayedApart.spans).toHaveLength(2);
   });
@@ -4698,29 +4945,44 @@ describe("records the index has not placed yet", () => {
       events: [],
     });
 
-    const hydrated = updateWindowMessage(window, "m-0", (message) => ({
-      ...message,
-      timestamp: 111,
-    }));
+    const hydrated = updateWindowMessage(
+      window,
+      "m-0",
+      (message) => ({
+        ...message,
+        timestamp: 111,
+      }),
+      null,
+    );
     expect(hydrated.held).toBe(true);
     expect(
       spanMessages(hydrated.window, hydrated.window.spans[0])[0].timestamp,
     ).toBe(111);
 
-    const live = updateWindowMessage(hydrated.window, "m-live", (message) => ({
-      ...message,
-      timestamp: 222,
-    }));
+    const live = updateWindowMessage(
+      hydrated.window,
+      "m-live",
+      (message) => ({
+        ...message,
+        timestamp: 222,
+      }),
+      null,
+    );
     expect(live.held).toBe(true);
     expect(live.window.liveMessages[0].timestamp).toBe(222);
 
     // Outside the window entirely. `held: false` is not an error - it is the
     // case the caller answers by dropping the change and letting hydration
     // serve the host's own version.
-    const absent = updateWindowMessage(live.window, "m-nowhere", (message) => ({
-      ...message,
-      timestamp: 333,
-    }));
+    const absent = updateWindowMessage(
+      live.window,
+      "m-nowhere",
+      (message) => ({
+        ...message,
+        timestamp: 333,
+      }),
+      null,
+    );
     expect(absent.held).toBe(false);
     expect(absent.window).toBe(live.window);
   });
@@ -4768,8 +5030,11 @@ describe("records the index has not placed yet", () => {
 
     const seededBytes = seeded.records.messages.get("m-0")?.bytes;
 
-    const grown = updateWindowMessage(seeded, "m-0", (message) =>
-      messageWithText(message, "a much longer body ".repeat(40)),
+    const grown = updateWindowMessage(
+      seeded,
+      "m-0",
+      (message) => messageWithText(message, "a much longer body ".repeat(40)),
+      null,
     );
     expect(grown.held).toBe(true);
     const grownEntry = grown.window.records.messages.get("m-0");
@@ -4783,8 +5048,11 @@ describe("records the index has not placed yet", () => {
     expect(grownEntry?.bytes).toBeGreaterThan(seededBytes ?? -1);
     expect(grown.window.hydratedBytes).toBe(freshBytesFromLedger(grown.window));
 
-    const shrunk = updateWindowMessage(grown.window, "m-0", (message) =>
-      messageWithText(message, "x"),
+    const shrunk = updateWindowMessage(
+      grown.window,
+      "m-0",
+      (message) => messageWithText(message, "x"),
+      null,
     );
     const shrunkEntry = shrunk.window.records.messages.get("m-0");
     expect(shrunkEntry?.bytes).toBe(
@@ -4828,8 +5096,11 @@ describe("the streaming row's byte charge", () => {
 
   it("leaves the figure alone while streaming, and names the row it owes", () => {
     const seeded = windowWithColdAndTail();
-    const streamed = streamWindowMessage(seeded, "live", (message) =>
-      messageWithText(message, "streamed body ".repeat(200)),
+    const streamed = streamWindowMessage(
+      seeded,
+      "live",
+      (message) => messageWithText(message, "streamed body ".repeat(200)),
+      null,
     );
 
     expect(streamed.held).toBe(true);
@@ -4841,11 +5112,17 @@ describe("the streaming row's byte charge", () => {
   it("settles to the same number an exact charge would have reached", () => {
     const seeded = windowWithColdAndTail();
     const text = "streamed body ".repeat(200);
-    const deferred = streamWindowMessage(seeded, "live", (message) =>
-      messageWithText(message, text),
+    const deferred = streamWindowMessage(
+      seeded,
+      "live",
+      (message) => messageWithText(message, text),
+      null,
     );
-    const exact = updateWindowMessage(seeded, "live", (message) =>
-      messageWithText(message, text),
+    const exact = updateWindowMessage(
+      seeded,
+      "live",
+      (message) => messageWithText(message, text),
+      null,
     );
 
     const settled = settleWindowBytes(deferred.window);
@@ -4856,8 +5133,11 @@ describe("the streaming row's byte charge", () => {
   it("does not name the same row twice across a turn's worth of deltas", () => {
     let window = windowWithColdAndTail();
     for (let index = 0; index < 50; index += 1) {
-      window = streamWindowMessage(window, "live", (message) =>
-        messageWithText(message, `body ${index}`),
+      window = streamWindowMessage(
+        window,
+        "live",
+        (message) => messageWithText(message, `body ${index}`),
+        null,
       ).window;
     }
     expect(window.unsettledByteMessageIds).toEqual(["live"]);
@@ -4870,8 +5150,11 @@ describe("the streaming row's byte charge", () => {
     // under budget and evict nothing.
     const seeded = windowWithColdAndTail();
     const budget = seeded.hydratedBytes + 100;
-    const streamed = streamWindowMessage(seeded, "live", (message) =>
-      messageWithText(message, "streamed body ".repeat(200)),
+    const streamed = streamWindowMessage(
+      seeded,
+      "live",
+      (message) => messageWithText(message, "streamed body ".repeat(200)),
+      null,
     ).window;
 
     // Under the STALE figure this window fits, so nothing would be dropped.
@@ -4886,8 +5169,11 @@ describe("the streaming row's byte charge", () => {
     // The other half: settling must not become a reason to evict. A row that
     // grew by a little stays inside a budget that accommodates it.
     const seeded = windowWithColdAndTail();
-    const streamed = streamWindowMessage(seeded, "live", (message) =>
-      messageWithText(message, "a bit more"),
+    const streamed = streamWindowMessage(
+      seeded,
+      "live",
+      (message) => messageWithText(message, "a bit more"),
+      null,
     ).window;
     const evicted = evictTranscriptWindowToBudget(
       streamed,
@@ -4953,8 +5239,11 @@ describe("the streaming row's byte charge", () => {
     // do until the streamed row grows.
     expect(rebased.staleSpans.map((span) => span.fromOrdinal)).toEqual([0, 10]);
 
-    const streamed = streamWindowMessage(rebased, "m-stream", (message) =>
-      messageWithText(message, bulk),
+    const streamed = streamWindowMessage(
+      rebased,
+      "m-stream",
+      (message) => messageWithText(message, bulk),
+      null,
     );
     // Deferred by construction, so the figure is not yet true and the bound
     // deliberately has nothing to act on.
@@ -5120,8 +5409,11 @@ describe("the streaming row's byte charge", () => {
       null,
       null,
     );
-    const streamed = streamWindowMessage(seeded, "m-stream", (message) =>
-      messageWithText(message, bulk),
+    const streamed = streamWindowMessage(
+      seeded,
+      "m-stream",
+      (message) => messageWithText(message, bulk),
+      null,
     );
     expect(streamed.window.unsettledByteMessageIds).toEqual(["m-stream"]);
 
@@ -5201,8 +5493,8 @@ describe("the streaming row's byte charge", () => {
         null,
       );
 
-    const grownWhileFresh = rebase(mapWindowMessages(seeded, grow));
-    const grownWhileStale = mapWindowMessages(rebase(seeded), grow);
+    const grownWhileFresh = rebase(mapWindowMessages(seeded, grow, null));
+    const grownWhileStale = mapWindowMessages(rebase(seeded), grow, null);
     const rebasedSeeded = rebase(seeded);
 
     expect(
@@ -8142,10 +8434,10 @@ describe("what a span charges the byte budget", () => {
     const grow = (message: Message): Message =>
       messageWithText(message, "streamed body ".repeat(50));
     const withContext = settleWindowBytes(
-      streamWindowMessage(hydrated(CONTEXT), "m-0", grow).window,
+      streamWindowMessage(hydrated(CONTEXT), "m-0", grow, null).window,
     );
     const bare = settleWindowBytes(
-      streamWindowMessage(hydrated({}), "m-0", grow).window,
+      streamWindowMessage(hydrated({}), "m-0", grow, null).window,
     );
 
     expect(withContext.spans[0].contextBytes).toBeGreaterThan(0);
@@ -8157,8 +8449,8 @@ describe("what a span charges the byte budget", () => {
   it("keeps the context charge when records are remapped", () => {
     const rewrite = (message: Message): Message =>
       messageWithText(message, "a rewritten body");
-    const withContext = mapWindowMessages(hydrated(CONTEXT), rewrite);
-    const bare = mapWindowMessages(hydrated({}), rewrite);
+    const withContext = mapWindowMessages(hydrated(CONTEXT), rewrite, null);
+    const bare = mapWindowMessages(hydrated({}), rewrite, null);
 
     // Same gap, same reason: a remap rewrites records and leaves the context
     // map untouched, so the difference after it must still be exactly the

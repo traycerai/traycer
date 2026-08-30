@@ -35,11 +35,13 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  *
  * ## The sequence counter is monotonic for the store's life and NEVER resets
  *
- * Invalidation and per-record resets clear ENTRIES only; a held stamp naming
- * a cleared entry finds no occurrence and is treated as no evidence. A
- * restarting counter would let a pre-invalidation stamp compare equal to a
- * post-invalidation witness - a fabricated cross-boundary verdict, the exact
- * thing the lineage boundary exists to prevent. The same counter also stamps
+ * Invalidation and per-record resets clear ENTRIES only; a held stamp from a
+ * cleared era can never yield a verdict on its own, because the verdict needs
+ * the SERVED side too and that side matches against the occurrences - cleared
+ * means no match, no match means silence. A restarting counter would let a
+ * pre-invalidation stamp compare equal to a post-invalidation witness - a
+ * fabricated cross-boundary verdict, the exact thing the lineage boundary
+ * exists to prevent. The same counter also stamps
  * capture and reset moments, so "captured before or after the record's last
  * authoritative replacement" is a plain comparison (see
  * {@link ImageWitnessStore.lineageFloor}).
@@ -127,6 +129,17 @@ export interface ImageWitnessStore {
     canonicalSource: string,
     seq: number,
   ) => void;
+  /**
+   * Carry a copy's evidence across a client-local rewrite. The next object
+   * DESCENDS from the previous one - same capture lineage, same per-source
+   * stamps - so the evidence follows it; without the carry, every rewrite
+   * (an image apply to a multi-image record, a streaming block delta, a
+   * steer remap) would strand the other sources' stamps and the capture
+   * moment on the discarded object, and rule 2's cross-source dominance
+   * would be unreachable for any record with two or more differing sources.
+   * Absent evidence carries as absent.
+   */
+  readonly carryRewrittenCopy: (previous: Message, next: Message) => void;
   /**
    * Seat-time stamping for a copy that just arrived by serve: per-source
    * unique content match (nothing on no match or an ambiguous one), plus the
@@ -218,9 +231,10 @@ export function createImageWitnessStore(): ImageWitnessStore {
         }
         heldEvidence.set(message, {
           stamps: new Map([[canonicalSource, applied]]),
-          // A rewritten copy descends from a copy captured earlier; with that
-          // ancestry unknown (the rewrite replaced the object), the write
-          // itself is the freshest capture fact available.
+          // A rewritten copy descends from a copy captured earlier; when that
+          // ancestry was not carried (no witness store on the rewrite path,
+          // or a copy this store never saw seat), the write itself is the
+          // freshest capture fact available.
           capturedAt: applied,
         });
       };
@@ -230,6 +244,17 @@ export function createImageWitnessStore(): ImageWitnessStore {
       // per holder.
       const entry = window.records.messages.get(messageId);
       if (entry !== undefined) stamp(entry.record);
+    },
+    carryRewrittenCopy: (previous, next) => {
+      if (previous === next) return;
+      const evidence = heldEvidence.get(previous);
+      if (evidence === undefined) return;
+      // A COPY of the stamps, not an alias: the discarded object can still be
+      // read transiently, and the two must not share mutation from here on.
+      heldEvidence.set(next, {
+        stamps: new Map(evidence.stamps),
+        capturedAt: evidence.capturedAt,
+      });
     },
     stampSeatedCopy: (copy) => {
       if (heldEvidence.has(copy)) return;

@@ -70,10 +70,6 @@ interface SummaryAssemblyEntry {
   state: "open" | "closed" | "abandoned";
 }
 
-interface SummaryRestreamEntry {
-  readonly scope: "summary-restream";
-}
-
 export interface SummaryTrust {
   /** An assembly exists for the current stream - the panel has a delivery. */
   readonly started: boolean;
@@ -159,8 +155,7 @@ export interface RecoveryLedger {
    * first observed chunk replaces the previous generation's entry - entries
    * never accumulate, and a dropped final chunk for gen N cannot hold the
    * seated flag hostage once gen N+1 arrives. A non-final chunk of the
-   * current generation RE-OPENS a closed entry (un-seats). Consumes any open
-   * `summary-restream` entry: the stream it asked for is arriving.
+   * current generation RE-OPENS a closed entry (un-seats).
    */
   readonly observeSummaryChunk: (generation: number) => void;
   /** The generation's final chunk landed with contiguous coverage. */
@@ -171,13 +166,6 @@ export interface RecoveryLedger {
    * vouches for nothing and the next chunk must read as a change.
    */
   readonly resetSummaryStream: () => void;
-  /** A summary restream was requested (rides a resnapshot). */
-  readonly openSummaryRestream: () => void;
-  /**
-   * Whether a requested restream has not yet produced a chunk - open until
-   * the assembly its response's first chunk opens replaces it.
-   */
-  readonly hasOpenSummaryRestream: () => boolean;
   /**
    * The one derivation of both published trust flags. Deriving one and
    * hand-setting the other is the two-answers drift this ledger removes.
@@ -201,7 +189,6 @@ export function createRecoveryLedger(): RecoveryLedger {
   const ranges = new Map<string, RangeEntry>();
   const recoveries: (ResnapshotEntry | SkeletonCompletionEntry)[] = [];
   let summaryAssembly: SummaryAssemblyEntry | null = null;
-  let summaryRestream: SummaryRestreamEntry | null = null;
 
   const openRecovery = <Scope extends "resnapshot" | "skeleton-completion">(
     scope: Scope,
@@ -296,8 +283,14 @@ export function createRecoveryLedger(): RecoveryLedger {
       // definition, and a same-epoch rebuild answers the same obligation).
       dropRecoveries((entry) => entry.scope !== "resnapshot");
       // Recovery entries from other epochs describe streams that can no
-      // longer arrive; the boundary's own epoch carries the obligation now.
-      dropRecoveries((entry) => entry.epoch === input.epoch);
+      // longer arrive, and a same-epoch ABANDONED entry's obligation is
+      // re-carried by whatever this boundary opens - keeping it would let
+      // rebuild-abandon cycles at a stagnant epoch accumulate residue for
+      // the life of the session. The boundary's own epoch's OPEN entries
+      // carry forward.
+      dropRecoveries(
+        (entry) => entry.epoch === input.epoch && entry.state === "open",
+      );
       if (input.announcesRebuild) {
         openRecovery("skeleton-completion", input.epoch);
       }
@@ -341,7 +334,6 @@ export function createRecoveryLedger(): RecoveryLedger {
           entry.state === "open",
       ),
     observeSummaryChunk: (generation) => {
-      summaryRestream = null;
       if (
         summaryAssembly !== null &&
         summaryAssembly.generation === generation
@@ -362,12 +354,7 @@ export function createRecoveryLedger(): RecoveryLedger {
     },
     resetSummaryStream: () => {
       summaryAssembly = null;
-      summaryRestream = null;
     },
-    openSummaryRestream: () => {
-      summaryRestream = { scope: "summary-restream" };
-    },
-    hasOpenSummaryRestream: () => summaryRestream !== null,
     summaryTrust: () => ({
       started: summaryAssembly !== null,
       seated: summaryAssembly?.state === "closed",
@@ -386,7 +373,6 @@ export function createRecoveryLedger(): RecoveryLedger {
       ranges.clear();
       recoveries.length = 0;
       summaryAssembly = null;
-      summaryRestream = null;
     },
   };
 }

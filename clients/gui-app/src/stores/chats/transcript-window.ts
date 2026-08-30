@@ -1389,8 +1389,12 @@ export function updateWindowMessage(
   window: TranscriptWindow,
   messageId: string,
   update: (message: Message) => Message,
+  witnesses: ImageWitnessStore | null,
 ): { readonly window: TranscriptWindow; readonly held: boolean } {
-  return rewriteWindowMessage(window, messageId, update, "now");
+  return rewriteWindowMessage(window, messageId, update, {
+    charge: "now",
+    witnesses,
+  });
 }
 
 /**
@@ -1407,8 +1411,12 @@ export function streamWindowMessage(
   window: TranscriptWindow,
   messageId: string,
   update: (message: Message) => Message,
+  witnesses: ImageWitnessStore | null,
 ): { readonly window: TranscriptWindow; readonly held: boolean } {
-  return rewriteWindowMessage(window, messageId, update, "deferred");
+  return rewriteWindowMessage(window, messageId, update, {
+    charge: "deferred",
+    witnesses,
+  });
 }
 
 /**
@@ -1430,6 +1438,7 @@ export function streamWindowMessage(
 export function mapWindowMessages(
   window: TranscriptWindow,
   update: (message: Message) => Message,
+  witnesses: ImageWitnessStore | null,
 ): TranscriptWindow {
   // ONE pass over the ledger, because the ledger holds the one copy of every
   // span-referenced record - the per-tier walks this replaced were the same
@@ -1444,6 +1453,10 @@ export function mapWindowMessages(
       nextEntries.set(id, entry);
       continue;
     }
+    // The rewritten object descends from the held one - its image evidence
+    // (stamps, capture moment) follows it, or rule 2 goes silent for every
+    // source the next witnessed write does not re-stamp.
+    witnesses?.carryRewrittenCopy(entry.record, record);
     ledgerChanged = true;
     nextEntries.set(id, {
       record,
@@ -1452,7 +1465,11 @@ export function mapWindowMessages(
       touchedAt: entry.touchedAt,
     });
   }
-  const liveMessages = window.liveMessages.map(update);
+  const liveMessages = window.liveMessages.map((message) => {
+    const next = update(message);
+    if (next !== message) witnesses?.carryRewrittenCopy(message, next);
+    return next;
+  });
   const liveChanged = liveMessages.some(
     (message, index) => message !== window.liveMessages[index],
   );
@@ -1537,10 +1554,10 @@ export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
  *
  * The cheap guard is the point. `boundedStaleSpans` scans every carried row id
  * to build its coverage set, which is proportional to the CARRY rather than to
- * the handful of records a rewrite touches; summing `span.bytes` is
- * proportional to the SPANS, the same shape as the `totalBytes(spans)` these
- * callers already compute. So the scan is paid at the crossing that needs it
- * and nowhere else.
+ * the handful of records a rewrite touches; `staleTierBytes` is proportional
+ * to the records the carry references - the ledger-dedup shape every other
+ * byte figure here already pays. So the scan is paid at the crossing that
+ * needs it and nowhere else.
  */
 function boundStaleTierToBudget(window: TranscriptWindow): TranscriptWindow {
   if (window.staleSpans.length === 0) return window;
@@ -1564,8 +1581,12 @@ function rewriteWindowMessage(
   window: TranscriptWindow,
   messageId: string,
   update: (message: Message) => Message,
-  charge: "now" | "deferred",
+  apply: {
+    readonly charge: "now" | "deferred";
+    readonly witnesses: ImageWitnessStore | null;
+  },
 ): { readonly window: TranscriptWindow; readonly held: boolean } {
+  const { charge, witnesses } = apply;
   // ONE ledger entry, wherever it is referenced from - the per-holder walk
   // this replaced was the same record rewritten once per span. A record held
   // ONLY by a stale span still counts as held, and rewriting it is
@@ -1586,6 +1607,12 @@ function rewriteWindowMessage(
   let hydratedBytes = window.hydratedBytes;
   if (entry !== undefined) {
     const next = update(entry.record);
+    // The rewritten object descends from the held one - its image evidence
+    // (stamps, capture moment) follows it. On the image-apply path the
+    // caller's `stampRewrittenCopies` then MERGES the applied source's stamp
+    // into the carried set; without the carry it would seed from nothing and
+    // strand every other source's stamp on the discarded object.
+    witnesses?.carryRewrittenCopy(entry.record, next);
     // A `now` charge measures the NEW body once and lets the entry's held
     // figure supply the old one - no serialization of the previous copy, and
     // any residual staleness in the held figure self-corrects. `deferred`
@@ -1626,9 +1653,12 @@ function rewriteWindowMessage(
   const liveMessages =
     liveIndex < 0
       ? window.liveMessages
-      : window.liveMessages.map((message, index) =>
-          index === liveIndex ? update(message) : message,
-        );
+      : window.liveMessages.map((message, index) => {
+          if (index !== liveIndex) return message;
+          const next = update(message);
+          if (next !== message) witnesses?.carryRewrittenCopy(message, next);
+          return next;
+        });
   const next: TranscriptWindow = {
     ...window,
     records,
@@ -3552,9 +3582,9 @@ function retireCoveredStaleSpans(window: TranscriptWindow): TranscriptWindow {
  * declared the index invalid, or the client detected a loss the host does not
  * know about - and the remedy is identical, because there is only one: a
  * `resnapshot`. The frame's `epoch`, `rowCount` and `indexRevision` are adopted
- * rather than the held ones so the resnapshot latch
- * (`resnapshotRequestedForEpoch`) is keyed on the space the client is being
- * moved INTO, which is the space its next request has to be framed against.
+ * rather than the held ones so the recovery ledger's resnapshot entry is keyed
+ * on the space the client is being moved INTO, which is the space its next
+ * request has to be framed against.
  */
 function voidedTranscriptWindow(
   window: TranscriptWindow,

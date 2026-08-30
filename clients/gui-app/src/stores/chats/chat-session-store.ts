@@ -2836,13 +2836,12 @@ export function createChatSessionStoreWithNotificationDependencies(
      * record of which set this client holds, so the reconcile actually
      * re-streams instead of short-circuiting on an identity match).
      *
-     * Deduped on the same `resnapshotRequestedForEpoch` latch the invalidated
-     * index uses, and deliberately the SAME latch rather than a second one:
-     * one resnapshot repairs both, so two independent latches would send two
-     * for a frame that stales both at once.
+     * Deduped on the same recovery-ledger resnapshot entry the invalidated
+     * index uses, and deliberately the SAME entry rather than a second one:
+     * one resnapshot repairs both, so two independent obligations would send
+     * two for a frame that stales both at once.
      */
     const requestSummaryRestream = (): void => {
-      recovery.openSummaryRestream();
       requestResnapshotOnceForEpoch(get().transcriptWindow.epoch);
     };
 
@@ -3423,6 +3422,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         state.transcriptWindow,
         rewrittenId,
         () => settled,
+        imageWitnesses,
       );
       return {
         patch: {
@@ -3695,23 +3695,30 @@ export function createChatSessionStoreWithNotificationDependencies(
         // unbudgeted means a reader who hydrated scrollback and then stopped
         // asking for ranges accumulates every completed turn's tail without
         // the budget ever running.
+        const windowBeforeSnapshot = get().transcriptWindow;
+        const seated = applyWindowedSnapshot(
+          windowBeforeSnapshot,
+          {
+            epoch: frame.snapshot.transcriptEpoch,
+            rowCount: frame.snapshot.rowCount,
+            indexRevision: frame.snapshot.indexRevision,
+            tail: frame.snapshot.tail,
+          },
+          // The STORE's active turn, not the frame's: the held-copy
+          // preference is about the client's current delta-rewrite state,
+          // and a completion snapshot whose frame already settled the turn
+          // must still not displace a fresher held copy while the store is
+          // mid-handoff.
+          get().activeTurn?.turnId ?? null,
+          imageWitnesses,
+        );
+        // The fold returns its input BY IDENTITY when it refuses the frame (a
+        // stale-epoch snapshot with a concrete revision, a same-epoch
+        // straggler), and every acceptance mints a new window - so identity IS
+        // the acceptance fact, read before the evict below can obscure it.
+        const snapshotAccepted = seated !== windowBeforeSnapshot;
         const window = evictTranscriptWindowToBudget(
-          applyWindowedSnapshot(
-            get().transcriptWindow,
-            {
-              epoch: frame.snapshot.transcriptEpoch,
-              rowCount: frame.snapshot.rowCount,
-              indexRevision: frame.snapshot.indexRevision,
-              tail: frame.snapshot.tail,
-            },
-            // The STORE's active turn, not the frame's: the held-copy
-            // preference is about the client's current delta-rewrite state,
-            // and a completion snapshot whose frame already settled the turn
-            // must still not displace a fresher held copy while the store is
-            // mid-handoff.
-            get().activeTurn?.turnId ?? null,
-            imageWitnesses,
-          ),
+          seated,
           TRANSCRIPT_WINDOW_MAX_BYTES,
           visibleTranscriptRange,
           // The FRAME's pair, not the store's: this runs before the snapshot's
@@ -3751,10 +3758,18 @@ export function createChatSessionStoreWithNotificationDependencies(
         // is invalidated on the same edge and is safe for the same reason:
         // nothing framed before the boundary can seat after it.
         const rebased = window.epoch !== epochBeforeSnapshot;
+        // Gated on the fold ACCEPTING the frame, not only on what the frame
+        // claims: a refused straggler leaves the window unchanged, and if
+        // that window was already invalidated (a void awaiting its rebuild),
+        // an ungated boundary would fire on a frame that moved nothing -
+        // dropping the open resnapshot entry in exactly the invalidated
+        // stretch its dedup protects, and wiping lineage evidence for
+        // comparisons still in the air.
         if (
-          frame.snapshot.indexRevision === null ||
-          rebased ||
-          window.invalidated
+          snapshotAccepted &&
+          (frame.snapshot.indexRevision === null ||
+            rebased ||
+            window.invalidated)
         ) {
           clearInFlightHydration();
           recovery.authorityBoundary({
@@ -4537,7 +4552,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           const nextWindow =
             remap === null || !windowed
               ? seated
-              : mapWindowMessages(seated, remap);
+              : mapWindowMessages(seated, remap, imageWitnesses);
           const nextMessages = turnStateMessages({
             windowed,
             previousMessages: state.messages,
@@ -6964,7 +6979,7 @@ function applyBlockDelta(
 ): Partial<ChatSessionState> {
   return event.type === "image_resolution.updated"
     ? applyImageResolutionDelta(state, event, witnesses)
-    : applyContentDelta(state, event);
+    : applyContentDelta(state, event, witnesses);
 }
 
 function applyImageResolutionDelta(
@@ -7043,7 +7058,7 @@ function applyImageResolutionDelta(
       message.messageId,
       (target) =>
         target.role === "assistant" ? { ...target, imageResolutions } : target,
-      "now",
+      { charge: "now", witnesses },
     ) ?? {};
   // An APPLIED write stamps exactly - the applied witness names its own
   // sequence, and `rewriteWindowMessage` rewrote every holder, so every copy
@@ -7067,6 +7082,7 @@ function applyImageResolutionDelta(
 function applyContentDelta(
   state: ChatSessionState,
   event: Exclude<RuntimeEvent, { type: "image_resolution.updated" }>,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   // `usage.updated` carries the live in-flight context usage so the
   // "% context left" composer chip can update during the turn. It must
@@ -7087,9 +7103,9 @@ function applyContentDelta(
   // new turn until its first usage.updated arrives). Always full reset.
   if (event.type === "turn.started") {
     if (state.liveTurnUsage === null) {
-      return applyContentBlockDelta(state, event);
+      return applyContentBlockDelta(state, event, witnesses);
     }
-    const partial = applyContentBlockDelta(state, event);
+    const partial = applyContentBlockDelta(state, event, witnesses);
     return { ...partial, liveTurnUsage: null };
   }
   // `turn.completed` / `turn.stopped` / `turn.interrupted` / `error`:
@@ -7108,7 +7124,7 @@ function applyContentDelta(
     event.type === "turn.interrupted" ||
     event.type === "error"
   ) {
-    const partial = applyContentBlockDelta(state, event);
+    const partial = applyContentBlockDelta(state, event, witnesses);
     const finalUsage =
       event.type === "turn.completed" && event.usage !== undefined
         ? event.usage
@@ -7117,7 +7133,7 @@ function applyContentDelta(
       ? partial
       : { ...partial, liveTurnUsage: finalUsage };
   }
-  return applyContentBlockDelta(state, event);
+  return applyContentBlockDelta(state, event, witnesses);
 }
 
 // The block id whose OWNING message a detached backgrounded-subagent event
@@ -7425,8 +7441,12 @@ function rewriteMessageInPlace(
   state: ChatSessionState,
   messageId: string,
   update: (message: Message) => Message,
-  charge: "now" | "deferred",
+  apply: {
+    readonly charge: "now" | "deferred";
+    readonly witnesses: ImageWitnessStore | null;
+  },
 ): Partial<ChatSessionState> | null {
+  const { charge, witnesses } = apply;
   if (!isWindowedTranscript(state)) {
     const index = state.messages.findIndex(
       (message) => message.messageId === messageId,
@@ -7438,8 +7458,18 @@ function rewriteMessageInPlace(
   }
   const applied =
     charge === "deferred"
-      ? streamWindowMessage(state.transcriptWindow, messageId, update)
-      : updateWindowMessage(state.transcriptWindow, messageId, update);
+      ? streamWindowMessage(
+          state.transcriptWindow,
+          messageId,
+          update,
+          witnesses,
+        )
+      : updateWindowMessage(
+          state.transcriptWindow,
+          messageId,
+          update,
+          witnesses,
+        );
   if (!applied.held) {
     // The row's span is evicted, so the delta is deliberately dropped: the
     // persisted host body carries it at the next hydration. What is NOT
@@ -7739,6 +7769,7 @@ function applySteerSplitCarryoverEvent(
   state: ChatSessionState,
   assistantIndex: number,
   event: RuntimeEvent,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> | null {
   if (assistantIndex < 0) return null;
   const active = state.messages[assistantIndex];
@@ -7776,7 +7807,7 @@ function applySteerSplitCarryoverEvent(
                 : { blocksVersion: content.blocksVersion }),
             }
           : target,
-      "now",
+      { charge: "now", witnesses },
     ) ?? {}
   );
 }
@@ -7820,6 +7851,7 @@ function applyEventToOwningMessage(
   state: ChatSessionState,
   event: RuntimeEvent,
   ownerBlockId: string,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> | null {
   const index = state.messages.findIndex((message) =>
     assistantMessageOwnsBlock(message, ownerBlockId),
@@ -7851,7 +7883,7 @@ function applyEventToOwningMessage(
               // replaces blocks/blocksVersion, and this mirrors it so the turn
               // doesn't appear to "complete later".
             },
-      "now",
+      { charge: "now", witnesses },
     ) ?? {}
   );
 }
@@ -7870,8 +7902,9 @@ function applyEventToOwningMessage(
 function applyContentBlockDelta(
   state: ChatSessionState,
   event: RuntimeEvent,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
-  const applied = reduceContentBlockDelta(state, event);
+  const applied = reduceContentBlockDelta(state, event, witnesses);
   if (applied === state) return applied;
   if (!isSubagentCardOpeningEvent(event)) return applied;
   if (state.openedSubagentCardBlockIds.has(event.blockId)) return applied;
@@ -7891,6 +7924,7 @@ function applyContentBlockDelta(
 function reduceContentBlockDelta(
   state: ChatSessionState,
   event: RuntimeEvent,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   const assistantIndex = findAssistantMessageIndex(
     state.messages,
@@ -7909,6 +7943,7 @@ function reduceContentBlockDelta(
       state,
       event,
       detachedTarget.ownerBlockId,
+      witnesses,
     );
     if (routed !== null) return routed;
     // A detached event whose owning message is gone must NOT fall through to
@@ -7961,6 +7996,7 @@ function reduceContentBlockDelta(
     state,
     assistantIndex,
     event,
+    witnesses,
   );
   if (carryoverRouted !== null) return carryoverRouted;
   if (assistantIndex >= 0) {
@@ -8001,7 +8037,7 @@ function reduceContentBlockDelta(
                 : { blocksVersion: content.blocksVersion }),
               timestamp: event.timestamp,
             },
-      "deferred",
+      { charge: "deferred", witnesses },
     );
     return {
       ...(streamed ?? {}),

@@ -1777,4 +1777,84 @@ describe("chat session viewport hydration: resnapshot after invalidation", () =>
       harness.handle.dispose();
     }
   });
+
+  it("a refused same-epoch straggler snapshot does not fire the authority boundary", () => {
+    // The boundary (`clearInFlightHydration` + `recovery.authorityBoundary` +
+    // `imageWitnesses.invalidateAll()`) used to be gated only on the FRAME's
+    // own claim (`indexRevision === null || rebased || window.invalidated`),
+    // never on whether the fold actually ACCEPTED the frame. A same-epoch
+    // straggler - a concrete `indexRevision` BEHIND what this client already
+    // holds - is refused by `applyWindowedSnapshot` outright
+    // (`classifySnapshotRevision` returns "straggler", and the fold returns
+    // its input window BY IDENTITY). But with that window still `invalidated`
+    // from the void below, the old ungated check read `window.invalidated` as
+    // true and fired the boundary anyway - closing the open resnapshot dedup
+    // entry for a frame that moved nothing. The very next planned-hydration
+    // pass (this handler's own trailing `requestPlannedHydration()`, or any
+    // later replan) then found the entry gone and sent a redundant
+    // `requestResnapshot` - one per straggler.
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      harness.callbacks().onIndexChanged(
+        indexChanged({
+          epoch: 2,
+          rowCount: 40,
+          indexRevision: 1,
+          changes: [{ type: "reindexed" }],
+        }),
+      );
+      expect(harness.resnapshotCount()).toBe(1);
+
+      // A void arms `indexRevisionRebuilding` for one frame's exemption from
+      // the revision-direction rules (the counter behind the NEXT frame may
+      // not be the counter this window holds). An ordinary follow-up delta
+      // spends that exemption and advances the held revision to 2, without
+      // touching `invalidated` - exactly "asks once per abandoned epoch"
+      // above's second frame - so the straggler below is judged against a
+      // revision the direction rules actually compare.
+      harness.callbacks().onIndexChanged(
+        indexChanged({
+          epoch: 2,
+          rowCount: 41,
+          indexRevision: 2,
+          changes: [{ type: "appended", entries: [skeletonEntry(40)] }],
+        }),
+      );
+      expect(harness.resnapshotCount()).toBe(1);
+
+      // Same epoch (2), with a concrete `indexRevision` (1) BEHIND the 2 this
+      // client now holds - a straggler, refused whole.
+      const bootstrap = snapshot({
+        rowCount: 41,
+        tailFromOrdinal: 20,
+        tailMessages: [userMessage("tail-late", 20)],
+      });
+      harness.callbacks().onWindowedSnapshot({
+        ...bootstrap,
+        snapshot: {
+          ...bootstrap.snapshot,
+          transcriptEpoch: 2,
+          indexRevision: 1,
+        },
+      });
+      // The refused frame's own trailing replan must not have fired the
+      // boundary and re-sent.
+      expect(harness.resnapshotCount()).toBe(1);
+
+      // A later, independent replan must still find the SAME open entry - not
+      // a fresh one a wrongly-fired boundary would have permitted.
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 5, toOrdinal: 10 });
+      expect(harness.resnapshotCount()).toBe(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  // The control half - an ACCEPTED rebuild announcement (same epoch,
+  // `indexRevision: null`) DOES close the entry, so a later void sends a
+  // fresh `requestResnapshot` - is already pinned above by "re-arms once a
+  // snapshot answers".
 });
