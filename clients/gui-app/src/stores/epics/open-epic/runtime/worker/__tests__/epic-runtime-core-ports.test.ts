@@ -35,6 +35,7 @@ function createSource(
   return {
     hasAttachmentBytes: () => false,
     readAttachmentBytes: neverResolves,
+    acquireBodyLease: () => () => {},
     bodyDocKey: () => null,
     encodeColdState: () => null,
     settleColdState: () => ({ accepted: false }),
@@ -323,5 +324,124 @@ describe("commands.apply", () => {
     });
 
     expect(begun).toEqual([pending]);
+  });
+});
+
+describe("bodies.materialize — the lease it stands on", () => {
+  /** A source whose cold state exists only while a lease is held. */
+  function leasedSource(overrides: Partial<EpicRuntimeCorePortSource>): {
+    readonly source: EpicRuntimeCorePortSource;
+    readonly leases: string[];
+    readonly releases: string[];
+  } {
+    const leases: string[] = [];
+    const releases: string[] = [];
+    let held = 0;
+    const source = createSource({
+      acquireBodyLease: (artifactId) => {
+        leases.push(artifactId);
+        held += 1;
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          releases.push(artifactId);
+          held -= 1;
+        };
+      },
+      bodyDocKey: (artifactId) => `room-${artifactId}`,
+      // The tier's real precondition: `encodeColdState` reads a `replicas`
+      // entry, and that entry exists only for a MATERIALIZED room. Modelling
+      // it is the whole point - a fixture that always returned bytes would
+      // pass against the read-only version that never leased.
+      encodeColdState: (docKey) =>
+        held > 0
+          ? {
+              update: new Uint8Array([1]),
+              seedMode: "full" as const,
+              hostStateVector: null,
+              docGuid: `guid-${docKey}`,
+            }
+          : null,
+      ...overrides,
+    });
+    return { source, leases, releases };
+  }
+
+  it("takes the runtime lease before encoding, so the body is held at all", async () => {
+    const rig = leasedSource({});
+    const ports = buildEpicRuntimeCorePorts(rig.source);
+
+    const materialized = await ports.bodies.materialize("art-1");
+
+    expect(materialized).not.toBeNull();
+    expect(rig.leases).toEqual(["art-1"]);
+    // Retained: the main thread now holds the doc this lease stands for.
+    expect(rig.releases).toEqual([]);
+  });
+
+  it("releases immediately when there is nothing to hand over", async () => {
+    // No cold state means nothing was materialized for the caller, so no
+    // demote will ever come back to release this lease. Holding it would keep
+    // the body subscribed for the session.
+    const rig = leasedSource({ encodeColdState: () => null });
+    const ports = buildEpicRuntimeCorePorts(rig.source);
+
+    await expect(ports.bodies.materialize("art-1")).resolves.toBeNull();
+
+    expect(rig.leases).toEqual(["art-1"]);
+    expect(rig.releases).toEqual(["art-1"]);
+  });
+
+  it("does not stack leases for a docKey already held", async () => {
+    // `bodies.release` decrements a ref-count, and the main side sends ONE
+    // demote per doc - so a second retained release is never called and the
+    // body stream stays open for the session.
+    const rig = leasedSource({});
+    const ports = buildEpicRuntimeCorePorts(rig.source);
+
+    await ports.bodies.materialize("art-1");
+    await ports.bodies.materialize("art-1");
+
+    expect(rig.leases).toEqual(["art-1", "art-1"]);
+    // The second lease came straight back off; the first is still held.
+    expect(rig.releases).toEqual(["art-1"]);
+  });
+
+  it("releases the lease when a demote is ACCEPTED", async () => {
+    const rig = leasedSource({
+      settleColdState: () => ({ accepted: true as const, settledBytes: 12 }),
+    });
+    const ports = buildEpicRuntimeCorePorts(rig.source);
+    await ports.bodies.materialize("art-1");
+
+    await ports.bodies.settle({
+      docKey: "room-art-1",
+      generation: 1,
+      docGuid: "guid-room-art-1",
+      update: new Uint8Array([2]),
+    });
+
+    expect(rig.releases).toEqual(["art-1"]);
+  });
+
+  it("KEEPS the lease when a demote is refused", async () => {
+    // The asymmetry that matters: a refusal means the main thread keeps its
+    // live doc, so the demand and tier lease it stands on are still in use.
+    // Releasing here unsubscribes a body the user still has open.
+    const rig = leasedSource({
+      settleColdState: () => ({ accepted: false as const }),
+    });
+    const ports = buildEpicRuntimeCorePorts(rig.source);
+    await ports.bodies.materialize("art-1");
+
+    await ports.bodies.settle({
+      docKey: "room-art-1",
+      generation: 1,
+      docGuid: "guid-room-art-1",
+      update: new Uint8Array([2]),
+    });
+
+    expect(rig.releases).toEqual([]);
   });
 });

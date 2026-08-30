@@ -99,6 +99,8 @@ export function installEpicRuntimeCore(host: EpicRuntimeWorkerHost): void {
           hasAttachmentBytes: (hash) => runtime.hasAttachmentBytes(hash),
           readAttachmentBytes: (hash, signal) =>
             runtime.readAttachmentBytes(hash, signal),
+          acquireBodyLease: (artifactId) =>
+            runtime.acquireArtifactBodyLease(artifactId),
           bodyDocKey: (artifactId) => runtime.getArtifactBodyDocKey(artifactId),
           encodeColdState: (docKey) =>
             runtime.encodeArtifactBodyColdState(docKey),

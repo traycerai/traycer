@@ -34,6 +34,16 @@ export interface EpicRuntimeCorePortSource {
     hash: string,
     signal: AbortSignal,
   ): Promise<Uint8Array | null>;
+  /**
+   * Take the runtime's body lease and return its release.
+   *
+   * This is what MATERIALIZES. `acquireArtifactBodyLease` takes body-lane
+   * demand ("the lease is also the subscribe" on the lane arm), then the tier
+   * lease that creates the replica entry, then signals a rebind for a new doc
+   * identity. Encoding cold state without it reads a `replicas` entry that
+   * does not exist, so it answers "not held" for every body.
+   */
+  acquireBodyLease(artifactId: string): () => void;
   bodyDocKey(artifactId: string): string | null;
   encodeColdState(docKey: string): ArtifactRoomColdState | null;
   settleColdState(
@@ -114,6 +124,15 @@ function readPendingChatCreation(value: unknown): PendingChatCreation | null {
 export function buildEpicRuntimeCorePorts(
   source: EpicRuntimeCorePortSource,
 ): EpicRuntimeCorePorts {
+  /**
+   * One retained release per resident `docKey`.
+   *
+   * Closure state, not module state - one map per composed runtime, which is
+   * also what keeps this module off the worker-graph ratchet's process-scoped
+   * list.
+   */
+  const heldLeases = new Map<string, () => void>();
+
   return {
     attachments: {
       /**
@@ -137,13 +156,33 @@ export function buildEpicRuntimeCorePorts(
     },
     bodies: {
       materialize: (artifactId) => {
+        // LEASE FIRST. Everything below reads state that only exists because
+        // of it - see `acquireBodyLease`.
+        const release = source.acquireBodyLease(artifactId);
         const docKey = source.bodyDocKey(artifactId);
-        if (docKey === null) return Promise.resolve(null);
+        if (docKey === null) {
+          release();
+          return Promise.resolve(null);
+        }
         const cold = source.encodeColdState(docKey);
         // `null` is NOT empty bytes: a zero-length update applies cleanly and
         // yields an empty document, so conflating them replaces a body with
-        // nothing.
-        if (cold === null) return Promise.resolve(null);
+        // nothing. The lease comes back off - nothing was handed over, so
+        // nothing will come back to release it.
+        if (cold === null) {
+          release();
+          return Promise.resolve(null);
+        }
+        if (heldLeases.has(docKey)) {
+          // Already held for this doc. Drop the SECOND lease rather than
+          // stacking it: the main side has one doc per `docKey` and will send
+          // one demote, so a second retained release would never be called -
+          // and `bodies.release` decrements a ref-count, so an unreleased
+          // extra demand keeps the body stream open for the session.
+          release();
+        } else {
+          heldLeases.set(docKey, release);
+        }
         return Promise.resolve({
           docKey,
           update: cold.update,
@@ -162,6 +201,14 @@ export function buildEpicRuntimeCorePorts(
         // response carries the verdict and the bytes, the main thread keeps
         // the live doc on either refusal, and the in-process port drops it at
         // the same seam.
+        if (settlement.accepted) {
+          // Released ONLY on acceptance, and that asymmetry is the contract: a
+          // refusal means the main thread KEEPS its live doc, so the demand and
+          // the tier lease that doc stands on are still in use. Releasing on a
+          // refusal would unsubscribe a body the user still has open.
+          heldLeases.get(input.docKey)?.();
+          heldLeases.delete(input.docKey);
+        }
         return Promise.resolve(
           settlement.accepted
             ? { accepted: true, settledBytes: settlement.settledBytes }
