@@ -200,7 +200,7 @@ describe("reparentArtifact validates against the projected tree", () => {
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
 
     await expect(
-      handle?.store.getState().reparentArtifact("ghost-node", parent),
+      handle.store.getState().reparentArtifact("ghost-node", parent),
     ).rejects.toMatchObject({ remoteName: "MissingNodeError" });
   });
 
@@ -212,7 +212,7 @@ describe("reparentArtifact validates against the projected tree", () => {
       .applyChatRecords([chatRecord({ chatId: "chat-registry" })], null);
 
     await expect(
-      handle?.store.getState().reparentArtifact(artifact, "chat-registry"),
+      handle.store.getState().reparentArtifact(artifact, "chat-registry"),
     ).rejects.toMatchObject({ remoteName: "CrossFamilyParentError" });
   });
 
@@ -233,7 +233,7 @@ describe("reparentArtifact validates against the projected tree", () => {
     // Moving chat-registry under chat-doc would cycle: chat-doc already
     // descends from chat-registry.
     await expect(
-      handle?.store.getState().reparentArtifact("chat-registry", "chat-doc"),
+      handle.store.getState().reparentArtifact("chat-registry", "chat-doc"),
     ).rejects.toMatchObject({ remoteName: "ReparentCycleError" });
   });
 
