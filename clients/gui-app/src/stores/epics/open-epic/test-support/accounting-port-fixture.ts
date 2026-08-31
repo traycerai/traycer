@@ -69,6 +69,9 @@ export function createRecordingAccountingPort(): RecordingAccountingPort {
       releaseHotDoc(artifactRoomId): void {
         record("releaseHotDoc", artifactRoomId, null);
       },
+      noteHotDocEvictionDeferred(): void {
+        record("noteHotDocEvictionDeferred", null, null);
+      },
     },
   };
 }

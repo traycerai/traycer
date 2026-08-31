@@ -20,10 +20,21 @@
  * - `demoteColdestUnpinned` cannot be cached because it DOES something. It is
  *   deferred: answer `reclaimedBytes: 0` with the last known protected
  *   breakdown, dispatch the request, and let what was actually freed arrive as
- *   the settlements that follow. The accountant already distinguishes a
- *   deferred eviction from a refused one - a zero reclaim with a non-empty
- *   breakdown is "everything here is pinned" - which is why the breakdown is
- *   carried rather than defaulted to empty.
+ *   the settlements that follow.
+ *
+ * That zero is ambiguous on its own - it is the same answer a tier gives when
+ * everything it holds is pinned - and the accountant does NOT read the
+ * protected breakdown to tell the two apart. It reads a flag the evicting tier
+ * raises for itself, so this bridge raises it (`noteHotDocEvictionDeferred`)
+ * from inside the `evict` closure. Without that, every deferred eviction was
+ * counted as a REFUSED one and `evictionsDeferred` stayed zero forever. The
+ * breakdown is still carried rather than defaulted to empty because it is the
+ * honest last-known value, not because it encodes the distinction.
+ *
+ * `bytesReclaimed` accrues nothing for this plane: the bytes arrive later, as
+ * settlements, and attributing them back to the eviction that caused them is a
+ * separate design. Out of scope here, and stated so it is not read as an
+ * oversight.
  */
 import type {
   RuntimeAccountingSnapshot,
@@ -81,6 +92,12 @@ export function createMainAccountingBridge(options: {
               projectionCounts: () =>
                 narrowProjectionCounts(cache.projectionCounts),
               demoteColdestUnpinned: (overBytes): EvictionOutcome => {
+                // BEFORE the dispatch and INSIDE this closure, both required:
+                // `reconcile` clears the flag immediately before calling
+                // `evict`, so a call made anywhere earlier is erased, and this
+                // zero return is the only thing that would otherwise be read as
+                // a refusal.
+                options.port.noteHotDocEvictionDeferred();
                 options.dispatchDemote(overBytes);
                 // Zero freed HERE, with what the tier last refused to give up.
                 // The eviction is real and is happening on the other thread;

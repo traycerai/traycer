@@ -24,6 +24,12 @@ export interface ReplicaMemoryTelemetry {
     readonly evictionsRequested: number;
     readonly bytesReclaimed: number;
     readonly evictionsRefused: number;
+    /**
+     * Requests a tier DISPATCHED rather than declined. Mutually exclusive with
+     * `evictionsRefused` by construction, so reading one without the other
+     * turns "freeing is in flight" into "freeing was refused".
+     */
+    readonly evictionsDeferred: number;
   };
   readonly pressureByPlane: Readonly<Record<BudgetPlaneId, BudgetPressure>>;
   readonly observedCeilingBytes: number;
@@ -47,11 +53,13 @@ export function collectReplicaMemoryTelemetry(
   let evictionsRequested = 0;
   let bytesReclaimed = 0;
   let evictionsRefused = 0;
+  let evictionsDeferred = 0;
   for (const plane of accountant.planes) {
     pressureByPlane[plane.planeId] = plane.pressure;
     evictionsRequested += plane.evictionsRequested;
     bytesReclaimed += plane.bytesReclaimed;
     evictionsRefused += plane.evictionsRefused;
+    evictionsDeferred += plane.evictionsDeferred;
   }
   return {
     accountant,
@@ -62,6 +70,7 @@ export function collectReplicaMemoryTelemetry(
       evictionsRequested,
       bytesReclaimed,
       evictionsRefused,
+      evictionsDeferred,
     },
     pressureByPlane,
     observedCeilingBytes: runtime.observedCeilingBytes,

@@ -98,6 +98,19 @@ export interface EpicRuntimeAccountingPort {
   settleHotDocBytes(artifactRoomId: string, bytes: number): void;
   chargeHotDocProvisional(artifactRoomId: string, bytes: number): void;
   releaseHotDoc(artifactRoomId: string): void;
+
+  /**
+   * This tier is about to DISPATCH an eviction rather than perform one, so the
+   * zero it is about to return means "later", not "refused".
+   *
+   * A `void` member for the reason stated above: the accountant it ultimately
+   * reaches is process-wide and reachable from exactly one module, and a
+   * question-shaped member here would not survive the worker boundary. The
+   * caller is the main-thread accounting bridge, and it must call this from
+   * INSIDE its `evict` closure - `reconcile` clears the flag immediately before
+   * invoking `evict`, so anything set earlier is erased.
+   */
+  noteHotDocEvictionDeferred(): void;
 }
 
 /** What an implementation needs to name this runtime's holders. */

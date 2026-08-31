@@ -130,6 +130,12 @@ export function createWorkerAccountingPort(
       releaseHotDoc(artifactRoomId): void {
         settle({ kind: "hot-doc-release", artifactRoomId });
       },
+      noteHotDocEvictionDeferred(): void {
+        // Deliberately nothing. The deferring tier is the MAIN-side bridge,
+        // which holds the process-backed port directly; a worker-resident
+        // runtime never dispatches a demote to itself, so there is no deferral
+        // here to report.
+      },
     },
   };
 }

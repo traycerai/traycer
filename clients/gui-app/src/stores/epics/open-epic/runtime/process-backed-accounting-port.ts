@@ -161,5 +161,9 @@ export function createProcessBackedAccountingPort(
         hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
       );
     },
+
+    noteHotDocEvictionDeferred(): void {
+      memory.accountant.noteEvictionDeferred(BUDGET_PLANE_IDS.hotDocs);
+    },
   };
 }
