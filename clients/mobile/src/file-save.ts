@@ -1,3 +1,5 @@
+import { Capacitor } from "@capacitor/core";
+import { Device } from "@capacitor/device";
 import { Directory, Filesystem } from "@capacitor/filesystem";
 import { Share } from "@capacitor/share";
 import type {
@@ -341,6 +343,61 @@ function releaseDownloadPath(path: string): void {
 }
 
 /**
+ * The one Android level with no route into the shared Documents folder.
+ *
+ * From API 30 an app may write files it creates there with no permission at
+ * all, and up to API 28 `WRITE_EXTERNAL_STORAGE` is declared and grantable. API
+ * 29 sits between: scoped storage is enforced, and the Documents relaxation
+ * that follows it is not yet in place. Buying it back would mean
+ * `requestLegacyExternalStorage`, i.e. opting the whole app out of scoped
+ * storage for one shrinking OS version - so the honest answer is to not offer
+ * a direct download there at all, and leave the share sheet as the route.
+ */
+const ANDROID_SCOPED_STORAGE_GAP_SDK = 29;
+
+/**
+ * How long the OS is given to name its own version before the probe gives up.
+ *
+ * This runs on the app's mount path, so a plugin call that never settles would
+ * mean an app that never renders. A capability this small must not be able to
+ * do that; the timeout bounds it, and its expiry is answered the same way any
+ * other unknown is (see {@link supportsDirectDownload}).
+ */
+const DEVICE_PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * Whether this device can honour {@link MobileFileSave.downloadFile}.
+ *
+ * Answered WITHOUT a plugin call anywhere but Android - iOS writes into its own
+ * documents container, which no OS version gates - so only one platform pays
+ * the await at all.
+ *
+ * An unknown answer resolves to `true`, deliberately. The two mistakes are not
+ * equal here: a false negative hides a working Download from every device on
+ * every modern Android, while a false positive costs one API level a loud error
+ * toast beside a Share button that still works. A probe that fails or hangs is
+ * a runtime anomaly, and it must not take the common case down with it.
+ */
+export async function supportsDirectDownload(): Promise<boolean> {
+  if (Capacitor.getPlatform() !== "android") return true;
+  try {
+    const info = await Promise.race([
+      Device.getInfo(),
+      new Promise<null>((resolve) => {
+        setTimeout(() => {
+          resolve(null);
+        }, DEVICE_PROBE_TIMEOUT_MS);
+      }),
+    ]);
+    if (info === null) return true;
+    // Absent on a device that reports no SDK version - unknown, so `true`.
+    return info.androidSDKVersion !== ANDROID_SCOPED_STORAGE_GAP_SDK;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * The plugin rejects a dismissed sheet rather than resolving it, and the
  * rejection carries prose rather than a code. Matching the wording is a guess,
  * but the alternative - reporting every rejection as a failure - tells a user
@@ -424,7 +481,26 @@ export class MobileFileSave implements IFileSaveHost {
    * re-open it - the path is the honest record of the location, not a route
    * back to it.
    */
-  async downloadFile(request: FileSaveRequest): Promise<SavedFileLocation> {
+  readonly downloadFile:
+    | ((request: FileSaveRequest) => Promise<SavedFileLocation>)
+    | null;
+
+  /**
+   * @param directDownloads whether this device has a documents destination
+   *   this shell may write to - {@link supportsDirectDownload} answers it.
+   *   `false` makes {@link downloadFile} `null`, which is what stops a surface
+   *   offering a Download it could only ever fail: the capability is absent
+   *   rather than present-and-broken, and Share is unaffected.
+   */
+  constructor(directDownloads: boolean) {
+    this.downloadFile = directDownloads
+      ? (request) => this.writeDownload(request)
+      : null;
+  }
+
+  private async writeDownload(
+    request: FileSaveRequest,
+  ): Promise<SavedFileLocation> {
     const name = toFileName(request.name, request.type);
     const path = await claimDownloadPath(name);
     try {

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Copy, Download, ExternalLink } from "lucide-react";
+import { Copy, Download, ExternalLink, Share2 } from "lucide-react";
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -14,8 +14,15 @@ export interface ImageRemoteOpen {
 export function ImageActions(props: {
   readonly pendingAction: ImageAction | null;
   readonly canCopy: boolean;
+  /**
+   * Whether this shell hands files to an OS chooser, in which case sharing and
+   * downloading are two different acts and both are offered. Ignored beside a
+   * remote image, whose control is Open-in-browser rather than any save.
+   */
+  readonly canShare: boolean;
   readonly remote: ImageRemoteOpen | null;
   readonly onCopy: () => void;
+  readonly onShare: () => void;
   readonly onDownload: () => void;
 }): ReactNode {
   return (
@@ -27,6 +34,15 @@ export function ImageActions(props: {
           pending={props.pendingAction === "copy"}
           onClick={props.onCopy}
           icon={<Copy className="size-3.5" aria-hidden />}
+        />
+      ) : null}
+      {props.canShare && props.remote === null ? (
+        <ImageActionButton
+          label="Share image"
+          disabled={props.pendingAction !== null}
+          pending={props.pendingAction === "share"}
+          onClick={props.onShare}
+          icon={<Share2 className="size-3.5" aria-hidden />}
         />
       ) : null}
       {props.remote === null ? (

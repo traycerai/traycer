@@ -87,7 +87,7 @@ beforeEach(() => {
 describe("toastSavedFile", () => {
   describe("browser runtime (no native save capability)", () => {
     it("shows a plain success toast with no action", () => {
-      toastSavedFile({ name: "a.md", path: null }, vi.fn(), null);
+      toastSavedFile({ name: "a.md", path: null }, vi.fn(), null, "save");
 
       expect(toastSuccess).toHaveBeenCalledWith("Saved a.md");
     });
@@ -101,7 +101,7 @@ describe("toastSavedFile", () => {
       );
 
       const saved = { name: "a.md", path: "/tmp/x/a.md" };
-      toastSavedFile(saved, openSaved, host);
+      toastSavedFile(saved, openSaved, host, "save");
 
       expect(toastSuccess).toHaveBeenCalledTimes(1);
       const [, options] = toastSuccess.mock.calls[0];
@@ -120,21 +120,46 @@ describe("toastSavedFile", () => {
         Promise.resolve(),
       );
 
-      toastSavedFile({ name: "a.md", path: null }, vi.fn(), host);
+      toastSavedFile({ name: "a.md", path: null }, vi.fn(), host, "save");
 
       expect(toastSuccess).toHaveBeenCalledWith("Saved a.md");
     });
   });
 
   describe("phone runtime (a save host that reports no path)", () => {
-    // The share sheet completed, so this IS a save - but nothing came back
-    // that could be re-opened, so offering the action would be a dead button.
+    // Nothing came back that could be re-opened, so offering the action would
+    // be a dead button.
     it("shows a plain toast even though the shell has a native save route", () => {
       const host = fileSaveHost(resolvingSaveFile(null), null);
 
-      toastSavedFile({ name: "a.md", path: null }, vi.fn(), host);
+      toastSavedFile({ name: "a.md", path: null }, vi.fn(), host, "save");
 
       expect(toastSuccess).toHaveBeenCalledWith("Saved a.md");
+    });
+
+    it("says the file was SHARED where the sheet was the route", () => {
+      // The bytes a share sheet is handed live in the app's cache container,
+      // so nothing was saved anywhere the user keeps files. Claiming otherwise
+      // is a plain untruth, and it is the verb the user reads.
+      const host = fileSaveHost(resolvingSaveFile(null), null);
+
+      toastSavedFile({ name: "a.md", path: null }, vi.fn(), host, "share");
+
+      expect(toastSuccess).toHaveBeenCalledWith("Shared a.md");
+    });
+
+    it("still offers no re-open action on a share, path or not", () => {
+      const host = fileSaveHost(resolvingSaveFile(null), null);
+
+      toastSavedFile(
+        { name: "a.md", path: "/tmp/a.md" },
+        vi.fn(),
+        host,
+        "share",
+      );
+
+      const [, options] = toastSuccess.mock.calls[0];
+      expect(isActionToast(options)).toBe(false);
     });
   });
 });

@@ -4,12 +4,26 @@
  * and one that resolves successfully having written nothing.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MobileFileSave } from "../src/file-save";
+import type {
+  FileSaveRequest,
+  SavedFileLocation,
+} from "@traycer-clients/shared/platform/runner-host";
+import { MobileFileSave, supportsDirectDownload } from "../src/file-save";
 
 const nativeMocks = vi.hoisted(() => ({
   writeFile: vi.fn(),
   stat: vi.fn(),
   share: vi.fn(),
+  getPlatform: vi.fn<() => string>(),
+  getInfo: vi.fn(),
+}));
+
+vi.mock("@capacitor/core", () => ({
+  Capacitor: { getPlatform: nativeMocks.getPlatform },
+}));
+
+vi.mock("@capacitor/device", () => ({
+  Device: { getInfo: nativeMocks.getInfo },
 }));
 
 vi.mock("@capacitor/filesystem", () => ({
@@ -85,6 +99,20 @@ function fileNotFoundRejection(): Error {
   return Object.assign(error, { code: "OS-PLUG-FILE-0008" });
 }
 
+/**
+ * The direct-download route of a shell that HAS the capability, narrowed once
+ * so the cases below read as calls rather than as null checks.
+ */
+function directDownload(): (
+  request: FileSaveRequest,
+) => Promise<SavedFileLocation> {
+  const download = new MobileFileSave(true).downloadFile;
+  if (download === null) {
+    throw new Error("A capable shell must expose a direct download.");
+  }
+  return download;
+}
+
 /** The set of paths a stat should report as already taken. */
 function occupyDocuments(paths: readonly string[]): void {
   nativeMocks.stat.mockImplementation((options: { path: string }) =>
@@ -105,11 +133,93 @@ beforeEach(() => {
   nativeMocks.share.mockResolvedValue({
     activityType: "com.apple.DocumentsApp",
   });
+  nativeMocks.getPlatform.mockReturnValue("ios");
+  nativeMocks.getInfo.mockResolvedValue({ androidSDKVersion: 34 });
+});
+
+describe("supportsDirectDownload", () => {
+  it("answers without asking the OS anywhere but Android", async () => {
+    nativeMocks.getPlatform.mockReturnValue("ios");
+
+    await expect(supportsDirectDownload()).resolves.toBe(true);
+    // iOS writes into its own documents container, which no OS version gates,
+    // so that platform must not pay a plugin round trip on the mount path.
+    expect(nativeMocks.getInfo).not.toHaveBeenCalled();
+  });
+
+  it("withholds the capability on the one Android level with no route", async () => {
+    // API 29 enforces scoped storage without the Documents relaxation that
+    // follows it, so a direct write there could only ever fail.
+    nativeMocks.getPlatform.mockReturnValue("android");
+    nativeMocks.getInfo.mockResolvedValue({ androidSDKVersion: 29 });
+
+    await expect(supportsDirectDownload()).resolves.toBe(false);
+  });
+
+  it("keeps the capability on the Android levels that do have a route", async () => {
+    nativeMocks.getPlatform.mockReturnValue("android");
+    for (const sdk of [26, 28, 30, 33, 36]) {
+      nativeMocks.getInfo.mockResolvedValue({ androidSDKVersion: sdk });
+      await expect(supportsDirectDownload()).resolves.toBe(true);
+    }
+  });
+
+  it("assumes the capability when the probe fails", async () => {
+    // A false negative would hide a working Download from every modern
+    // Android; a false positive costs one API level a loud error beside a
+    // Share that still works. The probe failing is a runtime anomaly and must
+    // not take the common case down with it.
+    nativeMocks.getPlatform.mockReturnValue("android");
+    nativeMocks.getInfo.mockRejectedValue(new Error("plugin unavailable"));
+
+    await expect(supportsDirectDownload()).resolves.toBe(true);
+  });
+
+  it("assumes the capability when the device names no SDK version", async () => {
+    nativeMocks.getPlatform.mockReturnValue("android");
+    nativeMocks.getInfo.mockResolvedValue({});
+
+    await expect(supportsDirectDownload()).resolves.toBe(true);
+  });
+
+  it("gives up on a probe that never settles rather than blocking the mount", async () => {
+    // This runs on the app's mount path: a plugin call that never resolves
+    // would otherwise mean an app that never renders.
+    vi.useFakeTimers();
+    try {
+      nativeMocks.getPlatform.mockReturnValue("android");
+      nativeMocks.getInfo.mockReturnValue(new Promise(() => undefined));
+
+      const settled = supportsDirectDownload();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(settled).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("MobileFileSave capability", () => {
+  it("withholds the direct download where the device has no destination", () => {
+    // Absent rather than present-and-broken: a surface reads the capability
+    // and simply does not offer a Download it could only ever fail.
+    expect(new MobileFileSave(false).downloadFile).toBeNull();
+  });
+
+  it("still offers the share sheet without a direct download", async () => {
+    const saved = await new MobileFileSave(false).saveFile(
+      request("diagram.png", new Uint8Array([1])),
+    );
+
+    expect(nativeMocks.share).toHaveBeenCalledTimes(1);
+    expect(saved).toEqual({ name: "diagram.png", path: null });
+  });
 });
 
 describe("MobileFileSave", () => {
   it("stages the bytes in the cache container and offers that file to the share sheet", async () => {
-    const saved = await new MobileFileSave().saveFile(
+    const saved = await new MobileFileSave(true).saveFile(
       request("diagram.png", new Uint8Array([1, 2, 3])),
     );
 
@@ -132,7 +242,7 @@ describe("MobileFileSave", () => {
   it("hands over the exact bytes it was given", async () => {
     const bytes = new Uint8Array([0, 1, 127, 128, 200, 255]);
 
-    await new MobileFileSave().saveFile(request("blob.bin", bytes));
+    await new MobileFileSave(true).saveFile(request("blob.bin", bytes));
 
     expect(Array.from(writtenBytes())).toEqual(Array.from(bytes));
   });
@@ -145,7 +255,7 @@ describe("MobileFileSave", () => {
       bytes[index] = index % 256;
     }
 
-    await new MobileFileSave().saveFile(request("big.bin", bytes));
+    await new MobileFileSave(true).saveFile(request("big.bin", bytes));
 
     const written = writtenBytes();
     expect(written.length).toBe(bytes.length);
@@ -159,7 +269,7 @@ describe("MobileFileSave", () => {
     nativeMocks.share.mockRejectedValue(new Error("Share canceled"));
 
     await expect(
-      new MobileFileSave().saveFile(
+      new MobileFileSave(true).saveFile(
         request("diagram.png", new Uint8Array([1])),
       ),
     ).resolves.toBeNull();
@@ -169,7 +279,7 @@ describe("MobileFileSave", () => {
     nativeMocks.share.mockRejectedValue(new Error("Share API not available"));
 
     await expect(
-      new MobileFileSave().saveFile(
+      new MobileFileSave(true).saveFile(
         request("diagram.png", new Uint8Array([1])),
       ),
     ).rejects.toThrow("Share API not available");
@@ -178,7 +288,7 @@ describe("MobileFileSave", () => {
   it("keeps a composed name inside the export directory", async () => {
     // Suggested names are built from user content (an image's alt text, an
     // epic title), so a separator in one must not choose a directory.
-    await new MobileFileSave().saveFile(
+    await new MobileFileSave(true).saveFile(
       request("../../escape/notes.md", new Uint8Array([1])),
     );
 
@@ -187,7 +297,7 @@ describe("MobileFileSave", () => {
   });
 
   it("falls back to a name rather than writing to the directory itself", async () => {
-    const saved = await new MobileFileSave().saveFile(
+    const saved = await new MobileFileSave(true).saveFile(
       request("   ", new Uint8Array([1])),
     );
 
@@ -199,7 +309,9 @@ describe("MobileFileSave", () => {
   it("falls back for a padded dot, which names the staging directory itself", async () => {
     // Whitespace around the dots hides them from a strip that runs first, and
     // `.../.` is the directory rather than a file in it.
-    await new MobileFileSave().saveFile(request(" . ", new Uint8Array([1])));
+    await new MobileFileSave(true).saveFile(
+      request(" . ", new Uint8Array([1])),
+    );
 
     // The property is that it names a FILE, not the directory or its parent -
     // asserted as such, so the fallback's exact spelling stays free to move.
@@ -209,7 +321,9 @@ describe("MobileFileSave", () => {
   });
 
   it("falls back for a padded double dot, which names the parent", async () => {
-    await new MobileFileSave().saveFile(request(" .. ", new Uint8Array([1])));
+    await new MobileFileSave(true).saveFile(
+      request(" .. ", new Uint8Array([1])),
+    );
 
     expect(stagedBaseName(0)).not.toBe(".");
     expect(stagedBaseName(0)).not.toBe("..");
@@ -221,7 +335,7 @@ describe("MobileFileSave", () => {
     // receiving app finishing its read of the granted URI. Two exports sharing
     // a path would let the second replace bytes the first recipient is still
     // consuming - the same late-read fact that makes deleting unsafe.
-    const host = new MobileFileSave();
+    const host = new MobileFileSave(true);
     await host.saveFile(request("mermaid-diagram.png", new Uint8Array([1])));
     await host.saveFile(request("mermaid-diagram.png", new Uint8Array([2])));
 
@@ -238,7 +352,7 @@ describe("MobileFileSave", () => {
     const title = "経過報告".repeat(30);
     expect(title.length).toBe(120);
 
-    const saved = await new MobileFileSave().saveFile(
+    const saved = await new MobileFileSave(true).saveFile(
       request(`${title}.md`, new Uint8Array([1])),
     );
 
@@ -257,7 +371,7 @@ describe("MobileFileSave", () => {
     // Four bytes each: the same 120-code-point allowance is 480 bytes here.
     const title = "🌊".repeat(120);
 
-    await new MobileFileSave().saveFile(
+    await new MobileFileSave(true).saveFile(
       request(`${title}.png`, new Uint8Array([1])),
     );
 
@@ -268,7 +382,7 @@ describe("MobileFileSave", () => {
   });
 
   it("leaves a name that already fits exactly as it was suggested", async () => {
-    await new MobileFileSave().saveFile(
+    await new MobileFileSave(true).saveFile(
       request("mermaid-diagram.png", new Uint8Array([1])),
     );
 
@@ -281,7 +395,7 @@ describe("MobileFileSave", () => {
     // is handed a file URI and nothing else, so the OS infers the type from
     // the path - extensionless reads as generic data, and "Save Image" is not
     // offered for it.
-    const saved = await new MobileFileSave().saveFile(
+    const saved = await new MobileFileSave(true).saveFile(
       requestOfType("a1b2c3d4", new Uint8Array([1]), "image/png"),
     );
 
@@ -291,7 +405,7 @@ describe("MobileFileSave", () => {
   });
 
   it("leaves a name that already carries an extension alone", async () => {
-    await new MobileFileSave().saveFile(
+    await new MobileFileSave(true).saveFile(
       requestOfType("photo.jpeg", new Uint8Array([1]), "image/png"),
     );
 
@@ -303,7 +417,7 @@ describe("MobileFileSave", () => {
   it("reads past a media type's parameters to reach the extension", async () => {
     // A Blob keeps the full type it was handed, so a response served as
     // `image/svg+xml; charset=utf-8` arrives with the charset attached.
-    await new MobileFileSave().saveFile(
+    await new MobileFileSave(true).saveFile(
       requestOfType(
         "diagram",
         new Uint8Array([1]),
@@ -315,7 +429,7 @@ describe("MobileFileSave", () => {
   });
 
   it("reads a type case-insensitively, as media types are", async () => {
-    await new MobileFileSave().saveFile(
+    await new MobileFileSave(true).saveFile(
       requestOfType("shot", new Uint8Array([1]), "IMAGE/PNG"),
     );
 
@@ -323,7 +437,7 @@ describe("MobileFileSave", () => {
   });
 
   it("invents no extension for a type it cannot name one for", async () => {
-    await new MobileFileSave().saveFile(
+    await new MobileFileSave(true).saveFile(
       requestOfType("payload", new Uint8Array([1]), "application/x-unknown"),
     );
 
@@ -331,7 +445,7 @@ describe("MobileFileSave", () => {
   });
 
   it("never offers a re-open route, having learned no path to re-open", () => {
-    expect(new MobileFileSave().openSavedFile).toBeNull();
+    expect(new MobileFileSave(true).openSavedFile).toBeNull();
   });
 });
 
@@ -341,7 +455,7 @@ describe("MobileFileSave.downloadFile", () => {
       uri: "file:///docs/Traycer/traycer-usage-30d.png",
     });
 
-    const saved = await new MobileFileSave().downloadFile(
+    const saved = await directDownload()(
       request("traycer-usage-30d.png", new Uint8Array([1, 2, 3])),
     );
 
@@ -363,7 +477,7 @@ describe("MobileFileSave.downloadFile", () => {
   it("hands over the exact bytes it was given", async () => {
     const bytes = new Uint8Array([0, 1, 127, 128, 200, 255]);
 
-    await new MobileFileSave().downloadFile(request("shot.png", bytes));
+    await directDownload()(request("shot.png", bytes));
 
     expect(Array.from(writtenBytes())).toEqual(Array.from(bytes));
   });
@@ -373,7 +487,7 @@ describe("MobileFileSave.downloadFile", () => {
     // the first would lose a file the user believes they still have.
     occupyDocuments(["Traycer/traycer-usage-30d.png"]);
 
-    const saved = await new MobileFileSave().downloadFile(
+    const saved = await directDownload()(
       request("traycer-usage-30d.png", new Uint8Array([1])),
     );
 
@@ -390,9 +504,7 @@ describe("MobileFileSave.downloadFile", () => {
       "Traycer/usage (3).png",
     ]);
 
-    await new MobileFileSave().downloadFile(
-      request("usage.png", new Uint8Array([1])),
-    );
+    await directDownload()(request("usage.png", new Uint8Array([1])));
 
     expect(writtenFile(0).path).toBe("Traycer/usage (4).png");
   });
@@ -403,9 +515,7 @@ describe("MobileFileSave.downloadFile", () => {
     // must still land, and still not clobber anything.
     nativeMocks.stat.mockResolvedValue({ uri: "file:///docs/taken" });
 
-    await new MobileFileSave().downloadFile(
-      request("usage.png", new Uint8Array([1])),
-    );
+    await directDownload()(request("usage.png", new Uint8Array([1])));
 
     const path = writtenFile(0).path;
     expect(path.startsWith("Traycer/usage")).toBe(true);
@@ -424,7 +534,7 @@ describe("MobileFileSave.downloadFile", () => {
     expect(new TextEncoder().encode(name).length).toBe(MAX_FILE_NAME_BYTES);
     occupyDocuments([`Traycer/${name}`]);
 
-    await new MobileFileSave().downloadFile(request(name, new Uint8Array([1])));
+    await directDownload()(request(name, new Uint8Array([1])));
 
     const written = writtenFile(0).path;
     const basename = written.split("/").at(-1) ?? "";
@@ -441,11 +551,11 @@ describe("MobileFileSave.downloadFile", () => {
     // their stat, so the claim set alone closes no window - only serialising
     // the search does. Separate export surfaces have independent mutations, so
     // two overlapping downloads are reachable.
-    const host = new MobileFileSave();
+    const host = directDownload();
 
     await Promise.all([
-      host.downloadFile(request("usage.png", new Uint8Array([1]))),
-      host.downloadFile(request("usage.png", new Uint8Array([2]))),
+      host(request("usage.png", new Uint8Array([1]))),
+      host(request("usage.png", new Uint8Array([2]))),
     ]);
 
     const paths = [writtenFile(0).path, writtenFile(1).path];
@@ -460,13 +570,13 @@ describe("MobileFileSave.downloadFile", () => {
     nativeMocks.stat.mockImplementationOnce(() => {
       throw new Error("bridge unavailable");
     });
-    const host = new MobileFileSave();
+    const host = directDownload();
 
     await expect(
-      host.downloadFile(request("usage.png", new Uint8Array([1]))),
+      host(request("usage.png", new Uint8Array([1]))),
     ).resolves.toBeTruthy();
     await expect(
-      host.downloadFile(request("later.png", new Uint8Array([1]))),
+      host(request("later.png", new Uint8Array([1]))),
     ).resolves.toBeTruthy();
     expect(writtenFile(1).path).toBe("Traycer/later.png");
   });
@@ -475,12 +585,12 @@ describe("MobileFileSave.downloadFile", () => {
     // A write that never landed leaves the path genuinely free; holding the
     // claim would push the user's retry onto a numbered name for nothing.
     nativeMocks.writeFile.mockRejectedValueOnce(new Error("Disk full"));
-    const host = new MobileFileSave();
+    const host = directDownload();
 
     await expect(
-      host.downloadFile(request("usage.png", new Uint8Array([1]))),
+      host(request("usage.png", new Uint8Array([1]))),
     ).rejects.toThrow("Disk full");
-    await host.downloadFile(request("usage.png", new Uint8Array([1])));
+    await host(request("usage.png", new Uint8Array([1])));
 
     expect(writtenFile(1).path).toBe("Traycer/usage.png");
   });
@@ -488,9 +598,7 @@ describe("MobileFileSave.downloadFile", () => {
   it("takes a confirmed not-found as the name being free", async () => {
     // The ordinary case, and the one the whole probe rests on: nothing is
     // there, so the download keeps the name it asked for.
-    await new MobileFileSave().downloadFile(
-      request("usage.png", new Uint8Array([1])),
-    );
+    await directDownload()(request("usage.png", new Uint8Array([1])));
 
     expect(writtenFile(0).path).toBe("Traycer/usage.png");
   });
@@ -502,9 +610,7 @@ describe("MobileFileSave.downloadFile", () => {
     // costs the download nothing but a numbered name.
     nativeMocks.stat.mockRejectedValue(new Error("I/O error"));
 
-    await new MobileFileSave().downloadFile(
-      request("usage.png", new Uint8Array([1])),
-    );
+    await directDownload()(request("usage.png", new Uint8Array([1])));
 
     expect(writtenFile(0).path).not.toBe("Traycer/usage.png");
     expect(writtenFile(0).path.startsWith("Traycer/usage")).toBe(true);
@@ -513,7 +619,7 @@ describe("MobileFileSave.downloadFile", () => {
   it("normalises the suggested name the same way the share leg does", async () => {
     // Same seam, same rules: a separator must not choose a directory, and the
     // extension comes from the blob's own type when the name carries none.
-    await new MobileFileSave().downloadFile(
+    await directDownload()(
       requestOfType("../../escape/a1b2c3d4", new Uint8Array([1]), "image/png"),
     );
 
@@ -528,9 +634,7 @@ describe("MobileFileSave.downloadFile", () => {
     );
 
     await expect(
-      new MobileFileSave().downloadFile(
-        request("usage.png", new Uint8Array([1])),
-      ),
+      directDownload()(request("usage.png", new Uint8Array([1]))),
     ).rejects.toThrow("File permissions denied");
   });
 });

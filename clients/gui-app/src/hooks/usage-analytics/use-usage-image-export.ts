@@ -174,7 +174,12 @@ export function useUsageImageExport(
           action: input.action,
           source: analyticsSource,
         });
-        toastSavedFile(saved, openSaved.mutate, fileSave);
+        toastSavedFile(
+          saved,
+          openSaved.mutate,
+          fileSave,
+          input.action === "share" ? "share" : "save",
+        );
       }
     },
     onError: (err, input) => {
