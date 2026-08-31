@@ -9,6 +9,7 @@ import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-se
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import { useNativeKeyboardOpen } from "@/hooks/ui/use-native-keyboard-open";
+import { isMobileApp } from "@/lib/mobile-app";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
 import { firstPaneId } from "@/stores/epics/canvas/tile-tree";
 import type { TileLayoutNode } from "@/stores/epics/canvas/types";
@@ -76,10 +77,12 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
       // iOS Safari overlays the soft keyboard instead of resizing the page,
       // which would hide the key bar behind it. The measured inset pads the
       // covered strip, lifting the bar to the visible bottom and shrinking
-      // the terminal through the normal resize sync. Runtime-measured, hence
-      // an inline style; 0 (no style) wherever the platform resizes for us.
+      // the terminal through the normal resize sync. Browser-only: the
+      // installed app also overlays (iOS `resize: none`), but there the
+      // shell's safe-height tokens already subtract `--keyboard-inset`, so
+      // padding here again would double it.
       style={
-        isTerminalTile && keyboardInset > 0
+        !isMobileApp() && isTerminalTile && keyboardInset > 0
           ? { paddingBottom: keyboardInset }
           : undefined
       }

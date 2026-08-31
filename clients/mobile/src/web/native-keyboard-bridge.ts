@@ -1,3 +1,4 @@
+import { Capacitor } from "@capacitor/core";
 import { Keyboard } from "@capacitor/keyboard";
 import { setNativeKeyboardState } from "@traycer-clients/gui-app";
 
@@ -43,16 +44,36 @@ function warnListenerAttachFailure(event: string): (error: unknown) => void {
   };
 }
 
+/**
+ * iOS runs the keyboard in overlay mode (`resize: none` in
+ * capacitor.config.ts): the webview keeps its full height and this bridge
+ * drives gui-app's `--keyboard-inset` from `keyboardWillShow`, which reports
+ * the height BEFORE the animation starts - the safe-height tokens subtract
+ * it and the `traycer-native-keyboard` glide rule animates the change in
+ * sync with the keyboard. Android is deliberately not driven: the OS resizes
+ * the webview itself (smoothly), so `100dvh` already tracks the keyboard and
+ * writing the inset would shrink the layout twice.
+ */
+function setKeyboardInset(px: number): void {
+  document.documentElement.style.setProperty("--keyboard-inset", `${px}px`);
+}
+
 export function startNativeKeyboardBridge(): void {
   if (started) return;
   started = true;
-  Keyboard.addListener("keyboardWillShow", () => {
+  const drivesInset = Capacitor.getPlatform() === "ios";
+  if (drivesInset) {
+    document.documentElement.classList.add("traycer-native-keyboard");
+  }
+  Keyboard.addListener("keyboardWillShow", (info) => {
+    if (drivesInset) setKeyboardInset(info.keyboardHeight);
     transition(true);
   }).catch(warnListenerAttachFailure("keyboardWillShow"));
   Keyboard.addListener("keyboardDidShow", () => {
     settle(true);
   }).catch(warnListenerAttachFailure("keyboardDidShow"));
   Keyboard.addListener("keyboardWillHide", () => {
+    if (drivesInset) setKeyboardInset(0);
     transition(false);
   }).catch(warnListenerAttachFailure("keyboardWillHide"));
   Keyboard.addListener("keyboardDidHide", () => {
