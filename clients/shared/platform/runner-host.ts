@@ -424,6 +424,24 @@ export interface IRunnerHost {
   readonly hasLocalHost: boolean;
 
   /**
+   * Whether an image written through the web clipboard API on this shell
+   * actually reaches the system clipboard.
+   *
+   * `true` everywhere the write is honoured - desktop, a browser tab, and
+   * WKWebView, which is what the promise-valued `ClipboardItem` path exists
+   * for. `false` on Android's WebView, where the write RESOLVES having written
+   * nothing: Chromium reaches the Android clipboard for an image through an
+   * embedder-supplied clipboard image file provider, and that embedder installs
+   * none. Nothing rejects, so a surface cannot learn this by trying.
+   *
+   * A capability rather than a platform identity: what a surface needs to know
+   * is whether offering "Copy image" would report a success the clipboard never
+   * received, and shells answer that for themselves. Callers that copy TEXT are
+   * unaffected and must not consult this.
+   */
+  readonly canCopyImages: boolean;
+
+  /**
    * Subscribes to local-host snapshot changes. The handler fires
    * synchronously on subscribe with the current snapshot (or `null`), then
    * again whenever the snapshot transitions. Mobile shells emit a single

@@ -34,6 +34,13 @@ const mocks = vi.hoisted(() => ({
   saveBlobToDisk: vi.fn(),
   downloadBlobToDevice: vi.fn(),
   hasSeparateDownloadRoute: vi.fn<() => boolean>(),
+  useCanCopyImages: vi.fn<() => boolean>(),
+}));
+
+// The shell capability behind "Copy image". Mocked at the hook rather than by
+// mounting a runner host, so a case states the one fact it varies.
+vi.mock("@/hooks/images/use-can-copy-images", () => ({
+  useCanCopyImages: mocks.useCanCopyImages,
 }));
 
 // html-to-image's `toBlob` rasterises via a canvas that jsdom can't back -
@@ -65,6 +72,7 @@ beforeEach(() => {
   // The shape of every shell whose own save route IS the download - desktop
   // and a plain browser tab. The share-sheet shape is opted into per case.
   mocks.hasSeparateDownloadRoute.mockReturnValue(false);
+  mocks.useCanCopyImages.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -75,6 +83,7 @@ afterEach(() => {
   mocks.saveBlobToDisk.mockReset();
   mocks.downloadBlobToDevice.mockReset();
   mocks.hasSeparateDownloadRoute.mockReset();
+  mocks.useCanCopyImages.mockReset();
 });
 
 const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
@@ -368,21 +377,48 @@ describe("<UsageSummaryPanel /> image export", () => {
     expect(screen.getByTestId("usage-copy-image")).toBeTruthy();
   });
 
-  it("swaps copy for share on a shell whose save route is an OS chooser", async () => {
-    // The installed mobile app: its `saveFile` reaches the share sheet, so
-    // share and download are two different acts - and its WebView cannot put
-    // an image on the system clipboard, so a Copy button there would report a
-    // success the clipboard never received.
+  it("adds share alongside copy on a shell whose save route is an OS chooser", async () => {
+    // The iOS install: its `saveFile` reaches the share sheet, so share and
+    // download are two different acts - and WKWebView does honour an image
+    // clipboard write, so Copy stays. All three controls.
     mocks.hasSeparateDownloadRoute.mockReturnValue(true);
     renderPanel(usageSummaryResponse);
     await screen.findByTestId("usage-cost-figure");
     await screen.findByTestId("usage-activity-section");
 
-    expect(screen.queryByTestId("usage-copy-image")).toBeNull();
+    expect(screen.getByTestId("usage-copy-image")).toBeTruthy();
     const shareButton = screen.getByTestId("usage-share-image");
     expect(
       shareButton instanceof HTMLButtonElement && shareButton.disabled,
     ).toBe(false);
+    expect(screen.getByTestId("usage-download-image")).toBeTruthy();
+  });
+
+  it("drops copy where the shell cannot put an image on the clipboard", async () => {
+    // The Android install: the write RESOLVES having written nothing, so a
+    // Copy button would report a success the clipboard never received. Share
+    // and download are unaffected, and the sheet's own Copy action is the
+    // route that works.
+    mocks.hasSeparateDownloadRoute.mockReturnValue(true);
+    mocks.useCanCopyImages.mockReturnValue(false);
+    renderPanel(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+    await screen.findByTestId("usage-activity-section");
+
+    expect(screen.queryByTestId("usage-copy-image")).toBeNull();
+    expect(screen.getByTestId("usage-share-image")).toBeTruthy();
+    expect(screen.getByTestId("usage-download-image")).toBeTruthy();
+  });
+
+  it("drops copy on a clipboard-less shell even with no share route", async () => {
+    // The two capabilities are independent: losing Copy must not depend on
+    // having gained Share.
+    mocks.useCanCopyImages.mockReturnValue(false);
+    renderPanel(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    expect(screen.queryByTestId("usage-copy-image")).toBeNull();
+    expect(screen.queryByTestId("usage-share-image")).toBeNull();
     expect(screen.getByTestId("usage-download-image")).toBeTruthy();
   });
 

@@ -27,8 +27,20 @@ function ownDownloadShell(): Pick<Overrides, "copyImage" | "shareImage"> {
   return { copyImage: () => undefined, shareImage: null };
 }
 
-/** The shell shape where `saveFile` reaches an OS chooser: the mobile app. */
-function shareSheetShell(): Pick<Overrides, "copyImage" | "shareImage"> {
+/**
+ * A shell with an OS chooser AND a working image clipboard - the iOS install.
+ * The two capabilities are independent, so this is the shape that carries all
+ * three controls at once.
+ */
+function shareAndCopyShell(): Pick<Overrides, "copyImage" | "shareImage"> {
+  return { copyImage: () => undefined, shareImage: () => undefined };
+}
+
+/**
+ * A shell with an OS chooser whose WebView cannot reach the image clipboard -
+ * the Android install.
+ */
+function shareOnlyShell(): Pick<Overrides, "copyImage" | "shareImage"> {
   return { copyImage: null, shareImage: () => undefined };
 }
 
@@ -76,7 +88,7 @@ describe("<UsageExportImageActions />", () => {
     renderActions({
       exportReady: true,
       pendingAction: null,
-      ...shareSheetShell(),
+      ...shareOnlyShell(),
       downloadImage: () => undefined,
       variant: "icon",
     });
@@ -87,11 +99,29 @@ describe("<UsageExportImageActions />", () => {
     ]);
   });
 
+  it("renders copy, share then download where the shell can do both", () => {
+    renderActions({
+      exportReady: true,
+      pendingAction: null,
+      ...shareAndCopyShell(),
+      downloadImage: () => undefined,
+      variant: "icon",
+    });
+
+    // Fixed order regardless of which controls exist, so a shell gaining or
+    // losing one never reshuffles the rest under the user's thumb.
+    expect(buttonTestIds()).toEqual([
+      "usage-copy-image",
+      "usage-share-image",
+      "usage-download-image",
+    ]);
+  });
+
   it("names an icon-only button for assistive tech", () => {
     renderActions({
       exportReady: true,
       pendingAction: null,
-      ...shareSheetShell(),
+      ...shareOnlyShell(),
       downloadImage: () => undefined,
       variant: "icon",
     });
@@ -106,7 +136,7 @@ describe("<UsageExportImageActions />", () => {
     renderActions({
       exportReady: true,
       pendingAction: null,
-      ...shareSheetShell(),
+      ...shareOnlyShell(),
       downloadImage: () => undefined,
       variant: "labelled",
     });
@@ -123,7 +153,7 @@ describe("<UsageExportImageActions />", () => {
     renderActions({
       exportReady: true,
       pendingAction: "share",
-      ...shareSheetShell(),
+      ...shareOnlyShell(),
       downloadImage: () => undefined,
       variant: "labelled",
     });
@@ -153,7 +183,7 @@ describe("<UsageExportImageActions />", () => {
     renderActions({
       exportReady: true,
       pendingAction: "download",
-      ...shareSheetShell(),
+      ...shareOnlyShell(),
       downloadImage: () => undefined,
       variant: "labelled",
     });

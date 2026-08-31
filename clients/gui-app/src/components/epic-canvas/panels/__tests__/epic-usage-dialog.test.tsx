@@ -81,6 +81,13 @@ const mocks = vi.hoisted(() => ({
   saveBlobToDisk: vi.fn(),
   downloadBlobToDevice: vi.fn(),
   hasSeparateDownloadRoute: vi.fn<() => boolean>(),
+  useCanCopyImages: vi.fn<() => boolean>(),
+}));
+
+// The shell capability behind "Copy image". Mocked at the hook rather than by
+// mounting a runner host, so a case states the one fact it varies.
+vi.mock("@/hooks/images/use-can-copy-images", () => ({
+  useCanCopyImages: mocks.useCanCopyImages,
 }));
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -117,6 +124,7 @@ beforeEach(() => {
   // The shape of every shell whose own save route IS the download - desktop
   // and a plain browser tab. The share-sheet shape is opted into per case.
   mocks.hasSeparateDownloadRoute.mockReturnValue(false);
+  mocks.useCanCopyImages.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -128,6 +136,7 @@ afterEach(() => {
   mocks.saveBlobToDisk.mockReset();
   mocks.downloadBlobToDevice.mockReset();
   mocks.hasSeparateDownloadRoute.mockReset();
+  mocks.useCanCopyImages.mockReset();
 });
 
 const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
@@ -700,20 +709,33 @@ describe("<EpicUsageDialog />", () => {
     expect(mocks.copyImageBlobPromiseToClipboard).not.toHaveBeenCalled();
   });
 
-  it("swaps copy for share on a shell whose save route is an OS chooser", async () => {
+  it("adds share alongside copy on a shell whose save route is an OS chooser", async () => {
     // Same policy as the Settings surface, from the same shared hook: the
     // two usage surfaces cannot drift into different control sets.
     mocks.hasSeparateDownloadRoute.mockReturnValue(true);
     renderDialog(usageSummaryResponse);
     await screen.findByTestId("usage-cost-figure");
 
-    expect(screen.queryByTestId("epic-usage-copy-image")).toBeNull();
+    expect(screen.getByTestId("epic-usage-copy-image").textContent).toContain(
+      "Copy image",
+    );
     expect(screen.getByTestId("epic-usage-share-image").textContent).toContain(
       "Share image",
     );
     expect(
       screen.getByTestId("epic-usage-download-image").textContent,
     ).toContain("Download image");
+  });
+
+  it("drops copy where the shell cannot put an image on the clipboard", async () => {
+    mocks.hasSeparateDownloadRoute.mockReturnValue(true);
+    mocks.useCanCopyImages.mockReturnValue(false);
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    expect(screen.queryByTestId("epic-usage-copy-image")).toBeNull();
+    expect(screen.getByTestId("epic-usage-share-image")).toBeTruthy();
+    expect(screen.getByTestId("epic-usage-download-image")).toBeTruthy();
   });
 
   it("sends share through the shell's own save route and download past it", async () => {

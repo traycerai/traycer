@@ -232,6 +232,15 @@ function bootstrap(): void {
     // worth preferring over the browser save APIs gui-app already falls back
     // to in a tab.
     fileSave: Capacitor.isNativePlatform() ? new MobileFileSave() : null,
+    // The one place this difference is allowed to be named. WKWebView honours
+    // an image clipboard write; Android's WebView RESOLVES it having written
+    // nothing, because Chromium reaches the Android clipboard for an image
+    // through an embedder-supplied image file provider and that embedder
+    // installs none. Nothing rejects, so gui-app cannot learn this by trying -
+    // it reads the capability instead, and simply does not offer a Copy that
+    // would report a success the clipboard never received. The dev web entry
+    // is a real browser tab, where the write works.
+    canCopyImages: Capacitor.getPlatform() !== "android",
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a

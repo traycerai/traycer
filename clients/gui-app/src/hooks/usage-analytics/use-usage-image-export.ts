@@ -20,6 +20,7 @@ import { appLogger } from "@/lib/logger";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
+import { useCanCopyImages } from "@/hooks/images/use-can-copy-images";
 
 export interface UseUsageImageExportParams {
   /**
@@ -81,7 +82,8 @@ export interface UseUsageImageExportResult {
   /**
    * `null` where the shell cannot put an image on the system clipboard, in
    * which case the share sheet is where a user copies one (see
-   * {@link useUsageImageExport}).
+   * {@link useUsageImageExport}). Independent of {@link shareImage}: a shell
+   * can offer both, one, or neither.
    */
   readonly copyImage: (() => void) | null;
   /** `null` where the shell owns no OS share surface to hand the image to. */
@@ -105,11 +107,13 @@ export interface UseUsageImageExportResult {
  *   whose `saveFile` goes through an OS chooser instead - the installed mobile
  *   app, whose sheet hands the file to another app. There, share and download
  *   are genuinely two different acts and both are offered.
- * - Copy is offered everywhere else and NOT there. The installed app's WebView
- *   cannot put an image on the system clipboard: on Android the write resolves
- *   having written nothing, which is worse than no button, since the surface
- *   then reports a success the clipboard never received. The share sheet's own
- *   Copy action is the route that does work, and it is one tap away.
+ * - Copy is offered wherever the shell can actually reach the system clipboard
+ *   with an image (`IRunnerHost.canCopyImages`), which is everywhere except
+ *   Android's WebView. That one resolves the write having written nothing, so
+ *   the button would report a success the clipboard never received - worse
+ *   than no button. The two questions are INDEPENDENT: iOS answers yes to both
+ *   and offers all three controls, and the share sheet's own Copy action is
+ *   the fallback where it answers no.
  *
  * ONE mutation carries every leg, discriminated by its variables: a capture
  * is an expensive full-region rasterisation, so two of them must never be in
@@ -131,6 +135,7 @@ export function useUsageImageExport(
   const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
   const canShare = hasSeparateDownloadRoute(fileSave);
+  const canCopy = useCanCopyImages();
   const mutation = useMutation<SavedFile | null, Error, UsageImageExportInput>({
     mutationKey: imageMutationKeys.usageExport(),
     mutationFn: async (input) => {
@@ -230,7 +235,7 @@ export function useUsageImageExport(
   return {
     mutation,
     pendingAction: mutation.isPending ? mutation.variables.action : null,
-    copyImage: canShare ? null : startCopy,
+    copyImage: canCopy ? startCopy : null,
     shareImage: canShare ? startShare : null,
     downloadImage,
   };
