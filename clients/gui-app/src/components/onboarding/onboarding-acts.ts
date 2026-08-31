@@ -1,14 +1,16 @@
 import { isMobileApp } from "@/lib/mobile-app";
 
 /**
- * The acts the desktop tour plays - and the only ids the desktop diorama can
- * draw, which is why it is a type of its own rather than the whole act union.
+ * The acts the desktop tour can play - and the only ids the desktop diorama
+ * can draw, which is why it is a type of its own rather than the whole act
+ * union.
  */
 export type DesktopOnboardingActId =
   | "task-tabs"
   | "navigation"
   | "task-context"
   | "providers"
+  | "session-import"
   | "agent-guide"
   | "command-theme";
 
@@ -29,22 +31,48 @@ export type OnboardingActId = DesktopOnboardingActId | MobileOnboardingActId;
 
 export interface OnboardingAct {
   readonly id: OnboardingActId;
-  readonly eyebrow: string;
+  /**
+   * The half of the eyebrow after the act number. The number itself is the
+   * act's place in the tour being shown, so it cannot live in this data - see
+   * `actEyebrow`.
+   */
+  readonly eyebrowLabel: string;
   readonly title: string;
   readonly body: string;
   /**
-   * What the copy rail carries under the body. `agent-guide` is the mobile
-   * tour's own: the real editor moves into the rail there, because a modal
-   * inside a phone-sized miniature is not something a thumb can type into.
+   * What rides along with the copy - or, for `session-import`, what the stage
+   * itself becomes. `agent-guide` is the mobile tour's own: the real editor
+   * moves into the rail there, because a modal inside a phone-sized miniature
+   * is not something a thumb can type into.
    */
-  readonly addon: "agents" | "theme" | "agent-guide" | null;
+  readonly addon: "agents" | "session-import" | "theme" | "agent-guide" | null;
+}
+
+/**
+ * Acts whose addon owns the copy rail's full height - the providers list, and
+ * the mobile tour's agent-guide editor. Named here rather than spelled out at
+ * each of the page's checks, so adding another full-height act cannot
+ * half-land. (Desktop acts never carry the `agent-guide` addon, so the second
+ * arm changes nothing there.)
+ */
+export function actUsesSoloStage(act: OnboardingAct): boolean {
+  return act.addon === "agents" || act.addon === "agent-guide";
+}
+
+/**
+ * The eyebrow reads "ACT 05 - YOUR WORK". The number counts the tour the user
+ * is actually being walked through, not this catalog: a host that drops an act
+ * would otherwise leave the survivors numbered 04, 06, 07.
+ */
+export function actEyebrow(act: OnboardingAct, index: number): string {
+  return `ACT ${String(index + 1).padStart(2, "0")} - ${act.eyebrowLabel}`;
 }
 
 // The three acts both tours play. Shared by REFERENCE, not copied, so their
 // copy has exactly one home.
 const TASK_CONTEXT_ACT: OnboardingAct = {
   id: "task-context",
-  eyebrow: "ACT 03 - HANDOFF",
+  eyebrowLabel: "HANDOFF",
   title: "Agents that talk\nto each other",
   body: "Your agents coordinate inside one Task: delegate work, report back, and stay in sync without you acting as the relay.",
   addon: null,
@@ -52,7 +80,7 @@ const TASK_CONTEXT_ACT: OnboardingAct = {
 
 const PROVIDERS_ACT: OnboardingAct = {
   id: "providers",
-  eyebrow: "ACT 04 - PROVIDERS",
+  eyebrowLabel: "PROVIDERS",
   title: "Bring your\nsubscriptions with you",
   body: "Connect the coding agents you already use.",
   addon: "agents",
@@ -60,36 +88,44 @@ const PROVIDERS_ACT: OnboardingAct = {
 
 const AGENT_GUIDE_ACT: OnboardingAct = {
   id: "agent-guide",
-  eyebrow: "ACT 05 - DELEGATION",
+  eyebrowLabel: "DELEGATION",
   title: "Tell Traycer\nhow to choose",
   body: "Set the rules once. Traycer follows them every time it spawns a child agent, so you're not re-deciding per task.",
   addon: null,
 };
 
 /**
- * Copy and per-act extras mirror the Figma onboarding frames.
+ * The desktop catalog. Copy and per-act extras mirror the Figma onboarding
+ * frames.
  */
-const DESKTOP_ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
+export const ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
   {
     id: "task-tabs",
-    eyebrow: "ACT 01 - TASKS",
+    eyebrowLabel: "TASKS",
     title: "Your work lives\nin Task tabs",
     body: "Each Task tab holds one initiative: agents, artifacts, terminals, and context stay together. Switch away, come back later, nothing scatters.",
     addon: null,
   },
   {
     id: "navigation",
-    eyebrow: "ACT 02 - LAYOUT",
+    eyebrowLabel: "LAYOUT",
     title: "Find it on the left.\nOpen it on the canvas.",
     body: "The left lists are your map: agents and artifacts. The canvas is where selected work opens, splits, and stays beside the conversation.",
     addon: null,
   },
   TASK_CONTEXT_ACT,
   PROVIDERS_ACT,
+  {
+    id: "session-import",
+    eyebrowLabel: "YOUR WORK",
+    title: "Bring your\nwork with you",
+    body: "Work you started in Claude Code, Codex, or OpenCode comes with you as tasks. Pick what to bring; the import runs while you carry on.",
+    addon: "session-import",
+  },
   AGENT_GUIDE_ACT,
   {
     id: "command-theme",
-    eyebrow: "ACT 06 - FLOW",
+    eyebrowLabel: "FLOW",
     title: "Move fast.\nMake it yours.",
     body: "Use Cmd+K to create, jump, launch, and switch without breaking flow. Pick a theme before you enter; terminals and app surfaces follow it together.",
     addon: "theme",
@@ -101,18 +137,23 @@ const DESKTOP_ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
  * a phone does not have (tab strip, drag-to-split canvas, Cmd+K) with the three
  * things a phone user must actually find: the drawer, the switcher sheet, and
  * the edge-swipe gestures.
+ *
+ * No session-import act here: its stage is the live desktop-sized wizard
+ * reading the host's own disk, and the phone tour's fixed six-act arc was
+ * designed without it. Where the capability exists, the wizard stays reachable
+ * from Settings.
  */
 const MOBILE_ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
   {
     id: "mobile-tasks",
-    eyebrow: "ACT 01 - TASKS",
+    eyebrowLabel: "TASKS",
     title: "Your work lives\nin Tasks",
     body: "Each Task holds one initiative: agents, artifacts, terminals, and context stay together. The menu, top left, holds your recent Tasks, a new one, and Settings.",
     addon: null,
   },
   {
     id: "mobile-switcher",
-    eyebrow: "ACT 02 - LAYOUT",
+    eyebrowLabel: "LAYOUT",
     title: "One tap opens\neverything",
     body: "The stack icon, top right, is the whole Task: chats, terminals, artifacts, diffs. Pick one; it fills the screen.",
     addon: null,
@@ -124,25 +165,42 @@ const MOBILE_ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
   { ...AGENT_GUIDE_ACT, addon: "agent-guide" },
   {
     id: "mobile-flow",
-    eyebrow: "ACT 06 - FLOW",
+    eyebrowLabel: "FLOW",
     title: "Move with a swipe.\nMake it yours.",
     body: "Swipe from the left edge to go back, the right edge to go forward. Pick a theme before you enter; terminals and app surfaces follow it together.",
     addon: "theme",
   },
 ];
 
+// Precomputed so the accessor hands back a stable reference per (platform,
+// capability) pair rather than filtering into a fresh array on every call.
+const DESKTOP_ACTS_WITHOUT_SESSION_IMPORT: ReadonlyArray<OnboardingAct> =
+  ONBOARDING_ACTS.filter((act) => act.id !== "session-import");
+
 /**
- * The tour the current shell plays. This is ONE of the tour's two platform
- * reads (the other is the page's miniature branch); every other consumer - the
- * store's step clamp, the progress rail, the copy rail, the page's step math -
- * follows from here.
+ * The tour this shell will actually walk. Two facts pick it, and both are
+ * resolved per CALL rather than into a module constant:
  *
- * Resolved per CALL rather than into a module constant: `setMobileApp()` runs
- * in the Capacitor entry's `bootstrap()`, which is after this module has
- * already been evaluated as part of gui-app's static graph. A constant would
- * therefore pin the desktop list on a phone. Each branch returns the same array
- * instance, so callers still get a stable reference.
+ * Platform - `setMobileApp()` runs in the Capacitor entry's `bootstrap()`,
+ * which is after this module has already been evaluated as part of gui-app's
+ * static graph, so a constant would pin the desktop list on a phone.
+ *
+ * Capability - session import is optional: an older or remote host never
+ * advertises `sessionImport.scan`, and Settings and the task-list prompt
+ * already hide their entry points when it does not. The session-import act
+ * cannot hide the same way, because its stage IS the live wizard - there is no
+ * mini-app behind it. Leaving the act in would strand the user on copy
+ * inviting them to pick sessions that a host which cannot scan will never
+ * produce, so the act is dropped from the tour instead.
+ *
+ * Everything that walks the tour - the step bounds, the progress rail, the
+ * diorama - reads this list rather than `ONBOARDING_ACTS`, so an act omitted
+ * here is simply unreachable.
  */
-export function onboardingActs(): ReadonlyArray<OnboardingAct> {
-  return isMobileApp() ? MOBILE_ONBOARDING_ACTS : DESKTOP_ONBOARDING_ACTS;
+export function onboardingActsFor(
+  sessionImportAvailable: boolean,
+): ReadonlyArray<OnboardingAct> {
+  if (isMobileApp()) return MOBILE_ONBOARDING_ACTS;
+  if (sessionImportAvailable) return ONBOARDING_ACTS;
+  return DESKTOP_ACTS_WITHOUT_SESSION_IMPORT;
 }

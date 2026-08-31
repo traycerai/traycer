@@ -10,8 +10,12 @@ import { LazyMotion, domAnimation } from "motion/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { onboardingActs } from "@/components/onboarding/onboarding-acts";
-import type { DesktopOnboardingActId } from "@/components/onboarding/onboarding-acts";
+import {
+  ONBOARDING_ACTS,
+  onboardingActsFor,
+  type OnboardingAct,
+  type OnboardingActId,
+} from "@/components/onboarding/onboarding-acts";
 import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-agent-guide-pane";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
@@ -40,12 +44,26 @@ vi.mock("@/components/onboarding/onboarding-theme-picker", () => ({
   OnboardingThemePicker: () => <div data-testid="theme-picker-stub" />,
 }));
 
+vi.mock("@/components/session-import/session-import-wizard", () => ({
+  SessionImportWizard: () => <div data-testid="session-import-wizard-stub" />,
+}));
+
+/**
+ * The negotiated capability the tour's length turns on. Driven directly here
+ * rather than through the stream transport that backs the real hook.
+ */
+const sessionImportAvailableMock = vi.hoisted(() => ({ value: true }));
+
+vi.mock("@/hooks/session-import/use-session-import-available", () => ({
+  useSessionImportAvailable: () => sessionImportAvailableMock.value,
+}));
+
 vi.mock("@/components/onboarding/onboarding-diorama", () => ({
   OnboardingDiorama: (props: {
-    readonly actId: DesktopOnboardingActId;
+    readonly actId: OnboardingActId;
     readonly agentGuide: OnboardingAgentGuideState;
   }) => (
-    <div data-testid="onboarding-diorama-stub" data-act={props.actId}>
+    <div data-testid="onboarding-diorama-stub" data-act-id={props.actId}>
       {props.actId === "agent-guide" ? (
         <>
           <textarea
@@ -146,19 +164,23 @@ function createRunnerHost() {
   });
 }
 
-function currentStage(): number {
-  return onboardingActs().findIndex(
-    (act) =>
-      act.id ===
-      screen.getByTestId("onboarding-diorama-stub").getAttribute("data-act"),
-  );
+/** The tour the mocked host actually runs - not always the whole catalog. */
+function visibleActs(): ReadonlyArray<OnboardingAct> {
+  return onboardingActsFor(sessionImportAvailableMock.value);
 }
 
-async function advanceToStage(stage: number): Promise<void> {
-  for (let index = currentStage(); index < stage; index++) {
+function currentActId(): string | null {
+  return screen.getByTestId("onboarding-act").getAttribute("data-act-id");
+}
+
+async function advanceToAct(actId: OnboardingActId): Promise<void> {
+  const acts = visibleActs();
+  const target = acts.findIndex((act) => act.id === actId);
+  const current = acts.findIndex((act) => act.id === currentActId());
+  for (let index = current; index < target; index++) {
     fireEvent.click(screen.getByTestId("onboarding-advance"));
     await waitFor(() => {
-      expect(currentStage()).toBe(index + 1);
+      expect(currentActId()).toBe(acts[index + 1].id);
     });
   }
 }
@@ -166,6 +188,7 @@ async function advanceToStage(stage: number): Promise<void> {
 describe("OnboardingPage", () => {
   beforeEach(() => {
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+    sessionImportAvailableMock.value = true;
     navigateMock.mockReset();
     historyBackMock.mockReset();
     setGlobalGuideMock.mockClear();
@@ -189,7 +212,7 @@ describe("OnboardingPage", () => {
   it("renders act 1 copy and the live miniature on initial mount", () => {
     renderPage({ replay: false });
 
-    const firstAct = onboardingActs()[0];
+    const firstAct = ONBOARDING_ACTS[0];
     expect(
       screen.getByText(firstAct.title.replace(/\s+/g, " "), {
         exact: false,
@@ -203,7 +226,7 @@ describe("OnboardingPage", () => {
 
     renderPage({ replay: true });
 
-    const firstAct = onboardingActs()[0];
+    const firstAct = ONBOARDING_ACTS[0];
     await waitFor(() => {
       expect(
         screen.getByText(firstAct.title.replace(/\s+/g, " "), {
@@ -295,16 +318,16 @@ describe("OnboardingPage", () => {
     windowOpenMock.mockRestore();
   });
 
-  it("advances through all five acts while keeping the Figma continue label", async () => {
+  it("advances through every act while keeping the Figma continue label", async () => {
     renderPage({ replay: false });
 
-    const lastActIndex = onboardingActs().length - 1;
-    for (let index = 0; index < lastActIndex; index++) {
+    const acts = visibleActs();
+    for (let index = 0; index < acts.length - 1; index++) {
       const advanceButton = screen.getByTestId("onboarding-advance");
       expect(advanceButton.textContent).toContain("Continue");
       fireEvent.click(advanceButton);
       await waitFor(() => {
-        expect(currentStage()).toBe(index + 1);
+        expect(currentActId()).toBe(acts[index + 1].id);
       });
     }
 
@@ -313,10 +336,61 @@ describe("OnboardingPage", () => {
     );
   });
 
+  it("omits the session-import act entirely when the host cannot scan sessions", async () => {
+    // The act's stage IS the live wizard, so an unsupported host has nothing to
+    // put there: the act must be unreachable, not blank.
+    sessionImportAvailableMock.value = false;
+    renderPage({ replay: false });
+
+    const acts = visibleActs();
+    expect(acts.map((act) => act.id)).not.toContain("session-import");
+
+    const walked: Array<string | null> = [currentActId()];
+    for (let index = 0; index < acts.length - 1; index++) {
+      expect(screen.queryByTestId("session-import-wizard-stub")).toBeNull();
+      fireEvent.click(screen.getByTestId("onboarding-advance"));
+      await waitFor(() => {
+        expect(currentActId()).toBe(acts[index + 1].id);
+      });
+      walked.push(currentActId());
+    }
+
+    expect(walked).toEqual(acts.map((act) => act.id));
+    expect(screen.queryByTestId("session-import-wizard-stub")).toBeNull();
+
+    // The act after providers is now delegation, and the tour still ends on the
+    // same last act - which finishes onboarding rather than overrunning.
+    expect(walked[4]).toBe("agent-guide");
+    expect(screen.getByTestId("onboarding-advance").textContent).toContain(
+      "Start building",
+    );
+    fireEvent.click(screen.getByTestId("onboarding-advance"));
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().completedAt).not.toBeNull();
+    });
+  });
+
+  it("keeps the session-import act, wizard and all, when the host can scan", async () => {
+    renderPage({ replay: false });
+
+    expect(visibleActs().map((act) => act.id)).toContain("session-import");
+    await advanceToAct("session-import");
+
+    expect(currentActId()).toBe("session-import");
+    expect(screen.getByTestId("session-import-wizard-stub")).not.toBeNull();
+    // This act has no mock-up to preview: its diorama slot holds the live
+    // wizard's own stage, not the shared `OnboardingDiorama`.
+    expect(
+      screen.getByTestId("onboarding-session-import-stage"),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("onboarding-diorama-stub")).toBeNull();
+  });
+
   it("first-run finish (no replay flag) marks complete and opens a fresh draft tab", async () => {
     renderPage({ replay: false });
 
-    await advanceToStage(onboardingActs().length - 1);
+    const acts = visibleActs();
+    await advanceToAct(acts[acts.length - 1].id);
 
     // Now on the last act.
     expect(useOnboardingStore.getState().completedAt).toBeNull();
@@ -350,7 +424,7 @@ describe("OnboardingPage", () => {
     };
     renderPage({ replay: false });
 
-    await advanceToStage(4);
+    await advanceToAct("agent-guide");
 
     const input = screen.getByTestId<HTMLTextAreaElement>(
       "mock-agent-guide-input",
@@ -361,7 +435,9 @@ describe("OnboardingPage", () => {
     fireEvent.click(screen.getByTestId("onboarding-advance"));
 
     await waitFor(() => {
-      expect(currentStage()).toBe(5);
+      expect(
+        screen.getByTestId("onboarding-act").getAttribute("data-act-id"),
+      ).toBe("command-theme");
     });
     expect(setGlobalGuideMock).not.toHaveBeenCalled();
 
@@ -385,7 +461,7 @@ describe("OnboardingPage", () => {
     };
     renderPage({ replay: false });
 
-    await advanceToStage(4);
+    await advanceToAct("agent-guide");
 
     const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
       name: "Agent selection guide",
@@ -418,7 +494,7 @@ describe("OnboardingPage", () => {
     };
     renderPage({ replay: false });
 
-    await advanceToStage(4);
+    await advanceToAct("agent-guide");
 
     const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
       name: "Agent selection guide",
@@ -444,7 +520,7 @@ describe("OnboardingPage", () => {
     guideQueryState = { data: undefined, isError: true };
     renderPage({ replay: false });
 
-    await advanceToStage(4);
+    await advanceToAct("agent-guide");
 
     // The optional guide keeps spinning (editor disabled) since the read never
     // resolved, but it must not block onboarding: Skip and Advance stay enabled.
@@ -479,7 +555,7 @@ describe("OnboardingPage", () => {
     };
     const { rerender } = renderPage({ replay: false });
 
-    await advanceToStage(4);
+    await advanceToAct("agent-guide");
 
     const input = screen.getByTestId<HTMLTextAreaElement>(
       "mock-agent-guide-input",
@@ -547,7 +623,7 @@ describe("OnboardingPage", () => {
     };
     const { rerender } = renderPage({ replay: false });
 
-    await advanceToStage(4);
+    await advanceToAct("agent-guide");
 
     expect(
       screen.getByTestId<HTMLTextAreaElement>("mock-agent-guide-input").value,
@@ -577,7 +653,7 @@ describe("OnboardingPage", () => {
   it("shows existing guide content without replacing it with provider defaults", async () => {
     const { rerender } = renderPage({ replay: false });
 
-    await advanceToStage(4);
+    await advanceToAct("agent-guide");
 
     const input = screen.getByTestId<HTMLTextAreaElement>(
       "mock-agent-guide-input",

@@ -207,18 +207,35 @@ const THEME_DOCK_SWATCHES = [
   ["#0b0e14", "#e6b450", "Ayu"],
 ] as const;
 
-const SCENE_FOR_ACT: Readonly<Record<DesktopOnboardingActId, SceneId>> = {
-  "task-tabs": "task-tabs",
-  navigation: "navigation",
-  "task-context": "task-context",
-  providers: "providers",
-  "agent-guide": "agent-guide",
-  "command-theme": "command-theme",
-};
+/**
+ * `null` is an act that shows no mini-app at all (session import, whose stage
+ * is the live wizard). The page does not render the diorama for it, and this
+ * map is where that fact is stated: defaulting to a scene instead would mount
+ * the command-theme mini-app - animations and all - behind an act that
+ * deliberately hides the diorama.
+ */
+const SCENE_FOR_ACT: Readonly<Record<DesktopOnboardingActId, SceneId | null>> =
+  {
+    "task-tabs": "task-tabs",
+    navigation: "navigation",
+    "task-context": "task-context",
+    providers: "providers",
+    "session-import": null,
+    "agent-guide": "agent-guide",
+    "command-theme": "command-theme",
+  };
 
 export function OnboardingDiorama(props: OnboardingDioramaProps) {
-  const { actId, agentGuide } = props;
-  const scene = SCENE_FOR_ACT[actId];
+  const scene = SCENE_FOR_ACT[props.actId];
+  if (scene === null) return null;
+  return <DioramaScene scene={scene} agentGuide={props.agentGuide} />;
+}
+
+function DioramaScene(props: {
+  readonly scene: SceneId;
+  readonly agentGuide: OnboardingAgentGuideState;
+}) {
+  const { scene, agentGuide } = props;
   const reducedMotion = useReducedMotion() === true;
   const [taskIndex, setTaskIndex] = useState(0);
   const dragLayerRef = useRef<HTMLDivElement>(null);

@@ -7,6 +7,7 @@ import {
   useEffect,
   useEffectEvent,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -17,7 +18,9 @@ import geistPixelSquareUrl from "@/assets/fonts/GeistPixel-Square.woff2?url";
 import onboardingBackdropUrl from "@/assets/brand/gradient-bg.jpg?url";
 import { BrandMark } from "@/components/auth/cinematic-backdrop";
 import {
-  onboardingActs,
+  actEyebrow,
+  actUsesSoloStage,
+  onboardingActsFor,
   type DesktopOnboardingActId,
   type OnboardingAct,
   type OnboardingActId,
@@ -32,19 +35,22 @@ import {
   OnboardingPhoneDiorama,
   type OnboardingPhoneSceneId,
 } from "@/components/onboarding/onboarding-phone-diorama";
+import { OnboardingSessionImportStage } from "@/components/onboarding/onboarding-session-import-stage";
 import { OnboardingThemePicker } from "@/components/onboarding/onboarding-theme-picker";
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
+import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { getClientAppVersionLabel } from "@/lib/app-version";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { isMobileApp } from "@/lib/mobile-app";
 import { readSafeAreaInsets } from "@/lib/safe-area-insets";
 import {
-  selectIsLastStep,
-  selectStep,
+  clampOnboardingStep,
+  isLastOnboardingStep,
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
+import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
@@ -594,10 +600,11 @@ function useActSwipe(
   }, [enabled, surfaceRef]);
 }
 
-/** Which miniature - if any - an act shows on the shell it is playing in. */
+/** What an act puts in the stage's second column on the shell it plays in. */
 type OnboardingMiniature =
   | { readonly kind: "desktop"; readonly actId: DesktopOnboardingActId }
   | { readonly kind: "phone"; readonly scene: OnboardingPhoneSceneId }
+  | { readonly kind: "session-import" }
   | { readonly kind: "none" };
 
 /**
@@ -608,7 +615,9 @@ type OnboardingMiniature =
  *
  * The two acts that do real setup work drop the miniature on a phone: providers
  * already stacked to its list-only layout below `lg`, and the agent guide moves
- * its editor into the copy rail, where a phone keyboard can reach it.
+ * its editor into the copy rail, where a phone keyboard can reach it. Session
+ * import is desktop-only (the mobile tour never lists it), and shows no
+ * miniature at all - its stage is the live wizard.
  */
 function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
   const mobile = isMobileApp();
@@ -624,6 +633,8 @@ function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
     case "providers":
     case "agent-guide":
       return mobile ? { kind: "none" } : { kind: "desktop", actId };
+    case "session-import":
+      return { kind: "session-import" };
     case "mobile-tasks":
       return { kind: "phone", scene: "drawer" };
     case "mobile-switcher":
@@ -637,16 +648,34 @@ function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
  * The stage's miniature column. The live miniature follows the user's real
  * theme on every act, so the preview always matches what the app looks like
  * for them - it renders with the same semantic tokens as the real shell.
+ * Session import has no mock-up to preview: its window holds the real wizard,
+ * reading the user's real machine.
  */
 function OnboardingMiniatureColumn(props: {
   readonly actId: OnboardingActId;
   readonly addon: OnboardingAct["addon"];
   readonly miniature: OnboardingMiniature;
   readonly agentGuide: OnboardingAgentGuideState;
+  readonly registerSessionImportSubmit: (submit: () => void) => void;
 }) {
-  const { actId, addon, miniature, agentGuide } = props;
+  const { actId, addon, miniature, agentGuide, registerSessionImportSubmit } =
+    props;
   if (miniature.kind === "none") return null;
   const phone = miniature.kind === "phone";
+  let content: ReactNode;
+  if (miniature.kind === "phone") {
+    content = <OnboardingPhoneDiorama scene={miniature.scene} />;
+  } else if (miniature.kind === "session-import") {
+    content = (
+      <OnboardingSessionImportStage
+        registerSubmit={registerSessionImportSubmit}
+      />
+    );
+  } else {
+    content = (
+      <OnboardingDiorama actId={miniature.actId} agentGuide={agentGuide} />
+    );
+  }
   return (
     <div
       className={cn(
@@ -670,11 +699,7 @@ function OnboardingMiniatureColumn(props: {
         transition={{ duration: 0.25, ease: ACT_EASE }}
         className={cn("w-full min-w-0", phone && "h-full min-h-0")}
       >
-        {miniature.kind === "phone" ? (
-          <OnboardingPhoneDiorama scene={miniature.scene} />
-        ) : (
-          <OnboardingDiorama actId={miniature.actId} agentGuide={agentGuide} />
-        )}
+        {content}
       </m.div>
     </div>
   );
@@ -684,12 +709,11 @@ function OnboardingMiniatureColumn(props: {
  * Stacked screens: blur + fade the desktop mini-app's lower edge behind the
  * actions bar so it reads as a clean footer, not a cut-off pane. The phone
  * frame is height-contained by its grid row and never reaches this band, so
- * the band would only smear its bottom bezel - desktop miniature only.
+ * the band would only smear its bottom bezel - the desktop miniature and the
+ * session-import wizard window only.
  */
-function OnboardingStageEdgeFade(props: {
-  readonly desktopMiniature: boolean;
-}) {
-  if (!props.desktopMiniature) return null;
+function OnboardingStageEdgeFade(props: { readonly visible: boolean }) {
+  if (!props.visible) return null;
   return (
     <div
       aria-hidden="true"
@@ -700,14 +724,14 @@ function OnboardingStageEdgeFade(props: {
 
 function ActCopy(props: {
   readonly act: OnboardingAct;
+  readonly eyebrow: string;
   readonly agentGuide: OnboardingAgentGuideState;
 }) {
-  const { act, agentGuide } = props;
+  const { act, eyebrow, agentGuide } = props;
   const headingRef = useRef<HTMLHeadingElement | null>(null);
-  const isAgentsAct = act.addon === "agents";
   // Both addons that own the rest of the rail rather than sitting under the
   // body: the providers list, and the mobile tour's agent-guide editor.
-  const isStretchedAddon = isAgentsAct || act.addon === "agent-guide";
+  const isStretchedAddon = actUsesSoloStage(act);
 
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
@@ -715,6 +739,8 @@ function ActCopy(props: {
 
   return (
     <m.div
+      data-testid="onboarding-act"
+      data-act-id={act.id}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -725,7 +751,7 @@ function ActCopy(props: {
       )}
     >
       <p className="onboarding-copy-kicker hidden font-mono leading-normal font-medium tracking-[0.07em] text-white/55 uppercase lg:block">
-        {act.eyebrow}
+        {eyebrow}
       </p>
       <div className="onboarding-copy-inner flex w-full flex-col items-center lg:items-start">
         <h1
@@ -739,7 +765,7 @@ function ActCopy(props: {
           {act.body}
         </p>
       </div>
-      {isAgentsAct ? (
+      {act.addon === "agents" ? (
         <div className="onboarding-addon flex min-h-0 w-full flex-1 flex-col self-center overflow-hidden pt-1 text-left lg:self-start">
           <OnboardingDetectedAgents />
         </div>
@@ -761,14 +787,17 @@ function ActCopy(props: {
   );
 }
 
-function ProgressRail(props: { activeIndex: number }) {
-  const { activeIndex } = props;
+function ProgressRail(props: {
+  readonly acts: ReadonlyArray<OnboardingAct>;
+  readonly activeIndex: number;
+}) {
+  const { acts, activeIndex } = props;
   return (
     <div
       aria-hidden="true"
       className="onboarding-progress flex items-center gap-0.5"
     >
-      {onboardingActs().map((act, index) => (
+      {acts.map((act, index) => (
         <span
           key={act.id}
           className={cn(
@@ -830,6 +859,13 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const agentGuideInitializedRef = useRef(false);
   const agentGuideAutoDefaultRef = useRef(false);
   const agentGuideLastDefaultRef = useRef("");
+  // The live wizard's submit, handed over while the session-import act is on
+  // screen. A ref rather than state: it changes on every render of a streaming
+  // scan, and nothing renders off it - Continue only reads it when pressed.
+  const sessionImportSubmitRef = useRef<(() => void) | null>(null);
+  const registerSessionImportSubmit = useCallback((submit: () => void) => {
+    sessionImportSubmitRef.current = submit;
+  }, []);
   const stageRef = useRef<HTMLDivElement | null>(null);
   // The page's other platform read (`miniatureForAct` has the first): the
   // interaction polish the installed app gets and a desktop window must not -
@@ -839,8 +875,22 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const navigate = useNavigate();
   const router = useRouter();
   const { replay } = props;
-  const step = useOnboardingStore(selectStep);
-  const isLastAct = useOnboardingStore(selectIsLastStep);
+  // The tour this shell can run, not the full catalog: the installed app plays
+  // the phone tour, and a host that cannot scan sessions never reaches the
+  // session-import act, whose stage is the live wizard. Everything below
+  // counts acts off this list, so an omitted act is unreachable rather than
+  // merely blank.
+  const sessionImportAvailable = useSessionImportAvailable();
+  const acts = useMemo(
+    () => onboardingActsFor(sessionImportAvailable),
+    [sessionImportAvailable],
+  );
+  // Read the raw step and clamp here: negotiation can retire an act while the
+  // user is already past its new end, and the clamp is what keeps the page on
+  // a real act until the next move re-seats the store.
+  const storedStep = useOnboardingStore((state) => state.step);
+  const step = clampOnboardingStep(storedStep, acts.length);
+  const isLastAct = isLastOnboardingStep(storedStep, acts.length);
   const advanceStep = useOnboardingStore((state) => state.advance);
   const retreat = useOnboardingStore((state) => state.retreat);
   const complete = useOnboardingStore((state) => state.complete);
@@ -854,7 +904,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     reset: resetAgentGuideSetMutation,
   } = agentGuideSetMutation;
 
-  const act = onboardingActs()[step];
+  const act = acts[step];
   const miniature = miniatureForAct(act.id);
   const isAgentGuideAct = act.id === "agent-guide";
   const agentGuideQueryData = agentGuideQuery.data;
@@ -868,6 +918,14 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   useLayoutEffect(() => {
     restart();
   }, [restart]);
+
+  // Presence, for app-level ambient surfaces: while the tour has the screen,
+  // the import-progress toast holds instead of floating over the stage.
+  const setTourOpen = useOnboardingTourOpenStore((state) => state.setOpen);
+  useEffect(() => {
+    setTourOpen(true);
+    return () => setTourOpen(false);
+  }, [setTourOpen]);
 
   useEffect(() => {
     Analytics.getInstance().track(AnalyticsEvent.OnboardingStarted, {
@@ -1011,30 +1069,35 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   );
 
   const retreatWithAnalytics = useCallback((): void => {
-    const destination = onboardingActs()[Math.max(0, step - 1)] ?? act;
-    retreat();
+    const destination = acts[Math.max(0, step - 1)] ?? act;
+    retreat(acts.length);
     Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
       direction: "back",
       step: destination.id,
     });
-  }, [act, retreat, step]);
+  }, [act, acts, retreat, step]);
 
   const advance = useCallback((): void => {
     if (advanceDisabled) return;
+    // The session-import act has one forward control, and it does both jobs:
+    // start the import for whatever is ticked (nothing ticked is a no-op), then
+    // move on. The run is owned by the app-wide controller, so it outlives this
+    // act and keeps going while the user finishes the tour.
+    if (act.addon === "session-import") sessionImportSubmitRef.current?.();
     const advancePastCurrent = (): void => {
       if (isLastAct) {
         finish("completed");
         return;
       }
-      const destination = onboardingActs()[step + 1] ?? act;
-      advanceStep();
+      const destination = acts[step + 1] ?? act;
+      advanceStep(acts.length);
       Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
         direction: "continue",
         step: destination.id,
       });
     };
     advancePastCurrent();
-  }, [act, advanceDisabled, advanceStep, finish, isLastAct, step]);
+  }, [act, acts, advanceDisabled, advanceStep, finish, isLastAct, step]);
   const handleKeyboardAdvance = useEffectEvent((): void => advance());
   const handleKeyboardRetreat = useEffectEvent((): void =>
     retreatWithAnalytics(),
@@ -1142,15 +1205,14 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                 "onboarding-stage-content relative mx-auto grid h-full min-h-0 w-full max-w-[104rem] items-start overflow-hidden",
                 // The providers act - and the mobile tour's agent guide - need a
                 // stretched copy rail so their addon can scroll.
-                (act.addon === "agents" || act.addon === "agent-guide") &&
-                  "onboarding-stage-content--solo",
+                actUsesSoloStage(act) && "onboarding-stage-content--solo",
                 miniature.kind === "none" &&
                   "onboarding-stage-content--no-miniature",
               )}
             >
               <div className="onboarding-copy-rail flex min-h-0 min-w-0 flex-col items-center lg:items-start">
                 <div className="hidden w-full justify-center lg:flex lg:justify-start">
-                  <ProgressRail activeIndex={step} />
+                  <ProgressRail acts={acts} activeIndex={step} />
                 </div>
 
                 <div className="mt-7 w-full min-w-0">
@@ -1158,6 +1220,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                     <ActCopy
                       key={act.id}
                       act={act}
+                      eyebrow={actEyebrow(act, step)}
                       agentGuide={agentGuideState}
                     />
                   </AnimatePresence>
@@ -1169,17 +1232,21 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                 addon={act.addon}
                 miniature={miniature}
                 agentGuide={agentGuideState}
+                registerSessionImportSubmit={registerSessionImportSubmit}
               />
             </div>
             <OnboardingStageEdgeFade
-              desktopMiniature={miniature.kind === "desktop"}
+              visible={
+                miniature.kind === "desktop" ||
+                miniature.kind === "session-import"
+              }
             />
             <div className="onboarding-actions absolute z-10 flex items-center justify-end gap-3">
               <div className="mr-auto flex min-w-0 max-w-[14rem] flex-1 flex-col gap-1.5 lg:hidden">
                 <p className="truncate font-mono text-[0.6875rem] leading-none font-medium tracking-[0.07em] text-white/55 uppercase">
-                  {act.eyebrow}
+                  {actEyebrow(act, step)}
                 </p>
-                <ProgressRail activeIndex={step} />
+                <ProgressRail acts={acts} activeIndex={step} />
               </div>
               {step > 0 ? (
                 <button

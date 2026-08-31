@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import { LazyMotion, domAnimation } from "motion/react";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { onboardingActs } from "@/components/onboarding/onboarding-acts";
+import { onboardingActsFor } from "@/components/onboarding/onboarding-acts";
 import { AnalyticsEvent } from "@/lib/analytics";
 import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-agent-guide-pane";
 import type { OnboardingPhoneSceneId } from "@/components/onboarding/onboarding-phone-diorama";
@@ -31,6 +31,19 @@ vi.mock("@/components/onboarding/onboarding-theme-picker", () => ({
 
 vi.mock("@/components/onboarding/onboarding-diorama", () => ({
   OnboardingDiorama: () => <div data-testid="onboarding-diorama-stub" />,
+}));
+
+// The phone tour never lists the session-import act, but the page still
+// imports its stage and capability hook; stub both so this suite neither
+// loads the wizard tree nor needs a negotiated stream runtime.
+vi.mock("@/components/onboarding/onboarding-session-import-stage", () => ({
+  OnboardingSessionImportStage: () => (
+    <div data-testid="session-import-stage-stub" />
+  ),
+}));
+
+vi.mock("@/hooks/session-import/use-session-import-available", () => ({
+  useSessionImportAvailable: () => false,
 }));
 
 vi.mock("@/components/onboarding/onboarding-phone-diorama", () => ({
@@ -154,7 +167,7 @@ function renderPage() {
 
 /** Which act is on screen, read from its rendered title. */
 function currentStage(): number {
-  return onboardingActs().findIndex(
+  return onboardingActsFor(false).findIndex(
     (act) =>
       screen.queryByText(act.title.replace(/\s+/g, " "), { exact: false }) !==
       null,
@@ -349,7 +362,7 @@ describe("OnboardingPage on the installed mobile app", () => {
   it("walks all six acts before offering the finish label", async () => {
     renderPage();
 
-    const lastActIndex = onboardingActs().length - 1;
+    const lastActIndex = onboardingActsFor(false).length - 1;
     for (let index = 0; index < lastActIndex; index++) {
       expect(screen.getByTestId("onboarding-advance").textContent).toContain(
         "Continue",
@@ -585,7 +598,7 @@ describe("swiping between acts on the installed mobile app", () => {
   it("finishes the tour on a swipe left from the final act", async () => {
     const { container } = renderPage();
 
-    await advanceToStage(onboardingActs().length - 1);
+    await advanceToStage(onboardingActsFor(false).length - 1);
     setGlobalGuideMock.mockClear();
 
     drag(

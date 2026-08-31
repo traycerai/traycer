@@ -172,6 +172,7 @@ export function useEpicBatchDelete(): UseMutationResult<
             hostId,
             paths: eligibleWorktreePaths,
             source: "task_cleanup",
+            epicId: undefined,
             stopOwnersPaths: new Set(),
             expectedHoldersRevisionByPath: new Map(),
           }).then((outcome) => {

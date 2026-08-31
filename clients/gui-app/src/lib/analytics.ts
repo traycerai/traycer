@@ -192,8 +192,12 @@ export type AnalyticsOnboardingStep =
   | "mobile-tasks"
   | "navigation"
   | "providers"
+  | "session-import"
   | "task-context"
   | "task-tabs";
+
+/** Which surface opened the import wizard - onboarding act or Settings. */
+export type AnalyticsSessionImportSurface = "dialog" | "onboarding";
 
 export type AnalyticsProviderOperation =
   | "ambient_drift"
@@ -308,6 +312,7 @@ export enum AnalyticsEvent {
   OnboardingCompleted = "onboarding_completed",
   OnboardingSkipped = "onboarding_skipped",
   OnboardingThemeChanged = "onboarding_theme_changed",
+  SessionImportStarted = "session_import_started",
   AgentGuideSaved = "agent_guide_saved",
   ProviderProfileLinkStarted = "provider_profile_link_started",
   ProviderProfileLinkSucceeded = "provider_profile_link_succeeded",
@@ -550,6 +555,17 @@ export interface AnalyticsEventProperties {
   };
   readonly [AnalyticsEvent.OnboardingThemeChanged]: {
     readonly theme: AnalyticsTheme;
+  };
+  /**
+   * A user submitted the session-import wizard. The counts are what the
+   * feature is judged on - how much work people actually bring over, and from
+   * how many repos - and `surface` separates first-run adoption from the
+   * later Settings path.
+   */
+  readonly [AnalyticsEvent.SessionImportStarted]: {
+    readonly surface: AnalyticsSessionImportSurface;
+    readonly session_count: number;
+    readonly group_count: number;
   };
   readonly [AnalyticsEvent.AgentGuideSaved]: { readonly customized: boolean };
   readonly [AnalyticsEvent.ProviderProfileLinkStarted]: SourceProperties & {
@@ -1137,6 +1153,7 @@ const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "mobile-tasks",
   "navigation",
   "providers",
+  "session-import",
   "task-context",
   "task-tabs",
 ]);
@@ -1293,6 +1310,10 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["last_step"],
   ),
   ...eventKeyEntries([AnalyticsEvent.OnboardingThemeChanged], ["theme"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.SessionImportStarted],
+    ["surface", "session_count", "group_count"],
+  ),
   ...eventKeyEntries([AnalyticsEvent.AgentGuideSaved], ["customized"]),
   ...eventKeyEntries(
     [AnalyticsEvent.ProviderProfileLinkStarted],
@@ -1687,6 +1708,11 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     new Set(["center", "toast", "native"]),
   ),
   ...eventValueEntries(
+    [AnalyticsEvent.SessionImportStarted],
+    "surface",
+    new Set(["dialog", "onboarding"]),
+  ),
+  ...eventValueEntries(
     [
       AnalyticsEvent.NotificationActivationCompleted,
       AnalyticsEvent.NotificationPageLoaded,
@@ -1817,9 +1843,11 @@ const COUNT_PROPERTY_KEYS = new Set<string>([
   "attachment_count",
   "failed_count",
   "file_count",
+  "group_count",
   "open_tabs",
   "requested_count",
   "script_count",
+  "session_count",
   "succeeded_count",
   "workspace_count",
 ]);

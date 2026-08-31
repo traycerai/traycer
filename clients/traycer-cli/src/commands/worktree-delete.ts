@@ -221,6 +221,7 @@ function runDeleteCommand(
       wsStreamClient: client,
       commandId: randomUUID(),
       source: "cli",
+      epicId: undefined,
       targets: [{ worktreePath, scripts: null }],
       callbacks: {
         onTargetStarted: (_worktreePath, hasTeardown) =>

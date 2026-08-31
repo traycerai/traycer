@@ -48,6 +48,7 @@ import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
 import { openEpicKey } from "@/lib/persist";
 import { adoptLegacyPersistedKey } from "@/lib/persist/zustand-persist-lifecycle";
+import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
 import { sessionCreatedEpicHostId } from "@/lib/epics/session-created-epics";
 
 export interface EpicSessionProviderProps {
@@ -156,6 +157,13 @@ export function EpicSessionProvider(
   props: EpicSessionProviderProps,
 ): ReactNode {
   const { epicId, tabId, children } = props;
+
+  // Opening the task is what retires its imported-unseen dot, and every open
+  // path - list click, palette, deep link - mounts this provider.
+  useEffect(() => {
+    useImportedUnseenStore.getState().markSeen(epicId);
+  }, [epicId]);
+
   // The session OWNS its durable transport: the factory built in the acquire
   // effect opens it (socket + auth + wake) and the returned handle's `close()`
   // tears it down on dispose. A host restart under a STABLE `hostId` is healed
