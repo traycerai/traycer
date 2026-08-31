@@ -7,6 +7,23 @@ import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { getEpicSessionHandleHostId } from "@/lib/registries/epic-session-registry";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import { appLogger } from "@/lib/logger";
+
+/**
+ * Terminal handler for the rename chains this module detaches.
+ *
+ * `void` states the intent not to await; it does NOT consume a rejection, and
+ * every chain below can reject in ways its own arms do not cover - a two-arm
+ * `.then(landed, failed)` notably does not catch what `landed` or `failed`
+ * THEMSELVES throw. Without this the surfaces here produce unhandled
+ * rejections rather than renames that quietly did not stick.
+ */
+function recordDetachedRenameFailure(stage: string, error: unknown): void {
+  appLogger.warn("canvas tab rename failed", {
+    stage,
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
 
 /**
  * Commit handler for inline tab-title editing in the canvas tab strip, for
@@ -207,14 +224,25 @@ export function useRenameCanvasTab(
       const failed = async (): Promise<void> => {
         await retire("failed");
       };
+      // The trailing `.catch` is NOT redundant beside `failed`. `failed`
+      // handles the `mutateAsync` rejection only; a throw from inside `landed`
+      // or from `failed` itself - `retirePendingMutation` or
+      // `isLatestRenameStamp` rejecting after the RPC already succeeded -
+      // rejects the promise `.then` returns, which nothing above consumes.
       if (tab.type === "chat") {
         void renameChat
           .mutateAsync({ epicId, chatId: id, title: trimmed })
-          .then(landed, failed);
+          .then(landed, failed)
+          .catch((error: unknown) => {
+            recordDetachedRenameFailure("chat-settlement", error);
+          });
       } else {
         void renameTerminalAgent
           .mutateAsync({ epicId, tuiAgentId: id, title: trimmed })
-          .then(landed, failed);
+          .then(landed, failed)
+          .catch((error: unknown) => {
+            recordDetachedRenameFailure("terminal-agent-settlement", error);
+          });
       }
     },
     [
@@ -230,11 +258,18 @@ export function useRenameCanvasTab(
 
   // The returned callback stays VOID-returning, which is what every caller
   // declares and what a DOM handler needs. `void` makes the fire-and-forget
-  // explicit rather than leaving a promise assignable-to-void by accident -
-  // the shape that silently swallows a rejection.
+  // explicit rather than leaving a promise assignable-to-void by accident.
+  //
+  // It does not, however, CONSUME anything: `commit` rejects for a worker
+  // handler fault or a malformed bridge response on the `beginRenameMutation`
+  // and doc-backed terminal arms, and `TabGroupView` calls this callback
+  // synchronously, so that rejection had nowhere to go but the unhandled
+  // channel. The `.catch` is what makes the fire-and-forget actually safe.
   return useCallback(
     (tab: EpicCanvasTileRef, rawTitle: string): void => {
-      void commit(tab, rawTitle);
+      void commit(tab, rawTitle).catch((error: unknown) => {
+        recordDetachedRenameFailure("commit", error);
+      });
     },
     [commit],
   );

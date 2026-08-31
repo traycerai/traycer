@@ -43,8 +43,16 @@ export function EpicWriteCommandsDialog(props: EpicWriteCommandsDialogProps) {
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      {/*
+       * `sm:` and no width of its own: `DialogContent` already supplies
+       * `w-full` plus the safe-area cap, and its own note says an UNMODIFIED
+       * `max-w-*` from a caller DISPLACES that cap. `max-w-lg` did exactly
+       * that, which is what the `w-[min(92vw,…)]` beside it was compensating
+       * for. A modified `sm:max-w-lg` overrides only the primitive's
+       * `sm:max-w-sm` and leaves the cap standing.
+       */}
       <DialogContent
-        className="w-[min(92vw,32rem)] max-w-lg"
+        className="sm:max-w-lg"
         data-testid="epic-write-commands-dialog"
       >
         <DialogTitle className="text-ui font-semibold">

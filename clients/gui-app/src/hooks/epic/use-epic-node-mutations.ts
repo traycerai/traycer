@@ -1,6 +1,7 @@
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { appLogger } from "@/lib/logger";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
@@ -156,10 +157,20 @@ export function useEpicDeleteArtifact(artifactId: string | null) {
     ...callbackList: CommandMutationCallbacks<Response, Variables>[]
   ): void {
     const callbacks = callbackList.length > 0 ? callbackList[0] : undefined;
-    void mutateAsync(variables).then(
-      (response) => callbacks?.onSuccess?.(response, variables),
-      (error: Error) => callbacks?.onError?.(error, variables),
-    );
+    // The trailing `.catch` covers the CALLBACKS, not the mutation. Both arms
+    // call into caller-supplied `onSuccess` / `onError`, and a throw from
+    // either rejects the promise `.then` returns - which `void` then discards.
+    // The two-arm form handles the mutation's own rejection and nothing else.
+    void mutateAsync(variables)
+      .then(
+        (response) => callbacks?.onSuccess?.(response, variables),
+        (error: Error) => callbacks?.onError?.(error, variables),
+      )
+      .catch((error: unknown) => {
+        appLogger.warn("epic node mutation callback threw", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
   }
   return { mutate, mutateAsync, isPending };
 }
