@@ -17,9 +17,19 @@ import type {
 
 type BrowserStorageCookieSameSite = ProtocolStorageCookie["sameSite"];
 const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
+/**
+ * Total origins one captured jar may carry - the origins observed this run
+ * plus the ones carried over from the seed.
+ *
+ * A capture becomes the host's whole jar, and that jar is the next run's seed,
+ * so without a ceiling the origin list (and the localStorage blob re-serialized
+ * over IPC and the wire on every quit) would grow monotonically with every
+ * origin ever visited. Accepted fidelity limit: once the cap is reached the
+ * oldest imported origins age out and those sites ask for a fresh sign-in.
+ * That is a bounded, explainable loss; unbounded growth is not.
+ */
+const PRIMARY_PROFILE_SNAPSHOT_ORIGIN_LIMIT = 32;
 
-// The protocol shape has no partition key, so seed/capture cannot preserve
-// CHIPS identity.
 const desktopStorageCookieSchema = protocolStorageCookieSchema.transform(
   (cookie) => ({
     ...cookie,
@@ -81,15 +91,6 @@ export interface BrowserStorageCaptureWebContents {
 
 export type BrowserPrimaryProfileOriginSnapshot = BrowserStorageOrigin;
 
-export interface BrowserStorageStateCaptureResult {
-  readonly storageState: ProtocolStorageState;
-  readonly cookieCount: number;
-  readonly cookieDomains: readonly string[];
-  readonly localStorageCount: number;
-  readonly localStorageAvailable: boolean;
-  readonly localStorageReason: string | null;
-}
-
 export interface BrowserPrimaryProfileCaptureDependencies {
   readonly readCryptoState: () => BrowserCookieCryptoState;
   readonly getSession: () => BrowserStorageSession;
@@ -142,6 +143,17 @@ type SequencedPrimaryProfileOrigin = BrowserPrimaryProfileOriginSnapshot & {
 /** Owns recent localStorage observations and the capture barrier over them. */
 export class BrowserPrimaryProfileSnapshotCoordinator {
   private readonly origins = new Map<string, SequencedPrimaryProfileOrigin>();
+  /**
+   * The origins the host's jar was last SEEDED with. `origins` above only ever
+   * holds what this process run navigated, capped at
+   * {@link PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT} - and the host stores a
+   * capture as the WHOLE jar, replacing what it had. Without carrying the seed
+   * forward, quitting after visiting one site erases the localStorage of every
+   * other origin the host held. Retained rather than re-read: the seed is the
+   * host's own authoritative jar, and no live guest is parked on those origins
+   * to read them from.
+   */
+  private seededOrigins: readonly BrowserPrimaryProfileOriginSnapshot[] = [];
   private readonly observations = new Set<Promise<void>>();
   private sequence = 0;
 
@@ -154,6 +166,32 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
       webContents: BrowserStorageCaptureWebContents,
     ) => Promise<BrowserPrimaryProfileOriginSnapshot | null>,
   ) {}
+
+  /**
+   * Records the origin list of a jar just seeded into this partition. A null
+   * or origin-less seed carries no jar and must not retire what is retained.
+   *
+   * Merged, never replaced: this runs once per PROVISIONED TAB, not once per
+   * process run, and {@link retainObservedOrigin} writes LRU-demoted
+   * observations into the same field. A wholesale replace on the second tab's
+   * seed would drop those demoted values and let the capture ship the stale
+   * seeded copy - exactly what the demotion exists to prevent. What is already
+   * retained wins: the seed is the host's jar as of this run's start, so a
+   * retained entry is never older than the incoming one.
+   */
+  retainSeededOrigins(storageState: ProtocolStorageState | null): void {
+    if (storageState === null || storageState.origins.length === 0) return;
+    const retained = new Set(this.seededOrigins.map((entry) => entry.origin));
+    this.seededOrigins = [
+      ...this.seededOrigins,
+      ...storageState.origins
+        .filter((origin) => !retained.has(origin.origin))
+        .map((origin) => ({
+          origin: origin.origin,
+          localStorage: [...origin.localStorage],
+        })),
+    ];
+  }
 
   observe(url: string, webContents: BrowserStorageCaptureWebContents): void {
     const origin = parseCurrentOrigin(url);
@@ -168,9 +206,14 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
         this.origins.delete(origin);
         this.origins.set(origin, { ...snapshot, sequence });
         while (this.origins.size > PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT) {
-          const oldest = this.origins.keys().next().value;
+          const oldest = this.origins.entries().next().value;
           if (oldest === undefined) break;
-          this.origins.delete(oldest);
+          this.origins.delete(oldest[0]);
+          // Demoted, not discarded: this is the freshest value anyone holds
+          // for that origin, and dropping it would let the next capture ship
+          // the STALE seeded copy - which the seed script then writes back
+          // over the newer one on the following run.
+          this.retainObservedOrigin(oldest[1]);
         }
       })
       .catch(() => undefined)
@@ -180,12 +223,51 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
     this.observations.add(observation);
   }
 
+  private retainObservedOrigin(
+    evicted: BrowserPrimaryProfileOriginSnapshot,
+  ): void {
+    this.seededOrigins = [
+      { origin: evicted.origin, localStorage: [...evicted.localStorage] },
+      ...this.seededOrigins.filter((entry) => entry.origin !== evicted.origin),
+    ];
+  }
+
   async capture(): Promise<BrowserPrimaryProfileCaptureResult> {
     await Promise.all([...this.observations]);
-    const origins = [...this.origins.values()]
+    const observed = [...this.origins.values()]
       .reverse()
       .map(({ origin, localStorage }) => ({ origin, localStorage }));
-    return this.captureProfile(origins);
+    // A freshly observed origin wins over its seeded copy; seeded origins this
+    // run never visited fill the remainder in seed order, so the capture is a
+    // whole jar rather than "the handful of sites open right now" - bounded by
+    // {@link PRIMARY_PROFILE_SNAPSHOT_ORIGIN_LIMIT}.
+    const observedOrigins = new Set(observed.map((entry) => entry.origin));
+    const origins = [
+      ...observed,
+      ...this.seededOrigins.filter(
+        (entry) => !observedOrigins.has(entry.origin),
+      ),
+    ].slice(0, PRIMARY_PROFILE_SNAPSHOT_ORIGIN_LIMIT);
+    const result = await this.captureProfile(origins);
+    // A capture becomes the host's WHOLE jar, so a jar that knows nothing must
+    // report itself unavailable rather than erase what the host holds -
+    // permanently, since the erased jar is the next seed. "Knows nothing" is a
+    // property of the CAPTURED result, not of this coordinator: the cookie jar
+    // lives in the Electron session, so a run that never observed an origin can
+    // still be carrying every cookie the user has.
+    if (
+      result.status === "captured" &&
+      result.storageState !== null &&
+      result.storageState.cookies.length === 0 &&
+      result.storageState.origins.length === 0
+    ) {
+      return {
+        status: "unavailable",
+        storageState: null,
+        reason: "No browser storage has been seeded or observed yet.",
+      };
+    }
+    return result;
   }
 }
 
@@ -211,45 +293,17 @@ export async function seedBrowserViewCookies(
   webContents: BrowserStorageSeedWebContents,
 ): Promise<void> {
   if (storageState === null) return;
-  const cookieDetails =
-    parseStorageState(storageState).cookies.map(toCookieSetDetails);
+  const cookieDetails = parseStorageState(storageState)
+    // Electron's cookies API has no partition key, so setting a partitioned
+    // cookie here would land it in the UNPARTITIONED jar - readable from
+    // top-level sites CHIPS scoped it out of. Skipping it costs a re-login in
+    // that embedded context; restoring it merged is a cross-site leak.
+    .cookies.filter((cookie) => cookie.partitionKey === null)
+    .map(toCookieSetDetails);
   for (const details of cookieDetails) {
     await webContents.session.cookies.set(toElectronCookieSetDetails(details));
   }
   await webContents.session.cookies.flushStore();
-}
-
-export async function captureBrowserViewStorageState(
-  input: { readonly origin: string },
-  webContents: BrowserStorageCaptureWebContents & BrowserStorageSeedWebContents,
-): Promise<BrowserStorageStateCaptureResult> {
-  const origin = parseHttpOrigin(input.origin);
-  const browserSession = webContents.session;
-  await browserSession.cookies.flushStore();
-  const cookies = (await browserSession.cookies.get({ url: origin })).map(
-    toStorageCookie,
-  );
-  const capturedCookies = cookies.map(toProtocolStorageCookie);
-  const localStorage = await captureLocalStorageForOrigin(origin, webContents);
-  // Omit the origin entirely when its localStorage capture was unavailable
-  // (e.g. the tile navigated away from `origin` mid-capture) rather than
-  // reporting `{origin, localStorage: []}` - an absent entry means "unknown",
-  // so a merge downstream cannot mistake it for a genuinely empty origin and
-  // erase a good cached value.
-  const origins = localStorage.available
-    ? [{ origin, localStorage: [...localStorage.entries] }]
-    : [];
-  return {
-    storageState: {
-      cookies: capturedCookies,
-      origins,
-    },
-    cookieCount: cookies.length,
-    cookieDomains: uniqueSorted(cookies.map((cookie) => cookie.domain)),
-    localStorageCount: localStorage.entries.length,
-    localStorageAvailable: localStorage.available,
-    localStorageReason: localStorage.reason,
-  };
 }
 
 function parseStorageState(value: ProtocolStorageState): DesktopStorageState {
@@ -324,6 +378,10 @@ function toStorageCookie(cookie: Cookie): DesktopStorageCookie {
     httpOnly: cookie.httpOnly === true,
     secure: cookie.secure === true,
     sameSite: playwrightSameSite(cookie.sameSite),
+    // Electron's cookies API exposes no partition key, so every cookie this
+    // shell captures is unpartitioned by construction. `null` says exactly
+    // that; it is not a lost value.
+    partitionKey: null,
   };
 }
 
@@ -444,10 +502,6 @@ function readCookiePath(value: string | undefined): string {
     throw new Error("Browser storageState cookie path is invalid");
   }
   return path;
-}
-
-function uniqueSorted(values: readonly string[]): readonly string[] {
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
 const URL_SCOPE_SYNTAX_PATTERN = /[@:/\\\s\x00-\x1F\x7F]/u;

@@ -41,6 +41,17 @@ export function openPipHeadlessStream(input: {
     role: "pip",
     callbacks: {
       onServerFrame: (frame, jpegBytes) => {
+        // Answered before anything else: the host times this reply, so any
+        // work in between is measured as link latency - and a mirror that
+        // never answers reads as a dead link.
+        if (frame.kind === "rttProbe") {
+          stream.sendClientFrame({
+            kind: "rttProbeAck",
+            hasBinaryPayload: false,
+            probeId: frame.probeId,
+          });
+          return;
+        }
         input.onFrame(frame, jpegBytes);
         if (frame.kind !== "frame") return;
         stream.sendClientFrame({

@@ -8,13 +8,18 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  BrowserPeekTile,
-  type BrowserPeekNode,
-} from "@/components/epic-canvas/renderers/browser-peek-tile";
-import {
   FakeStreamClient,
+  PEEK_NODE,
+  clearScreencastOwner,
+  hostDirectoryEntryModule,
+  hostStreamClientForWithAuthModule,
+  liveStream as fixtureLiveStream,
+  streamAuthRevalidatorModule,
+  tabHostIdModule,
+  tileBodyVisibleModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 
 const toast = vi.hoisted(() => vi.fn());
@@ -28,36 +33,26 @@ vi.mock("sonner", () => ({
   toast,
 }));
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-test",
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
+  tabHostIdModule(),
+);
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
-  useTileBodyVisible: () => hookState.visible,
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
+  tileBodyVisibleModule(hookState),
+);
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => ({ hostId: "host-test" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", () =>
+  hostDirectoryEntryModule(),
+);
 
-vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: () => hookState.streamClient,
-  authenticatedHostStreamKey: () => "authenticated-host-test",
-  authenticatedOwnerIdentityKey: () => "local\u0000host-test\u0000user-test",
-}));
+vi.mock("@/hooks/host/use-host-stream-client-for", () =>
+  hostStreamClientForWithAuthModule(hookState),
+);
 
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
+vi.mock("@/lib/host/stream-auth-revalidator", () =>
+  streamAuthRevalidatorModule(),
+);
 
-const PEEK_NODE: BrowserPeekNode = {
-  id: "browser-peek-headless-1",
-  instanceId: "peek-instance-1",
-  hostId: "host-test",
-  sessionId: "headless-1",
-  tabId: "headless-tab-1",
-  initialUrl: "http://localhost:3000",
-};
 const PEEK_OWNER_ID = [
   PEEK_NODE.hostId,
   PEEK_NODE.sessionId,
@@ -71,12 +66,7 @@ const URL_C = "https://example.com/c";
 const DRAFT_URL = "https://draft.example/path";
 
 function liveStream(): FakeStreamSession {
-  const sessions = hookState.streamClient?.sessions ?? [];
-  const stream = sessions.at(-1);
-  if (stream === undefined) {
-    throw new Error("expected browser.screencast stream");
-  }
-  return stream;
+  return fixtureLiveStream(hookState);
 }
 
 function overlayButton(): HTMLElement {
@@ -139,11 +129,6 @@ function armPeekTile(stream: FakeStreamSession): void {
   act(() => {
     stream.emit({ kind: "armed", hasBinaryPayload: false, armEpoch: 1 }, null);
   });
-}
-
-function clearScreencastOwner(): void {
-  const store = useScreencastArmedStore.getState();
-  if (store.ownerId !== null) store.release(store.ownerId);
 }
 
 describe("BrowserPeekTile toolbar chrome", () => {
@@ -452,7 +437,7 @@ describe("BrowserPeekTile toolbar chrome", () => {
     expect(addressInput().value).toBe(URL_B);
   });
 
-  it("disarms after leaving the tile from the address bar", async () => {
+  it("keeps control after leaving the tile from the address bar", async () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -470,7 +455,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
     fireEvent.blur(addressInput(), { relatedTarget: document.body });
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
-    expect(screen.queryByText("Controlling")).toBeNull();
+    // Focus is not ownership (ticket 20): the badge follows the arm, so it
+    // stays legible across a click into the address bar and out of the tile.
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
+    expect(screen.getByText("Controlling")).not.toBeNull();
   });
 });

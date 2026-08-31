@@ -34,7 +34,6 @@ import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserOriginLocalStorage,
   captureBrowserPrimaryProfile,
-  captureBrowserViewStorageState,
   seedBrowserViewCookies,
 } from "../browser-view/storage/browser-storage-state";
 import { trustBrowserCertificate } from "../app/cert-trust";
@@ -82,8 +81,13 @@ export function registerBrowserViewIpc(
     },
     send: (windowId, channel, payload) =>
       bridge.safeSendToWindow(windowId, channel, payload),
-    seedStorageState: seedBrowserViewCookies,
-    captureStorageState: captureBrowserViewStorageState,
+    seedStorageState: async (storageState, webContents) => {
+      // Retain BEFORE seeding: the jar the host just handed down is the only
+      // record of the origins this run may never navigate, and a quit capture
+      // replaces the host's whole jar with what it sends.
+      primaryProfileSnapshots.retainSeededOrigins(storageState);
+      await seedBrowserViewCookies(storageState, webContents);
+    },
     observePrimaryProfileOrigin: (url, webContents) => {
       primaryProfileSnapshots.observe(url, webContents);
     },
