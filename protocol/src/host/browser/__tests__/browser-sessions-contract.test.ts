@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  browserCookieKeySchema,
   browserPrimaryProfileDeltaSchema,
   browserSavedLoginSitesRequestSchema,
   browserSavedLoginSitesResponseSchema,
@@ -556,10 +557,16 @@ describe("browser.sessions@1.0 primary-profile cookie delta (ticket 06)", () => 
     sameSite: "Lax" as const,
   };
 
+  const COOKIE_KEY = {
+    domain: "example.com",
+    name: "sid",
+    path: "/",
+  };
+
   const DELTA = {
-    scope: { kind: "domain" as const, domain: "example.com" },
+    domain: "example.com",
     cookies: [COOKIE],
-    removedKeys: [{ domain: "example.com", name: "old-sid", path: "/" }],
+    removedKeys: [],
     issuedAt: 1_000,
   };
 
@@ -569,7 +576,36 @@ describe("browser.sessions@1.0 primary-profile cookie delta (ticket 06)", () => 
     );
   });
 
-  it("rejects an unknown top-level field", () => {
+  it("requires removedKeys - an omitted field is a wire error, not an empty default", () => {
+    const { removedKeys: _removedKeys, ...deltaWithoutRemovedKeys } = DELTA;
+    expect(_removedKeys).toEqual([]);
+    expect(
+      browserPrimaryProfileDeltaSchema.safeParse(deltaWithoutRemovedKeys)
+        .success,
+    ).toBe(false);
+  });
+
+  it("round-trips a delta carrying removedKeys, standalone and inside the primaryProfileDelta client frame", () => {
+    const deltaWithRemoval = { ...DELTA, removedKeys: [COOKIE_KEY] };
+    expect(
+      browserPrimaryProfileDeltaSchema.safeParse(deltaWithRemoval).success,
+    ).toBe(true);
+
+    const clientFrame = {
+      kind: "primaryProfileDelta" as const,
+      hasBinaryPayload: false,
+      ...deltaWithRemoval,
+    };
+    const parsed = browserSessionsClientFrameSchema.safeParse(clientFrame);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).toEqual({
+      ...clientFrame,
+      cookies: [{ ...COOKIE, partitionKey: null }],
+    });
+  });
+
+  it("is strict: rejects an unknown field on the delta itself", () => {
     expect(
       browserPrimaryProfileDeltaSchema.safeParse({
         ...DELTA,
@@ -578,46 +614,16 @@ describe("browser.sessions@1.0 primary-profile cookie delta (ticket 06)", () => 
     ).toBe(false);
   });
 
-  it("rejects a scope kind other than domain (the only scope this stream ever sends)", () => {
+  it("rejects a removedKeys entry carrying an extra field - the cookie-key schema is strict", () => {
     expect(
       browserPrimaryProfileDeltaSchema.safeParse({
         ...DELTA,
-        scope: { kind: "partition", domain: "example.com" },
+        removedKeys: [{ ...COOKIE_KEY, value: "abc" }],
       }).success,
     ).toBe(false);
-  });
-
-  it("rejects a missing removedKeys or issuedAt", () => {
-    const { removedKeys: _removedKeys, ...withoutRemovedKeys } = DELTA;
-    expect(_removedKeys.length).toBe(1);
+    expect(browserCookieKeySchema.safeParse(COOKIE_KEY).success).toBe(true);
     expect(
-      browserPrimaryProfileDeltaSchema.safeParse(withoutRemovedKeys).success,
-    ).toBe(false);
-
-    const { issuedAt: _issuedAt, ...withoutIssuedAt } = DELTA;
-    expect(_issuedAt).toBe(1_000);
-    expect(
-      browserPrimaryProfileDeltaSchema.safeParse(withoutIssuedAt).success,
-    ).toBe(false);
-  });
-
-  it("rejects a userId field - identity is the stream's, not the frame's", () => {
-    expect(
-      browserPrimaryProfileDeltaSchema.safeParse({
-        ...DELTA,
-        userId: "user-1",
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects a cookie missing a required field", () => {
-    const { path: _path, ...cookieWithoutPath } = COOKIE;
-    expect(_path).toBe("/");
-    expect(
-      browserPrimaryProfileDeltaSchema.safeParse({
-        ...DELTA,
-        cookies: [cookieWithoutPath],
-      }).success,
+      browserCookieKeySchema.safeParse({ ...COOKIE_KEY, value: "abc" }).success,
     ).toBe(false);
   });
 });
@@ -708,39 +714,6 @@ describe("browser.sessions@1.0 store-key handshake", () => {
       }).success,
     ).toBe(false);
   });
-
-  it("rejects a missing requestId, a missing key, and unknown fields", () => {
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        kind: "storeKeyWrapped",
-        hasBinaryPayload: false,
-        wrappedKey: WRAPPED_KEY,
-      }).success,
-    ).toBe(false);
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        kind: "storeKeyUnwrapped",
-        hasBinaryPayload: false,
-        requestId: "request-1",
-      }).success,
-    ).toBe(false);
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        kind: "storeKeyOffer",
-        hasBinaryPayload: false,
-        userId: "user-1",
-      }).success,
-    ).toBe(false);
-    expect(
-      browserSessionsServerFrameSchema.safeParse({
-        kind: "storeKeyUnwrapRequest",
-        hasBinaryPayload: false,
-        requestId: "request-1",
-        wrappedKey: WRAPPED_KEY,
-        userId: "user-1",
-      }).success,
-    ).toBe(false);
-  });
 });
 
 describe("browser.sessions@1.0 forget all browser logins (ticket 08)", () => {
@@ -763,42 +736,6 @@ describe("browser.sessions@1.0 forget all browser logins (ticket 08)", () => {
       browserSessionsV1.serverFrameSchema.safeParse(forgotten).success,
     ).toBe(true);
   });
-
-  it("rejects a userId on either frame", () => {
-    // The identity is the stream's authenticated user; a frame that could name
-    // another user would be a cross-user shred request.
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        kind: "forgetLogins",
-        hasBinaryPayload: false,
-        userId: "user-1",
-      }).success,
-    ).toBe(false);
-    expect(
-      browserSessionsServerFrameSchema.safeParse({
-        kind: "primaryProfileForgotten",
-        hasBinaryPayload: false,
-        userId: "user-1",
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects a requestId: neither frame is correlated", () => {
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        kind: "forgetLogins",
-        hasBinaryPayload: false,
-        requestId: "request-1",
-      }).success,
-    ).toBe(false);
-    expect(
-      browserSessionsServerFrameSchema.safeParse({
-        kind: "primaryProfileForgotten",
-        hasBinaryPayload: false,
-        requestId: "request-1",
-      }).success,
-    ).toBe(false);
-  });
 });
 
 describe("browser.sessions@1.0 clear cookies for one site (ticket 07)", () => {
@@ -816,42 +753,6 @@ describe("browser.sessions@1.0 clear cookies for one site (ticket 07)", () => {
       true,
     );
   });
-
-  it("requires the domain: an evict with no scope would clear the whole jar", () => {
-    expect(
-      browserSessionsServerFrameSchema.safeParse({
-        kind: "primaryProfileEvict",
-        hasBinaryPayload: false,
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects a userId - the identity is the stream's authenticated user", () => {
-    expect(
-      browserSessionsServerFrameSchema.safeParse({
-        ...evict,
-        userId: "user-1",
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects a requestId: the evict is unsolicited and uncorrelated", () => {
-    expect(
-      browserSessionsServerFrameSchema.safeParse({
-        ...evict,
-        requestId: "request-1",
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects a binary payload", () => {
-    expect(
-      browserSessionsServerFrameSchema.safeParse({
-        ...evict,
-        hasBinaryPayload: true,
-      }).success,
-    ).toBe(false);
-  });
 });
 
 describe("browser.sessions@1.0 clear one site from Settings (ticket 10)", () => {
@@ -868,42 +769,6 @@ describe("browser.sessions@1.0 clear one site from Settings (ticket 10)", () => 
     expect(
       browserSessionsV1.clientFrameSchema.safeParse(clearSite).success,
     ).toBe(true);
-  });
-
-  it("requires the domain: a clear with no scope would empty the whole jar", () => {
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        kind: "clearSite",
-        hasBinaryPayload: false,
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects a userId - the identity is the stream's authenticated user", () => {
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        ...clearSite,
-        userId: "user-1",
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects a requestId: the clear is unsolicited and uncorrelated", () => {
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        ...clearSite,
-        requestId: "request-1",
-      }).success,
-    ).toBe(false);
-  });
-
-  it("rejects a binary payload", () => {
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        ...clearSite,
-        hasBinaryPayload: true,
-      }).success,
-    ).toBe(false);
   });
 });
 

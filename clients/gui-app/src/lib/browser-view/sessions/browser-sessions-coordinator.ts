@@ -242,28 +242,22 @@ export function subscribeToBrowserSessionsCoordinator(
 }
 
 /**
- * "Forget all browser logins" (spec §6.5, ticket 08). Answers whether any live
- * stream took it, so a caller can say "not connected" rather than claim a shred
- * that never happened.
- *
- * Sent once per host, not once per coordinator: coordinators are keyed by
- * {epic, host, identity}, and the frame speaks for the user's whole slice on
+ * Sends once per host, not once per coordinator: coordinators are keyed by
+ * {epic, host, identity}, and these frames speak for the user's whole slice on
  * that host, so a second one for another epic of the same host would only ask
- * for the same shred twice. Every host the user has a live browser stream to is
- * addressed - "all" is the whole point of the action, and each host keeps its
- * own key and its own slice.
- *
- * Module-level, not a tile-scoped action: the trigger is temporary (the shield
- * popover) and moves to Settings › Browser in ticket 10, which has no tile to
- * hang it off either.
+ * for the same work twice. Every host the user has a live browser stream to is
+ * addressed - each host keeps its own key and its own slice. Answers whether
+ * any live stream took it.
  */
-export function forgetAllBrowserLogins(): boolean {
+function sendOncePerHost(
+  send: (coordinator: BrowserSessionsCoordinator) => boolean,
+): boolean {
   const addressedHostIds = new Set<string>();
   let sent = false;
   for (const coordinator of browserSessionsCoordinators.values()) {
     const hostId = coordinator.owner.hostId;
     if (addressedHostIds.has(hostId)) continue;
-    if (!coordinator.forgetLogins()) continue;
+    if (!send(coordinator)) continue;
     addressedHostIds.add(hostId);
     sent = true;
   }
@@ -271,28 +265,25 @@ export function forgetAllBrowserLogins(): boolean {
 }
 
 /**
+ * "Forget all browser logins" (spec §6.5, ticket 08).
+ *
+ * Module-level, not a tile-scoped action: the trigger lives in Settings ›
+ * Browser, which has no tile to hang it off.
+ */
+export function forgetAllBrowserLogins(): void {
+  sendOncePerHost((coordinator) => coordinator.forgetLogins());
+}
+
+/**
  * "Clear" on one row of Settings > Browser (spec section 7.3, ticket 10).
  * Answers whether any live stream took it.
  *
- * Deduped per host and addressed to every host the same way
- * {@link forgetAllBrowserLogins} is, and for the same reason: each host keeps
- * its own slice, and a site the user asked to forget is not one they meant to
- * keep on the machine they happen not to be looking at. The frame carries the
- * domain rather than a tile key - unlike the tile menu's clear-site, there is
- * no tile here whose URL could name the site, and the domain came from the
- * host's own list in the first place.
+ * The frame carries the domain rather than a tile key - unlike the tile menu's
+ * clear-site, there is no tile here whose URL could name the site, and the
+ * domain came from the host's own list in the first place.
  */
 export function clearSavedLoginSite(domain: string): boolean {
-  const addressedHostIds = new Set<string>();
-  let sent = false;
-  for (const coordinator of browserSessionsCoordinators.values()) {
-    const hostId = coordinator.owner.hostId;
-    if (addressedHostIds.has(hostId)) continue;
-    if (!coordinator.clearSite(domain)) continue;
-    addressedHostIds.add(hostId);
-    sent = true;
-  }
-  return sent;
+  return sendOncePerHost((coordinator) => coordinator.clearSite(domain));
 }
 
 function notifyBrowserSessionsCoordinator(key: string): void {
@@ -913,6 +904,9 @@ type BrowserSessionsSubsystemFrame = Exclude<
  * The host has already shredded its slice for this user; this is the desktop's
  * turn. Fire-and-forget: there is no frame to answer with, and a machine with
  * no bridge (a browser tab) has no jar to clear.
+ *
+ * Kept extracted rather than inlined into the frame switch: folding it back in
+ * puts {@link handleBrowserSessionsSubsystemFrame} over the complexity budget.
  */
 function forgetLocalLogins(browserView: BrowserViewBridge | null): void {
   void browserView?.forgetLogins().catch((cause: unknown) => {
@@ -1149,10 +1143,8 @@ function handleStoreKeyRequestFrame(args: {
     });
   };
   if (frame.kind === "storeKeyWrapRequest") {
-    // Wrapped so a bridge that predates this call rejects instead of throwing
-    // into the stream callback that asked for it.
-    void Promise.resolve()
-      .then(() => browserView.wrapStoreKey(frame.rawKey))
+    void browserView
+      .wrapStoreKey(frame.rawKey)
       .then((result) => {
         if (!result.ok) {
           warn(result.reason);
@@ -1168,8 +1160,8 @@ function handleStoreKeyRequestFrame(args: {
       .catch(warn);
     return;
   }
-  void Promise.resolve()
-    .then(() => browserView.unwrapStoreKey(frame.wrappedKey))
+  void browserView
+    .unwrapStoreKey(frame.wrappedKey)
     .then((result) => {
       if (!result.ok) warn(result.reason);
       args.sendClientFrame({

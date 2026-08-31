@@ -198,22 +198,6 @@ export const browserStorageStateSchema = z
   .strict();
 export type BrowserStorageState = z.infer<typeof browserStorageStateSchema>;
 
-/**
- * The slice of the jar one capture speaks for. Only registrable-domain scopes
- * travel on the wire today (`registrable-domain.ts` derives them on both ends);
- * the host's own store additionally knows a whole-partition scope, which is
- * what a teardown capture writes.
- */
-export const browserPrimaryProfileDeltaScopeSchema = z
-  .object({
-    kind: z.literal("domain"),
-    domain: z.string(),
-  })
-  .strict();
-export type BrowserPrimaryProfileDeltaScope = z.infer<
-  typeof browserPrimaryProfileDeltaScopeSchema
->;
-
 /** Unpartitioned cookie identity: exactly what a tombstone is keyed by. */
 export const browserCookieKeySchema = z
   .object({
@@ -226,15 +210,24 @@ export type BrowserCookieKey = z.infer<typeof browserCookieKeySchema>;
 
 /**
  * One coalescing window's worth of cookie change for a single registrable
- * domain. `cookies` is the **complete** picture of the scope after the window
- * (every cookie the scope subtree holds), not just the ones that changed, so
- * the host can tombstone by absence; `removedKeys` names what was observed
- * disappearing, which is what makes a removal legible in a trace and lets a
- * future reader distinguish "gone" from "never seen".
+ * domain (`registrable-domain.ts` derives it on both ends). The two lists
+ * answer two different questions and neither can stand in for the other.
+ *
+ * `cookies` is the **complete** picture of the domain after the window (every
+ * cookie its subtree holds), not just the ones that changed. It is what lets
+ * the host *reconcile* its cache by absence - the store converging on the
+ * desktop's jar.
+ *
+ * `removedKeys` names what the sender watched **disappear from its own jar**
+ * during the window. That is the only logout evidence on this frame:
+ * reconciliation buries cookies for all sorts of innocent reasons (a headless
+ * context contributed a cookie this desktop never had), so the host propagates
+ * a sign-out to live sessions from `removedKeys` alone and never from what a
+ * merge happened to tombstone.
  */
 export const browserPrimaryProfileDeltaSchema = z
   .object({
-    scope: browserPrimaryProfileDeltaScopeSchema,
+    domain: z.string(),
     cookies: z.array(browserStorageCookieSchema),
     removedKeys: z.array(browserCookieKeySchema),
     /** When the window opened, from the sender's clock. */
@@ -725,9 +718,6 @@ export type BrowserSavedLoginSite = z.infer<typeof browserSavedLoginSiteSchema>;
 
 /** No input: the slice read is the caller's own, from the request identity. */
 export const browserSavedLoginSitesRequestSchema = z.object({}).strict();
-export type BrowserSavedLoginSitesRequest = z.infer<
-  typeof browserSavedLoginSitesRequestSchema
->;
 
 /**
  * `sealed` is not "no sites": it is "this host holds no key for you yet", and

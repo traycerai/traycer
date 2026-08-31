@@ -23,7 +23,7 @@ import type {
   PipCaptureStartInput,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
-import { registrableDomainForUrl } from "@traycer-clients/shared/platform/registrable-domain";
+import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
 import { describeLogError, log } from "../app/logger";
 import type {
   BrowserSessionCertificateErrorChange,
@@ -84,11 +84,6 @@ import { BrowserViewDebugSessions } from "./manager/debug-session-for";
 export const BOUNDS_STREAM_LOG_INTERVAL_MS = 1000;
 
 const DEVTOOLS_TITLE = "Traycer Browser DevTools";
-
-/** The site one tile's "clear cookies for this site" would clear. */
-export interface BrowserViewClearSiteTarget {
-  readonly domain: string;
-}
 
 interface BrowserViewManagerOptions {
   readonly createView: (
@@ -477,12 +472,11 @@ export class BrowserViewManager {
   readClearSiteTarget(
     windowId: string,
     input: BrowserViewTileKey,
-  ): BrowserViewClearSiteTarget | null {
+  ): string | null {
     const entry = this.entries.getTile(windowId, input);
     if (entry === undefined || entry.profile !== "primary") return null;
     if (!isHttpBrowserUrl(entry.currentUrl)) return null;
-    const domain = registrableDomainForUrl(entry.currentUrl);
-    return domain === null ? null : { domain };
+    return registrableDomainForUrl(entry.currentUrl);
   }
 
   getDebugSnapshot(

@@ -7,7 +7,7 @@ import type {
 import {
   cookieDomainInScope,
   registrableDomain,
-} from "@traycer-clients/shared/platform/registrable-domain";
+} from "@traycer/protocol/host/browser/registrable-domain";
 import { describeLogError, log } from "../../app/logger";
 import { browserStorageCookies } from "./browser-storage-state";
 
@@ -16,13 +16,13 @@ import { browserStorageCookies } from "./browser-storage-state";
  * domain-scoped deltas (spec §6.3, decision #10).
  *
  * Chromium fires `changed` per cookie, several times for a single sign-in and
- * again for every silent refresh. Sending one frame each would be a flood, and
- * sending only what changed would leave the host unable to tell a removal from
- * a cookie it simply never saw. So changes coalesce per registrable domain for
- * a short window, and the window closes with the **whole** slice: every cookie
- * the scope holds right now, plus the keys observed disappearing during the
- * window. That makes the delta a complete picture of its scope, which is what
- * lets the host tombstone by absence instead of trusting a removal list.
+ * again for every silent refresh. Sending one frame each would be a flood, so
+ * changes coalesce per registrable domain for a short window, and the window
+ * closes with the **whole** slice: every cookie the scope holds right now,
+ * plus the keys observed disappearing during the window. The slice is what
+ * lets the host reconcile its cache by absence; the removal list is separately
+ * what lets it tell a **logout** from a cache that merely diverged, because
+ * only this jar can witness a cookie being taken out of it (ticket 14).
  *
  * Only a *persistent* `primary` partition is ever observed. An isolated or
  * ephemeral jar has nothing to contribute to the shared identity, and its
@@ -66,6 +66,7 @@ export const BROWSER_COOKIE_DELTA_WINDOW_MS = 2_000;
 interface CoalescingWindow {
   /** When the window opened - the delta's `issuedAt`. */
   readonly issuedAt: number;
+  /** Keys seen removed during the window, deduped by their id. */
   readonly removedKeys: Map<string, BrowserCookieKey>;
   readonly timer: NodeJS.Timeout;
 }
@@ -150,41 +151,6 @@ export class BrowserCookieChangeObserver {
     }
   }
 
-  /**
-   * Emits one delta for `domain` right now: the scope's current cookies, read
-   * fresh, with no removal list. Ticket 07's clear-site is the caller - it runs
-   * inside `suppress()` so the jar's own change events cannot echo, and then
-   * says the one true thing about the slice it just emptied, exactly once.
-   *
-   * Deliberately ignores *per-domain* suppression: the whole point is to speak
-   * for a domain whose events are muted. Everything else must go through a
-   * window.
-   *
-   * `suppressAll` is the one mute it does honour. Ticket 08's forget-all is
-   * shredding the whole slice, so a delta naming any domain - even one this
-   * clear-site just emptied on purpose - would land after the shred and
-   * re-create an entry for the identity the user asked to forget. The check is
-   * repeated after the read, because the slice is read asynchronously and a
-   * forget-all can begin while it is in flight.
-   */
-  async emitDeltaNow(domain: string): Promise<void> {
-    const scope = registrableDomain(domain);
-    if (scope === null) return;
-    // Any window open for this scope described the jar before the change; it
-    // has nothing left to say once this delta lands.
-    this.dropWindow(scope);
-    if (this.suppressedGlobally > 0) return;
-    try {
-      const delta = await this.readSlice(scope, new Map(), this.options.now());
-      if (this.suppressedGlobally > 0) return;
-      this.options.emit(delta);
-    } catch (error) {
-      log.warn("[browser-view] cookie delta capture failed", {
-        error: describeLogError(error),
-      });
-    }
-  }
-
   dispose(): void {
     if (this.listener !== null) {
       this.options.cookies.off("changed", this.listener);
@@ -254,7 +220,10 @@ export class BrowserCookieChangeObserver {
     }
   }
 
-  /** The complete picture of one scope: every cookie it holds, right now. */
+  /**
+   * The complete picture of one scope: every cookie it holds, right now, plus
+   * the keys that are still missing from it after the window closed.
+   */
   private async readSlice(
     domain: string,
     removedKeys: ReadonlyMap<string, BrowserCookieKey>,
@@ -267,7 +236,7 @@ export class BrowserCookieChangeObserver {
       await this.options.cookies.get({ domain }),
     ).filter((cookie) => cookieDomainInScope(cookie.domain, domain));
     return {
-      scope: { kind: "domain", domain },
+      domain,
       cookies: [...cookies],
       removedKeys: [...removedKeysNotPresent(removedKeys, cookies)],
       issuedAt,
@@ -275,6 +244,12 @@ export class BrowserCookieChangeObserver {
   }
 }
 
+/**
+ * The removals that survived the window. A key the flushed slice still holds
+ * was re-set before the window closed - a refresh, not a sign-out - and
+ * claiming it would evict a live login on the strength of a coalescing
+ * artifact.
+ */
 function removedKeysNotPresent(
   removed: ReadonlyMap<string, BrowserCookieKey>,
   present: readonly BrowserStorageCookie[],
@@ -287,8 +262,10 @@ function removedKeysNotPresent(
 
 /**
  * The change event's cookie through the same normalisation the capture path
- * uses, so a removed key is byte-identical to the key the store holds. `null`
- * when the cookie is not one the capture path could have produced.
+ * uses, so a removed key is byte-identical to the key the store holds - which
+ * is what lets the host match a removal against its own tombstones instead of
+ * guessing. `null` when the cookie is not one the capture path could have
+ * produced.
  */
 function cookieKeyOf(cookie: Cookie): BrowserCookieKey | null {
   try {

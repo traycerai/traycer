@@ -257,8 +257,8 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  clearSite() {
-    return Promise.resolve({ status: "refused" as const, reason: "test" });
+  clearSite(): Promise<void> {
+    return Promise.resolve();
   }
 
   evictSite(): Promise<void> {

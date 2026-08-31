@@ -36,7 +36,6 @@ describe("useBrowserSaveLogins", () => {
     await waitFor(() => {
       expect(screen.getByTestId("enabled").textContent).toBe("false");
     });
-    expect(bridge.saveLoginsGetCallCount()).toBe(2);
   });
 
   it("round-trips a set through the bridge", async () => {

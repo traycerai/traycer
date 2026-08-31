@@ -218,24 +218,6 @@ export type BrowserPrimaryProfileCaptureResult =
       readonly reason: string;
     };
 
-/**
- * The answer to "clear cookies for this site" (spec §6.5). `refused` is not a
- * failure: a tile with no site to name (a non-http(s) page) or a private
- * session has nothing to clear, and the reason is what the UI says instead of
- * a success toast.
- */
-export type BrowserViewClearSiteResult =
-  | {
-      readonly status: "cleared";
-      readonly domain: string;
-      readonly cookiesRemoved: number;
-      readonly originsCleared: number;
-    }
-  | {
-      readonly status: "refused";
-      readonly reason: string;
-    };
-
 export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabCapability {
   readonly target: BrowserCdpTarget;
   readonly command: BrowserCdpCommand;
@@ -394,9 +376,10 @@ export interface BrowserViewBridge {
    * "Clear cookies for this site" (spec §6.5): removes the tile's registrable
    * domain from the shared `primary` jar - cookies and the localStorage of
    * every remembered origin under it - and reports the emptied slice to the
-   * host as one delta, which is what turns it into tombstones.
+   * host as one delta, which is what turns it into tombstones. A tile with no
+   * site to name - a private session, or a non-http(s) page - is a no-op.
    */
-  clearSite(input: BrowserViewTileKey): Promise<BrowserViewClearSiteResult>;
+  clearSite(input: BrowserViewTileKey): Promise<void>;
   /**
    * The receiving half of the same action: the host says one site was cleared
    * somewhere else for this user (`primaryProfileEvict`), so this partition

@@ -20,7 +20,7 @@ const sites = vi.hoisted(
   (): { current: BrowserSavedLoginSitesResponse | null } => ({ current: null }),
 );
 const refetch = vi.hoisted(() => vi.fn());
-const forgetAllBrowserLogins = vi.hoisted(() => vi.fn(() => true));
+const forgetAllBrowserLogins = vi.hoisted(() => vi.fn());
 const clearSavedLoginSite = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("@/providers/use-runner-host", () => ({

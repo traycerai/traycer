@@ -149,12 +149,6 @@ vi.mock("../../browser-view/storage/browser-saved-logins", () => ({
   unwrapStoreKey: vi.fn(() => "unwrapped"),
 }));
 
-vi.mock("../../browser-view/storage/browser-forget-logins", () => ({
-  forgetBrowserPersistentLogins: vi.fn(() =>
-    Promise.resolve({ partitionCleared: false, tabsRecreated: 0 }),
-  ),
-}));
-
 vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   BrowserPrimaryProfileSnapshotCoordinator: class {
     observe(): void {}
@@ -180,7 +174,6 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
     }),
   ),
   seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
-  browserStorageStateFromCookies: vi.fn(() => ({ cookies: [], origins: [] })),
 }));
 
 function makeBridge() {

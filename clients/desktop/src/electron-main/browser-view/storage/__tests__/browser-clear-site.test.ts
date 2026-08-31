@@ -6,24 +6,20 @@ import {
   BrowserCookieChangeObserver,
 } from "../browser-cookie-change-observer";
 import {
+  browserStorageCookies,
   clearBrowserSite,
-  type BrowserSiteClearDependencies,
   type BrowserSiteClearSession,
 } from "../browser-storage-state";
+import {
+  makeCookie,
+  matchesDomainFilter,
+  type CookieChangeListener,
+} from "./cookie-jar-fixture";
 
 vi.mock("../../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   describeLogError: (error: unknown) => String(error),
 }));
-
-type CookieChangeListener = (
-  event: unknown,
-  cookie: Cookie,
-  cause: string,
-  removed: boolean,
-) => void;
-
-const PARTITION = "persist:traycer-browser";
 
 /**
  * One jar that answers both halves of the clear: the removal API the routine
@@ -90,35 +86,6 @@ class FakeClearSiteSession implements BrowserSiteClearSession {
   }
 }
 
-/** Chromium's own `get({domain})`: the domain itself or any host under it. */
-function matchesDomainFilter(
-  cookieDomain: string,
-  filterDomain: string,
-): boolean {
-  const normalized = cookieDomain.startsWith(".")
-    ? cookieDomain.slice(1)
-    : cookieDomain;
-  return normalized === filterDomain || normalized.endsWith(`.${filterDomain}`);
-}
-
-function makeCookie(input: {
-  readonly name: string;
-  readonly domain: string;
-}): Cookie {
-  return {
-    name: input.name,
-    value: `${input.name}-value`,
-    domain: input.domain,
-    hostOnly: !input.domain.startsWith("."),
-    path: "/",
-    secure: true,
-    httpOnly: false,
-    session: true,
-    sameSite: "lax",
-    expirationDate: 4_102_444_800,
-  };
-}
-
 const SITE_JAR: readonly Cookie[] = [
   makeCookie({ name: "sid", domain: ".example.com" }),
   makeCookie({ name: "prefs", domain: "www.example.com" }),
@@ -126,26 +93,14 @@ const SITE_JAR: readonly Cookie[] = [
   makeCookie({ name: "lookalike", domain: "notexample.com" }),
 ];
 
-function makeDependencies(
-  session: BrowserSiteClearSession,
-  origins: readonly string[],
-): BrowserSiteClearDependencies {
-  return {
-    getSession: () => session,
-    rememberedOrigins: () => origins,
-  };
-}
+const noOrigins = (): readonly string[] => [];
 
 describe("clearBrowserSite", () => {
   it("removes the site's own cookies and leaves every other site alone", async () => {
     const session = new FakeClearSiteSession(SITE_JAR);
 
-    const outcome = await clearBrowserSite(
-      { partition: PARTITION, domain: "example.com" },
-      makeDependencies(session, []),
-    );
+    await clearBrowserSite("example.com", session, noOrigins);
 
-    expect(outcome.cookiesRemoved).toBe(2);
     // `example.org` is a different site; `notexample.com` merely ends with the
     // same characters, which is the RFC 6265 trap the scope predicate exists
     // to avoid.
@@ -155,17 +110,13 @@ describe("clearBrowserSite", () => {
   it("clears localStorage for the remembered origins under the site, and no others", async () => {
     const session = new FakeClearSiteSession(SITE_JAR);
 
-    const outcome = await clearBrowserSite(
-      { partition: PARTITION, domain: "example.com" },
-      makeDependencies(session, [
-        "https://app.example.com",
-        "https://example.com",
-        "https://example.org",
-        "https://notexample.com",
-      ]),
-    );
+    await clearBrowserSite("example.com", session, () => [
+      "https://app.example.com",
+      "https://example.com",
+      "https://example.org",
+      "https://notexample.com",
+    ]);
 
-    expect(outcome.originsCleared).toBe(2);
     expect(session.clearedStorage).toEqual([
       { origin: "https://app.example.com", storages: ["localstorage"] },
       { origin: "https://example.com", storages: ["localstorage"] },
@@ -175,10 +126,7 @@ describe("clearBrowserSite", () => {
   it("flushes the jar, so a quit right after the clear cannot resurrect it", async () => {
     const session = new FakeClearSiteSession(SITE_JAR);
 
-    await clearBrowserSite(
-      { partition: PARTITION, domain: "example.com" },
-      makeDependencies(session, []),
-    );
+    await clearBrowserSite("example.com", session, noOrigins);
 
     expect(session.flushes).toBe(1);
   });
@@ -206,25 +154,45 @@ describe("clearBrowserSite delta behaviour", () => {
       const deltas: BrowserPrimaryProfileDelta[] = [];
       const observer = attachObserver(session, deltas);
 
-      // Exactly what the IPC handler does: remove with the domain suppressed,
-      // then say the one true thing about the slice.
-      await observer.suppress("example.com", async () => {
-        await clearBrowserSite(
-          { partition: PARTITION, domain: "example.com" },
-          makeDependencies(session, []),
-        );
-        await observer.emitDeltaNow("example.com");
-      });
+      // Exactly what the IPC handler does: remove, and let the jar's own
+      // removal events coalesce into the one delta that describes the slice.
+      await clearBrowserSite("example.com", session, noOrigins);
       await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS * 2);
 
       expect(deltas).toHaveLength(1);
-      expect(deltas[0]?.scope).toEqual({
-        kind: "domain",
-        domain: "example.com",
-      });
-      // The complete picture of the scope: nothing left. That is what lets the
-      // host tombstone by absence instead of trusting a removal list.
-      expect(deltas[0]?.cookies).toEqual([]);
+      const delta = deltas[0];
+      if (delta === undefined) throw new Error("expected a flushed delta");
+      expect(delta.domain).toBe("example.com");
+      // The complete picture of the scope: nothing left.
+      expect(delta.cookies).toEqual([]);
+      // And the removals are NAMED, which is the half that actually does the
+      // work now (ticket 14). `example.com` is typically unwatermarked - known
+      // to the host only through a whole-jar capture - and an observed empty
+      // picture may not bury an unwatermarked domain. So an empty `cookies`
+      // alone would tombstone nothing and "clear cookies for this site" would
+      // silently do nothing to the store; it is `removedKeys` that buries.
+      // Derived through the capture routine rather than spelled out, for the
+      // same reason the observer's own byte-identity test does: a removal only
+      // matches a stored key if the two normalise identically.
+      const byName = (
+        left: { readonly name: string },
+        right: { readonly name: string },
+      ): number => left.name.localeCompare(right.name);
+      const expectedRemoved = browserStorageCookies(
+        SITE_JAR.filter(
+          (cookie) => cookie.name === "sid" || cookie.name === "prefs",
+        ),
+      )
+        .map((cookie) => ({
+          domain: cookie.domain,
+          name: cookie.name,
+          path: cookie.path,
+        }))
+        .sort(byName);
+      // Pin the positive count first: comparing two empty arrays would pass
+      // for an observer that had stopped tracking removals entirely.
+      expect(expectedRemoved).toHaveLength(2);
+      expect([...delta.removedKeys].sort(byName)).toEqual(expectedRemoved);
       observer.dispose();
     } finally {
       vi.useRealTimers();
@@ -239,10 +207,7 @@ describe("clearBrowserSite delta behaviour", () => {
       const observer = attachObserver(session, deltas);
 
       await observer.suppress("example.com", () =>
-        clearBrowserSite(
-          { partition: PARTITION, domain: "example.com" },
-          makeDependencies(session, []),
-        ),
+        clearBrowserSite("example.com", session, noOrigins),
       );
       await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS * 2);
 

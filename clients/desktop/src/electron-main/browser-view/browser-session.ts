@@ -265,29 +265,6 @@ export async function suppressAllBrowserPrimaryProfileDeltas<T>(
   return await primaryCookieObserver.suppressAll(action);
 }
 
-/**
- * Emits exactly one delta for `domain`, now, from the durable `primary` jar.
- * Ticket 07's clear-site is the only caller: it removes the site's cookies with
- * the observer suppressed, then says the one true thing about that slice
- * instead of letting a burst of change events say it many times over. A no-op
- * where nothing is observed (ephemeral or isolated jars have no store to tell).
- */
-export async function emitBrowserPrimaryProfileDeltaNow(
-  domain: string,
-): Promise<void> {
-  if (primaryCookieObserver === null) return;
-  await primaryCookieObserver.emitDeltaNow(domain);
-}
-
-/**
- * The jar `primary` guests share right now - persistent or ephemeral, whichever
- * the saved-logins pref currently yields. `sessionId` is read only for an
- * isolated partition, so it has no bearing here.
- */
-export function currentPrimaryBrowserViewPartition(): string {
-  return partitionForProfile("primary", "");
-}
-
 export function createBrowserViewWebPreferences(
   request: BrowserSessionProfileRequest,
 ): WebPreferences {

@@ -25,13 +25,10 @@ import {
  */
 const SAVED_LOGINS_FILE_NAME = "browser-saved-logins.json";
 
-const recordSchema = z.strictObject({
-  version: z.literal(1),
-  saveLogins: z.boolean(),
-});
+const recordSchema = z.strictObject({ saveLogins: z.boolean() });
 type SavedLoginsRecord = z.infer<typeof recordSchema>;
 
-const DEFAULT_RECORD: SavedLoginsRecord = { version: 1, saveLogins: true };
+const DEFAULT_RECORD: SavedLoginsRecord = { saveLogins: true };
 
 function createSavedLoginsStore(
   filePath: string,
@@ -73,7 +70,7 @@ export async function setBrowserSavedLoginsEnabled(
   enabled: boolean,
 ): Promise<boolean> {
   if (store === null) throw new Error("saved-logins store is not initialised");
-  await store.saveStrict({ version: 1, saveLogins: enabled });
+  await store.saveStrict({ saveLogins: enabled });
   saveLogins = enabled;
   log.info("[browser-view] saved browser logins changed", { saveLogins });
   return saveLogins;

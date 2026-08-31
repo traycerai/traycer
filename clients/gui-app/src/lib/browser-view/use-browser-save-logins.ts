@@ -12,7 +12,7 @@ import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser
  */
 
 export interface BrowserSaveLoginsController {
-  /** Null until the first read settles, and on a bridge that predates this. */
+  /** Null until the first read settles, and after a read that failed. */
   readonly enabled: boolean | null;
   /** A set call is in flight. */
   readonly pending: boolean;
@@ -28,10 +28,8 @@ export function useBrowserSaveLogins(
   useEffect(() => {
     if (browserView === null) return;
     let cancelled = false;
-    // Wrapped so a bridge older than this call rejects rather than throwing
-    // synchronously out of the effect.
-    void Promise.resolve()
-      .then(() => browserView.getSaveLogins())
+    void browserView
+      .getSaveLogins()
       .then((value) => {
         if (!cancelled) setEnabled(value);
       })
@@ -47,8 +45,8 @@ export function useBrowserSaveLogins(
     (next: boolean) => {
       if (browserView === null || pending) return;
       setPending(true);
-      void Promise.resolve()
-        .then(() => browserView.setSaveLogins(next))
+      void browserView
+        .setSaveLogins(next)
         // The settled value, not the requested one: a desktop that refused the
         // durable write rejects, and the toggle stays where it was.
         .then((settled) => {

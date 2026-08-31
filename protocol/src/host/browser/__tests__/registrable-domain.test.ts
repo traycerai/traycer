@@ -8,19 +8,29 @@ import {
 describe("registrableDomain", () => {
   it("collapses a multi-label host to its registrable domain", () => {
     expect(registrableDomain("a.b.example.com")).toBe("example.com");
+    expect(registrableDomain("a.b.c.d.example.org")).toBe("example.org");
+    expect(registrableDomain("www.example.com")).toBe("example.com");
     expect(registrableDomain("example.com")).toBe("example.com");
   });
 
-  it("keeps three labels under a two-letter ccTLD's generic second level", () => {
+  it("keeps three labels under a ccTLD second level", () => {
+    expect(registrableDomain("x.example.co.uk")).toBe("example.co.uk");
     expect(registrableDomain("www.example.co.uk")).toBe("example.co.uk");
+    expect(registrableDomain("example.co.uk")).toBe("example.co.uk");
     expect(registrableDomain("shop.example.com.au")).toBe("example.com.au");
+    // A registry's own second level is itself a registrable domain.
+    expect(registrableDomain("foo.co.uk")).toBe("foo.co.uk");
   });
 
-  it("answers single-label hosts and IP literals with themselves - they have no registrable parent", () => {
+  it("answers single-label hosts and IP literals with themselves - the list has no answer and they have no registrable parent", () => {
     expect(registrableDomain("localhost")).toBe("localhost");
+    expect(registrableDomain("intranet")).toBe("intranet");
     expect(registrableDomain("127.0.0.1")).toBe("127.0.0.1");
+    expect(registrableDomain("192.168.1.1")).toBe("192.168.1.1");
     expect(registrableDomain("[::1]")).toBe("::1");
     expect(registrableDomain("::1")).toBe("::1");
+    // A bare public suffix is not a registrable domain either.
+    expect(registrableDomain("github.io")).toBe("github.io");
   });
 
   it("strips the RFC 6265 leading dot and a trailing root dot before deriving", () => {
@@ -28,16 +38,17 @@ describe("registrableDomain", () => {
     expect(registrableDomain("example.com.")).toBe("example.com");
   });
 
-  it("lowercases the host", () => {
+  it("lowercases the host and leaves punycode alone", () => {
     expect(registrableDomain("EXAMPLE.COM")).toBe("example.com");
+    expect(registrableDomain("xn--80ak6aa92e.com")).toBe("xn--80ak6aa92e.com");
   });
 
-  it("returns null for empty or whitespace-only input, and for an empty label", () => {
+  it("returns null only for empty or whitespace-only input", () => {
     expect(registrableDomain("")).toBeNull();
     expect(registrableDomain("   ")).toBeNull();
-    // The leading-dot strip only removes one dot, so a genuinely empty label
-    // (a stray second dot) survives to the label check and is rejected.
-    expect(registrableDomain("..a.com")).toBeNull();
+    // A malformed host the list cannot place answers with itself, the same
+    // narrowest-safe answer every unplaceable host gets.
+    expect(registrableDomain("a..com")).toBe("a..com");
   });
 
   it("keeps a private-suffix tenant to itself - the clear-site blast radius", () => {
@@ -45,20 +56,14 @@ describe("registrableDomain", () => {
     // sites: collapsing to `github.io` would put every GitHub Pages login in
     // one clear-site scope.
     expect(registrableDomain("app.github.io")).toBe("app.github.io");
-    expect(registrableDomain("user.github.io")).toBe("user.github.io");
+    expect(registrableDomain("foo.github.io")).toBe("foo.github.io");
     expect(registrableDomain("page.user.github.io")).toBe("user.github.io");
+    expect(registrableDomain("sub.localhost")).toBe("sub.localhost");
   });
 
-  it("keeps a registry's own second level whole", () => {
-    expect(registrableDomain("foo.co.uk")).toBe("foo.co.uk");
-    expect(registrableDomain("a.b.example.com")).toBe("example.com");
-  });
-
-  // The list has no entry for an invented TLD, so the fallback heuristic is
-  // what answers - two labels, as it always did.
-  it("falls back to the heuristic for a host the list cannot place", () => {
-    expect(registrableDomain("a.b.example.invalidtld")).toBe(
-      "example.invalidtld",
+  it("splits an unknown TLD at its last two labels", () => {
+    expect(registrableDomain("a.b.example.unknowntld")).toBe(
+      "example.unknowntld",
     );
   });
 });

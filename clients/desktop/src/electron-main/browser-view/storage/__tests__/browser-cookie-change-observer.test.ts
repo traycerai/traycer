@@ -6,18 +6,17 @@ import {
   BrowserCookieChangeObserver,
   type BrowserCookieChangeSource,
 } from "../browser-cookie-change-observer";
+import { browserStorageCookies } from "../browser-storage-state";
+import {
+  makeCookie,
+  matchesDomainFilter,
+  type CookieChangeListener,
+} from "./cookie-jar-fixture";
 
 vi.mock("../../../app/logger", () => ({
   log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
   describeLogError: (error: unknown) => String(error),
 }));
-
-type CookieChangeListener = (
-  event: unknown,
-  cookie: Cookie,
-  cause: string,
-  removed: boolean,
-) => void;
 
 /**
  * Minimal stand-in for Electron's `Session["cookies"]`: a jar array plus the
@@ -87,36 +86,6 @@ class FakeCookieChangeSource implements BrowserCookieChangeSource {
   }
 }
 
-function matchesDomainFilter(
-  cookieDomain: string,
-  filterDomain: string,
-): boolean {
-  const normalized = cookieDomain.startsWith(".")
-    ? cookieDomain.slice(1)
-    : cookieDomain;
-  return normalized === filterDomain || normalized.endsWith(`.${filterDomain}`);
-}
-
-interface CookieFixtureInput {
-  readonly name: string;
-  readonly domain: string;
-}
-
-function makeCookie(input: CookieFixtureInput): Cookie {
-  return {
-    name: input.name,
-    value: `${input.name}-value`,
-    domain: input.domain,
-    hostOnly: false,
-    path: "/",
-    secure: false,
-    httpOnly: false,
-    session: true,
-    sameSite: "lax",
-    expirationDate: 4_102_444_800,
-  };
-}
-
 function makeObserver(
   source: BrowserCookieChangeSource,
   deltas: BrowserPrimaryProfileDelta[],
@@ -164,7 +133,7 @@ describe("BrowserCookieChangeObserver coalescing", () => {
     expect(deltas).toHaveLength(1);
     const delta = deltas[0];
     if (delta === undefined) throw new Error("expected a flushed delta");
-    expect(delta.scope).toEqual({ kind: "domain", domain: "example.com" });
+    expect(delta.domain).toBe("example.com");
     // issuedAt is when the window opened (the first change), not the later
     // flush time - the host uses it to order captures, so a flush-time stamp
     // would misorder a burst that straddled the window boundary.
@@ -174,12 +143,14 @@ describe("BrowserCookieChangeObserver coalescing", () => {
       "b",
       "c",
     ]);
+    // A plain set/refresh removed nothing: this is the load-bearing case,
+    // since the host signs live sessions out on exactly this field.
     expect(delta.removedKeys).toEqual([]);
 
     observer.dispose();
   });
 
-  it("reports a genuine removal in removedKeys but drops a remove-then-reset within the same window", async () => {
+  it("reports only the final state of a scope after a remove-then-reset within the same window", async () => {
     const source = new FakeCookieChangeSource();
     const goneCookie = makeCookie({ name: "gone", domain: "example.com" });
     const resetCookie = makeCookie({ name: "reset", domain: "example.com" });
@@ -198,10 +169,14 @@ describe("BrowserCookieChangeObserver coalescing", () => {
     expect(deltas).toHaveLength(1);
     const delta = deltas[0];
     if (delta === undefined) throw new Error("expected a flushed delta");
+    expect(delta.cookies.map((cookie) => cookie.name)).toEqual(["reset"]);
+    // `goneCookie` really left the jar and stayed gone - a genuine removal.
+    // `resetCookie` was removed then re-set within the same window (Chromium's
+    // `overwrite` cause) and is present in the flushed slice, so its claim is
+    // a coalescing artifact and must not survive.
     expect(delta.removedKeys).toEqual([
       { domain: "example.com", name: "gone", path: "/" },
     ]);
-    expect(delta.cookies.map((cookie) => cookie.name)).toEqual(["reset"]);
 
     observer.dispose();
   });
@@ -258,79 +233,7 @@ describe("BrowserCookieChangeObserver coalescing", () => {
     // The observer is muted, not broken: the next real change still coalesces.
     source.set(makeCookie({ name: "fresh", domain: "example.com" }));
     await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
-    expect(deltas.map((delta) => delta.scope)).toEqual([
-      { kind: "domain", domain: "example.com" },
-    ]);
-
-    observer.dispose();
-  });
-
-  it("lets emitDeltaNow speak through per-domain suppression but not through suppressAll", async () => {
-    const source = new FakeCookieChangeSource();
-    const deltas: BrowserPrimaryProfileDelta[] = [];
-    const observer = makeObserver(source, deltas);
-    source.seed(makeCookie({ name: "sid", domain: "example.com" }));
-
-    // Ticket 07's clear-site holds the domain muted so its own removals cannot
-    // echo, then says the one true thing about the slice. That has to get out.
-    await observer.suppress("example.com", () =>
-      observer.emitDeltaNow("example.com"),
-    );
-    expect(deltas).toHaveLength(1);
-    expect(deltas[0]?.scope).toEqual({ kind: "domain", domain: "example.com" });
-
-    // Ticket 08's forget-all is shredding the whole slice. A clear-site racing
-    // it must not put the site back on the host's side of the wire.
-    await observer.suppressAll(() =>
-      observer.suppress("example.com", () =>
-        observer.emitDeltaNow("example.com"),
-      ),
-    );
-    expect(deltas).toHaveLength(1);
-
-    observer.dispose();
-  });
-
-  it("abandons an in-flight emitDeltaNow when a forget-all starts mid-read", async () => {
-    const source = new FakeCookieChangeSource();
-    const deltas: BrowserPrimaryProfileDelta[] = [];
-    let releaseRead = (): void => {};
-    const readGate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-    // The jar read is asynchronous in Electron too, so the suppression state
-    // can change under it. Only the gate is fake here.
-    const gated: BrowserCookieChangeSource = {
-      get: async (filter) => {
-        await readGate;
-        return await source.get(filter);
-      },
-      on: (event, listener) => source.on(event, listener),
-      off: (event, listener) => source.off(event, listener),
-    };
-    const observer = new BrowserCookieChangeObserver({
-      cookies: gated,
-      emit: (delta) => deltas.push(delta),
-      now: () => Date.now(),
-      coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
-    });
-    observer.attach();
-    source.seed(makeCookie({ name: "sid", domain: "example.com" }));
-
-    const emitting = observer.emitDeltaNow("example.com");
-    let releaseForget = (): void => {};
-    const forgetting = observer.suppressAll(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseForget = resolve;
-        }),
-    );
-    releaseRead();
-    await emitting;
-
-    expect(deltas).toEqual([]);
-    releaseForget();
-    await forgetting;
+    expect(deltas.map((delta) => delta.domain)).toEqual(["example.com"]);
 
     observer.dispose();
   });
@@ -346,9 +249,141 @@ describe("BrowserCookieChangeObserver coalescing", () => {
     await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
 
     expect(deltas).toHaveLength(2);
-    expect(deltas.map((delta) => delta.scope.domain).sort()).toEqual([
+    expect(deltas.map((delta) => delta.domain).sort()).toEqual([
       "example.com",
       "other.test",
+    ]);
+
+    observer.dispose();
+  });
+});
+
+describe("BrowserCookieChangeObserver removedKeys (ticket 14)", () => {
+  it("names a cookie the jar genuinely dropped in removedKeys", async () => {
+    const source = new FakeCookieChangeSource();
+    const goneCookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(goneCookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.remove(goneCookie);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    const delta = deltas[0];
+    if (delta === undefined) throw new Error("expected a flushed delta");
+    // The cookie is genuinely absent from the re-read slice, so its key
+    // survives as logout evidence.
+    expect(delta.cookies).toEqual([]);
+    expect(delta.removedKeys).toEqual([
+      { domain: "example.com", name: "sid", path: "/" },
+    ]);
+
+    observer.dispose();
+  });
+
+  it("carries an empty removedKeys for a plain set/refresh - the host signs live sessions out on exactly this field", async () => {
+    const source = new FakeCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.set(makeCookie({ name: "sid", domain: "example.com" }));
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    // Pin a positive count too: if the set had not coalesced into a delta at
+    // all, an empty removedKeys would prove nothing about this behaviour.
+    expect(deltas).toHaveLength(1);
+    const delta = deltas[0];
+    if (delta === undefined) throw new Error("expected a flushed delta");
+    expect(delta.cookies.map((cookie) => cookie.name)).toEqual(["sid"]);
+    expect(delta.removedKeys).toEqual([]);
+
+    observer.dispose();
+  });
+
+  it("drops a remove-then-re-set of the same key within one window (Chromium's overwrite cause)", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.remove(cookie);
+    source.set(cookie);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    const delta = deltas[0];
+    if (delta === undefined) throw new Error("expected a flushed delta");
+    // The key is present in the flushed slice, so a `removed=true` event
+    // having fired during the window must not survive as a removal claim.
+    expect(delta.cookies.map((cookie) => cookie.name)).toEqual(["sid"]);
+    expect(delta.removedKeys).toEqual([]);
+
+    observer.dispose();
+  });
+
+  it("dedupes repeated removals of the same key within one window to a single entry", async () => {
+    const source = new FakeCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.remove(cookie);
+    // Chromium can fire `changed` more than once for the same removal within
+    // a burst; the key must still land as one entry, not one per event.
+    source.remove(cookie);
+    source.remove(cookie);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    const delta = deltas[0];
+    if (delta === undefined) throw new Error("expected a flushed delta");
+    expect(delta.removedKeys).toEqual([
+      { domain: "example.com", name: "sid", path: "/" },
+    ]);
+
+    observer.dispose();
+  });
+
+  it("keys removedKeys entries through the same normalisation as the capture path, byte-identical to what the host stores", async () => {
+    const source = new FakeCookieChangeSource();
+    // A leading-dot domain cookie (a non-host-only cookie set on the parent
+    // domain) exercises the normalisation path `cookieKeyOf` shares with
+    // `browserStorageCookies` - the capture routine the host's own store
+    // reads. If the two ever diverged, a removal could never match a stored
+    // key.
+    const cookie = makeCookie({ name: "sid", domain: ".example.com" });
+    const [expectedCapturedCookie] = browserStorageCookies([cookie]);
+    if (expectedCapturedCookie === undefined) {
+      throw new Error("expected the fixture cookie to normalise");
+    }
+    source.seed(cookie);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.remove(cookie);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    expect(deltas).toHaveLength(1);
+    const delta = deltas[0];
+    if (delta === undefined) throw new Error("expected a flushed delta");
+    expect(delta.removedKeys).toEqual([
+      {
+        domain: expectedCapturedCookie.domain,
+        name: expectedCapturedCookie.name,
+        path: expectedCapturedCookie.path,
+      },
+    ]);
+    expect(Object.keys(delta.removedKeys[0] ?? {}).sort()).toEqual([
+      "domain",
+      "name",
+      "path",
     ]);
 
     observer.dispose();

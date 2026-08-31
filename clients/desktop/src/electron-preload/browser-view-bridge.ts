@@ -10,7 +10,6 @@ import type {
   BrowserStoreKeyWrapResult,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewClearSiteResult,
   BrowserViewDebugSnapshot,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
@@ -180,7 +179,7 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewClearSite,
           input,
-        ) as Promise<BrowserViewClearSiteResult>,
+        ) as Promise<void>,
       evictSite: (domain) =>
         ipcRenderer.invoke(RunnerHostInvoke.browserViewEvictSite, {
           domain,

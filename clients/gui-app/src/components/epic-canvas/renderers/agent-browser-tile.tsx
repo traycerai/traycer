@@ -81,6 +81,11 @@ interface AgentTileSessionFacts {
   readonly drivenBy: readonly BrowserTabDriver[];
 }
 
+/**
+ * Kept extracted rather than inlined into {@link ElectronTabSurface}: folding
+ * these lookups back into that component puts it over the complexity budget,
+ * which is the objective signal that the extraction is carrying its weight.
+ */
 function agentTileSessionFacts(
   sessions: BrowserSessionsState | null,
   sessionId: string,

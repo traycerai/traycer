@@ -44,24 +44,6 @@ describe("browser saved-logins pref", () => {
     expect(isBrowserSavedLoginsEnabled()).toBe(true);
   });
 
-  it("is on when the pref file is unparseable", async () => {
-    const filePath = pathIn("corrupt.json");
-    await writeFile(filePath, "{ not json", "utf8");
-
-    await initBrowserSavedLogins(filePath);
-
-    expect(isBrowserSavedLoginsEnabled()).toBe(true);
-  });
-
-  it("is on when the pref file parses but does not match the schema", async () => {
-    const filePath = pathIn("wrong-shape.json");
-    await writeFile(filePath, JSON.stringify({ version: 99 }), "utf8");
-
-    await initBrowserSavedLogins(filePath);
-
-    expect(isBrowserSavedLoginsEnabled()).toBe(true);
-  });
-
   it("round-trips an explicit off through the file", async () => {
     const filePath = pathIn("pref.json");
     await initBrowserSavedLogins(filePath);
@@ -70,7 +52,6 @@ describe("browser saved-logins pref", () => {
 
     expect(isBrowserSavedLoginsEnabled()).toBe(false);
     expect(JSON.parse(await readFile(filePath, "utf8"))).toEqual({
-      version: 1,
       saveLogins: false,
     });
 

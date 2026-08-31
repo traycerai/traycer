@@ -54,8 +54,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
-import type { BrowserSessionProfileKind } from "@traycer/protocol/host/browser/contracts";
-import { registrableDomainForUrl } from "@traycer-clients/shared/platform/registrable-domain";
+import { registrableDomainForUrl } from "@traycer/protocol/host/browser/registrable-domain";
 
 const BROWSER_PRIVATE_SESSION_SHIELD_COPY = {
   headline: "Private session",
@@ -430,10 +429,7 @@ function BrowserMoreMenu(props: {
           <BrowserZoomControls controller={controller} />
         ) : null}
         {capabilities.siteInfo ? (
-          <BrowserSiteInfoMenu
-            url={controller.url}
-            profile={controller.profile}
-          />
+          <BrowserSiteInfoMenu url={controller.url} />
         ) : null}
         {clearSite === null ? null : (
           <DropdownMenuItem
@@ -633,42 +629,17 @@ function BrowserViewportPresetMenu(props: {
   );
 }
 
-interface BrowserSiteInfoCookieRow {
-  readonly title: string;
-  readonly detail: string;
-}
-
-/**
- * Only a private session has anything to say here. A `primary` tile shares the
- * one jar the whole app shares, silently, so a row about it would be noise.
- */
-function siteInfoCookieRow(
-  profile: BrowserSessionProfileKind,
-): BrowserSiteInfoCookieRow | null {
-  if (profile !== "isolated") return null;
-  return {
-    title: BROWSER_PRIVATE_SESSION_SHIELD_COPY.headline,
-    detail: BROWSER_PRIVATE_SESSION_SHIELD_COPY.detail,
-  };
-}
-
-function BrowserSiteInfoMenu(props: {
-  readonly url: string;
-  readonly profile: BrowserSessionProfileKind;
-}) {
+function BrowserSiteInfoMenu(props: { readonly url: string }) {
   const [open, setOpen] = useState(false);
   const isWebOrigin = isWebOriginUrl(props.url);
   const originTitle = isWebOrigin ? "Web page" : "Local page";
   const originDetail = isWebOrigin
     ? "Served over the network from this page's origin."
     : "Not loaded from a web address (for example, a blank tab or an internal page).";
-  const cookieRow = siteInfoCookieRow(props.profile);
-  const cookieDetail =
-    cookieRow === null ? null : `${cookieRow.title}. ${cookieRow.detail}`;
   return (
     <DropdownMenuSub open={open} onOpenChange={setOpen}>
       <DropdownMenuSubTrigger
-        aria-label={`Site information. ${originTitle}. ${originDetail}${cookieDetail === null ? "" : ` ${cookieDetail}`}`}
+        aria-label={`Site information. ${originTitle}. ${originDetail}`}
         className="grid grid-cols-[minmax(0,1fr)_auto_1rem] items-center gap-1.5 [&>svg:last-child]:m-0 [&>svg:last-child]:justify-self-end"
         onClick={() => setOpen(true)}
       >
@@ -683,12 +654,6 @@ function BrowserSiteInfoMenu(props: {
         className="w-[min(80vw,18rem)] min-w-0 space-y-3 p-3 text-ui-sm"
       >
         <BrowserSiteInfoRow title={originTitle} detail={originDetail} />
-        {cookieRow === null ? null : (
-          <BrowserSiteInfoRow
-            title={cookieRow.title}
-            detail={cookieRow.detail}
-          />
-        )}
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );

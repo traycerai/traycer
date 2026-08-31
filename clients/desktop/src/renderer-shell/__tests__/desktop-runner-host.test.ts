@@ -578,7 +578,7 @@ function buildFakeBridge(
         storageState: { cookies: [], origins: [] },
         reason: null,
       }),
-      clearSite: async () => ({ status: "refused" as const, reason: "test" }),
+      clearSite: async () => undefined,
       evictSite: async () => undefined,
       getSaveLogins: async () => true,
       setSaveLogins: async (enabled) => enabled,

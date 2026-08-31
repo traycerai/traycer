@@ -29,7 +29,6 @@ import type {
  */
 export class FakeBrowserViewBridge implements BrowserViewBridge {
   private saveLoginsValue: boolean;
-  private saveLoginsGetCount = 0;
   private nextSetSaveLoginsResult: Promise<boolean> | null = null;
 
   constructor(input?: { readonly saveLogins?: boolean }) {
@@ -119,7 +118,6 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   }
 
   getSaveLogins(): Promise<boolean> {
-    this.saveLoginsGetCount += 1;
     return Promise.resolve(this.saveLoginsValue);
   }
 
@@ -137,10 +135,6 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
    * - a rejection, or a resolution that disagrees with what was requested. */
   setNextSetSaveLoginsResult(result: Promise<boolean>): void {
     this.nextSetSaveLoginsResult = result;
-  }
-
-  saveLoginsGetCallCount(): number {
-    return this.saveLoginsGetCount;
   }
 
   wrapStoreKey(rawKey: string): Promise<BrowserStoreKeyWrapResult> {
@@ -165,8 +159,8 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  clearSite() {
-    return Promise.resolve({ status: "refused" as const, reason: "test" });
+  clearSite(): Promise<void> {
+    return Promise.resolve();
   }
 
   evictSite(): Promise<void> {

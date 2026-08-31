@@ -29,8 +29,6 @@ import {
   clearBrowserViewPendingCertificateError,
   ensureBrowserViewSession,
   ensureBrowserViewSessionForPartition,
-  currentPrimaryBrowserViewPartition,
-  emitBrowserPrimaryProfileDeltaNow,
   onBrowserPrimaryProfileDelta,
   onBrowserViewCertificateError,
   onBrowserViewDownloadChange,
@@ -49,7 +47,6 @@ import {
   unwrapStoreKey,
   wrapStoreKey,
 } from "../browser-view/storage/browser-saved-logins";
-import type { BrowserSiteClearDependencies } from "../browser-view/storage/browser-storage-state";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserOriginLocalStorage,
@@ -57,13 +54,11 @@ import {
   clearBrowserSite,
   seedBrowserViewCookies,
 } from "../browser-view/storage/browser-storage-state";
-import { forgetBrowserPersistentLogins } from "../browser-view/storage/browser-forget-logins";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import type {
   BrowserStoreKeyUnwrapResult,
   BrowserStoreKeyWrapResult,
-  BrowserViewClearSiteResult,
 } from "@traycer-clients/shared/platform/browser-view";
 
 /**
@@ -89,13 +84,8 @@ export function registerBrowserViewIpc(
   // The remembered origins are the coordinator's: localStorage is not
   // enumerable from the session, so the origins this process has actually
   // visited are the only ones a site clear can name.
-  const clearSiteDependencies: BrowserSiteClearDependencies = {
-    getSession: (partition) => ensureBrowserViewSessionForPartition(partition),
-    rememberedOrigins: () =>
-      primaryProfileSnapshots
-        .rememberedOrigins()
-        .map((origin) => origin.origin),
-  };
+  const rememberedClearSiteOrigins = (): readonly string[] =>
+    primaryProfileSnapshots.rememberedOrigins().map((origin) => origin.origin);
   const manager = new BrowserViewManager({
     createView: createElectronBrowserView,
     getWindow: (windowId) =>
@@ -351,48 +341,26 @@ export function registerBrowserViewIpc(
 
   // "Clear cookies for this site" (spec §6.5). The manager derives the site
   // from the tile's own current URL; the jar is the one `primary` guests share
-  // right now, which is the only jar a tile menu may reach.
+  // right now, which is the only jar a tile menu may reach. A tile with no site
+  // to name - a private session, or a non-http(s) page - has nothing to clear.
+  //
+  // No suppression here: the removals fire the jar's own change events, which
+  // coalesce into the single delta that tells the host the slice is empty.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewClearSite,
     async (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      const target = manager.readClearSiteTarget(
+      const domain = manager.readClearSiteTarget(
         windowId,
         browserViewIpcPayload.tileKey.parse(payload),
       );
-      if (target === null) {
-        return {
-          status: "refused",
-          reason:
-            "This tile has no site to clear - it is a private session or is not on a web page.",
-        } satisfies BrowserViewClearSiteResult;
-      }
-      // One delta, issued explicitly inside the suppression window: the
-      // removals themselves are muted so the burst cannot echo, and what the
-      // host hears is a single complete picture of an emptied slice.
-      const outcome = await suppressBrowserPrimaryProfileDelta(
-        target.domain,
-        async () => {
-          const cleared = await clearBrowserSite(
-            {
-              partition: currentPrimaryBrowserViewPartition(),
-              domain: target.domain,
-            },
-            clearSiteDependencies,
-          );
-          await emitBrowserPrimaryProfileDeltaNow(target.domain);
-          return cleared;
-        },
+      if (domain === null) return;
+      await clearBrowserSite(
+        domain,
+        ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST),
+        rememberedClearSiteOrigins,
       );
-      log.info("[browser-view] cleared cookies for one site", {
-        cookiesRemoved: outcome.cookiesRemoved,
-        originsCleared: outcome.originsCleared,
-      });
-      return {
-        status: "cleared",
-        domain: target.domain,
-        ...outcome,
-      } satisfies BrowserViewClearSiteResult;
+      log.info("[browser-view] cleared cookies for one site", { domain });
     },
   );
 
@@ -404,15 +372,15 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewEvictSite,
     async (_event, payload) => {
       const domain = browserViewIpcPayload.evictDomain.parse(payload).domain;
-      const outcome = await suppressBrowserPrimaryProfileDelta(domain, () =>
+      await suppressBrowserPrimaryProfileDelta(domain, () =>
         clearBrowserSite(
-          { partition: currentPrimaryBrowserViewPartition(), domain },
-          clearSiteDependencies,
+          domain,
+          ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST),
+          rememberedClearSiteOrigins,
         ),
       );
       log.info("[browser-view] evicted one site on the host's request", {
-        cookiesRemoved: outcome.cookiesRemoved,
-        originsCleared: outcome.originsCleared,
+        domain,
       });
     },
   );
@@ -516,21 +484,32 @@ export function registerBrowserViewIpc(
   // the cookie-delta observer muted for every domain: `clearStorageData` fires
   // a removal for each cookie, and those deltas would re-create the entry the
   // host just deleted.
+  //
+  // The order is the whole correctness argument: the localStorage coordinator
+  // is reset before the tiles come back, so a recreated tile cannot be
+  // re-seeded from an origin remembered pre-forget, and the tiles are recreated
+  // last, at their current URLs.
   bridge.handleInvoke(RunnerHostInvoke.browserViewForgetLogins, async () => {
     // Opened here, outside the suppression: the durable jar survives the pref,
     // so it must be cleared even with saved logins off or no tile opened this
-    // run, and opening it is what installs the observer `suppressDeltas` mutes.
+    // run, and opening it is what installs the observer the suppression mutes.
     const persistentSession = ensureBrowserViewSessionForPartition(
       BROWSER_VIEW_PARTITION,
     );
-    await forgetBrowserPersistentLogins({
-      suppressDeltas: suppressAllBrowserPrimaryProfileDeltas,
-      persistentSession,
-      resetLocalStorageSnapshots: () => {
-        primaryProfileSnapshots.reset();
-      },
-      recreateTabs: () => manager.recreateNativeTabsOnCurrentPartition(),
+    await suppressAllBrowserPrimaryProfileDeltas(async () => {
+      try {
+        await persistentSession.clearStorageData();
+      } catch (error) {
+        // The tiles still have to be recreated: they are sitting on a jar the
+        // host no longer holds a key for, and leaving them there is worse.
+        log.warn("[browser-view] persistent session clear failed", {
+          error: describeLogError(error),
+        });
+      }
+      primaryProfileSnapshots.reset();
+      await manager.recreateNativeTabsOnCurrentPartition();
     });
+    log.info("[browser-view] forgot the saved browser logins");
   });
 
   // Coalesced cookie deltas from the durable `primary` jar (spec §6.3). The

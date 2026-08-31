@@ -16,7 +16,7 @@ import {
   type BrowserStorageState as ProtocolStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserPrimaryProfileCaptureResult } from "@traycer-clients/shared/platform/browser-view";
-import { cookieDomainInScope } from "@traycer-clients/shared/platform/registrable-domain";
+import { cookieDomainInScope } from "@traycer/protocol/host/browser/registrable-domain";
 
 type BrowserStorageCookieSameSite = ProtocolStorageCookie["sameSite"];
 const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
@@ -97,21 +97,6 @@ export interface BrowserSiteClearSession {
     flushStore(): Promise<void>;
   };
   clearStorageData(options: ClearStorageDataOptions): Promise<void>;
-}
-
-export interface BrowserSiteClearDependencies {
-  readonly getSession: (partition: string) => BrowserSiteClearSession;
-  /**
-   * Origins whose localStorage this process has seen (the capture
-   * coordinator's memory). Cookies are enumerable from the jar; localStorage
-   * is not, so these are the only origins a clear can name.
-   */
-  readonly rememberedOrigins: () => readonly string[];
-}
-
-export interface BrowserSiteClearOutcome {
-  readonly cookiesRemoved: number;
-  readonly originsCleared: number;
 }
 
 export interface BrowserStorageSeedWebContents {
@@ -358,20 +343,9 @@ export function browserLocalStorageSeedScript(
 }
 
 /**
- * One jar's cookies as the protocol storage shape the seed path validates.
- * `origins` is empty: cookies are session-wide, localStorage never is.
- */
-export function browserStorageStateFromCookies(
-  cookies: readonly Cookie[],
-): ProtocolStorageState {
-  return { cookies: [...browserStorageCookies(cookies)], origins: [] };
-}
-
-/**
  * Electron cookies as the protocol shape, with the one normalisation the whole
  * store depends on: a host-only cookie loses its leading dot, so `{domain,
- * name, path}` is the same identity here, in a delta's `removedKeys`, and in
- * the host's tombstone keys.
+ * name, path}` is the same identity here as in the host's tombstone keys.
  */
 export function browserStorageCookies(
   cookies: readonly Cookie[],
@@ -408,42 +382,41 @@ export async function seedBrowserViewCookies(
  * allowed to tombstone. A cookie on `example.org` is untouched by a clear of
  * `example.com`, and so is `notexample.com`.
  *
- * The caller owns the delta: this runs inside
- * `suppressBrowserPrimaryProfileDelta` so the removals cannot echo back as a
- * burst of windows, and the one delta that follows is issued explicitly.
+ * The removals fire the jar's own `changed` events, which coalesce into the
+ * one delta that tells the host the scope is now empty. The evict path runs
+ * this inside `suppressBrowserPrimaryProfileDelta` instead, because the host
+ * already recorded the tombstones before it asked.
+ *
+ * `rememberedOrigins` is the capture coordinator's memory: cookies are
+ * enumerable from the jar, localStorage is not, so those are the only origins
+ * a clear can name.
  */
 export async function clearBrowserSite(
-  input: { readonly partition: string; readonly domain: string },
-  dependencies: BrowserSiteClearDependencies,
-): Promise<BrowserSiteClearOutcome> {
-  const domain = input.domain;
-  const browserSession = dependencies.getSession(input.partition);
+  domain: string,
+  browserSession: BrowserSiteClearSession,
+  rememberedOrigins: () => readonly string[],
+): Promise<void> {
   const cookies = (await browserSession.cookies.get({ domain })).filter(
     (cookie) => cookieDomainInScope(cookie.domain ?? "", domain),
   );
-  let cookiesRemoved = 0;
   for (const cookie of cookies) {
     // Through the same normalisation the capture path uses, so the URL names
     // the cookie's own scope (host-only vs domain, path, secure) rather than a
     // guess - Electron removes by {url, name}.
     const scoped = toStorageCookie(cookie);
     await browserSession.cookies.remove(cookieUrl(scoped), scoped.name);
-    cookiesRemoved += 1;
   }
-  let originsCleared = 0;
-  for (const origin of dependencies.rememberedOrigins()) {
+  for (const origin of rememberedOrigins()) {
     const host = originHost(origin);
     if (host === null || !cookieDomainInScope(host, domain)) continue;
     await browserSession.clearStorageData({
       origin,
       storages: ["localstorage"],
     });
-    originsCleared += 1;
   }
   // Cookie removals are held in memory until the store is flushed; without
   // this, a quit right after the clear could resurrect the site's logins.
   await browserSession.cookies.flushStore();
-  return { cookiesRemoved, originsCleared };
 }
 
 function originHost(origin: string): string | null {

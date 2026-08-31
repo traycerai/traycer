@@ -21,47 +21,9 @@
  * So `tldts` decides, with `allowPrivateDomains` on: the private section of the
  * list is exactly the "these subdomains are separate sites" registry
  * (`github.io`, `s3.amazonaws.com`, ...) that the blast radius has to respect.
- *
- * The heuristic below survives as the **fallback**, for the hosts the list has
- * no answer for: IP literals, `localhost`, and any other single-label or
- * unlisted host. Those answer with themselves - a cookie on one is scoped to
- * exactly it - which is the narrowest safe answer in both roles.
  */
 
 import { getDomain } from "tldts";
-
-/**
- * Fallback only. Generic second-level labels that act as a public suffix under
- * a two-letter ccTLD (`co.uk`, `com.au`, `ne.jp`, ...); under those, the
- * registrable domain is the last *three* labels. The public suffix list
- * answers for every host it knows, so this is reached only for hosts it does
- * not - where a wrong split is still better than none.
- */
-const CCTLD_SECOND_LEVEL_SUFFIXES: ReadonlySet<string> = new Set([
-  "ac",
-  "biz",
-  "co",
-  "com",
-  "edu",
-  "gen",
-  "go",
-  "gov",
-  "govt",
-  "info",
-  "int",
-  "mil",
-  "ne",
-  "net",
-  "nhs",
-  "nom",
-  "or",
-  "org",
-  "plc",
-  "sch",
-  "web",
-]);
-
-const IPV4_PATTERN = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u;
 
 /**
  * The registrable domain of a host, or `null` when there is nothing sensible to
@@ -75,33 +37,10 @@ const IPV4_PATTERN = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u;
 export function registrableDomain(host: string): string | null {
   const normalized = normalizeHost(host);
   if (normalized === null) return null;
-  if (isIpLiteral(normalized)) return normalized;
-  const labels = normalized.split(".");
-  if (labels.some((label) => label.length === 0)) return null;
   // `allowPrivateDomains` keeps a hosting suffix (`github.io`, `vercel.app`,
   // `s3.amazonaws.com`) a suffix, so one tenant's cookies are never in another
   // tenant's clear-site scope.
-  const listed = getDomain(normalized, { allowPrivateDomains: true });
-  if (listed !== null && listed.length > 0) return listed;
-  return heuristicRegistrableDomain(labels, normalized);
-}
-
-/**
- * The pre-PSL split, for hosts the list has no entry for. Kept deliberately:
- * a single-label host, an IP, or an unlisted TLD still has to answer with
- * *something*, and "the host itself" is the narrowest answer available.
- */
-function heuristicRegistrableDomain(
-  labels: readonly string[],
-  normalized: string,
-): string {
-  if (labels.length <= 2) return normalized;
-  const tld = labels[labels.length - 1];
-  const secondLevel = labels[labels.length - 2];
-  if (tld === undefined || secondLevel === undefined) return normalized;
-  const takesThree =
-    tld.length === 2 && CCTLD_SECOND_LEVEL_SUFFIXES.has(secondLevel);
-  return labels.slice(takesThree ? -3 : -2).join(".");
+  return getDomain(normalized, { allowPrivateDomains: true }) ?? normalized;
 }
 
 /** The registrable domain of a URL's host; `null` for anything unparseable. */
@@ -140,11 +79,4 @@ function normalizeHost(value: string): string | null {
   if (host.endsWith(".")) host = host.slice(0, -1);
   if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
   return host.length === 0 ? null : host;
-}
-
-function isIpLiteral(host: string): boolean {
-  if (host.includes(":")) return true;
-  const octets = IPV4_PATTERN.exec(host);
-  if (octets === null) return false;
-  return octets.slice(1).every((octet) => Number.parseInt(octet, 10) <= 255);
 }
