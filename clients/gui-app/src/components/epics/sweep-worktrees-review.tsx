@@ -23,6 +23,16 @@ export function SweepWorktreesReview(props: {
   readonly selectedEpicIds: ReadonlySet<string>;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly taskTitles: ReadonlyMap<string, string>;
+  /**
+   * The host this review's snapshot was proven on, or `null` when the fleet
+   * gave the person no choice to make (and so nothing to be told about).
+   *
+   * READ-ONLY here, deliberately. The snapshot below is one machine's disk at
+   * one moment, and the typed-nothing-changed contract of a review step is
+   * that the thing being confirmed is the thing that was proven. Back is the
+   * route to another host, and it discards this snapshot on the way.
+   */
+  readonly hostName: string | null;
   readonly inventoryChanged: boolean;
   readonly activeSweepCount: number;
   readonly onBack: () => void;
@@ -59,6 +69,14 @@ export function SweepWorktreesReview(props: {
           <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
             Only the consequences of your current selection are shown.
           </DialogDescription>
+          {props.hostName === null ? null : (
+            <p
+              className="text-ui-xs text-muted-foreground wrap-anywhere"
+              data-testid="sweep-review-host"
+            >
+              {`On ${props.hostName} — go Back to change host.`}
+            </p>
+          )}
         </div>
       </div>
       <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-y-auto border-t border-border/60 bg-foreground/2 px-5 py-4">
