@@ -8,6 +8,7 @@ import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row
 import { SwitcherNewArtifactMenu } from "@/components/epic-canvas/mobile/switcher-create-actions";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
 import { useNarrowedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
+import { buildSwitcherTreeRows } from "@/components/epic-canvas/mobile/switcher-tree-rows";
 import { SwitcherArtifactsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
 import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
 import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
@@ -43,6 +44,7 @@ import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { FileText, Search, SearchX } from "lucide-react";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import {
+  INDENT_PX,
   STATUS_DOT_CLASSES,
   computeArtifactNodeStatusDot,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
@@ -66,9 +68,14 @@ interface SwitcherListProps {
 }
 
 /**
- * Artifacts category: spec / ticket / story / review as a flat list over the
- * shared `useEpicArtifactRecords()` projection (everything that is not a chat or
- * terminal-agent). Reuses the desktop status-dot helpers; no tree rendering.
+ * Artifacts category: spec / ticket / story / review over the shared
+ * `useEpicArtifactRecords()` projection (everything that is not a chat or
+ * terminal-agent). Reuses the desktop status-dot helpers, and the desktop
+ * indent step, so a nested artifact reads as nested here exactly as it does in
+ * the sidebar and in the Agents category beside it - which mounts the desktop
+ * chat tree outright. Rows carry indentation only: with no chevron column to
+ * collapse against, this surface has nothing for the sidebar's indent-guide
+ * rails to descend from.
  */
 export function SwitcherArtifactsList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
@@ -167,8 +174,9 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
 
 /**
  * The category's ordinary list: every artifact surviving the facet filters, in
- * the epic's sort order. Search replaces this wholesale rather than narrowing
- * it, because the host ranks its own hits and that ranking is the answer.
+ * the epic's sort order, each child grouped under whichever of its ancestors
+ * survived with it. Search replaces this wholesale rather than narrowing it,
+ * because the host ranks its own hits and that ranking is the answer.
  */
 function SwitcherArtifactBrowseList(props: {
   readonly artifacts: ReadonlyArray<EpicTreeRecord>;
@@ -180,7 +188,8 @@ function SwitcherArtifactBrowseList(props: {
   readonly onClose: () => void;
 }) {
   const { artifacts, records, epicId, tabId, onClose } = props;
-  if (artifacts.length === 0) {
+  const rows = useMemo(() => buildSwitcherTreeRows(artifacts), [artifacts]);
+  if (rows.length === 0) {
     return (
       <SwitcherArtifactsEmpty
         hasAnyArtifacts={props.hasAnyArtifacts}
@@ -190,10 +199,11 @@ function SwitcherArtifactBrowseList(props: {
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-      {artifacts.map((record) => (
+      {rows.map((row) => (
         <SwitcherArtifactRow
-          key={record.id}
-          record={record}
+          key={row.record.id}
+          record={row.record}
+          depth={row.depth}
           records={records}
           epicId={epicId}
           tabId={tabId}
@@ -322,10 +332,14 @@ function SwitcherArtifactSearchBody(props: {
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+      {/* Hits stay flat at depth 0. They are a ranking, not a tree: indenting
+          one under another would claim a containment the host's ordering never
+          asserted, and the parent it looked nested under may not be a hit. */}
       {hitRecords.map((record) => (
         <SwitcherArtifactRow
           key={record.id}
           record={record}
+          depth={0}
           records={records}
           epicId={epicId}
           tabId={tabId}
@@ -364,14 +378,24 @@ function SwitcherArtifactsEmpty(props: {
   );
 }
 
+/**
+ * One artifact row, indented by its depth in the list's own tree.
+ *
+ * The indent is the sidebar's `INDENT_PX` step rather than a mobile-only scale,
+ * so a tree the user reads on the phone steps at the same rate as the one they
+ * read on the desktop. It is padding on a wrapper, not on the row, which keeps
+ * the row itself the shared `SwitcherListRow` every other category renders -
+ * indentation narrows the row, and cannot shorten it below its 44px minimum.
+ */
 function SwitcherArtifactRow(props: {
   readonly record: EpicTreeRecord;
+  readonly depth: number;
   readonly records: ReadonlyArray<EpicTreeRecord>;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { record, records, epicId, tabId, onClose } = props;
+  const { record, depth, records, epicId, tabId, onClose } = props;
   const activate = useSwitcherActivate(epicId, tabId, onClose);
   const isActive = useIsActiveEpicArtifact(tabId, record.id);
 
@@ -394,25 +418,37 @@ function SwitcherArtifactRow(props: {
   );
 
   return (
-    <SwitcherListRow
-      icon={<SwitcherArtifactIcon type={record.type} status={record.status} />}
-      label={record.name}
-      secondaryLabel={null}
-      badge={null}
-      active={isActive}
-      onSelect={onSelect}
-      selectTestId={`switcher-artifact-row-${record.id}`}
-      actions={
-        <SwitcherRowActions
-          epicId={epicId}
-          tabId={tabId}
-          kind="artifact"
-          nodeId={record.id}
-          name={record.name}
-          cascadeSummary={cascadeSummary}
-        />
-      }
-    />
+    // `min-w-0` for the same reason the row's own levels carry it: this wrapper
+    // is one more level between the scroll container and the truncating label,
+    // and one level that may not shrink below its content re-inflates the row.
+    <div
+      className="min-w-0"
+      data-depth={depth}
+      data-testid={`switcher-artifact-node-${record.id}`}
+      style={{ paddingLeft: `${depth * INDENT_PX}px` }}
+    >
+      <SwitcherListRow
+        icon={
+          <SwitcherArtifactIcon type={record.type} status={record.status} />
+        }
+        label={record.name}
+        secondaryLabel={null}
+        badge={null}
+        active={isActive}
+        onSelect={onSelect}
+        selectTestId={`switcher-artifact-row-${record.id}`}
+        actions={
+          <SwitcherRowActions
+            epicId={epicId}
+            tabId={tabId}
+            kind="artifact"
+            nodeId={record.id}
+            name={record.name}
+            cascadeSummary={cascadeSummary}
+          />
+        }
+      />
+    </div>
   );
 }
 
