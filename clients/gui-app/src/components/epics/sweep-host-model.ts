@@ -1,10 +1,10 @@
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 
 /**
- * Which host a Sweep concerns: the fleet gate in front of the picker, the
- * picker's own rows, and the affordance gate that decides whether Sweep is
- * offered at all. One module because all three answer the same question from
- * the same zero-RPC evidence, and the two SURFACES (History and the Epic
+ * Which host a Sweep concerns: the fleet gate in front of the host chip, the
+ * chip's own popover rows, and the affordance gate that decides whether Sweep
+ * is offered at all. One module because all three answer the same question
+ * from the same zero-RPC evidence, and the two SURFACES (History and the Epic
  * status row) must answer it identically.
  */
 
@@ -12,8 +12,13 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
  * The occupancy badge's words. It claims exactly what the evidence supports -
  * the Task has AGENTS on this machine - and never "has worktrees here", which
  * would be a claim only the dialog's own act-time proof can make.
+ *
+ * Past tense on purpose. The dialog now opens on a host and offers the others,
+ * so this row sits next to a census rather than in front of one: "agents ran
+ * here" reads as the evidence it is, where the old present-tense phrasing read
+ * as a verdict about what is on that machine right now.
  */
-export const SWEEP_HOST_OCCUPANCY_LABEL = "has agents for this task";
+export const SWEEP_HOST_OCCUPANCY_LABEL = "agents ran here";
 
 /**
  * Does this Task's client-visible provenance name a machine OTHER than the one
@@ -90,11 +95,43 @@ export function unionHostIds(
   return union;
 }
 
+/**
+ * The badged hosts that are NOT the one being censused - the ids behind the
+ * empty state's redirect and the header's nudge.
+ *
+ * It exists because the badge is only worth showing a person when it points
+ * somewhere ELSE. On the host the dialog is already proving, "agents ran here"
+ * is a fact about the rows in front of them; on another machine it is the one
+ * actionable thing a zero-RPC read can offer when this host turns up empty.
+ *
+ * Sorted so the answer is a function of the SET rather than of whatever order
+ * the surface happened to build it in - two surfaces folding the same
+ * provenance must nudge toward the same machine. Which of several the copy
+ * finally names is the host LIST's decision (its own this-machine / active /
+ * alphabetical order), not this function's.
+ */
+export function nudgeHostIds(
+  occupiedHostIds: ReadonlySet<string>,
+  currentHostId: string | null,
+): readonly string[] {
+  return [...occupiedHostIds]
+    .filter((hostId) => hostId !== currentHostId)
+    .sort();
+}
+
 export interface SweepHostPickerRow {
   readonly host: HostScopeOption;
   /** The selected Task(s)' node records name this host. Hint, not a census. */
   readonly occupied: boolean;
-  /** The host this surface was already pointed at when Sweep was opened. */
+  /**
+   * The host the dialog is CURRENTLY censusing - the one the chip names.
+   *
+   * It used to mean "where Sweep was already pointed when the question was
+   * asked", and marking it was the defect the standalone step died of: a
+   * highlighted row in a modal that asks "which host?" reads as a selection
+   * nobody made. In a popover hung off a chip the same mark is simply true -
+   * it says where you are, next to a census of that machine.
+   */
   readonly isDefault: boolean;
 }
 
