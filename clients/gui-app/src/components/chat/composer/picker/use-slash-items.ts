@@ -19,6 +19,8 @@ export interface UseSlashItemsParams {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly harnessId: GuiHarnessId;
   readonly workingDirectories: ReadonlyArray<string>;
+  /** See `UseSlashCommandsParams.localCommands`. */
+  readonly localCommands: ReadonlyArray<SlashCommand>;
 }
 
 interface SlashPickerSlice {
@@ -48,7 +50,13 @@ function selectSlashSlice(state: {
 }
 
 export function useSlashItems(params: UseSlashItemsParams): void {
-  const { pickerStore, hostClient, harnessId, workingDirectories } = params;
+  const {
+    pickerStore,
+    hostClient,
+    harnessId,
+    workingDirectories,
+    localCommands,
+  } = params;
 
   const slice = useStore(pickerStore, useShallow(selectSlashSlice));
   const { active, sessionId, query, slashScope } = slice;
@@ -64,6 +72,7 @@ export function useSlashItems(params: UseSlashItemsParams): void {
     harnessId,
     workingDirectories,
     enabled: active,
+    localCommands,
   });
 
   const retryLoad = useCallback(() => {

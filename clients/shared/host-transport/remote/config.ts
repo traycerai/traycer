@@ -134,6 +134,21 @@ export const RELAY_PING_INTERVAL_MS = 25_000;
 export const RELAY_PONG_TIMEOUT_MS = 60_000;
 
 /**
+ * Ceiling on how far measurement may stretch the AWAITING window, as a
+ * multiple of {@link RELAY_AWAITING_PONG_TIMEOUT_MS}.
+ *
+ * One estimator sizes both windows, and they are not the same kind of window.
+ * The idle one can absorb whatever a slow path needs - it is already a
+ * minute. The awaiting one is a DETECTION window whose entire value is being
+ * fast, and it is armed exactly when the user is waiting on an answer; a
+ * single stalled sample near the estimator's clamp would push 12s past a
+ * minute and hand the loss back to the idle detector this window exists to
+ * pre-empt. Three keeps a genuinely slow path measurable (36s) while keeping
+ * the fast lane fast.
+ */
+export const RELAY_AWAITING_DEADLINE_CAP_MULTIPLE = 3;
+
+/**
  * Deadline for the answer to a WAKE-time ping (`RelaySocket.pokeKeepalive`),
  * as opposed to the 60s the scheduled keepalive allows.
  *
@@ -147,6 +162,37 @@ export const RELAY_PONG_TIMEOUT_MS = 60_000;
  * does not. A false positive costs exactly one redial.
  */
 export const RELAY_WAKE_PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * The wake-probe deadline for a runtime that KNOWS it was just backgrounded
+ * briefly (a mobile app switch measured under
+ * {@link WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS}).
+ *
+ * The 10s default above is sized for a desktop wake, where the socket usually
+ * survived and a false positive re-dials a healthy localhost link. An iOS app
+ * switch inverts the odds: the OS suspends the WebView and typically kills its
+ * sockets, so the probe exists to catch the RARE survivor quickly, not to
+ * protect the common one. The pong is auto-answered at the relay's edge, so a
+ * healthy link answers in round-trip time; 3s is generous for that and cheap
+ * to be wrong about - a false positive costs one redial of a socket that was
+ * probably dead anyway.
+ */
+export const RELAY_WAKE_PROBE_TIMEOUT_BACKGROUNDED_MS = 3_000;
+
+/**
+ * Background dwell beyond which a resuming mobile runtime stops probing its
+ * old socket and re-dials outright.
+ *
+ * Duration is the discriminator because it tracks what iOS actually does: a
+ * quick app switch often returns before the OS has torn the socket down (worth
+ * a short probe - see the constant above), while after ~10s of background the
+ * socket is almost certainly gone and a probe only delays the redial the user
+ * is already waiting on. A resume that cannot state its background duration
+ * (desktop, web, a shell that missed the hidden edge) keeps the default probe
+ * path - forcing a redial there would tear down healthy desktop sockets on
+ * every lid-open.
+ */
+export const WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS = 10_000;
 
 /**
  * How often the keepalive loop WAKES. Distinct from how often it PINGS: the
@@ -192,6 +238,50 @@ export const RELAY_PING_TICK_MS = 5_000;
  */
 export const RELAY_AWAITING_PING_INTERVAL_MS = 5_000;
 export const RELAY_AWAITING_PONG_TIMEOUT_MS = 12_000;
+
+/**
+ * How long after a completed attach the session waits before logging that its
+ * ready boundary is still blocked by streams with NO restore evidence (no
+ * delivered frame and no in-flight chunk).
+ *
+ * Sized well past a healthy resubscribe fan-out round trip and well under the
+ * point a person gives up on a stuck surface: a stream that has produced
+ * nothing for this long is not slow, it is silent, and the session-level
+ * verdict the surfaces render ("still can't connect") cannot name it. The
+ * log line is the only artifact that attributes that state to a method.
+ *
+ * Deliberately NOT equal to any other NAMED timeout in this file (see the
+ * collision warning on {@link RECONNECT_STABLE_RESET_MS}): the session suite
+ * identifies timers by their delay, so sharing the dial or attach-ack budget
+ * would make this timer indistinguishable to a spy assertion. Distinctness
+ * covers the named constants only - a jittered backoff/reopen rung can still
+ * land on any value - so a test filtering by this delay must also keep its
+ * scenario free of concurrent jittered timers.
+ */
+export const RESTORE_STALL_LOG_AFTER_MS = 8_000;
+
+/**
+ * Progress deadline for one stream's IN-FLIGHT chunk reassembly: the longest
+ * acceptable gap between two accepted chunks of the same message. Reset by
+ * every accepted chunk; expiry treats that stream's transfer as stopped and
+ * reopens it on a fresh stream id through the per-stream reopen backoff.
+ *
+ * This is the ONLY deadline that speaks for a partial transfer. The ready
+ * boundary deliberately accepts the first chunk as restore evidence, so
+ * completion no longer bounds anything; the socket's awaiting-response fast
+ * deadline is cleared by the very chunk that opened the sequence (any inbound
+ * frame does); and the relay answers keepalive pings at its edge, so a
+ * host-side forwarding stall on one stream keeps both keepalive deadlines fed
+ * indefinitely while that stream silently never completes. Without this bound
+ * such a stream stays `reconnecting` - dropping writes - forever, on a
+ * session every surface reports as healthy.
+ *
+ * Sized generously above healthy inter-chunk cadence (a slow relay path
+ * measured ~0.5 MB/s still yields several 64 KiB chunks per second) and
+ * distinct from every other named constant here (same spy-identification
+ * rule and jitter caveat as {@link RESTORE_STALL_LOG_AFTER_MS}).
+ */
+export const REASSEMBLY_PROGRESS_TIMEOUT_MS = 20_000;
 
 /**
  * Bounded terminal-stream tombstone frontier, mirroring the host's invariant

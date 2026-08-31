@@ -10,6 +10,7 @@
  * human scrolls away from the newest line.
  */
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -41,6 +42,7 @@ import {
 } from "@/hooks/agent/use-host-reachability";
 import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { TileHostLoadState } from "@/components/epic-canvas/renderers/tile-host-load-state";
+import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { ShellOutputAvailabilityNotice } from "@/components/managed-commands/shell-output-availability-notice";
 import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
@@ -55,6 +57,10 @@ import type {
 } from "@/stores/managed-commands/managed-command-output-store";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 import {
+  createManagedCommandOutputFindAdapter,
+  type ManagedCommandOutputFindMatch,
+} from "./managed-command-output-find-adapter";
+import {
   MANAGED_COMMAND_OUTPUT_WINDOW_TITLE,
   managedCommandStatusLabel,
 } from "@/lib/managed-commands/managed-command-copy";
@@ -63,6 +69,7 @@ import {
   isShellOutputPanelReplacement,
   shellOutputHostAvailability,
   shellOutputStreamAvailability,
+  type ShellOutputAvailability,
 } from "@/lib/managed-commands/shell-output-availability";
 import type { ManagedCommandOutputTileRef } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
@@ -84,6 +91,33 @@ const FOLLOW_SLACK_PX = 24;
 const LOAD_OLDER_THRESHOLD_PX = 48;
 const OUTPUT_VIRTUAL_OVERSCAN = 12;
 const OUTPUT_VIRTUAL_INITIAL_RECT = { width: 0, height: 600 } as const;
+// The terminal tiles' search decorations, so a hit looks the same on both
+// surfaces. Both set a foreground as well as a fill: a match keeps its row's
+// colour otherwise, and `text-destructive` on a stderr line over dark amber is
+// barely readable.
+const FIND_MATCH_STYLE = {
+  backgroundColor: "#854d0e",
+  color: "#fafaf9",
+} as const;
+const FIND_ACTIVE_MATCH_STYLE = {
+  backgroundColor: "#facc15",
+  color: "#1c1917",
+} as const;
+
+interface OutputRowFindMatch {
+  readonly startCol: number;
+  readonly length: number;
+  readonly active: boolean;
+}
+
+interface FindPaint {
+  readonly matchesBySeq: ReadonlyMap<number, readonly OutputRowFindMatch[]>;
+}
+
+const EMPTY_ROW_FIND_MATCHES: readonly OutputRowFindMatch[] = [];
+const EMPTY_FIND_PAINT: FindPaint = {
+  matchesBySeq: new Map<number, readonly OutputRowFindMatch[]>(),
+};
 /**
  * One test id for whatever the window has to say instead of (or over) the log;
  * the notice's `data-availability` carries WHICH state it is.
@@ -282,6 +316,15 @@ function ManagedCommandOutputTileBody(props: {
     "managedCommand.subscribeOutput",
   );
   const terminalFont = useEffectiveTerminalFont();
+  const findAdapter = useMemo(
+    () =>
+      createManagedCommandOutputFindAdapter({
+        tileInstanceId: node.instanceId,
+      }),
+    [node.instanceId],
+  );
+  useRegisterTileFindAdapter(findAdapter);
+  const [findPaint, setFindPaint] = useState(EMPTY_FIND_PAINT);
 
   const visible = useTileBodyVisible();
   const readingIdentity = useMemo(
@@ -301,7 +344,6 @@ function ManagedCommandOutputTileBody(props: {
     [readingIdentity],
   );
   const viewRef = useRef<HTMLDivElement>(null);
-  const outputListRef = useRef<HTMLDivElement>(null);
   const lastReadingAnchorRef = useRef<ManagedCommandReadingAnchor | null>(
     restoredReadingAnchor,
   );
@@ -329,6 +371,13 @@ function ManagedCommandOutputTileBody(props: {
     getItemKey: getOutputRowKey,
     overscan: OUTPUT_VIRTUAL_OVERSCAN,
     initialRect: OUTPUT_VIRTUAL_INITIAL_RECT,
+    // The first snapshot scrolls to an estimated tail. Wrapped rows at that
+    // tail are measured after the scroll and can grow the virtual document;
+    // end anchoring carries that growth into scrollTop so the fresh window
+    // stays live. This does not turn every focus into "jump to live": TanStack
+    // applies the end correction only while the viewport is already at the
+    // end, so a restored reader parked in history keeps their position.
+    anchorTo: "end",
     // Row measurement can land while the follow/prepend layout effects are
     // committing. TanStack's synchronous default calls React `flushSync` from
     // that ResizeObserver path, which React rejects and which turns a burst of
@@ -337,23 +386,8 @@ function ManagedCommandOutputTileBody(props: {
     useFlushSync: false,
   });
   const virtualRows = outputVirtualizer.getVirtualItems();
-  // What the timeline looked like at the last moment we could measure it:
-  // the oldest row's identity, and how tall the document was. A page of older
-  // lines prepends content ABOVE the viewport, which slides everything the
-  // human is reading down by exactly the height added.
-  const anchorRef = useRef<{
-    readonly firstSeq: number | null;
-    readonly lastSeq: number | null;
-    readonly scrollHeight: number;
-    readonly scrollTop: number;
-    readonly listOffsetTop: number;
-  }>({
-    firstSeq: null,
-    lastSeq: null,
-    scrollHeight: 0,
-    scrollTop: 0,
-    listOffsetTop: 0,
-  });
+  const outputVirtualizerRef = useRef(outputVirtualizer);
+  outputVirtualizerRef.current = outputVirtualizer;
   const lastTimelineGenerationRef = useRef(timelineGeneration);
 
   const scrollToNewest = useCallback(() => {
@@ -369,6 +403,31 @@ function ManagedCommandOutputTileBody(props: {
     },
     [setOutputFollowing],
   );
+
+  const revealMatch = useCallback(
+    (match: ManagedCommandOutputFindMatch) => {
+      // Follow pins the viewport to the tail; drop it before the jump or the
+      // next append immediately undoes the scroll-to-match. Only ever reached
+      // for a find command the human gave -- the adapter does not reveal on a
+      // re-scan -- so this never takes a tailing reader off the live tail.
+      setFollowMode(false);
+      outputVirtualizerRef.current.scrollToIndex(match.lineIndex, {
+        align: "center",
+      });
+    },
+    [setFollowMode],
+  );
+
+  useEffect(() => {
+    const syncPaint = (): void => {
+      const snapshot = findAdapter.getSnapshot();
+      setFindPaint(
+        buildFindPaint(findAdapter.getMatches(), snapshot.current - 1),
+      );
+    };
+    syncPaint();
+    return findAdapter.subscribe(syncPaint);
+  }, [findAdapter]);
 
   // Seed the store before any user scroll. A restored, scrolled-back reader
   // must keep their held history even if output lands immediately after mount.
@@ -433,53 +492,6 @@ function ManagedCommandOutputTileBody(props: {
     restoredReadingPositionRef.current = true;
   }, [captureReadingPosition, lines.length, readingIdentity, visible]);
 
-  // Runs before paint, so the correction is never a visible jump. Browsers do
-  // have native scroll anchoring, but the spec suppresses it at scrollTop 0 -
-  // precisely where a load-older fires - so the position has to be held here.
-  useLayoutEffect(() => {
-    const view = viewRef.current;
-    if (view === null) return;
-    const firstSeq = lines.length > 0 ? lines[0].seq : null;
-    const lastSeq = lines.length > 0 ? lines[lines.length - 1].seq : null;
-    const previous = anchorRef.current;
-    const listOffsetTop = outputListRef.current?.offsetTop ?? 0;
-    const prepended =
-      previous.firstSeq !== null &&
-      firstSeq !== null &&
-      firstSeq < previous.firstSeq;
-    if (prepended) {
-      const tailWasEvicted =
-        previous.lastSeq !== null && lastSeq !== previous.lastSeq;
-      const previousFirstIndex = lines.findIndex(
-        (line) => line.seq === previous.firstSeq,
-      );
-      const previousFirstOffset =
-        previousFirstIndex < 0
-          ? undefined
-          : outputVirtualizer.getOffsetForIndex(
-              previousFirstIndex,
-              "start",
-            )?.[0];
-      // Paging while detached can prepend old rows and evict stale tail rows
-      // in the same update, so total scroll-height delta is not the prepend
-      // height. Anchor to the row that used to begin the document instead.
-      view.scrollTop =
-        !tailWasEvicted || previousFirstOffset === undefined
-          ? view.scrollTop + view.scrollHeight - previous.scrollHeight
-          : previousFirstOffset +
-            previous.scrollTop +
-            listOffsetTop -
-            previous.listOffsetTop;
-    }
-    anchorRef.current = {
-      firstSeq,
-      lastSeq,
-      scrollHeight: view.scrollHeight,
-      scrollTop: view.scrollTop,
-      listOffsetTop,
-    };
-  }, [lines, outputVirtualizer]);
-
   // The first snapshot participates in reading-position restore. Every later
   // snapshot is a deliberate rebase (resnapshot or reconnect), so it restores
   // the live latch and pins the replacement tail before paint.
@@ -499,22 +511,12 @@ function ManagedCommandOutputTileBody(props: {
     scrollToNewest();
   }, [following, lines, resyncPending, scrollToNewest]);
 
-  // A Terminal typography change resizes every row at once, so the geometry
-  // both the follow latch and the prepend correction were measured against is
-  // wrong the moment it lands - and no line arrived to trigger the effects that
-  // normally re-measure. Re-pin before paint instead of leaving the reader
-  // somewhere they did not scroll to.
+  // A Terminal typography change resizes every row at once. Re-pin before
+  // paint instead of leaving a tailing reader somewhere they did not scroll to.
   useLayoutEffect(() => {
     const view = viewRef.current;
     if (view === null) return;
     if (following && !resyncPending) view.scrollTop = view.scrollHeight;
-    anchorRef.current = {
-      firstSeq: anchorRef.current.firstSeq,
-      lastSeq: anchorRef.current.lastSeq,
-      scrollHeight: view.scrollHeight,
-      scrollTop: view.scrollTop,
-      listOffsetTop: outputListRef.current?.offsetTop ?? 0,
-    };
   }, [
     following,
     resyncPending,
@@ -525,15 +527,6 @@ function ManagedCommandOutputTileBody(props: {
   const onScroll = useCallback(() => {
     const view = viewRef.current;
     if (view === null) return;
-    // Keep the anchor honest between renders: the human scrolling is the other
-    // way the measurable geometry changes.
-    anchorRef.current = {
-      firstSeq: anchorRef.current.firstSeq,
-      lastSeq: anchorRef.current.lastSeq,
-      scrollHeight: view.scrollHeight,
-      scrollTop: view.scrollTop,
-      listOffsetTop: outputListRef.current?.offsetTop ?? 0,
-    };
     if (resyncPending) return;
     const distanceFromBottom =
       view.scrollHeight - view.scrollTop - view.clientHeight;
@@ -585,6 +578,18 @@ function ManagedCommandOutputTileBody(props: {
     deleted,
     fatalClose,
   });
+  const findAvailable = managedCommandOutputFindAvailability(availability);
+
+  useEffect(() => {
+    findAdapter.updateEnvironment({
+      lines,
+      available: findAvailable,
+      reachedStart,
+      detached,
+      revealMatch,
+    });
+  }, [detached, findAdapter, findAvailable, lines, reachedStart, revealMatch]);
+
   let jumpLiveLabel = "Jump to live";
   if (newOutputAvailable) jumpLiveLabel = "New output available";
   if (resyncPending) jumpLiveLabel = "Loading live output…";
@@ -712,7 +717,6 @@ function ManagedCommandOutputTileBody(props: {
           ) : null}
           {lines.length === 0 ? null : (
             <div
-              ref={outputListRef}
               data-testid="managed-command-output-virtual-list"
               className="relative w-full"
               style={{ height: `${outputVirtualizer.getTotalSize()}px` }}
@@ -729,7 +733,13 @@ function ManagedCommandOutputTileBody(props: {
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
-                    <OutputRow line={line} />
+                    <OutputRow
+                      line={line}
+                      matches={
+                        findPaint.matchesBySeq.get(line.seq) ??
+                        EMPTY_ROW_FIND_MATCHES
+                      }
+                    />
                   </div>
                 );
               })}
@@ -953,8 +963,11 @@ const CHANNEL_CLASS = {
   lifecycle: "text-muted-foreground italic",
 } as const;
 
-function OutputRow(props: { readonly line: ManagedCommandTimelineLine }) {
-  const { line } = props;
+const OutputRow = memo(function OutputRow(props: {
+  readonly line: ManagedCommandTimelineLine;
+  readonly matches: readonly OutputRowFindMatch[];
+}) {
+  const { line, matches } = props;
   return (
     <div
       data-testid={`managed-command-output-line-${line.seq}`}
@@ -973,10 +986,82 @@ function OutputRow(props: { readonly line: ManagedCommandTimelineLine }) {
           CHANNEL_CLASS[line.channel],
         )}
       >
-        {line.text}
+        <OutputLineText text={line.text} matches={matches} />
       </span>
     </div>
   );
+});
+
+function OutputLineText(props: {
+  readonly text: string;
+  readonly matches: readonly OutputRowFindMatch[];
+}): ReactNode {
+  const { text, matches } = props;
+  if (matches.length === 0) return text;
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const match of matches) {
+    if (match.startCol > cursor) {
+      parts.push(text.slice(cursor, match.startCol));
+    }
+    const end = match.startCol + match.length;
+    parts.push(
+      <span
+        key={match.startCol}
+        data-testid={
+          match.active
+            ? "managed-command-output-find-match-active"
+            : "managed-command-output-find-match"
+        }
+        data-start-col={match.startCol}
+        style={match.active ? FIND_ACTIVE_MATCH_STYLE : FIND_MATCH_STYLE}
+      >
+        {text.slice(match.startCol, end)}
+      </span>,
+    );
+    cursor = end;
+  }
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+  return parts;
+}
+
+function buildFindPaint(
+  matches: readonly ManagedCommandOutputFindMatch[],
+  activeIndex: number,
+): FindPaint {
+  if (matches.length === 0) return EMPTY_FIND_PAINT;
+  const matchesBySeq = new Map<number, OutputRowFindMatch[]>();
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    const rowMatches = matchesBySeq.get(match.seq) ?? [];
+    rowMatches.push({
+      startCol: match.startCol,
+      length: match.length,
+      active: index === activeIndex,
+    });
+    matchesBySeq.set(match.seq, rowMatches);
+  }
+  return { matchesBySeq };
+}
+
+function managedCommandOutputFindAvailability(
+  availability: ShellOutputAvailability,
+): boolean | string {
+  if (!isShellOutputPanelReplacement(availability)) return true;
+  switch (availability.kind) {
+    case "bootstrapping":
+      return "Output is still loading.";
+    case "gone":
+      return "This shell is no longer available.";
+    case "unauthorized":
+      return "You no longer have access to this shell.";
+    case "unsupported-host":
+      return "This host cannot serve shell output.";
+    case "unreachable-host":
+      return "The host is unreachable.";
+  }
 }
 
 /**

@@ -27,6 +27,44 @@ import {
   removeOptimisticQueuedItemByMessageId,
 } from "@/stores/chats/optimistic-queue";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
+import { TRANSCRIPT_RANGE_MAX_BYTES } from "@traycer/protocol/persistence/chat-transcript/read-range";
+import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import type {
+  ChatAccumulatedFileChangeSummary,
+  ChatIndexChange,
+  ChatRangeResponse,
+  ChatTranscriptDerived,
+  InterviewAnswerability,
+} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import {
+  createImageWitnessStore,
+  type ImageWitnessStore,
+} from "@/stores/chats/image-witness-store";
+import { createRecoveryLedger } from "@/stores/chats/recovery-ledger";
+import {
+  applyIndexChange,
+  applyRangeResponse,
+  applySkeletonChunk,
+  applyWindowedSnapshot,
+  appendLiveRecords,
+  bodyInvalidatingOrdinals,
+  emptyTranscriptWindow,
+  evictTranscriptWindowToBudget,
+  hydratedRecords,
+  holdsActiveTurnAssistantMessage,
+  hydratedRowContext,
+  isActiveTurnStreamingEcho,
+  isTailHydrated,
+  mapWindowMessages,
+  planTranscriptHydration,
+  recordSharingOrdinals,
+  streamWindowMessage,
+  touchTranscriptRange,
+  updateWindowMessage,
+  TRANSCRIPT_WINDOW_MAX_BYTES,
+  type OrdinalRange,
+  type TranscriptWindow,
+} from "@/stores/chats/transcript-window";
 import type {
   StreamFlushCoordinator,
   StreamFlushLease,
@@ -65,6 +103,11 @@ import type {
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
+import type { Attachment } from "@/lib/composer/types";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { collectAnnotationImageHashes } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { addWithFifoEviction } from "@/lib/bounded-set";
 import type {
   RuntimeApprovalDecision,
@@ -114,7 +157,6 @@ import type {
   TokenUsage,
 } from "@traycer/protocol/persistence/epic/foundation";
 import type {
-  AssistantMessage,
   Chat,
   ChatEvent,
   ContentBlock,
@@ -123,12 +165,22 @@ import type {
   Message,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
+import { latestAssistantAuthFailureTurnKey } from "@traycer/protocol/persistence/chat-transcript/provider-auth-failure";
 import { v4 as uuidv4 } from "uuid";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 
-type ChatStreamClientHandle = Pick<
+export type ChatStreamClientHandle = Pick<
   ChatStreamClient,
-  "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
+  | "sendAction"
+  | "close"
+  | "sameTurnSteeringProtocolSupported"
+  // The two windowed READS. Required rather than optional even though every
+  // implementation but the real client is a test double: the store calls them
+  // unconditionally, and an optional method invoked through `?.()` is a silent
+  // no-op - which on this line means a chat that asks for its tail, never
+  // sends the request, and renders empty forever.
+  | "requestTranscriptRange"
+  | "requestResnapshot"
 > &
   Partial<
     Pick<ChatStreamClient, "interviewSettlementActionsProtocolSupported">
@@ -145,6 +197,57 @@ type ChatOwnerActionFrame = Exclude<
   { readonly kind: "ping" }
 >;
 type ChatActionAckFrame = Parameters<ChatStreamCallbacks["onActionAck"]>[0];
+type ChatSnapshotFrame = Parameters<ChatStreamCallbacks["onSnapshot"]>[0];
+type ChatWindowedSnapshotFrame = Parameters<
+  ChatStreamCallbacks["onWindowedSnapshot"]
+>[0];
+/**
+ * The windowed snapshot fields a LATER frame can supersede.
+ *
+ * Exactly the ones `applyAuthoritativeSnapshot` copies across from
+ * `frame.snapshot` without consulting the transcript, plus `queue`, whose
+ * merge takes the authoritative list as an input. Everything else the fold
+ * produces is derived from the transcript or from store state the delta frames
+ * have already updated in place, so replaying it is not a regression.
+ *
+ * Listed rather than `Partial<...>` of the whole snapshot: a field added to the
+ * snapshot that a delta frame can also change has to be added here
+ * deliberately, and a `Partial` would silently accept the omission.
+ */
+type DeferredWindowedSnapshotAux = Pick<
+  ChatWindowedSnapshotFrame["snapshot"],
+  | "queue"
+  | "runStatus"
+  | "activeTurn"
+  | "turnInProgress"
+  | "backgroundItems"
+  | "pendingApprovals"
+  | "pendingFileEditApprovals"
+  | "pendingInterviews"
+  | "worktreeBinding"
+  | "missingWorktreePaths"
+  | "managedCommands"
+  | "heldUpdates"
+>;
+
+function deferredWindowedSnapshotAuxOf(
+  snapshot: ChatWindowedSnapshotFrame["snapshot"],
+): DeferredWindowedSnapshotAux {
+  return {
+    queue: snapshot.queue,
+    runStatus: snapshot.runStatus,
+    activeTurn: snapshot.activeTurn,
+    turnInProgress: snapshot.turnInProgress,
+    backgroundItems: snapshot.backgroundItems,
+    pendingApprovals: snapshot.pendingApprovals,
+    pendingFileEditApprovals: snapshot.pendingFileEditApprovals,
+    pendingInterviews: snapshot.pendingInterviews,
+    worktreeBinding: snapshot.worktreeBinding,
+    missingWorktreePaths: snapshot.missingWorktreePaths,
+    managedCommands: snapshot.managedCommands,
+    heldUpdates: snapshot.heldUpdates,
+  };
+}
 type ChatSessionSetState = StoreApi<ChatSessionState>["setState"];
 type ChatSessionGetState = StoreApi<ChatSessionState>["getState"];
 type SendActionInput = {
@@ -155,13 +258,30 @@ type SendActionInput = {
   readonly pendingUserMessage: PendingUserMessage | null;
 };
 
+/**
+ * What a send hands back to the composer if it never lands - the pre-submit
+ * document plus the annotation cards that left with it. One value so a new
+ * restorable composer artifact costs no call-site edits.
+ */
+export interface ChatSendRestore {
+  readonly content: JsonContent;
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+}
+
 export interface PendingUserMessage {
   readonly clientActionId: string;
   readonly messageId: string;
   readonly content: JsonContent;
+  readonly attachments: ReadonlyArray<Attachment>;
   readonly sender: UserMessageSender;
   readonly settings: ChatRunSettings;
   readonly timestamp: number;
+  /**
+   * Pre-submit composer document (no crop atoms) plus its annotation cards.
+   * Used when a settled turn never recorded the send, so restore does not
+   * inline the wire image atoms or drop the records.
+   */
+  readonly restore: ChatSendRestore;
   /**
    * The billing context this send was stamped with at dispatch. Retained for
    * the same reason `settings` is: it dies with the action, so a resend picks
@@ -213,7 +333,7 @@ export interface PendingChatAction {
   /** Immutable retry identity; null for all non-delivery-retry actions. */
   readonly interviewDeliveryRetry: InterviewDeliveryRetryIdentity | null;
   readonly messageId: string | null;
-  readonly restoreContent: JsonContent | null;
+  readonly restore: ChatSendRestore | null;
   readonly sender: UserMessageSender | null;
   readonly settings: ChatRunSettings | null;
   /** See {@link PendingUserMessage.accountContext}. */
@@ -254,6 +374,7 @@ export type PendingChatActionSeed = Omit<PendingChatAction, "connectionEpoch">;
 export interface FailedSendRestorationState {
   readonly clientActionId: string;
   readonly content: JsonContent;
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly reason: string;
   /**
    * Whether the path that created this slot ALREADY said the reason on a
@@ -347,7 +468,7 @@ export interface AcceptedChatAction {
    * {@link reconcileSnapshotChange}. `null` for non-`send` actions and after
    * the content has been consumed once by `takeSetupFailedRestoration`.
    */
-  readonly restoreContent: JsonContent | null;
+  readonly restore: ChatSendRestore | null;
   /**
    * The rest of the recovery tuple, for `send` records only.
    *
@@ -464,6 +585,37 @@ type MissingWorktreePathsUpdate =
   | ReadonlyArray<string>
   | ((current: ReadonlyArray<string>) => ReadonlyArray<string>);
 
+/**
+ * The chat record MINUS its transcript spine.
+ *
+ * `ChatSessionState` keeps the transcript in its own `messages`/`events`
+ * fields, and the snapshot's `chat` carries the same arrays a second time.
+ * Storing both meant every session retained the whole transcript TWICE - on a
+ * 40 MB chat across the ~30 live subscriptions a multi-pane workspace holds,
+ * that second copy is the larger half of the store's footprint - to serve four
+ * scalar reads (`title`, `isTitleEditedByUser`, `settings`, `parentId`).
+ *
+ * The fields are omitted from the TYPE rather than merely left unassigned, so
+ * the compiler is what proves nothing reads them. Anything that needs the
+ * transcript reads `state.messages` / `state.events`, which is where the
+ * merge, the row projection and (with the windowed transcript) hydration all
+ * already look.
+ */
+export type ChatSessionRecord = Omit<Chat, "messages" | "events">;
+
+/**
+ * Drops the transcript arrays off a snapshot's chat record.
+ *
+ * Written as a destructure so adding a transcript-bearing field to `Chat`
+ * cannot silently start being retained again: the omission is expressed once,
+ * here and in {@link ChatSessionRecord}, and the two are checked against each
+ * other by the return type.
+ */
+function chatRecordWithoutTranscript(chat: Chat): ChatSessionRecord {
+  const { messages: _messages, events: _events, ...record } = chat;
+  return record;
+}
+
 export interface ChatSessionState {
   readonly epicId: string;
   readonly chatId: string;
@@ -493,7 +645,40 @@ export interface ChatSessionState {
    * value, since those carry live news too.
    */
   readonly transcriptBaselineEpoch: number;
-  readonly chat: Chat | null;
+  /**
+   * Bumped whenever a range response seated rows the reader SCROLLED to.
+   *
+   * The third way transcript data reaches this client, and the one
+   * `transcriptBaselineEpoch` cannot describe. That epoch separates "the
+   * transcript was rehydrated wholesale" from "we have been watching since the
+   * last observation", and on the windowed line neither fits a range: the
+   * connection is unchanged and watching, yet the rows that just appeared are
+   * settled history the reader travelled backwards to reach, not news.
+   *
+   * Consumers that would otherwise read a newly-present settled row as a live
+   * arrival (see `useChatAnnouncements`, which would announce a turn from last
+   * week as it scrolled into view) absorb rows that appear across a change in
+   * this counter. Always `0` off the windowed line, where nothing hydrates
+   * ranges.
+   */
+  readonly transcriptHydrationSequence: number;
+  /**
+   * What each hydrated row renders WITH, by row id.
+   *
+   * The host projects a row against whole history; a range serves that row's
+   * records alone. Every derivation that reads the rows AROUND the one it is
+   * drawing therefore gets a different answer from a bounded subset - and in
+   * two cases the re-derived row id then disagrees with the skeleton, so the
+   * ordinal is suppressed and the row draws unplaced. Those derivations read
+   * this instead. See `row-context.ts`.
+   *
+   * Published in the SAME `set` as the records it describes, so no consumer
+   * can observe rows against a previous hydration's context. Empty off the
+   * windowed line, where `messages` is the whole transcript and every
+   * derivation can still see everything it needs.
+   */
+  readonly transcriptRowContext: Readonly<Record<string, TranscriptRowContext>>;
+  readonly chat: ChatSessionRecord | null;
   readonly access: ChatAccess | null;
   readonly messages: ReadonlyArray<Message>;
   readonly events: ReadonlyArray<ChatEvent>;
@@ -536,6 +721,88 @@ export interface ChatSessionState {
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingInterviews: ReadonlyArray<ChatPendingInterviewState>;
   readonly accumulatedFileChanges: ReadonlyArray<ChatAccumulatedFileChange>;
+  /**
+   * The transcript index and whichever bodies are hydrated, on the windowed
+   * line. Empty on every other line, where the whole transcript rides the
+   * snapshot and {@link messages} is complete by construction.
+   *
+   * `messages`/`events` are DERIVED from this on the windowed line - they hold
+   * what is hydrated, not what exists. `transcriptWindow.rowCount` is what
+   * exists.
+   */
+  readonly transcriptWindow: TranscriptWindow;
+  /**
+   * Whole-transcript folds the host computed because a windowed client cannot:
+   * the pinned-todo stack, the latest usage, the fork boundary, and the
+   * restorable setup interruption (whose event occupies no ordinal at all).
+   * `null` off the windowed line, where each is still derived locally.
+   */
+  readonly transcriptDerived: ChatTranscriptDerived | null;
+  /**
+   * How many files this chat has touched, per the windowed snapshot - what the
+   * accumulated-changes panel paints its collapsed header from before any
+   * summary chunk lands. `0` off the windowed line, where
+   * {@link accumulatedFileChanges} carries the whole set.
+   */
+  readonly accumulatedFileChangeCount: number;
+  /**
+   * Rows rewritten while their span was EVICTED, so the rewrite was dropped.
+   *
+   * Provenance, not content: the body itself is recovered by the next
+   * hydration. What this preserves is that the row's next appearance is NEWS
+   * rather than history - see `rewriteMessageInPlace` and
+   * `ChatAnnouncementsInput.coldRewrittenMessageIds`. Empty on the legacy
+   * line, which evicts nothing.
+   */
+  readonly coldRewrittenMessageIds: ReadonlySet<string>;
+  /**
+   * An ordinal a pending transcript JUMP needs hydrated, or `null`.
+   *
+   * Set by the surface that holds the jump request when its target resolves to
+   * a row outside the retained spans, and cleared when the jump is consumed.
+   * See {@link requiredHydrationOrdinalsOf}.
+   */
+  readonly jumpTargetOrdinal: number | null;
+  /**
+   * The accumulated-change SUMMARIES, assembled from the chunk frames.
+   *
+   * Separate from {@link accumulatedFileChanges} rather than replacing it,
+   * because they are different types: a summary carries a digest and counts,
+   * not the before/after CONTENTS. `accumulatedFileChanges` stays empty on this
+   * line and nothing reads it here - the panel takes a content-free row model
+   * both lines produce (`accumulated-change-rows.ts`), and the contents are
+   * fetched by digest only by the diff tile a row click opens.
+   */
+  readonly accumulatedFileChangeSummaries: ReadonlyArray<ChatAccumulatedFileChangeSummary>;
+  /**
+   * Whether any chunk of the CURRENT summary generation has been accepted.
+   *
+   * The array above is deliberately retained across a rebuild (see the
+   * generation reset), so between the reset and the first replacement chunk it
+   * holds the PREVIOUS generation's entries - with the previous digests. A
+   * length comparison cannot see that: when the replacement stream's total
+   * happens to equal the retained length, which is the common case for a set
+   * that has not changed and the certain case for a set that fits one chunk,
+   * "delivered === authoritative" is true over entries no chunk of this
+   * generation ever sent.
+   *
+   * So completeness is answered by GENERATION, not by length: false here means
+   * the retained array cannot vouch for anything, whatever its length.
+   */
+  readonly accumulatedSummaryGenerationSeated: boolean;
+  /**
+   * Whether a replacement generation is being assembled off-screen right now.
+   *
+   * The public face of the store's private assembly buffer, and the reason it
+   * has one: unseated-plus-zero-count is BOTH "a chat with no accumulated
+   * changes", which is complete, and "a generation mid-flight whose count a
+   * delayed same-epoch snapshot rewound to zero", which is not. Nothing
+   * outside this store could tell those apart, so
+   * {@link accumulatedSummarySetComplete} read the second as the first and
+   * every consumer of it treated an empty published array as authoritative -
+   * bundle paths absent from it reading as reverted.
+   */
+  readonly accumulatedSummaryAssemblyStarted: boolean;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   /**
    * The shells this chat created, whatever state they are in - not a subset
@@ -620,6 +887,31 @@ export interface ChatSessionState {
    * grows for the life of a chat.
    */
   readonly deliveredNoticeActionIds: ReadonlySet<string>;
+  /**
+   * Block ids this session has already OPENED a subagent/workflow card for.
+   *
+   * The one thing that tells a first `subagent.started` from a late re-emit of
+   * it, because nothing on the wire does: a `blockDelta` frame carries no turn
+   * identity, and the two events are otherwise the same shape. A repeat is
+   * definitionally a SECOND start for a block id, so remembering the first is
+   * the whole discriminator.
+   *
+   * It matters because the two want opposite answers when no row owns the
+   * block. A first start must create its card - that is the birth of every
+   * subagent card. A re-emit must not: the accumulator deliberately permits one
+   * after its turn has completed (Codex resolves the agent nickname
+   * asynchronously and re-emits `subagent.started` when it lands), so on the
+   * windowed line its row may have been evicted by then, and creating from it
+   * would mint a copy of an OLD turn's card under whatever turn is running now.
+   *
+   * Bounded by the same FIFO shape as {@link deliveredNoticeActionIds}: an
+   * unbounded set keyed by block id grows for the life of a chat. Eviction is
+   * safe in the direction that matters - a forgotten id only means a re-emit
+   * that old is treated as a first start again, which is the behaviour this
+   * replaces, and block ids are unique per run so a stale entry cannot deny a
+   * genuinely new card.
+   */
+  readonly openedSubagentCardBlockIds: ReadonlySet<string>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
   readonly currentComposerSettings: ChatRunSettings | null;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
@@ -682,13 +974,28 @@ export interface ChatSessionState {
    * a fresh `chat.subscribe`, clearing `fatalClose` and `snapshotLoaded`. Drives
    * the tile error state's retry affordance.
    */
+  /** See the implementation - names the ordinal a pending jump is waiting on. */
+  requestTranscriptOrdinal: (ordinal: number | null) => void;
   retry: () => void;
-  sendMessage: (
-    content: JsonContent,
-    sender: UserMessageSender,
-    settings: ChatRunSettings,
-    deliveryPolicy: ChatQueueDeliveryPolicy,
-  ) => SentChatMessageAction | null;
+  /**
+   * Which ordinals the transcript viewport is currently showing, from the
+   * timeline's viewability pass - the second obligation
+   * `planTranscriptHydration` folds in (the first is the tail). `null` means
+   * "no placed row is visible" (the pending tail, a concealed surface, the
+   * legacy line), which clears the viewport obligation rather than requesting
+   * anything. A no-op off the windowed line and once disposed; repeats of the
+   * same range are absorbed here, and an identical planned request is not
+   * re-sent while the one in flight is unanswered.
+   */
+  reportVisibleTranscriptRange: (range: OrdinalRange | null) => void;
+  sendMessage: (input: {
+    readonly content: JsonContent;
+    readonly sender: UserMessageSender;
+    readonly settings: ChatRunSettings;
+    readonly attachments: ReadonlyArray<Attachment>;
+    readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+    readonly restore: ChatSendRestore;
+  }) => SentChatMessageAction | null;
   /**
    * Sends the initial handoff message reusing its pre-minted ids (shared with
    * the host turn-overlap idempotency gate). The driver's fallback `send`
@@ -811,7 +1118,7 @@ export interface ChatSessionState {
    *
    * Subsequent calls for the same `messageId` return `null` (the
    * `pendingUserMessages` entry is removed; `pendingActions` /
-   * `acceptedActions` entries have their `restoreContent` field nulled
+   * `acceptedActions` entries have their `restore` field nulled
    * out) so a duplicate or replayed `setup.failed` event does not
    * double-restore. The matching action records stay in their slots so
    * downstream ack/accept reconciliation continues to work.
@@ -905,6 +1212,63 @@ export function isChatRunInProgress(runStatus: ChatRunStatus): boolean {
   return runStatus === "running" || runStatus === "stopping";
 }
 
+/**
+ * How long an unanswered range or resnapshot request is waited on before its
+ * dedup latch is released and the plan re-issued.
+ *
+ * Generous, because an oversized range rides the BULK lane behind whatever else
+ * is queued there. Releasing the latch does NOT cancel the request: the earlier
+ * answer stays eligible to seat (its recovery-ledger entry survives), so this
+ * deadline governs only how long a possibly-dropped request may suppress a
+ * re-ask. Timing it too tight therefore costs a redundant round trip, never a
+ * discarded answer - which is what makes a generous value safe on both sides.
+ *
+ * Module scope rather than the store closure so the helpers that arm it cannot
+ * out-order its declaration.
+ */
+export const HYDRATION_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * How many sent-and-unanswered range requests keep their staleness record.
+ *
+ * Reached only when the host answers nothing for several timeouts running, so
+ * the value just has to be comfortably above the number of re-asks a live
+ * connection can stack up. Small enough that the map cannot become a leak on a
+ * tab left open against a wedged host.
+ *
+ * That premise is a constraint on the CALLERS, not a property of the cap: it
+ * holds only while nothing mints a request for a range already being answered.
+ * Releasing the dedup slot on a frame that did not end the request breaks it -
+ * eight aux rebroadcasts then evict the very entry the outstanding answer needs
+ * - so a new clear site has to justify itself against this number.
+ *
+ * The value itself lives on the recovery ledger now, which owns the eviction;
+ * re-exported here for the consumers that size scenarios by it.
+ */
+export { MAX_OUTSTANDING_HYDRATION_REQUESTS } from "@/stores/chats/recovery-ledger";
+
+/**
+ * How long a chunked delivery may go quiet before it is treated as stalled
+ * rather than slow.
+ *
+ * Longer than {@link HYDRATION_REQUEST_TIMEOUT_MS} on purpose. That deadline
+ * governs a single round trip the client asked for; this one governs the gap
+ * BETWEEN chunks of a stream the host is pushing, and firing it early costs a
+ * whole-transcript resnapshot rather than one re-request.
+ */
+export const STREAM_COMPLETION_TIMEOUT_MS = 45_000;
+
+/**
+ * How many times a stalled stream may be restarted within one epoch.
+ *
+ * The recovery restarts the very stream that stalled, so an unbounded retry is
+ * a self-sustaining loop against a link that keeps dropping the last frame.
+ * Past the cap the client keeps its partial state rather than asking again -
+ * which is exactly the behaviour that existed before the watchdog, so the cap
+ * degrades to the status quo instead of to something worse.
+ */
+export const MAX_WATCHDOG_RESTREAMS_PER_EPOCH = 3;
+
 const EMPTY_QUEUE: ChatQueueState = { status: "idle", items: [] };
 
 function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
@@ -955,6 +1319,16 @@ export const MAX_ERROR_NOTICE_RECORDS = 32;
  * memory bounded.
  */
 export const MAX_DELIVERED_CLIENT_ACTION_IDS = MAX_ERROR_NOTICE_RECORDS * 4;
+
+/**
+ * How many opened subagent/workflow card block ids a session remembers.
+ *
+ * Sized for "cards a live chat can open before an old one's re-emit stops
+ * mattering" rather than for the transcript: the window the memory has to
+ * cover is one async nickname lookup, and a chat that has opened 256 further
+ * cards since is long past it.
+ */
+export const MAX_OPENED_SUBAGENT_CARD_BLOCK_IDS = 256;
 /** Bounds string-key retention while comfortably covering recent restores. */
 export const MAX_DELIVERED_RESTORE_COMPLETIONS = 32;
 
@@ -1152,11 +1526,11 @@ function rejectionNotice(input: {
     input.displaced &&
     pending !== null &&
     pending.action === "send" &&
-    pending.restoreContent !== null
+    pending.restore !== null
   ) {
     return unrecoverableSendNotice({
       clientActionId: input.frame.clientActionId,
-      content: pending.restoreContent,
+      content: pending.restore.content,
       circumstance: `A message was not accepted (${reason.replace(/\.$/, "")})`,
       account: input.account ?? EMPTY_DEAD_SEND_ACCOUNT,
     });
@@ -1191,7 +1565,7 @@ function rejectionEvidence(
   currentSettings: ChatRunSettings | null,
 ): DeadSendAccount | null {
   if (pending === null || pending.action !== "send") return null;
-  if (pending.restoreContent === null) return null;
+  if (pending.restore === null) return null;
   return {
     worktree: { ...worktree, superseded },
     sentSettings: pending.settings,
@@ -1221,12 +1595,13 @@ function rejectionRestoration(input: {
 }): FailedSendRestorationState | null {
   const { state, pending, frame } = input;
   if (state.failedSendRestoration !== null) return null;
-  if (pending?.action !== "send" || pending.restoreContent === null) {
+  if (pending?.action !== "send" || pending.restore === null) {
     return null;
   }
   return {
     clientActionId: frame.clientActionId,
-    content: pending.restoreContent,
+    content: pending.restore.content,
+    browserAnnotations: pending.restore.browserAnnotations,
     reason: `${frame.reason ?? "Message was not accepted."}${
       input.account === null ? "" : deadSendAccountClauses(input.account, true)
     }`,
@@ -1393,6 +1768,33 @@ function restoreStagedWorktreeIntent(
     .restoreIntentForDispatch(stagingKey, survivors, source.clientActionId);
   return true;
 }
+
+const liveChatSessionStores = new Set<{
+  getState: () => ChatSessionState;
+}>();
+
+function collectPendingAnnotationImageHashes(): ReadonlyArray<string> {
+  const records: BrowserAnnotationRecord[] = [];
+  for (const sessionStore of liveChatSessionStores) {
+    const state = sessionStore.getState();
+    for (const pending of Object.values(state.pendingActions)) {
+      if (pending.restore !== null) {
+        records.push(...pending.restore.browserAnnotations);
+      }
+    }
+    for (const message of state.pendingUserMessages) {
+      records.push(...message.restore.browserAnnotations);
+    }
+    if (state.failedSendRestoration !== null) {
+      records.push(...state.failedSendRestoration.browserAnnotations);
+    }
+  }
+  return collectAnnotationImageHashes(records);
+}
+
+registerExtraImageRootSource({
+  hashes: collectPendingAnnotationImageHashes,
+});
 
 export function createChatSessionStore(
   options: ChatSessionStoreOptions,
@@ -1665,26 +2067,46 @@ export function createChatSessionStoreWithNotificationDependencies(
     // harmless refetch either way (the gate is a pure predicate).
     let nudgedAuthErrorTurnId: string | null = null;
 
-    const nudgeProviderAuthFromPersistedError = (
-      messages: ReadonlyArray<Message>,
-    ): void => {
+    /**
+     * Act on the whole-transcript answer, whichever line produced it.
+     *
+     * The SELECTION moved to `provider-auth-failure.ts` and the two lines get
+     * it from different places - the legacy caller runs it over the snapshot's
+     * full record array, the windowed caller reads the host's scalar. What
+     * stays here is the dedupe, because the marker it compares against is also
+     * written by the live `blockDelta` path below and neither line can see
+     * that.
+     *
+     * `null` means "the latest turn did not fail on a credential", on both
+     * lines. It never means "could not tell": that ambiguity is precisely what
+     * the derived scalar exists to remove.
+     */
+    const nudgeProviderAuthFailure = (turnKey: string | null): void => {
       if (options.onProviderAuthError === null) return;
-      const lastAssistant = messages.findLast(
-        (message): message is AssistantMessage => message.role === "assistant",
-      );
-      if (lastAssistant === undefined) return;
-      const turnKey = lastAssistant.turnId ?? lastAssistant.messageId;
+      if (turnKey === null) return;
       if (nudgedAuthErrorTurnId === turnKey) return;
-      const hasAuthError = lastAssistant.blocks.some(
-        (block) => block.type === "error" && block.code === AUTH_ERROR_CODE,
-      );
-      if (!hasAuthError) return;
       nudgedAuthErrorTurnId = turnKey;
       options.onProviderAuthError();
     };
 
     const applyBufferedDeltas = (): void => {
       if (bufferedDeltas.length === 0) return;
+      // HELD, not dropped, while a windowed snapshot waits for its tail.
+      //
+      // The deferral publishes the snapshot's `aux` but deliberately not its
+      // `activeTurn`, and no assistant row is seated yet - so a delta folded
+      // now has nothing to attach to and `applyBlockDelta` discards it. That
+      // is a permanent loss for the one delta that cannot be recovered from
+      // anywhere else: the oversized tail travels on the BULK lane, so a delta
+      // can overtake a range response that was sliced BEFORE the delta
+      // existed, leaving it absent from the live stream and from the
+      // hydration. The reader then sees a live turn missing a span of its own
+      // output until the next turn boundary rewrites the row.
+      //
+      // Nothing here bounds the buffer, and that is the existing contract: it
+      // is drained by the flush coordinator's tick on every non-deferred beat,
+      // and a deferral resolves on the very next range response.
+      if (deferredWindowedSnapshot !== null) return;
       const batch = bufferedDeltas;
       bufferedDeltas = [];
       if (disposed) return;
@@ -1696,7 +2118,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // when nothing changed (zustand then fires no listeners).
         let merged: ChatSessionState = state;
         for (const event of batch) {
-          const partial = applyBlockDelta(merged, event);
+          const partial = applyBlockDelta(merged, event, imageWitnesses);
           if (partial === merged || Object.keys(partial).length === 0) {
             continue;
           }
@@ -1719,7 +2141,50 @@ export function createChatSessionStoreWithNotificationDependencies(
           ? merged
           : { ...merged, pendingActions, acceptedActions };
       });
+      evictWindowAfterInPlaceGrowth();
     };
+
+    /**
+     * Run the fresh tier's eviction after an in-place rewrite grew it.
+     *
+     * `rewriteWindowMessage` recomputes `hydratedBytes` exactly for a CHARGED
+     * write and then applies only `boundStaleTierToBudget`, which by
+     * construction cannot drop a fresh span - and the reducers' callers publish
+     * the returned window directly. So repeated growth on an already-settled
+     * turn (a detached subagent's progress, an image resolving) could hold the
+     * fresh tier above the budget for as long as no range or snapshot was
+     * seated, and keep growing.
+     *
+     * Here rather than inside the window module, because the eviction's
+     * protections are the CALLER's to supply: `visibleTranscriptRange` and the
+     * rows a pending question sits on. The latter especially cannot be retained
+     * on the window the way the viewport can - `onWindowedSnapshot` passes the
+     * FRAME's pair precisely because protecting the rows the previous snapshot
+     * was blocked on would protect the wrong ones - so it is derived from
+     * current state at the moment of use, exactly as `onRange` does.
+     *
+     * Gated on `hydratedBytes` alone, which is what makes this affordable on
+     * the delta path. The figure is exact after a `now` charge and deliberately
+     * UNMOVED by a `deferred` one, so the streaming row's growth cannot trip
+     * this and `settleWindowBytes` is never paid per token - which is the whole
+     * reason the deferred charge exists.
+     */
+    function evictWindowAfterInPlaceGrowth(): void {
+      if (disposed) return;
+      const state = get();
+      if (!isWindowedTranscript(state)) return;
+      if (state.transcriptWindow.hydratedBytes <= TRANSCRIPT_WINDOW_MAX_BYTES) {
+        return;
+      }
+      const evicted = evictTranscriptWindowToBudget(
+        state.transcriptWindow,
+        TRANSCRIPT_WINDOW_MAX_BYTES,
+        visibleTranscriptRange,
+        requiredHydrationOrdinalsOf(state),
+      );
+      if (evicted === state.transcriptWindow) return;
+      publishWindowedTranscript(evicted, null);
+    }
 
     const lease = options.streamFlushCoordinator.register({
       flush: applyBufferedDeltas,
@@ -1740,302 +2205,1422 @@ export function createChatSessionStoreWithNotificationDependencies(
     const isCurrentStream = (streamGeneration: number): boolean =>
       !disposed && streamGeneration === activeStreamGeneration;
 
-    const callbacks: ChatStreamCallbacks = {
-      onSnapshot: (frame) => {
-        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
-          return;
-        }
-        nudgeProviderAuthFromPersistedError(frame.snapshot.chat.messages);
-        flushBlockDeltas();
-        // Pendings dispatched on an earlier connection never see their ack, so
-        // the snapshot drops them (below). Computed here, before the set, so a
-        // swept `editUserMessage` gets its staged worktree intent restored the
-        // same way a rejected one does - the drop otherwise leaves the slot
-        // cleared and the next resend runs against the prior binding. Reads
-        // `get()` (no pendingActions mutation happens before the set), so it
-        // sees the same state the updater will.
-        const sweep = sweepStalePendingActions(
-          get().pendingActions,
+    /**
+     * The authoritative-snapshot fold, shared by BOTH lines.
+     *
+     * Named and hoisted rather than left inline because the windowed line
+     * needs exactly this - the pending-send reconcile, the queue merge, the
+     * worktree-intent hand-back, the interview-draft reap - over a transcript
+     * that arrives differently. Re-implementing it for the windowed peer
+     * would be a second copy of the most intricate fold in this store, and
+     * the two would drift on the first bug fixed in one of them.
+     *
+     * It takes a LEGACY-shaped snapshot; the windowed caller adapts. See
+     * `applyWindowedSnapshotFrame` for what that adaptation is and is not.
+     *
+     * `extra` is merged into the fold's own `set`, so state that must land
+     * ATOMICALLY with the published transcript can. The windowed caller passes
+     * the new `transcriptWindow` (and its snapshot aux) through here rather
+     * than setting it in its own earlier `set`, because the row merge treats
+     * "span names a row `rendered` lacks" as deliberate renderer suppression -
+     * and a store state holding new spans beside old rendered models makes
+     * that judgement about a legitimate new row. The legacy caller passes
+     * either `null` or the windowed-state RESET (a downgrade is the same
+     * atomicity argument in reverse).
+     *
+     * `authFailureTurnKey` is passed in rather than scanned from `frame`
+     * because THIS is the one question the adaptation cannot carry: the
+     * windowed caller's `frame.snapshot.chat.messages` is the hydrated subset,
+     * so a scan here would answer "no failure" for a failure that is merely
+     * cold. Each caller supplies the whole-transcript answer its own line has -
+     * the legacy scan, or the host's scalar - and the two agree by running the
+     * same selection.
+     */
+    const applyAuthoritativeSnapshot = (
+      frame: ChatSnapshotFrame,
+      extra: Partial<ChatSessionState> | null,
+      authFailureTurnKey: string | null,
+    ): void => {
+      if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+        return;
+      }
+      nudgeProviderAuthFailure(authFailureTurnKey);
+      flushBlockDeltas();
+      // Pendings dispatched on an earlier connection never see their ack, so
+      // the snapshot drops them (below). Computed here, before the set, so a
+      // swept `editUserMessage` gets its staged worktree intent restored the
+      // same way a rejected one does - the drop otherwise leaves the slot
+      // cleared and the next resend runs against the prior binding. Reads
+      // `get()` (no pendingActions mutation happens before the set), so it
+      // sees the same state the updater will.
+      const sweep = sweepStalePendingActions(
+        get().pendingActions,
+        connectionEpoch,
+      );
+      // Every swept id came from this same `pendingActions` snapshot, so the
+      // lookup is always present. DEFERRED past the reconcile rather than
+      // applied here: the slot holds one pick, and a swept edit is not the
+      // only claimant. See `restoreOneWorktreeIntent` below for who wins.
+      const sweptPendings = get().pendingActions;
+      const sweptWorktreeIntents = [...sweep.sweptActionIds].map(
+        (sweptId) => sweptPendings[sweptId],
+      );
+      let restoredWorktreeIntentForSnapshot: StagedWorktreeIntentSource | null =
+        null;
+      set((state) => {
+        const previousTurnId = snapshotPreviousTurnId(
+          state.activeTurn,
+          state.liveAssistantMessage,
+          frame.snapshot.activeTurn,
+        );
+        const messages = messagesForTurnStateChange(
+          frame.snapshot.chat.messages,
+          {
+            previousTurnId,
+            nextTurnId: frame.snapshot.activeTurn?.turnId ?? null,
+          },
+        );
+        // A changed persisted tuple is an authoritative host-side update
+        // (for example `agent.configure`) and must replace the live picker.
+        // An unchanged tuple is ordinary stream traffic, so keep any local
+        // composer edits that have not been committed by a send yet.
+        const authoritativeSettingsChanged =
+          state.chat === null ||
+          !nullableChatRunSettingsEqual(
+            state.chat.settings,
+            frame.snapshot.chat.settings,
+          );
+        // What a RESEND would run under after this snapshot lands. The
+        // drift statement compares against this, not the persisted tuple:
+        // a local pick the user just made is what the composer will send.
+        const nextComposerSettings = authoritativeSettingsChanged
+          ? frame.snapshot.chat.settings
+          : state.currentComposerSettings;
+        const now = Date.now();
+        // This snapshot is the authority for everything a lost connection
+        // left in limbo: pendings dispatched on an earlier connection will
+        // never see their ack, so drop them (via `sweep`, computed above so
+        // swept edits restore their staged worktree intent). Controls
+        // re-enable; the user can re-issue against the state the snapshot
+        // shows. Message sends stay - `reconcileSnapshotChange` settles those
+        // by messageId with composer restoration, and only for sends from
+        // an earlier epoch: this same connection's in-flight sends keep
+        // waiting for their ack (a steady-state refresh snapshot is not
+        // evidence they were lost).
+        const pending = reconcileSnapshotChange({
+          pendingActions: sweep.pendingActions,
+          pendingUserMessages: state.pendingUserMessages,
+          messages,
+          queue: frame.snapshot.queue,
+          failedSendRestoration: state.failedSendRestoration,
           connectionEpoch,
-        );
-        // Every swept id came from this same `pendingActions` snapshot, so the
-        // lookup is always present. DEFERRED past the reconcile rather than
-        // applied here: the slot holds one pick, and a swept edit is not the
-        // only claimant. See `restoreOneWorktreeIntent` below for who wins.
-        const sweptPendings = get().pendingActions;
-        const sweptWorktreeIntents = [...sweep.sweptActionIds].map(
-          (sweptId) => sweptPendings[sweptId],
-        );
-        let restoredWorktreeIntentForSnapshot: StagedWorktreeIntentSource | null =
-          null;
-        set((state) => {
-          const previousTurnId = snapshotPreviousTurnId(
-            state.activeTurn,
-            state.liveAssistantMessage,
-            frame.snapshot.activeTurn,
-          );
-          const messages = messagesForTurnStateChange(
-            frame.snapshot.chat.messages,
-            {
-              previousTurnId,
-              nextTurnId: frame.snapshot.activeTurn?.turnId ?? null,
-            },
-          );
-          // A changed persisted tuple is an authoritative host-side update
-          // (for example `agent.configure`) and must replace the live picker.
-          // An unchanged tuple is ordinary stream traffic, so keep any local
-          // composer edits that have not been committed by a send yet.
-          const authoritativeSettingsChanged =
-            state.chat === null ||
-            !nullableChatRunSettingsEqual(
-              state.chat.settings,
-              frame.snapshot.chat.settings,
-            );
-          // What a RESEND would run under after this snapshot lands. The
-          // drift statement compares against this, not the persisted tuple:
-          // a local pick the user just made is what the composer will send.
-          const nextComposerSettings = authoritativeSettingsChanged
-            ? frame.snapshot.chat.settings
-            : state.currentComposerSettings;
-          const now = Date.now();
-          // This snapshot is the authority for everything a lost connection
-          // left in limbo: pendings dispatched on an earlier connection will
-          // never see their ack, so drop them (via `sweep`, computed above so
-          // swept edits restore their staged worktree intent). Controls
-          // re-enable; the user can re-issue against the state the snapshot
-          // shows. Message sends stay - `reconcileSnapshotChange` settles those
-          // by messageId with composer restoration, and only for sends from
-          // an earlier epoch: this same connection's in-flight sends keep
-          // waiting for their ack (a steady-state refresh snapshot is not
-          // evidence they were lost).
-          const pending = reconcileSnapshotChange({
-            pendingActions: sweep.pendingActions,
-            pendingUserMessages: state.pendingUserMessages,
+          currentSettings: nextComposerSettings,
+          currentAccountContext:
+            useAccountContextStore.getState().accountContext,
+          worktreePartition,
+          acceptedActions: state.acceptedActions,
+          nowMs: now,
+        });
+        // `reconcileSnapshotChange` only settles sends still awaiting their
+        // ack. A send whose accepted ack landed before the connection died
+        // has already left `pendingActions`, so its optimistic user message
+        // needs its own settled pass: when this authoritative snapshot
+        // reports no turn in progress, an entry with no remaining path to
+        // materialization will never be cleared by a later frame - drop it
+        // (restoring its content if the transcript never recorded it).
+        const settled = reconcileTurnSettled(
+          turnSettledFromStatus(
+            frame.snapshot.turnInProgress,
+            frame.snapshot.runStatus,
+          ),
+          {
+            pendingActions: pending.pendingActions,
+            pendingUserMessages: pending.pendingUserMessages,
             messages,
             queue: frame.snapshot.queue,
-            failedSendRestoration: state.failedSendRestoration,
-            connectionEpoch,
+            failedSendRestoration: pending.failedSendRestoration,
             currentSettings: nextComposerSettings,
             currentAccountContext:
               useAccountContextStore.getState().accountContext,
             worktreePartition,
             acceptedActions: state.acceptedActions,
-            nowMs: now,
-          });
-          // `reconcileSnapshotChange` only settles sends still awaiting their
-          // ack. A send whose accepted ack landed before the connection died
-          // has already left `pendingActions`, so its optimistic user message
-          // needs its own settled pass: when this authoritative snapshot
-          // reports no turn in progress, an entry with no remaining path to
-          // materialization will never be cleared by a later frame - drop it
-          // (restoring its content if the transcript never recorded it).
-          const settled = reconcileTurnSettled(
-            turnSettledFromStatus(
-              frame.snapshot.turnInProgress,
-              frame.snapshot.runStatus,
-            ),
-            {
-              pendingActions: pending.pendingActions,
-              pendingUserMessages: pending.pendingUserMessages,
-              messages,
-              queue: frame.snapshot.queue,
-              failedSendRestoration: pending.failedSendRestoration,
-              currentSettings: nextComposerSettings,
-              currentAccountContext:
-                useAccountContextStore.getState().accountContext,
-              worktreePartition,
-              acceptedActions: state.acceptedActions,
-            },
-          );
-          restoredWorktreeIntentForSnapshot =
-            settled.restoredWorktreeIntent ?? pending.restoredWorktreeIntent;
-          const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
-            pending.pendingActions,
-            messages,
-            state.liveAssistantMessage,
-            null,
-          );
-          const acceptedActions =
-            withoutSupersededInterviewDeliveryRetryActions(
-              pruneAcceptedActions(
-                {
-                  ...withoutSettledAcceptedActions(
-                    state.acceptedActions,
-                    // BOTH passes retire records: the snapshot pass for sends it
-                    // settled itself, the settled pass for rows it recovered.
-                    new Set([
-                      ...pending.settledAcceptedActionIds,
-                      ...settled.settledAcceptedActionIds,
-                    ]),
-                  ),
-                  // Confirmation stamps first, then this pass's own additions -
-                  // an id cannot be in both, but ordering the merge makes that
-                  // independent of whether it ever could be.
-                  ...pending.confirmedAcceptedActions,
-                  ...pending.acceptedActions,
-                },
-                now,
-              ),
-              messages,
-              state.liveAssistantMessage,
-              connectionEpoch,
-            );
-          return {
-            chat: {
-              ...frame.snapshot.chat,
-              messages: [...messages],
-            },
-            currentComposerSettings: nextComposerSettings,
-            access: frame.snapshot.access,
-            messages,
-            events: frame.snapshot.chat.events,
-            queue: mergeQueueWithOptimisticQueuedItems(
-              frame.snapshot.queue,
-              queueWithoutSettledAcceptedSends(
-                state.queue,
-                pending.settledAcceptedActionIds,
-              ),
-              new Set(Object.keys(pending.pendingActions)),
-            ),
-            runStatus: frame.snapshot.runStatus,
-            activeTurn: frame.snapshot.activeTurn,
-            turnInProgress: frame.snapshot.turnInProgress,
-            pendingApprovals: frame.snapshot.pendingApprovals,
-            pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
-            pendingInterviews: frame.snapshot.pendingInterviews,
-            accumulatedFileChanges: frame.snapshot.accumulatedFileChanges,
-            backgroundItems: frame.snapshot.backgroundItems,
-            managedCommands: frame.snapshot.managedCommands,
-            heldUpdates: frame.snapshot.heldUpdates,
-            // Drop per-item stops whose task has left the running-only list
-            // (its terminal landed) and clear the stop-all flag once nothing
-            // is left running, so settled rows never stay disabled. A stop
-            // whose FRAME died with a dropped connection never terminates its
-            // task, so also drop entries whose generic pending was just swept
-            // (same clientActionId) - an ack-ACCEPTED stop has no generic
-            // pending left and correctly stays disabled until its terminal.
-            pendingBackgroundStops: reconcileBackgroundStops(
-              withoutBackgroundStopsForActions(
-                state.pendingBackgroundStops,
-                sweep.sweptActionIds,
-              ),
-              frame.snapshot.backgroundItems,
-            ),
-            pendingBackgroundStopAll:
-              state.pendingBackgroundStopAll !== null &&
-              sweep.sweptActionIds.has(
-                state.pendingBackgroundStopAll.clientActionId,
-              )
-                ? null
-                : reconcileBackgroundStopAll(
-                    state.pendingBackgroundStopAll,
-                    frame.snapshot.backgroundItems,
-                  ),
-            // A session stop whose in-flight frame died with the connection
-            // (either phase) was just swept - drop it so Stop all re-enables.
-            // One whose frame was already accepted survives; the dispatch
-            // call after this set advances or clears it against the
-            // snapshot's turn and item state.
-            pendingBackgroundSessionStop:
-              state.pendingBackgroundSessionStop !== null &&
-              sweep.sweptActionIds.has(
-                state.pendingBackgroundSessionStop.clientActionId,
-              )
-                ? null
-                : state.pendingBackgroundSessionStop,
-            pendingActions,
-            acceptedActions,
-            pendingUserMessages: settled.pendingUserMessages,
-            failedSendRestoration: settled.failedSendRestoration,
-            // Statements both reconcile passes owe the user: a send whose
-            // restoration lost the single-slot race on reconnect, and a
-            // stranded send the settled pass dropped without the slot.
-            // Appended through the same ring/cap as the rejection path's
-            // notice.
-            errorNotices: appendErrorNoticeDelta(
-              state.errorNotices,
-              [
-                ...pending.appendedErrorNotices,
-                ...settled.appendedErrorNotices,
-              ],
-              state.deliveredNoticeActionIds,
-            ),
-            restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
-            snapshotLoaded: true,
-            // Stamped with the CONNECTION, not a per-snapshot counter: a
-            // reconnect's backfill re-baselines transcript consumers, while a
-            // steady-state refresh on this same connection does not.
-            transcriptBaselineEpoch: connectionEpoch,
-            worktreeBinding: frame.snapshot.worktreeBinding,
-            missingWorktreePaths: frame.snapshot.missingWorktreePaths,
-            liveAssistantMessage: liveAssistantForTurnStateFrame({
-              current: state.liveAssistantMessage,
-              previousTurnId,
-              activeTurn: frame.snapshot.activeTurn,
-              messages,
-            }),
-            // Snapshot is authoritative - the assistant message's
-            // persisted `usage` field now carries any final state. Clear
-            // the transient liveTurnUsage so a stale value from a
-            // disconnected/abandoned turn can't survive a reconnect or
-            // route swap. The chip falls back to messages[last].usage
-            // (which the new snapshot just refreshed) until the next
-            // live `usage.updated` arrives.
-            liveTurnUsage: null,
-          };
-        });
-        // A prompt handed back to the composer takes its staged worktree with
-        // it, or the resubmit silently runs against the chat's previous
-        // binding.
-        //
-        // PRECEDENCE, because the slot holds one pick and a reconnect can kill
-        // several actions that each want theirs back. The prompt in the
-        // composer wins: a prompt and the worktree it was written for have to
-        // travel together, and staging an unrelated action's binding beside it
-        // is worse than staging none - the resend looks right and runs
-        // somewhere else. A swept edit only gets its binding back when no
-        // prompt is being handed back, which is the case the sweep's own
-        // reasoning was written for (an edit dropped before its ack never runs
-        // the rejection path, so nothing else would restore it).
-        const handedBackForSnapshot = restoreOneWorktreeIntent(
-          restoredWorktreeIntentForSnapshot,
-          sweptWorktreeIntents,
-          {
-            surface: "owner",
-            hostId: options.hostId,
-            epicId: options.epicId,
-            ownerKind: "chat",
-            ownerId: options.chatId,
           },
-          // Read AFTER the reconcile `set`, so this is who holds the slot now -
-          // this pass's own restored prompt, or an earlier pass's still waiting
-          // to be consumed.
-          get().failedSendRestoration,
         );
-        recordStagedRevisionFor(
-          restoredWorktreeIntentForSnapshot,
-          handedBackForSnapshot,
+        restoredWorktreeIntentForSnapshot =
+          settled.restoredWorktreeIntent ?? pending.restoredWorktreeIntent;
+        const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
+          pending.pendingActions,
+          messages,
+          state.liveAssistantMessage,
+          null,
         );
-        // A deferred session stop that survived the sweep (its turn stop was
-        // accepted before the connection dropped) may never see another
-        // turn-state frame - the turn could have settled while offline - so
-        // advance it against the snapshot state directly.
-        maybeDispatchPendingBackgroundSessionStop(set, get);
-        // This snapshot is authoritative for which interviews are still
-        // pending, so any stored draft whose block has left the set is an
-        // orphan (its interview resolved, possibly while this window was
-        // offline). Prune those keys; currently-pending drafts survive. Runs on
-        // every snapshot, so cold start and reconnect both reap orphans.
-        useInterviewDraftStore
-          .getState()
-          .pruneChatDrafts(
-            options.chatId,
-            new Set(
-              frame.snapshot.pendingInterviews.map(
-                (interview) => interview.blockId,
+        const acceptedActions = withoutSupersededInterviewDeliveryRetryActions(
+          pruneAcceptedActions(
+            {
+              ...withoutSettledAcceptedActions(
+                state.acceptedActions,
+                // BOTH passes retire records: the snapshot pass for sends it
+                // settled itself, the settled pass for rows it recovered.
+                new Set([
+                  ...pending.settledAcceptedActionIds,
+                  ...settled.settledAcceptedActionIds,
+                ]),
               ),
+              // Confirmation stamps first, then this pass's own additions -
+              // an id cannot be in both, but ordering the merge makes that
+              // independent of whether it ever could be.
+              ...pending.confirmedAcceptedActions,
+              ...pending.acceptedActions,
+            },
+            now,
+          ),
+          messages,
+          state.liveAssistantMessage,
+          connectionEpoch,
+        );
+        return {
+          // Destructured rather than spread-and-overwritten: the point is
+          // that neither array is RETAINED, and `{...chat, messages: []}`
+          // would still hold `events` (and any transcript-bearing field a
+          // later minor adds). See `ChatSessionRecord`.
+          chat: chatRecordWithoutTranscript(frame.snapshot.chat),
+          currentComposerSettings: nextComposerSettings,
+          access: frame.snapshot.access,
+          messages,
+          events: frame.snapshot.chat.events,
+          queue: mergeQueueWithOptimisticQueuedItems(
+            frame.snapshot.queue,
+            queueWithoutSettledAcceptedSends(
+              state.queue,
+              pending.settledAcceptedActionIds,
             ),
+            new Set(Object.keys(pending.pendingActions)),
+          ),
+          runStatus: frame.snapshot.runStatus,
+          activeTurn: frame.snapshot.activeTurn,
+          turnInProgress: frame.snapshot.turnInProgress,
+          pendingApprovals: frame.snapshot.pendingApprovals,
+          pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
+          pendingInterviews: frame.snapshot.pendingInterviews,
+          accumulatedFileChanges: frame.snapshot.accumulatedFileChanges,
+          backgroundItems: frame.snapshot.backgroundItems,
+          managedCommands: frame.snapshot.managedCommands,
+          heldUpdates: frame.snapshot.heldUpdates,
+          // Drop per-item stops whose task has left the running-only list
+          // (its terminal landed) and clear the stop-all flag once nothing
+          // is left running, so settled rows never stay disabled. A stop
+          // whose FRAME died with a dropped connection never terminates its
+          // task, so also drop entries whose generic pending was just swept
+          // (same clientActionId) - an ack-ACCEPTED stop has no generic
+          // pending left and correctly stays disabled until its terminal.
+          pendingBackgroundStops: reconcileBackgroundStops(
+            withoutBackgroundStopsForActions(
+              state.pendingBackgroundStops,
+              sweep.sweptActionIds,
+            ),
+            frame.snapshot.backgroundItems,
+          ),
+          pendingBackgroundStopAll:
+            state.pendingBackgroundStopAll !== null &&
+            sweep.sweptActionIds.has(
+              state.pendingBackgroundStopAll.clientActionId,
+            )
+              ? null
+              : reconcileBackgroundStopAll(
+                  state.pendingBackgroundStopAll,
+                  frame.snapshot.backgroundItems,
+                ),
+          // A session stop whose in-flight frame died with the connection
+          // (either phase) was just swept - drop it so Stop all re-enables.
+          // One whose frame was already accepted survives; the dispatch
+          // call after this set advances or clears it against the
+          // snapshot's turn and item state.
+          pendingBackgroundSessionStop:
+            state.pendingBackgroundSessionStop !== null &&
+            sweep.sweptActionIds.has(
+              state.pendingBackgroundSessionStop.clientActionId,
+            )
+              ? null
+              : state.pendingBackgroundSessionStop,
+          pendingActions,
+          acceptedActions,
+          pendingUserMessages: settled.pendingUserMessages,
+          failedSendRestoration: settled.failedSendRestoration,
+          // Statements both reconcile passes owe the user: a send whose
+          // restoration lost the single-slot race on reconnect, and a
+          // stranded send the settled pass dropped without the slot.
+          // Appended through the same ring/cap as the rejection path's
+          // notice.
+          errorNotices: appendErrorNoticeDelta(
+            state.errorNotices,
+            [...pending.appendedErrorNotices, ...settled.appendedErrorNotices],
+            state.deliveredNoticeActionIds,
+          ),
+          restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
+          snapshotLoaded: true,
+          // Stamped with the CONNECTION, not a per-snapshot counter: a
+          // reconnect's backfill re-baselines transcript consumers, while a
+          // steady-state refresh on this same connection does not.
+          transcriptBaselineEpoch: connectionEpoch,
+          worktreeBinding: frame.snapshot.worktreeBinding,
+          missingWorktreePaths: frame.snapshot.missingWorktreePaths,
+          liveAssistantMessage: liveAssistantForTurnStateFrame({
+            current: state.liveAssistantMessage,
+            previousTurnId,
+            activeTurn: frame.snapshot.activeTurn,
+            messages,
+          }),
+          // Snapshot is authoritative - the assistant message's
+          // persisted `usage` field now carries any final state. Clear
+          // the transient liveTurnUsage so a stale value from a
+          // disconnected/abandoned turn can't survive a reconnect or
+          // route swap. The chip falls back to messages[last].usage
+          // (which the new snapshot just refreshed) until the next
+          // live `usage.updated` arrives.
+          liveTurnUsage: null,
+          // Last, on purpose: the caller's atomically-co-published state (see
+          // the function doc) wins over anything the fold computed.
+          ...extra,
+        };
+      });
+      // A prompt handed back to the composer takes its staged worktree with
+      // it, or the resubmit silently runs against the chat's previous
+      // binding.
+      //
+      // PRECEDENCE, because the slot holds one pick and a reconnect can kill
+      // several actions that each want theirs back. The prompt in the
+      // composer wins: a prompt and the worktree it was written for have to
+      // travel together, and staging an unrelated action's binding beside it
+      // is worse than staging none - the resend looks right and runs
+      // somewhere else. A swept edit only gets its binding back when no
+      // prompt is being handed back, which is the case the sweep's own
+      // reasoning was written for (an edit dropped before its ack never runs
+      // the rejection path, so nothing else would restore it).
+      const handedBackForSnapshot = restoreOneWorktreeIntent(
+        restoredWorktreeIntentForSnapshot,
+        sweptWorktreeIntents,
+        {
+          surface: "owner",
+          hostId: options.hostId,
+          epicId: options.epicId,
+          ownerKind: "chat",
+          ownerId: options.chatId,
+        },
+        // Read AFTER the reconcile `set`, so this is who holds the slot now -
+        // this pass's own restored prompt, or an earlier pass's still waiting
+        // to be consumed.
+        get().failedSendRestoration,
+      );
+      recordStagedRevisionFor(
+        restoredWorktreeIntentForSnapshot,
+        handedBackForSnapshot,
+      );
+      // A deferred session stop that survived the sweep (its turn stop was
+      // accepted before the connection dropped) may never see another
+      // turn-state frame - the turn could have settled while offline - so
+      // advance it against the snapshot state directly.
+      maybeDispatchPendingBackgroundSessionStop(set, get);
+      // This snapshot is authoritative for which interviews are still
+      // pending, so any stored draft whose block has left the set is an
+      // orphan (its interview resolved, possibly while this window was
+      // offline). Prune those keys; currently-pending drafts survive. Runs on
+      // every snapshot, so cold start and reconnect both reap orphans.
+      useInterviewDraftStore
+        .getState()
+        .pruneChatDrafts(
+          options.chatId,
+          new Set(
+            frame.snapshot.pendingInterviews.map(
+              (interview) => interview.blockId,
+            ),
+          ),
+        );
+    };
+
+    // ─── The windowed line (`chat.subscribe@1.8`) ───────────────────────────
+
+    /**
+     * A windowed snapshot whose TAIL had no bodies, held until it does.
+     *
+     * The wait-for-tail rule lives here. The fold above answers "did the
+     * transcript record this message?" by looking in the records it was
+     * handed, and on this line absence means "not hydrated" rather than "never
+     * landed" - so running it against an empty window restores an already-sent
+     * message into the composer and the user sends it twice.
+     *
+     * A pending send is recent by construction, so if it landed it is at the
+     * tail. That makes the tail's presence exactly the condition under which
+     * the fold's question is answerable, and holding the WHOLE snapshot until
+     * then is the simple correct move: the alternative - applying aux state now
+     * and reconciling later - splits one authoritative frame into two
+     * half-applications for a case that only arises when a chat's last row is
+     * over the host's 256 KB tail budget. Rare enough to pay a round trip for;
+     * not rare enough to get wrong.
+     */
+    let deferredWindowedSnapshot: ChatWindowedSnapshotFrame | null = null;
+
+    /**
+     * The held snapshot's AUX state, advanced by every frame that arrives while
+     * it waits.
+     *
+     * A deferred snapshot is authoritative about the transcript it was sent
+     * with, and about nothing that happened afterwards - but the frames that
+     * carry "afterwards" are applied immediately, because only the transcript
+     * half of the fold is what the tail gates. A range answer can ride the BULK
+     * lane and land well after a `queueChanged`, a `turnStateChanged` or an
+     * `approvalRequested`, so replaying the frame's own aux at that point
+     * reinstates values those frames had already replaced - and it does so
+     * PERMANENTLY, because nothing re-sends them. An approval can vanish from
+     * the panel while the agent stays blocked waiting for it.
+     *
+     * So the snapshot's aux is kept live rather than frozen: this starts as the
+     * frame's own copy and each later frame applies the SAME update to it that
+     * it applies to the store. Two baselines, one rule per site - never two
+     * copies of the rule. The result is the union the frames would have
+     * produced had they arrived in order, which neither "frame wins" nor "store
+     * wins" can express: the snapshot may add an approval the store has never
+     * seen while a later frame adds another the snapshot predates.
+     *
+     * `null` whenever nothing is deferred, which is the ordinary state - every
+     * advance below is then a no-op.
+     */
+    let deferredWindowedSnapshotAux: DeferredWindowedSnapshotAux | null = null;
+
+    const advanceDeferredSnapshotAux = (
+      update: (
+        aux: DeferredWindowedSnapshotAux,
+      ) => Partial<DeferredWindowedSnapshotAux>,
+    ): void => {
+      if (deferredWindowedSnapshotAux === null) return;
+      deferredWindowedSnapshotAux = {
+        ...deferredWindowedSnapshotAux,
+        ...update(deferredWindowedSnapshotAux),
+      };
+    };
+
+    const forgetDeferredWindowedSnapshot = (): void => {
+      deferredWindowedSnapshot = null;
+      deferredWindowedSnapshotAux = null;
+    };
+
+    /**
+     * Whether this session negotiated the windowed line.
+     *
+     * Set by the first windowed snapshot rather than read from the transport,
+     * because it is the SHAPE of what arrived that the appliers below have to
+     * branch on, and that shape is what the frame proves. The negotiated minor
+     * is fixed for a CONNECTION, not for this closure: `retry()` builds a new
+     * stream client inside the same store, and the new connection negotiates
+     * its own minor - a host rolled back below `1.8` between the two answers
+     * with a LEGACY snapshot. `onSnapshot` therefore resets this flag and
+     * drops the windowed state outright, because a skeleton and spans built
+     * under the old line describe a coordinate space no current peer serves,
+     * and merging a whole legacy transcript against them would omit and
+     * duplicate rows.
+     */
+    let windowedLine = false;
+
+    /**
+     * The witnessed image-resolution write stream - the directional evidence
+     * the settled arm's image tiebreak compares (see
+     * {@link ImageWitnessStore}). Lives and dies with the WINDOW, never the
+     * connection: replaced on a windowed-to-legacy downgrade, where its
+     * ordinals' whole coordinate space becomes unaddressable, and otherwise
+     * carried across reconnects exactly as the window's spans are.
+     */
+    let imageWitnesses = createImageWitnessStore();
+
+    /**
+     * The ordinal range the transcript viewport is showing, as last reported
+     * by {@link ChatSessionState.reportVisibleTranscriptRange}. Fed into every
+     * hydration plan so scrolling into unhydrated history fetches what the
+     * reader is looking at. Survives a reconnect (it describes the viewport,
+     * not the connection), and the timeline re-reports on its next
+     * viewability pass anyway.
+     */
+    let visibleTranscriptRange: OrdinalRange | null = null;
+
+    /**
+     * What a request that has been SENT and not yet answered still promises.
+     *
+     * Kept per request id rather than on the dedup slot below, because the two
+     * answer different questions and their lifetimes are not the same. The
+     * slot asks "is there an outstanding ask for this range, so I should not
+     * re-send it"; this ledger asks "is the answer that just arrived still
+     * describing rows this client can trust". Releasing the first must not
+     * forget the second: a request the timeout gave up waiting for is one
+     * whose answer is LATE, and late is not the same as wrong.
+     *
+     * That distinction is the whole fix for a loop this store shipped once. A
+     * range response is deliberately unbounded for a single folded row (see
+     * `read-range.ts`) and rides the relay's BULK lane, so exceeding any
+     * client-side deadline is an ordinary slow answer, not evidence of a drop.
+     * With one slot holding both roles, the timeout's re-issue replaced the id
+     * the original answer would be matched against, so that answer was
+     * discarded on arrival and its replacement re-armed the same deadline -
+     * every answer thrown away, every discard minting one more request.
+     *
+     * `superseded` is the other half of the hazard, and it is why an answer
+     * cannot simply be trusted because it parses. An oversized `range`
+     * response is the one frame on this line the relay may reclassify to BULK,
+     * where it can be reordered behind INTERACTIVE deltas - so an
+     * `indexChanged` naming a row that response is carrying can arrive FIRST.
+     * An `updated` deliberately keeps both the epoch and the row id (see
+     * `diffRowSkeleton`: a row id that moved is a `reindexed` instead), so
+     * NEITHER check inside {@link applyRangeResponse} can see the staleness.
+     * The pre-update body seats, passes every check, and nothing re-requests
+     * it - a row frozen at a previous revision for the life of the epoch.
+     */
+    // The ledger those questions now live on - range obligations, resnapshot
+    // dedup, skeleton-completion, and the summary-assembly trust state, one
+    // record per fact. See the module doc for the entry state machine.
+    const recovery = createRecoveryLedger();
+
+    /**
+     * The summary re-stream this client is currently assembling.
+     *
+     * `-1` rather than 0 so the FIRST generation the host sends (1) is already
+     * a change - a client starting at 0 would match generation 0 and accept a
+     * mid-stream chunk before ever seeing an index-0 one.
+     *
+     * Compared for INEQUALITY, never for ordering. The counter is the host's
+     * PER-SUBSCRIBER one, so a reconnect mints a fresh subscriber that starts
+     * over at 1 - lower than whatever this client accumulated on the previous
+     * connection. What matters is only "is this the stream I am assembling",
+     * and a `>` test here would reject every chunk after a reconnect and leave
+     * the panel permanently empty.
+     *
+     * Which is also why inequality ALONE is not enough, and this is reset at
+     * the rebuild boundary in `onWindowedSnapshot`. Restarting at 1 does not
+     * merely produce a lower number - it produces a COLLIDING one whenever the
+     * held value is also 1, and one rebuild per subscriber is the modal case.
+     * A colliding generation reads as "the stream I am assembling", so a chunk
+     * from the new stream whose index-0 predecessor was dropped splices into
+     * the RETAINED previous-generation array instead of asking for a re-stream.
+     * The reset makes the new stream's first chunk a change again.
+     *
+     * Reset at `indexRevision === null` specifically - the documented "the host
+     * holds no index for this subscriber and is rebuilding one" signal, which
+     * is the same condition under which the host emits these chunks at all. An
+     * aux-only snapshot must NOT reset it: no chunks accompany one, so the next
+     * chunk of the stream still in flight would read as foreign and buy a
+     * re-stream, over and over for as long as aux traffic keeps arriving.
+     */
+    let accumulatedSummaryGeneration = -1;
+    /**
+     * The replacement summary generation being assembled, unpublished.
+     *
+     * `null` when no chunk of the current generation has arrived yet. Kept
+     * out of the store so the panel renders the previous COMPLETE set while
+     * a replacement streams in - publishing partial assemblies is the
+     * "2 files changed" flash mid-restream.
+     *
+     * Its EXISTENCE is public even though its contents are not, as
+     * `accumulatedSummaryAssemblyStarted` - the two move together at every one
+     * of the three sites that assign this. Keeping the fact of an in-flight
+     * generation private made the trust gate outside this store unable to see
+     * it, and `accumulatedSummarySetComplete` then read an assembling
+     * generation whose count had been rewound to zero as a finished one.
+     */
+    let assemblingSummaries:
+      | readonly ChatAccumulatedFileChangeSummary[]
+      | null = null;
+
+    /**
+     * The range request currently in flight, so a stream of identical
+     * viewport reports does not re-send the same ask while the host is
+     * answering it. Cleared when a range response arrives (whatever it held -
+     * a partial answer changes the next plan anyway), cleared on a windowed
+     * snapshot that RESET this client's connection or its coordinate space (a
+     * reconnect's request died with its connection, and the transcript epoch
+     * can survive one - without the clear, an identical re-plan would be
+     * suppressed forever), and superseded by any differently-planned request.
+     *
+     * On a snapshot that did NEITHER - an aux-only rebroadcast - it is
+     * deliberately kept. The request it names is still being answered, so
+     * releasing the key would let the same range be asked again per aux frame;
+     * see the clear site in `onWindowedSnapshot` for why that also destroys the
+     * answer it was waiting for.
+     *
+     * Holds no staleness state of its own: that lives on the recovery
+     * ledger's range entries, keyed by the id this names.
+     */
+    let inFlightHydrationRequest: {
+      readonly requestId: string;
+      readonly epoch: number;
+      readonly range: OrdinalRange;
+    } | null = null;
+
+    let resnapshotRequestTimer: number | null = null;
+
+    const clearResnapshotRequestTimer = (): void => {
+      if (resnapshotRequestTimer === null) return;
+      window.clearTimeout(resnapshotRequestTimer);
+      resnapshotRequestTimer = null;
+    };
+
+    /**
+     * Ask for a `resnapshot`, at most one per epoch - and not forever.
+     *
+     * The dedup lives on the ledger's `resnapshot` entry, and it would wedge
+     * for exactly the reason an unanswered range request does (see
+     * {@link clearInFlightHydration}): a request or its answer dropped on a
+     * stream that stays OPEN clears nothing, and only authority movement
+     * closes the entry - which is the very thing that is not coming. The
+     * consequence is worse here than for a range, because an invalidated
+     * window is the WHOLE transcript rather than one visible gap: every
+     * ordinal belongs to a coordinate space this client has left, so nothing
+     * on screen can be repaired until a snapshot lands.
+     *
+     * Same bounded wait, and the retry has TWO shapes because this request
+     * serves two recoveries. Releasing the entry is enough for the invalidated
+     * index: the next windowed frame re-plans, sees the invalidation and asks
+     * again. It is not enough for a stalled summary stream, whose transcript is
+     * valid and often fully hydrated - the planner measures the transcript, so
+     * it looks at that state and asks for nothing. That one is re-armed on the
+     * completion watchdog instead, inside the timeout below.
+     *
+     * An aux-only snapshot deliberately closes NOTHING here: the pending
+     * answer is a rebuild that repairs everything this entry was opened for,
+     * and releasing per aux frame would re-send once per approval or queue
+     * change. Only the rebuild announcement, a rebase, or a voided index -
+     * the authority-boundary cases - replace the entry, plus the bounded wait
+     * below.
+     *
+     * A late answer to the abandoned request costs nothing either way - a
+     * resnapshot is idempotent, and the snapshot it produces closes the entry
+     * whichever request it answers.
+     */
+    const requestResnapshotOnceForEpoch = (epoch: number): void => {
+      const client = streamClient;
+      if (client === null) return;
+      if (!recovery.openResnapshot(epoch)) return;
+      clearResnapshotRequestTimer();
+      resnapshotRequestTimer = window.setTimeout(() => {
+        resnapshotRequestTimer = null;
+        if (disposed || !recovery.hasOpenResnapshot(epoch)) return;
+        recovery.releaseResnapshot(epoch);
+        requestPlannedHydration();
+        // `requestPlannedHydration` retries only what it can SEE, and it looks
+        // at the transcript: an invalidated window re-asks here, and a planned
+        // range covers a visible gap. Neither describes a summary-only stall -
+        // that transcript is valid and often fully hydrated, so the planner
+        // returns having asked for nothing, while the watchdog timer that
+        // started this recovery has already fired and cleared itself.
+        //
+        // Nothing else re-arms it. The watchdog is restarted by delivery
+        // progress or a snapshot, and the whole premise of this timeout is that
+        // neither arrived - so on an idle chat the summary set stays incomplete
+        // for the life of the connection while the retry budget still reads as
+        // unspent.
+        //
+        // Re-arming here is what makes that budget real. It cannot spin: the
+        // watchdog spends `MAX_WATCHDOG_RESTREAMS_PER_EPOCH` before it will ask
+        // again, and `readCompleteness` disarms it outright once the delivery
+        // is whole - so an answered resnapshot ends the loop on the next fire
+        // rather than starting another.
+        armStreamCompletionWatchdog({
+          readCompleteness: true,
+          restartDeadline: true,
+        });
+      }, HYDRATION_REQUEST_TIMEOUT_MS);
+      client.requestResnapshot();
+    };
+
+    /**
+     * Ask the host to start the accumulated-summary stream over.
+     *
+     * A `resnapshot`, because there is no narrower request: the summaries are
+     * emitted while the host rebuilds a subscriber's index, and a resnapshot
+     * is what puts it back into that state (it clears the host's per-subscriber
+     * record of which set this client holds, so the reconcile actually
+     * re-streams instead of short-circuiting on an identity match).
+     *
+     * Deduped on the same recovery-ledger resnapshot entry the invalidated
+     * index uses, and deliberately the SAME entry rather than a second one:
+     * one resnapshot repairs both, so two independent obligations would send
+     * two for a frame that stales both at once.
+     */
+    const requestSummaryRestream = (): void => {
+      requestResnapshotOnceForEpoch(get().transcriptWindow.epoch);
+    };
+
+    /**
+     * The ONE derivation of both summary trust flags, from the ledger's
+     * summary-assembly entry. The code note at the old assignment sites said
+     * the two move together at every site; deriving them from one entry is
+     * that note made structural - hand-setting either is how the trust gate
+     * outside this store reads an assembling generation as a finished one.
+     */
+    const summaryTrustState = (): {
+      readonly accumulatedSummaryGenerationSeated: boolean;
+      readonly accumulatedSummaryAssemblyStarted: boolean;
+    } => {
+      const trust = recovery.summaryTrust();
+      return {
+        accumulatedSummaryGenerationSeated: trust.seated,
+        accumulatedSummaryAssemblyStarted: trust.started,
+      };
+    };
+
+    let streamCompletionTimer: number | null = null;
+    let watchdogRestreamsForEpoch: { epoch: number; count: number } | null =
+      null;
+
+    const clearStreamCompletionWatchdog = (): void => {
+      if (streamCompletionTimer === null) return;
+      window.clearTimeout(streamCompletionTimer);
+      streamCompletionTimer = null;
+    };
+
+    /**
+     * Is a chunked delivery still missing part of what it promised?
+     *
+     * Read off the TOTALS the snapshot states, and deliberately not off
+     * whether a chunk was ever received. An earlier version gated both streams
+     * behind "this stream has delivered something", to stop a chat that was
+     * never going to stream from reading as stalled. That gate is unsound, and
+     * unsound in exactly the case the watchdog exists for: when a stream's
+     * whole content fits in ONE chunk and that sole chunk is dropped, the gate
+     * never closes, and a stall that loses everything is the one stall it
+     * cannot see. The same hole swallows the summaries whenever the skeleton
+     * arrives and the summary stream's first chunk does not.
+     *
+     * The premise behind it was wrong too. No chat rides the snapshot without a
+     * skeleton stream: `chunkRowSkeleton` states that an EMPTY skeleton yields
+     * one empty final chunk rather than zero, precisely so "this chat has no
+     * rows" is distinguishable from "chunks were lost", and the host streams it
+     * on every bootstrap (`reconcileWindowedIndex`'s `state.kind === "none"`).
+     * A receipt gate on the client threw that distinction away again.
+     *
+     * So the totals answer it directly:
+     *
+     * - The skeleton is owed until `skeletonComplete`, which only a chunk
+     *   carrying `isFinal` sets, and only once its coverage agrees.
+     * - The summaries are owed while a generation is mid-ASSEMBLY, or while
+     *   the published count DISAGREES with `accumulatedFileChangeCount` -
+     *   self-gating, because a chat with no accumulated changes promises
+     *   none, assembles nothing, and `0 !== 0` is false.
+     *
+     * The assembly half is not redundant with the count: the count is aux and
+     * can be rewound under a generation that is still arriving, and the array
+     * it would be measured against has not been published yet. See the guard
+     * itself.
+     *
+     * Still not the same predicate as `accumulatedSummarySetComplete`, which
+     * the UI's visibility and action gates share: that one asks whether the
+     * PUBLISHED set is trustworthy, this one whether a delivery is still owed.
+     * But they are not independent, and reading them as two clean questions
+     * was the mistake - a published set cannot be trusted while its
+     * replacement is mid-flight, so "a delivery is owed" is an INPUT to
+     * trustworthiness. Both now open on the same clause over the same public
+     * state; what stays private is the assembly's CONTENTS, which is all the
+     * panel needed kept back to keep rendering the previous complete set.
+     *
+     * Any mismatch, not just a short prefix. A revert LOWERS the count, and
+     * the snapshot path deliberately retains the previous summary array until
+     * a replacement chunk starting at index 0 arrives - so if that first
+     * replacement chunk is dropped, the retained array is LONGER than the
+     * count it is being measured against. A `<` reads that as complete,
+     * disarms the watchdog, and leaves reverted paths and stale digests in
+     * the panel for the rest of the connection. Overshoot is exactly as much
+     * evidence of a broken stream as shortfall.
+     *
+     * Neither can indict a healthy chat, because the only state that reads as
+     * incomplete is one where a resnapshot genuinely repairs something:
+     * `handleResnapshot` resets the subscriber's index to `none` and its
+     * summary belief to `null`, so the answer to it is always a full skeleton
+     * and a full summary re-stream.
+     */
+    const chunkedDeliveryIncomplete = (): boolean => {
+      const state = get();
+      if (!state.transcriptWindow.skeletonComplete) return true;
+      // A rebuild is in flight and its replacement stream has not landed. The
+      // length check below cannot answer this: the retained array is the
+      // previous generation's, and when the counts coincide it reads as a
+      // finished delivery over stale digests - so the watchdog would disarm on
+      // the one state it exists to notice.
+      //
+      // An unvouched-for ASSEMBLY proves that independently of the count, and
+      // has to, because the count is aux and last-write-wins: a delayed
+      // same-epoch snapshot can rewind it to zero mid-generation, and against
+      // a published array that is still empty a count test then reads
+      // `0 !== 0` as a finished delivery and disarms the watchdog on a
+      // generation that never published.
+      //
+      // Read from STATE rather than from `assemblingSummaries` directly, and
+      // the same clause is now the first thing
+      // {@link accumulatedSummarySetComplete} asks. That predicate answers a
+      // different question - whether the PUBLISHED set can be trusted, not
+      // whether a delivery is owed - but the answers are not independent: a
+      // set cannot be trusted while its replacement is in flight. Leaving the
+      // in-flight fact private here is what let that predicate call an
+      // assembling zero-count generation complete.
+      if (
+        !state.accumulatedSummaryGenerationSeated &&
+        (state.accumulatedSummaryAssemblyStarted ||
+          state.accumulatedFileChangeCount > 0)
+      ) {
+        return true;
+      }
+      return (
+        state.accumulatedFileChangeSummaries.length !==
+        state.accumulatedFileChangeCount
+      );
+    };
+
+    /**
+     * Notice a chunked delivery that STOPPED rather than finished.
+     *
+     * Both of these streams close their loop only when the final chunk
+     * arrives - `applySkeletonChunk` reads completeness off `chunk.isFinal`,
+     * and the summaries' gap check only runs when a LATER chunk exposes the
+     * hole. Losing exactly the last frame is therefore silent: the skeleton
+     * suffix keeps no metadata and `userRowPresence` answers `"unknown"`
+     * forever, the file rows stay missing with `Review all` held back by a
+     * nonzero undelivered count, and neither repairs before a reconnect. The
+     * window's own doc already says what that state is worth: "`skeletonComplete`
+     * merely goes false, which requests no repair."
+     *
+     * An IDLE timeout, re-armed by every chunk, rather than one deadline for
+     * the whole stream. The failure being detected is a STALL, so a stream
+     * that is merely slow but still arriving must not be restarted - it would
+     * be torn down and re-sent precisely when the link is least able to afford
+     * it. Re-arming makes the question "has anything arrived lately", which is
+     * the question that actually distinguishes the two.
+     *
+     * Bounded by {@link MAX_WATCHDOG_RESTREAMS_PER_EPOCH}. A resnapshot
+     * restarts the very stream whose stall triggered it, so an unbounded
+     * version is a self-sustaining loop against a link that keeps dropping the
+     * last frame - the same shape as the range-request loop this store already
+     * shipped once. Past the cap it stops asking and leaves the partial state,
+     * which is no worse than the behaviour this replaces.
+     */
+    const armStreamCompletionWatchdog = (input: {
+      /**
+       * Whether to read completeness before arming.
+       *
+       * `false` for a caller whose state has not landed yet - a snapshot can be
+       * DEFERRED, so reading completeness here would read the window the
+       * snapshot is about to replace. Arming costs one idle timer; the
+       * fire-time check below is the authoritative one either way, and a missed
+       * arm is the failure that matters.
+       */
+      readonly readCompleteness: boolean;
+      /**
+       * Whether this caller is DELIVERY PROGRESS, and so entitled to restart
+       * the idle clock.
+       *
+       * The watchdog measures "has anything arrived lately", so only something
+       * that actually carries stream content may reset it. A chunk qualifies. A
+       * REBUILD snapshot qualifies - a fresh stream is starting behind it. An
+       * aux-only snapshot does not: it carries no chunk, and an active chat
+       * re-broadcasts one on every queue change and approval. Letting those
+       * restart the deadline postpones the stall detector for as long as the
+       * chat stays busy, which is exactly when a dropped chunk is most likely
+       * and least affordable - the transcript keeps its missing rows for the
+       * rest of the connection and nothing ever asks again.
+       */
+      readonly restartDeadline: boolean;
+    }): void => {
+      // Teardown first, and it always CLEARS - the guard below must never be
+      // able to leave a timer running on a disposed store.
+      if (disposed || !windowedLine) {
+        clearStreamCompletionWatchdog();
+        return;
+      }
+      // A non-progress arm with a deadline already running is a no-op: the
+      // timer in flight is the one measuring this stall, and replacing it with
+      // an identical one that starts now is the postponement itself.
+      if (!input.restartDeadline && streamCompletionTimer !== null) return;
+      clearStreamCompletionWatchdog();
+      if (input.readCompleteness && !chunkedDeliveryIncomplete()) {
+        // Completed: the next stall starts from a clean budget.
+        watchdogRestreamsForEpoch = null;
+        return;
+      }
+      const epoch = get().transcriptWindow.epoch;
+      streamCompletionTimer = window.setTimeout(() => {
+        streamCompletionTimer = null;
+        if (disposed || !windowedLine) return;
+        // A stream belonging to a coordinate space this client has left says
+        // nothing about the one it is in now.
+        if (get().transcriptWindow.epoch !== epoch) return;
+        if (!chunkedDeliveryIncomplete()) return;
+        const spent =
+          watchdogRestreamsForEpoch?.epoch === epoch
+            ? watchdogRestreamsForEpoch.count
+            : 0;
+        if (spent >= MAX_WATCHDOG_RESTREAMS_PER_EPOCH) {
+          // Past the budget it stops asking and leaves the partial state -
+          // and the ledger says so: the epoch's open recovery entries move to
+          // the ABANDONED terminal, rendered-but-degraded via the existing
+          // surfaces rather than silently reading as still-in-flight. The
+          // planner keeps running over whatever the partial skeleton
+          // delivered; abandonment is about streams nothing will re-ask for.
+          recovery.abandonEpochRecovery(epoch);
+          return;
+        }
+        watchdogRestreamsForEpoch = { epoch, count: spent + 1 };
+        requestResnapshotOnceForEpoch(epoch);
+      }, STREAM_COMPLETION_TIMEOUT_MS);
+    };
+
+    let hydrationRequestTimer: number | null = null;
+
+    /**
+     * Release the slot an unanswered range request is holding.
+     *
+     * The slot is the dedup key: while it holds a request for a range, every
+     * later plan for that same range is suppressed as already-asked. That is
+     * right for a request that is going to be answered, and a wedge for one
+     * that is not - a `loadRange` or its response dropped on a stream that
+     * stays OPEN clears nothing, and the visible gap then stays placeholders
+     * for as long as the viewport does not move. Nothing else recovers it:
+     * `applyVisibleTranscriptRange` returns early on an unchanged report, and
+     * the other two clear sites are a snapshot and a downgrade, both of which
+     * need a reconnect.
+     *
+     * So the wait is bounded ({@link HYDRATION_REQUEST_TIMEOUT_MS}) and the
+     * plan is simply re-issued.
+     *
+     * Releasing the slot says nothing about the request's ANSWER: its
+     * recovery-ledger entry survives, so an answer that merely took longer
+     * than the deadline still seats. The states in which the ordinals no
+     * longer name anything usable - an authority boundary, a downgrade - are
+     * the ledger's own transitions (`authorityBoundary`, `dropAll`), taken
+     * beside this release, never instead of it.
+     *
+     * The converse is not a free action, which is the trap this pairing hides.
+     * Releasing the slot while KEEPING the ledger looks like the conservative
+     * half of the choice and is the one that loses the answer: the re-plan it
+     * permits asks for the same range again, and the new request's ledger entry
+     * evicts an older one at the cap. Call this only for a request that is
+     * genuinely gone, never as a precaution.
+     */
+    const clearInFlightHydration = (): void => {
+      inFlightHydrationRequest = null;
+      if (hydrationRequestTimer === null) return;
+      window.clearTimeout(hydrationRequestTimer);
+      hydrationRequestTimer = null;
+    };
+
+    const requestPlannedHydration = (): void => {
+      const client = streamClient;
+      if (client === null) return;
+      const state = get();
+      // NOT named `window`: the timeout below is armed off the global one, and
+      // a local of that name would shadow it.
+      const transcriptWindow = state.transcriptWindow;
+      if (transcriptWindow.invalidated) {
+        // A void index cannot be repaired by a range: every ordinal it would
+        // name belongs to a coordinate space this client has left.
+        requestResnapshotOnceForEpoch(transcriptWindow.epoch);
+        return;
+      }
+      const next = planTranscriptHydration(
+        transcriptWindow,
+        visibleTranscriptRange,
+        requiredHydrationOrdinalsOf(state),
+      );
+      if (next === null) return;
+      const inFlight = inFlightHydrationRequest;
+      if (
+        inFlight !== null &&
+        inFlight.epoch === transcriptWindow.epoch &&
+        inFlight.range.fromOrdinal === next.fromOrdinal &&
+        inFlight.range.toOrdinal === next.toOrdinal
+      ) {
+        return;
+      }
+      const requestId = uuidv4();
+      // Clears the previous request's timeout as well as its slot: replanning
+      // over an outstanding request abandons it, and its deadline with it. Its
+      // ledger entry deliberately stays - a differently-planned request does
+      // not make the earlier answer wrong, only unawaited.
+      clearInFlightHydration();
+      inFlightHydrationRequest = {
+        requestId,
+        epoch: transcriptWindow.epoch,
+        range: next,
+      };
+      const { capEvicted } = recovery.openRange({
+        requestId,
+        epoch: transcriptWindow.epoch,
+        range: next,
+      });
+      hydrationRequestTimer = window.setTimeout(() => {
+        hydrationRequestTimer = null;
+        // Only the request this timeout was armed for. Anything else already
+        // replaced the slot - and took the deadline with it.
+        if (disposed || inFlightHydrationRequest?.requestId !== requestId) {
+          return;
+        }
+        // Releases the dedup slot so the plan can be re-asked. `requestId`
+        // keeps its ledger entry: this is a request that has waited too long,
+        // not one whose answer has been ruled out.
+        inFlightHydrationRequest = null;
+        requestPlannedHydration();
+      }, HYDRATION_REQUEST_TIMEOUT_MS);
+      client.requestTranscriptRange({
+        requestId,
+        epoch: transcriptWindow.epoch,
+        fromOrdinal: next.fromOrdinal,
+        // The two bounds mean different things and the conversion is here.
+        // `OrdinalRange.toOrdinal` is EXCLUSIVE (see its declaration);
+        // `ChatLoadRangeRequest.toOrdinal` is inclusive at both ends, as is the
+        // `sliceTranscriptRange` that serves it. Forwarding it unchanged asked
+        // for one row more than the plan on every request - and at a gap
+        // boundary that extra row is the first row of the span already held,
+        // so it also pulled a body the client did not need across the wire.
+        //
+        // `planTranscriptHydration` never returns an empty range, so
+        // `toOrdinal - 1` cannot fall below `fromOrdinal`.
+        toOrdinal: next.toOrdinal - 1,
+        // The host clamps this to its own ceiling regardless, so asking for the
+        // full frame budget is asking for "as much as one frame holds" rather
+        // than a number this side has to keep in step.
+        maxBytes: TRANSCRIPT_RANGE_MAX_BYTES,
+      });
+      // The cap binding is a SUPERSEDE-AND-REPLAN, never silent trust: the
+      // evicted oldest entries are replaced by one NEW wider request covering
+      // their rows, whose own entry carries the obligation. A response to an
+      // evicted requestId is discarded exactly as any unrecorded response is,
+      // and only the wider request's own accepted answer closes its entry -
+      // no path lets one member's response discharge another's obligation.
+      // The ledger evicted enough to fit this one back under the cap.
+      if (capEvicted.length > 0) {
+        const evictedFrom = Math.min(
+          ...capEvicted.map((entry) => entry.range.fromOrdinal),
+        );
+        const evictedTo = Math.max(
+          ...capEvicted.map((entry) => entry.range.toOrdinal),
+        );
+        const widerRequestId = uuidv4();
+        recovery.openRange({
+          requestId: widerRequestId,
+          epoch: transcriptWindow.epoch,
+          range: { fromOrdinal: evictedFrom, toOrdinal: evictedTo },
+        });
+        client.requestTranscriptRange({
+          requestId: widerRequestId,
+          epoch: transcriptWindow.epoch,
+          fromOrdinal: evictedFrom,
+          toOrdinal: evictedTo - 1,
+          maxBytes: TRANSCRIPT_RANGE_MAX_BYTES,
+        });
+      }
+    };
+
+    /**
+     * Record that a delta invalidated bodies a range request is still waiting
+     * for.
+     *
+     * Reads the SAME predicates {@link applyIndexChange} folds with
+     * ({@link bodyInvalidatingOrdinals}, then {@link recordSharingOrdinals})
+     * rather than re-deriving "which ordinals does this frame stale" from
+     * `changes` here - a second copy of that rule would drift from the one that
+     * decides which spans to drop, and the two disagreeing is exactly the state
+     * this guards against.
+     *
+     * ## An ordinal is not the unit a response is stale in
+     *
+     * The ordinals a request ASKED for are not the rows its answer can carry a
+     * stale copy of. A range serves a row from its turn's shared records, so a
+     * response for slice 10 generated before an `updated` for sibling slice 12
+     * seats that turn's pre-update records - and an intersection on requested
+     * ordinals is empty, so the answer is accepted. Slice 10 is then covered,
+     * slice 12 need not be visible, and nothing refetches either.
+     *
+     * So the frame's ordinals are widened to the turn before they are matched
+     * against a range. The widening is deliberately conservative: superseding a
+     * request that would have been fine costs one discard and one refetch,
+     * while accepting one that was not costs a body no gap will ever re-ask
+     * for.
+     */
+    const supersedeInFlightHydration = (input: {
+      readonly epoch: number;
+      readonly changes: readonly ChatIndexChange[];
+    }): void => {
+      if (!recovery.hasOpenRanges()) return;
+      const bodyInvalidated = bodyInvalidatingOrdinals(input.changes);
+      // Against the window as the requests were framed against it - this runs
+      // before the fold, and an `updated` never renumbers a row, so the turn a
+      // widened ordinal belongs to is the same either side of it.
+      //
+      // The per-entry rules live on the ledger and are unchanged: EVERY open
+      // request is marked, not just the one holding the dedup slot; a
+      // `reindexed` - or a NEWER epoch, which is a reindexed this client
+      // learned about late - voids every entry's answer outright; a same-epoch
+      // `updated` accumulates its ordinals per intersecting entry (exclusive
+      // at the range top, matching the wire's inclusive-bound conversion).
+      const invalidated =
+        bodyInvalidated === "all"
+          ? bodyInvalidated
+          : recordSharingOrdinals(get().transcriptWindow, bodyInvalidated);
+      recovery.markRangesSuperseded({ epoch: input.epoch, invalidated });
+    };
+
+    /**
+     * Should this `range` response be thrown away rather than seated?
+     *
+     * Tested against what the response actually SERVED - a truncated answer
+     * that stopped before the invalidated ordinal is still current, and
+     * discarding it would cost a round trip for nothing.
+     *
+     * An untracked response is discarded rather than trusted. A record is
+     * absent only because a snapshot or a downgrade dropped it (see
+     * the ledger's `authorityBoundary`/`dropAll`) or the cap evicted it, and that is
+     * precisely the state in which nothing recorded what happened to these
+     * ordinals while the answer was in the air. Costing a re-request there is
+     * the cheap side of the trade; the expensive side is a body that renders
+     * as current forever.
+     *
+     * Matched against the response's OWN request rather than whichever one
+     * currently holds the dedup slot. A slow answer is late, not wrong: the
+     * question is what happened to the ordinals THIS request asked for, and
+     * the request that replaced it in the slot cannot answer that.
+     */
+    const rangeResponseIsStale = (response: ChatRangeResponse): boolean =>
+      recovery.rangeAnswerIsStale({
+        requestId: response.requestId,
+        fromOrdinal: response.fromOrdinal,
+        servedCount: response.rowIds.length,
+      });
+
+    /** {@link ChatSessionState.reportVisibleTranscriptRange}'s implementation;
+     *  hoisted beside the planner it drives rather than defined inline in the
+     *  state object two thousand lines below. */
+    const applyVisibleTranscriptRange = (range: OrdinalRange | null): void => {
+      const unchanged =
+        (range === null && visibleTranscriptRange === null) ||
+        (range !== null &&
+          visibleTranscriptRange !== null &&
+          range.fromOrdinal === visibleTranscriptRange.fromOrdinal &&
+          range.toOrdinal === visibleTranscriptRange.toOrdinal);
+      visibleTranscriptRange = range;
+      // Off the windowed line the value is recorded (the line can be
+      // negotiated by a later reconnect) but nothing here could mean anything
+      // yet.
+      if (unchanged || !windowedLine || disposed) return;
+      // Warm the LRU for what the reader is looking at BEFORE planning. An
+      // already-hydrated visible span plans no fetch, so this report is the
+      // only event that ever re-touches it - without it, returning to old
+      // scrollback leaves it "coldest" for the next eviction even while it is
+      // on screen.
+      //
+      // A `null` report reaches this too, and must: it warms nothing, but the
+      // window RETAINS the range to protect the carry the reader is on, and a
+      // retained one would go on exempting spans they have scrolled away from.
+      const window = get().transcriptWindow;
+      const touched = touchTranscriptRange(window, range);
+      if (touched !== window) set({ transcriptWindow: touched });
+      // What `null` does only CLEAR is the standing obligation - there is
+      // nothing to fetch for "no placed row visible".
+      if (range === null) return;
+      requestPlannedHydration();
+    };
+
+    /**
+     * Re-point `messages`/`events` at what the window now holds.
+     *
+     * The steady-state path for every windowed frame that changes hydration
+     * without being authoritative about anything else.
+     */
+    const publishWindowedTranscript = (
+      window: TranscriptWindow,
+      // How the rows got here, when that is something a consumer has to know.
+      // `null` for the ordinary frames, which say nothing beyond "this is what
+      // the window holds now"; a range response passes its counter bump so the
+      // rows and their provenance land in ONE `set`.
+      provenance: Pick<ChatSessionState, "transcriptHydrationSequence"> | null,
+    ): void => {
+      const records = hydratedRecords(window);
+      set({
+        transcriptWindow: window,
+        messages: records.messages,
+        events: records.events,
+        transcriptRowContext: records.rowContext,
+        ...(provenance ?? {}),
+      });
+    };
+
+    /**
+     * Route a record that arrived with no ordinal into the window.
+     *
+     * The append half of "state.messages is DERIVED on this line". An applier
+     * that appended to the published array instead would have its work erased
+     * by the very next windowed frame - a skeleton chunk, an index delta, a
+     * range - because that array is rebuilt from the window each time. The
+     * legacy line has the same shape and does not notice, because there the only
+     * rebuild is a snapshot, which carries the record anyway.
+     *
+     * {@link rewriteMessageInPlace} is the same rule for a record that already
+     * HAS an ordinal.
+     */
+    const takeLiveRecords = (input: {
+      readonly messages: readonly Message[];
+      readonly events: readonly ChatEvent[];
+    }): void => {
+      publishWindowedTranscript(
+        appendLiveRecords(get().transcriptWindow, input),
+        null,
+      );
+    };
+
+    /**
+     * Settle an interview, on whichever line this session is on.
+     *
+     * The shared path for `onInterviewAnswered` and `onInterviewErrored`, which
+     * differ only in the projection they build. Both used to write the
+     * lifecycle result to `state.messages` alone, and on the windowed line that
+     * array is DERIVED: the very next skeleton chunk, index delta, range or
+     * appended event rebuilds it from `transcriptWindow` and the interview
+     * block reverts to unresolved - with `pendingInterviews` already cleared,
+     * so nothing re-settles it and the row stays stuck showing a question the
+     * user has answered.
+     *
+     * A settlement that landed on the LIVE row needs no window write:
+     * `liveAssistantMessage` is not a window record and both lines hold it the
+     * same way.
+     */
+    const interviewLifecycleTranscript = (
+      state: ChatSessionState,
+      projection: InterviewLifecycleProjection,
+    ): {
+      readonly patch: Pick<
+        ChatSessionState,
+        "messages" | "liveAssistantMessage" | "transcriptWindow"
+      >;
+      readonly resolvedPendingOwner: boolean;
+      readonly matchedOwner: boolean;
+    } => {
+      const lifecycle = withInterviewLifecycleState(
+        state.messages,
+        state.liveAssistantMessage,
+        projection,
+      );
+      const rewrittenId = lifecycle.rewrittenMessageId;
+      const settled =
+        rewrittenId === null || !isWindowedTranscript(state)
+          ? undefined
+          : lifecycle.messages.find(
+              (message) => message.messageId === rewrittenId,
+            );
+      if (rewrittenId === null || settled === undefined) {
+        return {
+          patch: {
+            messages: lifecycle.messages,
+            liveAssistantMessage: lifecycle.liveAssistantMessage,
+            transcriptWindow: state.transcriptWindow,
+          },
+          resolvedPendingOwner: lifecycle.resolvedPendingOwner,
+          matchedOwner: lifecycle.matchedOwner,
+        };
+      }
+      const applied = updateWindowMessage(
+        state.transcriptWindow,
+        rewrittenId,
+        () => settled,
+        imageWitnesses,
+      );
+      return {
+        patch: {
+          // `held: false` means the row left the window between the fold above
+          // and here. Publishing the fold's array anyway would reintroduce a
+          // record the window no longer holds; the host's emit-after-persist
+          // invariant means the eventual re-hydration serves it settled.
+          messages: applied.held
+            ? hydratedRecords(applied.window).messages
+            : state.messages,
+          liveAssistantMessage: lifecycle.liveAssistantMessage,
+          transcriptWindow: applied.window,
+        },
+        resolvedPendingOwner: lifecycle.resolvedPendingOwner,
+        matchedOwner: lifecycle.matchedOwner,
+      };
+    };
+
+    /**
+     * The windowed snapshot as the shared fold expects it.
+     *
+     * The chat record regains its two transcript arrays - from the WINDOW, so
+     * they hold what is hydrated rather than what exists - and every other
+     * field maps across unchanged, because the two snapshot shapes differ in
+     * exactly the transcript and the accumulated changes.
+     *
+     * `accumulatedFileChanges` is deliberately empty. The windowed line carries
+     * SUMMARIES (a digest and counts, no before/after contents), which is a
+     * different type from what this field holds; they land in
+     * `accumulatedFileChangeSummaries` instead, and every surface that used to
+     * read this field now reads the row model derived from whichever of the two
+     * this line delivers.
+     */
+    const adaptWindowedSnapshot = (
+      frame: ChatWindowedSnapshotFrame,
+      window: TranscriptWindow,
+      // The frame's aux as of NOW rather than as of when it was sent - see
+      // {@link deferredWindowedSnapshotAux}. `null` for a snapshot applied on
+      // arrival, which is every snapshot whose tail was already in.
+      aux: DeferredWindowedSnapshotAux | null,
+    ): ChatSnapshotFrame => {
+      const records = hydratedRecords(window);
+      const current = aux ?? deferredWindowedSnapshotAuxOf(frame.snapshot);
+      return {
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: frame.epicId,
+        chatId: frame.chatId,
+        snapshot: {
+          chat: {
+            ...frame.snapshot.chat,
+            messages: [...records.messages],
+            events: [...records.events],
+          },
+          access: frame.snapshot.access,
+          queue: current.queue,
+          runStatus: current.runStatus,
+          activeTurn: current.activeTurn,
+          pendingApprovals: current.pendingApprovals,
+          pendingInterviews: current.pendingInterviews,
+          worktreeBinding: current.worktreeBinding,
+          missingWorktreePaths: current.missingWorktreePaths,
+          pendingFileEditApprovals: current.pendingFileEditApprovals,
+          accumulatedFileChanges: [],
+          backgroundItems: current.backgroundItems,
+          managedCommands: current.managedCommands,
+          heldUpdates: current.heldUpdates,
+          turnInProgress: current.turnInProgress,
+        },
+      };
+    };
+
+    /**
+     * Runs the shared fold if the tail is in, or holds the frame until it is.
+     * The one place the wait-for-tail rule is enforced.
+     *
+     * `aux` is the state that must land WITH the published transcript - the
+     * new window above all (see `applyAuthoritativeSnapshot`'s doc for why
+     * setting it in a separate earlier `set` mis-suppresses rows). When the
+     * fold runs, `aux` rides its atomic `set`; when the frame defers, `aux`
+     * rides a single `set` with the window's own hydrated records.
+     *
+     * Those records go out on the DEFERRAL path too, and that is the point.
+     * The deferral cases are a rebase (no spans) or a same-epoch snapshot whose
+     * retained spans already agree with the rendered models - so publishing is
+     * a no-op in the second and the whole fix in the first. A rebase moves the
+     * transcript into a new coordinate space and `applyWindowedSnapshot`
+     * returns an empty window for it; leaving `messages`/`events` alone there
+     * keeps the PREVIOUS epoch's rows on screen, where the row merge reads them
+     * as unplaced rows of the new space. If the tail that would replace them is
+     * slow or lost, the reader keeps seeing a transcript that no longer exists.
+     */
+    const applyOrDeferWindowedSnapshot = (
+      frame: ChatWindowedSnapshotFrame,
+      window: TranscriptWindow,
+      aux: Partial<ChatSessionState>,
+    ): void => {
+      if (!isTailHydrated(window)) {
+        const records = hydratedRecords(window);
+        set({
+          ...aux,
+          messages: records.messages,
+          events: records.events,
+          transcriptRowContext: records.rowContext,
+        });
+        // Re-entry with the frame already held keeps the supersessions
+        // collected since it arrived; a NEW snapshot replaces both, because its
+        // own aux is the newer authority for everything it carries.
+        if (frame !== deferredWindowedSnapshot) {
+          deferredWindowedSnapshot = frame;
+          deferredWindowedSnapshotAux = deferredWindowedSnapshotAuxOf(
+            frame.snapshot,
           );
+        }
+        return;
+      }
+      const superseded =
+        frame === deferredWindowedSnapshot ? deferredWindowedSnapshotAux : null;
+      forgetDeferredWindowedSnapshot();
+      // The adapted snapshot's records ARE `hydratedRecords(window)`, so its
+      // context has to ride the same apply. Left out, a snapshot would seat
+      // rows against whatever context the previous hydration published.
+      applyAuthoritativeSnapshot(
+        adaptWindowedSnapshot(frame, window, superseded),
+        {
+          ...aux,
+          transcriptRowContext: hydratedRowContext(window),
+        },
+        // The HOST's answer, not a scan of the adapted frame: those records are
+        // the hydrated subset, and a failure several user rows back is exactly
+        // the shape that falls outside the inline tail.
+        frame.snapshot.derived.latestAssistantAuthFailureTurnKey,
+      );
+    };
+
+    const callbacks: ChatStreamCallbacks = {
+      onSnapshot: (frame) => {
+        if (!windowedLine) {
+          // The legacy line's `messages` IS the transcript, so the scan is the
+          // whole-transcript answer here and needs no host help.
+          applyAuthoritativeSnapshot(
+            frame,
+            null,
+            latestAssistantAuthFailureTurnKey(frame.snapshot.chat.messages),
+          );
+          return;
+        }
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        // A LEGACY snapshot on a session that had negotiated `1.8`: the
+        // reconnect renegotiated onto an older line (a host rolled back below
+        // `1.8`, or a fallback route to an older peer). The windowed state is
+        // not stale-but-usable, it is unaddressable - no current peer serves
+        // the epoch its ordinals live in, so stale placeholders could never
+        // hydrate - and left in place it would make the appliers treat this
+        // WHOLE transcript as a hydrated subset and merge it against a dead
+        // skeleton. Drop all of it, atomically with the snapshot's own
+        // publish (`extra` below), and fall back to the legacy shape the
+        // discriminator now reports.
+        windowedLine = false;
+        clearInFlightHydration();
+        clearStreamCompletionWatchdog();
+        // Not merely unawaited: this line no longer HAS ordinals, so an answer
+        // still in the air describes a coordinate space nothing here can read.
+        // The whole ledger drops with the window - ranges, recovery entries
+        // and summary trust alike.
+        recovery.dropAll();
+        clearResnapshotRequestTimer();
+        forgetDeferredWindowedSnapshot();
+        // The buffer belongs to the windowed line too. Left behind, the flag
+        // below and it disagree at the one site whose own comment demands a
+        // blank slate for a later re-upgrade.
+        assemblingSummaries = null;
+        // The witness store's evidence orders copies within the windowed
+        // coordinate space this line is abandoning; a later re-upgrade starts
+        // a new lineage and must not inherit stamps from the old one.
+        imageWitnesses = createImageWitnessStore();
+        applyAuthoritativeSnapshot(
+          frame,
+          {
+            transcriptWindow: emptyTranscriptWindow(),
+            transcriptDerived: null,
+            // The rest of the windowed line's aux state, back to its initial
+            // values: nothing reads either once `transcriptDerived` is null,
+            // but a LATER re-upgrade must start from the same blank state a
+            // fresh store does.
+            accumulatedFileChangeCount: 0,
+            coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
+            jumpTargetOrdinal: null,
+            accumulatedFileChangeSummaries: [],
+            accumulatedSummaryGenerationSeated: false,
+            accumulatedSummaryAssemblyStarted: false,
+          },
+          // A downgrade frame is a LEGACY snapshot - full records - so the
+          // scan is again the whole-transcript answer.
+          latestAssistantAuthFailureTurnKey(frame.snapshot.chat.messages),
+        );
       },
       onWorktreeStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2045,6 +3630,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           worktreeBinding: frame.worktreeBinding,
           missingWorktreePaths: frame.missingWorktreePaths,
         });
+        advanceDeferredSnapshotAux(() => ({
+          worktreeBinding: frame.worktreeBinding,
+          missingWorktreePaths: frame.missingWorktreePaths,
+        }));
       },
       onManagedCommandsChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2053,6 +3642,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         // The frame carries the whole set, so a dropped one can never strand a
         // stale row - the next frame replaces everything either way.
         set({ managedCommands: frame.managedCommands });
+        advanceDeferredSnapshotAux(() => ({
+          managedCommands: frame.managedCommands,
+        }));
       },
       onHeldUpdatesChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2062,6 +3654,565 @@ export function createChatSessionStoreWithNotificationDependencies(
         // ABSENCE of a row, so a delta shape would need a removal frame the
         // host has no reason to send.
         set({ heldUpdates: frame.heldUpdates });
+        advanceDeferredSnapshotAux(() => ({ heldUpdates: frame.heldUpdates }));
+      },
+      // ─── The windowed line (`chat.subscribe@1.8`) ────────────────────────
+      //
+      // Live: `chatSubscribeV18` is registered, so two `1.8`-capable peers
+      // negotiate onto this handler. Against an older peer negotiation still
+      // settles on that peer's minor and the legacy handlers above serve the
+      // session instead.
+      onWindowedSnapshot: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        windowedLine = true;
+        // NEITHER the dedup slot nor the ledger is cleared here, and both
+        // decisions are deferred to below for the same reason. A snapshot is
+        // not only a reconnection on this line: an aux-only rebroadcast (a
+        // queue change, an approval) arrives through this same handler at the
+        // SAME epoch and preserves every span, and treating one as a
+        // connection reset makes a large `loadRange` answer still travelling on
+        // the BULK lane arrive untracked and be rejected as stale. Repeated aux
+        // snapshots could therefore discard every slow response in turn and
+        // leave the visible gap unhydrated indefinitely.
+        const epochBeforeSnapshot = get().transcriptWindow.epoch;
+        // The resnapshot entry deliberately does NOT close here. The answer
+        // that obligation is waiting for is authority movement - a rebuild
+        // announcement, a rebase, or a void - and the boundary block after
+        // the fold closes it there. An aux-only rebroadcast through this same
+        // handler is not that answer, and closing per aux frame would re-send
+        // one resnapshot per approval or queue change while the real answer
+        // is still streaming.
+        //
+        // Before the fold, exactly as the legacy path flushes: a queued delta
+        // applied after an authoritative snapshot would re-add a block the
+        // snapshot already carries.
+        flushBlockDeltas();
+        // Budgeted here as well as in `onRange`, because seating a tail is the
+        // OTHER way this window grows: `insertSpan` has exactly two callers
+        // (`applyWindowedSnapshot` and `applyRangeResponse`) and leaving one
+        // unbudgeted means a reader who hydrated scrollback and then stopped
+        // asking for ranges accumulates every completed turn's tail without
+        // the budget ever running.
+        const windowBeforeSnapshot = get().transcriptWindow;
+        const seated = applyWindowedSnapshot(
+          windowBeforeSnapshot,
+          {
+            epoch: frame.snapshot.transcriptEpoch,
+            rowCount: frame.snapshot.rowCount,
+            indexRevision: frame.snapshot.indexRevision,
+            tail: frame.snapshot.tail,
+          },
+          // The STORE's active turn, not the frame's: the held-copy
+          // preference is about the client's current delta-rewrite state,
+          // and a completion snapshot whose frame already settled the turn
+          // must still not displace a fresher held copy while the store is
+          // mid-handoff.
+          get().activeTurn?.turnId ?? null,
+          imageWitnesses,
+        );
+        // The fold returns its input BY IDENTITY when it refuses the frame (a
+        // stale-epoch snapshot with a concrete revision, a same-epoch
+        // straggler), and every acceptance mints a new window - so identity IS
+        // the acceptance fact, read before the evict below can obscure it.
+        const snapshotAccepted = seated !== windowBeforeSnapshot;
+        const window = evictTranscriptWindowToBudget(
+          seated,
+          TRANSCRIPT_WINDOW_MAX_BYTES,
+          visibleTranscriptRange,
+          // The FRAME's pair, not the store's: this runs before the snapshot's
+          // judgement and pending list are published, and protecting the rows
+          // the PREVIOUS snapshot was blocked on would protect the wrong ones
+          // for exactly the beat that matters.
+          pendingInterviewOrdinals(
+            frame.snapshot.derived.interviewAnswerability,
+            frame.snapshot.pendingInterviews,
+          ),
+        );
+        // NOW the boundary decision, with the applied window in hand - the
+        // fold runs FIRST, deliberately, so everything below reads post-fold
+        // authority.
+        //
+        // Three cases and only three, the same three the dedup slot has
+        // always released on: a rebuild announcement (`indexRevision: null` -
+        // a reconnect mints a fresh subscriber whose index state is `none`,
+        // and its request really did die with the previous connection), a
+        // REBASE (the epoch moved, so every outstanding ordinal denotes a row
+        // in a space this client has left), and a VOIDED index (this snapshot
+        // proved the held index unusable). An aux-only rebroadcast is none of
+        // them and releases nothing: aux frames arrive per approval and queue
+        // change while preserving every span, and treating one as a boundary
+        // would let a steady drip discard every slow `loadRange` answer in
+        // turn - the starvation the old same-epoch protection existed for.
+        //
+        // At a boundary the ledger SUBSUMES rather than merely clears. Every
+        // open range entry is replaced at once - a pre-boundary-framed answer
+        // must never seat, because the host slices at answer time and a
+        // pre-boundary answer is indistinguishable from a post-boundary slice
+        // of current state - and a rebuild announcement opens the
+        // skeleton-completion entry that carries the subsumed obligations to
+        // a guaranteed-within-budget close, after which the planner (which is
+        // never gated on the open entry) re-derives every remaining gap from
+        // the fresh skeleton. The lineage evidence the image tiebreak reads
+        // is invalidated on the same edge and is safe for the same reason:
+        // nothing framed before the boundary can seat after it.
+        const rebased = window.epoch !== epochBeforeSnapshot;
+        // Gated on the fold ACCEPTING the frame, not only on what the frame
+        // claims: a refused straggler leaves the window unchanged, and if
+        // that window was already invalidated (a void awaiting its rebuild),
+        // an ungated boundary would fire on a frame that moved nothing -
+        // dropping the open resnapshot entry in exactly the invalidated
+        // stretch its dedup protects, and wiping lineage evidence for
+        // comparisons still in the air.
+        if (
+          snapshotAccepted &&
+          (frame.snapshot.indexRevision === null ||
+            rebased ||
+            window.invalidated)
+        ) {
+          clearInFlightHydration();
+          recovery.authorityBoundary({
+            epoch: window.epoch,
+            announcesRebuild: frame.snapshot.indexRevision === null,
+          });
+          imageWitnesses.invalidateAll();
+        }
+        if (window.skeletonComplete) {
+          recovery.skeletonCompleted(window.epoch);
+        }
+        // The rebuild boundary for the summary generation tracker. `null` is
+        // the host saying it holds no index for THIS subscriber and is about
+        // to rebuild one (see `applyWindowedSnapshot`'s own doc) - and the
+        // summary chunks are emitted only during that rebuild, so a `null`
+        // revision is exactly "a re-stream is coming, from a counter that may
+        // have restarted". Resetting to `-1` makes whatever generation that
+        // re-stream carries - including the host's first, `1` - a change.
+        //
+        // Keyed on the revision and NOT on "a snapshot arrived": an aux-only
+        // re-broadcast comes through this same handler at a live revision and
+        // sends no chunks at all, so resetting there would make the next chunk
+        // of the CURRENT stream look foreign and fire `requestSummaryRestream`
+        // - a restream livelock under any steady aux traffic. Same reasoning
+        // as the summaries themselves, below.
+        if (frame.snapshot.indexRevision === null) {
+          accumulatedSummaryGeneration = -1;
+          assemblingSummaries = null;
+          recovery.resetSummaryStream();
+          // The retained array is now the PREVIOUS generation's, so it vouches
+          // for nothing until a replacement chunk lands - including when its
+          // length already equals the authoritative count.
+          set(summaryTrustState());
+        }
+        // The window and the snapshot's aux ride the fold's own `set` (or the
+        // deferral's single `set`) rather than being published here first - a
+        // beat of "new spans, old rendered models" reads to the row merge as
+        // renderer suppression of a real row.
+        applyOrDeferWindowedSnapshot(frame, window, {
+          transcriptWindow: window,
+          transcriptDerived: frame.snapshot.derived,
+          accumulatedFileChangeCount: frame.snapshot.accumulatedFileChangeCount,
+          // A rebase replaces the coordinate space, so a pending "this row was
+          // rewritten while cold" note is about rows that no longer exist under
+          // these ordinals. The announcements hook drops its own consumption
+          // record on the same edge.
+          ...(rebased
+            ? { coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS }
+            : {}),
+          // Deliberately NOT resetting `accumulatedFileChangeSummaries` here.
+          //
+          // A re-stream already resets it: the host chunks the whole set from
+          // `fromIndex: 0`, and the splice below turns that first chunk into
+          // `slice(0, 0) + summaries`, so the assembled list ends at exactly
+          // the new total and no entry of a previous set can outlive it.
+          //
+          // And a snapshot is NOT proof that a re-stream is coming. The host
+          // re-streams the summaries whenever they CHANGED - the reconcile runs
+          // ahead of every index branch, so a turn that replaces them while
+          // leaving every ordinal intact still delivers them - but it compares
+          // what this subscriber was last sent by identity, so an UNCHANGED set
+          // is never re-sent. An aux-only re-broadcast - a queue change, an
+          // approval - therefore carries no chunks at all, and clearing here
+          // would empty the panel on the next approval and leave it empty, with
+          // the header still counting the files it can no longer list.
+        });
+        // An aux-only re-broadcast - a queue change, an approval - clears the
+        // resnapshot latch and `invalidated` while sending no chunks at all
+        // (see the comment just above). If the re-stream this client asked for
+        // was itself dropped, nothing else would ever ask again: the partial
+        // index would simply read as valid. `true` because the apply above may
+        // have DEFERRED, so completeness cannot be read here yet.
+        armStreamCompletionWatchdog({
+          readCompleteness: false,
+          // A rebuild is a fresh stream starting, so it restarts the clock; an
+          // aux-only re-broadcast carries no chunk and must not. Same
+          // `indexRevision === null` discriminator the summary-generation reset
+          // above and the window's own skeleton-coverage reset read.
+          //
+          // OR a rebase, which is not the same condition and is easy to miss: a
+          // reindex can move the epoch while the host still HOLDS this
+          // subscriber's index, so the revision is a real number. A timer left
+          // running from the previous epoch is inert - its fire-time check
+          // returns on the epoch mismatch - so preserving it there would leave
+          // the new coordinate space with no watchdog at all.
+          restartDeadline: frame.snapshot.indexRevision === null || rebased,
+        });
+        requestPlannedHydration();
+      },
+      onSkeletonChunk: (frame) => {
+        // `!windowedLine` covers the downgrade reset in `onSnapshot` above: a
+        // windowed frame straggling in after a legacy snapshot has replaced
+        // the transcript must not rebuild windowed state - or worse, republish
+        // `messages` from the emptied window over the legacy transcript.
+        if (
+          disposed ||
+          !windowedLine ||
+          !matchesChat(options, frame.epicId, frame.chatId)
+        ) {
+          return;
+        }
+        // Can DROP bodies, not just add entries: this is where a tail seated
+        // with no ids to check against finally meets the rows it claimed.
+        const window = applySkeletonChunk(get().transcriptWindow, frame.chunk);
+        // The rebuild's guaranteed close: `skeletonComplete` is what
+        // discharges the skeleton-completion entry the announcement opened.
+        if (window.skeletonComplete) {
+          recovery.skeletonCompleted(window.epoch);
+        }
+        publishWindowedTranscript(window, null);
+        // Re-arms while the skeleton is still short, disarms once it covers
+        // `rowCount`. A stream that simply stops after a non-final chunk is
+        // otherwise indistinguishable from one still in progress.
+        armStreamCompletionWatchdog({
+          readCompleteness: true,
+          restartDeadline: true,
+        });
+        requestPlannedHydration();
+      },
+      onIndexChanged: (frame) => {
+        // Same downgrade guard as `onSkeletonChunk`.
+        if (
+          disposed ||
+          !windowedLine ||
+          !matchesChat(options, frame.epicId, frame.chatId)
+        ) {
+          return;
+        }
+        const activeTurnId = get().activeTurn?.turnId ?? null;
+        // The streaming turn's own index echo supersedes nothing: the deltas
+        // that produced it have already rewritten the held records, so an
+        // answer in flight for that turn's rows is not stale. Discarding it
+        // anyway is a starvation loop on a chat dominated by one long turn -
+        // every answer arrives after the next echo and hydration never lands.
+        //
+        // But ONLY while the turn's record is actually HELD. A copy the
+        // window does not hold is not being rewritten - its deltas are
+        // dropped - so an answer generated before them carries blocks the
+        // client can never recover, and it must be superseded and re-asked
+        // exactly as before. The holds scan is gated on there being an
+        // outstanding request at all, so it never runs on the bare per-token
+        // path.
+        //
+        // KNOWN GAP, deliberately not patched here: holding a copy is not the
+        // same as that copy being CURRENT with this echo, which is what the
+        // premise above actually needs. A write dropped while its row was
+        // unheld leaves the client behind, and a range sliced before it then
+        // seats a copy at the same older `blocksVersion` - so the seat's
+        // held-versus-served comparison reads a tie rather than both trailing
+        // the host, and the row is hydrated so no gap is left to repair it.
+        //
+        // A latch cleared on the supersede this branch performs does NOT close
+        // it: `supersedeInFlightHydration` marks only requests whose ordinals
+        // intersect the change, so an append-only frame discharges the latch
+        // having covered nothing. Clearing only once nothing is outstanding
+        // fails the other way - each supersede re-plans a fresh request, so
+        // the set never empties and the exemption is disabled for the rest of
+        // the turn, which is the starvation this exemption exists to prevent.
+        // The per-request provenance lives on the recovery ledger's range
+        // entries now, and their honest ends are what retire the wedge: an
+        // answer closes its entry, an authority boundary subsumes it, the cap
+        // replaces it with a wider request - an entry can no longer sit open
+        // for the life of a turn with nothing owed against it. The residual
+        // this gate cannot see (a write dropped while its row was unheld,
+        // leaving held and served tied at the same stale version) is narrowed
+        // by the image witness store - which records writes even for unheld
+        // rows - and what remains rides the `updated` index entry, exactly as
+        // the settled-arm comparison documents.
+        const streamingEcho =
+          isActiveTurnStreamingEcho(frame.changes, activeTurnId) &&
+          (!recovery.hasOpenRanges() ||
+            holdsActiveTurnAssistantMessage(
+              get().transcriptWindow,
+              activeTurnId,
+            ));
+        // Folded FIRST, but not published yet - the two orderings this has to
+        // satisfy pull in opposite directions and this is what satisfies both.
+        //
+        // `supersedeInFlightHydration` must read the PRE-fold window, because
+        // it compares against the epoch each in-flight request was framed
+        // against and the fold can move it. But it must not run for a frame
+        // the window REJECTS: `applyIndexChange` drops a duplicated or
+        // reordered same-epoch frame on `indexRevision <= window.indexRevision`
+        // and changes nothing, while the supersede has already marked a valid
+        // in-flight request - so its answer is discarded and re-asked for a
+        // frame that moved nothing, extending the placeholders it was going to
+        // fill. Repeated stragglers can keep a range from ever settling.
+        //
+        // Computing the fold without `set` gives both: `get()` still returns
+        // the pre-fold window below, and identity tells us whether the frame
+        // was accepted. Deliberately NOT a second copy of the acceptance rule -
+        // the epoch, revision and rebuild-suspension checks are intricate
+        // enough that a mirror of them here would drift.
+        const beforeFold = get().transcriptWindow;
+        const window = applyIndexChange(beforeFold, {
+          epoch: frame.epoch,
+          rowCount: frame.rowCount,
+          indexRevision: frame.indexRevision,
+          changes: frame.changes,
+          activeTurnId,
+        });
+        if (!streamingEcho && window !== beforeFold) {
+          supersedeInFlightHydration({
+            epoch: frame.epoch,
+            changes: frame.changes,
+          });
+        }
+        publishWindowedTranscript(window, null);
+        // Covers the `reindexed` case too: `requestPlannedHydration` sends a
+        // `resnapshot` rather than a range when the window is invalidated.
+        requestPlannedHydration();
+      },
+      onRange: (frame) => {
+        // Same downgrade guard as `onSkeletonChunk`.
+        if (
+          disposed ||
+          !windowedLine ||
+          !matchesChat(options, frame.epicId, frame.chatId)
+        ) {
+          return;
+        }
+        const tracked = inFlightHydrationRequest;
+        const stale = rangeResponseIsStale(frame.range);
+        // This request is answered: it can neither be superseded nor seat
+        // anything again, whichever way the staleness check just went.
+        recovery.closeRange(frame.range.requestId);
+        // Clear the slot ONLY for the request this response actually answers.
+        //
+        // Clearing it unconditionally forgets a replacement that is still on
+        // the wire, and the re-plan below then re-issues it under a new id -
+        // whose own answer arrives to find the slot mismatched again. Every
+        // answer discarded, every discard minting exactly one more request:
+        // a self-sustaining loop in which the visible gap never hydrates.
+        //
+        // Reached by ordinary scrolling: replanning while a request is
+        // outstanding replaces the slot, so the first answer back is already
+        // one this store has moved on from.
+        if (tracked !== null && tracked.requestId === frame.range.requestId) {
+          clearInFlightHydration();
+        }
+        if (stale) {
+          // Seat nothing. The ordinals stay unhydrated, so the re-plan below
+          // asks for them again - which is the whole point: a discarded
+          // response costs a round trip, a seated stale one costs a row that
+          // never corrects itself.
+          requestPlannedHydration();
+          return;
+        }
+        const window = evictTranscriptWindowToBudget(
+          applyRangeResponse(
+            get().transcriptWindow,
+            frame.range,
+            get().activeTurn?.turnId ?? null,
+            imageWitnesses,
+          ),
+          TRANSCRIPT_WINDOW_MAX_BYTES,
+          // What the reader is looking at is never evicted - see the
+          // function's own doc for the oversized-row re-fetch loop this
+          // forecloses.
+          visibleTranscriptRange,
+          // And the row a pending question lives on, which is re-planned with
+          // no viewport to scroll away from and would loop hardest of all.
+          requiredHydrationOrdinalsOf(get()),
+        );
+        // Rides the same `set` as the rows it describes, so no consumer can
+        // observe the rows without the fact that a range delivered them.
+        const hydrated = {
+          transcriptHydrationSequence: get().transcriptHydrationSequence + 1,
+        };
+        const deferred = deferredWindowedSnapshot;
+        if (deferred === null) {
+          publishWindowedTranscript(window, hydrated);
+        } else {
+          // The tail this response was asked for may have arrived. The fold
+          // publishes `messages`/`events` itself - with the window riding the
+          // same `set` - so it replaces the steady-state publish above.
+          applyOrDeferWindowedSnapshot(deferred, window, {
+            transcriptWindow: window,
+            ...hydrated,
+          });
+          // Whatever arrived while the snapshot was held. Only once it is
+          // actually seated - `applyOrDeferWindowedSnapshot` can defer AGAIN if
+          // this response was not the tail it was waiting for, and flushing
+          // then would fold the deltas into the same empty state the hold
+          // exists to keep them out of.
+          if (deferredWindowedSnapshot === null) flushBlockDeltas();
+        }
+        requestPlannedHydration();
+      },
+      onAccumulatedChanges: (frame) => {
+        // Same downgrade guard as `onSkeletonChunk`, and it is not symmetry
+        // for its own sake: `onSnapshot` clears the summaries when it falls
+        // back to the legacy line, where `accumulatedFileChanges` is the
+        // authoritative set - and nothing clears them a second time. A
+        // straggling chunk repopulating them here leaves the panel serving
+        // rows from an abandoned windowed epoch for the life of the session.
+        if (
+          disposed ||
+          !windowedLine ||
+          !matchesChat(options, frame.epicId, frame.chatId)
+        ) {
+          return;
+        }
+        // The summaries are the ONE windowed stream whose chunks do not pass
+        // through a function that holds the epoch - `applySkeletonChunk` and
+        // `applyRangeResponse` both open with this comparison, and both can
+        // because they fold into the window. These land in a store field of
+        // their own, so the check has to be made here or not at all.
+        //
+        // Dropped on any mismatch, exactly as those two do. A resnapshot or
+        // reindex advances the epoch while a chunk is still in flight, and a
+        // stale one beginning at index 0 would otherwise REPLACE the current
+        // set: the splice below treats `fromIndex: 0` as "a fresh set starts
+        // here", so an abandoned epoch's paths and digests become the panel's,
+        // and if its length happens to match the new count the completeness
+        // check reads them as the whole story.
+        //
+        // Dropped without asking for a re-stream, deliberately. The chunk
+        // carries no evidence that the CURRENT epoch is short - the host
+        // re-emits these only when the summary set itself changed, so a stale
+        // chunk arriving at a client that is already complete would buy a
+        // whole-transcript resnapshot for nothing. Whether anything is
+        // actually missing is what the completion watchdog reads off the
+        // totals, and it is the one place that question is answerable.
+        if (frame.chunk.epoch !== get().transcriptWindow.epoch) return;
+        // Every same-epoch chunk is an OBSERVATION of its generation's
+        // assembly, recorded on the ledger before anything is judged: a new
+        // generation's entry replaces the previous one (whatever its state -
+        // a dropped final chunk for gen N cannot hold the seated flag hostage
+        // once gen N+1 is observed), and a chunk of the current generation
+        // re-opens a closed entry, which is what "a non-final chunk actively
+        // un-seats" means now. The restream entry, if one was open, is
+        // consumed: the stream it asked for is arriving.
+        recovery.observeSummaryChunk(frame.chunk.generation);
+        // Chunks are contiguous and in order from `fromIndex`, so a chunk
+        // starting at 0 begins a fresh set and any other extends the one being
+        // assembled. Splicing at `fromIndex` rather than appending makes a
+        // re-sent chunk idempotent instead of duplicating its entries.
+        // Which re-stream this client is assembling. A chunk from a LATER
+        // generation than the one in hand is only seatable at index 0, which is
+        // where every generation starts; anything else means its predecessors -
+        // including that index-0 chunk - were dropped.
+        //
+        // This is the case the gap check below cannot see. The client retains
+        // the previous generation's array until a replacement at index 0
+        // arrives, so when a file changes without changing the COUNT that array
+        // is still at the authoritative length: a later chunk's `fromIndex` is
+        // not greater than it, and it splices cleanly into the wrong
+        // generation. The result is a prefix of the old set with a suffix of
+        // the new one, whose stale digests make every content fetch return
+        // `stale`, and both the gap check and the count watchdog read it as
+        // healthy.
+        if (frame.chunk.generation !== accumulatedSummaryGeneration) {
+          if (frame.chunk.fromIndex !== 0) {
+            // The chunk itself cannot seat - its predecessors were dropped -
+            // but the generation WAS observed above, so the trust flags
+            // already read the replacement stream as running. Publishing that
+            // is the fix for the previous shape, which returned here leaving
+            // `accumulatedSummaryGenerationSeated` vouching for the previous
+            // generation while its replacement was known to be in flight.
+            set(summaryTrustState());
+            requestSummaryRestream();
+            return;
+          }
+          accumulatedSummaryGeneration = frame.chunk.generation;
+          // A fresh generation assembles OFF-SCREEN. Publishing its first
+          // chunk immediately repainted the panel with a partial replacement
+          // - "2 files changed" flashing mid-restream over a 6-file set - so
+          // the previous complete set stays published until the replacement
+          // reaches the authoritative count. The seated flag goes false so
+          // the completion watchdog measures the ASSEMBLY, not the retained
+          // array whose length may coincide with the count.
+          assemblingSummaries = [];
+          set(summaryTrustState());
+        }
+        // A chunk starting PAST the end is a chunk whose predecessor was
+        // dropped. `slice(0, fromIndex)` cannot express that - on a shorter
+        // array it silently returns the whole thing and appends, so every
+        // entry from here on sits at an index below the one the host gave
+        // it, and the panel's rows are then attributed to the wrong files.
+        //
+        // Dropped rather than seated at the wrong offset - but dropping
+        // alone is not a recovery. The host re-streams these chunks when the
+        // summaries CHANGE, and it records the set it just sent: a chunk lost
+        // in transit leaves the host believing this subscriber holds that
+        // generation, so ordinary traffic over an unchanged set sends nothing
+        // and the panel stays short - "Review all" held back - for the rest
+        // of the connection. A resnapshot is what restarts the stream, and it
+        // is the same recovery a void index uses.
+        const assembled =
+          assemblingSummaries ?? get().accumulatedFileChangeSummaries;
+        if (frame.chunk.fromIndex > assembled.length) {
+          // The observation above re-opened the entry, so a late gap chunk
+          // after a seated final publishes the un-seat it proves.
+          set(summaryTrustState());
+          requestSummaryRestream();
+          return;
+        }
+        const summaries = [
+          ...assembled.slice(0, frame.chunk.fromIndex),
+          ...frame.chunk.summaries,
+        ];
+        assemblingSummaries = summaries;
+        // Published only once whole. Until then the previous set keeps the
+        // panel honest, and the watchdog - armed below off the un-seated
+        // flag - is what recovers a replacement stream that stops short.
+        //
+        // Whole means the host SAID so, not that the length agrees.
+        // `isFinal` is the chunk contract's own statement that the generation
+        // is complete; `accumulatedFileChangeCount` is an aux field, and aux
+        // is last-write-wins, so a delayed same-epoch snapshot restores an
+        // older, smaller count for a frame. Only one of those two can answer
+        // the question.
+        //
+        // Requiring the count to AGREE as well was the same defect this whole
+        // change exists to remove, one field over: the client holds the
+        // complete generation the host declared final, and a transient aux
+        // value made it discard that and keep rendering the previous set,
+        // with no route back. A count that disagrees with a FINAL assembly is
+        // evidence the count is stale, and `chunkedDeliveryIncomplete` already
+        // reads that disagreement as a reason to keep the watchdog armed until
+        // a snapshot corrects it - recovery, rather than a refusal to publish.
+        //
+        // A non-final chunk actively un-seats, so a generation can never stay
+        // seated across one, and a prefix whose length coincides with the
+        // count is no longer seatable on that coincidence.
+        if (frame.chunk.isFinal) {
+          recovery.closeSummaryAssembly(frame.chunk.generation);
+          set({
+            accumulatedFileChangeSummaries: summaries,
+            ...summaryTrustState(),
+          });
+        } else if (get().accumulatedSummaryGenerationSeated) {
+          // The observation at the top re-opened the entry; this publishes it.
+          set(summaryTrustState());
+        }
+        // The gap check above only fires when a LATER chunk exposes the hole,
+        // so it cannot see the stream simply stopping. Armed after the `set`
+        // so the watchdog reads the assembled length this chunk produced.
+        armStreamCompletionWatchdog({
+          readCompleteness: true,
+          restartDeadline: true,
+        });
       },
       onActionAck: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2279,7 +4430,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.acceptedActions,
             frame.message.messageId,
           );
-          if (messageExists(state.messages, frame.message.messageId)) {
+          // On the windowed line the record goes into the WINDOW instead (see
+          // `takeLiveRecords`), and `messages` is republished from there - so
+          // the existence check moves with it, because `state.messages` here
+          // holds only what is hydrated. `appendLiveRecords` runs the same
+          // check against the live set AND the spans.
+          if (
+            windowedLine ||
+            messageExists(state.messages, frame.message.messageId)
+          ) {
             return {
               acceptedActions,
               pendingUserMessages,
@@ -2299,6 +4458,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             ),
           };
         });
+        if (windowedLine) {
+          takeLiveRecords({ messages: [frame.message], events: [] });
+        }
       },
       onQueueChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2333,6 +4495,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingUserMessages: patch.pendingUserMessages,
           };
         });
+        // The AUTHORITATIVE queue, not the merged one the store now holds:
+        // that is what the deferred fold's own merge takes as its input, and
+        // handing it a list the optimistic items are already in would keep an
+        // item whose pending action has since settled.
+        advanceDeferredSnapshotAux(() => ({ queue: frame.queue }));
       },
       onTurnStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2351,7 +4518,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // branches in an updater already at the complexity budget.
           const previousTurnId = state.activeTurn?.turnId ?? null;
           const nextTurnId = frame.activeTurn?.turnId ?? null;
-          const baseMessages = messagesWithMaterializedLiveAssistant(
+          const materialized = materializedLiveAssistant(
             state.messages,
             state.liveAssistantMessage,
             {
@@ -2359,9 +4526,40 @@ export function createChatSessionStoreWithNotificationDependencies(
               nextActiveTurnId: nextTurnId,
             },
           );
-          const nextMessages = messagesForTurnStateChange(baseMessages, {
-            previousTurnId,
-            nextTurnId,
+          // The frozen row goes into the WINDOW on the windowed line, not into
+          // the published array. It has no ordinal yet - the host indexes it
+          // and tells us in a later `appended` index change - so it is a LIVE
+          // record, the same home `onEventAppended` uses. Written to
+          // `state.messages` instead it would survive only until the next
+          // windowed frame republished that array from `transcriptWindow`, and
+          // the turn that just finished would vanish from the transcript until
+          // some later snapshot or range happened to restore it.
+          const windowed = isWindowedTranscript(state);
+          const seated =
+            materialized === null || !windowed
+              ? state.transcriptWindow
+              : appendLiveRecords(state.transcriptWindow, {
+                  messages: [materialized],
+                  events: [],
+                });
+          // The steer-restart remap is the SAME rule one step on: it renames a
+          // `turnId` across every row carrying it, and on this line those rows
+          // live in the window too. Applied to the published array alone it
+          // would be undone by the next republish exactly as the frozen row
+          // above was, leaving the moved rows attributed to a turn that no
+          // longer exists.
+          const remap = turnRemapFor({ previousTurnId, nextTurnId });
+          const nextWindow =
+            remap === null || !windowed
+              ? seated
+              : mapWindowMessages(seated, remap, imageWitnesses);
+          const nextMessages = turnStateMessages({
+            windowed,
+            previousMessages: state.messages,
+            previousWindow: state.transcriptWindow,
+            nextWindow,
+            materialized,
+            turnIds: { previousTurnId, nextTurnId },
           });
           // Clear liveTurnUsage on any turn transition (turnId changes or
           // activeTurn settles to null). The new turn hasn't emitted its
@@ -2424,6 +4622,10 @@ export function createChatSessionStoreWithNotificationDependencies(
               state.deliveredNoticeActionIds,
             ),
             messages: nextMessages,
+            // Same object when nothing above touched it, so the windowed
+            // subscribers that compare by identity see no change on the
+            // ordinary turn transition.
+            transcriptWindow: nextWindow,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
             turnInProgress: frame.turnInProgress ?? state.turnInProgress,
@@ -2441,6 +4643,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             ...(turnIdChanged ? { liveTurnUsage: null } : {}),
           };
         });
+        // The other path that grows the window without seating a range:
+        // `appendLiveRecords` adds the materialized row and `mapWindowMessages`
+        // rewrites every record carrying the remapped turn. Same reason, same
+        // guard - a no-op unless the fresh tier is genuinely over budget.
+        evictWindowAfterInPlaceGrowth();
         // Routed through the shared decider rather than calling
         // `restoreStagedWorktreeIntent` directly, so the swept-claimant rule
         // is applied here too.
@@ -2461,6 +4668,15 @@ export function createChatSessionStoreWithNotificationDependencies(
           handedBackForTurnState,
         );
         maybeDispatchPendingBackgroundSessionStop(set, get);
+        // Same `??` fallbacks as the updater above, against the deferred
+        // snapshot's own baseline rather than the store's: an older host omits
+        // both fields, and "omitted" means "unchanged", not "cleared".
+        advanceDeferredSnapshotAux((held) => ({
+          runStatus: frame.runStatus,
+          activeTurn: frame.activeTurn,
+          turnInProgress: frame.turnInProgress ?? held.turnInProgress,
+          backgroundItems: frame.backgroundItems ?? held.backgroundItems,
+        }));
       },
       onBlockDelta: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2537,6 +4753,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.approval,
           ),
         }));
+        advanceDeferredSnapshotAux((held) => ({
+          pendingApprovals: [
+            ...upsertApproval(held.pendingApprovals, frame.approval),
+          ],
+        }));
       },
       onApprovalResolved: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2544,6 +4765,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         set((state) => ({
           pendingApprovals: state.pendingApprovals.filter(
+            (approval) => approval.approvalId !== frame.approvalId,
+          ),
+        }));
+        advanceDeferredSnapshotAux((held) => ({
+          pendingApprovals: held.pendingApprovals.filter(
             (approval) => approval.approvalId !== frame.approvalId,
           ),
         }));
@@ -2558,6 +4784,14 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.approval,
           ),
         }));
+        advanceDeferredSnapshotAux((held) => ({
+          pendingFileEditApprovals: [
+            ...upsertFileEditApproval(
+              held.pendingFileEditApprovals,
+              frame.approval,
+            ),
+          ],
+        }));
       },
       onFileEditApprovalResolved: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2565,6 +4799,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         set((state) => ({
           pendingFileEditApprovals: state.pendingFileEditApprovals.filter(
+            (approval) => approval.approvalId !== frame.approvalId,
+          ),
+        }));
+        advanceDeferredSnapshotAux((held) => ({
+          pendingFileEditApprovals: held.pendingFileEditApprovals.filter(
             (approval) => approval.approvalId !== frame.approvalId,
           ),
         }));
@@ -2586,38 +4825,41 @@ export function createChatSessionStoreWithNotificationDependencies(
             requestedAt: frame.requestedAt,
           }),
         }));
+        advanceDeferredSnapshotAux((held) => ({
+          pendingInterviews: [
+            ...upsertPendingInterview(held.pendingInterviews, {
+              blockId: frame.blockId,
+              requestedAt: frame.requestedAt,
+            }),
+          ],
+        }));
       },
       onInterviewAnswered: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
         const state = get();
-        const lifecycle = withInterviewLifecycleState(
-          state.messages,
-          state.liveAssistantMessage,
-          {
-            kind: "answered",
-            blockId: frame.blockId,
-            settlementId: frame.settlementId,
-            settlementSource: frame.settlementSource,
-            resolvedAt: frame.resolvedAt,
-            answers: frame.answers,
-            reason: null,
-            outcome: "answered",
-            draftAnswers: [],
-            delivery: frame.delivery,
-          },
-        );
+        const lifecycle = interviewLifecycleTranscript(state, {
+          kind: "answered",
+          blockId: frame.blockId,
+          settlementId: frame.settlementId,
+          settlementSource: frame.settlementSource,
+          resolvedAt: frame.resolvedAt,
+          answers: frame.answers,
+          reason: null,
+          outcome: "answered",
+          draftAnswers: [],
+          delivery: frame.delivery,
+        });
         const resolvedPendingOwner =
           lifecycle.resolvedPendingOwner ||
           (!lifecycle.matchedOwner &&
             state.pendingInterviews.some(
               (interview) => interview.blockId === frame.blockId,
             ));
-        const { messages, liveAssistantMessage } = lifecycle;
+        const { messages, liveAssistantMessage } = lifecycle.patch;
         set({
-          messages,
-          liveAssistantMessage,
+          ...lifecycle.patch,
           pendingInterviews: resolvedPendingOwner
             ? withoutPendingInterview(state.pendingInterviews, frame.blockId)
             : state.pendingInterviews,
@@ -2639,6 +4881,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             null,
           ),
         });
+        // Unconditional, unlike the store write above. `resolvedPendingOwner`
+        // asks whether the STORE still listed this interview; a deferred
+        // snapshot is a different list and may still carry it. Settled is
+        // settled on either.
+        advanceDeferredSnapshotAux((held) => ({
+          pendingInterviews: [
+            ...withoutPendingInterview(held.pendingInterviews, frame.blockId),
+          ],
+        }));
         if (resolvedPendingOwner) {
           useInterviewDraftStore
             .getState()
@@ -2650,32 +4901,27 @@ export function createChatSessionStoreWithNotificationDependencies(
           return;
         }
         const state = get();
-        const lifecycle = withInterviewLifecycleState(
-          state.messages,
-          state.liveAssistantMessage,
-          {
-            kind: "errored",
-            blockId: frame.blockId,
-            settlementId: frame.settlementId,
-            settlementSource: frame.settlementSource,
-            resolvedAt: frame.resolvedAt,
-            answers: [],
-            reason: frame.reason,
-            outcome: frame.outcome,
-            draftAnswers: frame.draftAnswers,
-            delivery: frame.delivery,
-          },
-        );
+        const lifecycle = interviewLifecycleTranscript(state, {
+          kind: "errored",
+          blockId: frame.blockId,
+          settlementId: frame.settlementId,
+          settlementSource: frame.settlementSource,
+          resolvedAt: frame.resolvedAt,
+          answers: [],
+          reason: frame.reason,
+          outcome: frame.outcome,
+          draftAnswers: frame.draftAnswers,
+          delivery: frame.delivery,
+        });
         const resolvedPendingOwner =
           lifecycle.resolvedPendingOwner ||
           (!lifecycle.matchedOwner &&
             state.pendingInterviews.some(
               (interview) => interview.blockId === frame.blockId,
             ));
-        const { messages, liveAssistantMessage } = lifecycle;
+        const { messages, liveAssistantMessage } = lifecycle.patch;
         set({
-          messages,
-          liveAssistantMessage,
+          ...lifecycle.patch,
           pendingInterviews: resolvedPendingOwner
             ? withoutPendingInterview(state.pendingInterviews, frame.blockId)
             : state.pendingInterviews,
@@ -2697,6 +4943,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             null,
           ),
         });
+        // Unconditional, unlike the store write above. `resolvedPendingOwner`
+        // asks whether the STORE still listed this interview; a deferred
+        // snapshot is a different list and may still carry it. Settled is
+        // settled on either.
+        advanceDeferredSnapshotAux((held) => ({
+          pendingInterviews: [
+            ...withoutPendingInterview(held.pendingInterviews, frame.blockId),
+          ],
+        }));
         if (resolvedPendingOwner) {
           useInterviewDraftStore
             .getState()
@@ -2705,6 +4960,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       onEventAppended: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        if (windowedLine) {
+          takeLiveRecords({ messages: [], events: [frame.event] });
           return;
         }
         set((state) => ({
@@ -2863,6 +5122,29 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onHeldUpdatesChanged(frame);
       },
+      // Guarded like every frame above rather than passed through: whatever
+      // binds these must not apply a hydration response from a stream
+      // generation this store has already replaced.
+      onWindowedSnapshot: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onWindowedSnapshot(frame);
+      },
+      onSkeletonChunk: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onSkeletonChunk(frame);
+      },
+      onIndexChanged: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onIndexChanged(frame);
+      },
+      onRange: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onRange(frame);
+      },
+      onAccumulatedChanges: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onAccumulatedChanges(frame);
+      },
       onActionAck: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onActionAck(frame);
@@ -2995,6 +5277,8 @@ export function createChatSessionStoreWithNotificationDependencies(
       fatalClose: null,
       snapshotLoaded: false,
       transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
+      transcriptHydrationSequence: 0,
+      transcriptRowContext: {},
       chat: null,
       access: null,
       messages: [],
@@ -3009,6 +5293,14 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingFileEditApprovals: [],
       pendingInterviews: [],
       accumulatedFileChanges: [],
+      transcriptWindow: emptyTranscriptWindow(),
+      transcriptDerived: null,
+      accumulatedFileChangeCount: 0,
+      coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
+      jumpTargetOrdinal: null,
+      accumulatedFileChangeSummaries: [],
+      accumulatedSummaryGenerationSeated: false,
+      accumulatedSummaryAssemblyStarted: false,
       backgroundItems: undefined,
       managedCommands: [],
       heldUpdates: [],
@@ -3021,6 +5313,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingUserMessages: [],
       errorNotices: [],
       deliveredNoticeActionIds: new Set<string>(),
+      openedSubagentCardBlockIds: new Set<string>(),
       failedSendRestoration: null,
       currentComposerSettings: null,
       liveAssistantMessage: null,
@@ -3028,6 +5321,24 @@ export function createChatSessionStoreWithNotificationDependencies(
       worktreeBinding: null,
       missingWorktreePaths: [],
 
+      reportVisibleTranscriptRange: (range) => {
+        if (disposed) return;
+        applyVisibleTranscriptRange(range);
+      },
+
+      /**
+       * Name (or clear) the ordinal a pending transcript jump is waiting on.
+       *
+       * Called by the surface holding the jump request when its target is not
+       * in the hydrated set. Hydration is otherwise driven by the VIEWPORT, and
+       * the jump does not move the viewport until its target arrives - so
+       * without this the request waits on a row nothing will fetch.
+       */
+      requestTranscriptOrdinal: (ordinal: number | null) => {
+        if (get().jumpTargetOrdinal === ordinal) return;
+        set({ jumpTargetOrdinal: ordinal });
+        if (ordinal !== null) requestPlannedHydration();
+      },
       retry: () => {
         if (disposed) return;
         closeStreamClient();
@@ -3074,7 +5385,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         set({ missingWorktreePaths: next });
       },
-      sendMessage: (content, sender, settings, deliveryPolicy) => {
+      sendMessage: (input) => {
         const clientActionId = uuidv4();
         const messageId = uuidv4();
         // A worktree staged mid-chat ("Create new worktree") rides on this send;
@@ -3089,6 +5400,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         };
         if (stagedWorktreeIntentIsSuspended(stagedKey)) return null;
         const worktreeIntent = readStagedWorktreeIntent(stagedKey);
+        const browserAnnotations = input.attachments.filter(
+          (attachment): attachment is BrowserAnnotationRecord =>
+            attachment.kind === "browser-annotation",
+        );
         const frame: ChatOwnerActionFrame = {
           kind: "send",
           hasBinaryPayload: false,
@@ -3096,12 +5411,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           chatId: options.chatId,
           clientActionId,
           messageId,
-          content,
-          sender,
-          settings,
+          content: input.content,
+          sender: input.sender,
+          settings: input.settings,
           accountContext: useAccountContextStore.getState().accountContext,
-          deliveryPolicy,
+          deliveryPolicy: input.deliveryPolicy,
           worktreeIntent,
+          browserAnnotations,
         };
         // Consume before dispatch so the pending action captures precisely the
         // revision it may later restore. A synchronous action rejection cannot
@@ -3132,9 +5448,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
-            restoreContent: content,
-            sender,
-            settings,
+            restore: input.restore,
+            sender: input.sender,
+            settings: input.settings,
             accountContext: frame.accountContext,
             restoreWorktreeIntent: worktreeIntent,
             deliveryPolicy: frame.deliveryPolicy,
@@ -3154,10 +5470,12 @@ export function createChatSessionStoreWithNotificationDependencies(
             ? {
                 clientActionId,
                 messageId,
-                content,
-                sender,
-                settings,
+                content: input.content,
+                attachments: input.attachments,
+                sender: input.sender,
+                settings: input.settings,
                 timestamp: Date.now(),
+                restore: input.restore,
                 accountContext: frame.accountContext,
                 deliveryPolicy: frame.deliveryPolicy,
                 restoreWorktreeIntent: worktreeIntent,
@@ -3178,9 +5496,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           state: get(),
           clientActionId,
           messageId,
-          content,
-          sender,
-          settings,
+          content: input.content,
+          sender: input.sender,
+          settings: input.settings,
         });
         if (optimisticQueuedItem !== null) {
           set((state) => ({
@@ -3240,6 +5558,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // The landing handoff carries its worktree intent via `epic.create`,
           // not the send frame.
           worktreeIntent: null,
+          browserAnnotations: [],
         };
         const sentClientActionId = sendAction({
           set,
@@ -3251,7 +5570,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: input.messageId,
-            restoreContent: input.content,
+            restore: { content: input.content, browserAnnotations: [] },
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
@@ -3267,11 +5586,13 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId: input.clientActionId,
             messageId: input.messageId,
             content: input.content,
+            attachments: buildAttachmentsFromJSONContent(input.content),
             sender: input.sender,
             settings: input.settings,
             accountContext: frame.accountContext,
             deliveryPolicy: frame.deliveryPolicy,
             timestamp: Date.now(),
+            restore: { content: input.content, browserAnnotations: [] },
             // The landing handoff's worktree rides `epic.create`, not this
             // send, so there is no staged slot for it to give back.
             restoreWorktreeIntent: null,
@@ -3354,7 +5675,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
-            restoreContent: null,
+            restore: null,
             sender: null,
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
@@ -3426,7 +5747,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: null,
-            restoreContent: null,
+            restore: null,
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
@@ -4034,7 +6355,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (restored === null) return null;
         // Clear every restorable slot in lockstep so a duplicate
         // `setup.failed` event cannot double-restore. The action records
-        // themselves stay in place - only their `restoreContent` slot is
+        // themselves stay in place - only their `restore` slot is
         // nulled - so downstream ack/accept reconciliation continues to
         // work.
         set({
@@ -4051,7 +6372,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                   ...state.pendingActions,
                   [pendingActionMatch.entry.clientActionId]: {
                     ...pendingActionMatch.entry,
-                    restoreContent: null,
+                    restore: null,
                   },
                 },
           acceptedActions:
@@ -4061,7 +6382,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                   ...state.acceptedActions,
                   [acceptedActionMatch.entry.clientActionId]: {
                     ...acceptedActionMatch.entry,
-                    restoreContent: null,
+                    restore: null,
                   },
                 },
         });
@@ -4070,9 +6391,14 @@ export function createChatSessionStoreWithNotificationDependencies(
       dispose: () => {
         if (disposed) return;
         disposed = true;
+        liveChatSessionStores.delete(store);
         unsubscribeLiveCompletionAcknowledgements();
         lease.unregister();
         clearBufferedDeltas();
+        clearInFlightHydration();
+        recovery.dropAll();
+        clearResnapshotRequestTimer();
+        clearStreamCompletionWatchdog();
         closeStreamClient();
       },
     };
@@ -4111,6 +6437,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         },
       );
   }
+
+  liveChatSessionStores.add(store);
 
   return {
     epicId: options.epicId,
@@ -4166,7 +6494,7 @@ function basicPending(
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId: null,
-    restoreContent: null,
+    restore: null,
     sender: null,
     settings: null,
     restoreWorktreeIntent: null,
@@ -4491,7 +6819,7 @@ function findRestorableSendByMessageId<
     readonly clientActionId: string;
     readonly action: ChatOwnerActionFrame["kind"];
     readonly messageId: string | null;
-    readonly restoreContent: JsonContent | null;
+    readonly restore: ChatSendRestore | null;
   },
 >(
   entries: ReadonlyArray<T>,
@@ -4501,9 +6829,9 @@ function findRestorableSendByMessageId<
     if (
       entry.action === "send" &&
       entry.messageId === messageId &&
-      entry.restoreContent !== null
+      entry.restore !== null
     ) {
-      return { entry, content: entry.restoreContent };
+      return { entry, content: entry.restore.content };
     }
   }
   return null;
@@ -4555,6 +6883,9 @@ function optimisticQueuedItemForSend(
     message: {
       kind: "user",
       content: input.content,
+      // Optimistic local echo only - the real `queue.added` event reconciles
+      // this row once it arrives.
+      browserAnnotations: [],
     },
     sender: input.sender,
     settings: input.settings,
@@ -4644,16 +6975,23 @@ function withoutPendingInterview(
 function applyBlockDelta(
   state: ChatSessionState,
   event: RuntimeEvent,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   return event.type === "image_resolution.updated"
-    ? applyImageResolutionDelta(state, event)
-    : applyContentDelta(state, event);
+    ? applyImageResolutionDelta(state, event, witnesses)
+    : applyContentDelta(state, event, witnesses);
 }
 
 function applyImageResolutionDelta(
   state: ChatSessionState,
   event: Extract<RuntimeEvent, { type: "image_resolution.updated" }>,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
+  // Recorded FIRST, and unconditionally: the witness is evidence about the
+  // source's write stream, not about the client's holdings, so an unheld or
+  // unreachable row records exactly as a held one does - that is what stamps
+  // a later first hydration correctly.
+  const witnessSeq = witnesses?.record(event.messageId, event.entry) ?? null;
   const messageIndex = state.messages.findIndex(
     (message) =>
       message.role === "assistant" && message.messageId === event.messageId,
@@ -4711,14 +7049,40 @@ function applyImageResolutionDelta(
       : message.imageResolutions.map((entry, index) =>
           index === entryIndex ? event.entry : entry,
         );
-  const messages = state.messages.slice();
-  messages[messageIndex] = { ...message, imageResolutions };
-  return { messages };
+  // A no-op rather than `{}` if the row is unreachable: the caller has already
+  // decided this event belongs to a persisted row rather than the live one, so
+  // falling back would re-run that decision with a worse answer.
+  const patch =
+    rewriteMessageInPlace(
+      state,
+      message.messageId,
+      (target) =>
+        target.role === "assistant" ? { ...target, imageResolutions } : target,
+      { charge: "now", witnesses },
+    ) ?? {};
+  // An APPLIED write stamps exactly - the applied witness names its own
+  // sequence, and `rewriteWindowMessage` rewrote every holder, so every copy
+  // of the record in the new window carries it.
+  if (
+    witnesses !== null &&
+    witnessSeq !== null &&
+    "transcriptWindow" in patch &&
+    patch.transcriptWindow !== undefined
+  ) {
+    witnesses.stampRewrittenCopies(
+      patch.transcriptWindow,
+      event.messageId,
+      event.entry.canonicalSource,
+      witnessSeq,
+    );
+  }
+  return patch;
 }
 
 function applyContentDelta(
   state: ChatSessionState,
   event: Exclude<RuntimeEvent, { type: "image_resolution.updated" }>,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   // `usage.updated` carries the live in-flight context usage so the
   // "% context left" composer chip can update during the turn. It must
@@ -4739,9 +7103,9 @@ function applyContentDelta(
   // new turn until its first usage.updated arrives). Always full reset.
   if (event.type === "turn.started") {
     if (state.liveTurnUsage === null) {
-      return applyContentBlockDelta(state, event);
+      return applyContentBlockDelta(state, event, witnesses);
     }
-    const partial = applyContentBlockDelta(state, event);
+    const partial = applyContentBlockDelta(state, event, witnesses);
     return { ...partial, liveTurnUsage: null };
   }
   // `turn.completed` / `turn.stopped` / `turn.interrupted` / `error`:
@@ -4760,7 +7124,7 @@ function applyContentDelta(
     event.type === "turn.interrupted" ||
     event.type === "error"
   ) {
-    const partial = applyContentBlockDelta(state, event);
+    const partial = applyContentBlockDelta(state, event, witnesses);
     const finalUsage =
       event.type === "turn.completed" && event.usage !== undefined
         ? event.usage
@@ -4769,56 +7133,364 @@ function applyContentDelta(
       ? partial
       : { ...partial, liveTurnUsage: finalUsage };
   }
-  return applyContentBlockDelta(state, event);
+  return applyContentBlockDelta(state, event, witnesses);
 }
 
 // The block id whose OWNING message a detached backgrounded-subagent event
-// targets, plus whether routing to that owner is MANDATORY:
-//   - `subagent.*`             → the subagent block (`event.blockId`).
+// targets, plus whether that owner MUST already exist:
+//   - `subagent.*` / `workflow.*` → the subagent block (`event.blockId`).
 //   - a terminal `tool_call.*` / `command.completed` → its non-empty
 //     `parentBlockId` when it is a subagent CHILD; otherwise its own `blockId`
 //     (a genuinely top-level background terminal - Claude backgrounds through a
 //     `tool_call`, Codex through a plain `command`).
 //   - any other nested event  → its `parentBlockId`.
-// `mandatory` is set whenever the owner comes from `parentBlockId` or from a
-// parentless background tool terminal: such an event belongs to an older row
-// and must NEVER fall through to the active turn, where the accumulator would
-// mint a duplicate top-level card for it.
 // Null for everything else (text/reasoning/top-level tool deltas), so the
 // common high-frequency path skips the owner lookup.
+//
+// `workflow.*` is here because it is the SAME CARD: all three write a
+// `subagent` block through `makeSubAgentBlock`, addressed by `event.blockId`,
+// with `started` opening and `progress`/`completed` updating-or-synthesizing -
+// the accumulator's workflow arm mirrors its subagent arm case for case. A
+// Workflow run is a fleet that outlives its spawning turn exactly as a
+// background subagent does, so leaving it out of this table was not a
+// narrower policy, it was the same hazard with no guard on it.
+//
+// `ownerMustExist` decides what happens when the scan finds NO owner, and it
+// says what it means rather than proxying it through how the owner is named.
+// The distinction it draws is whether this event OPENS its own card or updates
+// one:
+//
+//   - `subagent.started` / `workflow.started` open it - the FIRST time.
+//     `accumulateTurnContent` builds the block FROM this event, so "no message
+//     owns it" is the ordinary birth of every such card, not evidence of a
+//     detached one. Dropping it there means the card is never created - and
+//     then its own progress and completion have no owner either, so nothing
+//     about that run ever renders. A REPEAT of one is an update wearing a
+//     start's clothes and is held to the update rule instead; the caller
+//     supplies that, since only the session's memory knows which it is (see
+//     `ChatSessionState.openedSubagentCardBlockIds`).
+//   - the matching `progress` / `completed` update it. They ALSO build a card
+//     when none exists (see the accumulator), which is exactly the synthesis
+//     that must not happen under an unrelated turn: their card's row is
+//     evictable on the windowed line, so an ownerless one means gone, not new.
+//   - a `parentBlockId` owner, or a parentless BACKGROUND terminal, belongs to
+//     an older row for the same reason and never falls through.
+//
+// A parentless FOREGROUND terminal keeps the fall-through it has always had:
+// with the active turn's own row consulted (see `activeTurnOwnsBlock`) a live
+// call's terminal never reaches here, so what is left is a terminal whose
+// `started` was genuinely never seen, and completing it beats stranding it.
+// Does this event OPEN a subagent/workflow card, as opposed to updating one?
+// Named because two places need the same answer for different reasons: the
+// owner rule below, and the session memory that tells a first one from a
+// repeat.
+function isSubagentCardOpeningEvent(
+  event: RuntimeEvent,
+): event is Extract<
+  RuntimeEvent,
+  { type: "subagent.started" | "workflow.started" }
+> {
+  return event.type === "subagent.started" || event.type === "workflow.started";
+}
+
+// The `subagent.*` / `workflow.*` arm, split out so the opens-versus-updates
+// rule reads as two branches rather than a negated conjunction hidden in a
+// flag - and so the parent function stays under the complexity ceiling as the
+// pair grows. Both triples address the SAME card by their own `blockId`; the
+// only thing that differs between them is which event opens it.
+function subagentCardOwnerTarget(
+  event: RuntimeEvent,
+): { readonly ownerBlockId: string; readonly ownerMustExist: boolean } | null {
+  if (isSubagentCardOpeningEvent(event)) {
+    return { ownerBlockId: event.blockId, ownerMustExist: false };
+  }
+  if (
+    event.type === "subagent.progress" ||
+    event.type === "subagent.completed" ||
+    event.type === "workflow.progress" ||
+    event.type === "workflow.completed"
+  ) {
+    return { ownerBlockId: event.blockId, ownerMustExist: true };
+  }
+  return null;
+}
+
 function detachedSubagentOwnerTarget(
   event: RuntimeEvent,
-): { readonly ownerBlockId: string; readonly mandatory: boolean } | null {
+): { readonly ownerBlockId: string; readonly ownerMustExist: boolean } | null {
   const parentBlockId =
     "parentBlockId" in event &&
     typeof event.parentBlockId === "string" &&
     event.parentBlockId.length > 0
       ? event.parentBlockId
       : null;
-  if (
-    event.type === "subagent.started" ||
-    event.type === "subagent.progress" ||
-    event.type === "subagent.completed"
-  ) {
-    return { ownerBlockId: event.blockId, mandatory: false };
-  }
+  const cardTarget = subagentCardOwnerTarget(event);
+  if (cardTarget !== null) return cardTarget;
   if (
     event.type === "tool_call.completed" ||
     event.type === "tool_call.errored" ||
     event.type === "command.completed"
   ) {
     if (parentBlockId !== null) {
-      return { ownerBlockId: parentBlockId, mandatory: true };
+      return { ownerBlockId: parentBlockId, ownerMustExist: true };
     }
     return {
       ownerBlockId: event.blockId,
-      mandatory: "backgroundTask" in event && event.backgroundTask === true,
+      ownerMustExist:
+        "backgroundTask" in event && event.backgroundTask === true,
     };
   }
   if (parentBlockId !== null) {
-    return { ownerBlockId: parentBlockId, mandatory: true };
+    return { ownerBlockId: parentBlockId, ownerMustExist: true };
   }
   return null;
+}
+
+// Does the ACTIVE TURN's row already own this block?
+//
+// The active turn writes to one of two places, and which one is not a detail
+// this check can skip: `state.messages[assistantIndex]` once the turn has
+// materialized a row, and `liveAssistantMessage` before it does - which is the
+// ordinary case for a turn that is still streaming. `liveAssistantMessage` is
+// NOT in `state.messages`, so a scan of `state.messages` alone answers "no row
+// owns this block" for every card the active turn is currently building, and
+// the detached branch then drops the turn's own tool calls and subagent cards.
+//
+// The live row counts only while it IS the active turn's. A completed turn's
+// row stays visible after the next turn starts (see
+// `liveAssistantForActiveTurnState`), and an event for a block it owns is not
+// the active turn's to accumulate - letting it pass here would write that
+// block into the NEW turn's row instead.
+function activeTurnOwnsBlock(
+  state: ChatSessionState,
+  assistantIndex: number,
+  blockId: string,
+): boolean {
+  if (
+    assistantIndex >= 0 &&
+    assistantMessageOwnsBlock(state.messages[assistantIndex], blockId)
+  ) {
+    return true;
+  }
+  const live = state.liveAssistantMessage;
+  const activeTurnId = state.activeTurn?.turnId ?? null;
+  return (
+    live !== null &&
+    activeTurnId !== null &&
+    live.turnId === activeTurnId &&
+    live.blocks.some((block) => block.blockId === blockId)
+  );
+}
+
+/**
+ * Is this session on the windowed line?
+ *
+ * `transcriptDerived` is the discriminator because it is the one field only a
+ * windowed snapshot sets and every windowed snapshot sets - the host computes
+ * those folds precisely because a windowed client cannot. Named here so the
+ * rule is stated once: it is read by the row appliers below, by the context
+ * chip's usage selector, and by the composer-restore selector, and three
+ * hand-written `transcriptDerived !== null` checks would be three places to
+ * forget it.
+ *
+ * What it MEANS is the important part: on this line `state.messages` holds what
+ * is HYDRATED, not what exists, and it is DERIVED - rebuilt from
+ * `transcriptWindow` by `publishWindowedTranscript` on every windowed frame. So
+ * "not found in `state.messages`" is not "absent", and a write to
+ * `state.messages` is not a write at all.
+ */
+export function isWindowedTranscript<
+  T extends Pick<ChatSessionState, "transcriptDerived">,
+>(
+  state: T,
+): state is T & { readonly transcriptDerived: ChatTranscriptDerived } {
+  return state.transcriptDerived !== null;
+}
+
+/**
+ * Rows the chat is BLOCKED on - the hydration obligation the viewport cannot
+ * express.
+ *
+ * A pending interview's answer card renders in the composer slot, off a
+ * `streaming` interview block found by walking the rendered rows. Scrolling
+ * never brings it into view, so viewport-driven hydration will not fetch it,
+ * and a chat whose question sits outside the retained window has no affordance
+ * at all: the card cannot render, and the dismiss notice is (correctly) held
+ * back because the host says the question is answerable. Naming the ordinal is
+ * what closes that.
+ *
+ * Intersected with the store's OWN pending list rather than taken from the
+ * host's judgement wholesale. The two are the same set at the snapshot that
+ * produced them, and they diverge afterwards in exactly one direction that
+ * matters: an interview settled by a live frame is dropped from `state`
+ * immediately, and re-fetching a row for a question already answered would be
+ * work with nothing on the other end of it.
+ *
+ * Empty on the legacy line, where `transcriptDerived` is null and the whole
+ * transcript is materialized anyway.
+ */
+function pendingInterviewOrdinals(
+  answerability: ReadonlyArray<InterviewAnswerability> | null,
+  pendingInterviews: ReadonlyArray<ChatPendingInterviewState>,
+): ReadonlyArray<number> {
+  if (answerability === null) return [];
+  if (pendingInterviews.length === 0) return [];
+  const pending = new Set(
+    pendingInterviews.map((interview) => interview.blockId),
+  );
+  const ordinals: number[] = [];
+  for (const entry of answerability) {
+    // `null` is "no row renders it" - genuinely stuck, and nothing to fetch.
+    if (entry.ordinal === null) continue;
+    if (!pending.has(entry.blockId)) continue;
+    ordinals.push(entry.ordinal);
+  }
+  return ordinals;
+}
+
+/**
+ * The ordinals hydration must reach beyond the viewport, as the STORE currently
+ * holds them.
+ *
+ * Two sources, and they are here together because `planTranscriptHydration`
+ * takes one list: the pending interviews' answer cards, and a transcript JUMP
+ * whose target is cold.
+ *
+ * The jump one is not an optimization. A cross-tile jump waits for its target
+ * to appear before it scrolls, and a scroll is what moves the viewport, which
+ * is what drives hydration - so for a target outside the retained spans the
+ * request waits on a row that nothing will ever ask for, and the jump parks
+ * forever. Naming the ordinal here is what breaks that circle.
+ */
+function requiredHydrationOrdinalsOf(
+  state: ChatSessionState,
+): ReadonlyArray<number> {
+  const interviews = pendingInterviewOrdinals(
+    state.transcriptDerived === null
+      ? null
+      : state.transcriptDerived.interviewAnswerability,
+    state.pendingInterviews,
+  );
+  const jump = state.jumpTargetOrdinal;
+  if (jump === null) return interviews;
+  return interviews.includes(jump) ? interviews : [...interviews, jump];
+}
+
+/**
+ * `state.coldRewrittenMessageIds` with one more id, bounded.
+ *
+ * A new Set per call, because the value is state and the store's consumers
+ * compare identities. The cap is what keeps this from being a leak on a long
+ * session: the set exists only so a row's FIRST post-hydration appearance can
+ * be classified, and the oldest entries are the ones least likely to still be
+ * waiting for that. Dropping one costs a missed announcement, never
+ * correctness.
+ */
+const MAX_COLD_REWRITTEN_MESSAGE_IDS = 256;
+
+/** Stable empty identity, so a reset does not look like a change. */
+const EMPTY_COLD_REWRITTEN_IDS: ReadonlySet<string> = new Set();
+
+function withColdRewrite(
+  state: ChatSessionState,
+  messageId: string,
+): ReadonlySet<string> {
+  if (state.coldRewrittenMessageIds.has(messageId)) {
+    return state.coldRewrittenMessageIds;
+  }
+  const next = new Set(state.coldRewrittenMessageIds);
+  next.add(messageId);
+  while (next.size > MAX_COLD_REWRITTEN_MESSAGE_IDS) {
+    const oldest = next.values().next();
+    if (oldest.done === true) break;
+    next.delete(oldest.value);
+  }
+  return next;
+}
+
+/**
+ * Rewrite one row in place, on whichever line this session is on.
+ *
+ * The shared path for the row-targeted delta appliers - an image resolving, a
+ * detached subagent's card, a block carried to the frozen half of a split turn.
+ * Each locates its own target (they key on a block, not a message id), then
+ * hands the row and its rewrite here.
+ *
+ * On the windowed line the write goes into the WINDOW. That is not a detail of
+ * where the data lives: `state.messages` is rebuilt from the window by the next
+ * windowed frame of ANY kind, so an applier that spliced the published array
+ * would have its work erased by the next skeleton chunk, index delta, range or
+ * appended event - whichever arrived first. `05577d2f` settled that for records
+ * arriving with no ordinal; this is the same rule for records that have one.
+ *
+ * `null` means the row is not reachable and the change is DROPPED. That is
+ * sound rather than lossy, and only because of the host's emit-after-persist
+ * invariant: the host wrote the row before it told us about the change, so the
+ * `loadRange` that eventually hydrates that ordinal serves a body that already
+ * contains it. Dropping loses nothing; applying to a copy the next frame
+ * overwrites loses the same thing while looking like it worked.
+ *
+ * `charge` says when the window's byte figure is brought back in line, and it
+ * follows from how often the caller runs rather than from what it wants. The
+ * row-targeted appliers pass `"now"`. The ACTIVE TURN's streaming row passes
+ * `"deferred"`, because charging it exactly would serialize a growing record
+ * on every buffered delta - see `unsettledByteMessageIds` in
+ * `transcript-window`.
+ */
+function rewriteMessageInPlace(
+  state: ChatSessionState,
+  messageId: string,
+  update: (message: Message) => Message,
+  apply: {
+    readonly charge: "now" | "deferred";
+    readonly witnesses: ImageWitnessStore | null;
+  },
+): Partial<ChatSessionState> | null {
+  const { charge, witnesses } = apply;
+  if (!isWindowedTranscript(state)) {
+    const index = state.messages.findIndex(
+      (message) => message.messageId === messageId,
+    );
+    if (index < 0) return null;
+    const messages = state.messages.slice();
+    messages[index] = update(state.messages[index]);
+    return { messages };
+  }
+  const applied =
+    charge === "deferred"
+      ? streamWindowMessage(
+          state.transcriptWindow,
+          messageId,
+          update,
+          witnesses,
+        )
+      : updateWindowMessage(
+          state.transcriptWindow,
+          messageId,
+          update,
+          witnesses,
+        );
+  if (!applied.held) {
+    // The row's span is evicted, so the delta is deliberately dropped: the
+    // persisted host body carries it at the next hydration. What is NOT
+    // recoverable is the fact that it happened - the row then first becomes
+    // observable across a hydration-sequence bump, which every consumer reads
+    // as "history arriving late". For the announcements hook that is the
+    // difference between a screen-reader user hearing a detached background
+    // task complete and never learning of it at all.
+    //
+    // Recorded rather than announced here: this is a pure reducer over a
+    // record, and which of these is worth saying out loud is the hook's
+    // question, not this function's.
+    return { coldRewrittenMessageIds: withColdRewrite(state, messageId) };
+  }
+  return {
+    transcriptWindow: applied.window,
+    // `messages` only: republishing `events` from the same fold would hand
+    // every event consumer a new array identity for a change that touched no
+    // event.
+    messages: hydratedRecords(applied.window).messages,
+  };
 }
 
 type InterviewBlock = Extract<ContentBlock, { readonly type: "interview" }>;
@@ -4834,6 +7506,84 @@ type InterviewLifecycleProjection = {
   readonly draftAnswers: ReadonlyArray<InterviewAnswer>;
   readonly delivery: InterviewBlock["delivery"];
 };
+
+/**
+ * The host's code for "the Claude runtime was torn down under a running turn".
+ *
+ * Restated here rather than imported because the host is not on this side of
+ * the wire, and `errorBlockSchema.code` is a free-form string with no enum to
+ * share. The value is the contract; the host owns it (`CLAUDE_RUNTIME_DISPOSED`
+ * in `claude-converter.ts`), and this fold is only a live mirror of a decision
+ * the host has already made durably - a mismatch degrades to "the card lingers
+ * until the next snapshot", never to wrong persisted state.
+ */
+const CLAUDE_RUNTIME_DISPOSED_ERROR_CODE = "CLAUDE_RUNTIME_DISPOSED";
+
+/**
+ * Drop the runtime-disposal errors that belong to ONE answered interview.
+ *
+ * Two conditions, and BOTH are needed. Either alone retires a truthful error.
+ *
+ * 1. POSITION - the target must be the disposal's nearest preceding interview.
+ *    The row is not an interview boundary: a provider turn can ask more than
+ *    once and both interview blocks land in the same row, so a turn that
+ *    answers A, asks B, then dies holds `[A answered, B streaming, disposal]`.
+ *    A row-wide filter would let an exact lifecycle frame for A retire the card
+ *    that is B's only explanation, while B is still waiting on the user.
+ *
+ * 2. CHRONOLOGY - the target's settlement must be strictly LATER than the
+ *    disposal. Answering does not end the turn: the continuation streams more
+ *    text and tool calls into the same row and the runtime can die after all of
+ *    it, giving `[A answered, text, disposal]` where A is STILL the nearest
+ *    preceding interview. There the disposal is the honest terminal for the
+ *    later work, and a stale or duplicate exact-settlement frame for A - which
+ *    re-runs this fold, since the effective block stays answered - must leave
+ *    it alone.
+ *
+ * `targetSettledAt` must be the CANONICAL acceptance time - the `resolvedAt` of
+ * the lifecycle frame that speaks for the block's own settlement authority,
+ * which the host derives from the durable settlement envelope. It must NOT be
+ * the block's `timestamp`: the reducer advances that on every contributing
+ * settlement, so a losing cleanup can drag it past a disposal the answer truly
+ * predates, and a stamp-based guard would then delete a truthful error.
+ *
+ * STRICTLY later, not "at or after": both values are millisecond readings, so
+ * equality cannot order them, and retiring on a tie erases an error the user
+ * needed while retaining on a tie only leaves a stale card that the host's
+ * authoritative row clears on the next snapshot.
+ *
+ * One known degradation, deliberately accepted: a LEGACY/partial lifecycle
+ * tuple carries no `settlementId`, so the caller cannot confirm it speaks for
+ * this block's authority and retains. The host has still retired the block
+ * durably, so the next snapshot corrects it.
+ *
+ * The host owns the same predicate over the same array
+ * (`withRuntimeDisposalRetiredForInterview` in `chat-session-manager.ts`); this
+ * is the live mirror for a row the client already hydrated.
+ */
+function withRuntimeDisposalRetiredForInterview(
+  blocks: ReadonlyArray<ContentBlock>,
+  targetInterviewIndex: number,
+  targetSettledAt: number,
+): ReadonlyArray<ContentBlock> {
+  let nearestInterviewIndex = -1;
+  const retained: ContentBlock[] = [];
+  for (const [index, block] of blocks.entries()) {
+    if (block.type === "interview") nearestInterviewIndex = index;
+    if (
+      block.type === "error" &&
+      block.code === CLAUDE_RUNTIME_DISPOSED_ERROR_CODE &&
+      nearestInterviewIndex === targetInterviewIndex &&
+      targetSettledAt > block.timestamp
+    ) {
+      continue;
+    }
+    retained.push(block);
+  }
+  // Same reference when nothing matched, so a fold that changes nothing keeps
+  // the row's identity and every memoized renderer below it.
+  return retained.length === blocks.length ? blocks : retained;
+}
 
 function withInterviewLifecycleBlocks(
   blocks: ReadonlyArray<ContentBlock>,
@@ -4895,10 +7645,60 @@ function withInterviewLifecycleBlocks(
             delivery,
           };
   }
-  if (updated === block) return blocks;
-  const next = blocks.slice();
-  next[targetIndex] = updated;
-  return next;
+  let settled: ReadonlyArray<ContentBlock> = blocks;
+  if (updated !== block) {
+    const next = blocks.slice();
+    next[targetIndex] = updated;
+    settled = next;
+  }
+  // Mirror of the host's settlement projection: an ANSWERED interview resumes
+  // the provider session on a fresh runtime, so the disposal error that was
+  // waiting on this interview stops explaining why the turn stopped and starts
+  // reading as "answering failed". The host removes it in the settlement's own
+  // durable write; folding it here is what a client that already hydrated this
+  // row needs, since a bounded windowed snapshot may never resend an
+  // arbitrarily old row. The host stays the policy owner - this only makes its
+  // accepted projection visible immediately.
+  //
+  // Only this code, and only the disposal correlated to THIS interview by both
+  // position and chronology. An unrelated error and a still-actionable
+  // `QUEUE_PAUSED_AFTER_ERROR` notice both stay, as do a later interview's own
+  // disposal and one that followed work this answer released.
+  if (!lifecycleFrameOwnsInterviewSettlement(updated, projection)) {
+    return settled;
+  }
+  return withRuntimeDisposalRetiredForInterview(
+    settled,
+    targetIndex,
+    projection.resolvedAt,
+  );
+}
+
+/**
+ * Whether this frame is entitled to date the settled interview's answer.
+ *
+ * Retirement needs a canonical acceptance time, and `resolvedAt` is only that
+ * when the frame speaks for the block's OWN settlement authority. A frame
+ * carrying a different settlementId is a loser or a stale duplicate of some
+ * other settlement and says nothing about when THIS answer was accepted; a
+ * legacy/partial tuple carries no settlementId at all. Both retain and wait
+ * for the host's authoritative row, which has already made the durable call.
+ *
+ * Deliberately not the block's own `timestamp`: the reducer advances that on
+ * every contributing settlement, so a losing cleanup can drag it past a
+ * disposal the answer truly predates.
+ */
+function lifecycleFrameOwnsInterviewSettlement(
+  settledInterview: Extract<ContentBlock, { type: "interview" }>,
+  projection: InterviewLifecycleProjection,
+): boolean {
+  if (settledInterview.outcome !== "answered") return false;
+  const authority = settledInterview.settlement;
+  return (
+    authority !== null &&
+    projection.settlementId !== null &&
+    projection.settlementId === authority.settlementId
+  );
 }
 
 function interviewLifecycleBlockIndex(
@@ -4942,6 +7742,15 @@ function withInterviewLifecycleProjectionPass(
 ): {
   readonly messages: ReadonlyArray<Message>;
   readonly matched: boolean;
+  /**
+   * The one row this pass rewrote, or `null` if it rewrote none.
+   *
+   * Reported rather than left to be recovered by diffing the two arrays,
+   * because the windowed line needs to write that row back into
+   * `transcriptWindow` and "whichever element changed identity" is a fact this
+   * function already knows and the caller would have to re-derive.
+   */
+  readonly rewrittenMessageId: string | null;
 } {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -4960,12 +7769,18 @@ function withInterviewLifecycleProjectionPass(
       projection,
       allowUnresolvedFallback,
     );
-    if (blocks === message.blocks) return { messages, matched: true };
+    if (blocks === message.blocks) {
+      return { messages, matched: true, rewrittenMessageId: null };
+    }
     const next = messages.slice();
     next[index] = { ...message, blocks: [...blocks] };
-    return { messages: next, matched: true };
+    return {
+      messages: next,
+      matched: true,
+      rewrittenMessageId: message.messageId,
+    };
   }
-  return { messages, matched: false };
+  return { messages, matched: false, rewrittenMessageId: null };
 }
 
 function withInterviewLifecycleState(
@@ -4977,6 +7792,8 @@ function withInterviewLifecycleState(
   readonly liveAssistantMessage: LiveAssistantMessage | null;
   readonly matchedOwner: boolean;
   readonly resolvedPendingOwner: boolean;
+  /** See {@link withInterviewLifecycleProjectionPass}'s field of this name. */
+  readonly rewrittenMessageId: string | null;
 } {
   if (projection.settlementId !== null) {
     const exactMessages = withInterviewLifecycleProjectionPass(
@@ -4990,6 +7807,7 @@ function withInterviewLifecycleState(
         liveAssistantMessage,
         matchedOwner: true,
         resolvedPendingOwner: false,
+        rewrittenMessageId: exactMessages.rewrittenMessageId,
       };
     }
     if (liveAssistantMessage !== null) {
@@ -5013,6 +7831,9 @@ function withInterviewLifecycleState(
               : { ...liveAssistantMessage, blocks: exactLiveBlocks },
           matchedOwner: true,
           resolvedPendingOwner: false,
+          // The live row is not a window record - it is `liveAssistantMessage`,
+          // which both lines hold the same way.
+          rewrittenMessageId: null,
         };
       }
     }
@@ -5038,6 +7859,7 @@ function withInterviewLifecycleState(
             : { ...liveAssistantMessage, blocks: liveBlocks },
         matchedOwner: true,
         resolvedPendingOwner: true,
+        rewrittenMessageId: null,
       };
     }
   }
@@ -5051,6 +7873,7 @@ function withInterviewLifecycleState(
     liveAssistantMessage,
     matchedOwner: unresolvedMessages.matched,
     resolvedPendingOwner: unresolvedMessages.matched,
+    rewrittenMessageId: unresolvedMessages.rewrittenMessageId,
   };
 }
 
@@ -5074,6 +7897,7 @@ function applySteerSplitCarryoverEvent(
   state: ChatSessionState,
   assistantIndex: number,
   event: RuntimeEvent,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> | null {
   if (assistantIndex < 0) return null;
   const active = state.messages[assistantIndex];
@@ -5093,15 +7917,27 @@ function applySteerSplitCarryoverEvent(
     event,
   );
   if (content.blocks === sibling.blocks) return {};
-  const next = state.messages.slice();
-  next[siblingIndex] = {
-    ...sibling,
-    blocks: content.blocks,
-    ...(sibling.blocksVersion === undefined
-      ? {}
-      : { blocksVersion: content.blocksVersion }),
-  };
-  return { messages: next };
+  // `{}` and not `null` when the row is unreachable: `null` here means "this is
+  // not a carryover event", and the caller answers it by routing to the ACTIVE
+  // row - which is the duplicate-card outcome this function exists to prevent.
+  // A sibling we found but cannot write to is still a carryover.
+  return (
+    rewriteMessageInPlace(
+      state,
+      sibling.messageId,
+      (target) =>
+        target.role === "assistant"
+          ? {
+              ...target,
+              blocks: content.blocks,
+              ...(target.blocksVersion === undefined
+                ? {}
+                : { blocksVersion: content.blocksVersion }),
+            }
+          : target,
+      { charge: "now", witnesses },
+    ) ?? {}
+  );
 }
 
 // Finds the EARLIER assistant row of the same turn that owns this event's
@@ -5143,6 +7979,7 @@ function applyEventToOwningMessage(
   state: ChatSessionState,
   event: RuntimeEvent,
   ownerBlockId: string,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> | null {
   const index = state.messages.findIndex((message) =>
     assistantMessageOwnsBlock(message, ownerBlockId),
@@ -5155,28 +7992,67 @@ function applyEventToOwningMessage(
     event,
   );
   if (content.blocks === target.blocks) return {};
-  const next = state.messages.slice();
-  next[index] = {
-    ...target,
-    blocks: content.blocks,
-    ...(target.blocksVersion === undefined
-      ? {}
-      : { blocksVersion: content.blocksVersion }),
-    // Preserve the settled row's `timestamp` (its completed-at). A detached
-    // subagent's later activity must NOT advance the turn's completed-at / cache
-    // token - the host detached writer only replaces blocks/blocksVersion, and
-    // this mirrors it so the turn doesn't appear to "complete later".
-  };
-  return { messages: next };
+  return (
+    rewriteMessageInPlace(
+      state,
+      target.messageId,
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : {
+              ...message,
+              blocks: content.blocks,
+              ...(message.blocksVersion === undefined
+                ? {}
+                : { blocksVersion: content.blocksVersion }),
+              // Preserve the settled row's `timestamp` (its completed-at). A
+              // detached subagent's later activity must NOT advance the turn's
+              // completed-at / cache token - the host detached writer only
+              // replaces blocks/blocksVersion, and this mirrors it so the turn
+              // doesn't appear to "complete later".
+            },
+      { charge: "now", witnesses },
+    ) ?? {}
+  );
+}
+
+/**
+ * Reduces a single runtime delta event onto the session state, and remembers
+ * the cards it opened.
+ *
+ * The memory is kept HERE rather than inside the reducer because it is one
+ * fact about one event kind, and every branch below would otherwise have to
+ * carry it. Recorded only when the event actually landed - `applied === state`
+ * is the reducer's own identity signal for "dropped" - so a start that was
+ * refused (no active turn, say) does not leave a note that would make its
+ * legitimate re-delivery look like a repeat.
+ */
+function applyContentBlockDelta(
+  state: ChatSessionState,
+  event: RuntimeEvent,
+  witnesses: ImageWitnessStore | null,
+): Partial<ChatSessionState> {
+  const applied = reduceContentBlockDelta(state, event, witnesses);
+  if (applied === state) return applied;
+  if (!isSubagentCardOpeningEvent(event)) return applied;
+  if (state.openedSubagentCardBlockIds.has(event.blockId)) return applied;
+  const opened = new Set(state.openedSubagentCardBlockIds);
+  addWithFifoEviction(
+    opened,
+    event.blockId,
+    MAX_OPENED_SUBAGENT_CARD_BLOCK_IDS,
+  );
+  return { ...applied, openedSubagentCardBlockIds: opened };
 }
 
 // Reduces a single runtime delta event onto the session state. The branches map
 // one-to-one to the distinct block/delta kinds; flattening that mapping is
 // clearer than threading the dispatch through extra indirection.
 // eslint-disable-next-line complexity
-function applyContentBlockDelta(
+function reduceContentBlockDelta(
   state: ChatSessionState,
   event: RuntimeEvent,
+  witnesses: ImageWitnessStore | null,
 ): Partial<ChatSessionState> {
   const assistantIndex = findAssistantMessageIndex(
     state.messages,
@@ -5189,26 +8065,54 @@ function applyContentBlockDelta(
   const detachedTarget = detachedSubagentOwnerTarget(event);
   if (
     detachedTarget !== null &&
-    !(
-      assistantIndex >= 0 &&
-      assistantMessageOwnsBlock(
-        state.messages[assistantIndex],
-        detachedTarget.ownerBlockId,
-      )
-    )
+    !activeTurnOwnsBlock(state, assistantIndex, detachedTarget.ownerBlockId)
   ) {
     const routed = applyEventToOwningMessage(
       state,
       event,
       detachedTarget.ownerBlockId,
+      witnesses,
     );
     if (routed !== null) return routed;
-    // A parented (subagent-child) event whose owning message is gone must NOT
-    // fall through to the active turn: the accumulator would append its
-    // terminal as a duplicate top-level card on an unrelated turn. The settled
-    // subagent owner is its only legitimate target, so drop it (identity =
-    // no-op) instead.
-    if (detachedTarget.mandatory) return state;
+    // A detached event whose owning message is gone must NOT fall through to
+    // the active turn: the accumulator would append its terminal as a duplicate
+    // top-level card on an unrelated turn. The owner is its only legitimate
+    // target, so drop it (identity = no-op) instead.
+    //
+    // Gated on `ownerMustExist`, which is the direct question and not the
+    // `parentBlockId`-versus-own-`blockId` proxy this used to read. That proxy
+    // was sound only while the transcript was whole: on the windowed line a
+    // `subagent.progress/completed` names its own card's block and that card's
+    // row is EVICTABLE, so a background subagent outliving its spawning turn
+    // finds its owner gone for a reason that has nothing to do with the event
+    // - and synthesizes its progress or completion under whatever turn happens
+    // to be active. Those two are `ownerMustExist` now, so they still drop.
+    //
+    // What must NOT drop is an event that opens its own card FOR THE FIRST
+    // TIME, because "no owner" is its normal starting condition rather than
+    // evidence of anything. `subagent.started` is that event, and dropping it
+    // took the subagent card with it - see `detachedSubagentOwnerTarget`.
+    //
+    // A REPEAT of a start is the other thing entirely, and the exemption above
+    // is a door it would otherwise walk straight through. The accumulator
+    // deliberately accepts a `subagent.started` re-emitted after its turn has
+    // COMPLETED - Codex resolves the agent nickname asynchronously and re-emits
+    // when it lands - so on the windowed line that late arrival can find its
+    // row evicted while a newer turn is running, which is the synthesis case
+    // exactly. The session's own memory is what separates the two, because
+    // nothing on the wire does: a `blockDelta` carries no turn identity, and a
+    // re-emit is otherwise indistinguishable from a start.
+    //
+    // Dropping is safe precisely because eviction is recoverable: the row is
+    // re-served whole by the range that re-hydrates it, carrying this update
+    // already folded in. Falling through is not - it writes a card under a turn
+    // that never spawned it, and no later frame corrects that.
+    if (
+      detachedTarget.ownerMustExist ||
+      state.openedSubagentCardBlockIds.has(detachedTarget.ownerBlockId)
+    ) {
+      return state;
+    }
   }
   // Steer-split carryover: a block that was still STREAMING when a steered
   // user message split the turn lives in an EARLIER assistant row of the SAME
@@ -5220,6 +8124,7 @@ function applyContentBlockDelta(
     state,
     assistantIndex,
     event,
+    witnesses,
   );
   if (carryoverRouted !== null) return carryoverRouted;
   if (assistantIndex >= 0) {
@@ -5227,10 +8132,17 @@ function applyContentBlockDelta(
     if (target.role !== "assistant") {
       return { liveAssistantMessage: null };
     }
-    // Index-targeted update: copy the messages array once (slice is O(N)
-    // but allocates only the spine, not the elements) and replace exactly
-    // the streaming row. Avoids the prior `.map` which re-creates every
-    // unchanged element on every text delta.
+    // The ACTIVE TURN's row - the highest-frequency writer in the store, and
+    // the one the consumer sweep missed. It goes through the same window
+    // write-through as the row-targeted appliers: `state.messages` is DERIVED
+    // on the windowed line, so accumulating into it alone meant the next
+    // appended event republished from the window and erased everything
+    // streamed since the last snapshot. The row is at the tail and hydrated by
+    // construction, which is why this reads as "always worked" - being
+    // hydrated is what makes the write land, not what makes it survive.
+    //
+    // `deferred` because this runs per buffered delta on a GROWING row; the
+    // byte figure is trued up before eviction reads it.
     const content = accumulateTurnContent(
       {
         blocks: target.blocks,
@@ -5239,17 +8151,24 @@ function applyContentBlockDelta(
       event,
     );
     if (content.blocks === target.blocks) return state;
-    const next = state.messages.slice();
-    next[assistantIndex] = {
-      ...target,
-      blocks: content.blocks,
-      ...(target.blocksVersion === undefined
-        ? {}
-        : { blocksVersion: content.blocksVersion }),
-      timestamp: event.timestamp,
-    };
+    const streamed = rewriteMessageInPlace(
+      state,
+      target.messageId,
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : {
+              ...message,
+              blocks: content.blocks,
+              ...(message.blocksVersion === undefined
+                ? {}
+                : { blocksVersion: content.blocksVersion }),
+              timestamp: event.timestamp,
+            },
+      { charge: "deferred", witnesses },
+    );
     return {
-      messages: next,
+      ...(streamed ?? {}),
       liveAssistantMessage: null,
     };
   }
@@ -5340,6 +8259,69 @@ function snapshotPreviousTurnId(
   return activeTurn?.turnId ?? liveAssistant?.turnId ?? null;
 }
 
+/**
+ * What `messages` becomes across a turn transition, on either line.
+ *
+ * The two lines differ in WHERE the records live, which is the whole reason
+ * this is one function rather than a conditional at the call site. On the
+ * windowed line both the frozen row and the steer remap have already been
+ * applied to the window, so the published array is simply re-derived from it -
+ * and re-derived only when the window actually moved, so an ordinary turn
+ * transition hands subscribers the same array identity they already had. On
+ * the legacy line there is no window, so the same two edits are made to the
+ * array directly.
+ */
+function turnStateMessages(input: {
+  readonly windowed: boolean;
+  readonly previousMessages: ReadonlyArray<Message>;
+  readonly previousWindow: TranscriptWindow;
+  readonly nextWindow: TranscriptWindow;
+  readonly materialized: Message | null;
+  readonly turnIds: {
+    readonly previousTurnId: string | null;
+    readonly nextTurnId: string | null;
+  };
+}): ReadonlyArray<Message> {
+  if (input.windowed) {
+    return input.nextWindow === input.previousWindow
+      ? input.previousMessages
+      : hydratedRecords(input.nextWindow).messages;
+  }
+  const base =
+    input.materialized === null
+      ? input.previousMessages
+      : [...input.previousMessages, input.materialized];
+  return messagesForTurnStateChange(base, input.turnIds);
+}
+
+/**
+ * The per-record rewrite a steer restart implies, or `null` when it is a no-op.
+ *
+ * ONE definition with two appliers, because the two transcript lines hold their
+ * records in different places: {@link messagesForTurnStateChange} maps the
+ * legacy line's published array with it, and `mapWindowMessages` maps the
+ * window with it. Stated once rather than twice - a second copy of a predicate
+ * this quiet is the kind that drifts without either copy looking wrong.
+ */
+function turnRemapFor(turnIds: {
+  readonly previousTurnId: string | null;
+  readonly nextTurnId: string | null;
+}): ((message: Message) => Message) | null {
+  const previousTurnId = turnIds.previousTurnId;
+  const nextTurnId = turnIds.nextTurnId;
+  if (
+    previousTurnId === null ||
+    nextTurnId === null ||
+    previousTurnId === nextTurnId
+  ) {
+    return null;
+  }
+  return (message: Message): Message =>
+    message.role === "assistant" && message.turnId === previousTurnId
+      ? { ...message, turnId: nextTurnId }
+      : message;
+}
+
 function messagesForTurnStateChange(
   messages: ReadonlyArray<Message>,
   turnIds: {
@@ -5347,42 +8329,43 @@ function messagesForTurnStateChange(
     readonly nextTurnId: string | null;
   },
 ): ReadonlyArray<Message> {
-  if (
-    turnIds.previousTurnId === null ||
-    turnIds.nextTurnId === null ||
-    turnIds.previousTurnId === turnIds.nextTurnId
-  ) {
-    return messages;
-  }
-  return messages.map((message) =>
-    message.role === "assistant" && message.turnId === turnIds.previousTurnId
-      ? { ...message, turnId: turnIds.nextTurnId }
-      : message,
-  );
+  const remap = turnRemapFor(turnIds);
+  return remap === null ? messages : messages.map(remap);
 }
 
-function messagesWithMaterializedLiveAssistant(
+/**
+ * The row a settling turn's live assistant must be frozen into, or `null`.
+ *
+ * Returns the RECORD rather than a rewritten array, because the two lines put
+ * it in different places and only the caller knows which one it is on: the
+ * legacy line appends it to `state.messages`, the windowed line appends it to
+ * the window's live records. Handing back an array here is what made the
+ * windowed line lose it - `state.messages` is derived from `transcriptWindow`
+ * there, so the append survived only until the next windowed frame of any kind
+ * republished the array from a window that never received the row.
+ */
+function materializedLiveAssistant(
   messages: ReadonlyArray<Message>,
   liveAssistant: LiveAssistantMessage | null,
   turnIds: {
     readonly previousActiveTurnId: string | null;
     readonly nextActiveTurnId: string | null;
   },
-): ReadonlyArray<Message> {
-  if (liveAssistant === null) return messages;
-  if (liveAssistantCoveredByMessages(liveAssistant, messages)) return messages;
+): Message | null {
+  if (liveAssistant === null) return null;
+  if (liveAssistantCoveredByMessages(liveAssistant, messages)) return null;
   if (
     turnIds.nextActiveTurnId !== null &&
     liveAssistant.turnId === turnIds.nextActiveTurnId
   ) {
-    return messages;
+    return null;
   }
   if (
     turnIds.previousActiveTurnId !== null &&
     liveAssistant.turnId === turnIds.previousActiveTurnId &&
     turnIds.nextActiveTurnId !== null
   ) {
-    return messages;
+    return null;
   }
   // Invariant: a frozen (materialized) assistant row can never contain a
   // `streaming` action block. The terminal `blockDelta` normally finalizes the
@@ -5393,10 +8376,7 @@ function messagesWithMaterializedLiveAssistant(
   // guard above returns early), so this path cannot reliably distinguish
   // "superseded" from "interrupted" and uses the generic cut-off status. The
   // authoritative status (and any "superseded") arrives with the next snapshot.
-  return [
-    ...messages,
-    assistantMessageFromLiveAssistant(liveAssistant, "interrupted"),
-  ];
+  return assistantMessageFromLiveAssistant(liveAssistant, "interrupted");
 }
 
 function assistantMessageFromLiveAssistant(
@@ -5441,6 +8421,12 @@ function assistantMessageFromLiveAssistant(
     usage: null,
     reasoningEffort: liveAssistant.reasoningEffort,
     serviceTier: liveAssistant.serviceTier,
+    // Unlike the two above - mirrored from `ChatActiveTurn`, which knows what
+    // the user PICKED - the credential a spawn used is a host-side fact this
+    // transient placeholder never receives. Left null rather than guessed: the
+    // authoritative snapshot that replaces this row carries the real value, and
+    // a wrong `null` here would only ever be visible for the moment before it.
+    envCredentialVar: null,
     imageResolutions,
   };
 }

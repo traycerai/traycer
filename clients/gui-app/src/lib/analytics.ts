@@ -21,7 +21,9 @@ export type AnalyticsSource =
   | "host_failover";
 
 export type AnalyticsWorkspaceSurface =
-  "landing" | "new-conversation" | "owner";
+  | "landing"
+  | "new-conversation"
+  | "owner";
 
 export type AnalyticsWorkspaceContextSource = "browse" | "recent";
 
@@ -66,6 +68,7 @@ export type AnalyticsCommand =
 export type AnalyticsSettingsSection =
   | "agents"
   | "app-diagnostics"
+  | "app-notifications"
   | "appearance"
   | "devices"
   | "diagnostics"
@@ -122,7 +125,12 @@ export type AnalyticsNotificationCategory = "task" | "collaboration" | "system";
  * summary unavailable) - never as a generic "didn't bother computing it"
  * escape hatch. */
 export type AnalyticsCountBucket =
-  "unknown" | "0" | "1" | "2-5" | "6-20" | "21+";
+  | "unknown"
+  | "0"
+  | "1"
+  | "2-5"
+  | "6-20"
+  | "21+";
 
 export type AnalyticsNotificationEntryPoint = Extract<
   AnalyticsSource,
@@ -132,14 +140,16 @@ export type AnalyticsNotificationEntryPoint = Extract<
 export type AnalyticsNotificationHostState = "exact" | "unknown";
 
 export type AnalyticsNotificationFilter =
-  "unread_only" | AnalyticsNotificationCategory;
+  | "unread_only"
+  | AnalyticsNotificationCategory;
 
 export type AnalyticsNotificationSection = "attention" | "recent";
 
 export type AnalyticsNotificationSurface = "center" | "toast" | "native";
 
 export type AnalyticsNotificationAcknowledgmentSource =
-  "explicit_action" | "activation";
+  | "explicit_action"
+  | "activation";
 
 export type AnalyticsNotificationOutcome = "success" | "failure";
 
@@ -162,19 +172,31 @@ export function analyticsCountBucket(
  * bugs show up as heap correlating with this bucket, so it is the axis every
  * resource sample must carry. */
 export type AnalyticsSessionAgeBucket =
-  "under_1h" | "1_to_4h" | "4_to_12h" | "over_12h";
+  | "under_1h"
+  | "1_to_4h"
+  | "4_to_12h"
+  | "over_12h";
 
 /** Escalating JS-heap pressure bands. `critical` sits below the renderer's
  * 4 GB old-space ceiling with room to still report before an OOM. */
 export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
 
+/** Every act id either tour can show, desktop and mobile alike. Mirrors
+ * `OnboardingActId` - a step the union does not carry is dropped by the
+ * allowed-values pinning below. */
 export type AnalyticsOnboardingStep =
   | "agent-guide"
   | "command-theme"
+  | "mobile-switcher"
+  | "mobile-tasks"
   | "navigation"
   | "providers"
+  | "session-import"
   | "task-context"
   | "task-tabs";
+
+/** Which surface opened the import wizard - onboarding act or Settings. */
+export type AnalyticsSessionImportSurface = "dialog" | "onboarding";
 
 export type AnalyticsProviderOperation =
   | "ambient_drift"
@@ -212,6 +234,7 @@ export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
+  | "agentTabSurfacingMode"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "chatTurnMinimapSide"
@@ -288,6 +311,7 @@ export enum AnalyticsEvent {
   OnboardingCompleted = "onboarding_completed",
   OnboardingSkipped = "onboarding_skipped",
   OnboardingThemeChanged = "onboarding_theme_changed",
+  SessionImportStarted = "session_import_started",
   AgentGuideSaved = "agent_guide_saved",
   ProviderProfileLinkStarted = "provider_profile_link_started",
   ProviderProfileLinkSucceeded = "provider_profile_link_succeeded",
@@ -353,6 +377,7 @@ export enum AnalyticsEvent {
   TabCreated = "tab_created",
   TabDuplicated = "tab_duplicated",
   TabSplit = "tab_split",
+  AgentTabSurfaced = "agent_tab_surfaced",
   TabMoved = "tab_moved",
   TabClosed = "tab_closed",
   ArtifactCreated = "artifact_created",
@@ -534,6 +559,17 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.OnboardingThemeChanged]: {
     readonly theme: AnalyticsTheme;
   };
+  /**
+   * A user submitted the session-import wizard. The counts are what the
+   * feature is judged on - how much work people actually bring over, and from
+   * how many repos - and `surface` separates first-run adoption from the
+   * later Settings path.
+   */
+  readonly [AnalyticsEvent.SessionImportStarted]: {
+    readonly surface: AnalyticsSessionImportSurface;
+    readonly session_count: number;
+    readonly group_count: number;
+  };
   readonly [AnalyticsEvent.AgentGuideSaved]: { readonly customized: boolean };
   readonly [AnalyticsEvent.ProviderProfileLinkStarted]: SourceProperties & {
     readonly provider: AnalyticsProvider;
@@ -691,6 +727,14 @@ export interface AnalyticsEventProperties {
     readonly target: AnalyticsTargetKind;
   };
   readonly [AnalyticsEvent.TabSplit]: { readonly target: AnalyticsTargetKind };
+  readonly [AnalyticsEvent.AgentTabSurfaced]: {
+    readonly disposition: "float" | "tile" | "suppress";
+    readonly disposition_reason:
+      | "mode-off"
+      | "manual-pip-active"
+      | "pip-epic-hidden"
+      | null;
+  };
   readonly [AnalyticsEvent.TabMoved]: { readonly target: AnalyticsTargetKind };
   readonly [AnalyticsEvent.TabClosed]: { readonly target: AnalyticsTargetKind };
   readonly [AnalyticsEvent.ArtifactCreated]: {
@@ -850,7 +894,10 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ReportIssueBlocked]: {
     readonly report_type: "bug" | "idea" | "other";
     readonly blocked_action:
-      "send" | "open_github_issue" | "report_on_github" | "save_bundle";
+      | "send"
+      | "open_github_issue"
+      | "report_on_github"
+      | "save_bundle";
   };
   readonly [AnalyticsEvent.ReportIssuePrivateSubmit]:
     | {
@@ -899,7 +946,7 @@ export const POSTHOG_CONFIG = {
   disable_surveys_automatic_display: true,
   disable_product_tours: true,
   disable_web_experiments: true,
-  advanced_disable_decide: true,
+  advanced_disable_flags: true,
   advanced_disable_feature_flags: true,
   person_profiles: "identified_only",
   save_campaign_params: false,
@@ -1035,6 +1082,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
   Object.keys({
     agents: true,
     "app-diagnostics": true,
+    "app-notifications": true,
     appearance: true,
     devices: true,
     diagnostics: true,
@@ -1107,8 +1155,11 @@ const ANALYTICS_THEMES = new Set<string>([
 const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "agent-guide",
   "command-theme",
+  "mobile-switcher",
+  "mobile-tasks",
   "navigation",
   "providers",
+  "session-import",
   "task-context",
   "task-tabs",
 ]);
@@ -1266,6 +1317,10 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["last_step"],
   ),
   ...eventKeyEntries([AnalyticsEvent.OnboardingThemeChanged], ["theme"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.SessionImportStarted],
+    ["surface", "session_count", "group_count"],
+  ),
   ...eventKeyEntries([AnalyticsEvent.AgentGuideSaved], ["customized"]),
   ...eventKeyEntries(
     [AnalyticsEvent.ProviderProfileLinkStarted],
@@ -1370,6 +1425,10 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["target"],
   ),
   ...eventKeyEntries([AnalyticsEvent.ArtifactCreated], ["kind"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.AgentTabSurfaced],
+    ["disposition", "disposition_reason"],
+  ),
   ...eventKeyEntries([AnalyticsEvent.ArtifactOpened], ["source", "kind"]),
   ...eventKeyEntries(
     [AnalyticsEvent.ArtifactStatusChanged],
@@ -1656,6 +1715,11 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     new Set(["center", "toast", "native"]),
   ),
   ...eventValueEntries(
+    [AnalyticsEvent.SessionImportStarted],
+    "surface",
+    new Set(["dialog", "onboarding"]),
+  ),
+  ...eventValueEntries(
     [
       AnalyticsEvent.NotificationActivationCompleted,
       AnalyticsEvent.NotificationPageLoaded,
@@ -1712,6 +1776,11 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     ],
     "target",
     ANALYTICS_TARGETS,
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.AgentTabSurfaced],
+    "disposition",
+    new Set(["float", "tile", "suppress"]),
   ),
   ...eventValueEntries(
     [
@@ -1781,9 +1850,11 @@ const COUNT_PROPERTY_KEYS = new Set<string>([
   "attachment_count",
   "failed_count",
   "file_count",
+  "group_count",
   "open_tabs",
   "requested_count",
   "script_count",
+  "session_count",
   "succeeded_count",
   "workspace_count",
 ]);
@@ -1842,6 +1913,7 @@ function isAnalyticsMeasure(value: unknown): boolean {
  */
 const EVENT_SCOPED_PROPERTY_KEYS = new Set<string>([
   "blocker",
+  "disposition_reason",
   "has_more",
   "result_count_bucket",
   "status",
@@ -1860,6 +1932,13 @@ function isEventScopedPropertyValue(
       );
     }
     return typeof value === "string" && ANALYTICS_BLOCKERS.has(value);
+  }
+  if (key === "disposition_reason") {
+    if (value === null) return event === AnalyticsEvent.AgentTabSurfaced;
+    return (
+      typeof value === "string" &&
+      new Set(["mode-off", "manual-pip-active", "pip-epic-hidden"]).has(value)
+    );
   }
   if (key === "result_count_bucket") {
     if (value === null) return event === AnalyticsEvent.NotificationPageLoaded;
@@ -2399,7 +2478,12 @@ export function analyticsAppSurface(): "desktop" | "mobile" {
 }
 
 export function analyticsPlatform():
-  "android" | "ios" | "linux" | "macos" | "other" | "windows" {
+  | "android"
+  | "ios"
+  | "linux"
+  | "macos"
+  | "other"
+  | "windows" {
   if (isMobileApp()) {
     // `navigator.platform` reads "iPhone"/"Linux armv8l" inside the mobile
     // WebViews, which the desktop branches below would misfile as other or

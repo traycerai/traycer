@@ -1,9 +1,11 @@
 import { WorktreeDeleteStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import type { WorktreeDeletionSource } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { appLogger } from "@/lib/logger";
+import { sanitizeHoldersRevision } from "@/lib/worktree/teardown-holder-copy";
 
 export interface WorktreeCleanupOutcome {
   readonly removed: ReadonlyArray<string>;
@@ -19,12 +21,25 @@ export interface WorktreeCleanupOutcome {
    * completion notification with the real counts.
    */
   readonly uncertain: ReadonlyArray<string>;
+  /**
+   * Force paths the host refused with `WORKTREE_HOLDERS_CHANGED` (fresh
+   * inventory attached). The GUI must return to review — never toast this
+   * as a generic failure or auto-retry.
+   */
+  readonly holdersChanged: ReadonlyArray<HoldersChangedPath>;
+}
+
+export interface HoldersChangedPath {
+  readonly worktreePath: string;
+  readonly holders: readonly WorktreeBusyHolder[];
+  readonly holdersRevision: string | undefined;
 }
 
 const EMPTY_OUTCOME: WorktreeCleanupOutcome = {
   removed: [],
   failed: [],
   uncertain: [],
+  holdersChanged: [],
 };
 
 // Fan-out cap for the FALLBACK path only (an older host with no batch command
@@ -60,16 +75,60 @@ const MAX_PARALLEL_CLEANUP_STREAMS = 2;
  * in-use after the dialog opened is declined and lands in `failed`, never
  * silently force-removed.
  */
+export interface WorktreeCleanupRequest {
+  readonly hostId: string;
+  readonly paths: ReadonlyArray<string>;
+  readonly source: WorktreeDeletionSource;
+  readonly epicId?: string;
+  readonly stopOwnersPaths: ReadonlySet<string>;
+  readonly expectedHoldersRevisionByPath: ReadonlyMap<string, string>;
+}
+
 export function runWorktreeCleanup(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
-  hostId: string,
-  paths: ReadonlyArray<string>,
-  source: WorktreeDeletionSource,
+  request: WorktreeCleanupRequest,
 ): Promise<WorktreeCleanupOutcome> {
   // No approved paths is not a command. Opening one would burn a `commandId`
   // and ask the host for a "you deleted nothing" notification row.
-  if (paths.length === 0) return Promise.resolve(EMPTY_OUTCOME);
-  return runCleanupCommand(openStreamTransport, hostId, paths, source);
+  if (request.paths.length === 0) return Promise.resolve(EMPTY_OUTCOME);
+  const forcePaths = request.paths.filter((path) =>
+    request.stopOwnersPaths.has(path),
+  );
+  const normalPaths = request.paths.filter(
+    (path) => !request.stopOwnersPaths.has(path),
+  );
+  if (forcePaths.length === 0) {
+    return runCleanupCommand(openStreamTransport, {
+      hostId: request.hostId,
+      paths: normalPaths,
+      source: request.source,
+      epicId: request.epicId,
+    });
+  }
+  // Force paths first: a HOLDERS_CHANGED refusal must not start the batch
+  // delete of the remaining selection.
+  return runFallbackCleanup({
+    openStreamTransport,
+    hostId: request.hostId,
+    paths: forcePaths,
+    stopOwners: true,
+    expectedHoldersRevisionByPath: request.expectedHoldersRevisionByPath,
+  }).then((force) => {
+    if (force.holdersChanged.length > 0 || normalPaths.length === 0) {
+      return force;
+    }
+    return runCleanupCommand(openStreamTransport, {
+      hostId: request.hostId,
+      paths: normalPaths,
+      source: request.source,
+      epicId: request.epicId,
+    }).then((normal) => ({
+      removed: [...normal.removed, ...force.removed],
+      failed: [...normal.failed, ...force.failed],
+      uncertain: [...normal.uncertain, ...force.uncertain],
+      holdersChanged: force.holdersChanged,
+    }));
+  });
 }
 
 /**
@@ -85,10 +144,14 @@ export function runWorktreeCleanup(
  */
 function runCleanupCommand(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
-  hostId: string,
-  paths: ReadonlyArray<string>,
-  source: WorktreeDeletionSource,
+  input: {
+    readonly hostId: string;
+    readonly paths: ReadonlyArray<string>;
+    readonly source: WorktreeDeletionSource;
+    readonly epicId: string | undefined;
+  },
 ): Promise<WorktreeCleanupOutcome> {
+  const { hostId, paths, source, epicId } = input;
   return new Promise<WorktreeCleanupOutcome>((resolve) => {
     const removed: string[] = [];
     const failed: string[] = [];
@@ -106,6 +169,7 @@ function runCleanupCommand(
         removed,
         failed: unsettledAre === "failed" ? [...failed, ...unsettled] : failed,
         uncertain: unsettledAre === "uncertain" ? unsettled : [],
+        holdersChanged: [],
       });
     };
     /**
@@ -124,12 +188,19 @@ function runCleanupCommand(
       requestClose(holder);
       const remaining = [...pending];
       pending.clear();
-      void runFallbackCleanup(openStreamTransport, hostId, remaining).then(
+      void runFallbackCleanup({
+        openStreamTransport,
+        hostId,
+        paths: remaining,
+        stopOwners: false,
+        expectedHoldersRevisionByPath: new Map(),
+      }).then(
         (fallback) =>
           resolve({
             removed: [...removed, ...fallback.removed],
             failed: [...failed, ...fallback.failed],
-            uncertain: [],
+            uncertain: fallback.uncertain,
+            holdersChanged: fallback.holdersChanged,
           }),
         (error: unknown) => {
           // `runFallbackCleanup` has no rejecting path today - every
@@ -149,7 +220,12 @@ function runCleanupCommand(
           // claiming "couldn't be removed" would be a false statement about the
           // filesystem. Nothing is retried - a destructive operation whose
           // outcome we do not know is exactly what must not be replayed.
-          resolve({ removed, failed, uncertain: remaining });
+          resolve({
+            removed,
+            failed,
+            uncertain: remaining,
+            holdersChanged: [],
+          });
           appLogger.warn(
             "[worktree-cleanup] the per-target fallback failed unexpectedly; those worktrees may or may not have been removed",
             {
@@ -179,6 +255,7 @@ function runCleanupCommand(
             wsStreamClient,
             commandId: crypto.randomUUID(),
             source,
+            epicId,
             targets: paths.map((worktreePath) => ({
               worktreePath,
               scripts: null,
@@ -245,108 +322,162 @@ function runCleanupCommand(
 }
 
 /**
- * Older-host fallback: one `worktree.deleteByPath@1.0` stream per path, bounded
- * to {@link MAX_PARALLEL_CLEANUP_STREAMS} in flight.
+ * Per-path `worktree.deleteByPath` fan-out, bounded to
+ * {@link MAX_PARALLEL_CLEANUP_STREAMS} in flight. Used for older hosts that
+ * cannot serve the batch command, and for current-host force paths that need
+ * `stopOwners`.
  *
- * Unchanged from the pre-command behaviour on purpose - it is what an older
- * host can serve, and its outcome shape has no `uncertain` bucket because
- * nothing on that path survives this client: a dropped single-target stream is
- * work that stopped, which is what `failed` already means there.
+ * A drop after the stream opened is `uncertain` — the host may still finish
+ * the delete — matching the batch command. A drop before open, an open
+ * failure, or an app terminal `failed`/`deleted: false` is `failed`.
  *
- * It is also expected never to reject - each path settles through
+ * Expected never to reject - each path settles through
  * {@link deleteOneWorktree}. The caller still handles rejection, because the
  * "always settles" invariant belongs to the caller's promise, not to this
  * function's present implementation.
  */
-async function runFallbackCleanup(
-  openStreamTransport: (hostId: string) => DurableStreamTransport,
-  hostId: string,
-  paths: ReadonlyArray<string>,
-): Promise<{ removed: string[]; failed: string[] }> {
+async function runFallbackCleanup(input: {
+  readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
+  readonly hostId: string;
+  readonly paths: ReadonlyArray<string>;
+  readonly stopOwners: boolean;
+  readonly expectedHoldersRevisionByPath: ReadonlyMap<string, string>;
+}): Promise<WorktreeCleanupOutcome> {
   const removed: string[] = [];
   const failed: string[] = [];
-  const queue = [...paths];
+  const uncertain: string[] = [];
+  const holdersChanged: HoldersChangedPath[] = [];
+  const queue = [...input.paths];
 
   const worker = async (): Promise<void> => {
     for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
-      const deleted = await deleteOneWorktree(
-        openStreamTransport,
-        hostId,
-        path,
-      );
-      if (deleted) {
+      const outcome = await deleteOneWorktree({
+        openStreamTransport: input.openStreamTransport,
+        hostId: input.hostId,
+        worktreePath: path,
+        stopOwners: input.stopOwners,
+        expectedHoldersRevision: input.expectedHoldersRevisionByPath.get(path),
+      });
+      if (outcome.kind === "removed") {
         removed.push(path);
-      } else {
+      } else if (outcome.kind === "failed") {
         failed.push(path);
+      } else if (outcome.kind === "holders-changed") {
+        holdersChanged.push({
+          worktreePath: path,
+          holders: outcome.holders,
+          holdersRevision: outcome.holdersRevision,
+        });
+      } else {
+        uncertain.push(path);
       }
     }
   };
 
-  const workerCount = Math.min(MAX_PARALLEL_CLEANUP_STREAMS, paths.length);
+  const workerCount = Math.min(
+    MAX_PARALLEL_CLEANUP_STREAMS,
+    input.paths.length,
+  );
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-  return { removed, failed };
+  return { removed, failed, uncertain, holdersChanged };
 }
+
+type DeleteOneOutcome =
+  | { readonly kind: "removed" }
+  | { readonly kind: "failed" }
+  | { readonly kind: "uncertain" }
+  | {
+      readonly kind: "holders-changed";
+      readonly holders: readonly WorktreeBusyHolder[];
+      readonly holdersRevision: string | undefined;
+    };
 
 /**
  * Every per-path delete settles: on an app terminal frame (`complete`/`failed`),
  * on the FIRST connection drop after start (`reconnecting`/`closed`), or on a
- * synchronous open failure. A drop is counted as `failed` and the session is
- * torn down immediately so the transport's reconnect loop can't re-issue the
- * `subscribe` frame (which would re-run the host delete pipeline) - so exactly
- * one subscribe is ever sent per path, and the overall promise always resolves.
+ * synchronous open failure. The session is torn down immediately so the
+ * transport's reconnect loop can't re-issue the `subscribe` frame (which would
+ * re-run the host delete pipeline) - so exactly one subscribe is ever sent per
+ * path, and the overall promise always resolves.
+ *
+ * A drop after `open` is `uncertain` (the host may still finish). A drop
+ * before the session opened, an open failure, or an app terminal failure is
+ * `failed`.
  */
-function deleteOneWorktree(
-  openStreamTransport: (hostId: string) => DurableStreamTransport,
-  hostId: string,
-  worktreePath: string,
-): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+function deleteOneWorktree(input: {
+  readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
+  readonly hostId: string;
+  readonly worktreePath: string;
+  readonly stopOwners: boolean;
+  readonly expectedHoldersRevision: string | undefined;
+}): Promise<DeleteOneOutcome> {
+  return new Promise<DeleteOneOutcome>((resolve) => {
     const holder = newCloseHolder();
-    const state = { settled: false };
-    const finish = (deleted: boolean): void => {
+    const state = { settled: false, reachedHost: false };
+    const finish = (outcome: DeleteOneOutcome): void => {
       if (state.settled) return;
       state.settled = true;
       requestClose(holder);
-      resolve(deleted);
+      resolve(outcome);
     };
 
     try {
       const owned = openOwnedDurableStreamClient(
-        openStreamTransport,
-        hostId,
+        input.openStreamTransport,
+        input.hostId,
         (wsStreamClient) =>
           new WorktreeDeleteStreamClient({
             wsStreamClient,
-            worktreePath,
+            worktreePath: input.worktreePath,
             scripts: null,
+            stopOwners: input.stopOwners,
+            expectedHoldersRevision: input.stopOwners
+              ? sanitizeHoldersRevision(input.expectedHoldersRevision)
+              : undefined,
             callbacks: {
               onStarted: () => {},
               onPhase: () => {},
               onOutput: () => {},
-              onComplete: (deleted) => finish(deleted),
-              onFailed: () => finish(false),
+              onComplete: (deleted) =>
+                finish({ kind: deleted ? "removed" : "failed" }),
+              onFailed: (_reason, holders, code, holdersRevision) => {
+                if (code === "WORKTREE_HOLDERS_CHANGED") {
+                  finish({
+                    kind: "holders-changed",
+                    holders: holders ?? [],
+                    holdersRevision,
+                  });
+                  return;
+                }
+                finish({ kind: "failed" });
+              },
               onConnectionStatus: (status) => {
                 // Fail fast on the FIRST drop after start. The one-shot delete
                 // stream must not silently re-run, but WsStreamClient's own
                 // reconnect loop keeps rescheduling `reconnecting` (reason:
                 // null) drops - which would both re-issue the subscribe (re-run
                 // the host pipeline) AND leave this promise hanging (the summary
-                // toast + cache invalidation would never fire). Any
-                // `reconnecting`/`closed` before a terminal frame means the
-                // delete never confirmed: count it failed and let `finish`'s
-                // `close()` tear the session down. `connecting`/`open` are the
-                // normal startup and are ignored; a `closed` fired by our own
-                // teardown after a terminal frame is absorbed by the `settled`
-                // guard.
-                if (status !== "reconnecting" && status !== "closed") return;
-                if (!state.settled) {
-                  appLogger.warn(
-                    "[worktree-cleanup] delete stream dropped before completing; the worktree may or may not have been removed",
-                    { worktreePath, status },
-                  );
+                // toast + cache invalidation would never fire).
+                // `connecting`/`open` are the normal startup; a `closed` fired
+                // by our own teardown after a terminal frame is absorbed by
+                // the `settled` guard.
+                if (status === "open") {
+                  state.reachedHost = true;
+                  return;
                 }
-                finish(false);
+                if (status !== "reconnecting" && status !== "closed") return;
+                if (state.reachedHost) {
+                  if (!state.settled) {
+                    appLogger.warn(
+                      "[worktree-cleanup] delete stream dropped before completing; the worktree may or may not have been removed",
+                      { worktreePath: input.worktreePath, status },
+                    );
+                  }
+                  finish({ kind: "uncertain" });
+                  return;
+                }
+                finish({ kind: "failed" });
               },
             },
           }),
@@ -354,10 +485,10 @@ function deleteOneWorktree(
       adoptClose(holder, owned.close);
     } catch (error) {
       appLogger.warn("[worktree-cleanup] failed to open delete stream", {
-        worktreePath,
+        worktreePath: input.worktreePath,
         error: error instanceof Error ? error.message : String(error),
       });
-      finish(false);
+      finish({ kind: "failed" });
     }
   });
 }

@@ -9,6 +9,7 @@ import type {
   DisplayTopology,
   FeatureSettingsSnapshot,
   InstalledFont,
+  CertificateTrustScope,
   LogLevel,
   LogLevelScope,
   LogLevelsSnapshot,
@@ -91,7 +92,11 @@ export interface PlatformBridgeSurface {
   certTrust: {
     list(): Promise<ReadonlyArray<TrustedCertificateEntry>>;
     trust(hostname: string, certificate: unknown): Promise<unknown>;
-    untrust(fingerprint: string, hostname: string): Promise<void>;
+    untrust(
+      scope: CertificateTrustScope,
+      fingerprint: string,
+      hostname: string,
+    ): Promise<void>;
     listPending(): Promise<ReadonlyArray<PendingCertificateError>>;
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
@@ -102,7 +107,9 @@ export interface PlatformBridgeSurface {
     onTopologyChange(
       handler: Listener<{
         readonly reason:
-          "display-added" | "display-removed" | "display-metrics-changed";
+          | "display-added"
+          | "display-removed"
+          | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }>,
     ): Disposable;
@@ -260,9 +267,10 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
           hostname,
           certificate,
         ),
-      untrust: (fingerprint, hostname) =>
+      untrust: (scope, fingerprint, hostname) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.certTrustRemove,
+          scope,
           fingerprint,
           hostname,
         ) as Promise<void>,

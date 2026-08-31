@@ -20,6 +20,7 @@ export const RPC_ERROR_CODES = [
   "FORBIDDEN",
   "E_HOST_UNSUPPORTED",
   "WORKTREE_BUSY",
+  "WORKTREE_HOLDERS_CHANGED",
   "WORKTREE_REBIND_BLOCKED",
   "WORKTREE_SETUP_FAILED",
   "WORKTREE_SETUP_CANCELLED",
@@ -84,11 +85,17 @@ export type RpcErrorDetails = {
   code: RpcErrorCode;
   message: string;
   /**
-   * Typed `WORKTREE_BUSY` holder inventory. Optional: omitted on every other
-   * code, and omitted by hosts that predate the holders minor. See
+   * Typed holder inventory on `WORKTREE_BUSY` and
+   * `WORKTREE_HOLDERS_CHANGED`. Optional: omitted on every other code, and
+   * omitted by hosts that predate the holders minor. See
    * `worktreeBusyHolderSchema`.
    */
   holders?: readonly WorktreeBusyHolder[];
+  /**
+   * Host-computed digest of `holders`. Present on `WORKTREE_BUSY` and
+   * `WORKTREE_HOLDERS_CHANGED` from a current host; omitted otherwise.
+   */
+  holdersRevision?: string;
 };
 
 export type RpcContract<
@@ -141,7 +148,8 @@ export type RpcErrorFor<Contract> = Contract extends AnyRpcContract
   : never;
 
 export type RpcResultFor<Contract> =
-  RpcSuccessFor<Contract> | RpcErrorFor<Contract>;
+  | RpcSuccessFor<Contract>
+  | RpcErrorFor<Contract>;
 
 export type RpcResponseUpgradeContext<Request> = {
   readonly request: Request;
@@ -157,10 +165,7 @@ type SameMethodPair<
     : false
   : false;
 
-type UpgradePathBase<
-  From extends AnyRpcContract,
-  To extends AnyRpcContract,
-> = {
+type UpgradePathBase<From extends AnyRpcContract, To extends AnyRpcContract> = {
   from: From["schemaVersion"];
   to: To["schemaVersion"];
   upgradeRequest: (request: RequestOf<From>) => RequestOf<To>;
@@ -169,33 +174,34 @@ type UpgradePathBase<
 export type ContextlessUpgradePath<
   From extends AnyRpcContract,
   To extends AnyRpcContract,
-> = SameMethodPair<From, To> extends true
-  ? UpgradePathBase<From, To> & {
-      upgradeResponse: (response: ResponseOf<From>) => ResponseOf<To>;
-    }
-  : never;
+> =
+  SameMethodPair<From, To> extends true
+    ? UpgradePathBase<From, To> & {
+        upgradeResponse: (response: ResponseOf<From>) => ResponseOf<To>;
+      }
+    : never;
 
 export type ContextualUpgradePath<
   From extends AnyRpcContract,
   To extends AnyRpcContract,
-> = SameMethodPair<From, To> extends true
-  ? UpgradePathBase<From, To> & {
-      upgradeResponse: (
-        response: ResponseOf<From>,
-        context: RpcResponseUpgradeContext<RequestOf<From>> | undefined,
-      ) => ResponseOf<To>;
-    }
-  : never;
+> =
+  SameMethodPair<From, To> extends true
+    ? UpgradePathBase<From, To> & {
+        upgradeResponse: (
+          response: ResponseOf<From>,
+          context: RpcResponseUpgradeContext<RequestOf<From>> | undefined,
+        ) => ResponseOf<To>;
+      }
+    : never;
 
 export type UpgradePath<
   From extends AnyRpcContract,
   To extends AnyRpcContract,
-> =
-  | ContextlessUpgradePath<From, To>
-  | ContextualUpgradePath<From, To>;
+> = ContextlessUpgradePath<From, To> | ContextualUpgradePath<From, To>;
 
 export type DowngradeResult<Value> =
-  { ok: true; value: Value } | { ok: false; error: RpcErrorDetails };
+  | { ok: true; value: Value }
+  | { ok: false; error: RpcErrorDetails };
 
 export type DowngradePath<
   From extends AnyRpcContract,

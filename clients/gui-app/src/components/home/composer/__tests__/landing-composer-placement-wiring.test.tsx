@@ -76,7 +76,8 @@ const testState = vi.hoisted(() => ({
   pasteDisabled: false,
   resolvingPaths: false,
   runPendingImageJob: null as
-    ((job: (signal: AbortSignal) => Promise<void>) => void) | null,
+    | ((job: (signal: AbortSignal) => Promise<void>) => void)
+    | null,
   /** The target `useLandingComposerActions` was actually constructed with. */
   actionsTarget: null as { readonly hostLabel: string } | null,
   // G4 fixture: `ComposerPlacement.followsEffective` as `useComposerPlacement`
@@ -202,6 +203,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     // (reusing a pre-minted pendingCreateId when present) rather than
     // createDraft directly.
     createDraftWithId: vi.fn(() => "draft-for-test"),
+    restoreDraftWorkspaceForHost: vi.fn(),
     setDraftContent: vi.fn(),
   };
   const useLandingDraftStore = Object.assign(

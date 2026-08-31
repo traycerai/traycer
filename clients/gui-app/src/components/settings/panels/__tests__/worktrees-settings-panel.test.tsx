@@ -18,6 +18,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import type { WorktreeDeleteBatchStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -81,6 +82,8 @@ const streamMock = vi.hoisted(() => ({
   legacyPaths: [] as string[],
   closeCount: 0,
   commandCount: 0,
+  stopOwnersByPath: new Map<string, boolean>(),
+  expectedHoldersRevisionByPath: new Map<string, string | undefined>(),
 }));
 
 // Capture the confirm-time "dropped rows" toast so its class-summarized copy can
@@ -196,10 +199,20 @@ vi.mock(
       constructor(options: {
         readonly worktreePath: string;
         readonly scripts: WorktreeEntryScripts | null;
+        readonly stopOwners: boolean;
+        readonly expectedHoldersRevision: string | undefined;
         readonly callbacks: WorktreeDeleteStreamCallbacks;
       }) {
         streamMock.paths.push(options.worktreePath);
         streamMock.legacyPaths.push(options.worktreePath);
+        streamMock.stopOwnersByPath.set(
+          options.worktreePath,
+          options.stopOwners,
+        );
+        streamMock.expectedHoldersRevisionByPath.set(
+          options.worktreePath,
+          options.expectedHoldersRevision,
+        );
         if (streamMock.throwForPaths.has(options.worktreePath)) {
           throw new Error(`cannot subscribe ${options.worktreePath}`);
         }
@@ -268,8 +281,8 @@ vi.mock(
               options.callbacks.onTargetComplete(path, deleted);
               settleTarget(path, deleted);
             },
-            onFailed: (reason) => {
-              options.callbacks.onTargetFailed(path, reason);
+            onFailed: (reason, holders) => {
+              options.callbacks.onTargetFailed(path, reason, holders);
               settleTarget(path, false);
             },
             onConnectionStatus: (status, reason) =>
@@ -296,6 +309,7 @@ function stubStreamClient(): WsStreamClient<HostStreamRpcRegistry> {
     endpoint: () => null,
     bearer: () => null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
@@ -370,6 +384,19 @@ function entry(
   };
 }
 
+const BUSY_HOLDERS: readonly WorktreeBusyHolder[] = [
+  {
+    ownerRef: {
+      epicId: "epic-1",
+      ownerKind: "terminal-agent",
+      ownerId: "tui-1",
+    },
+    holdKind: "terminal-agent-pty",
+    activity: "working",
+    label: "Claude Code agent polite-ocelot is working",
+  },
+];
+
 const WORKTREES: WorktreeHostEntryV16[] = [
   entry({
     worktreePath: "/wt/clean",
@@ -437,11 +464,13 @@ function renderList(args: {
   readonly queryClient: QueryClient;
   readonly worktrees: readonly WorktreeHostEntryV16[];
   readonly enrichedByPath:
-    ReadonlyMap<string, WorktreeHostEntryV16> | undefined;
+    | ReadonlyMap<string, WorktreeHostEntryV16>
+    | undefined;
   readonly erroredPaths: ReadonlySet<string> | undefined;
   readonly seededPaths: ReadonlySet<string> | undefined;
   readonly onVisiblePathsChange:
-    ((paths: readonly string[]) => void) | undefined;
+    | ((paths: readonly string[]) => void)
+    | undefined;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string> | undefined;
 }) {
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
@@ -787,15 +816,17 @@ describe("WorktreesList delete flow", () => {
     streamMock.legacyPaths = [];
     streamMock.closeCount = 0;
     streamMock.commandCount = 0;
+    streamMock.stopOwnersByPath.clear();
+    streamMock.expectedHoldersRevisionByPath.clear();
     toastMock.messages = [];
   });
 
-  it("disables delete for an in-use worktree", () => {
+  it("keeps in-use delete enabled so a busy refusal can open the force-delete confirm", () => {
     renderDefault();
     const busyButton = screen.getByRole("button", {
-      name: /in use by an active agent/i,
+      name: "Delete worktree feat-busy",
     });
-    expect(busyButton.hasAttribute("disabled")).toBe(true);
+    expect(busyButton.hasAttribute("disabled")).toBe(false);
   });
 
   it("renders unresolved rows as checking and excludes them from destructive selection", () => {
@@ -1243,7 +1274,7 @@ describe("WorktreesList delete flow", () => {
     expect(selectAll.classList.contains("text-muted-foreground")).toBe(false);
   });
 
-  it("excludes an in-use row and a backgrounded-deleting row from selection and select-all", () => {
+  it("excludes an in-use row and a backgrounded-deleting row from select-all", () => {
     renderDefault();
     confirmDelete("feat-dirty");
     act(() => {
@@ -1256,7 +1287,8 @@ describe("WorktreesList delete flow", () => {
     const busyCheckbox = screen.getByRole("checkbox", {
       name: "Select worktree feat-busy",
     });
-    expect(busyCheckbox.getAttribute("aria-disabled")).toBe("true");
+    // In-use is selectable-deliberately, but select-all never pre-selects it.
+    expect(busyCheckbox.getAttribute("aria-disabled")).toBe("false");
     // The dirty row's own checkbox is now locked while its delete runs.
     expect(
       screen
@@ -1264,7 +1296,7 @@ describe("WorktreesList delete flow", () => {
         .getAttribute("aria-disabled"),
     ).toBe("true");
 
-    // Select-all only picks up the one remaining selectable row (feat-clean).
+    // Select-all only picks up the one remaining select-all-eligible row (feat-clean).
     fireEvent.click(screen.getByTestId("worktrees-select-all"));
     expect(screen.getByText("1 selected")).not.toBeNull();
     expect(busyCheckbox.getAttribute("aria-checked")).toBe("false");
@@ -1588,13 +1620,14 @@ describe("WorktreesList delete flow", () => {
   it("selects visible deletable worktrees and starts bulk deletes in the background", () => {
     renderDefault();
 
-    // No selection yet -> no action bar. The in-use row's checkbox is disabled.
+    // No selection yet -> no action bar. The in-use row is selectable but
+    // never pre-selected (select-all leaves it out).
     expect(screen.queryByTestId("worktrees-selection-action-bar")).toBeNull();
     expect(
       screen
         .getByRole("checkbox", { name: "Select worktree feat-busy" })
         .getAttribute("aria-disabled"),
-    ).toBe("true");
+    ).toBe("false");
 
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Select worktree feat-clean" }),
@@ -1860,7 +1893,12 @@ describe("WorktreesList delete flow", () => {
     // `/wt/clean` settles under the ORIGINAL command and releases its
     // reservation, so the user can act on that path again.
     act(() => {
-      callbacksFor("/wt/clean").onFailed("busy");
+      callbacksFor("/wt/clean").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
 
     // They do: a fresh single delete opens its own command, whose record sits
@@ -1957,7 +1995,12 @@ describe("WorktreesList delete flow", () => {
     // The queued third target starts only once a slot frees, and every target
     // releases its reservation as it settles.
     act(() => {
-      callbacksFor("/wt/clean").onFailed("busy");
+      callbacksFor("/wt/clean").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
     expect(streamMock.paths).toEqual([
       "/wt/clean",
@@ -1965,8 +2008,18 @@ describe("WorktreesList delete flow", () => {
       "/wt/api-clean",
     ]);
     act(() => {
-      callbacksFor("/wt/dirty").onFailed("busy");
-      callbacksFor("/wt/api-clean").onFailed("busy");
+      callbacksFor("/wt/dirty").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
+      callbacksFor("/wt/api-clean").onFailed(
+        "busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
 
     // All three failed, so all three are selectable and deletable again - a
@@ -2056,12 +2109,152 @@ describe("WorktreesList delete flow", () => {
     act(() => {
       streamMock.callbacks?.onFailed(
         "Worktree /wt/clean is in use by an active agent session",
+        undefined,
+        undefined,
+        undefined,
       );
     });
     expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
       "in use by an active agent session",
     );
     expect(streamMock.closeCount).toBe(1);
+  });
+
+  it("opens the force-delete dialog on a typed busy refusal and retries with stopOwners", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Worktree is in use",
+        BUSY_HOLDERS,
+        undefined,
+        undefined,
+      );
+    });
+    expect(screen.queryByTestId("worktree-delete-error")).toBeNull();
+    screen.getByRole("dialog", { name: "Delete worktree feat-clean?" });
+    expect(
+      screen.getByTestId("teardown-disclosure-working").textContent,
+    ).toContain(
+      "Terminal agent “Claude Code agent polite-ocelot” is working — will be stopped",
+    );
+    expect(screen.getByTestId("teardown-disclosure").textContent).not.toMatch(
+      /\bbusy\b/i,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
+    expect(streamMock.legacyPaths).toEqual(["/wt/clean"]);
+    expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBe(true);
+  });
+
+  it("retries force-delete with the refusal's holdersRevision", () => {
+    const digest =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    streamMock.unsupportedForPaths.add("/wt/clean");
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Worktree is in use",
+        BUSY_HOLDERS,
+        "WORKTREE_BUSY",
+        digest,
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
+    expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBe(true);
+    expect(streamMock.expectedHoldersRevisionByPath.get("/wt/clean")).toBe(
+      digest,
+    );
+  });
+
+  it("surfaces HOLDERS_CHANGED on retry instead of stopping the new inventory", () => {
+    const digestA =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const digestB =
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const changedHolders: readonly WorktreeBusyHolder[] = [
+      {
+        ownerRef: {
+          epicId: "epic-1",
+          ownerKind: "chat",
+          ownerId: "chat-1",
+        },
+        holdKind: "chat-turn",
+        activity: "working",
+        label: "new actor is working",
+      },
+    ];
+    streamMock.unsupportedForPaths.add("/wt/clean");
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Worktree is in use",
+        BUSY_HOLDERS,
+        "WORKTREE_BUSY",
+        digestA,
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Holders changed",
+        changedHolders,
+        "WORKTREE_HOLDERS_CHANGED",
+        digestB,
+      );
+    });
+    expect(
+      screen.getByRole("dialog", { name: "Delete worktree feat-clean?" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("teardown-disclosure-working").textContent,
+    ).toContain("Agent “new actor” is working on a turn — will be stopped");
+    fireEvent.click(screen.getByRole("button", { name: "Stop all & delete" }));
+    expect(streamMock.expectedHoldersRevisionByPath.get("/wt/clean")).toBe(
+      digestB,
+    );
+    expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBe(true);
+  });
+
+  it("keeps the old-host toast path when a busy refusal has no holders", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Worktree /wt/clean is in use by an active agent session",
+        undefined,
+        undefined,
+        undefined,
+      );
+    });
+    expect(
+      screen.queryByRole("dialog", { name: "Delete worktree feat-clean?" }),
+    ).toBeNull();
+    expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
+      "in use by an active agent session",
+    );
+    expect(streamMock.legacyPaths).toEqual([]);
+  });
+
+  it("leaves the worktree untouched when the force-delete dialog is cancelled", () => {
+    renderDefault();
+    confirmDelete("feat-clean");
+    act(() => {
+      streamMock.callbacks?.onFailed(
+        "Worktree is in use",
+        BUSY_HOLDERS,
+        undefined,
+        undefined,
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.queryByRole("dialog", { name: "Delete worktree feat-clean?" }),
+    ).toBeNull();
+    expect(streamMock.legacyPaths).toEqual([]);
+    expect(streamMock.stopOwnersByPath.get("/wt/clean")).toBeUndefined();
+    screen.getByRole("button", { name: "Delete worktree feat-clean" });
   });
 
   it("invalidates the host captured at delete start, even after a host swap mid-flight", () => {
@@ -2318,7 +2511,12 @@ describe("WorktreesList delete flow", () => {
     expect(screen.queryByTestId("worktree-delete-progress-modal")).toBeNull();
 
     act(() => {
-      streamMock.callbacks?.onFailed("Worktree /wt/clean is busy");
+      streamMock.callbacks?.onFailed(
+        "Worktree /wt/clean is busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
 
     // The failure brings the panel back so the error is visible.
@@ -2369,7 +2567,12 @@ describe("WorktreesList delete flow", () => {
     expect(streamMock.paths).toEqual(["/wt/clean", "/wt/dirty"]);
     act(() => {
       callbacksFor("/wt/clean").onComplete(true);
-      callbacksFor("/wt/dirty").onFailed("Worktree /wt/dirty is busy");
+      callbacksFor("/wt/dirty").onFailed(
+        "Worktree /wt/dirty is busy",
+        undefined,
+        undefined,
+        undefined,
+      );
     });
 
     // A batch failure must not pop a modal; it shows in the strip with a count.
@@ -2424,7 +2627,7 @@ describe("WorktreesList confirm-time re-check", () => {
     );
   }
 
-  it("drops a swept row that became dirty in the freshest snapshot, updates the dialog, and names the drop", () => {
+  it("drops a swept row that regressed to Checking in the freshest snapshot, updates the dialog, and names the drop", () => {
     const queryClient = new QueryClient();
     const clean = [
       merged("/wt/a", "feat-a"),
@@ -2438,8 +2641,8 @@ describe("WorktreesList confirm-time re-check", () => {
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     screen.getByText("Delete 3 worktrees?");
 
-    // A background refresh makes /wt/c busy (and dirty) while the dialog is open,
-    // so it is no longer selectable and drops out of the confirm.
+    // A background refresh re-arms /wt/c as Checking while the dialog is open,
+    // so it is no longer deletable and drops out of the confirm.
     rendered.rerender(
       renderWith(queryClient, [
         merged("/wt/a", "feat-a"),
@@ -2447,8 +2650,7 @@ describe("WorktreesList confirm-time re-check", () => {
         entry({
           worktreePath: "/wt/c",
           branch: "feat-c",
-          inUse: true,
-          uncommittedCount: 2,
+          resolvedAt: null,
         }),
       ]),
     );
@@ -2458,10 +2660,8 @@ describe("WorktreesList confirm-time re-check", () => {
 
     fireEvent.click(screen.getByTestId("confirm-action"));
 
-    // The now-ineligible row is excluded from the started delete and named by the
-    // lock reason instead of by its underlying git facts.
     expect(streamMock.paths).toEqual(["/wt/a", "/wt/b"]);
-    expect(toastMock.messages.join("\n")).toContain("1 in use");
+    expect(toastMock.messages.join("\n")).toContain("still checking");
   });
 
   it("filter → Landed then select-all picks only the Landed rows (fast path)", () => {
@@ -2664,13 +2864,39 @@ describe("WorktreesList confirm-time re-check", () => {
     const busy = screen.getByRole("checkbox", {
       name: "Select worktree feat-busy",
     });
-    expect(busy.getAttribute("aria-disabled")).toBe("true");
+    expect(busy.getAttribute("aria-disabled")).toBe("false");
     expect(busy.getAttribute("aria-checked")).toBe("false");
 
     // Header again clears the selection (action bar disappears).
     fireEvent.click(selectAll);
     expect(screen.queryByTestId("worktrees-selection-action-bar")).toBeNull();
     expect(selectAll.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("does not mark select-all checked when only an in-use row is selected", () => {
+    render(
+      renderWith(new QueryClient(), [
+        merged("/wt/a", "feat-a"),
+        entry({
+          worktreePath: "/wt/busy",
+          branch: "feat-busy",
+          inUse: true,
+          branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+        }),
+      ]),
+    );
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-busy" }),
+    );
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-a" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      screen.getByTestId("worktrees-select-all").getAttribute("aria-checked"),
+    ).toBe("false");
   });
 
   it("prunes a dropped row from the selection bookkeeping after confirm", () => {
@@ -2687,7 +2913,8 @@ describe("WorktreesList confirm-time re-check", () => {
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     screen.getByText("Delete 3 worktrees?");
 
-    // /wt/c becomes in-use, so it is dropped at confirm while /wt/a and /wt/b run.
+    // /wt/c regresses to Checking, so it is dropped at confirm while /wt/a and
+    // /wt/b run.
     rendered.rerender(
       renderWith(queryClient, [
         merged("/wt/a", "feat-a"),
@@ -2695,8 +2922,7 @@ describe("WorktreesList confirm-time re-check", () => {
         entry({
           worktreePath: "/wt/c",
           branch: "feat-c",
-          inUse: true,
-          branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+          resolvedAt: null,
         }),
       ]),
     );
@@ -3789,7 +4015,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV16>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
     readonly onVisiblePathsChange:
-      ((paths: readonly string[]) => void) | undefined;
+      | ((paths: readonly string[]) => void)
+      | undefined;
   }): ReactNode {
     return (
       <QueryClientProvider client={new QueryClient()}>
@@ -4654,12 +4881,12 @@ describe("WorktreesList status-aware delete safety", () => {
     });
     expect(deleting.getAttribute("aria-disabled")).toBe("true");
     expect(deleting.getAttribute("aria-description")).toBeNull();
-    // The in-use row still names its own real reason.
+    // In-use is selectable-deliberately now, so it has no disabled description.
     expect(
       screen
         .getByRole("checkbox", { name: "Select worktree feat-busy" })
-        .getAttribute("aria-description"),
-    ).toBe("In use by an active agent");
+        .getAttribute("aria-disabled"),
+    ).toBe("false");
   });
 
   it("keeps a gitUnreadable row in the Review filter and out of Orphaned", () => {

@@ -163,9 +163,7 @@ function authorAttribute(
     return attribute("author", trimmedHandle);
   }
   const trimmedUserId = userId.trim();
-  return trimmedUserId.length > 0
-    ? attribute("user_id", trimmedUserId)
-    : null;
+  return trimmedUserId.length > 0 ? attribute("user_id", trimmedUserId) : null;
 }
 
 function attribute(name: string, value: string): string {

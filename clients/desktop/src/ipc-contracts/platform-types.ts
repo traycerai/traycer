@@ -46,7 +46,11 @@ export type Vibrancy =
   | "under-page";
 
 export type BackgroundMaterial =
-  "auto" | "none" | "mica" | "acrylic" | "tabbed";
+  | "auto"
+  | "none"
+  | "mica"
+  | "acrylic"
+  | "tabbed";
 
 export interface PendingCertificateError {
   readonly id: string;
@@ -92,7 +96,15 @@ export interface FileSaveResult {
   readonly path: string;
 }
 
+/**
+ * Which surface a trust grant applies to. Grants are scope-specific: trusting
+ * a cert for an in-app browser tab never grants it to the app shell itself,
+ * so listing and revoking must carry the scope too.
+ */
+export type CertificateTrustScope = "app-shell" | "browser";
+
 export interface TrustedCertificateEntry {
+  readonly scope: CertificateTrustScope;
   readonly fingerprint: string;
   readonly hostname: string;
   readonly subject: string;

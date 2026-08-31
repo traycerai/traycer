@@ -96,6 +96,7 @@ function makeWsStreamClient(
     endpoint: () => mockLocalHostEntry,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,
@@ -284,7 +285,7 @@ describe("ResourcesStreamClient", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "resources.subscribe",
-      schemaVersion: { major: 1, minor: 4 },
+      schemaVersion: { major: 1, minor: 4, supportedMajors: [1] },
       params: {
         epicId: "epic-1",
         scope: { kind: "epic", epicId: "epic-1" },

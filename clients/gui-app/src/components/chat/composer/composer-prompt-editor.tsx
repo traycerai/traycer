@@ -55,6 +55,7 @@ import {
 } from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
+import { bumpComposerDraftGeneration } from "@/lib/composer/composer-draft-generation";
 
 const composerEditorIncarnations = new WeakMap<
   Editor,
@@ -516,6 +517,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
 
   const clear = useCallback(() => {
     if (editor === null) return;
+    // Whatever async work was filling THIS draft (a cross-host tab screenshot
+    // still in flight) must not write into the empty one that replaces it.
+    bumpComposerDraftGeneration(editor);
     editor.chain().clearContent().focus().run();
   }, [editor]);
 
@@ -530,6 +534,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         content,
         selection,
       );
+      bumpComposerDraftGeneration(editor);
       editor.commands.setContent(normalized.content, { emitUpdate });
       if (normalized.selection !== null) {
         editor.commands.setTextSelection({

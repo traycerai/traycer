@@ -29,6 +29,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
     hostPublicKey: VALID_PUBLIC_KEY,
     bearer: () => bearerSource,
     auth: null,
+    clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,
     webSocketFactory: {
@@ -37,6 +38,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
       },
     },
     requestId: () => "req-1",
+    proactiveWakeEligible: true,
     evidence: NO_TRANSPORT_EVIDENCE,
   });
 }

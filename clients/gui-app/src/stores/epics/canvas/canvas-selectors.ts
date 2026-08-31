@@ -147,6 +147,25 @@ export interface TileRefLivenessCheck {
   readonly recordListAuthorizesChatAbsence: boolean;
 }
 
+/**
+ * Whether this ref's record is HOST-AUTHORITATIVE - owned by one host's own
+ * registry rather than by the shared epic document.
+ *
+ * The two populations answer "my projection does not have this row"
+ * differently, and that is the whole distinction the cross-host exemption
+ * turns on. A doc-shared record (an artifact) is replicated to every
+ * participant, so its absence is evidence of deletion wherever it is observed.
+ * A host-authoritative record is only ever complete on its OWN host, so its
+ * absence from another device's projection is evidence of nothing at all.
+ *
+ * Exported so both liveness gates read the same predicate rather than each
+ * spelling the ref-type list out - the comment on each says they must move
+ * together, and this is what makes that structural instead of aspirational.
+ */
+export function isHostAuthoritativeRef(ref: EpicCanvasTileRef): boolean {
+  return ref.type === "chat" || ref.type === "terminal-agent";
+}
+
 export function isTileRefRecordLive(
   ref: EpicCanvasTileRef,
   pendingCreateArtifactIds: ReadonlySet<string>,
@@ -156,19 +175,26 @@ export function isTileRefRecordLive(
   const { hasLiveRecord, isCloudKnown } = liveness;
   if (!isTileRefRecordBacked(ref)) return true;
   // With no projection host yet, a disabled record query cannot classify a
-  // chat as same-host or cross-host and therefore cannot prove it disappeared.
-  if (ref.type === "chat" && projectionHostId === null) return true;
-  // A chat ref bound to ANOTHER host is not policed by this device's
-  // projection. Chat records are HOST-AUTHORITATIVE (each host's own chat
-  // registry), so a cross-host live tab - a reachable owner's chat opened
-  // from the unified sidebar - legitimately has no local record, and reaping
-  // it here is what turned those clicks into silent no-ops. Scoped to
-  // `chat` alone: artifact and terminal-agent records live in the SHARED
-  // epic doc, so their absence still means deleted, whatever host the ref
-  // is bound to. Cross-host chat tiles are closed by the user, never by
-  // record sync - this device cannot see the owner's registry to know more.
+  // ref as same-host or cross-host and therefore cannot prove it disappeared.
+  if (isHostAuthoritativeRef(ref) && projectionHostId === null) return true;
+  // A ref bound to ANOTHER host is not policed by this device's projection.
+  // Its record is HOST-AUTHORITATIVE - it lives in the owner host's own
+  // registry - so a cross-host live tab legitimately has no local record, and
+  // reaping it here is what turned those clicks into silent no-ops.
+  //
+  // Terminal agents joined that population in the roster's phase 2. Before it
+  // they were doc-shared, so a projection miss really did mean deleted on any
+  // host; now this device may hold a REPLICA of an agent bound to another of
+  // the user's machines, and a replica arrives on the feed's schedule - so a
+  // cold open, or any window before the inbox has caught up, would read as
+  // "remotely deleted" and auto-close a tile whose agent is alive on its own
+  // host. Artifacts are still doc-shared and still excluded.
+  //
+  // Mirrors `isRemotelyDeleted` in `tab-group-view.tsx`: the two
+  // record-liveness gates must agree, or a click opens a tile the surface
+  // then refuses to mount.
   if (
-    ref.type === "chat" &&
+    isHostAuthoritativeRef(ref) &&
     projectionHostId !== null &&
     ref.hostId !== projectionHostId
   ) {

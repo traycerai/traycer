@@ -240,6 +240,7 @@ export function TerminalTile(props: TerminalTileProps) {
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner
+        reason="host-unreachable"
         hostLabel={reachability.hostLabel}
         ownerKind="terminal"
         unavailability={reachability.unavailability}

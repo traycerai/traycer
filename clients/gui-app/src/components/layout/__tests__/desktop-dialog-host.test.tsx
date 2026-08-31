@@ -299,6 +299,7 @@ function createRunnerHostWithoutPrivateDelivery(
 
 function createBaseRunnerHost(): IRunnerHost {
   return {
+    browserView: null,
     selectionAuthority: createInertSelectionAuthorityClient(),
     refreshHostFleet: () => Promise.resolve(),
     onRegisteredHostsChange: () => null,
@@ -345,6 +346,7 @@ function createBaseRunnerHost(): IRunnerHost {
       delete: () => Promise.resolve(),
     },
     notifications: {
+      systemSettings: null,
       show: () => Promise.resolve("presented" as const),
       onForegroundDisplay: () => ({ dispose: () => undefined }),
       onClick: () => ({ dispose: () => undefined }),
@@ -363,6 +365,7 @@ function createBaseRunnerHost(): IRunnerHost {
       copyDroppedFilePaths: (paths) => Promise.resolve(paths),
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
+    fileSave: null,
     tokenStore: {
       get: () => Promise.resolve(null),
       signIn: () => Promise.resolve(),
@@ -376,6 +379,7 @@ function createBaseRunnerHost(): IRunnerHost {
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
+    onNetworkPathChanged: () => ({ dispose: () => undefined }),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     getLastKnownLocalHostId: () => Promise.resolve(null),
     service: null,
@@ -498,6 +502,7 @@ function createDirtyEpicHandle(
     requestFreshSnapshot: () => undefined,
     retryMigration: () => undefined,
     applyChatRecords: () => undefined,
+    peekChatIngestSeq: () => 0,
     markChatRecordListAuthoritative: () => undefined,
     applyChatRecordDelta: () => undefined,
     applyTuiAgentRecords: () => undefined,
@@ -510,6 +515,12 @@ function createDirtyEpicHandle(
     createArtifact: () => "fake-id",
     createTerminalChat: () => null,
     renameArtifact: () => false,
+    beginRenameMutation: () => null,
+    beginEpicTitleMutation: () => null,
+    beginReparentMutation: () => null,
+    retirePendingMutation: () => false,
+    isLatestRenameStamp: () => false,
+    ingestFenceIdentity: 0,
     deleteArtifact: () => false,
     reparentArtifact: () => false,
     setEpicTitle: () => false,

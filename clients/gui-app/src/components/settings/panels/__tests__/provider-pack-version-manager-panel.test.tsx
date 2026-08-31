@@ -15,7 +15,9 @@ type UsePackVersionVariables = {
 };
 
 type UsePackVersionRefusalCode =
-  "verification-failed" | "below-security-floor" | "host-ineligible";
+  | "verification-failed"
+  | "below-security-floor"
+  | "host-ineligible";
 
 type UseMutateOptions = {
   readonly onSuccess?: (response: {
@@ -90,7 +92,10 @@ type RemovePackVersionVariables = {
 };
 
 type RemovePackVersionRefusalCode =
-  "is-current" | "holder-reserved" | "quarantine-reserved" | "deferred-locked";
+  | "is-current"
+  | "holder-reserved"
+  | "quarantine-reserved"
+  | "deferred-locked";
 
 type RemoveMutateOptions = {
   readonly onSuccess?: (response: {

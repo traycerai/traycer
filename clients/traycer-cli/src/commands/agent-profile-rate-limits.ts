@@ -1,11 +1,11 @@
 import { formatAgentProviderProfileRateLimitsResponse } from "@traycer/protocol/agent/agent-profile-format";
 import {
   agentGetProviderProfileRateLimitsRequestSchema,
-  agentGetProviderProfileRateLimitsResponseSchema,
+  agentGetProviderProfileRateLimitsResponseSchemaV5,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -44,8 +44,14 @@ export function buildAgentProfileRateLimitsCommand(opts: {
     const result = await toAgentCliError(
       callHostRpc("agent.getProviderProfileRateLimits", request),
     );
-    const response = parseHostResponse(
-      agentGetProviderProfileRateLimitsResponseSchema,
+    // The explicit v5.0 schema, not the base `...ResponseSchema` name this
+    // used to read. That name is the LIVE line's alias: identical to v5.0
+    // today, but it is redefined onto each new major as the previous one is
+    // frozen, so it only tracks canonical by coincidence of timing. Naming the
+    // version pins the contract and lets `parseCanonicalHostResponse` prove it.
+    const response = parseCanonicalHostResponse(
+      "agent.getProviderProfileRateLimits",
+      agentGetProviderProfileRateLimitsResponseSchemaV5,
       result,
     );
     return {

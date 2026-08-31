@@ -13,7 +13,7 @@ import {
 } from "@traycer/protocol/agent/agent-roles-format";
 import {
   callHostRpc,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -50,7 +50,11 @@ export function buildAgentRoleClaimCommand(opts: {
     const result = await toAgentCliError(
       callHostRpc("agent.roles.claim", request),
     );
-    const response = parseHostResponse(claimAgentRoleResponseSchemaV11, result);
+    const response = parseCanonicalHostResponse(
+      "agent.roles.claim",
+      claimAgentRoleResponseSchemaV11,
+      result,
+    );
     return {
       data: response,
       human: formatClaimRoleResponseV11(response),
@@ -69,7 +73,11 @@ export function buildAgentRoleListCommand(opts: {
     const result = await toAgentCliError(
       callHostRpc("agent.roles.list", request),
     );
-    const response = parseHostResponse(listAgentRolesResponseSchema, result);
+    const response = parseCanonicalHostResponse(
+      "agent.roles.list",
+      listAgentRolesResponseSchema,
+      result,
+    );
     return {
       data: response,
       human: formatListRolesResponse(response),
@@ -92,7 +100,8 @@ export function buildAgentRoleRelinquishCommand(opts: {
     const result = await toAgentCliError(
       callHostRpc("agent.roles.relinquish", request),
     );
-    const response = parseHostResponse(
+    const response = parseCanonicalHostResponse(
+      "agent.roles.relinquish",
       relinquishAgentRoleResponseSchemaV11,
       result,
     );

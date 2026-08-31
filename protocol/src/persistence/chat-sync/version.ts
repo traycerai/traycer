@@ -39,7 +39,13 @@ import { z } from "zod";
  * because a payload's self-identifying version is what a detached repair
  * candidate is trusted on.
  */
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 2 } as const;
+// 1.3 adds `chat.imported` to `KNOWN_CHAT_EVENT_TYPES`. A new chat-event type
+// is a MINOR here and only here: the unknown-variant passthrough
+// (`passthrough.ts`) is what lets an older reader meet the event, keep it whole
+// in `raw`, and re-publish it unchanged - the mechanism `COMPATIBILITY.md`
+// names as reclassifying this class of addition from breaking to additive.
+// (Renumbered from 1.2 when main's interview-settlement bump took that minor.)
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 3 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

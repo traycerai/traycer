@@ -21,6 +21,7 @@ import type {
   LocalHostSnapshot,
   RegisteredHostsChange,
   StoredAuthTokens,
+  SystemResumeEvent,
   StoredCredentials,
   StoredCredentialsIdentity,
   TokenRotateResult,
@@ -151,6 +152,7 @@ function sameFlags(a: readonly string[], b: readonly string[]): boolean {
  * fire, matching the production invariant.
  */
 export class MockRunnerHost implements IRunnerHost {
+  readonly browserView = null;
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
   // Fixed test-only value: no test constructs a real remote transport against
@@ -196,7 +198,10 @@ export class MockRunnerHost implements IRunnerHost {
   private readonly notificationForegroundDisplayHandlers = new Set<
     (display: NotificationForegroundDisplay) => void
   >();
-  private readonly systemResumedHandlers = new Set<() => void>();
+  private readonly systemResumedHandlers = new Set<
+    (event: SystemResumeEvent) => void
+  >();
+  private readonly networkPathChangedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
   /** `undefined` means "derive from `localHost`"; `null` means "no id on disk". */
   private readonly explicitLastKnownLocalHostId: string | null | undefined;
@@ -280,6 +285,10 @@ export class MockRunnerHost implements IRunnerHost {
     },
     readNativeClipboardFilePaths: async (): Promise<readonly string[]> => [],
   };
+  // No native save surface to stand in for: this shell runs in a browser tab,
+  // where gui-app's own File System Access / `<a download>` legs are already
+  // the real answer.
+  readonly fileSave: null = null;
   readonly service: null = null;
   readonly traycerCli: ITraycerCli | null;
   readonly migration: null = null;
@@ -789,6 +798,7 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   readonly notifications: INotificationHost = {
+    systemSettings: null,
     show: async (
       title: string,
       body: string,
@@ -863,11 +873,20 @@ export class MockRunnerHost implements IRunnerHost {
     return Promise.resolve(this.localHost?.hostId ?? null);
   }
 
-  onSystemResumed(handler: () => void): Disposable {
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     this.systemResumedHandlers.add(handler);
     return {
       dispose: () => {
         this.systemResumedHandlers.delete(handler);
+      },
+    };
+  }
+
+  onNetworkPathChanged(handler: () => void): Disposable {
+    this.networkPathChangedHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.networkPathChangedHandlers.delete(handler);
       },
     };
   }
@@ -894,8 +913,15 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   /** Test helper: fire the OS-wake signal to every `onSystemResumed` subscriber. */
-  emitSystemResumed(): void {
+  emitSystemResumed(event: SystemResumeEvent): void {
     for (const handler of this.systemResumedHandlers) {
+      handler(event);
+    }
+  }
+
+  /** Test helper: fire the network-path signal to every subscriber. */
+  emitNetworkPathChanged(): void {
+    for (const handler of this.networkPathChangedHandlers) {
       handler();
     }
   }

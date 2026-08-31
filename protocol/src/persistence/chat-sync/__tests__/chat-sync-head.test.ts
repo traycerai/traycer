@@ -80,8 +80,8 @@ const wireHead: JsonObject = {
   throughRecordSeq: 7,
   capturedAt: 1_700_000_000_000,
   minReaderVersion: {
-    major: CHAT_SYNC_SCHEMA_VERSION.major,
-    minor: CHAT_SYNC_SCHEMA_VERSION.minor,
+    major: CHAT_SYNC_1_1_READER_FLOOR.major,
+    minor: CHAT_SYNC_1_1_READER_FLOOR.minor,
   },
   cdc: { ...FIXTURE_CDC },
   core: {
@@ -151,9 +151,9 @@ describe("chat-head lineage", () => {
     expect(parse(wireHead).parentHeadSha256).toBeNull();
 
     const parent = "c".repeat(64);
-    expect(parse({ ...wireHead, parentHeadSha256: parent }).parentHeadSha256).toBe(
-      parent,
-    );
+    expect(
+      parse({ ...wireHead, parentHeadSha256: parent }).parentHeadSha256,
+    ).toBe(parent);
   });
 
   it("chains a head to the digest of the head it superseded", () => {
@@ -235,8 +235,10 @@ describe("chat-head section graduation", () => {
 });
 
 describe("chat-head minReaderVersion coherence", () => {
-  it("accepts this contract's own version - the 1.1 v2-head stamp", () => {
-    expect(parse(wireHead).minReaderVersion).toEqual(CHAT_SYNC_SCHEMA_VERSION);
+  it("accepts a current-version head that still stamps the 1.1 reader floor", () => {
+    expect(parse(wireHead).minReaderVersion).toEqual(
+      CHAT_SYNC_1_1_READER_FLOOR,
+    );
   });
 
   it("READER defaults to null when the key is absent", () => {
@@ -355,9 +357,9 @@ describe("chat-head canonical encoding", () => {
       },
     };
 
-    expect(canonicalJsonStringify(encodeChatHead(parse(withFutureFields)))).toBe(
-      canonicalJsonStringify(withFutureFields),
-    );
+    expect(
+      canonicalJsonStringify(encodeChatHead(parse(withFutureFields))),
+    ).toBe(canonicalJsonStringify(withFutureFields));
   });
 
   /**
@@ -402,7 +404,7 @@ describe("chat-head canonical encoding", () => {
     // This fixture states a deliberate floor, so it survives the round trip
     // verbatim; the DEFAULT (absent -> null, on the writer as on the reader) is
     // pinned in the coherence and null-floor describes.
-    expect(once.minReaderVersion).toEqual(CHAT_SYNC_SCHEMA_VERSION);
+    expect(once.minReaderVersion).toEqual(CHAT_SYNC_1_1_READER_FLOOR);
 
     // Idempotent from there on - so the digest the next head chains to does not
     // move under a reader that merely opened and re-published the chat.
@@ -455,7 +457,7 @@ describe("chat-head 1.0 reader compatibility", () => {
     expect(parsed.messageShards[0].firstSeq).toBeUndefined();
   });
 
-  it("lets a 1.0 reader refuse a 1.1 head that stamps minReaderVersion {1,1}", () => {
+  it("lets a 1.0 reader refuse a head that stamps its own version as the floor", () => {
     const refused = gateChatHeadVersion(
       {
         schemaVersion: CHAT_SYNC_SCHEMA_VERSION,

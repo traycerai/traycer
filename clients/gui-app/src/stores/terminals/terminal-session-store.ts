@@ -1,6 +1,9 @@
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { v4 as uuidv4 } from "uuid";
-import type { TerminalSubscribeClientFrame } from "@traycer/protocol/host/terminal/subscribe";
+import type {
+  TerminalSubscribeClientFrame,
+  TerminalSubscribeViewer,
+} from "@traycer/protocol/host/terminal/subscribe";
 import type {
   CanonicalTerminalSessionInfo,
   CanonicalTerminalSessionInfoWithCurrentCwd,
@@ -24,11 +27,16 @@ type TerminalStreamClientHandle = Pick<
   "sendAction" | "close"
 >;
 
+export interface TerminalStreamClientFactoryArgs {
+  readonly sessionId: string;
+  readonly cols: number;
+  readonly rows: number;
+  readonly callbacks: TerminalStreamCallbacks;
+  readonly viewer: TerminalSubscribeViewer;
+}
+
 export type TerminalStreamClientFactory = (
-  sessionId: string,
-  cols: number,
-  rows: number,
-  callbacks: TerminalStreamCallbacks,
+  args: TerminalStreamClientFactoryArgs,
 ) => TerminalStreamClientHandle;
 
 export type TerminalReattachMode = "fresh" | "live";
@@ -44,7 +52,11 @@ export type TerminalReattachMode = "fresh" | "live";
  * bounded recovery must replace the handle and consult current host authority.
  */
 export type TerminalLifecycleStatus =
-  "creating" | "running" | "exited" | "lost" | "reaped";
+  | "creating"
+  | "running"
+  | "exited"
+  | "lost"
+  | "reaped";
 
 const MAX_PENDING_ACTIONS = 64;
 // Cap the pre-writer queue so a misconfigured tile that never registers a
@@ -134,6 +146,14 @@ export interface TerminalSessionState {
    * progress" (for sleep prevention) but ignores an idle plain shell.
    */
   readonly kind: TerminalSessionKind;
+  /**
+   * `terminal.subscribe@1.6` attachment intent currently on the wire.
+   * Follows lease state, not session kind: a leased tile is `presentation`;
+   * a lease-free keep-warm / linger attachment is `cache`. Intent is
+   * open-frame-only, so {@link TerminalSessionState.setViewer} reopens the
+   * stream rather than restating on the live session.
+   */
+  readonly viewer: TerminalSubscribeViewer;
   readonly pendingActions: Readonly<Record<string, PendingTerminalAction>>;
   readonly lastOutputPreview: string | null;
   /**
@@ -161,6 +181,14 @@ export interface TerminalSessionState {
   writeInput: (data: string) => string | null;
   /** Ask the host to resize; the host may pick a smaller min(cols/rows). */
   requestResize: (cols: number, rows: number) => string | null;
+  /**
+   * Retag attachment intent. A change reopens `terminal.subscribe` (open
+   * frame only; there is no restate client frame). No-op when the value
+   * is unchanged or the store is disposed. A dead session (`lost` /
+   * `exited` / `reaped`) updates the field but does not attach a new
+   * stream — the PTY is no longer addressable.
+   */
+  setViewer: (viewer: TerminalSubscribeViewer) => void;
   /** Closes the underlying stream client (does NOT call `terminal.kill`). */
   dispose: () => void;
 }
@@ -339,12 +367,56 @@ function currentCwdFromSession(
   return session.currentCwd.length === 0 ? null : session.currentCwd;
 }
 
+function bindStreamCallbacks(
+  callbacks: TerminalStreamCallbacks,
+  isCurrent: () => boolean,
+): TerminalStreamCallbacks {
+  return {
+    onSnapshot: (frame, scrollback) => {
+      if (!isCurrent()) return;
+      callbacks.onSnapshot(frame, scrollback);
+    },
+    onData: (frame, chunk) => {
+      if (!isCurrent()) return;
+      callbacks.onData(frame, chunk);
+    },
+    onResized: (frame) => {
+      if (!isCurrent()) return;
+      callbacks.onResized(frame);
+    },
+    onExit: (frame) => {
+      if (!isCurrent()) return;
+      callbacks.onExit(frame);
+    },
+    onActionAck: (frame) => {
+      if (!isCurrent()) return;
+      callbacks.onActionAck(frame);
+    },
+    onSessionUpdated: (frame) => {
+      if (!isCurrent()) return;
+      callbacks.onSessionUpdated(frame);
+    },
+    onConnectionStatus: (status, reason) => {
+      if (!isCurrent()) return;
+      callbacks.onConnectionStatus(status, reason);
+    },
+  };
+}
+
 export function createTerminalSessionStore(
   options: TerminalSessionStoreOptions,
 ): TerminalSessionStoreHandle {
   let disposed = false;
   let writer: TerminalDataWriter | null = null;
   let streamClient: TerminalStreamClientHandle | null = null;
+  let viewer: TerminalSubscribeViewer = "presentation";
+  // Bumped before tearing down a subscriber so its close-driven status
+  // callback cannot map a deliberate viewer-intent reopen to "lost".
+  let streamGeneration = 0;
+  // After a viewer-intent reopen of an already-open session, ignore the
+  // replacement stream's connecting/reconnecting statuses so the tile does
+  // not flash a reconnect overlay (keep-warm reattach stays instant).
+  let ignoreTransientStatus = false;
   // Buffers host output that arrives before the tile has finished mounting
   // its xterm host and registered a writer. Without this queue the snapshot
   // frame and any initial shell output (zsh's first prompt, motd, etc.) get
@@ -353,7 +425,10 @@ export function createTerminalSessionStore(
   const pendingWrites: TerminalWrite[] = [];
   let pendingBytes = 0;
   const enqueuePending = (write: TerminalWrite): void => {
-    if (write.chunk.length === 0) return;
+    // Live zero-length writes carry no bytes. An empty snapshot is still an
+    // authoritative full-screen boundary and must reach a retained engine's
+    // reset path (viewer-intent reopen keeps the xterm across streams).
+    if (write.chunk.length === 0 && write.kind !== "snapshot") return;
     pendingWrites.push(write);
     pendingBytes += write.chunk.length;
     while (pendingBytes > MAX_PENDING_BYTES && pendingWrites.length > 1) {
@@ -567,26 +642,28 @@ export function createTerminalSessionStore(
         // `snapshot` kind is load-bearing: xterm can emit protocol responses
         // while parsing historical bytes, and those must not be forwarded back
         // to the live PTY as user input.
-        if (scrollback.length > 0) {
-          // Carry the snapshot's grid so the host resizes xterm to it BEFORE
-          // replaying. `session.cols/rows` are the post-`min()` effective size
-          // the host serialized the redraw at; replaying into a differently
-          // sized grid garbles it (see `TerminalWrite`).
-          const scrollbackAccountLength = contentAccountLength(scrollback);
-          const generationAtWrite = ackGeneration;
-          const write: TerminalWrite = {
-            kind: "snapshot",
-            chunk: scrollback,
-            cols: frame.session.cols,
-            rows: frame.session.rows,
-            onAckable: () =>
-              accountAckableBytes(generationAtWrite, scrollbackAccountLength),
-          };
-          if (writer !== null) {
-            writer(write);
-          } else {
-            enqueuePending(write);
-          }
+        //
+        // Always forward the write, including a zero-length payload. The host
+        // serializes a cleared screen to `""`; dropping that boundary on a
+        // viewer-intent reopen leaves the retained engine showing stale
+        // content. Carry the snapshot's grid so the host resizes xterm to it
+        // BEFORE replaying. `session.cols/rows` are the post-`min()`
+        // effective size the host serialized the redraw at; replaying into a
+        // differently sized grid garbles it (see `TerminalWrite`).
+        const scrollbackAccountLength = contentAccountLength(scrollback);
+        const generationAtWrite = ackGeneration;
+        const write: TerminalWrite = {
+          kind: "snapshot",
+          chunk: scrollback,
+          cols: frame.session.cols,
+          rows: frame.session.rows,
+          onAckable: () =>
+            accountAckableBytes(generationAtWrite, scrollbackAccountLength),
+        };
+        if (writer !== null) {
+          writer(write);
+        } else {
+          enqueuePending(write);
         }
         const lastOutputPreview =
           scrollback.length === 0
@@ -684,6 +761,14 @@ export function createTerminalSessionStore(
         reason: StreamCloseReason | null,
       ) => {
         if (disposed) return;
+        if (ignoreTransientStatus) {
+          ignoreTransientStatus = false;
+          // Drop only the replacement stream's initial connecting/reconnecting
+          // so a keep-warm reattach does not flash the reconnect overlay.
+          if (status === "connecting" || status === "reconnecting") {
+            return;
+          }
+        }
         if (status !== "open") {
           // A reconnect re-subscribes and the host mints a fresh subscriber
           // with unackedBytes = 0, so any credit accumulated for the old
@@ -715,12 +800,39 @@ export function createTerminalSessionStore(
       },
     };
 
-    streamClient = options.streamClientFactory(
-      options.sessionId,
-      options.cols,
-      options.rows,
-      callbacks,
-    );
+    const attachStream = (cols: number, rows: number): void => {
+      const generation = streamGeneration;
+      streamClient = options.streamClientFactory({
+        sessionId: options.sessionId,
+        cols,
+        rows,
+        callbacks: bindStreamCallbacks(
+          callbacks,
+          () => generation === streamGeneration,
+        ),
+        viewer,
+      });
+    };
+
+    streamGeneration = 1;
+    attachStream(options.cols, options.rows);
+
+    const setViewer = (nextViewer: TerminalSubscribeViewer): void => {
+      if (disposed) return;
+      if (nextViewer === viewer) return;
+      viewer = nextViewer;
+      set({ viewer: nextViewer });
+      const state = get();
+      if (isTerminalOrDead(state.status)) return;
+      const wasOpen = state.connectionStatus === "open";
+      resetAckAccounting();
+      // Invalidate before close() so the outgoing client's closed status
+      // cannot mark this still-alive session lost.
+      streamGeneration += 1;
+      closeStreamClient();
+      ignoreTransientStatus = wasOpen;
+      attachStream(state.requestedCols, state.requestedRows);
+    };
 
     return {
       sessionId: options.sessionId,
@@ -736,6 +848,7 @@ export function createTerminalSessionStore(
       requestedRows: options.rows,
       reattachMode: options.reattachMode,
       kind: options.kind,
+      viewer: "presentation",
       pendingActions: {},
       lastOutputPreview: null,
       lastInputLostAt: null,
@@ -825,6 +938,7 @@ export function createTerminalSessionStore(
         dispatchClientFrame(frame);
         return clientActionId;
       },
+      setViewer,
       dispose: () => {
         if (disposed) return;
         disposed = true;

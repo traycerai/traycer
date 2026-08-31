@@ -36,6 +36,7 @@ import type {
   IHostManagement,
   IHostTray,
   IFileDropHost,
+  IFileSaveHost,
   IMigrationHost,
   INotificationHost,
   IRunnerHost,
@@ -49,6 +50,7 @@ import type {
   LocalHostSnapshot,
   MigrationRunningSnapshot,
   RegisteredHostsChange,
+  SystemResumeEvent,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -65,6 +67,7 @@ import type {
 import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
+  CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
   FileSaveInput,
@@ -84,6 +87,7 @@ import {
 export type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial as DesktopBackgroundMaterial,
+  CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
   PendingCertificateError,
@@ -135,6 +139,7 @@ import type {
   DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
   MenuCommandPayload,
+  OpenDraftInNewWindowResult,
   OpenEpicInNewWindowResult,
   OwnershipClaimResult,
   OwnershipEntry,
@@ -149,6 +154,7 @@ import type {
   WindowSummary,
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * Shape of the `window.runnerHost` object installed by the Electron preload
@@ -211,6 +217,7 @@ export interface DesktopPreloadBridge {
     start(): Promise<DeviceFlowSession | null>;
   };
   notifications: {
+    readonly systemSettings: { open(): Promise<void> } | null;
     show(
       title: string,
       body: string,
@@ -256,6 +263,7 @@ export interface DesktopPreloadBridge {
   platform: DesktopPlatformBridge;
   power: DesktopPowerBridge;
   zoom: DesktopZoomBridge;
+  browserView: BrowserViewBridge;
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
   hostControllerStatus: DesktopHostControllerStatusBridge;
@@ -440,7 +448,11 @@ export interface DesktopPlatformBridge {
   certTrust: {
     list(): Promise<ReadonlyArray<TrustedCertificateEntry>>;
     trust(hostname: string, certificate: unknown): Promise<unknown>;
-    untrust(fingerprint: string, hostname: string): Promise<void>;
+    untrust(
+      scope: CertificateTrustScope,
+      fingerprint: string,
+      hostname: string,
+    ): Promise<void>;
     listPending(): Promise<ReadonlyArray<PendingCertificateError>>;
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
@@ -453,7 +465,9 @@ export interface DesktopPlatformBridge {
     onTopologyChange(
       handler: (event: {
         readonly reason:
-          "display-added" | "display-removed" | "display-metrics-changed";
+          | "display-added"
+          | "display-removed"
+          | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }) => void,
     ): { dispose: () => void };
@@ -584,6 +598,9 @@ export interface DesktopWindowsBridge {
     title: string,
     tabId: string,
   ): Promise<OpenEpicInNewWindowResult>;
+  requestOpenDraftInNewWindow(
+    draftId: string,
+  ): Promise<OpenDraftInNewWindowResult>;
   ownership: {
     snapshot(): Promise<readonly OwnershipEntry[]>;
     claim(tabId: string, epicId: string): Promise<OwnershipClaimResult>;
@@ -643,6 +660,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly tray: ITrayState;
   readonly workspaceFolders: IWorkspaceFoldersHost;
   readonly fileDrops: IFileDropHost;
+  readonly fileSave: IFileSaveHost;
   readonly windows: DesktopWindowsBridge;
   readonly menu: DesktopMenuBridge;
   readonly appUpdates: DesktopAppUpdatesBridge;
@@ -654,6 +672,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly platform: DesktopPlatformBridge;
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
+  readonly browserView: BrowserViewBridge;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
   // No OS push on the desktop: notifications here are native `show` calls, not
@@ -669,7 +688,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   private readonly localHostHandlers = new Set<
     (snapshot: LocalHostSnapshot | null) => void
   >();
-  private readonly systemResumedHandlers = new Set<() => void>();
+  private readonly systemResumedHandlers = new Set<
+    (event: SystemResumeEvent) => void
+  >();
   private readonly bridgeSubscriptions: Disposable[] = [];
 
   constructor(options: DesktopRunnerHostOptions) {
@@ -684,6 +705,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;
+    this.browserView = options.bridge.browserView;
     // Passed straight through: the client instance, its issued attach
     // generation and its buffering all belong to the preload load, so
     // re-wrapping it here could only add a second identity for the same
@@ -710,7 +732,9 @@ export class DesktopRunnerHost implements IRunnerHost {
       }),
       this.bridge.onSystemResumed(() => {
         for (const handler of this.systemResumedHandlers) {
-          handler();
+          // `powerMonitor` reports no sleep duration, so this shell cannot
+          // measure how long the runtime was actually suspended.
+          handler({ backgroundedForMs: null });
         }
       }),
     );
@@ -738,6 +762,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.tokenStore = options.bridge.tokenStore;
 
     this.notifications = {
+      systemSettings: this.bridge.notifications.systemSettings,
       show: (
         title,
         body,
@@ -774,6 +799,7 @@ export class DesktopRunnerHost implements IRunnerHost {
       pickFolders: () => this.bridge.workspaceFolders.pickFolders(),
     };
     this.fileDrops = buildDesktopFileDrops(this.bridge.fileDrops);
+    this.fileSave = buildDesktopFileSave(this.bridge.fileDrops);
     this.service = {
       install: () => this.bridge.service.install(),
       uninstall: (purge) => this.bridge.service.uninstall(purge),
@@ -1038,12 +1064,22 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.getLastKnownLocalHostId();
   }
 
-  onSystemResumed(handler: () => void): Disposable {
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     this.systemResumedHandlers.add(handler);
     return {
       dispose: () => {
         this.systemResumedHandlers.delete(handler);
       },
+    };
+  }
+
+  onNetworkPathChanged(handler: () => void): Disposable {
+    // Desktop has no native reachability edge to bridge; its consumers cover
+    // the equivalent transitions with `window 'online'` and the OS-wake
+    // signal above. No-op subscription per the IRunnerHost contract.
+    void handler;
+    return {
+      dispose: () => undefined,
     };
   }
 
@@ -1112,6 +1148,21 @@ function isEphemeralDropPath(filePath: string): boolean {
     /[\\/]TemporaryItems[\\/]/i.test(filePath) ||
     /screencaptureui/i.test(filePath)
   );
+}
+
+/**
+ * The desktop's `IFileSaveHost`, over the same preload surface the drop
+ * helpers use. The sandboxed renderer cannot write through the File System
+ * Access API (`createWritable()` throws `NotAllowedError`), so the bytes go to
+ * the main process, which shows a native save dialog and writes them there;
+ * the dialog is also what makes this the one shell that learns an absolute
+ * path, and therefore the one that can re-open the file afterwards.
+ */
+function buildDesktopFileSave(bridge: DesktopFileDropsBridge): IFileSaveHost {
+  return {
+    saveFile: (request) => bridge.saveFile(request),
+    openSavedFile: (path) => bridge.openSavedFile(path),
+  };
 }
 
 function buildDesktopFileDrops(bridge: DesktopFileDropsBridge): IFileDropHost {

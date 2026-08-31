@@ -1,7 +1,11 @@
 {
   "name": "@traycer/protocol",
-  "license": "MIT",
   "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -18,6 +22,9 @@
     "./host/*": "./src/host/*.ts",
     "./host-transport/mux": "./src/host-transport/mux.ts",
     "./host-transport/chunking": "./src/host-transport/chunking.ts",
+    "./host-transport/relay-liveness": "./src/host-transport/relay-liveness.ts",
+    "./host-transport/rtt-deadlines": "./src/host-transport/rtt-deadlines.ts",
+    "./host-transport/vantage": "./src/host-transport/vantage.ts",
     "./host-transport/__tests__/chunk-reassembler-conformance": "./src/host-transport/__tests__/chunk-reassembler-conformance.ts",
     "./framework": "./src/framework/index.ts",
     "./framework/*": "./src/framework/*.ts",
@@ -27,12 +34,7 @@
     "./utils/yjs-utils/*": "./utils/yjs-utils/*.ts",
     "./utils/text/*": "./utils/text/*.ts"
   },
-  "files": [
-    "dist",
-    "README.md"
-  ],
   "publishConfig": {
-    "access": "public",
     "types": "./dist/src/index.d.ts",
     "exports": {
       ".": {
@@ -91,6 +93,18 @@
         "types": "./dist/src/host-transport/chunking.d.ts",
         "import": "./dist/src/host-transport/chunking.js"
       },
+      "./host-transport/relay-liveness": {
+        "types": "./dist/src/host-transport/relay-liveness.d.ts",
+        "import": "./dist/src/host-transport/relay-liveness.js"
+      },
+      "./host-transport/rtt-deadlines": {
+        "types": "./dist/src/host-transport/rtt-deadlines.d.ts",
+        "import": "./dist/src/host-transport/rtt-deadlines.js"
+      },
+      "./host-transport/vantage": {
+        "types": "./dist/src/host-transport/vantage.d.ts",
+        "import": "./dist/src/host-transport/vantage.js"
+      },
       "./framework": {
         "types": "./dist/src/framework/index.d.ts",
         "import": "./dist/src/framework/index.js"
@@ -119,14 +133,15 @@
         "types": "./dist/utils/text/*.d.ts",
         "import": "./dist/utils/text/*.js"
       }
-    }
+    },
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs",
     "compile": "tsgo --noEmit --singleThreaded",
     "prepack": "bun run build",
     "test": "vitest run",
-    "lint": "eslint . --cache --fix --max-warnings 0"
+    "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings ."
   },
   "dependencies": {
     "@noble/curves": "^2.3.0",

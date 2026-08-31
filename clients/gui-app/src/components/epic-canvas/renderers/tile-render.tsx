@@ -14,6 +14,9 @@ import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-min
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
+import { BrowserLinkRoutingProvider } from "@/lib/browser-view/link-routing/browser-link-routing";
+import { BrowserSessionsHostBoundary } from "./browser-sessions-provider";
+import { BrowserSessionTile } from "./browser-session-tile";
 import { ChatTile } from "./chat-tile";
 import { ReviewTile } from "./review-tile";
 import { SpecTile } from "./spec-tile";
@@ -49,8 +52,13 @@ type TileRendererRegistry = {
 };
 
 const TILE_RENDERERS: TileRendererRegistry = {
-  chat: ({ node, viewTabId, isActive }) => (
-    <ChatTile node={node} viewTabId={viewTabId} isActive={isActive} />
+  chat: ({ node, viewTabId, tileId, isActive }) => (
+    <ChatTile
+      node={node}
+      viewTabId={viewTabId}
+      tileId={tileId}
+      isActive={isActive}
+    />
   ),
   "terminal-agent": ({ node, viewTabId, tileId, isActive }) => (
     <TuiAgentTile
@@ -100,6 +108,14 @@ const TILE_RENDERERS: TileRendererRegistry = {
       isActive={isActive}
     />
   ),
+  "browser-session": ({ node, viewTabId, tileId, epicId }) => (
+    <BrowserSessionTile
+      node={node}
+      viewTabId={viewTabId}
+      paneId={tileId}
+      epicId={epicId}
+    />
+  ),
   "workspace-file": ({ node, viewTabId, isActive }) => (
     <WorkspaceFileTile node={node} viewTabId={viewTabId} isActive={isActive} />
   ),
@@ -131,11 +147,12 @@ const TILE_RENDERERS: TileRendererRegistry = {
   // The ordinary chat surface fed from a published copy - see the tile's own
   // note. Bound, like every tile, to the tab's host: that host SERVES the cloud
   // read, and the chat's owning host is metadata the locked composer names.
-  "published-chat": ({ node, epicId, viewTabId, isActive }) => (
+  "published-chat": ({ node, epicId, viewTabId, tileId, isActive }) => (
     <PublishedChatTile
       node={node}
       epicId={epicId}
       viewTabId={viewTabId}
+      tileId={tileId}
       isActive={isActive}
     />
   ),
@@ -177,22 +194,49 @@ function tileRenderer<K extends TileKindId>(
 /**
  * Render any canvas tile. Wraps the kind-specific body in
  * `<TabHostProvider>` so every tile reads its bound host via
- * `useTabHostId()`.
+ * `useTabHostId()`, and in `<BrowserSessionsHostBoundary>` so everything
+ * inside the tile - link routing, terminal OSC-8 links, the browser tile
+ * itself - reads the sessions stream of the TILE's host rather than the
+ * canvas host's. Without it a tile on a remote host sees the canvas host's
+ * stream, and every consumer that compares the two has to fall back; the
+ * boundary makes that mismatch impossible instead of handled per surface.
+ * It is a no-op when the tile is on the canvas host, and coordinators are
+ * refcounted, so N tiles on one host share one stream.
+ *
+ * Accepted cost: the coordinator is acquired EAGERLY while the tile is
+ * mounted - a lazy one would not be live at click time, so the first link
+ * click would still fall out to the OS browser. A tile on a host that is
+ * asleep therefore holds a capped-backoff (1s→30s) reconnect loop, one socket
+ * per host per epic. Gating on reachability was rejected: stale or pending
+ * reachability reintroduces exactly the first-click failure this closes.
  */
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
   return (
     <TabHostProvider hostId={args.node.hostId}>
-      <TileFindScope
-        node={args.node}
-        viewTabId={args.viewTabId}
-        tileId={args.tileId}
+      <BrowserSessionsHostBoundary
+        hostId={args.node.hostId}
         epicId={args.epicId}
-        isActive={args.isActive}
       >
-        <TileMinimapScope tileInstanceId={args.node.instanceId}>
-          {tileRenderer(args.node.type)(args)}
-        </TileMinimapScope>
-      </TileFindScope>
+        <BrowserLinkRoutingProvider
+          source={{
+            viewTabId: args.viewTabId,
+            paneId: args.tileId,
+            hostId: args.node.hostId,
+          }}
+        >
+          <TileFindScope
+            node={args.node}
+            viewTabId={args.viewTabId}
+            tileId={args.tileId}
+            epicId={args.epicId}
+            isActive={args.isActive}
+          >
+            <TileMinimapScope tileInstanceId={args.node.instanceId}>
+              {tileRenderer(args.node.type)(args)}
+            </TileMinimapScope>
+          </TileFindScope>
+        </BrowserLinkRoutingProvider>
+      </BrowserSessionsHostBoundary>
     </TabHostProvider>
   );
 }

@@ -13,12 +13,16 @@ import type {
   HostGetInstallationInfoResponse,
   HostServiceDeregisterResponse,
   HostServiceRegisterResponse,
-  HostUpdateInstallResponse,
+  HostUpdateInstallResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartResponse } from "@traycer/protocol/host/restart/index";
+import { useEffect } from "react";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
+import { keepPreviousDataForSameHost } from "@/hooks/host/keep-previous-data-same-host";
 import { hostMaintenanceMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
 import { useHostServiceWriteLatchStore } from "@/components/settings/panels/host-service-write-latch-store";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -89,6 +93,7 @@ export function useHostIdentityQuery(input: {
 export function useHostOverviewStatusQuery(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly enabled: boolean;
+  readonly hostId: string | null;
 }) {
   return useHostQuery<HostRpcRegistry, "host.status">({
     cacheKeyIdentity: undefined,
@@ -101,8 +106,71 @@ export function useHostOverviewStatusQuery(input: {
     // ages out and `isStale` becomes the signal that demotes the drain count
     // to `null`. Inverting these two would make a healthy query flicker
     // between live and unknown on every tick.
-    options: { enabled: input.enabled, staleTime: 30_000, poll: true },
+    options: {
+      enabled: input.enabled,
+      staleTime: 30_000,
+      poll: true,
+      // Same-host retain-while-refetching so a remount or observer swap
+      // cannot empty `data` and unmount the busy chip for a round trip.
+      // A host mismatch drops the prior payload (never show host A's work
+      // as host B's).
+      placeholderData: keepPreviousDataForSameHost(input.hostId),
+    },
   });
+}
+
+/**
+ * Refetch `host.status` when THIS host's chat or terminal session
+ * membership changes.
+ *
+ * Overview has no busy subscription — only a 10s poll — so a terminal-agent
+ * that just started can sit invisible on the chip until the next tick.
+ * Membership is the event the GUI already has: a new (or gone) session is
+ * exactly when host-side `busyBreakdown` is likely to have moved. Per-handle
+ * status changes on an already-registered session still wait for the poll;
+ * that lag is host-side accounting, not a missing client invalidation.
+ *
+ * Registries are process-wide, so a notify fires for every host. Invalidating
+ * host A's `host.status` on host B's membership momentarily voids SETTLED
+ * busy (and can disable "Apply now"). Compare a host-scoped snapshot and
+ * skip the invalidate when this host's entries did not move.
+ */
+export function useRefreshOverviewStatusOnSessionActivity(input: {
+  readonly hostId: string | null;
+  readonly enabled: boolean;
+}): void {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!input.enabled || input.hostId === null) {
+      return;
+    }
+    const hostId = input.hostId;
+    // Snapshot BEFORE subscribe so a StrictMode remount (cleanup + re-setup)
+    // with unchanged membership does not invalidate.
+    let lastSignature = scopedSessionMembershipSignature(hostId);
+    const refresh = (): void => {
+      const next = scopedSessionMembershipSignature(hostId);
+      if (next === lastSignature) return;
+      lastSignature = next;
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(hostId, "host.status"),
+      });
+    };
+    const unsubTerminal = getTerminalSessionRegistry().subscribe(refresh);
+    const unsubChat = getChatSessionRegistry().subscribe(refresh);
+    return () => {
+      unsubTerminal();
+      unsubChat();
+    };
+  }, [input.enabled, input.hostId, queryClient]);
+}
+
+function scopedSessionMembershipSignature(hostId: string): string {
+  const terminals = getTerminalSessionRegistry()
+    .membershipIdsForHost(hostId)
+    .join(",");
+  const chats = getChatSessionRegistry().membershipIdsForHost(hostId).join(",");
+  return `t:${terminals}|c:${chats}`;
 }
 
 /**
@@ -506,8 +574,16 @@ export function useHostServiceDeregister(
  */
 export function useHostUpdateInstall(
   client: HostClient<HostRpcRegistry> | null,
+  // The @1.1 response type, which is what this client's registry negotiates
+  // and therefore what callers actually receive. Annotating the @1.0 type here
+  // used to compile only by accident: `attemptId` is an EXTRA property, and an
+  // arm with extra properties stays assignable to the arm without them. The
+  // `dispatch-indeterminate` arm is a new discriminant rather than a new field,
+  // so it is not assignable to anything in @1.0 and the annotation stopped
+  // being quietly wrong and started being loudly wrong — which is the better
+  // failure, and the reason to name the version explicitly now.
 ): UseMutationResult<
-  HostUpdateInstallResponse,
+  HostUpdateInstallResponseV11,
   HostRpcError,
   { readonly version: string; readonly force: boolean },
   HostOverviewMutationContext
@@ -554,6 +630,35 @@ export function useHostUpdateInstall(
       // actually updating rather than whichever one the picker has reached.
       onSuccess: (response, _variables, context) => {
         if (context.hostId === null) return;
+        // AN UNRESOLVED DISPATCH IS ITS OWN ANSWER, and it is handled before
+        // the refusal test below rather than falling into it.
+        //
+        // Both branches release the latch, so this arm could be left to the
+        // `!== accepted && !== already-updating` test and would behave
+        // correctly today. It is written out anyway because that test's comment
+        // says "no swap was dispatched" — which is the one thing
+        // `dispatch-indeterminate` explicitly does not claim. A future reader
+        // reconciling the arm with that comment would reasonably conclude the
+        // arm was mis-filed and move it in with the armed outcomes, which is
+        // precisely the mistake the O3 ruling forbids: the latch is a 60s
+        // lockout, it belongs to `accepted` alone, and arming it over an
+        // outcome that is not an acceptance freezes the controls a person needs
+        // for a minute over a dispatch nobody can attribute.
+        //
+        // It also does something the refusal branch does not: it REFRESHES
+        // `host.status`. An update may well be running — we simply cannot tie
+        // it to this call — and observation through `updateOperation` is the
+        // negotiated route to that fact, so the read that would reveal it has
+        // to be re-armed rather than skipped.
+        if (response.outcome === "dispatch-indeterminate") {
+          useHostServiceWriteLatchStore
+            .getState()
+            .releaseUpdateInstallAccepted(context.hostId);
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(context.hostId, "host.status"),
+          });
+          return;
+        }
         if (
           response.outcome !== "accepted" &&
           response.outcome !== "already-updating"

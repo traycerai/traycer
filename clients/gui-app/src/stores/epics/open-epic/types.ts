@@ -116,9 +116,52 @@ export interface ChatsSlice {
  * Mirrors `TuiAgent` from the persistence registry but keeps the fields
  * the renderer needs to surface a tile + cascade them into the tree slice.
  */
+/**
+ * The three planes a terminal-agent row can reach this renderer from, mirroring
+ * `epic.listTuiAgents@1.2`'s `origin`. See {@link TuiAgentProjection.origin}.
+ */
+export type TuiAgentProjectionOrigin = "registry" | "doc" | "cloud";
+
 export interface TuiAgentProjection {
   readonly id: string;
-  readonly harnessId: TuiHarnessId;
+  /**
+   * Whether this agent's parent pointer still lives in the epic Y.Doc rather
+   * than on the host's record plane - the routing fact `isDocOnlyTerminalAgent`
+   * needs, carried on the agent instead of inferred from which slice produced
+   * it.
+   *
+   * Inference used to be sound: the doc arm meant doc, the record arm meant
+   * registry. `epic.listTuiAgents@1.1` broke that by serving the doc-resident
+   * remainder AS records (an agent bound to an un-upgraded peer host), and
+   * `epic.subscribe@2` finishes the job by removing the doc arm entirely - at
+   * which point "which slice was it in" has no answer at all and every agent
+   * looks registry-backed. Routing one of these to `epic.reparentChat` names
+   * no registry chat and fails host-side.
+   */
+  readonly docResident: boolean;
+  /**
+   * WHICH PLANE this agent's row came from, and therefore how much of the
+   * projection below is real.
+   *
+   * `registry` and `doc` are LOCAL to the host serving this epic and carry the
+   * whole record. `cloud` is a read-only REPLICA of an agent bound to another
+   * of the user's machines, and the cloud metadata projection it came from has
+   * no resume metadata in it at all - so on a `cloud` row `workspaceFolders`
+   * is empty, `agentMode` is the launch default, and every launch override and
+   * `harnessSessionId` is null. Those are PLACEHOLDERS, not values.
+   *
+   * Read this before any of them. It is not a decoration on `docResident` - it
+   * answers a different question ("does this row have the fields") from the one
+   * `docResident` answers ("is this row addressable through the registry
+   * affordances"), which is why both are carried.
+   *
+   * The one thing it settles for good: a `cloud` row can never be cloned,
+   * forked or resumed onto this machine. There is no `harnessSessionId` to
+   * resume from and there never will be - which is also the no-double-driver
+   * property, one driver per provider CLI session, by construction.
+   */
+  readonly origin: TuiAgentProjectionOrigin;
+  readonly harnessId: TuiHarnessId | null;
   readonly title: string;
   readonly parentId: string | null;
   readonly createdAt: number;
@@ -187,7 +230,6 @@ export interface TreeSlice {
 export interface EpicHeader {
   readonly title: string;
   readonly updatedAt: number;
-  readonly isTitleEditedByUser: boolean;
 }
 
 /**
@@ -236,7 +278,6 @@ export interface EpicProjectedSlices {
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
-  readonly contentRevByArtifactId: Readonly<Record<string, number>>;
 }
 
 export const EMPTY_ARRAY: readonly string[] = Object.freeze([]);
@@ -284,7 +325,6 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
   epic: Object.freeze({
     title: "",
     updatedAt: 0,
-    isTitleEditedByUser: false,
   }),
   artifacts: Object.freeze({
     byId: Object.freeze({} as Record<string, ArtifactProjection>),
@@ -304,5 +344,4 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
     childrenByParent: Object.freeze({} as Record<string, readonly string[]>),
     nodeById: Object.freeze({} as Record<string, TreeNode>),
   }),
-  contentRevByArtifactId: Object.freeze({} as Record<string, number>),
 });

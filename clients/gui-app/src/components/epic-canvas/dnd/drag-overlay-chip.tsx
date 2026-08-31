@@ -9,7 +9,14 @@
  */
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
-import { FileDiff, FilePlus, Folder, GitPullRequest, Lock } from "lucide-react";
+import {
+  FileDiff,
+  FilePlus,
+  Folder,
+  GitPullRequest,
+  Globe,
+  Lock,
+} from "lucide-react";
 import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
@@ -28,14 +35,16 @@ import {
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
 import {
   isBlankTileRef,
-  isManagedCommandOutputTileRef,
+  isBrowserSessionTileRef,
   isCommGraphTileRef,
   isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
+  isManagedCommandOutputTileRef,
   isPrDetailTileRef,
   isPrDiffTileRef,
   type BlankTileRef,
+  type BrowserSessionTileRef,
   type ManagedCommandOutputTileRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
@@ -90,8 +99,12 @@ function canvasOpenableDragSource(
  */
 export function EpicRootDragOverlayContent() {
   const overlayTile = useEpicDndStore((s) => s.activeOverlayTile);
+  // A dragged TILE is the tab itself, so its overlay takes the tile's measured
+  // width instead of sizing to its own content.
+  const tileSourceWidth = useEpicDndStore((s) => s.tileSourceWidth);
   const activeSource = useEpicDndStore((s) => s.activeSource);
   const activeHeaderTab = useEpicDndStore((s) => s.activeHeaderTab);
+  const headerTabWidth = useEpicDndStore((s) => s.headerStripSourceWidth);
   const openableSource = canvasOpenableDragSource(activeSource);
   const railSource =
     activeSource?.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE ? activeSource : null;
@@ -99,14 +112,40 @@ export function EpicRootDragOverlayContent() {
     activeSource?.kind === WORKSPACE_FOLDER_DND_TYPE ? activeSource : null;
 
   return (
-    <>
+    // One native-view occlusion marker for every chip. The coordinator scans
+    // `[data-browser-overlay]` elements and takes each one's own bounding rect
+    // (`collectBrowserOverlaySurfaces`), so an ancestor is read exactly like a
+    // chip root as long as it hugs the chip - hence `w-max`. Marking here
+    // rather than per chip is what stops the next chip variant from being born
+    // invisible over a live browser tile, the way the published-chat one was.
+    // dnd-kit's `<DragOverlay>` takes no data attributes, so this is the
+    // outermost element we own; it exists only while a drag is active.
+    <div
+      className="pointer-events-none w-max"
+      data-browser-overlay="drag-overlay"
+    >
       <AnimatePresence initial={false}>
         {overlayTile === null || openableSource === null ? null : (
-          <EpicCanvasNodeDragOverlay
-            key={overlayTile.instanceId}
-            node={overlayTile}
-            epicId={openableSource.epicId}
-          />
+          <div
+            style={
+              tileSourceWidth === null ? undefined : { width: tileSourceWidth }
+            }
+            // The chip itself is `w-max max-w-[min(80vw,24rem)]`, so a width on
+            // this wrapper alone does nothing - a 192px tile rendered a 360px
+            // chip. The child variants override both, which makes the dragged
+            // object the tile at its own measured width.
+            className={cn(
+              tileSourceWidth === null
+                ? undefined
+                : "[&>*]:w-full [&>*]:max-w-none",
+            )}
+          >
+            <EpicCanvasNodeDragOverlay
+              key={overlayTile.instanceId}
+              node={overlayTile}
+              epicId={openableSource.epicId}
+            />
+          </div>
         )}
       </AnimatePresence>
       <AnimatePresence initial={false}>
@@ -130,10 +169,11 @@ export function EpicRootDragOverlayContent() {
           <HeaderTabOverlayChip
             key={`${activeHeaderTab.tabKind}:${activeHeaderTab.tabId}`}
             tab={activeHeaderTab}
+            width={headerTabWidth}
           />
         )}
       </AnimatePresence>
-    </>
+    </div>
   );
 }
 
@@ -146,7 +186,10 @@ function WorkspaceFolderDragOverlay(props: { readonly name: string }) {
   );
 }
 
-function HeaderTabOverlayChip(props: { readonly tab: HeaderTabDragData }) {
+function HeaderTabOverlayChip(props: {
+  readonly tab: HeaderTabDragData;
+  readonly width: number | null;
+}) {
   const allTabs = useHeaderTabs();
   const tab =
     allTabs.find(
@@ -155,7 +198,7 @@ function HeaderTabOverlayChip(props: { readonly tab: HeaderTabDragData }) {
         candidate.id === props.tab.tabId,
     ) ?? null;
   if (tab === null) return null;
-  return <HeaderTabDragOverlay tab={tab} />;
+  return <HeaderTabDragOverlay tab={tab} width={props.width} />;
 }
 
 function EpicCanvasNodeDragOverlay(props: {
@@ -173,6 +216,9 @@ function EpicCanvasNodeDragOverlay(props: {
   }
   if (isBlankTileRef(props.node)) {
     return <BlankTileDragOverlay node={props.node} />;
+  }
+  if (isBrowserSessionTileRef(props.node)) {
+    return <BrowserSessionTileDragOverlay node={props.node} />;
   }
   if (isManagedCommandOutputTileRef(props.node)) {
     return (
@@ -249,6 +295,21 @@ function PrDetailTileDragOverlay(props: { readonly node: PrDetailTileRef }) {
     <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+    </m.div>
+  );
+}
+
+function BrowserSessionTileDragOverlay(props: {
+  readonly node: BrowserSessionTileRef;
+}) {
+  return (
+    <m.div
+      {...CHIP_MOTION}
+      className={cn(CHIP_CLASS)}
+      data-browser-tab-id={props.node.tabId}
+    >
+      <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate">Browser</span>
     </m.div>
   );
 }

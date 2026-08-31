@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 
 export type LandingTerminalDurableBootstrapAction =
-  "create" | "ensure-running" | "none";
+  | "create"
+  | "ensure-running"
+  | "none";
 
 export function resolveLandingTerminalDurableBootstrapAction(input: {
   readonly projectionStatus: "running" | "dormant" | "unknown" | "missing";

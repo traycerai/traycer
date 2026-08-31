@@ -10,6 +10,8 @@ import { useNavDrawerClosePull } from "@/components/layout/shell/use-nav-drawer-
 import {
   useEdgeNavSwipe,
   type EdgeNavDirection,
+  type EdgeNavDragResponse,
+  type EdgeNavSwipeRelease,
 } from "@/components/layout/shell/use-edge-nav-swipe";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { setMobileApp } from "@/lib/mobile-app";
@@ -1183,15 +1185,34 @@ describe("useEdgeNavSwipe", () => {
   const VIEWPORT_PX = 400;
 
   interface SwipeProbe {
+    /** Discrete steps - the path taken when nothing follows the finger. */
     readonly navigations: ReadonlyArray<EdgeNavDirection>;
+    readonly dragStarts: ReadonlyArray<EdgeNavDirection>;
+    readonly dragTravel: ReadonlyArray<number>;
+    readonly releases: ReadonlyArray<EdgeNavSwipeRelease>;
   }
 
   function mountSwipe(options: {
     readonly edgesClaimed: () => boolean;
+    /** What the transition answers at activation. */
+    readonly response: EdgeNavDragResponse;
   }): SwipeProbe {
     const navigations: EdgeNavDirection[] = [];
+    const dragStarts: EdgeNavDirection[] = [];
+    const dragTravel: number[] = [];
+    const releases: EdgeNavSwipeRelease[] = [];
     const { unmount } = renderHook(() =>
       useEdgeNavSwipe({
+        onDragStart: (direction) => {
+          dragStarts.push(direction);
+          return options.response;
+        },
+        onDragMove: (travelPx) => {
+          dragTravel.push(travelPx);
+        },
+        onDragEnd: (release) => {
+          releases.push(release);
+        },
         onNavigate: (direction) => {
           navigations.push(direction);
         },
@@ -1199,13 +1220,23 @@ describe("useEdgeNavSwipe", () => {
       }),
     );
     activeUnmounts.push(unmount);
-    return { navigations };
+    return { navigations, dragStarts, dragTravel, releases };
   }
 
-  /** The ordinary case: the mobile app, with nothing covering the edges. */
+  /**
+   * The ordinary case: the mobile app, nothing covering the edges, and no
+   * transition able to follow the finger - so activation navigates outright,
+   * which is the shape every case below asserts against.
+   */
   function mountOnBareScreen(): SwipeProbe {
     setMobileApp(true);
-    return mountSwipe({ edgesClaimed: NOTHING_CLAIMED });
+    return mountSwipe({ edgesClaimed: NOTHING_CLAIMED, response: "instant" });
+  }
+
+  /** The same screen, with a transition that takes the drag at activation. */
+  function mountWithFollowingTransition(): SwipeProbe {
+    setMobileApp(true);
+    return mountSwipe({ edgesClaimed: NOTHING_CLAIMED, response: "follow" });
   }
 
   function swipe(options: {
@@ -1393,7 +1424,10 @@ describe("useEdgeNavSwipe", () => {
 
   it("never navigates when the mobile app flag is off", () => {
     setMobileApp(false);
-    const probe = mountSwipe({ edgesClaimed: NOTHING_CLAIMED });
+    const probe = mountSwipe({
+      edgesClaimed: NOTHING_CLAIMED,
+      response: "instant",
+    });
 
     swipe({ from: 8, to: 60, target: document.body, dropY: 0 });
 
@@ -1404,7 +1438,7 @@ describe("useEdgeNavSwipe", () => {
   // is already inside a drag of its own.
   it("stands down while the caller says the edges are claimed", () => {
     setMobileApp(true);
-    const probe = mountSwipe({ edgesClaimed: () => true });
+    const probe = mountSwipe({ edgesClaimed: () => true, response: "instant" });
 
     swipe({ from: 8, to: 60, target: document.body, dropY: 0 });
 
@@ -1425,7 +1459,10 @@ describe("useEdgeNavSwipe", () => {
     } {
       setMobileApp(true);
       let claimed = false;
-      const probe = mountSwipe({ edgesClaimed: () => claimed });
+      const probe = mountSwipe({
+        edgesClaimed: () => claimed,
+        response: "instant",
+      });
       return {
         probe,
         claim: (next: boolean) => {
@@ -1758,7 +1795,7 @@ describe("useEdgeNavSwipe", () => {
 
     it("leaves a drag alone while the edges are claimed", () => {
       setMobileApp(true);
-      mountSwipe({ edgesClaimed: () => true });
+      mountSwipe({ edgesClaimed: () => true, response: "instant" });
 
       touchDown(8, document.body);
       const move = touchTo({ clientX: 60, clientY: 300 }, document.body);
@@ -1940,6 +1977,337 @@ describe("useEdgeNavSwipe", () => {
       });
 
       expect(probe.navigations).toEqual([]);
+    });
+  });
+
+  /**
+   * What activation leads to. The recognizer asks whether anything can follow
+   * the finger and spends the rest of the pointer accordingly - carrying a
+   * drag to its release, or making the step there and then. Both answers come
+   * out of the same activation, so the cases live together.
+   */
+  describe("a drag something can follow", () => {
+    function press(clientX: number, timeStamp: number): void {
+      dispatchPointer("pointerdown", {
+        clientX,
+        clientY: 300,
+        target: document.body,
+        timeStamp,
+        pointerId: 1,
+        isPrimary: true,
+      });
+    }
+
+    function move(clientX: number, timeStamp: number): void {
+      dispatchPointer("pointermove", {
+        clientX,
+        clientY: 300,
+        target: document.body,
+        timeStamp,
+        pointerId: 1,
+        isPrimary: true,
+      });
+    }
+
+    function lift(
+      type: "pointerup" | "pointercancel",
+      timeStamp: number,
+    ): void {
+      dispatchPointer(type, {
+        clientX: 160,
+        clientY: 300,
+        target: document.body,
+        timeStamp,
+        pointerId: 1,
+        isPrimary: true,
+      });
+    }
+
+    it("hands the drag over instead of navigating, when one can be followed", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 100);
+
+      expect(probe.dragStarts).toEqual(["back"]);
+      expect(probe.navigations).toEqual([]);
+      expect(probe.dragTravel).toEqual([52]);
+    });
+
+    // The step is made at activation only because nothing could carry it. The
+    // recognizer asks first either way, which is what keeps one activation
+    // rule behind both outcomes.
+    it("makes the step at activation when nothing can follow it", () => {
+      const probe = mountOnBareScreen();
+
+      press(8, 0);
+      move(60, 100);
+
+      expect(probe.dragStarts).toEqual(["back"]);
+      expect(probe.navigations).toEqual(["back"]);
+      expect(probe.dragTravel).toEqual([]);
+    });
+
+    // The third answer. A declined gesture is CONSUMED - no follow, and no
+    // instant step either: the decliner is a navigation already in flight,
+    // and falling back to a discrete step would fire a second navigation
+    // under layers still showing the first.
+    it("consumes the gesture entirely when the transition declines it", () => {
+      setMobileApp(true);
+      const probe = mountSwipe({
+        edgesClaimed: NOTHING_CLAIMED,
+        response: "decline",
+      });
+
+      press(8, 0);
+      move(60, 100);
+      move(160, 200);
+      lift("pointerup", 300);
+
+      expect(probe.dragStarts).toEqual(["back"]);
+      expect(probe.navigations).toEqual([]);
+      expect(probe.dragTravel).toEqual([]);
+      expect(probe.releases).toEqual([]);
+    });
+
+    it("reports travel for the whole drag rather than only its activation", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 100);
+      move(110, 200);
+      move(160, 300);
+
+      expect(probe.dragTravel).toEqual([52, 102, 152]);
+      expect(probe.dragStarts).toEqual(["back"]);
+    });
+
+    // The trailing edge, exercised end to end. The followed-drag path inverts
+    // travel for a forward swipe in two places, and a block that only ever
+    // presses at the leading edge would pass with a sign error in either -
+    // one direction covered and the other assumed is the exact shape of the
+    // defect this feature shipped with.
+    it("follows a forward drag from the trailing edge, travel inward-positive", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(VIEWPORT_PX - 8, 0);
+      move(VIEWPORT_PX - 60, 100);
+      move(VIEWPORT_PX - 110, 200);
+      move(VIEWPORT_PX - 160, 300);
+      dispatchPointer("pointerup", {
+        clientX: VIEWPORT_PX - 160,
+        clientY: 300,
+        target: document.body,
+        timeStamp: 400,
+        pointerId: 1,
+        isPrimary: true,
+      });
+
+      expect(probe.dragStarts).toEqual(["forward"]);
+      expect(probe.navigations).toEqual([]);
+      expect(probe.dragTravel).toEqual([52, 102, 152]);
+      // Velocity is the last move-pair's 500 px/s; the up sat still at a
+      // later timestamp, so the last real sample stands.
+      expect(probe.releases).toEqual([
+        { travelPx: 152, velocityPxPerS: 500, cancelled: false },
+      ]);
+    });
+
+    // DIRECTION LOCK, the axis half: past activation the classifier is never
+    // consulted again, so a drag that curves sharply downward afterwards is
+    // still this gesture's - a thumb arcing across a phone does not travel a
+    // straight line, and re-classifying mid-drag would drop the screen it is
+    // carrying.
+    it("keeps a followed drag that curves off-axis after activation", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 100);
+      // Far more vertical than horizontal from here - travel that would have
+      // failed the classifier had it still been asked.
+      dispatchPointer("pointermove", {
+        clientX: 70,
+        clientY: 460,
+        target: document.body,
+        timeStamp: 200,
+        pointerId: 1,
+        isPrimary: true,
+      });
+      lift("pointerup", 300);
+
+      expect(probe.dragTravel).toEqual([52, 62]);
+      expect(probe.releases).toHaveLength(1);
+    });
+
+    // A release is judged on what the hand was doing when it let go, so the
+    // speed comes from the last move rather than from the gesture's average -
+    // the difference between a long slow drag finished with a flick and the
+    // drag it mostly was.
+    it("releases with the speed of the last move", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      // Activation, then 200ms crawling 20px, then 100ms covering 80. The
+      // average over the followed drag is 333 px/s; the flick it ended on is
+      // 800, and 800 is what a release means.
+      move(60, 100);
+      move(80, 300);
+      move(160, 400);
+      lift("pointerup", 400);
+
+      expect(probe.releases).toEqual([
+        { travelPx: 152, velocityPxPerS: 800, cancelled: false },
+      ]);
+    });
+
+    // Precision-clamped event clocks hand samples dispatched together the
+    // SAME timestamp. Ground covered is ground covered regardless: the up's
+    // travel must count even at a tied clock, while the speed - underivable
+    // over zero elapsed - stands at the last real sample.
+    it("counts the up's travel even when its timestamp ties the last move", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 100);
+      dispatchPointer("pointerup", {
+        clientX: 200,
+        clientY: 300,
+        target: document.body,
+        timeStamp: 100,
+        pointerId: 1,
+        isPrimary: true,
+      });
+
+      // Travel is the up's 192; velocity is the activation seed (52px/100ms),
+      // the last sample with real elapsed time behind it.
+      expect(probe.releases).toEqual([
+        { travelPx: 192, velocityPxPerS: 520, cancelled: false },
+      ]);
+    });
+
+    // The hand does not stop moving when it leaves the glass: a fast swipe
+    // covers real ground between the last delivered move and the up, and a
+    // release judged on the move's numbers alone would refuse a flick that
+    // crossed the threshold on its way out.
+    it("judges the release on the ground the up itself covered", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 100);
+      dispatchPointer("pointerup", {
+        clientX: 140,
+        clientY: 300,
+        target: document.body,
+        timeStamp: 200,
+        pointerId: 1,
+        isPrimary: true,
+      });
+
+      expect(probe.releases).toEqual([
+        { travelPx: 132, velocityPxPerS: 800, cancelled: false },
+      ]);
+    });
+
+    it("reports a release the system took as cancelled", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 100);
+      lift("pointercancel", 200);
+
+      // 520 is the activation seed - 52px over the 100ms it took to activate.
+      // It is reported faithfully even here; cancellation beats velocity in
+      // the release rule, so nothing downstream may read it as intent.
+      expect(probe.releases).toEqual([
+        { travelPx: 52, velocityPxPerS: 520, cancelled: true },
+      ]);
+    });
+
+    // A flick fast enough to activate on its only move and release in place
+    // has exactly one speed sample: the ground covered reaching activation.
+    // Judged at zero it would spring back - punishing precisely the quickest
+    // gestures.
+    it("commits a flick whose only sample is the activating move", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 50);
+      dispatchPointer("pointerup", {
+        clientX: 60,
+        clientY: 300,
+        target: document.body,
+        timeStamp: 60,
+        pointerId: 1,
+        isPrimary: true,
+      });
+
+      // 52px over 50ms: a 1040 px/s flick, far past the commit threshold
+      // despite travel far short of the distance rule.
+      expect(probe.releases).toEqual([
+        { travelPx: 52, velocityPxPerS: 1040, cancelled: false },
+      ]);
+    });
+
+    // DIRECTION LOCK. A surface arriving mid-flight takes the edges from the
+    // NEXT gesture; it cannot take a screen out from under a finger already
+    // carrying one, which would strand the transition with nothing to move it.
+    it("keeps a followed drag when a blocking surface arrives mid-flight", () => {
+      setMobileApp(true);
+      let claimed = false;
+      const probe = mountSwipe({
+        edgesClaimed: () => claimed,
+        response: "follow",
+      });
+
+      press(8, 0);
+      move(60, 100);
+      claimed = true;
+      move(160, 200);
+      lift("pointerup", 200);
+
+      expect(probe.dragTravel).toEqual([52, 152]);
+      expect(probe.releases).toEqual([
+        { travelPx: 152, velocityPxPerS: 1000, cancelled: false },
+      ]);
+    });
+
+    // A second finger is a pinch or a two-finger pan, and the tracked pointer's
+    // coordinates stop describing the gesture. The drag did not choose to end,
+    // so it ends the way the system ending it would.
+    it("cancels a followed drag when a second pointer lands", () => {
+      const probe = mountWithFollowingTransition();
+
+      press(8, 0);
+      move(60, 100);
+      dispatchPointer("pointerdown", {
+        clientX: 300,
+        clientY: 300,
+        target: document.body,
+        timeStamp: 150,
+        pointerId: 2,
+        isPrimary: false,
+      });
+
+      expect(probe.releases).toEqual([
+        { travelPx: 52, velocityPxPerS: 520, cancelled: true },
+      ]);
+    });
+
+    // Nothing is left holding a screen it can no longer move.
+    it("cancels a followed drag when the recognizer is torn down", () => {
+      setMobileApp(true);
+      const probe = mountSwipe({
+        edgesClaimed: NOTHING_CLAIMED,
+        response: "follow",
+      });
+
+      press(8, 0);
+      move(60, 100);
+      for (const unmount of activeUnmounts.splice(0)) unmount();
+
+      expect(probe.releases).toEqual([
+        { travelPx: 52, velocityPxPerS: 520, cancelled: true },
+      ]);
     });
   });
 });

@@ -26,7 +26,7 @@ import {
 } from "../manifest/cli-manifest";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, CliError, isErrnoException } from "../runner/errors";
-import { renameWithRetry } from "../installer/rename-retry";
+import { renameWithRetryLegacy } from "../installer/rename-retry";
 import { resolveCliVersion } from "../cli-version";
 import { isStrictlyNewerHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { errorFromUnknown } from "../logger";
@@ -1153,7 +1153,7 @@ export async function stageWellKnownCliBinary(opts: {
     // a service stop with antivirus scanning the fresh copy - the exact
     // transient EBUSY/EPERM window installer/rename-retry.ts exists for. A
     // single-attempt publish would report that hiccup as a failed staging.
-    await renameWithRetry(staging, wellKnownPath);
+    await renameWithRetryLegacy(staging, wellKnownPath);
     // Deliberately no record when the copy raced a replacement. The next run
     // finds none and falls back to the timestamp test - which the skipped
     // `utimes` above makes FAIL - and restages. That costs one redundant copy;
@@ -1188,7 +1188,9 @@ export async function stageWellKnownCliBinary(opts: {
       // ABSENT. The outer catch stays: after the retries are exhausted
       // there is genuinely nothing more this path can do, and the failure
       // report below already carries the original error.
-      await renameWithRetry(asidePath, wellKnownPath).catch(() => undefined);
+      await renameWithRetryLegacy(asidePath, wellKnownPath).catch(
+        () => undefined,
+      );
     }
     const named = error instanceof Error ? error : new Error(String(error));
     return {
@@ -1218,7 +1220,7 @@ async function renameSlotBinaryAside(
     // Retried for the same Windows transient-handle window as the publish
     // rename. ENOENT is not in the retry set, so the first-staging case
     // still reaches the handler below on the first attempt.
-    await renameWithRetry(wellKnownPath, asidePath);
+    await renameWithRetryLegacy(wellKnownPath, asidePath);
     return asidePath;
   } catch (error) {
     if (isEnoentError(error)) {

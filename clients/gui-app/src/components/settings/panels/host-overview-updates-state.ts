@@ -191,6 +191,10 @@ export function useHostOverviewUpdates(input: {
         onSuccess: (response) => {
           handleInstallOutcome({
             outcome: response.outcome,
+            indeterminateReason:
+              response.outcome === "dispatch-indeterminate"
+                ? response.reason
+                : null,
             hostName,
             version,
             // `Date.now()` here, in the settle, is what "after the refusal"
@@ -785,7 +789,18 @@ function handleInstallOutcome(input: {
     | "externally-managed"
     | "cli-unavailable"
     | "cli-failed"
-    | "already-updating";
+    | "already-updating"
+    | "dispatch-indeterminate";
+  /**
+   * The `dispatch-indeterminate` cause, when the host named one. `null` on
+   * every other arm, and also when that arm declines to say.
+   *
+   * Carried rather than dropped because three different causes reach that one
+   * outcome — an ACK timeout, the child exiting, and a bad or missing ACK — and
+   * flattening them into a single opaque message is the diagnostic
+   * substitution this epic has already paid for three times.
+   */
+  readonly indeterminateReason: string | null;
   readonly hostName: string;
   readonly version: string;
   readonly onSticky: (reason: OverviewDegradeReason) => void;
@@ -807,6 +822,28 @@ function handleInstallOutcome(input: {
     // that blind gap gets told.
     input.onAccepted();
     toast.info(`${input.hostName} is already installing an update.`);
+    return;
+  }
+  if (input.outcome === "dispatch-indeterminate") {
+    // NOT a success and NOT a failure — the host spawned a detached CLI and
+    // cannot attribute a durable attempt to this call. An update may well be
+    // running, so this must not read as "nothing happened"; equally it may not
+    // read as "updating", because nothing here can name what would be updating.
+    //
+    // `onAccepted()` clears the transient CLI-failure state, which is correct:
+    // the CLI did not fail to run. It does NOT arm the accepted latch — that
+    // lives in `useHostUpdateInstall` and is deliberately reserved for
+    // `accepted`, since a 60s lockout over an outcome nobody can attribute
+    // would freeze the very controls a person would use to find out.
+    //
+    // The live answer comes from `host.status.updateOperation`, which is the
+    // negotiated route for progress and is unaffected by this arm.
+    input.onAccepted();
+    toast.info(
+      input.indeterminateReason === null
+        ? `Couldn't confirm the update started on ${input.hostName}. Watching for progress.`
+        : `Couldn't confirm the update started on ${input.hostName}: ${input.indeterminateReason}. Watching for progress.`,
+    );
     return;
   }
   if (

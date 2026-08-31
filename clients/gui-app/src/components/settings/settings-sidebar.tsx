@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import { AnimatePresence } from "motion/react";
@@ -25,6 +25,7 @@ import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -132,6 +133,14 @@ function SettingsSidebarHostPicker(props: {
 }): ReactNode {
   const { scope } = props;
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
+  // THE one surface that badges update state (settled product decision: fleet
+  // update state lives in Settings). The resolver reads only hosts that already
+  // have a borrowable session, so opening this list causes no connection and
+  // improves no badge by dialling — every other host simply projects `unknown`
+  // and shows nothing.
+  const updateViewForHost = useFleetUpdateViews(
+    useMemo(() => scope.hosts.map((host) => host.hostId), [scope.hosts]),
+  );
   // `gap-0.5` matches the section rows below, so the picker reads as the first
   // row of the tier it heads rather than a control docked above it.
   return (
@@ -155,6 +164,7 @@ function SettingsSidebarHostPicker(props: {
         isLoading={scope.isLoading}
         listsFailed={scope.listsFailed}
         onRetryLists={scope.retryLists}
+        updateViewForHost={updateViewForHost}
       />
       {/* Said at rest, not on discovery: sections describing a host that is
           NOT the app's active one is the single most confusing state this
@@ -299,10 +309,15 @@ function SettingsSidebarRouteItem(props: {
   const Icon = section.icon;
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const active = isSectionPathname(pathname, section.id);
+  // The rail replaces: its sections are peers on one screen, and back should
+  // leave settings, not replay every section clicked. The mobile list pushes:
+  // there a section is a full-screen drill-down BELOW the list, and a replace
+  // would make back-swipe skip the list and land on whatever preceded
+  // settings entirely.
   return (
     <Link
       to={`/settings/${section.id}`}
-      replace
+      replace={variant !== "mobile-list"}
       data-testid={`settings-sidebar-item-${section.id}`}
       onClick={() => {
         Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {

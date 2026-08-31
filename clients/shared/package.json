@@ -1,12 +1,13 @@
 {
   "name": "@traycer-clients/shared",
+  "private": true,
   "license": "MIT",
   "type": "module",
-  "private": true,
   "scripts": {
-    "compile": "tsc --noEmit",
-    "lint": "eslint . --cache --fix --max-warnings 0",
-    "format": "bun x prettier --write .",
+    "compile": "tsgo --noEmit",
+    "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "test": "vitest run"
   },
   "dependencies": {

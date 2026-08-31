@@ -88,6 +88,8 @@ async function withPidMetadataFile(
         dir,
         "pending-login-item-revision.json",
       ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
       environment: "production",
     });
   } finally {

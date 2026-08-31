@@ -5,15 +5,22 @@ import type {
   ChatRunSettings,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { InterviewAnswerability } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
-import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  Message,
+  UserMessageSender,
+} from "@traycer/protocol/persistence/epic/schemas";
+import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatMessageEditing } from "@/components/chat/chat-message";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type {
-  ChatSessionState,
-  PendingChatAction,
+import {
+  isWindowedTranscript,
+  type ChatSessionState,
+  type PendingChatAction,
 } from "@/stores/chats/chat-session-store";
+import { userRowPresence } from "@/stores/chats/transcript-window";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
@@ -296,21 +303,67 @@ function hasRunningManagedCommand(
   return managedCommands.some((command) => command.status.state === "running");
 }
 
+/**
+ * Whether the transcript contains this user row AT ALL - hydrated or not.
+ *
+ * `state.messages` cannot answer it on the windowed line. It is a bounded,
+ * evictable slice, so "the replacement row is not there" conflates "the edit
+ * never landed" with "the reader has scrolled away from it", and the second is
+ * the ordinary steady state for an edit made a few turns ago.
+ *
+ * The SKELETON can: it is one entry per row for the whole chat, and a user
+ * row's id is its message id. Scanned rather than indexed because this runs
+ * only while an inline edit is outstanding - a rare, short-lived state - so the
+ * cost is paid in a case that barely occurs, and building a per-render index of
+ * a 20k-row skeleton to answer one membership question would not be.
+ *
+ * A sparse skeleton (chunks still streaming) can answer `false` for a row that
+ * exists. That degrades to the pre-existing behaviour rather than to a new
+ * failure: the action-ledger checks below still hold in the near term, and the
+ * answer becomes durable as soon as the skeleton completes.
+ */
+function transcriptHasUserRow(
+  state: Pick<ChatSessionState, "messages" | "transcriptWindow">,
+  messageId: string,
+): boolean {
+  if (
+    state.messages.some(
+      (message) => message.role === "user" && message.messageId === messageId,
+    )
+  ) {
+    return true;
+  }
+  return state.transcriptWindow.skeleton.some(
+    (entry) => entry !== undefined && entry.rowId === messageId,
+  );
+}
+
 export function normalizeInlineEditForSession(
   inlineEdit: InlineEditState | null,
   state: Pick<
     ChatSessionState,
-    "messages" | "pendingActions" | "acceptedActions"
+    "messages" | "pendingActions" | "acceptedActions" | "transcriptWindow"
   >,
 ): InlineEditState | null {
   if (inlineEdit === null) return null;
+  // The DURABLE success signal, and the reason it is not `state.messages`.
+  //
+  // An accepted edit settles twice over: its replacement row is persisted, and
+  // its accepted-action entry is recorded. Both of those are transient in
+  // `state` - the row is evictable once the reader scrolls past it, and the
+  // accepted entry is pruned - so once both have gone this function fell
+  // through to the last branch, which KEEPS the edit alive with its ids
+  // cleared. `displayedMessages` then re-appended the stale `originalMessage`
+  // as an unplaced row and other message actions stayed locked, for an edit
+  // that succeeded and was rendered correctly minutes earlier.
+  //
+  // The last branch is still right for what it was written for - a REJECTED
+  // dispatch, which must return the composer to an editable state - and that
+  // is precisely why the success case has to be answered from something that
+  // does not expire.
   if (
     inlineEdit.pendingMessageId !== null &&
-    state.messages.some(
-      (message) =>
-        message.role === "user" &&
-        message.messageId === inlineEdit.pendingMessageId,
-    )
+    transcriptHasUserRow(state, inlineEdit.pendingMessageId)
   ) {
     return null;
   }
@@ -371,17 +424,42 @@ export function canModifyChatMessages(input: {
   );
 }
 
+/**
+ * Is this send the FIRST thing a person has said in this chat, and therefore
+ * the one a generated title should come from?
+ *
+ * The transcript half of that question cannot be answered from `messages` on
+ * the windowed line: it holds what is HYDRATED, so a chat long enough to have
+ * been windowed can present no user row and re-trigger title generation on a
+ * chat that has had a title for weeks. The SKELETON describes every row, which
+ * is what a whole-transcript question needs.
+ *
+ * Both sources are consulted rather than one replacing the other. The hydrated
+ * rows are checked first because they are authoritative and always available -
+ * including on the legacy line, where there is no skeleton at all - and the
+ * skeleton then answers the case they cannot.
+ *
+ * `unknown` (a skeleton still streaming) is folded into "do not generate",
+ * deliberately. The two failures are not symmetric: re-titling an established
+ * chat rewrites something the user has been reading for weeks, while a missed
+ * title needs `rowCount > 0` on a mid-stream skeleton - which a genuinely new
+ * chat, whose `rowCount` is 0, never has.
+ */
 export function shouldGenerateChatTitleForSubmittedMessage(input: {
   readonly chat: ChatSessionState["chat"];
   readonly messages: ChatSessionState["messages"];
   readonly pendingUserMessages: ChatSessionState["pendingUserMessages"];
+  readonly transcriptWindow: ChatSessionState["transcriptWindow"];
+  readonly transcriptDerived: ChatSessionState["transcriptDerived"];
   readonly content: JsonContent;
 }): boolean {
   if (input.chat?.isTitleEditedByUser === true) return false;
   const text = extractPlainTextFromComposerJSONContent(input.content).trim();
   if (text.length === 0) return false;
   if (input.pendingUserMessages.length > 0) return false;
-  return !input.messages.some((message) => message.role === "user");
+  if (input.messages.some((message) => message.role === "user")) return false;
+  if (!isWindowedTranscript(input)) return true;
+  return userRowPresence(input.transcriptWindow) === "absent";
 }
 
 export function showRestoreResultToast(
@@ -510,6 +588,44 @@ export function latestForkableAssistantMessageId(
   messages: ReadonlyArray<ChatMessageModel>,
 ): string | null {
   for (let index = messages.length - 1; index >= 0; index--) {
+    const messageId = forkableAssistantMessageId(messages[index]);
+    if (messageId !== null) return messageId;
+  }
+  return null;
+}
+
+/**
+ * The same boundary, brought forward past one the host already named.
+ *
+ * The windowed line reads that boundary off `chatTranscriptDerived`, which the
+ * host recomputes per SNAPSHOT - while the gate in front of the gesture
+ * (`composerActiveTurnStatus`) is cleared by a LIVE `turnStateChanged` frame.
+ * Between the two there is a window in which the gesture is allowed and the
+ * boundary still names the PREVIOUS turn, so a fork silently omits the turn the
+ * user just watched finish. Two clocks, and only one of them ticks live.
+ *
+ * The repair is local because the evidence is local: the turn that just
+ * completed is in the live tail this client is holding. So the scan looks only
+ * at what follows `known` in display order and answers `null` otherwise - it
+ * can move the boundary FORWARD and never backward, which is what makes it safe
+ * to prefer over the host's value. `known: null` means the host has no boundary
+ * at all, so any forkable row here is newer than nothing.
+ *
+ * `null` when `known` is not in `messages`: that is a boundary outside the
+ * hydrated window, and nothing here can order against it. It is also not the
+ * failing case - a turn completing live sits immediately after the one the last
+ * snapshot named, and the tail carrying it carries both.
+ */
+export function forkableAssistantMessageIdAfter(
+  messages: ReadonlyArray<ChatMessageModel>,
+  known: string | null,
+): string | null {
+  const knownIndex =
+    known === null
+      ? -1
+      : messages.findIndex((message) => message.persistentMessageId === known);
+  if (knownIndex === -1 && known !== null) return null;
+  for (let index = messages.length - 1; index > knownIndex; index--) {
     const messageId = forkableAssistantMessageId(messages[index]);
     if (messageId !== null) return messageId;
   }
@@ -652,15 +768,39 @@ const NO_UNANSWERABLE_INTERVIEWS: ReadonlyArray<UnanswerableInterviewView> = [];
  * over the host's pending set: every id here has no streaming block, so the two
  * can never name the same block.
  *
- * There is no transient window to debounce. The host broadcasts an interview's
- * `blockDelta` before the `interviewRequested` frame that makes it pending
- * (chat-session-manager `handleRuntimeEvent`), and hydration surfaces detached
- * waits in the same snapshot that carries their persisted blocks - so a pending
- * id without a streaming block is genuinely stuck, not mid-arrival.
+ * There is no transient window to debounce ON THE LEGACY LINE. The host
+ * broadcasts an interview's `blockDelta` before the `interviewRequested` frame
+ * that makes it pending (chat-session-manager `handleRuntimeEvent`), and
+ * hydration surfaces detached waits in the same snapshot that carries their
+ * persisted blocks - so a pending id without a streaming block is genuinely
+ * stuck, not mid-arrival.
+ *
+ * ## Why the windowed line needs `hostAnswerability`
+ *
+ * That whole argument rests on the transcript being WHOLE. Once `messages` is
+ * the hydrated window, "no streaming block here" stops meaning "no streaming
+ * block": the question can be perfectly answerable and merely cold - its row
+ * past the inline tail, or a detached wait the eager range has not reached -
+ * and this would offer to error out a question the user could have answered.
+ * A block delta arriving for an EVICTED row is dropped rather than seated, so
+ * even the flush-before-publish ordering above stops closing the gap.
+ *
+ * So on that line the host judges it, and the three states are distinct:
+ *
+ * - **an entry with an ordinal** - answerable, merely cold. Not listed here;
+ *   the store hydrates that row and the card appears.
+ * - **an entry with `ordinal: null`** - no row renders it. Genuinely stuck,
+ *   listed, and dismissal is the right affordance.
+ * - **no entry** - the host has not judged this id (it became pending after
+ *   the snapshot). Not listed: an unjudged question is not evidence of one.
+ *
+ * @param hostAnswerability The host's judgement, or `null` on the legacy line -
+ * where absence in `messages` IS the answer and no second opinion exists.
  */
 export function findUnanswerableInterviews(
   messages: ReadonlyArray<ChatMessageModel>,
   hostPendingInterviews: ReadonlyArray<ChatPendingInterviewState>,
+  hostAnswerability: ReadonlyArray<InterviewAnswerability> | null,
 ): ReadonlyArray<UnanswerableInterviewView> {
   if (hostPendingInterviews.length === 0) return NO_UNANSWERABLE_INTERVIEWS;
   const streamingBlockIds = new Set<string>();
@@ -671,9 +811,22 @@ export function findUnanswerableInterviews(
       streamingBlockIds.add(segment.id);
     }
   }
+  // Only the ids the host judged UNRENDERABLE. Both other states - judged and
+  // placeable, or not judged at all - fall outside this set, which is why the
+  // check below is membership rather than a lookup with a default.
+  const hostStuckBlockIds =
+    hostAnswerability === null
+      ? null
+      : new Set(
+          hostAnswerability
+            .filter((entry) => entry.ordinal === null)
+            .map((entry) => entry.blockId),
+        );
   const unanswerable: UnanswerableInterviewView[] = [];
   for (const interview of hostPendingInterviews) {
     if (streamingBlockIds.has(interview.blockId)) continue;
+    if (hostStuckBlockIds !== null && !hostStuckBlockIds.has(interview.blockId))
+      continue;
     unanswerable.push({
       blockId: interview.blockId,
       requestedAt: interview.requestedAt,
@@ -684,4 +837,52 @@ export function findUnanswerableInterviews(
   // blocking the chat, so it reads first in the notice.
   unanswerable.sort((left, right) => left.requestedAt - right.requestedAt);
   return unanswerable;
+}
+
+/**
+ * The context chip's usage number.
+ *
+ * `liveTurnUsage` takes precedence over the persisted value so the chip shows
+ * live in-flight numbers during a turn and carries the final usage forward
+ * across the gap between `turn.completed` and the next snapshot.
+ *
+ * The persisted half has two sources, one per line. On the windowed line
+ * `messages` holds what is HYDRATED, not what exists, so the backwards scan
+ * below terminates at the window's edge - and the chip would read blank on
+ * exactly the chats long enough to have been windowed in the first place. The
+ * host ships the whole-transcript fold for that reason.
+ *
+ * The gap-bridging argument survives the swap: the host memoizes `derived` on
+ * the transcript view's identity and re-emits it from all the same
+ * `broadcastSnapshot()` call sites, so `latestAssistantUsage` refreshes at
+ * exactly the moments a legacy peer's `messages` array does.
+ */
+export function selectContextUsage(
+  state: Pick<
+    ChatSessionState,
+    "liveTurnUsage" | "messages" | "transcriptDerived"
+  >,
+): TokenUsage | null {
+  if (state.liveTurnUsage !== null) return state.liveTurnUsage;
+  // Deliberately not `?? findLastAssistantUsage(...)`: `latestAssistantUsage:
+  // null` is the real answer for a chat where no assistant row has reported
+  // usage yet, and the chip's empty form is what that should render. Falling
+  // through would put the O(history) scan back on every fresh chat, and let a
+  // hydrated row contradict the host on a chat where the host can see further.
+  if (isWindowedTranscript(state)) {
+    return state.transcriptDerived.latestAssistantUsage;
+  }
+  return findLastAssistantUsage(state.messages);
+}
+
+function findLastAssistantUsage(
+  messages: ReadonlyArray<Message>,
+): TokenUsage | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "assistant" && message.usage !== null) {
+      return message.usage;
+    }
+  }
+  return null;
 }

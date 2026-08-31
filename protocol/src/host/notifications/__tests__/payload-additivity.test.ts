@@ -8,6 +8,7 @@ import {
 import {
   hostNotificationAgentStalledPayloadSchema,
   hostNotificationApprovalPayloadSchema,
+  hostNotificationBrowserHumanNeededPayloadSchema,
   hostNotificationChatStoppedPayloadSchema,
   hostNotificationEpicStoppedPayloadSchema,
   hostNotificationInterviewPayloadSchema,
@@ -25,17 +26,20 @@ import { PAYLOAD_FINGERPRINT_BASELINE } from "./payload-additivity-baseline";
  * engine against the committed baseline, so the convention fails a build
  * instead of a downgrade. See the baseline module for the refresh policy.
  */
-const LIVE_PAYLOAD_SCHEMAS: Record<HostNotificationKnownPayloadKind, z.ZodType> =
-  {
-    chat: hostNotificationChatStoppedPayloadSchema,
-    epic: hostNotificationEpicStoppedPayloadSchema,
-    agent_stalled: hostNotificationAgentStalledPayloadSchema,
-    workspace_operation_failed:
-      hostNotificationWorkspaceOperationFailedPayloadSchema,
-    approval: hostNotificationApprovalPayloadSchema,
-    interview: hostNotificationInterviewPayloadSchema,
-    worktree_deletion: hostNotificationWorktreeDeletionPayloadSchema,
-  };
+const LIVE_PAYLOAD_SCHEMAS: Record<
+  HostNotificationKnownPayloadKind,
+  z.ZodType
+> = {
+  chat: hostNotificationChatStoppedPayloadSchema,
+  epic: hostNotificationEpicStoppedPayloadSchema,
+  agent_stalled: hostNotificationAgentStalledPayloadSchema,
+  workspace_operation_failed:
+    hostNotificationWorkspaceOperationFailedPayloadSchema,
+  approval: hostNotificationApprovalPayloadSchema,
+  interview: hostNotificationInterviewPayloadSchema,
+  worktree_deletion: hostNotificationWorktreeDeletionPayloadSchema,
+  browser_human_needed: hostNotificationBrowserHumanNeededPayloadSchema,
+};
 
 const KINDS = [
   "chat",
@@ -45,6 +49,7 @@ const KINDS = [
   "approval",
   "interview",
   "worktree_deletion",
+  "browser_human_needed",
 ] as const satisfies readonly HostNotificationKnownPayloadKind[];
 
 describe("host notification payload additivity", () => {

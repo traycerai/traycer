@@ -94,9 +94,7 @@ describe("asset stream 1.1 media-type widening", () => {
   });
 
   it("REJECTS a PDF header under a 1.0 client's enum - the emission gate is load-bearing", () => {
-    expect(v10MediaTypeSchema.safeParse("application/pdf").success).toBe(
-      false,
-    );
+    expect(v10MediaTypeSchema.safeParse("application/pdf").success).toBe(false);
     // And through the whole frame: rebuild the 1.0 header variant around
     // the old enum and confirm the full frame fails, not just the field -
     // this is what an un-upgraded client's discriminated-union parse does
@@ -116,7 +114,9 @@ describe("asset stream 1.1 media-type widening", () => {
 
 describe("asset stream 1.1 registry wiring", () => {
   it("advertises latestMinor 1 on both methods", () => {
-    expect(hostStreamRpcRegistry["workspace.streamAsset"][1].latestMinor).toBe(1);
+    expect(hostStreamRpcRegistry["workspace.streamAsset"][1].latestMinor).toBe(
+      1,
+    );
     expect(hostStreamRpcRegistry["git.streamFileAsset"][1].latestMinor).toBe(1);
   });
 

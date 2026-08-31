@@ -97,6 +97,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -190,6 +191,9 @@ function renderSubscription(
         hostId: HOST_ID,
         workspacePath: WORKSPACE_PATH,
         enabled: true,
+        streamClient: undefined,
+        expandedPathsOverride: null,
+        onPrunedOverride: null,
       }),
     { wrapper },
   );

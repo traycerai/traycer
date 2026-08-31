@@ -19,7 +19,8 @@ export function deriveTitleSourceFromSessionTitle(
  */
 export function terminalSessionLabel(
   session:
-    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd,
+    | CanonicalTerminalSessionInfo
+    | CanonicalTerminalSessionInfoWithCurrentCwd,
 ): string {
   return terminalSessionTitle({
     title: session.title,

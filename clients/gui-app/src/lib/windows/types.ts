@@ -31,7 +31,8 @@ export interface DesktopOwnershipEntry {
 }
 
 export type DesktopOwnershipClaimResult =
-  { readonly ok: true } | { readonly ok: false; readonly currentOwner: string };
+  | { readonly ok: true }
+  | { readonly ok: false; readonly currentOwner: string };
 
 export interface DesktopPerWindowEpicViewTab {
   readonly id: string;
@@ -43,7 +44,8 @@ export interface DesktopPerWindowEpicViewTab {
 }
 
 export type DesktopPerWindowStateFeature =
-  "tab-strip-layout-v2" | "active-route-v1";
+  | "tab-strip-layout-v2"
+  | "active-route-v1";
 
 export interface DesktopPerWindowStateCapabilities {
   readonly schemaVersion: number;
@@ -93,7 +95,9 @@ export interface DesktopPerWindowStatePatch {
 }
 
 export type DesktopAuthSessionStatus =
-  "signed-out" | "signing-in" | "signed-in";
+  | "signed-out"
+  | "signing-in"
+  | "signed-in";
 
 export interface DesktopAuthSessionProfile {
   readonly userId: string;
@@ -111,6 +115,15 @@ export type DesktopOpenEpicInNewWindowResult =
   | { readonly result: "focused"; readonly windowId: string }
   | { readonly result: "moved"; readonly windowId: string }
   | { readonly result: "queued-discard"; readonly windowId: string };
+
+/**
+ * `not-found`: the main process's copy of the source window's snapshot holds
+ * no such draft - the projection flush did not land, or the draft closed
+ * mid-flight. Treated as a refused move; nothing was created.
+ */
+export type DesktopOpenDraftInNewWindowResult =
+  | { readonly result: "moved"; readonly windowId: string }
+  | { readonly result: "not-found"; readonly windowId: string };
 
 export type DesktopMenuCommandId =
   | "app.openSettings"
@@ -138,7 +151,11 @@ export interface DesktopMenuCommandPayload {
 }
 
 export type DesktopTopLevelMenuId =
-  "file" | "edit" | "view" | "window" | "help";
+  | "file"
+  | "edit"
+  | "view"
+  | "window"
+  | "help";
 
 export interface DesktopZoomBridge {
   readonly ladder: readonly number[];
@@ -153,7 +170,11 @@ export interface DesktopZoomBridge {
 export type DesktopSupportLogTarget = "desktop" | "host";
 
 export type DesktopSupportLinkId =
-  "website" | "documentation" | "release-notes" | "discord" | "support";
+  | "website"
+  | "documentation"
+  | "release-notes"
+  | "discord"
+  | "support";
 
 export interface DesktopSupportLinkDescriptor {
   readonly id: DesktopSupportLinkId;
@@ -457,7 +478,9 @@ export interface DesktopAppUpdateSnapshot {
  * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
  */
 export type DesktopAppUpdateChannelChangeOutcome =
-  "changed" | "unchanged" | "refused-update-pending";
+  | "changed"
+  | "unchanged"
+  | "refused-update-pending";
 
 export interface DesktopAppUpdateChannelChange {
   readonly outcome: DesktopAppUpdateChannelChangeOutcome;
@@ -485,7 +508,10 @@ export interface DesktopAppUpdateChannelChange {
  * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
  */
 export type DesktopCompatRecoveryRoute =
-  "update-available" | "enable-rc" | "restart-to-clear-staged" | "manual";
+  | "update-available"
+  | "enable-rc"
+  | "restart-to-clear-staged"
+  | "manual";
 
 export interface DesktopCompatRecoveryPlan {
   readonly route: DesktopCompatRecoveryRoute;
@@ -563,7 +589,10 @@ export interface DesktopHostControllerStatusBridge {
 export type DesktopReportType = "bug" | "idea" | "other";
 
 export type DesktopReportFrequency =
-  "once" | "sometimes" | "every_time" | "not_sure";
+  | "once"
+  | "sometimes"
+  | "every_time"
+  | "not_sure";
 
 /**
  * Field-for-field match with ticket 08's `SupportImageAttachmentInput`
@@ -675,6 +704,16 @@ export interface DesktopWindowsBridge {
     title: string,
     tabId: string,
   ): Promise<DesktopOpenEpicInNewWindowResult>;
+  /**
+   * Optional + capability-probed, like `perWindowState.clear`: an older
+   * preload (built before draft moves existed) has no such method, and
+   * requiring it in `isDesktopWindowsBridge` would fail the WHOLE bridge on a
+   * renderer/preload version skew. Probe `typeof === "function"` at the call
+   * site (`use-draft-open-in-new-window`).
+   */
+  requestOpenDraftInNewWindow?(
+    draftId: string,
+  ): Promise<DesktopOpenDraftInNewWindowResult>;
   ownership: {
     snapshot(): Promise<readonly DesktopOwnershipEntry[]>;
     claim(tabId: string, epicId: string): Promise<DesktopOwnershipClaimResult>;

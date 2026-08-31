@@ -17,6 +17,7 @@ import type {
   ImageGenerationResult,
   TodoItem,
   AgentUserMessage,
+  BrowserAnnotationRecord,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   AgentMessageSend,
@@ -425,6 +426,17 @@ export type MessageSegment =
     }
   | {
       id: string;
+      kind: "imported-chat-marker";
+      /**
+       * Synthesized in `rendered-messages` from the chat's `chat.imported`
+       * event and never persisted - the event itself is the record.
+       */
+      sourceProvider: GuiHarnessId;
+      importedAt: number;
+      sourceCwd: string;
+    }
+  | {
+      id: string;
       kind: "setup-card";
       /**
        * Consolidated worktree-setup view-model (T2 deriver output). The segment
@@ -530,6 +542,23 @@ export interface AssistantTurnMeta {
   readonly providerLabel: string;
   /** Profile label snapshotted when the turn's provider session was minted. */
   readonly profileLabel: string | null;
+  /**
+   * NAME of the environment variable whose credential actually authenticated
+   * this turn, recorded by the host at spawn time; `null` when the turn ran on
+   * the profile named by `profileLabel`.
+   *
+   * The two fields answer different questions and can disagree - that
+   * disagreement is the whole point. `profileLabel` is the account the user
+   * SELECTED; this is the credential the provider CLI actually USED, and a CLI
+   * prefers an env key/token over its own signed-in store. When this is
+   * non-null the tooltip annotates the profile row, because "Terminal account"
+   * on its own would otherwise be a confident, wrong answer to "what ran this?"
+   *
+   * Read, never derived: the host stamps it on the turn record from the spawn
+   * env. Recomputing it here would describe today's environment rather than
+   * this turn's.
+   */
+  readonly envCredentialVar: string | null;
   readonly modelLabel: string | null;
   /** Raw persisted reasoning effort id from the host turn. */
   readonly reasoningEffort: string | null;
@@ -592,6 +621,7 @@ export interface ChatMessage {
   segments: ReadonlyArray<MessageSegment>;
   structuredContent: JsonContent | null;
   attachments: ReadonlyArray<Attachment>;
+  browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;
   settings: ChatRunSettings | null;
   createdAt: number;
   /**

@@ -112,6 +112,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/": "Settings",
   "/settings/agents": "Settings - Agents",
   "/settings/app-diagnostics": "Settings - App diagnostics",
+  "/settings/app-notifications": "Settings - Application notifications",
   "/settings/appearance": "Settings - Appearance",
   "/settings/devices": "Settings - Devices",
   "/settings/diagnostics": "Settings - Host diagnostics",
@@ -745,7 +746,10 @@ export function ReportIssueDialog(
   // four, same telemetry (now tagged with which action was blocked).
   function runIfGateSatisfied(
     blockedAction:
-      "send" | "open_github_issue" | "report_on_github" | "save_bundle",
+      | "send"
+      | "open_github_issue"
+      | "report_on_github"
+      | "save_bundle",
     run: () => void,
   ): void {
     if (!gateSatisfied) {

@@ -3,6 +3,7 @@ import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
@@ -10,6 +11,8 @@ import {
   hostChatRecordsSubscribeClientFrameSchemaV10,
   hostChatRecordsSubscribeOpenRequestSchemaV10,
   hostChatRecordsSubscribeServerFrameSchemaV10,
+  hostChatRecordsSubscribeServerFrameSchemaV11,
+  hostChatRecordsSubscribeServerFrameSchemaV12,
   hostChatRecordsSubscribeV10,
   listChatRecordsResponseSchema,
 } from "@traycer/protocol/host/epic/chat-records";
@@ -123,12 +126,17 @@ describe("host.chatRecords.subscribe@1.0 contract", () => {
       major: 1,
       minor: 0,
     });
-    // The manifest names the newest installed minor - @1.1 since the
-    // terminal-agent delta frames joined the stream. @1.0 stays installed
-    // beneath it for clients that negotiated the frozen set.
-    expect(buildStreamManifest(hostStreamRpcRegistry)[METHOD]).toEqual({
+    // The manifest names the newest installed minor - @1.2 since `tuiUpsert`
+    // grew the cross-host `origin` row union. @1.0 and @1.1 stay installed
+    // beneath it for clients that negotiated the frozen sets.
+    expect(
+      buildStreamManifest(hostStreamRpcRegistry, SERVES_EVERY_INSTALLED_MAJOR)[
+        METHOD
+      ],
+    ).toEqual({
       major: 1,
-      minor: 1,
+      minor: 2,
+      supportedMajors: [1],
     });
   });
 
@@ -271,7 +279,10 @@ describe("host.chatRecords.subscribe@1.0 frames", () => {
 
 describe("host.chatRecords.subscribe@1.0 degrades against an older host", () => {
   it("fails only this method's subscribe, leaving every other stream method compatible", () => {
-    const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
+    const currentManifest = buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
     const olderHostManifest = Object.fromEntries(
       Object.entries(currentManifest).filter(([method]) => method !== METHOD),
     );
@@ -305,5 +316,105 @@ describe("host.chatRecords.subscribe@1.0 degrades against an older host", () => 
         ).ok,
       ).toBe(true);
     }
+  });
+});
+
+describe("host.chatRecords.subscribe@1.2 tuiUpsert frames", () => {
+  const ENVELOPE = {
+    kind: "tuiUpsert",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    tuiAgentId: "tui-1",
+    revision: 7,
+  } as const;
+
+  const LOCAL_RECORD = {
+    tuiAgentId: "tui-1",
+    ownerUserId: "user-1",
+    hostId: "host-1",
+    harnessId: "claude",
+    harnessSessionId: null,
+    parentId: null,
+    title: "An agent",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    archivedAt: null,
+    workspaceFolders: [],
+    workspaceMode: null,
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    profileId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+    revision: 7,
+    docResident: false,
+    origin: "registry",
+  } as const;
+
+  const CLOUD_RECORD = {
+    tuiAgentId: "tui-1",
+    ownerUserId: "user-1",
+    hostId: "host-2",
+    harnessId: "claude",
+    parentId: null,
+    title: "A remote agent",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    revision: 7,
+    origin: "cloud",
+  } as const;
+
+  it("carries a registry row, exactly as @1.1 did", () => {
+    expect(
+      hostChatRecordsSubscribeServerFrameSchemaV12.safeParse({
+        ...ENVELOPE,
+        record: LOCAL_RECORD,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("carries a narrow cloud replica - the phase-2 population", () => {
+    expect(
+      hostChatRecordsSubscribeServerFrameSchemaV12.safeParse({
+        ...ENVELOPE,
+        record: CLOUD_RECORD,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("refuses a cloud replica on the frozen @1.1 frame set", () => {
+    // The emission gate's reason, stated as a contract fact: a @1.1
+    // subscriber agreed to a `tuiUpsert` carrying the full registry row, so
+    // handing it a narrow arm would be a frame it cannot parse. The host
+    // must never emit one below the negotiated floor.
+    expect(
+      hostChatRecordsSubscribeServerFrameSchemaV11.safeParse({
+        ...ENVELOPE,
+        record: CLOUD_RECORD,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("still enforces the envelope invariant across every arm", () => {
+    // The envelope addresses and orders the row it carries. A frame where the
+    // two disagree corrupts whichever chat the consumer happened to read.
+    expect(
+      hostChatRecordsSubscribeServerFrameSchemaV12.safeParse({
+        ...ENVELOPE,
+        record: { ...CLOUD_RECORD, tuiAgentId: "tui-other" },
+      }).success,
+    ).toBe(false);
+    expect(
+      hostChatRecordsSubscribeServerFrameSchemaV12.safeParse({
+        ...ENVELOPE,
+        record: { ...CLOUD_RECORD, revision: 8 },
+      }).success,
+    ).toBe(false);
   });
 });

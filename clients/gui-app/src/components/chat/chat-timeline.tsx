@@ -13,6 +13,7 @@ import {
   LegendList,
   type LegendListRef,
   type MaintainVisibleContentPositionConfig,
+  type OnViewableItemsChangedInfo,
 } from "@legendapp/list/react";
 import { cn } from "@/lib/utils";
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
@@ -29,12 +30,15 @@ import {
   clearChatTimelineVisibleRows,
 } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import {
-  chatTimelineKeySequence,
-  computeStableChatTimelineRows,
-  didChatTimelineKeySequenceChange,
-  EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
-  type StableChatTimelineRowsState,
+  computeStableTranscriptListRows,
+  didTranscriptListKeySequenceChange,
+  EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE,
+  transcriptListKeySequence,
+  type StableTranscriptListRowsState,
 } from "./chat-stable-rows";
+import { ChatTranscriptPlaceholderRow } from "./chat-transcript-placeholder-row";
+import type { ChatTranscriptRowHeightMemory } from "./chat-transcript-row-height-memory";
+import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 import {
   useChatTimelineFollowLatch,
   type ChatTimelineFollowLatch,
@@ -149,16 +153,16 @@ const CHAT_TIMELINE_NEAR_END_THRESHOLD = 0.1;
 /** The two configurations the timeline alternates between, at module scope so
  *  each keeps one identity and a commit that does not move between them hands
  *  the list the same object. See the prop itself for what selects which. */
-const CHAT_TIMELINE_MVCP_SIZE_ONLY: MaintainVisibleContentPositionConfig<ChatMessageModel> =
+const CHAT_TIMELINE_MVCP_SIZE_ONLY: MaintainVisibleContentPositionConfig<TranscriptListRow> =
   { data: false, size: true };
-const CHAT_TIMELINE_MVCP_WITH_DATA: MaintainVisibleContentPositionConfig<ChatMessageModel> =
+const CHAT_TIMELINE_MVCP_WITH_DATA: MaintainVisibleContentPositionConfig<TranscriptListRow> =
   { data: true, size: true };
 
 /** Both arms are pinned by the prop-capture cases in `chat-timeline.test.tsx`,
  *  which observe what the list actually received rather than calling this. */
 function resolveChatTimelineMvcp(
   keySequenceChanged: boolean,
-): MaintainVisibleContentPositionConfig<ChatMessageModel> {
+): MaintainVisibleContentPositionConfig<TranscriptListRow> {
   return keySequenceChanged
     ? CHAT_TIMELINE_MVCP_WITH_DATA
     : CHAT_TIMELINE_MVCP_SIZE_ONLY;
@@ -183,8 +187,37 @@ export interface ChatTimelineInitialScrollAnchor {
   readonly viewPosition: number;
 }
 
+/**
+ * The part of LegendList's `onItemSizeChanged` payload this component reads.
+ * Declared locally because the library types it inline on the prop rather than
+ * exporting it; a narrower parameter is assignable to the wider callback.
+ */
+interface ChatTimelineItemSizeInfo {
+  readonly size: number;
+  readonly itemData: TranscriptListRow;
+}
+
 export interface ChatTimelineProps {
-  readonly messages: ReadonlyArray<ChatMessageModel>;
+  /**
+   * The rows to draw, hydrated bodies and placeholders together.
+   *
+   * A full-length list on the windowed line: `transcriptListRows` fills every
+   * ordinal the window says exists, so scrolling reaches the top of the CHAT
+   * rather than the top of what happens to be loaded. On the legacy line every
+   * row is hydrated and this is just the rendered messages.
+   */
+  readonly rows: ReadonlyArray<TranscriptListRow>;
+  /**
+   * Which ROW indexes the viewport is showing, from LegendList's viewability
+   * pass - `[fromIndex, toIndex)` over `rows`, buffered by the list's render
+   * window so hydration modestly prefetches around the reading line. The
+   * windowed line turns this into ordinal-range hydration requests; on the
+   * legacy line the ranges resolve to no ordinals and the report is inert.
+   */
+  readonly onVisibleRowRangeChange?: (
+    fromIndex: number,
+    toIndex: number,
+  ) => void;
   readonly taskTitle: string;
   readonly backgroundToolBlockIds: ReadonlySet<string>;
   readonly getMessageActions: (
@@ -227,6 +260,13 @@ export interface ChatTimelineProps {
   readonly resolveSuppressedEndLanding?: () => boolean;
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
+  /**
+   * Where this transcript's measured row heights are kept, so a placeholder for
+   * a row the list has already drawn stands at the height that row really
+   * takes. `null` on the legacy line, which holds every body and never draws a
+   * placeholder at all.
+   */
+  readonly rowHeightMemory?: ChatTranscriptRowHeightMemory | null;
   /** Notifies presentational consumers after LegendList remeasures any row. */
   readonly onItemSizeChanged?: () => void;
   /** Fires for every mounted virtual row, including cached equal-size rows. */
@@ -256,7 +296,8 @@ export interface ChatTimelineProps {
  * here.
  */
 export const ChatTimeline = memo(function ChatTimeline({
-  messages,
+  rows: inputRows,
+  onVisibleRowRangeChange,
   taskTitle,
   backgroundToolBlockIds,
   getMessageActions,
@@ -273,12 +314,13 @@ export const ChatTimeline = memo(function ChatTimeline({
   isFollowCorrectionSuppressed,
   resolveSuppressedEndLanding,
   navigationHighlightedMessageId,
+  rowHeightMemory = null,
   onItemSizeChanged,
   onRowMount,
   onListMetricsChange,
   ...rest
 }: ChatTimelineProps) {
-  const rows = useStableChatTimelineRows(listRef, messages);
+  const rows = useStableChatTimelineRows(listRef, inputRows);
 
   const keySequenceChanged = useCommittedKeySequenceChanged(listRef, rows);
 
@@ -328,13 +370,34 @@ export const ChatTimeline = memo(function ChatTimeline({
     ],
   );
 
-  // Stable renderItem - no closure deps. ChatTimelineRow reads shared state
-  // from ChatTimelineRowCtx, which propagates through LegendList's memo.
+  // `endBuffered` is the last BUFFERED index, inclusive; the consumer takes
+  // an end-exclusive range. Reported from the buffered bounds rather than the
+  // strictly-visible ones so hydration warms the rows the list is about to
+  // mount, not only the ones already on screen.
+  const handleViewableItemsChanged = useCallback(
+    (info: OnViewableItemsChangedInfo<TranscriptListRow>): void => {
+      onVisibleRowRangeChange?.(info.startBuffered, info.endBuffered + 1);
+    },
+    [onVisibleRowRangeChange],
+  );
+
+  // Stable renderItem: `rowHeightMemory` is a mount-lifetime object, not a
+  // value that changes as rows are measured, so naming it as a dep does not
+  // cost the identity this callback is kept stable for. ChatTimelineRow reads
+  // shared state from ChatTimelineRowCtx, which propagates through
+  // LegendList's memo.
   const renderItem = useCallback(
-    ({ item }: { item: ChatMessageModel }) => (
-      <ChatTimelineRow message={item} />
-    ),
-    [],
+    ({ item }: { item: TranscriptListRow }) =>
+      item.kind === "placeholder" ? (
+        <ChatTranscriptPlaceholderRow
+          entry={item.entry}
+          ordinal={item.ordinal}
+          heightMemory={rowHeightMemory}
+        />
+      ) : (
+        <ChatTimelineRow message={item.model} />
+      ),
+    [rowHeightMemory],
   );
 
   const handleScroll = useCallback(() => {
@@ -346,10 +409,24 @@ export const ChatTimeline = memo(function ChatTimeline({
   // layout are two of the real LegendList maintain triggers that never
   // re-enter this component's render - consult the latch right here, at the
   // actual callback boundary, not through a prop the library reads later.
-  const handleItemSizeChanged = useCallback(() => {
-    followLatch.followEndIfPermitted();
-    onItemSizeChanged?.();
-  }, [followLatch, onItemSizeChanged]);
+  const handleItemSizeChanged = useCallback(
+    (info: ChatTimelineItemSizeInfo) => {
+      // Only a HYDRATED row's measurement says anything true about how tall
+      // that row is. A placeholder measures at whatever height the memory just
+      // told it to stand at, so recording one would be the memory reading its
+      // own estimate back in as evidence for that estimate.
+      if (rowHeightMemory !== null && info.itemData.kind === "hydrated") {
+        rowHeightMemory.recordMeasuredHeight({
+          rowId: info.itemData.key,
+          ordinal: info.itemData.ordinal,
+          height: info.size,
+        });
+      }
+      followLatch.followEndIfPermitted();
+      onItemSizeChanged?.();
+    },
+    [followLatch, onItemSizeChanged, rowHeightMemory],
+  );
 
   const handleMetricsChange = useCallback(
     (metrics: { readonly headerSize: number; readonly footerSize: number }) => {
@@ -401,7 +478,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 
   return (
     <ChatTimelineRowCtx value={sharedState}>
-      <LegendList<ChatMessageModel>
+      <LegendList<TranscriptListRow>
         ref={listRef}
         data={rows}
         keyExtractor={chatTimelineKeyExtractor}
@@ -464,6 +541,7 @@ export const ChatTimeline = memo(function ChatTimeline({
         onItemSizeChanged={handleItemSizeChanged}
         onScroll={handleScroll}
         onMetricsChange={handleMetricsChange}
+        onViewableItemsChanged={handleViewableItemsChanged}
         showsVerticalScrollIndicator
         className={cn(
           // The Legend List node is the sole scroll owner. It deliberately uses
@@ -479,8 +557,8 @@ export const ChatTimeline = memo(function ChatTimeline({
   );
 });
 
-function chatTimelineKeyExtractor(item: ChatMessageModel): string {
-  return item.id;
+function chatTimelineKeyExtractor(item: TranscriptListRow): string {
+  return item.key;
 }
 
 /** Ticket 13 (bonus): the assistant estimate (14rem) is tuned for
@@ -530,7 +608,7 @@ function chatTimelineRowSizeHintClassName(
  */
 const stableChatTimelineRowsCache = new WeakMap<
   RefObject<LegendListRef | null>,
-  StableChatTimelineRowsState
+  StableTranscriptListRowsState
 >();
 
 /**
@@ -560,13 +638,13 @@ const committedChatTimelineKeysCache = new WeakMap<
  *  published during render and a discarded render can move it. */
 function useStableChatTimelineRows(
   listRef: RefObject<LegendListRef | null>,
-  rows: ReadonlyArray<ChatMessageModel>,
-): ReadonlyArray<ChatMessageModel> {
+  rows: ReadonlyArray<TranscriptListRow>,
+): ReadonlyArray<TranscriptListRow> {
   return useMemo(() => {
     const previous =
       stableChatTimelineRowsCache.get(listRef) ??
-      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE;
-    const next = computeStableChatTimelineRows(rows, previous);
+      EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE;
+    const next = computeStableTranscriptListRows(rows, previous);
     stableChatTimelineRowsCache.set(listRef, next);
     return next.result;
   }, [rows, listRef]);
@@ -590,11 +668,11 @@ function useStableChatTimelineRows(
  */
 function useCommittedKeySequenceChanged(
   listRef: RefObject<LegendListRef | null>,
-  rows: ReadonlyArray<ChatMessageModel>,
+  rows: ReadonlyArray<TranscriptListRow>,
 ): boolean {
   const keySequenceChanged = useMemo(
     () =>
-      didChatTimelineKeySequenceChange(
+      didTranscriptListKeySequenceChange(
         committedChatTimelineKeysCache.get(listRef),
         rows,
       ),
@@ -602,7 +680,10 @@ function useCommittedKeySequenceChanged(
   );
 
   useLayoutEffect(() => {
-    committedChatTimelineKeysCache.set(listRef, chatTimelineKeySequence(rows));
+    committedChatTimelineKeysCache.set(
+      listRef,
+      transcriptListKeySequence(rows),
+    );
   }, [listRef, rows]);
 
   return keySequenceChanged;

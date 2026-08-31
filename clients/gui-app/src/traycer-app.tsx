@@ -5,6 +5,7 @@ import { HostControllerStatusListener } from "@/components/layout/bridges/host-c
 import { LinkLoginDeepLinkBridge } from "@/components/layout/bridges/link-login-deep-link-bridge";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
+import { SessionImportProgressToastBridge } from "@/components/layout/bridges/session-import-progress-toast-bridge";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
 import { HostRuntimeBootFallback } from "@/components/host/host-runtime-boot-fallback";
 import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
@@ -17,6 +18,7 @@ import {
   type MessengerFactory,
 } from "@/lib/host";
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
+import { SessionImportRunController } from "@/components/session-import/session-import-run-controller";
 import {
   HostReadinessControllerProvider,
   HostScopeReady,
@@ -59,6 +61,7 @@ import { createAppRouter, type AppRouter } from "@/router";
 // Tailwind variant so titlebar insets toggle on fullscreen.
 import "@/lib/window-controls-overlay";
 import { startMainThreadBlockProbe } from "@/lib/perf/main-thread-block-probe";
+import { appLogger, describeLogError } from "@/lib/logger";
 
 // Surface renderer main-thread stalls (Long Tasks) so slow-feeling RPCs caused
 // by a busy main thread are visible directly. Gated to dev / opt-in.
@@ -77,6 +80,31 @@ const ReactQueryDevtools = import.meta.env.DEV
       })),
     )
   : null;
+
+// Evaluation-only canvas fixture seeding. The guard is statically analysable
+// and the module is reached ONLY through this dynamic import, so a production
+// build eliminates both the branch and the module - which is checked by
+// grepping the built artifact for `SEED_FIXTURE_SENTINEL`, after first proving
+// the grep can find it on a build where the seeder is deliberately retained.
+// A runtime flag would leave the seeder present-but-dormant, and dormancy is a
+// claim about invocation that has to be re-proven for every path ever added.
+// `import.meta.env.MODE !== "test"` keeps it out of Vitest, where `DEV` is also
+// true: a module-scope floating import there pulls the canvas and landing-draft
+// stores in asynchronously, mid-test, for no benefit. The `DEV` conjunct is what
+// the production build eliminates on, so narrowing does not weaken the bundle
+// exclusion - proven separately by the sentinel grep with a positive control.
+if (import.meta.env.DEV && import.meta.env.MODE !== "test") {
+  void import("@/dev/seed-canvas-fixture")
+    .then((module) => {
+      module.installSeedFixtureBridge();
+    })
+    .catch((error: unknown) => {
+      // Never let an eval-only harness surface as an unhandled rejection.
+      appLogger.warn("[seed-fixture] bridge install failed", {
+        error: describeLogError(error),
+      });
+    });
+}
 
 export interface TraycerAppProps {
   readonly runnerHost: IRunnerHost;
@@ -250,6 +278,12 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                 <ProvidersChangedStreamMount />
                                 <ChatRecordsStreamMount />
                               </HostScopeReady>
+                              {/* Above the shell split on purpose: the onboarding tour
+                                  renders through `StandaloneShell`, not `AppShell`, so a
+                                  mount inside the app shell left the tour's Import button
+                                  with no run handle to call. This is the lowest node both
+                                  shells share that still has the host stream. */}
+                              <SessionImportRunController />
                               <AppLocalNotificationsPersistLifecycleBridge>
                                 <ReadingPositionPersistLifecycleBridge>
                                   <NotificationsSessionProvider
@@ -293,6 +327,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <AppUpdateToastController />
       <LinkLoginDeepLinkBridge />
       <WorktreeDeleteProgressToastBridge />
+      <SessionImportProgressToastBridge />
       <HarnessCatalogPrefetcher />
       <RateLimitQueueProvider />
       <HistoryPruneProvider router={props.router} />

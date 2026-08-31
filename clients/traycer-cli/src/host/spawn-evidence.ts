@@ -52,7 +52,9 @@ export interface SpawnEvidenceBaseline {
 }
 
 export type SpawnEvidenceKind =
-  "pid-metadata" | "starting-marker" | "terminal-marker";
+  | "pid-metadata"
+  | "starting-marker"
+  | "terminal-marker";
 
 export interface SpawnEvidence {
   readonly kind: SpawnEvidenceKind;

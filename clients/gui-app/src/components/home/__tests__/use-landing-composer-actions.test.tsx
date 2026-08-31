@@ -3,12 +3,14 @@ import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import { useHostClient } from "@/lib/host";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
+import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { tabItemId, type SplitStripItem } from "@/stores/tabs/layout";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -31,11 +33,23 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  clearSessionCreatedEpics,
+  sessionCreatedEpicHostId,
+  wasEpicCreatedRecentlyThisSession,
+  wasEpicCreatedThisSession,
+} from "@/lib/epics/session-created-epics";
+
+interface CapturedNavigation {
+  readonly search?: (
+    previous: Readonly<Record<string, unknown>>,
+  ) => Readonly<Record<string, unknown>>;
+}
 
 const landingMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   createTerminalAgent: vi.fn<(input: unknown) => Promise<void>>(),
-  navigate: vi.fn(),
+  navigate: vi.fn<(options: CapturedNavigation) => void>(),
   getActiveHostId: vi.fn(() => "host-landing"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-landing"),
   getActiveHost: vi.fn(() => ({
@@ -145,6 +159,19 @@ function foldedChatIdFromCreateEpicPayload(payload: unknown): string | null {
   const chatId = chat.chatId;
   return typeof chatId === "string" ? chatId : null;
 }
+
+// Same structural-narrowing shape as the chat-id reader above, for the
+// epic's own id - present on both flows' `epic.create` payload (`chat` is
+// `null` on the terminal-agent flow, but `epic.id` always rides along).
+function epicIdFromCreateEpicPayload(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  if (!("epic" in payload)) return null;
+  const epic = payload.epic;
+  if (typeof epic !== "object" || epic === null) return null;
+  if (!("id" in epic)) return null;
+  const id = epic.id;
+  return typeof id === "string" ? id : null;
+}
 const WORKSPACE_PATH = "/tmp/traycer";
 const DRAFT_WORKSPACE_PATH = "/tmp/draft-workspace";
 const GLOBAL_WORKSPACE_PATH = "/tmp/global-workspace";
@@ -248,6 +275,7 @@ describe("useLandingComposerActions", () => {
   });
 
   afterEach(() => {
+    setSystemTabModalApi(null);
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     cleanup();
@@ -1564,6 +1592,76 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  it("keeps Settings open when a submitted draft finishes creating", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-settings-race", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+
+    // Settings opens while epic.create is still in flight. It is URL-backed,
+    // so the success navigation must carry its search flag onto the new Epic
+    // route instead of dismissing the modal.
+    setSystemTabModalApi({
+      active: { kind: "settings", section: "general" },
+      openSettings: () => undefined,
+      openHistory: () => undefined,
+      close: () => undefined,
+      setSection: () => undefined,
+      promoteToTab: () => undefined,
+      isOverlayActive: (kind) => kind === "settings",
+    });
+    createGate.resolve({ roomInfo: null });
+
+    await waitFor(() => {
+      expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    });
+    const search = landingMocks.navigate.mock.calls[0]?.[0].search;
+    if (search === undefined) {
+      throw new Error("expected created-task navigation to preserve search");
+    }
+    expect(search({ settingsOverlay: true })).toEqual({
+      settingsOverlay: true,
+    });
+    expect(useTabsStore.getState().items[0]).toMatchObject({
+      kind: "tab",
+      ref: { kind: "epic" },
+    });
+    queryClient.clear();
+  });
+
   it("creates an epic from the active draft workspace instead of the global workspace", async () => {
     setGlobalWorkspaceFolders({
       folders: [DRAFT_WORKSPACE_PATH],
@@ -2370,6 +2468,218 @@ describe("useLandingComposerActions", () => {
       await waitFor(() => {
         expect(result.current.isPending).toBe(false);
       });
+      queryClient.clear();
+    });
+  });
+
+  // `markEpicCreatedThisSession` fires once before `epic.create` (for the
+  // existence reconciler) and again in each flow's SUCCESS handler, to
+  // re-anchor `CREATE_RACE_WINDOW_MS` (2 minutes) on COMPLETION rather than on
+  // the request. `epic.create` can legitimately hold a 30s host RPC deadline
+  // (longer under retry), so anchoring on the request alone would let a slow
+  // create hand an already-expired seed to the session that opens right after
+  // it - reintroducing the exact NOT_FOUND race this marker exists to
+  // prevent. `Date` is faked (not the timer queue) so the clock is fully
+  // controllable while `waitFor`'s own real-timer polling - and every
+  // TanStack Query internal `setTimeout(0)` hop the mutation pipeline relies
+  // on - keeps working unmodified.
+  describe("create-race window re-anchoring on completion", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("keeps the create-race window open 90s after a GUI-chat create resolves, even though the request itself took 60s", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      setSingleWorkspace();
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      const epicId = epicIdFromCreateEpicPayload(createEpicCall?.[1]);
+      if (epicId === null) throw new Error("expected an epic id");
+
+      // The request is still pending - advance 60s before it resolves.
+      vi.advanceTimersByTime(60_000);
+
+      await act(async () => {
+        createGate.resolve({ roomInfo: null });
+        await createGate.promise;
+      });
+      await waitFor(() => {
+        expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
+      });
+
+      // 90s after completion - 150s after the request, past the 2-minute
+      // window if it were still anchored there. Only the success handler's
+      // re-anchor keeps this seed alive.
+      vi.advanceTimersByTime(90_000);
+
+      expect(sessionCreatedEpicHostId(epicId)).toBe(TEST_HOST_ID);
+      expect(wasEpicCreatedRecentlyThisSession(epicId)).toBe(true);
+
+      queryClient.clear();
+    });
+
+    it("keeps the create-race window open 90s after a terminal-agent create resolves, even though the request itself took 60s", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.selectTerminalAgent(
+          {
+            harnessId: "claude",
+            model: null,
+            reasoningEffort: null,
+            terminalAgentArgs: "",
+            profileId: null,
+          },
+          null,
+        );
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      const epicId = epicIdFromCreateEpicPayload(createEpicCall?.[1]);
+      if (epicId === null) throw new Error("expected an epic id");
+
+      // The request is still pending - advance 60s before it resolves.
+      vi.advanceTimersByTime(60_000);
+
+      await act(async () => {
+        createGate.resolve({ roomInfo: null });
+        await createGate.promise;
+      });
+      await waitFor(() => {
+        expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+      });
+
+      // 90s after completion - 150s after the request, past the 2-minute
+      // window if it were still anchored there. Only the success handler's
+      // re-anchor keeps this seed alive.
+      vi.advanceTimersByTime(90_000);
+
+      expect(sessionCreatedEpicHostId(epicId)).toBe(TEST_HOST_ID);
+      expect(wasEpicCreatedRecentlyThisSession(epicId)).toBe(true);
+
+      queryClient.clear();
+    });
+
+    it("does not restore the create marker when the identity changed while the create was in flight", async () => {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "user-initial",
+          userName: "Initial User",
+          email: "initial@example.com",
+        },
+        { userId: "user-initial", username: "initial" },
+        [],
+      );
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.selectTerminalAgent(
+          {
+            harnessId: "claude",
+            model: null,
+            reasoningEffort: null,
+            terminalAgentArgs: "",
+            profileId: null,
+          },
+          null,
+        );
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      const epicId = epicIdFromCreateEpicPayload(createEpicCall?.[1]);
+      if (epicId === null) throw new Error("expected an epic id");
+
+      // The identity transition `auth-lifecycle-bridge` performs on
+      // sign-out / user-switch: swap in a DIFFERENT user and clear the
+      // session-created-epics markers, while the create is still in flight.
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "user-different",
+          userName: "Different User",
+          email: "different@example.com",
+        },
+        { userId: "user-different", username: "different" },
+        [],
+      );
+      clearSessionCreatedEpics();
+
+      await act(async () => {
+        createGate.resolve({ roomInfo: null });
+        await createGate.promise;
+      });
+      await waitFor(() => {
+        expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+      });
+
+      // The completion re-anchor must not restore the marker for the
+      // OUTGOING account: the dispatching identity no longer matches the
+      // identity live at completion.
+      expect(sessionCreatedEpicHostId(epicId)).toBeNull();
+      expect(wasEpicCreatedThisSession(epicId)).toBe(false);
+
+      useAuthStore.getState().setSignedOut();
       queryClient.clear();
     });
   });

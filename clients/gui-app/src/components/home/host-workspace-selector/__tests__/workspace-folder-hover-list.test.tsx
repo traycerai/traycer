@@ -17,6 +17,7 @@ function folder(over: {
   readonly displayPath: string;
   readonly mode: "local" | "worktree";
   readonly currentIntent: WorktreeFolderIntent | null;
+  readonly hasStagedIntent?: boolean;
 }) {
   return {
     key: over.key,
@@ -48,6 +49,7 @@ function folder(over: {
     onLocate: null,
     onMakePrimary: NOOP,
     onRemove: null,
+    hasStagedIntent: over.hasStagedIntent,
   };
 }
 
@@ -152,6 +154,117 @@ describe("WorkspaceFolderHoverList", () => {
     expect(screen.getByText(/New worktree/)).toBeTruthy();
     // The source folder path is not shown — there's no path yet.
     expect(screen.queryByText("/Users/me/Work/traycer")).toBeNull();
+  });
+
+  it("names a staged local switch instead of New worktree", () => {
+    render(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/a",
+            displayName: "traycer",
+            branchLabel: "main",
+            displayPath: "/Users/me/Work/traycer",
+            mode: "worktree",
+            currentIntent: {
+              kind: "local",
+              workspacePath: "/Users/me/Work/traycer",
+              repoIdentifier: null,
+              isPrimary: true,
+            },
+            hasStagedIntent: true,
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("workspace-hover-draft-hint").textContent).toBe(
+      "Local folder · applies on send",
+    );
+    expect(screen.queryByText(/New worktree/)).toBeNull();
+  });
+
+  it("does not hint a committed local row as a staged apply", () => {
+    render(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/a",
+            displayName: "traycer",
+            branchLabel: "main",
+            displayPath: "/Users/me/Work/traycer",
+            mode: "worktree",
+            currentIntent: {
+              kind: "local",
+              workspacePath: "/Users/me/Work/traycer",
+              repoIdentifier: null,
+              isPrimary: true,
+            },
+            hasStagedIntent: false,
+          }),
+        ]}
+      />,
+    );
+    expect(screen.queryByTestId("workspace-hover-draft-hint")).toBeNull();
+  });
+
+  it("names a staged existing-worktree switch", () => {
+    render(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/a",
+            displayName: "traycer",
+            branchLabel: "feat/login",
+            displayPath: "/Users/me/Work/traycer",
+            mode: "local",
+            currentIntent: {
+              kind: "import",
+              workspacePath: "/Users/me/Work/traycer",
+              repoIdentifier: null,
+              isPrimary: true,
+              worktreePath: "/wt/feat-login",
+            },
+            hasStagedIntent: true,
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("workspace-hover-draft-hint").textContent).toBe(
+      "Switch to feat/login · applies on send",
+    );
+  });
+
+  it("names a staged new worktree from a source branch", () => {
+    render(
+      <WorkspaceFolderHoverList
+        items={[
+          folder({
+            key: "/a",
+            displayName: "traycer",
+            branchLabel: "traycer/new-thing",
+            displayPath: "/Users/me/Work/traycer",
+            mode: "local",
+            currentIntent: {
+              kind: "worktree",
+              scripts: null,
+              workspacePath: "/Users/me/Work/traycer",
+              repoIdentifier: null,
+              isPrimary: true,
+              branch: {
+                type: "new",
+                name: "traycer/new-thing",
+                source: "main",
+                carryUncommittedChanges: false,
+              },
+            },
+            hasStagedIntent: true,
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("workspace-hover-draft-hint").textContent).toBe(
+      "From main · created on send",
+    );
   });
 
   it("claims a viewport-aware width so a long path cannot drive unpredictable w-fit sizing", () => {

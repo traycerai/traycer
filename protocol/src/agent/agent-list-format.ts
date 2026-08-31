@@ -4,9 +4,7 @@ import type {
   ListAgentsResponse,
 } from "@traycer/protocol/host";
 
-export function formatAgentListResponse(
-  response: ListAgentsResponse,
-): string {
+export function formatAgentListResponse(response: ListAgentsResponse): string {
   const agents = response.agents;
   const showSend = response.caller.canSendMessages;
   // Only the direct host-enriched listing can ever render an [archived] row, so
@@ -208,10 +206,7 @@ function buildChildrenByParent(
 
 function collectDescendantIds(
   rootId: string,
-  childrenByParent: ReadonlyMap<
-    string | null,
-    readonly AgentSummary[]
-  >,
+  childrenByParent: ReadonlyMap<string | null, readonly AgentSummary[]>,
 ): Set<string> {
   const out = new Set<string>();
   const walk = (parentId: string): void => {
@@ -226,10 +221,7 @@ function collectDescendantIds(
 }
 
 function formatAgentTreeLevel(
-  childrenByParent: ReadonlyMap<
-    string | null,
-    readonly AgentSummary[]
-  >,
+  childrenByParent: ReadonlyMap<string | null, readonly AgentSummary[]>,
   parentId: string | null,
   prefix: string,
   showSend: boolean,
@@ -261,10 +253,7 @@ function formatAgentTreeLevel(
   });
 }
 
-function formatAgentListLine(
-  agent: AgentSummary,
-  showSend: boolean,
-): string {
+function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
   const self = agent.isSelf ? " [self]" : "";
   const archived = isArchivedAgent(agent) ? " [archived]" : "";
   const parts = [

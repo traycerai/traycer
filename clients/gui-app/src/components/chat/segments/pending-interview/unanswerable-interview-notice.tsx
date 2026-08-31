@@ -23,7 +23,8 @@ interface UnanswerableInterviewNoticeProps {
    * renders so the deadlock is at least legible.
    */
   readonly onDismiss:
-    ((blockId: string, reason: string) => string | null) | null;
+    | ((blockId: string, reason: string) => string | null)
+    | null;
 }
 
 /**

@@ -214,17 +214,22 @@ function assertSingleTerminalResult(out: ParsedRunnerOutput): void {
   expect(resultIndices[0]).toBe(out.envelopes.length - 1);
 }
 
+function validCredentialsFixture(effect: string): Record<string, unknown> {
+  return {
+    kind: "valid",
+    credentials: {
+      token: "tok",
+      savedAt: "2026-05-15T00:00:00Z",
+      user: { id: "u1", email: "user@example.com", name: "User One" },
+    },
+    effect,
+  };
+}
+
 describe("whoami runner migration", () => {
   it("emits a single ok result envelope with the user payload when credentials are valid", async () => {
     vi.doMock("../../auth/validate", () => ({
-      validateStoredCredentials: async () => ({
-        kind: "valid",
-        credentials: {
-          token: "tok",
-          savedAt: "2026-05-15T00:00:00Z",
-          user: { id: "u1", email: "user@example.com", name: "User One" },
-        },
-      }),
+      validateStoredCredentials: async () => validCredentialsFixture("none"),
     }));
     const { whoamiCommand } = await import("../whoami");
     const out = await runJsonCommand(whoamiCommand);
@@ -238,17 +243,70 @@ describe("whoami runner migration", () => {
         user: { id: "u1", email: "user@example.com", name: "User One" },
         // whoami reports the CONFIGURED authn origin - the file carries no URL.
         authnBaseUrl: config.authnBaseUrl,
+        validated: true,
+        credentialUpdate: "none",
       },
     });
+    // `savedAt` is deliberately absent from validating mode: it is only
+    // unambiguous when it comes from a file this command actually read
+    // (`superseded` means the returned credentials are a sibling's pair with
+    // its own stamp). Pin the absence so a future change cannot quietly
+    // reintroduce an ambiguous field.
+    const data = (out.terminal?.data ?? {}) as Record<string, unknown>;
+    expect(data).not.toHaveProperty("savedAt");
     // No free-form stdout other than NDJSON.
     for (const line of out.stdoutLines) {
       expect(() => JSON.parse(line)).not.toThrow();
     }
   });
 
-  it("emits a single ok result with status='no-credentials' and exits 1 when not signed in", async () => {
+  it.each([
+    ["none", ""],
+    ["profile-refreshed", "Updated the stored profile from Traycer."],
+    ["profile-refresh-unconfirmed", "did not confirm"],
+    ["token-rotated", "Refreshed the stored access token."],
+    ["token-rotation-unconfirmed", "may be stale"],
+  ] as const)(
+    "reports credentialUpdate=%s and the matching human suffix",
+    async (effect, suffix) => {
+      vi.doMock("../../auth/validate", () => ({
+        validateStoredCredentials: async () => validCredentialsFixture(effect),
+      }));
+      const { whoamiCommand } = await import("../whoami");
+
+      const jsonOut = await runJsonCommand(whoamiCommand);
+      // Every credentialUpdate value, including the two "-unconfirmed" ones,
+      // is still exit 0: the identity question WAS answered, truthfully - the
+      // warning is advisory, not a failure.
+      expect(jsonOut.exitCode).toBe(0);
+      expect(jsonOut.terminal).toMatchObject({
+        status: "ok",
+        data: { validated: true, credentialUpdate: effect },
+      });
+
+      stdoutChunks = [];
+      vi.resetModules();
+      vi.doMock("../../auth/validate", () => ({
+        validateStoredCredentials: async () => validCredentialsFixture(effect),
+      }));
+      const { whoamiCommand: whoamiCommandHuman } = await import("../whoami");
+      const humanOut = await runHumanCommand(whoamiCommandHuman);
+      const humanLine = joined(stdoutChunks);
+      expect(humanOut.exitCode).toBe(0);
+      if (suffix === "") {
+        expect(humanLine.trim()).toBe("Logged in as user@example.com.");
+      } else {
+        expect(humanLine).toContain(suffix);
+      }
+    },
+  );
+
+  it("emits a single ok result with status='no-credentials', validated=false, and exits 1 when not signed in", async () => {
     vi.doMock("../../auth/validate", () => ({
-      validateStoredCredentials: async () => ({ kind: "no-credentials" }),
+      validateStoredCredentials: async () => ({
+        kind: "no-credentials",
+        effect: "none",
+      }),
     }));
     const { whoamiCommand } = await import("../whoami");
     const out = await runJsonCommand(whoamiCommand);
@@ -257,13 +315,20 @@ describe("whoami runner migration", () => {
     expect(out.terminal).toMatchObject({
       type: "result",
       status: "ok",
-      data: { status: "no-credentials" },
+      data: {
+        status: "no-credentials",
+        validated: false,
+        credentialUpdate: "none",
+      },
     });
   });
 
-  it("emits a single ok result with status='rejected' and exits 1 when the token was rejected", async () => {
+  it("emits a single ok result with status='rejected', validated=true, and exits 1 when the token was rejected", async () => {
     vi.doMock("../../auth/validate", () => ({
-      validateStoredCredentials: async () => ({ kind: "rejected" }),
+      validateStoredCredentials: async () => ({
+        kind: "rejected",
+        effect: "none",
+      }),
     }));
     const { whoamiCommand } = await import("../whoami");
     const out = await runJsonCommand(whoamiCommand);
@@ -271,13 +336,76 @@ describe("whoami runner migration", () => {
     expect(out.exitCode).toBe(1);
     expect(out.terminal).toMatchObject({
       status: "ok",
-      data: { status: "rejected" },
+      data: { status: "rejected", validated: true, credentialUpdate: "none" },
     });
+  });
+
+  // A rejection can arrive AFTER a spend (first rotate attempt loses its
+  // commit, a concurrent logout/account switch turns the retry into
+  // deleted/tombstoned/user-mismatch). Reporting "none" there would tell an
+  // auditing caller this invocation touched nothing, when it consumed the
+  // refresh token.
+  it("reports the spend on a rejection that followed one, in data and on the human line", async () => {
+    vi.doMock("../../auth/validate", () => ({
+      validateStoredCredentials: async () => ({
+        kind: "rejected",
+        effect: "token-rotation-unconfirmed",
+      }),
+    }));
+    const { whoamiCommand } = await import("../whoami");
+    const out = await runJsonCommand(whoamiCommand);
+    expect(out.exitCode).toBe(1);
+    expect(out.terminal).toMatchObject({
+      status: "ok",
+      data: {
+        status: "rejected",
+        credentialUpdate: "token-rotation-unconfirmed",
+      },
+    });
+
+    stdoutChunks = [];
+    vi.resetModules();
+    vi.doMock("../../auth/validate", () => ({
+      validateStoredCredentials: async () => ({
+        kind: "rejected",
+        effect: "token-rotation-unconfirmed",
+      }),
+    }));
+    const { whoamiCommand: humanCmd } = await import("../whoami");
+    await runHumanCommand(humanCmd);
+    expect(joined(stdoutChunks)).toContain("may be stale");
+  });
+
+  // The network path throws, so its envelope is the ONLY thing the caller
+  // gets - the spend has to ride on it or it is lost.
+  it("carries a spend that preceded a network failure in the error envelope", async () => {
+    vi.doMock("../../auth/validate", () => ({
+      validateStoredCredentials: async () => ({
+        kind: "network-error",
+        effect: "token-rotation-unconfirmed",
+      }),
+    }));
+    const { whoamiCommand } = await import("../whoami");
+    const out = await runJsonCommand(whoamiCommand);
+    expect(out.exitCode).toBe(2);
+    const error = out.terminal?.error as Record<string, unknown>;
+    expect(error.code).toBe("E_AUTH_NETWORK");
+    expect(error.details).toMatchObject({
+      credentialUpdate: "token-rotation-unconfirmed",
+    });
+    // The message must NOT assert a spend: `refresh-network` means the request
+    // may never have reached the server, which is the whole reason the effect
+    // is "unconfirmed" rather than a definite rotation.
+    expect(String(error.message)).not.toContain("was spent");
+    expect(String(error.message)).toContain("may or may not have gone through");
   });
 
   it("emits a single error envelope with code=E_AUTH_NETWORK and exits 2 on a network failure", async () => {
     vi.doMock("../../auth/validate", () => ({
-      validateStoredCredentials: async () => ({ kind: "network-error" }),
+      validateStoredCredentials: async () => ({
+        kind: "network-error",
+        effect: "none",
+      }),
     }));
     const { whoamiCommand } = await import("../whoami");
     const out = await runJsonCommand(whoamiCommand);
@@ -295,14 +423,7 @@ describe("whoami runner migration", () => {
 
   it("emits only the human line on stdout when JSON mode is off", async () => {
     vi.doMock("../../auth/validate", () => ({
-      validateStoredCredentials: async () => ({
-        kind: "valid",
-        credentials: {
-          token: "tok",
-          savedAt: "2026-05-15T00:00:00Z",
-          user: { id: "u1", email: "user@example.com", name: "User One" },
-        },
-      }),
+      validateStoredCredentials: async () => validCredentialsFixture("none"),
     }));
     const { whoamiCommand } = await import("../whoami");
     const out = await runHumanCommand(whoamiCommand);
@@ -310,6 +431,85 @@ describe("whoami runner migration", () => {
     expect(out.terminal).toBeNull();
     expect(joined(stdoutChunks)).toContain("Logged in as user@example.com.");
     expect(out.exitCode).toBe(0);
+  });
+});
+
+describe("whoami --local (whoamiLocalCommand)", () => {
+  it("is purely observational: never calls validateStoredCredentials, reads the store directly", async () => {
+    const validateSpy = vi.fn();
+    vi.doMock("../../auth/validate", () => ({
+      validateStoredCredentials: validateSpy,
+    }));
+    vi.doMock("../../store/credentials", () => ({
+      readCredentials: async () => ({
+        token: "tok",
+        savedAt: "2026-05-15T00:00:00Z",
+        user: { id: "u1", email: "user@example.com", name: "User One" },
+      }),
+    }));
+    const { whoamiLocalCommand } = await import("../whoami");
+    const out = await runJsonCommand(whoamiLocalCommand);
+    assertSingleTerminalResult(out);
+    expect(out.exitCode).toBe(0);
+    expect(out.terminal).toMatchObject({
+      status: "ok",
+      data: {
+        status: "stored",
+        user: { id: "u1", email: "user@example.com", name: "User One" },
+        authnBaseUrl: config.authnBaseUrl,
+        savedAt: "2026-05-15T00:00:00Z",
+        validated: false,
+        credentialUpdate: "none",
+      },
+    });
+    expect(validateSpy).not.toHaveBeenCalled();
+    vi.doUnmock("../../store/credentials");
+  });
+
+  it("prints the observational human line", async () => {
+    vi.doMock("../../store/credentials", () => ({
+      readCredentials: async () => ({
+        token: "tok",
+        savedAt: "2026-05-15T00:00:00Z",
+        user: { id: "u1", email: "user@example.com", name: "User One" },
+      }),
+    }));
+    const { whoamiLocalCommand } = await import("../whoami");
+    const out = await runHumanCommand(whoamiLocalCommand);
+    expect(out.terminal).toBeNull();
+    expect(joined(stdoutChunks)).toContain(
+      "Logged in as user@example.com (stored credentials; not checked with Traycer).",
+    );
+    expect(out.exitCode).toBe(0);
+    vi.doUnmock("../../store/credentials");
+  });
+
+  it("emits status='no-credentials' and exits 1 when nothing is stored, without touching the store's mutation surface", async () => {
+    vi.doMock("../../store/credentials", () => ({
+      readCredentials: async () => null,
+    }));
+    const { whoamiLocalCommand } = await import("../whoami");
+    const out = await runJsonCommand(whoamiLocalCommand);
+    assertSingleTerminalResult(out);
+    expect(out.exitCode).toBe(1);
+    expect(out.terminal).toMatchObject({
+      status: "ok",
+      data: {
+        status: "no-credentials",
+        validated: false,
+        credentialUpdate: "none",
+      },
+    });
+    vi.doUnmock("../../store/credentials");
+  });
+});
+
+describe("buildWhoamiCommand", () => {
+  it("selects whoamiLocalCommand when local=true and whoamiCommand when local=false", async () => {
+    const { buildWhoamiCommand, whoamiCommand, whoamiLocalCommand } =
+      await import("../whoami");
+    expect(buildWhoamiCommand({ local: true })).toBe(whoamiLocalCommand);
+    expect(buildWhoamiCommand({ local: false })).toBe(whoamiCommand);
   });
 });
 

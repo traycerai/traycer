@@ -10,6 +10,11 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
+import {
+  getMobileAppPlatform,
+  isMobileApp,
+  type MobileAppPlatform,
+} from "@/lib/mobile-app";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -178,6 +183,26 @@ export function ClientUpdateRequiredAction(props: {
     );
   }
 
+  // THE MOBILE SHELL. Every desktop arm above needs the updater bridge (or a
+  // recovery plan, which is bridge-gated), so a Capacitor build always falls
+  // through to here - and the releases page below is a desktop remedy a phone
+  // cannot act on: mobile builds ship through the stores, not GitHub. There
+  // is no store URL this repository can vouch for across lanes (internal
+  // testing installs update through the TestFlight app / Play opt-in track),
+  // so the remedy names the shell's own store. A `null` platform is the
+  // mobile stream's dev browser tab, which belongs to neither store and gets
+  // the neutral sentence.
+  if (isMobileApp()) {
+    return (
+      <p
+        className="w-full text-left text-xs text-muted-foreground"
+        data-testid="client-update-required-mobile-note"
+      >
+        {mobileStoreUpdateNote(getMobileAppPlatform())}
+      </p>
+    );
+  }
+
   if (snapshot.status === "checking") {
     return (
       <Button
@@ -296,6 +321,22 @@ function renderCachedUpdateAction(input: {
     }
   }
   return null;
+}
+
+/**
+ * The one sentence a phone can act on, per shell.
+ *
+ * `null` is the mobile stream's dev browser tab, which belongs to neither
+ * store; naming one there would be a guess, so it gets the neutral sentence.
+ */
+function mobileStoreUpdateNote(platform: MobileAppPlatform | null): string {
+  if (platform === "ios") {
+    return "Update the Traycer app in TestFlight or the App Store, then reopen it.";
+  }
+  if (platform === "android") {
+    return "Update the Traycer app in Google Play, then reopen it.";
+  }
+  return "Update the Traycer app from the store you installed it from, then reopen it.";
 }
 
 function ReleasesPageButton(props: {

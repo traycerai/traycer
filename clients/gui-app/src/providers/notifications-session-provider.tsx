@@ -75,7 +75,7 @@ import {
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type {
-  HostNotificationEntryV21,
+  HostNotificationEntryV22,
   HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -85,6 +85,7 @@ import {
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
+import { installNotificationChimeAudioWarmup } from "@/lib/notifications/notification-chime";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -120,6 +121,7 @@ interface FocusedNotificationScope {
 export function NotificationsSessionProvider(
   props: NotificationsSessionProviderProps,
 ): ReactNode {
+  useEffect(() => installNotificationChimeAudioWarmup(), []);
   const queryClient = useQueryClient();
   const authService = useAuthService();
   const hostClient = useHostClient();
@@ -203,7 +205,7 @@ export function NotificationsSessionProvider(
   const recordCompletions = useCallback(
     (
       inputs: ReadonlyArray<{
-        readonly entry: HostNotificationEntryV21;
+        readonly entry: HostNotificationEntryV22;
         readonly originHostId: string;
         readonly semanticId: string;
       }>,

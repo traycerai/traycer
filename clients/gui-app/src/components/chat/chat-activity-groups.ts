@@ -4,7 +4,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/interview-tools";
 import { filePathFromInputDetail } from "@/lib/segment-summary";
 import { formatClockDuration } from "@/lib/format-duration";
-import { formatSingleLine } from "@/lib/utils";
+import { formatSingleLine } from "@/lib/text/format-single-line";
 import type {
   ApprovalSegment,
   CommandSegment,
@@ -18,6 +18,7 @@ import {
   deriveActivityGroupRenderId,
   derivePromotedSubagentRenderId,
 } from "./chat-collapsible-key";
+import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
 
 export type ActivitySegment =
   | ToolSegment
@@ -113,6 +114,7 @@ interface ActivitySummaryCounts {
   readonly editedFiles: Set<string>;
   ranCommands: number;
   ranHooks: number;
+  browsed: number;
   spawnedSubagents: number;
   approved: number;
   denied: number;
@@ -120,7 +122,14 @@ interface ActivitySummaryCounts {
 }
 
 type ToolActivityKind =
-  "explore" | "read" | "search" | "edit" | "run" | "hook" | "tool";
+  | "explore"
+  | "read"
+  | "search"
+  | "edit"
+  | "run"
+  | "hook"
+  | "browser"
+  | "tool";
 
 const SUMMARY_MAX = 96;
 const EMPTY_QUESTION_TOOL_IDS: ReadonlySet<string> = new Set();
@@ -201,6 +210,7 @@ function createEmptyCounts(): ActivitySummaryCounts {
     editedFiles: new Set(),
     ranCommands: 0,
     ranHooks: 0,
+    browsed: 0,
     spawnedSubagents: 0,
     approved: 0,
     denied: 0,
@@ -354,6 +364,7 @@ export function activityGroupSummary(
     countPhrase(counts.editedFiles.size, "edited", "file", "files"),
     countPhrase(counts.ranCommands, "ran", "command", "commands"),
     countPhrase(counts.ranHooks, "ran", "hook", "hooks"),
+    countPhrase(counts.browsed, "browsed", "page", "pages"),
     countPhrase(counts.spawnedSubagents, "spawned", "subagent", "subagents"),
     countPhrase(counts.approved, "approved", "request", "requests"),
     countPhrase(counts.denied, "denied", "request", "requests"),
@@ -553,6 +564,8 @@ function toolActivityLabel(segment: ToolSegment): string {
       return `Ran ${singleLine(detail)}`;
     case "hook":
       return `Ran ${singleLine(segment.toolName)}`;
+    case "browser":
+      return `Browsed ${singleLine(detail)}`;
     case "tool":
       return `Used ${singleLine(detail)}`;
     default: {
@@ -736,10 +749,15 @@ function countActivitySegment(
     counts.ranHooks += 1;
     return;
   }
+  if (kind === "browser") {
+    counts.browsed += 1;
+    return;
+  }
   counts.usedTools += 1;
 }
 
 function toolActivityKind(toolName: string): ToolActivityKind {
+  if (isTraycerBrowserReplToolName(toolName)) return "browser";
   const normalized = normalizedToolName(toolName);
   if (normalized.includes("hook")) return "hook";
   if (READ_TOOL_NAMES.has(normalized)) return "read";

@@ -85,7 +85,9 @@ export type RecordDowngradePath<
     ? {
         from: From["schemaVersion"];
         to: To["schemaVersion"];
-        downgradeRecord: (record: ValueOf<From>) => DowngradeResult<ValueOf<To>>;
+        downgradeRecord: (
+          record: ValueOf<From>,
+        ) => DowngradeResult<ValueOf<To>>;
       }
     : never;
 
@@ -208,14 +210,16 @@ type DigitsLessThan = {
   "9": "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8";
 };
 
-type DigitLessThan<Left extends string, Right extends string> =
-  Left extends keyof DigitsLessThan
-    ? Right extends keyof DigitsLessThan
-      ? Left extends DigitsLessThan[Right]
-        ? true
-        : false
+type DigitLessThan<
+  Left extends string,
+  Right extends string,
+> = Left extends keyof DigitsLessThan
+  ? Right extends keyof DigitsLessThan
+    ? Left extends DigitsLessThan[Right]
+      ? true
       : false
-    : false;
+    : false
+  : false;
 
 type LengthTuple<
   Value extends string,
@@ -235,31 +239,32 @@ type TupleShorterThan<
     ? true
     : false;
 
-type SameLengthLessThan<Left extends string, Right extends string> =
-  Left extends `${infer LeftHead}${infer LeftTail}`
-    ? Right extends `${infer RightHead}${infer RightTail}`
-      ? LeftHead extends RightHead
-        ? SameLengthLessThan<LeftTail, RightTail>
-        : DigitLessThan<LeftHead, RightHead>
-      : false
-    : false;
+type SameLengthLessThan<
+  Left extends string,
+  Right extends string,
+> = Left extends `${infer LeftHead}${infer LeftTail}`
+  ? Right extends `${infer RightHead}${infer RightTail}`
+    ? LeftHead extends RightHead
+      ? SameLengthLessThan<LeftTail, RightTail>
+      : DigitLessThan<LeftHead, RightHead>
+    : false
+  : false;
 
-type IsLessThan<Left extends number, Right extends number> =
-  Left extends Right
-    ? false
-    : `${Left}` extends infer LeftString extends string
-      ? `${Right}` extends infer RightString extends string
-        ? LengthTuple<LeftString> extends infer LeftLength extends unknown[]
-          ? LengthTuple<RightString> extends infer RightLength extends unknown[]
-            ? TupleShorterThan<LeftLength, RightLength> extends true
-              ? true
-              : TupleShorterThan<RightLength, LeftLength> extends true
-                ? false
-                : SameLengthLessThan<LeftString, RightString>
-            : false
+type IsLessThan<Left extends number, Right extends number> = Left extends Right
+  ? false
+  : `${Left}` extends infer LeftString extends string
+    ? `${Right}` extends infer RightString extends string
+      ? LengthTuple<LeftString> extends infer LeftLength extends unknown[]
+        ? LengthTuple<RightString> extends infer RightLength extends unknown[]
+          ? TupleShorterThan<LeftLength, RightLength> extends true
+            ? true
+            : TupleShorterThan<RightLength, LeftLength> extends true
+              ? false
+              : SameLengthLessThan<LeftString, RightString>
           : false
         : false
-      : false;
+      : false
+    : false;
 
 type LowerNumbers<
   Values extends number,
@@ -281,10 +286,9 @@ type AllOtherNumbersAreLessThan<
   ? false
   : true;
 
-type HighestNumber<
-  Values extends number,
-  AllValues extends number = Values,
-> = [Values] extends [never]
+type HighestNumber<Values extends number, AllValues extends number = Values> = [
+  Values,
+] extends [never]
   ? never
   : Values extends infer Candidate extends number
     ? AllOtherNumbersAreLessThan<Candidate, AllValues> extends true
@@ -330,22 +334,23 @@ type PreviousInstalledContract<
   Registry extends UncheckedRecordVersionRegistry,
   Major extends NumberKeys<Registry>,
   Minor extends NumberKeys<Registry[Major]["versions"]>,
-> = PreviousInstalledMinor<
-  Registry[Major]["versions"],
-  Minor
-> extends infer PreviousMinor
-  ? [PreviousMinor] extends [never]
-    ? PreviousInstalledMajor<Registry, Major> extends infer PreviousMajor
-      ? [PreviousMajor] extends [never]
-        ? never
-        : PreviousMajor extends NumberKeys<Registry>
-          ? LatestContractForLine<Registry[PreviousMajor]>
-          : never
-      : never
-    : PreviousMinor extends NumberKeys<Registry[Major]["versions"]>
-      ? ContractAtVersion<Registry, Major, PreviousMinor>
-      : never
-  : never;
+> =
+  PreviousInstalledMinor<
+    Registry[Major]["versions"],
+    Minor
+  > extends infer PreviousMinor
+    ? [PreviousMinor] extends [never]
+      ? PreviousInstalledMajor<Registry, Major> extends infer PreviousMajor
+        ? [PreviousMajor] extends [never]
+          ? never
+          : PreviousMajor extends NumberKeys<Registry>
+            ? LatestContractForLine<Registry[PreviousMajor]>
+            : never
+        : never
+      : PreviousMinor extends NumberKeys<Registry[Major]["versions"]>
+        ? ContractAtVersion<Registry, Major, PreviousMinor>
+        : never
+    : never;
 
 type ValidateVersionEntry<
   Name extends string,
@@ -385,9 +390,9 @@ type ValidateLineVersions<
   Registry extends UncheckedRecordVersionRegistry,
   Major extends NumberKeys<Registry>,
 > = {
-  readonly [Minor in NumberKeys<
-    Registry[Major]["versions"]
-  >]: ValidateVersionEntry<Name, Registry, Major, Minor>;
+  readonly [
+    Minor in NumberKeys<Registry[Major]["versions"]>
+  ]: ValidateVersionEntry<Name, Registry, Major, Minor>;
 };
 
 type ValidateLineDowngrades<
@@ -395,8 +400,9 @@ type ValidateLineDowngrades<
   Major extends NumberKeys<Registry>,
   Downgrades extends Readonly<Record<number, AnyRecordDowngradePath>>,
 > = {
-  readonly [TargetMajor in keyof Downgrades &
-    number]: TargetMajor extends NumberKeys<Registry>
+  readonly [
+    TargetMajor in keyof Downgrades & number
+  ]: TargetMajor extends NumberKeys<Registry>
     ? IsLessThan<TargetMajor, Major> extends true
       ? RecordDowngradePath<
           LatestContractForLine<Registry[Major]>,
@@ -410,21 +416,22 @@ type ValidateMajorRecordVersionLine<
   Name extends string,
   Registry extends UncheckedRecordVersionRegistry,
   Major extends NumberKeys<Registry>,
-> = Registry[Major] extends MajorRecordVersionLine<
-  infer Versions,
-  infer _LatestMinor,
-  infer Downgrades
->
-  ? {
-      readonly latestMinor: HighestNumber<NumberKeys<Versions>>;
-      readonly versions: ValidateLineVersions<Name, Registry, Major>;
-      readonly downgradePathsFromLatest: ValidateLineDowngrades<
-        Registry,
-        Major,
-        Downgrades
-      >;
-    }
-  : never;
+> =
+  Registry[Major] extends MajorRecordVersionLine<
+    infer Versions,
+    infer _LatestMinor,
+    infer Downgrades
+  >
+    ? {
+        readonly latestMinor: HighestNumber<NumberKeys<Versions>>;
+        readonly versions: ValidateLineVersions<Name, Registry, Major>;
+        readonly downgradePathsFromLatest: ValidateLineDowngrades<
+          Registry,
+          Major,
+          Downgrades
+        >;
+      }
+    : never;
 
 type ValidateRecordVersionRegistry<
   Name extends string,

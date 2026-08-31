@@ -46,9 +46,12 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
       extractPlainTextFromComposerJSONContent(draftContent).trim().length > 0,
     [draftContent],
   );
+  const draftAnnotationCount = useComposerDraftStore(
+    (state) => state.drafts[args.taskId]?.browserAnnotations.length ?? 0,
+  );
   const draftHasImages = useMemo(
-    () => containsImageAtoms(draftContent),
-    [draftContent],
+    () => containsImageAtoms(draftContent) || draftAnnotationCount > 0,
+    [draftContent, draftAnnotationCount],
   );
 
   const handleDocumentChange = useCallback(

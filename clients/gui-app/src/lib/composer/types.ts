@@ -1,32 +1,54 @@
 import type {
   GuiAgentCommandOption,
   EpicMentionSuggestion,
-  WorkspaceMentionGitType,
   WorkspaceMentionSuggestion,
 } from "@traycer/protocol/host/index";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { MentionPathTree } from "@/lib/path";
+import type {
+  BrowserTabMentionContextType,
+  EntityMentionContextType,
+  GithubMentionContextType,
+  MentionAttachment,
+  PathKind,
+} from "@traycer/protocol/common/composer-mention-attrs";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/schemas";
 
-export type PathKind = "file" | "folder";
-export type EntityMentionContextType =
-  "epic" | "chat" | "terminal-agent" | "terminal" | EpicArtifactKind | "user";
 /**
- * Wire spelling, not a local one: these strings ARE `ContextType` members in
- * `@traycer/protocol`'s json-content serializer, which reads the mention
- * node's `contextType` attribute straight off the submitted document. Renaming
- * them here would silently stop the serializer recognizing the chip.
+ * The mention ATTACHMENT half of this module - what a chip's node attributes
+ * decode to - lives in `@traycer/protocol/common/composer-mention-attrs`, since
+ * the host runs the same decode to build a transcript row's preview. Re-exported
+ * here so the GUI keeps one import path for composer types; the picker-facing
+ * types below (suggestion entries, previews, slash commands) are GUI-only and
+ * stay. `browser-tab` moved there with the rest rather than staying local: its
+ * own doc calls it a wire spelling, and every other mention kind already
+ * answers to that module.
  */
-export type GithubMentionContextType = "github_pull_request" | "github_issue";
+export type {
+  BrowserTabMentionAttachment,
+  BrowserTabMentionContextType,
+  EntityMentionAttachment,
+  EntityMentionContextType,
+  FileMentionAttachment,
+  GitMentionAttachment,
+  GithubMentionAttachment,
+  GithubMentionContextType,
+  MentionAttachment,
+  PathKind,
+  WorktreeMentionAttachment,
+} from "@traycer/protocol/common/composer-mention-attrs";
+
 export type MentionContextType =
   | PathKind
   | "git"
   | "worktree"
   | EntityMentionContextType
-  | GithubMentionContextType;
+  | GithubMentionContextType
+  | BrowserTabMentionContextType;
 
 export type ComposerPromptSegment =
-  { type: "text"; text: string } | { type: "mention"; path: string };
+  | { type: "text"; text: string }
+  | { type: "mention"; path: string };
 
 export type WorkspaceEntry = WorkspaceMentionSuggestion;
 
@@ -96,7 +118,8 @@ export interface EpicTerminalAgentMentionEntry extends EpicAgentMentionEntryBase
 }
 
 export type EpicAgentMentionEntry =
-  EpicChatMentionEntry | EpicTerminalAgentMentionEntry;
+  | EpicChatMentionEntry
+  | EpicTerminalAgentMentionEntry;
 
 /**
  * A plain interactive terminal in the open Task - the shell itself, not an
@@ -123,8 +146,60 @@ export interface EpicTerminalMentionEntry {
 }
 
 export type EpicMentionEntry = EpicMentionSuggestion | EpicAgentMentionEntry;
+
+/**
+ * One browser tab as the @-mention picker lists it - sourced live from
+ * `useMaybeBrowserSessionsContext()`, not a host RPC, so every field is
+ * already resolved when the entry is built.
+ *
+ * `coLocated` and `lastActivityAt` are ranking hints only, never rendered:
+ * the co-located-pane-group ranking the design calls for needs the chat's
+ * `viewTabId`/tile identity threaded into the mention context, which is
+ * disproportionately invasive here (see `providers.tsx`'s
+ * `rankBrowserTabEntries`). `coLocated` is `tab.viewed` - the session
+ * stream's own "currently viewed" hint - used as the closest cheap proxy:
+ * a real pane-group walk ranks a sibling-pane tab first regardless of which
+ * tab a person is looking at, while this ranks whichever tab the stream
+ * already marks as viewed, so the two agree only when that also happens to
+ * be the co-located one.
+ */
+export interface BrowserTabMentionEntry {
+  readonly kind: "browser-tab";
+  readonly id: string;
+  readonly tabId: string;
+  readonly sessionId: string;
+  readonly label: string;
+  readonly url: string;
+  /** The host that OWNS this tab; never assume it is the chat's host. */
+  readonly hostId: string;
+  /** That host's directory label, or null when it is not in the directory. */
+  readonly hostLabel: string | null;
+  /** The browser-sessions coordinator this tab's host is reached through. */
+  readonly coordinatorKey: string;
+  /**
+   * The tab lives on a DIFFERENT host than the chat, so it can only ever be
+   * snapshot context - url, title, screenshot - never a drive handle (spec
+   * decision #10). Picking one attaches an image plus a text line instead of
+   * emitting a `browser-tab:` token the agent could try to attach to.
+   */
+  readonly contextOnly: boolean;
+  readonly coLocated: boolean;
+  readonly lastActivityAt: number;
+  /**
+   * `tab.status === "dormant"` (the sidebar's own source of truth for its
+   * Moon glyph - `epic-browser-sidebar-row.tsx`). Dormant tabs ARE listed
+   * and mentionable: `page.attachTab` auto-wakes a dormant session before
+   * leasing it, so this is a display hint (renders the Moon glyph, demotes
+   * the row a notch in ranking) and never a filter.
+   */
+  readonly dormant: boolean;
+}
+
 export type MentionSuggestionEntry =
-  WorkspaceEntry | EpicMentionEntry | EpicTerminalMentionEntry;
+  | WorkspaceEntry
+  | EpicMentionEntry
+  | EpicTerminalMentionEntry
+  | BrowserTabMentionEntry;
 
 export type ImageAttachment = {
   kind: "image";
@@ -140,108 +215,13 @@ export type ImageAttachment = {
   size: number | undefined;
 };
 
-export type FileMentionAttachment = {
-  kind: "mention";
-  contextType: "file" | "folder";
-  path: string;
-  pathKind: PathKind;
-  relPath: string;
-  absolutePath: string | null;
-  workspacePath: string | null;
-  label: string;
-  description: string;
-};
-
-export type GitMentionAttachment = {
-  kind: "mention";
-  contextType: "git";
-  path: string;
-  pathKind: null;
-  relPath: null;
-  absolutePath: null;
-  workspacePath: string | null;
-  label: string;
-  description: string;
-  gitType: WorkspaceMentionGitType;
-  branchName: string | null;
-  commitHash: string | null;
-};
-
-export type WorktreeMentionAttachment = {
-  kind: "mention";
-  contextType: "worktree";
-  // The worktree's absolute directory; this is what serializes to the agent
-  // as `@<path>` since the worktree lives outside the workspace root.
-  path: string;
-  pathKind: null;
-  relPath: null;
-  absolutePath: string | null;
-  workspacePath: string | null;
-  label: string;
-  description: string;
-  worktreePath: string;
-  branch: string | null;
-  isMain: boolean;
-};
-
-export type EntityMentionAttachment = {
-  kind: "mention";
-  contextType: EntityMentionContextType;
-  path: string;
-  pathKind: null;
-  relPath: null;
-  absolutePath: null;
-  workspacePath: null;
-  label: string;
-  description: string;
-  epicId: string;
-  artifactId: string | null;
-  artifactType: EpicArtifactKind | null;
-  chatId: string | null;
-  terminalAgentId: string | null;
-  /** Session id of a plain terminal mention; null for every other entity. */
-  terminalId: string | null;
-  status: string | number | null;
-};
-
-/**
- * A GitHub pull request or issue the composer references.
- *
- * What travels is a STABLE REFERENCE, never inlined content: provider, kind,
- * `org/repo#number`, and the URL. The agent resolves detail with its own tools
- * at read time, exactly as a file mention hands over a path rather than the
- * file's bytes - so the reference cannot go stale between insert and send, and
- * the URL keeps it resolvable where `gh` is not signed in.
- *
- * The field names are the serializer's (`organizationLogin`, `repositoryName`,
- * `issueNumber`, `githubHost`, `url`), because these become the mention node's
- * attributes verbatim and `formatMentionForLLMQuery` reads them by name.
- */
-export type GithubMentionAttachment = {
-  kind: "mention";
-  contextType: GithubMentionContextType;
-  /** The entity token: `github-pr:org/repo#123` / `github-issue:org/repo#123`. */
-  path: string;
-  pathKind: null;
-  relPath: null;
-  absolutePath: null;
-  workspacePath: null;
-  label: string;
-  description: string;
-  githubHost: string;
-  organizationLogin: string;
-  repositoryName: string;
-  issueNumber: number;
-  url: string;
-};
-
-export type MentionAttachment =
-  | FileMentionAttachment
-  | WorktreeMentionAttachment
-  | GitMentionAttachment
-  | EntityMentionAttachment
-  | GithubMentionAttachment;
-export type Attachment = ImageAttachment | MentionAttachment;
+// The mention members are re-exported above from
+// `@traycer/protocol/common/composer-mention-attrs`; what is declared here is
+// the union itself, which is wider than mentions alone.
+export type Attachment =
+  | ImageAttachment
+  | MentionAttachment
+  | BrowserAnnotationRecord;
 
 /**
  * Full, untruncated preview content for a picker row - the side preview panel
@@ -294,7 +274,20 @@ export type ProviderSlashCommand = GuiAgentCommandOption & {
   preview: MentionPreview;
 };
 
-export type SlashCommand = ProviderSlashCommand;
+/**
+ * A command the RENDERER handles rather than the provider - today the `/btw`
+ * side-chat command (`lib/chats/side-chat-command.ts`). Same row shape as a
+ * provider command so the picker, the chip and the raw-text converter treat it
+ * identically; `harnessId` is the composer's current harness, not a fact about
+ * who serves it. A surface that cannot honor the command simply does not offer
+ * it (see `useComposerPickerItems`'s `localSlashCommands`).
+ */
+export type LocalSlashCommand = GuiAgentCommandOption & {
+  source: "local";
+  preview: MentionPreview;
+};
+
+export type SlashCommand = ProviderSlashCommand | LocalSlashCommand;
 
 /**
  * Character that opened a slash picker, or that a raw-text prompt led with.

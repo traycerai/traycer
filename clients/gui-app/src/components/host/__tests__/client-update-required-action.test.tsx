@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
+import { setMobileApp, setMobileAppPlatform } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ClientUpdateRequiredAction } from "@/components/host/client-update-required-action";
 import type {
@@ -49,7 +50,11 @@ vi.mock("@/lib/runner-error-toast", () => ({
  * the loop they refuse to open.
  */
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  setMobileApp(false);
+  setMobileAppPlatform(null);
+});
 
 /**
  * Lets every already-queued microtask settle.
@@ -81,7 +86,9 @@ function requirement(
     observedClientKind: "desktop",
     observedClientAppVersion: "1.1.10",
     observedClientAppVersionStatus: "valid",
+    // oxlint-disable-next-line typescript/no-deprecated -- Required null placeholder retained for shipped-client wire compatibility.
     minimumKnownClientAppVersion: null,
+    // oxlint-disable-next-line typescript/no-deprecated -- Required null placeholder retained for shipped-client wire compatibility.
     upgradeChannel: null,
     hostReleaseChannel: "stable",
     ...overrides,
@@ -219,9 +226,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
   it("asks the updater once when it has never been asked", async () => {
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
     renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: null })}
-      />,
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
       bridge,
     );
     await waitFor(() => {
@@ -246,9 +251,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
       lastCheckIntent: "automatic",
     });
     renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: null })}
-      />,
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
       bridge,
     );
     await waitFor(() => {
@@ -263,9 +266,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
       cleanup();
       const bridge = new FakeAppUpdatesBridge({ ...IDLE_SNAPSHOT, status });
       renderAction(
-        <ClientUpdateRequiredAction
-          requirement={requirement({ minimumKnownClientAppVersion: null })}
-        />,
+        <ClientUpdateRequiredAction requirement={requirement({})} />,
         bridge,
       );
       await waitFor(() => {
@@ -289,9 +290,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
       status: "checking",
     });
     renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: null })}
-      />,
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
       bridge,
     );
     await waitFor(() => {
@@ -307,9 +306,7 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
   it("never asks when there is no updater bridge at all", async () => {
     // Web/dev shells. The manual link is the whole answer there.
     renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ upgradeChannel: "stable" })}
-      />,
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
       null,
     );
     await Promise.resolve();
@@ -332,7 +329,7 @@ describe("<ClientUpdateRequiredAction /> manual fallback", () => {
       cleanup();
       renderAction(
         <ClientUpdateRequiredAction
-          requirement={requirement({ upgradeChannel: channel })}
+          requirement={requirement({ hostReleaseChannel: channel })}
         />,
         null,
       );
@@ -837,5 +834,53 @@ describe("<ClientUpdateRequiredAction /> restart-to-clear-staged arm", () => {
     ).toBeTruthy();
     expect(screen.queryByTestId("client-update-required-install")).toBeNull();
     expect(screen.queryByTestId("client-update-required-enable-rc")).toBeNull();
+  });
+});
+
+describe("<ClientUpdateRequiredAction /> mobile shell", () => {
+  it("names the iOS stores instead of the releases page button", () => {
+    // No desktop arm above applies without an updater bridge, so a mobile
+    // build always falls through to here - and the releases page is a
+    // desktop remedy a phone cannot act on. The copy must name the shell's
+    // own update channel, not a generic "update" a tester cannot locate.
+    setMobileApp(true);
+    setMobileAppPlatform("ios");
+    renderAction(
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
+      null,
+    );
+    const note = screen.getByTestId("client-update-required-mobile-note");
+    expect(note.textContent).toContain("TestFlight");
+    expect(note.textContent).toContain("App Store");
+    expect(note.textContent).not.toContain("Google Play");
+    expect(
+      screen.queryByTestId("client-update-required-download-page"),
+    ).toBeNull();
+  });
+
+  it("names Google Play on Android", () => {
+    setMobileApp(true);
+    setMobileAppPlatform("android");
+    renderAction(
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
+      null,
+    );
+    const note = screen.getByTestId("client-update-required-mobile-note");
+    expect(note.textContent).toContain("Google Play");
+    expect(note.textContent).not.toContain("TestFlight");
+  });
+
+  it("stays store-neutral when the shell reports no platform", () => {
+    // The mobile stream's dev browser tab: installed-app policy without a
+    // native shell. Naming either store would be a guess.
+    setMobileApp(true);
+    renderAction(
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
+      null,
+    );
+    const note = screen.getByTestId("client-update-required-mobile-note");
+    expect(note.textContent).toContain("store you installed it from");
+    expect(note.textContent).not.toContain("TestFlight");
+    expect(note.textContent).not.toContain("Google Play");
   });
 });

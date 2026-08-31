@@ -1,4 +1,8 @@
 import type { HostActivationState } from "./host-state";
+import type {
+  HostUpdateAttemptContinuation,
+  HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
 
 // Type surface for `HostController` (Host Update Layer Redesign Tech Plan,
 // "Desktop main: HostController" > "State model" / "Canonical status").
@@ -75,8 +79,30 @@ export interface DownloadLaneStatus {
   readonly lastError: string | null;
 }
 
+/**
+ * Mirror of `@traycer-clients/shared`'s `LocalAttemptFacts`.
+ *
+ * This file already re-declares `HostControllerStatus` structurally rather than
+ * importing it, and this rides that existing shape. The duplication is
+ * pre-existing and out of Ticket 07's scope; noting it so the next reader knows
+ * BOTH declarations must move together, and that the compile is what catches a
+ * one-sided edit.
+ */
+export interface LocalAttemptFacts {
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly sequence: number;
+  readonly targetVersion: string;
+  readonly phase: HostUpdateAttemptPhase;
+  // `HostUpdateAttemptContinuation` already includes `null`.
+  readonly continuation: HostUpdateAttemptContinuation;
+  readonly updatedAt: string;
+}
+
 // Two independent lanes, per the Tech Plan's canonical status shape.
 export interface HostControllerStatus {
+  /** Durable attempt facts for the host-down window (Ticket 07 §5.2.7). */
+  readonly localAttempt: LocalAttemptFacts | null;
   readonly download: DownloadLaneStatus | null;
   readonly mutation: MutationLaneStatus | null;
   readonly installedVersion: string | null;
@@ -201,7 +227,8 @@ export interface AbandonedByGuard {
 
 /** What an intent-taking (guardable) mutation resolves. */
 export type GuardedMutationOutcome<TOk> =
-  MutationOutcome<TOk> | AbandonedByGuard;
+  | MutationOutcome<TOk>
+  | AbandonedByGuard;
 
 /**
  * Narrows a guarded outcome for a caller that submitted a `background`
@@ -242,12 +269,41 @@ export interface ServiceRegistrationOk {
 
 export interface UninstallOk {
   readonly removedInstallDir: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - not that
+   * the registration is provably gone.
+   *
+   * That weaker meaning is the only honest one available. No platform can
+   * verify absence: Windows maps every `schtasks /Query` failure (timeout,
+   * access denial) to `not-installed`, Linux re-reads the manifest the
+   * uninstall just deleted, and macOS's `launchctl print` probe tolerates
+   * non-zero while an unloaded SMAppService record is invisible to it. A field
+   * meaning "actually accomplished" would therefore be unsatisfiable, so the
+   * contract is stated rather than the value inverted.
+   *
+   * It IS false when the CLI's readback positively found the registration
+   * still present - a positive observation is real evidence and vetoes the
+   * claim. Read `serviceRegistrationRetained` for the underlying tri-state.
+   */
   readonly deregisteredService: boolean;
+  /**
+   * What the CLI's post-teardown readback actually observed.
+   * `true` = definitely still registered, `null` = nothing could confirm
+   * either way, `false` = verified absent (no platform produces this today).
+   */
+  readonly serviceRegistrationRetained: boolean | null;
 }
 
 export interface RemoveTraycerOk {
   readonly removedHost: boolean;
+  /** Same weaker meaning as `UninstallOk.deregisteredService` - see there. */
   readonly deregisteredService: boolean;
+  /**
+   * Same tri-state as `UninstallOk.serviceRegistrationRetained`. Carried here
+   * too: discarding it left Remove Traycer publishing the weakened boolean as
+   * an accomplished fact with no way for a caller to see the uncertainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
 }
 

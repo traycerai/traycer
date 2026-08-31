@@ -1,5 +1,6 @@
 import {
   chatEventSchema,
+  chatEventSchemaPreImported,
   chatEventSchemaPreInReplyTo,
   chatEventSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/chat-events";
@@ -184,11 +185,33 @@ export const chatSchemaPreInReplyTo = z.object({
   activeSessionChain: activeSessionChainSchemaPreReasonix
     .nullable()
     .default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
-    [],
-  ),
+  claudePendingWakes: z
+    .array(claudePendingWakeSchemaPreRetryDeadline)
+    .default([]),
   messages: z.array(messageSchemaPreInReplyTo),
   events: z.array(chatEventSchemaPreInReplyTo).default([]),
+});
+
+/**
+ * The epic RECORD's view of a chat: the live shape with the event-type enum
+ * pinned to its pre-`chat.imported` vocabulary.
+ *
+ * Adding an enum value to a persisted record is breaking under
+ * `persistence/COMPATIBILITY.md` - an older same-major reader strict-decodes
+ * it and rejects the whole epic. The `chats` map is legacy state: since the
+ * chat plane pivot, chats live in the per-epic chat store and a chats-free
+ * room is the steady state, so no writer can put a `chat.imported` event in
+ * here and nothing is lost by the epic record never learning the value. The
+ * cloud-published `chat-head` / `chat-shard` records, which DO carry imported
+ * chats, take it through their unknown-variant passthrough on a record minor
+ * (see `chat-sync/version.ts`).
+ *
+ * Derived from `chatSchema` rather than hand-frozen, deliberately: only this
+ * one enum is pinned, so the epic record keeps following every other chat
+ * change exactly as it did before.
+ */
+export const chatSchemaPreImported = chatSchema.extend({
+  events: z.array(chatEventSchemaPreImported).default([]),
 });
 
 // Wire-freeze copy without `archivedAt`, bound to `chat.subscribe@1.4`'s
@@ -212,13 +235,16 @@ export const chatSchemaV14 = z.object({
   activeSessionChain: activeSessionChainSchemaPreReasonix
     .nullable()
     .default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
-    [],
-  ),
+  claudePendingWakes: z
+    .array(claudePendingWakeSchemaPreRetryDeadline)
+    .default([]),
   // Pre-image freeze (see `messageSchemaPreImage`): this released line must
   // never observe `imageResults`/the image resolution record, which the live
   // `messageSchema` would otherwise silently gain.
   messages: z.array(messageSchemaPreImage),
+  // Frozen on both axes - pre-Reasonix actor AND pre-`chat.imported` type
+  // (the enum is strict on both sides, so a released line must not follow
+  // the live one). See `chatEventSchemaPreReasonix`.
   events: z.array(chatEventSchemaPreReasonix).default([]),
 });
 
@@ -244,13 +270,14 @@ export const chatSchemaV15 = z.object({
   activeSessionChain: activeSessionChainSchemaPreReasonix
     .nullable()
     .default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
-    [],
-  ),
+  claudePendingWakes: z
+    .array(claudePendingWakeSchemaPreRetryDeadline)
+    .default([]),
   // Pre-image freeze (see `messageSchemaPreImage`): this released line must
   // never observe `imageResults`/the image resolution record, which the live
   // `messageSchema` would otherwise silently gain.
   messages: z.array(messageSchemaPreImage),
+  // Frozen on both axes: see `chatSchemaV14` above.
   events: z.array(chatEventSchemaPreReasonix).default([]),
   archivedAt: z.number().nullable().default(null),
 });

@@ -122,7 +122,8 @@ async function resolveDevDesktopSlot(argv, env) {
     (typeof env[DEV_DESKTOP_SLOT_ENV] === "string"
       ? env[DEV_DESKTOP_SLOT_ENV]
       : null);
-  const basename = sanitizeDevDesktopSlot(path.basename(REPO_ROOT)) || "worktree";
+  const basename =
+    sanitizeDevDesktopSlot(path.basename(REPO_ROOT)) || "worktree";
   const defaultSlot = `${basename}-${stableHash(REPO_ROOT).slice(0, 8)}`;
   const slot = sanitizeDevDesktopSlot(requested ?? defaultSlot);
   if (slot.length === 0) {
@@ -420,7 +421,9 @@ function findCachedArchive(version) {
   } catch {
     return null;
   }
-  const archive = entries.find((name) => /\.(tgz|tar\.gz|tar|zip)$/i.test(name));
+  const archive = entries.find((name) =>
+    /\.(tgz|tar\.gz|tar|zip)$/i.test(name),
+  );
   return archive === undefined ? null : path.join(dir, archive);
 }
 
@@ -445,7 +448,14 @@ async function resolveCachedHostArchive(release) {
     }
 
     const registry = await import(
-      path.join(REPO_ROOT, "clients", "traycer-cli", "src", "registry", "index.ts")
+      path.join(
+        REPO_ROOT,
+        "clients",
+        "traycer-cli",
+        "src",
+        "registry",
+        "index.ts",
+      )
     );
     const { config } = await import(
       path.join(REPO_ROOT, "clients", "traycer-cli", "src", "config.ts")

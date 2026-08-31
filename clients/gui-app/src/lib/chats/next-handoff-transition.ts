@@ -39,6 +39,7 @@ export type HandoffStep =
       readonly kind: "restoreAndAckFailed";
       readonly clientActionId: string;
       readonly content: FailedSendRestorationState["content"];
+      readonly browserAnnotations: FailedSendRestorationState["browserAnnotations"];
     };
 
 export interface HandoffTransitionContext {
@@ -108,6 +109,7 @@ function failedSendStep(
     kind: "restoreAndAckFailed",
     clientActionId: failed.clientActionId,
     content: failed.content,
+    browserAnnotations: failed.browserAnnotations,
   };
 }
 

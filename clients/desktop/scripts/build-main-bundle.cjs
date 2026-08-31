@@ -38,6 +38,9 @@ const { existsSync, mkdirSync, rmSync } = require("node:fs");
 const path = require("node:path");
 const esbuild = require("esbuild");
 const { sentryEsbuildPlugin } = require("@sentry/esbuild-plugin");
+const {
+  generate: generateAnnotationOverlay,
+} = require("./bundle-annotation-overlay.cjs");
 
 const workspaceRoot = path.resolve(__dirname, "..");
 const distDir = path.resolve(workspaceRoot, "dist");
@@ -101,6 +104,7 @@ const sharedConfig = {
 };
 
 async function build() {
+  generateAnnotationOverlay();
   const sentryPlugins = (() => {
     if (!process.env.SENTRY_AUTH_TOKEN) return [];
     const missing = ["SENTRY_ORG", "SENTRY_PROJECT"].filter(

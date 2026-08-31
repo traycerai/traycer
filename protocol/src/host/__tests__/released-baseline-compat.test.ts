@@ -7,7 +7,10 @@ import {
   parseCompatExceptionsFile,
   protocolSurfaceSchema,
 } from "@traycer/protocol/framework/surface-compat";
-import { hostRpcRegistry, hostStreamRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
 /**
@@ -46,6 +49,13 @@ const exceptionsPath = join(
 );
 
 describe("released baseline surface (newest release) is wire-compatible", () => {
+  it("keeps unreleased browser.screencast out of the released fixture", () => {
+    const baseline = protocolSurfaceSchema.parse(
+      JSON.parse(readFileSync(fixturePath, "utf8")),
+    );
+    expect(baseline.stream["browser.screencast"]).toBeUndefined();
+  });
+
   it("live registries have no blocking findings against the committed baseline", () => {
     const theirs = protocolSurfaceSchema.parse(
       JSON.parse(readFileSync(fixturePath, "utf8")),

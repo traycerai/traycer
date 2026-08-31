@@ -34,10 +34,12 @@ export interface ClonedChatCatalogUnavailable {
 }
 
 export type ClonedChatProfileRecoveryRequired =
-  ClonedChatProfileSelectionRequired | ClonedChatCatalogUnavailable;
+  | ClonedChatProfileSelectionRequired
+  | ClonedChatCatalogUnavailable;
 
 export type ClonedChatSettingsResolution =
-  ResolvedClonedChatSettings | ClonedChatProfileRecoveryRequired;
+  | ResolvedClonedChatSettings
+  | ClonedChatProfileRecoveryRequired;
 
 // The wire array's ambient row keys itself by the literal "ambient" sentinel;
 // every run/session-level profileId (chat settings included) uses `null` for

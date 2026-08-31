@@ -34,6 +34,7 @@ import type { PluginListenerHandle } from "@capacitor/core";
 import type {
   PushPermissionState,
   StoredCredentials,
+  SystemResumeEvent,
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
@@ -46,7 +47,10 @@ import type {
 
 /** Capacitor's PermissionState, spelled out (no type dep on the plugin). */
 export type CapacitorPushPermissionState =
-  "prompt" | "prompt-with-rationale" | "granted" | "denied";
+  | "prompt"
+  | "prompt-with-rationale"
+  | "granted"
+  | "denied";
 
 /**
  * Capacitor's four states down to the three the shared contract speaks
@@ -124,7 +128,7 @@ export interface PushTokenSource {
  * cold start or sign-in.
  */
 export interface SystemResumeSource {
-  onSystemResumed(handler: () => void): Disposable;
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
 }
 
 export interface PushRegistrationTarget {

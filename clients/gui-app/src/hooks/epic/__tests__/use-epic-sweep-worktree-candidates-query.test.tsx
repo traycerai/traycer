@@ -6,13 +6,16 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import type {
   WorktreeHostEntryV16,
   WorktreeListAllForHostRequestV15,
   WorktreeListAllForHostResponseV16,
+  WorktreeListHoldersResponse,
 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { useEpicSweepWorktreeCandidatesForClient } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
 
 interface StubOwner {
@@ -91,6 +94,10 @@ let worktreeHandler: (
   throw new Error("no worktree handler configured for this test");
 };
 
+let listHoldersHandler: (
+  worktreePath: string,
+) => WorktreeListHoldersResponse = () => ({ holders: [] });
+
 /**
  * Wires the two-request act-time flow: the un-probed base walk returns
  * `baseEntries` (owner discovery only), the forced selection-mode probe
@@ -120,8 +127,10 @@ function wrapperFor(queryClient: QueryClient) {
   );
 }
 
-function renderCandidates(epicIds: ReadonlyArray<string> | null) {
-  const queryClient = new QueryClient();
+function renderCandidatesWithQueryClient(
+  epicIds: ReadonlyArray<string> | null,
+  queryClient: QueryClient,
+) {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
@@ -139,17 +148,24 @@ function renderCandidates(epicIds: ReadonlyArray<string> | null) {
   );
 }
 
+function renderCandidates(epicIds: ReadonlyArray<string> | null) {
+  return renderCandidatesWithQueryClient(epicIds, new QueryClient());
+}
+
 describe("useEpicSweepWorktreeCandidatesForClient", () => {
   beforeEach(() => {
     worktreeHandler = () => {
       throw new Error("no worktree handler configured for this test");
     };
+    listHoldersHandler = () => ({ holders: [] });
     let requestSeq = 0;
     messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `sweep-${String(++requestSeq)}`,
       handlers: {
         "worktree.listAllForHost": (params) => worktreeHandler(params),
+        "worktree.listHolders": (params) =>
+          listHoldersHandler(params.worktreePath),
       },
     });
   });
@@ -287,7 +303,92 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
     expect(requestParams(3)).toEqual(forcedProbeParams(["/wt/recheck"]));
   });
 
-  it("marks shared rows checkable-unchecked and busy/unresolved rows disabled", async () => {
+  it("keeps the last snapshot visible while a fresh proof is in flight", async () => {
+    const before = entry({ worktreePath: "/wt/recheck", resolvedAt: 100 });
+    const after = entry({
+      worktreePath: "/wt/recheck",
+      atBaseCommit: true,
+      resolvedAt: 200,
+    });
+    let pauseForcedProbe = false;
+    let releaseForcedProbe: (() => void) | null = null;
+    worktreeHandler = async (params) => {
+      if (!params.forceRefresh) {
+        return { worktrees: [before], nextCursor: null };
+      }
+      if (pauseForcedProbe) {
+        await new Promise<void>((resolve) => {
+          releaseForcedProbe = resolve;
+        });
+      }
+      return {
+        worktrees: [pauseForcedProbe ? after : before],
+        nextCursor: null,
+      };
+    };
+
+    const { result } = renderCandidates(["epic-1"]);
+    await waitFor(() => {
+      expect(result.current.checkedAt).toBe(100);
+    });
+
+    pauseForcedProbe = true;
+    let refreshPromise: Promise<unknown> | null = null;
+    act(() => {
+      refreshPromise = result.current.refresh();
+    });
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(true);
+    });
+    expect(result.current.rows[0]?.entry.worktreePath).toBe("/wt/recheck");
+    expect(result.current.checkedAt).toBe(100);
+
+    await act(async () => {
+      releaseForcedProbe?.();
+      await refreshPromise;
+    });
+    await waitFor(() => {
+      expect(result.current.checkedAt).toBe(200);
+    });
+  });
+
+  it("paints from warm task provenance on first open while proving in the background", async () => {
+    const warm = entry({
+      worktreePath: "/wt/warm",
+      atBaseCommit: true,
+      resolvedAt: 123,
+    });
+    const queryClient = new QueryClient();
+    queryClient.setQueryData<WorktreeListAllForHostResponseV16>(
+      hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
+        "host-1",
+        "worktree.listAllForHost",
+        {
+          includeActivity: true,
+          activityPaths: [warm.worktreePath],
+          cursor: null,
+          limit: null,
+          forceRefresh: false,
+        },
+      ),
+      { worktrees: [warm], nextCursor: null },
+    );
+    worktreeHandler = () => new Promise(() => {});
+
+    const { result, unmount } = renderCandidatesWithQueryClient(
+      ["epic-1"],
+      queryClient,
+    );
+
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(true);
+      expect(result.current.rows[0]?.entry.worktreePath).toBe("/wt/warm");
+    });
+    expect(result.current.checkedAt).toBe(123);
+    unmount();
+  });
+
+  it("marks shared rows checkable-unchecked, in-use checkable-unchecked, and unresolved rows disabled", async () => {
     const probed = [
       entry({
         worktreePath: "/wt/shared",
@@ -322,7 +423,7 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
     });
     expect(byPath.get("/wt/busy")).toMatchObject({
       defaultChecked: false,
-      disabled: true,
+      disabled: false,
       note: "in-use",
     });
     expect(byPath.get("/wt/probing")).toMatchObject({
@@ -446,5 +547,78 @@ describe("useEpicSweepWorktreeCandidatesForClient", () => {
     expect(result.current.rows).toEqual([]);
     expect(result.current.isPending).toBe(false);
     expect(messenger.calls).toHaveLength(0);
+  });
+
+  it("loads listHolders for in-use rows and keeps a digest for consent", async () => {
+    const holder: WorktreeBusyHolder = {
+      ownerRef: {
+        epicId: "epic-1",
+        ownerKind: "chat",
+        ownerId: "chat-1",
+      },
+      holdKind: "chat-turn",
+      activity: "working",
+      label: "Fixing persistent busyness is working",
+      holderId: "epic-1:chat:chat-1",
+    };
+    listHoldersHandler = () => ({
+      holders: [holder],
+      holdersRevision:
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    const probed = [
+      entry({
+        worktreePath: "/wt/busy",
+        inUse: true,
+        prState: "merged",
+        mergedHeadShaMatches: true,
+      }),
+    ];
+    mockActTimeProbe(probed, probed);
+    const { result } = renderCandidates(["epic-1"]);
+    await waitFor(() => {
+      expect(result.current.rows[0]?.holdersStatus).toBe("ready");
+    });
+    expect(result.current.rows[0]).toMatchObject({
+      note: "in-use",
+      disabled: false,
+      holdersStatus: "ready",
+      holdersRevision:
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      holders: [holder],
+    });
+  });
+
+  it("treats a missing holdersRevision as the unknown fallback", async () => {
+    const holder: WorktreeBusyHolder = {
+      ownerRef: {
+        epicId: "epic-1",
+        ownerKind: "chat",
+        ownerId: "chat-1",
+      },
+      holdKind: "chat-turn",
+      activity: "working",
+      label: "Fixing persistent busyness is working",
+      holderId: "epic-1:chat:chat-1",
+    };
+    listHoldersHandler = () => ({ holders: [holder] });
+    const probed = [
+      entry({
+        worktreePath: "/wt/busy",
+        inUse: true,
+        prState: "merged",
+        mergedHeadShaMatches: true,
+      }),
+    ];
+    mockActTimeProbe(probed, probed);
+    const { result } = renderCandidates(["epic-1"]);
+    await waitFor(() => {
+      expect(result.current.rows[0]?.holdersStatus).toBe("unknown");
+    });
+    expect(result.current.rows[0]).toMatchObject({
+      disabled: false,
+      holders: [],
+      holdersRevision: undefined,
+    });
   });
 });

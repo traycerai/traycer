@@ -76,7 +76,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRow,
+  type HostNotificationsCloudFeedRowV11,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsCloudFeedMarkAllReadRequest,
   type HostNotificationsCloudFeedClearAllRequest,
@@ -95,7 +95,10 @@ import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 export type MergedNotificationSource =
-  "host" | "app-local" | "global" | "cloud";
+  | "host"
+  | "app-local"
+  | "global"
+  | "cloud";
 
 export interface MergedNotificationRow {
   readonly feedId: string;
@@ -249,7 +252,7 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
       const rows: MergedNotificationRow[] = [
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRow => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV11 => row !== undefined,
           )
           .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
@@ -442,7 +445,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRow | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV11 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -1093,7 +1096,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRow =>
+              (row): row is HostNotificationsCloudFeedRowV11 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -1397,11 +1400,13 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRow,
+  row: HostNotificationsCloudFeedRowV11,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
-    row.presentation.chatTitle ?? row.presentation.epicTitle ?? fallback.title;
+    nonEmptyCloudPresentationTitle(row.presentation.epicTitle) ??
+    nonEmptyCloudPresentationTitle(row.presentation.chatTitle) ??
+    fallback.title;
   const providerPackAttribution = parseProviderPackNotificationAttribution(
     row.entry.payload,
   );
@@ -1427,6 +1432,10 @@ export function rowFromCloudFeedRow(
     providerPackAttribution,
     category: categoryForNotificationSource("cloud"),
   };
+}
+
+function nonEmptyCloudPresentationTitle(title: string | null): string | null {
+  return title !== null && title.length > 0 ? title : null;
 }
 
 function parseFeedId(feedId: string): ParsedFeedId | null {
@@ -1614,18 +1623,35 @@ function navigationPayloadFromKnown(
         chatId: known.chatId,
         interviewBlockId: known.interviewBlockId,
       };
+    case "browser_human_needed":
+      return {
+        kind: "browserSession",
+        epicId: known.epicId,
+        sessionId: known.sessionId,
+        tabId: known.tabId,
+      };
     // No focus hint: the deleted worktree's row is gone, and the list's saved
     // filters are the authoritative view to return to. A row from a NEWER host
     // whose operation payload this build cannot parse never reaches here at
     // all - it renders with common-field copy and no deep link, which is the
     // designed degradation rather than a guessed destination.
     case "worktree_deletion":
-      return {
-        kind: "hostSurface",
-        surface: "worktreeSettings",
-        focus: undefined,
-      };
+      return navigationPayloadForWorktreeDeletion(known);
   }
+}
+
+function navigationPayloadForWorktreeDeletion(known: {
+  readonly source: string;
+  readonly epicId?: string;
+}): NotificationPayload {
+  if (known.source === "task_sweep" && known.epicId !== undefined) {
+    return { kind: "epic", epicId: known.epicId };
+  }
+  return {
+    kind: "hostSurface",
+    surface: "worktreeSettings",
+    focus: undefined,
+  };
 }
 
 const HOST_PAGE_LIMIT = 50;

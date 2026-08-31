@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
@@ -57,6 +58,10 @@ import type {
   ServiceStatus,
   UninstallServiceOptions,
 } from "../index";
+import {
+  isServiceMutationAuthorityError,
+  verifyServiceMutationAuthority,
+} from "../mutation-authority";
 
 // macOS service controller - CLI-owned launchctl. There is intentionally
 // no `SMAppService` path here (Decision 1 of the Tech Plan); the
@@ -79,10 +84,30 @@ export type ProcessRunner = (
   options: RunOptions,
 ) => Promise<RunResult>;
 
+// Only the versioned maintenance-lease endpoint may bind a service mutation
+// to another user's GUI launchd domain. AsyncLocalStorage makes the binding
+// request-scoped, so an ambient environment variable or a parallel command
+// cannot retarget an ordinary CLI service action to `gui/<other uid>`.
+const maintenanceServiceUid = new AsyncLocalStorage<number>();
+
+export async function withMacosMaintenanceServiceUid<T>(
+  serviceUid: number,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!Number.isSafeInteger(serviceUid) || serviceUid < 0) {
+    throw new Error("maintenance service uid was invalid");
+  }
+  return maintenanceServiceUid.run(serviceUid, run);
+}
+
 export function createMacosController(
   runner: ProcessRunner | null,
 ): ServiceController {
-  const run: ProcessRunner = runner ?? runCommand;
+  const unverifiedRun: ProcessRunner = runner ?? runCommand;
+  const run: ProcessRunner = async (command, args, options) => {
+    await verifyServiceMutationAuthority();
+    return unverifiedRun(command, args, options);
+  };
   return {
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
@@ -90,6 +115,10 @@ export function createMacosController(
     stop: (label, options) => stopService(label, run, options.force, "stop"),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
+    hostStartAdoptionLabel: async (label) => {
+      const desktopAgent = await probeDesktopAgentOwnership(label, run);
+      return desktopAgent?.agentLabelId ?? label.id;
+    },
     stopForRestart: (label, options) =>
       stopServiceForRestart(label, run, options.force),
     relaunchAfterRestart: (label, stop) =>
@@ -312,15 +341,20 @@ async function installService(
   // `writeFile`'s `mode` only applies when the file is created, not when an
   // existing launcher is rewritten.
   const launcherPath = serviceLauncherScriptPath(options.label);
+  await verifyServiceMutationAuthority();
   await mkdir(dirname(launcherPath), { recursive: true });
+  await verifyServiceMutationAuthority();
   await writeFile(
     launcherPath,
     buildHostStartLauncherScript(options.label.id),
     "utf8",
   );
+  await verifyServiceMutationAuthority();
   await chmod(launcherPath, 0o755);
   const manifestPath = serviceManifestPath(options.label);
+  await verifyServiceMutationAuthority();
   await mkdir(dirname(manifestPath), { recursive: true });
+  await verifyServiceMutationAuthority();
   await writeFile(
     manifestPath,
     buildPlist({ label: options.label, cli: options.cli }),
@@ -395,6 +429,7 @@ async function installService(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     if (!isBenignBootstrapFailure(cause)) {
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
@@ -428,6 +463,7 @@ async function installService(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `launchctl kickstart failed for ${options.label.id}: ${describeCause(cause)}`,
@@ -476,6 +512,7 @@ async function reloadRegisteredService(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     // Race may have cleared the job between the failed bootstrap and
     // this bootout; treat "not loaded" as success and continue to
     // bootstrap the fresh file. Real bootout failures must surface.
@@ -503,6 +540,7 @@ async function reloadRegisteredService(
       },
     );
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     // A second "already loaded" after our own explicit bootout means a
     // concurrent registrar won the reload race - and it bootstrapped the
     // same freshly regenerated on-disk plist this process just wrote (every
@@ -693,9 +731,13 @@ async function uninstallService(
   // the CLI-label bootout above.
   const agentLabelId = smAppServiceAgentLabelId(options.label);
   const agentTarget = `${guiDomain()}/${agentLabelId}`;
-  const agentOwnership = await inspectLaunchdOwnership(agentTarget, run).catch(
-    (): LaunchdOwnership => ({ kind: "not-loaded" }),
-  );
+  let agentOwnership: LaunchdOwnership;
+  try {
+    agentOwnership = await inspectLaunchdOwnership(agentTarget, run);
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    agentOwnership = { kind: "not-loaded" };
+  }
   if (agentOwnership.kind === "smappservice") {
     createCliLogger(options.label.environment).warn(
       "Service uninstall: Traycer Desktop's SMAppService agent is registered for this environment; booting it out now, but macOS may keep the login-item record. If the host reappears at next login, remove Traycer in the Desktop app or System Settings -> Login Items.",
@@ -727,6 +769,7 @@ async function uninstallService(
         tolerateNonZeroExit: false,
       });
     } catch (cause) {
+      if (isServiceMutationAuthorityError(cause)) throw cause;
       if (!isBenignBootoutFailure(cause)) {
         bootoutFailures.push({ labelId, cause });
       }
@@ -741,9 +784,11 @@ async function uninstallService(
       exitCode: 1,
     });
   }
+  await verifyServiceMutationAuthority();
   await rm(serviceManifestPath(options.label), { force: true });
   // The launcher directory is per-label and exists solely for the plist
   // that was just removed.
+  await verifyServiceMutationAuthority();
   await rm(dirname(serviceLauncherScriptPath(options.label)), {
     recursive: true,
     force: true,
@@ -855,7 +900,14 @@ async function probeDesktopAgentOwnership(
   const agentOwnership = await inspectLaunchdOwnership(
     `${guiDomain()}/${agentLabelId}`,
     run,
-  ).catch((): LaunchdOwnership => ({ kind: "not-loaded" }));
+  ).catch((cause: unknown): LaunchdOwnership => {
+    // Advisory means tolerant of launchctl faults, not of a revoked mutation
+    // capability: reporting "no Desktop agent" for an authority failure would
+    // route adoption to the logical label and publish a grant the Desktop
+    // supervisor rejects. Same re-throw discipline as every other probe here.
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    return { kind: "not-loaded" };
+  });
   if (agentOwnership.kind !== "smappservice") return null;
   return { agentLabelId, loadedPath: agentOwnership.path };
 }
@@ -1064,6 +1116,7 @@ async function kickstartDesktopAgent(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `launchctl ${forcedRecycle ? "kickstart -k" : "kickstart"} failed for ${agent.agentLabelId}: ${describeCause(cause)}`,
@@ -1361,6 +1414,7 @@ async function retireCompetingRegistration(
       });
       bootedOut = true;
     } catch (cause) {
+      if (isServiceMutationAuthorityError(cause)) throw cause;
       // A benign failure means the job was already gone - nothing was
       // evicted, but nothing failed either.
       if (!isBenignBootoutFailure(cause)) {
@@ -1422,9 +1476,11 @@ async function retireCompetingRegistration(
     );
   } else if (manifestProbe.kind === "present") {
     try {
+      await verifyServiceMutationAuthority();
       await rm(manifestPath, { force: true });
       manifestRemoved = true;
     } catch (cause) {
+      if (isServiceMutationAuthorityError(cause)) throw cause;
       manifestRemovalFailed = true;
       logger.warn(
         "Service repair: failed to remove the competing CLI LaunchAgent manifest; it will start a second host at the next login.",
@@ -1451,6 +1507,7 @@ async function retireCompetingRegistration(
       });
       agentStartRequested = true;
     } catch (cause) {
+      if (isServiceMutationAuthorityError(cause)) throw cause;
       logger.warn(
         "Service repair: evicted the competing CLI-label host but could not start Traycer Desktop's agent; open Traycer or log out and back in if the host is unreachable.",
         {
@@ -1635,6 +1692,7 @@ async function startService(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `launchctl kickstart failed for ${targetLabelId}: ${describeCause(cause)}`,
@@ -1719,6 +1777,7 @@ async function restartService(
       tolerateNonZeroExit: false,
     });
   } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `launchctl kickstart -k failed for ${label.id}: ${describeCause(cause)}`,
@@ -1729,7 +1788,7 @@ async function restartService(
 }
 
 function guiDomain(): string {
-  return `gui/${process.getuid?.() ?? 0}`;
+  return `gui/${maintenanceServiceUid.getStore() ?? process.getuid?.() ?? 0}`;
 }
 
 function statusNotInstalled(): ServiceStatus {

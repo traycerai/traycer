@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { CURRENT_CLIENT_COMPATIBILITY_EPOCH } from "@traycer/protocol/framework/index";
 import {
-  GUI_CLIENT_IDENTITY,
+  getGuiClientIdentity,
   LOCAL_CLIENT_APP_VERSION,
 } from "@/lib/host/client-identity";
+import { setMobileApp } from "@/lib/mobile-app";
 
 /**
  * The GUI's first-party identity, pinned at its single source.
@@ -17,12 +18,27 @@ import {
  *  - letting an unstamped RELEASE bundle wear the dev sentinel (which would
  *    make a missing `VITE_APP_VERSION` invisible in the field).
  */
-describe("GUI_CLIENT_IDENTITY", () => {
+describe("getGuiClientIdentity", () => {
+  afterEach(() => {
+    setMobileApp(false);
+  });
+
   it("declares the desktop kind and the shared reviewed epoch", () => {
-    expect(GUI_CLIENT_IDENTITY.kind).toBe("desktop");
+    expect(getGuiClientIdentity().kind).toBe("desktop");
     // Read from the protocol package, NOT restated - a second copy of this
     // number is how one sender starts claiming a generation the others do not.
-    expect(GUI_CLIENT_IDENTITY.compatibilityEpoch).toBe(
+    expect(getGuiClientIdentity().compatibilityEpoch).toBe(
+      CURRENT_CLIENT_COMPATIBILITY_EPOCH,
+    );
+  });
+
+  it("declares the mobile kind in the Capacitor shell, same epoch", () => {
+    // The kind is diagnostic; the epoch is admission. A mobile build must
+    // change only the former - a diverged mobile epoch would be a second
+    // copy of the number the assertion above exists to prevent.
+    setMobileApp(true);
+    expect(getGuiClientIdentity().kind).toBe("mobile");
+    expect(getGuiClientIdentity().compatibilityEpoch).toBe(
       CURRENT_CLIENT_COMPATIBILITY_EPOCH,
     );
   });
@@ -32,16 +48,16 @@ describe("GUI_CLIENT_IDENTITY", () => {
     // An epoch derived from it would be 0 - which the host classifies as
     // `invalid-epoch` - so this assertion fails loudly the moment anyone ties
     // the two together.
-    expect(GUI_CLIENT_IDENTITY.appVersion).toBe(LOCAL_CLIENT_APP_VERSION);
-    expect(GUI_CLIENT_IDENTITY.compatibilityEpoch).toBeGreaterThan(0);
+    expect(getGuiClientIdentity().appVersion).toBe(LOCAL_CLIENT_APP_VERSION);
+    expect(getGuiClientIdentity().compatibilityEpoch).toBeGreaterThan(0);
   });
 
-  it("is a process constant - the same object on every read", () => {
+  it("is value-constant across reads once the shell is set", () => {
     // The remote-session cache deliberately leaves identity out of its key on
-    // exactly this basis. A future member resolved per call (a window id, a
-    // user id) would break that invariant silently.
-    const first = GUI_CLIENT_IDENTITY;
-    const second = GUI_CLIENT_IDENTITY;
-    expect(first).toBe(second);
+    // exactly this basis: the shell flag is set once before first render and
+    // every other member is baked at bundle time, so two reads can never
+    // disagree. A future member resolved per call (a window id, a user id)
+    // would break that invariant silently.
+    expect(getGuiClientIdentity()).toEqual(getGuiClientIdentity());
   });
 });

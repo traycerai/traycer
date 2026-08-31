@@ -4,7 +4,7 @@ import {
   chatQueuedItemSchema,
   chatQueuedManagedCommandItemSchema,
   chatSubscribeClientFrameSchema,
-  chatSubscribeLiveSchemaVersion,
+  chatSubscribeFullSnapshotSchemaVersion,
   chatSubscribeServerFrameSchema,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -14,6 +14,7 @@ import {
   chatSubscribeV15,
   chatSubscribeV16,
   chatSubscribeV17,
+  chatSubscribeV18,
   createImageResolutionUpdatedFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -53,6 +54,7 @@ const userMessage: UserMessage = {
   message: {
     kind: "user",
     content: { type: "doc", content: [] },
+    browserAnnotations: [],
   },
   timestamp: 1000,
   sessionAnchor: null,
@@ -1945,6 +1947,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions,
   };
 
@@ -1953,9 +1956,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     messages: [userMessage, assistantWithImages],
   };
 
-  function snapshotFrameWithChat(
-    chatPayload: Chat,
-  ): Record<string, unknown> {
+  function snapshotFrameWithChat(chatPayload: Chat): Record<string, unknown> {
     return {
       kind: "snapshot",
       hasBinaryPayload: false,
@@ -1977,7 +1978,9 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     };
   }
 
-  function blockDeltaFrame(event: Record<string, unknown>): Record<string, unknown> {
+  function blockDeltaFrame(
+    event: Record<string, unknown>,
+  ): Record<string, unknown> {
     return {
       kind: "blockDelta",
       hasBinaryPayload: false,
@@ -2172,7 +2175,9 @@ describe("chat.subscribe@1.6 (image generation)", () => {
       throw new Error("expected assistant message");
     }
     expect(assistant.imageResolutions).toHaveLength(resolutionStates.length);
-    const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
+    const toolCall = assistant.blocks.find(
+      (block) => block.type === "tool_call",
+    );
     if (!toolCall || toolCall.type !== "tool_call") {
       throw new Error("expected tool_call block");
     }
@@ -2252,7 +2257,9 @@ describe("chat.subscribe@1.6 (image generation)", () => {
       throw new Error("expected assistant message");
     }
     expect(assistant.imageResolutions).toHaveLength(resolutionStates.length);
-    const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
+    const toolCall = assistant.blocks.find(
+      (block) => block.type === "tool_call",
+    );
     if (!toolCall || toolCall.type !== "tool_call") {
       throw new Error("expected tool_call block");
     }
@@ -2263,14 +2270,18 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 7 as chatSubscribeV17", () => {
+  it("registers chat.subscribe major 1 latestMinor 8 as chatSubscribeV18", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(7);
+    // Registering `8` IS the switch to the windowed line: a stream minor
+    // negotiates to the highest the peers share, so this line flipping to `8`
+    // is the moment `1.8`-capable peers start exchanging windowed frames.
+    expect(entry[1].latestMinor).toBe(8);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
+    expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
-    expect(entry[1].versions).not.toHaveProperty("8");
+    expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
   });
 });
 
@@ -2664,6 +2675,7 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   });
 
@@ -2735,12 +2747,16 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
     [
       "snapshot chat.messages[].sender",
       (h: string) =>
-        snapshotWith({ chat: { ...chat, messages: [assistantRow(h)] } as Chat }),
+        snapshotWith({
+          chat: { ...chat, messages: [assistantRow(h)] } as Chat,
+        }),
     ],
     [
       "snapshot chat.activeSessionChain",
       (h: string) =>
-        snapshotWith({ chat: { ...chat, activeSessionChain: sessionChain(h) } as Chat }),
+        snapshotWith({
+          chat: { ...chat, activeSessionChain: sessionChain(h) } as Chat,
+        }),
     ],
     [
       "snapshot chat.messages[].blocks[plan]",
@@ -2775,7 +2791,9 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
     [
       "snapshot chat.events[].actor",
       (h: string) =>
-        snapshotWith({ chat: { ...chat, events: [eventWithActor(h)] } as Chat }),
+        snapshotWith({
+          chat: { ...chat, events: [eventWithActor(h)] } as Chat,
+        }),
     ],
     [
       "messageAccepted message.sender",
@@ -2884,26 +2902,26 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
         ([version, contract]) => [path, version, contract, build] as const,
       ),
     ),
-  )(
-    "keeps %s off released %s frames",
-    (path, version, contract, build) => {
-      expect(contract.serverFrameSchema.safeParse(build("reasonix")).success).toBe(
-        false,
-      );
-      if ((CONTROL_NOT_APPLICABLE[path] ?? []).includes(version)) return;
-      // Paired control: the identical frame naming a shipped harness parses,
-      // so the negative above cannot be passing for a structural reason.
-      expect(contract.serverFrameSchema.safeParse(build("claude")).success).toBe(
-        true,
-      );
+  )("keeps %s off released %s frames", (path, version, contract, build) => {
+    expect(
+      contract.serverFrameSchema.safeParse(build("reasonix")).success,
+    ).toBe(false);
+    if ((CONTROL_NOT_APPLICABLE[path] ?? []).includes(version)) return;
+    // Paired control: the identical frame naming a shipped harness parses,
+    // so the negative above cannot be passing for a structural reason.
+    expect(contract.serverFrameSchema.safeParse(build("claude")).success).toBe(
+      true,
+    );
+  });
+
+  it.each(perPathFrames)(
+    "carries %s on the unreleased 1.7 line",
+    (_path, build) => {
+      expect(
+        chatSubscribeV17.serverFrameSchema.safeParse(build("reasonix")).success,
+      ).toBe(true);
     },
   );
-
-  it.each(perPathFrames)("carries %s on the unreleased 1.7 line", (_path, build) => {
-    expect(
-      chatSubscribeV17.serverFrameSchema.safeParse(build("reasonix")).success,
-    ).toBe(true);
-  });
 
   // ...and ≤1.4 must still strip it, exactly as before the enum pin.
   it("still strips the steering-capability field on the 1.4 active turn", () => {
@@ -2961,7 +2979,10 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
   });
 
   it("points the live-line constant at `1.7`", () => {
-    expect(chatSubscribeLiveSchemaVersion).toEqual({ major: 1, minor: 7 });
+    expect(chatSubscribeFullSnapshotSchemaVersion).toEqual({
+      major: 1,
+      minor: 7,
+    });
   });
 });
 

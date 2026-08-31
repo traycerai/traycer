@@ -1,4 +1,6 @@
 import type {
+  BrowserTabMentionAttachment,
+  BrowserTabMentionEntry,
   EntityMentionAttachment,
   GitMentionAttachment,
   MentionAttachment,
@@ -16,6 +18,9 @@ export function mentionAttachmentFromSuggestion(
   if (entry.kind === "git") return gitMentionAttachmentFromSuggestion(entry);
   if (entry.kind === "worktree") {
     return worktreeMentionAttachmentFromSuggestion(entry);
+  }
+  if (entry.kind === "browser-tab") {
+    return browserTabMentionAttachmentFromSuggestion(entry);
   }
   if (
     entry.kind === "epic" ||
@@ -172,6 +177,35 @@ function worktreeMentionAttachmentFromSuggestion(
     worktreePath: entry.worktreePath,
     branch: entry.branch,
     isMain: entry.isMain,
+  };
+}
+
+/**
+ * `null` for a tab on ANOTHER host. The serializer renders a tab mention's
+ * `tabId` unconditionally (`json-content-serializer.ts:514-519`), so a
+ * cross-host pick routed through here would hand the agent a `browser-tab:`
+ * token naming a tab it can never attach to. Those picks are attached as
+ * snapshot context instead (spec decision #10, see `browser-tab-preview.ts`);
+ * this null is the backstop for any other path that reaches a cross-host
+ * entry.
+ */
+function browserTabMentionAttachmentFromSuggestion(
+  entry: BrowserTabMentionEntry,
+): BrowserTabMentionAttachment | null {
+  if (entry.contextOnly) return null;
+  return {
+    kind: "mention",
+    contextType: "browser-tab",
+    path: `browser-tab:${entry.tabId}`,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label: entry.label,
+    description: entry.url,
+    tabId: entry.tabId,
+    sessionId: entry.sessionId,
+    url: entry.url,
   };
 }
 

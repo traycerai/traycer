@@ -15,7 +15,10 @@
  */
 
 export type ReportAttachmentMediaType =
-  "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  | "image/png"
+  | "image/jpeg"
+  | "image/gif"
+  | "image/webp";
 
 export const MAX_REPORT_IMAGES = 3;
 

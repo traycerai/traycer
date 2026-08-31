@@ -262,6 +262,66 @@ describe("merged notifications feed", () => {
     });
   });
 
+  it("uses the cloud task title as the header with the chat title as fallback", () => {
+    const cloudRow: HostNotificationsCloudFeedRow = {
+      entryId: "entry-completed",
+      originHostId: "host-a",
+      coalesceKey: "agent.stopped:chat-1",
+      entry: {
+        id: "agent.stopped:chat-1",
+        updatedAt: 10,
+        readAt: null,
+        kind: "agent.stopped",
+        sourceRef: "chat-1",
+        severity: "done",
+        outcome: "completed",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        payload: {
+          kind: "chat",
+          epicId: "epic-1",
+          chatId: "chat-1",
+          agentName: "Test Code Execution",
+          taskTitle: "Stale task title",
+          outcome: "completed",
+        },
+      },
+      presentation: {
+        epicTitle: "Notification improvements",
+        chatTitle: "Test Code Execution",
+      },
+    };
+
+    expect(rowFromCloudFeedRow(cloudRow)).toMatchObject({
+      title: "Notification improvements",
+      body: "Test Code Execution • Done",
+    });
+    expect(
+      rowFromCloudFeedRow({
+        ...cloudRow,
+        presentation: {
+          ...cloudRow.presentation,
+          epicTitle: "",
+        },
+      }),
+    ).toMatchObject({
+      title: "Test Code Execution",
+      body: "Test Code Execution • Done",
+    });
+    expect(
+      rowFromCloudFeedRow({
+        ...cloudRow,
+        presentation: {
+          epicTitle: "",
+          chatTitle: "",
+        },
+      }),
+    ).toMatchObject({
+      title: "Stale task title",
+      body: "Test Code Execution • Done",
+    });
+  });
+
   it("splits global notification titles from their collaboration context", () => {
     expect(rowFromGlobalEntry(globalEntry("global", 10, null))).toMatchObject({
       title: "Alice invited you to an epic",
@@ -693,6 +753,36 @@ describe("merged notifications feed", () => {
         surface: "worktreeSettings",
         focus: undefined,
       },
+    });
+  });
+
+  it("routes a Task sweep completion back to the Task that initiated it", () => {
+    expect(
+      rowFromHostEntry({
+        id: "worktree.deletion:command-task-sweep",
+        updatedAt: 10,
+        readAt: null,
+        kind: "host.operation.finished",
+        sourceRef: "command-task-sweep",
+        severity: "done",
+        outcome: "completed",
+        epicId: null,
+        chatId: null,
+        payload: {
+          kind: "worktree_deletion",
+          operation: "worktree.deletion",
+          title: "Worktrees deleted",
+          message: "Deleted 2 worktrees.",
+          commandId: "command-task-sweep",
+          source: "task_sweep",
+          epicId: "epic-1",
+          requestedCount: 2,
+          deletedCount: 2,
+          failedCount: 0,
+        },
+      }),
+    ).toMatchObject({
+      payload: { kind: "epic", epicId: "epic-1" },
     });
   });
 

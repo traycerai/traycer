@@ -70,17 +70,11 @@ import type {
   TilePane,
 } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
-import {
-  isBlankTileRef,
-  isCommGraphTileRef,
-  isPublishedChatTileRef,
-  isDiffTileRef,
-  isManagedCommandOutputTileRef,
-  isPrDetailTileRef,
-  isPrDiffTileRef,
-  isWorkspaceFileRef,
-} from "@/stores/epics/canvas/types";
+import { isHostAuthoritativeRef } from "@/stores/epics/canvas/canvas-selectors";
+import { isTileRefRecordBacked } from "@/stores/epics/canvas/tile-schema";
+import { isWorkspaceFileRef } from "@/stores/epics/canvas/types";
 import { requestFileTreeReveal } from "@/stores/file-tree/file-tree-reveal-store";
+import { requestSidebarNodeReveal } from "@/stores/epics/sidebar-node-reveal-store";
 import { resolveActivePaneTab } from "@/stores/epics/canvas/tile-tree";
 import { surfaceOwnerFor } from "@/components/epic-canvas/surface-host/surface-owner";
 import { TileSurfaceSlot } from "@/components/epic-canvas/surface-host/tile-surface-slot";
@@ -94,6 +88,7 @@ import {
   TILE_KIND_PR_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "@/stores/epics/canvas/tile-kinds";
+
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
 import {
@@ -347,6 +342,12 @@ export const TabGroupView = memo(function TabGroupView(
           workspacePath: tab.workspacePath,
           filePath: tab.filePath,
         });
+      }
+      if (
+        tab !== undefined &&
+        (tab.type === "chat" || tab.type === "terminal-agent")
+      ) {
+        requestSidebarNodeReveal(tabId, tab.id);
       }
       setActivePanelIdAndExpand(tabId, panelIdForTabType(tab?.type));
     },
@@ -704,7 +705,10 @@ function usePublishedChatFallbackRef(args: {
   readonly activeTab: EpicCanvasTileRef;
   readonly epicId: string;
   readonly liveArtifact:
-    EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
+    | EpicArtifactProjection
+    | EpicChatProjection
+    | EpicTuiAgentProjection
+    | null;
   readonly activeHostId: string | null;
 }): {
   /**
@@ -811,15 +815,7 @@ function usePublishedChatFallbackRef(args: {
             hostId: readingHostId,
           })
         : null,
-    [
-      substitute,
-      activeTab.id,
-      activeTab.name,
-      activeTab.hostId,
-      ownerUserId,
-      readingHostId,
-      epicId,
-    ],
+    [substitute, activeTab, ownerUserId, readingHostId, epicId],
   );
   return {
     fallbackRef,
@@ -908,36 +904,25 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
         )
       : s.pendingCreateArtifactIds.has(activeTab.id),
   );
-  // Terminals, git-diff tiles, the PR detail/diff pair, workspace files, output
-  // windows, the comm graph, and blank tabs are renderer-only - no cloud-backed
-  // projection, so a lookup miss isn't deletion. (A blank tab's content id is a
-  // throwaway uuid; the comm graph's is derived from the epic id; an output
-  // window's is a managed-command id, which the epic doc never carries at all -
-  // its own stream reports the command's death instead. Without this guard the
-  // artifact lookup would miss and wrongly mark them deleted.)
-  const isRemoteDeleted =
-    activeTab.type === "terminal" ||
-    isDiffTileRef(activeTab) ||
-    isPrDetailTileRef(activeTab) ||
-    isPrDiffTileRef(activeTab) ||
-    isBlankTileRef(activeTab) ||
-    isManagedCommandOutputTileRef(activeTab) ||
-    isCommGraphTileRef(activeTab) ||
-    isPublishedChatTileRef(activeTab) ||
-    activeTab.type === WORKSPACE_FILE_TAB_KIND
-      ? false
-      : computeIsRemoteDeleted({
-          snapshotLoaded,
-          leafArtifact: activeTab,
-          liveArtifact,
-          isSelfDeleted,
-          isPendingCreate,
-          projectionHostId: activeHostIdForRecordGate,
-          isCloudKnown,
-          cloudListAuthorizesChatAbsence,
-          recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
-          retractedAsDeleted: chatRetraction === "deleted",
-        });
+  // Terminals, browser surfaces, diff/PR tiles, workspace files, output
+  // windows, the comm graph, and blank tabs are renderer-only, so a cloud
+  // artifact lookup miss is not deletion. A blank id is throwaway, the comm
+  // graph id is epic-derived, and an output id belongs to a managed command;
+  // each surface owns its own lifecycle instead.
+  const isRemoteDeleted = !isTileRefRecordBacked(activeTab)
+    ? false
+    : computeIsRemoteDeleted({
+        snapshotLoaded,
+        leafArtifact: activeTab,
+        liveArtifact,
+        isSelfDeleted,
+        isPendingCreate,
+        projectionHostId: activeHostIdForRecordGate,
+        isCloudKnown,
+        cloudListAuthorizesChatAbsence,
+        recordListAuthorizesChatAbsence: chatRecordListAuthoritative,
+        retractedAsDeleted: chatRetraction === "deleted",
+      });
   const isActive = role !== null && props.selected && props.globallyActive;
 
   // Reports the SAME isRemoteDeleted value this render already uses for the
@@ -1122,7 +1107,10 @@ interface ComputeIsRemoteDeletedArgs {
   readonly snapshotLoaded: boolean;
   readonly leafArtifact: EpicNodeRef | null;
   readonly liveArtifact:
-    EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
+    | EpicArtifactProjection
+    | EpicChatProjection
+    | EpicTuiAgentProjection
+    | null;
   readonly isSelfDeleted: boolean;
   /**
    * Symmetric counterpart to `isSelfDeleted`: the local user just initiated
@@ -1186,19 +1174,28 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
   if (leafArtifact.type === "chat" && !chatAbsenceIsAuthoritative(args)) {
     return false;
   }
-  // A CHAT ref bound to another host is invisible to this device's
-  // projection by construction - chat records are host-authoritative, so a
-  // cross-host live tab (reachable owner opened from the unified sidebar)
-  // must not read as "remotely deleted". Its record lives in the OWNER
-  // host's registry, which this projection cannot see. Chat-only: artifact
-  // and terminal-agent records are doc-shared, so their projection miss
-  // still means deleted regardless of the ref's bound host. Mirrors
-  // `isTileRefRecordLive`'s exemption - the two record-liveness gates must
-  // agree or a click opens a tile the surface refuses to mount.
+  // A ref bound to another host is invisible to this device's projection by
+  // construction - its record is HOST-AUTHORITATIVE, living in the OWNER
+  // host's registry - so a cross-host live tab (a reachable owner's row
+  // opened from the unified sidebar) must not read as "remotely deleted".
+  //
+  // Terminal agents joined that population in the roster's phase 2: this
+  // device may now hold a REPLICA of an agent bound to another of the user's
+  // machines, and a replica arrives on the record feed's schedule, so any
+  // window before the inbox has caught up would otherwise close a tile whose
+  // agent is alive on its own host. Artifacts stay doc-shared and stay out.
+  //
+  // The `projectionHostId === null` half is folded in here rather than left
+  // to `chatAbsenceIsAuthoritative` above, which answers for chats only: with
+  // no projection host there is nothing to compare a ref's binding against,
+  // so absence cannot be classified for either kind.
+  //
+  // Mirrors `isTileRefRecordLive`'s exemption and shares its predicate - the
+  // two record-liveness gates must agree, or a click opens a tile the surface
+  // then refuses to mount.
   if (
-    leafArtifact.type === "chat" &&
-    projectionHostId !== null &&
-    leafArtifact.hostId !== projectionHostId
+    isHostAuthoritativeRef(leafArtifact) &&
+    (projectionHostId === null || leafArtifact.hostId !== projectionHostId)
   ) {
     return false;
   }

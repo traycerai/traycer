@@ -29,7 +29,8 @@ import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
 import { useHostBinding } from "@/lib/host/runtime";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
-import { GUI_CLIENT_IDENTITY } from "@/lib/host/client-identity";
+import { appServerClock } from "@/lib/clock/app-server-clock";
+import { getGuiClientIdentity } from "@/lib/host/client-identity";
 import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
@@ -209,6 +210,15 @@ export function buildHostStreamClient(params: {
    * consulted on the `target.kind === "remote"` branch.
    */
   readonly userId: string;
+  /**
+   * Whether the process-wide wake sweep may proactively poke or force-drop
+   * the shared session behind this client (remote branch only). The caller's
+   * statement that a reconnect's subscribe replay is safe for the streams it
+   * will open: durable/warm transports pass `true`; the one-shot
+   * side-effecting transport passes `false`, because a forced replay would
+   * re-run its operation. See `RemoteSessionAcquirePolicy`.
+   */
+  readonly proactiveWakeEligible: boolean;
   // Whether to eagerly `start()` the remote session (warm-connect). Owned-
   // lifetime callers (`openDurableStreamTransport`, one-shot) pass `true`.
   // Render-path callers (`useHostStreamClientBindingFor`, `HostStreamProvider`)
@@ -247,12 +257,18 @@ export function buildHostStreamClient(params: {
       // bearer at a wake-time re-attach revalidates + redials instead of
       // terminally closing the shared session (`RemoteSessionOptions.auth`).
       auth: params.auth,
+      // The same app-wide verdict the local branch passes below. A wrong wall
+      // clock wedges a remote session identically - it is the machine's clock,
+      // not the host's - and a user connected across a relay is the one least
+      // placed to guess why nothing works.
+      clock: appServerClock,
       rpcRegistry: hostRpcRegistry,
       streamRegistry: hostStreamRpcRegistry,
       webSocketFactory: browserStreamWebSocketFactory,
       requestId: uuidv4,
       evidence: transportEvidenceRelay,
-      clientIdentity: GUI_CLIENT_IDENTITY,
+      clientIdentity: getGuiClientIdentity(),
+      proactiveWakeEligible: params.proactiveWakeEligible,
     });
     if (remoteTransport === null) return null;
     if (params.autoStart) {
@@ -266,6 +282,12 @@ export function buildHostStreamClient(params: {
     endpoint: params.endpoint,
     bearer: params.bearer,
     auth: params.auth,
+    // App-wide for the same reason the mint flow below is: the wall clock is a
+    // property of the machine, so every stream in the renderer parks and
+    // resumes on ONE verdict. Without it, a bearer that reads "expired" only
+    // because the clock is hours off walks this session to `goTerminal` with a
+    // diagnosis that blames the credential.
+    clock: appServerClock,
     // Always the app-wide flow, never a per-caller one: the renderer holds
     // several clients against one host, and the shared module is what keeps
     // that from becoming several concurrent mints revoking each other. It
@@ -293,7 +315,7 @@ export function buildHostStreamClient(params: {
     pongTimeoutMs: PONG_TIMEOUT_MS,
     initialBackoffMs: INITIAL_BACKOFF_MS,
     maxBackoffMs: MAX_BACKOFF_MS,
-    clientIdentity: GUI_CLIENT_IDENTITY,
+    clientIdentity: getGuiClientIdentity(),
   });
 }
 
@@ -472,6 +494,10 @@ export function useHostStreamClientBindingFor(
           authnBaseUrl,
           auth,
           userId,
+          // A render-path durable client (chat/terminal/epic tiles): its
+          // streams are snapshot-shaped, so a swept reconnect only
+          // re-snapshots.
+          proactiveWakeEligible: true,
           // Never eager-start: this acquire is guaranteed exactly one matching
           // release (unlike the old memo-based build), but the connect-on-first-
           // subscribe laziness is an independent, unchanged behavior. `start()`

@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { cn } from "@/lib/utils";
 import type { FuzzyRange } from "@/lib/fuzzy-folder-match";
 
 /**
@@ -32,7 +31,7 @@ export function HighlightedName(props: {
       <span
         key={`hit-${String(index)}`}
         data-testid="folder-picker-name-hit"
-        className="font-semibold text-primary underline decoration-primary/40 underline-offset-2"
+        className="font-semibold text-primary underline decoration-primary/40 underline-offset-2 group-aria-selected/button:text-foreground group-aria-selected/button:decoration-current/40"
       >
         {props.name.slice(range.start, range.end)}
       </span>,
@@ -46,32 +45,10 @@ export function HighlightedName(props: {
 }
 
 /**
- * A path that loses its FRONT when it will not fit, never its end: the leaf
- * is the identity of the row and the prefix is the noise, so the end is what
- * has to survive.
- *
- * CSS truncation always eats the end of the line, so the line is laid out
- * right-to-left — which moves the overflow, and the ellipsis with it, to the
- * start — while the text inside is isolated back to left-to-right so the path
- * itself still reads normally. Doing it in CSS rather than by counting
- * characters means the cut lands exactly at the available width, at whatever
- * size the row happens to be.
- */
-export function TailAnchoredPath(props: {
-  readonly path: string;
-  readonly className: string | undefined;
-}): ReactNode {
-  return (
-    <span dir="rtl" className={cn("block truncate text-left", props.className)}>
-      <bdi dir="ltr">{props.path}</bdi>
-    </span>
-  );
-}
-
-/**
- * The escape hatch for every abbreviation above: the untouched absolute path,
- * selectable, one long-press away. Abbreviating is safe precisely because
- * this exists.
+ * The escape hatch for every abbreviation above, on touch: the untouched
+ * absolute path, selectable, one long-press away. A pointer reaches the same
+ * path through the rows' hover tooltip. Abbreviating is safe precisely
+ * because both exist.
  */
 export function FullPathSheet(props: {
   readonly path: string | null;

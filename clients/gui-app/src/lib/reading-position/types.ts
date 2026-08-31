@@ -1,5 +1,9 @@
 export type ReadingPositionSurfaceKind =
-  "native" | "bundle-diff" | "chat" | "managed-command" | "terminal";
+  | "native"
+  | "bundle-diff"
+  | "chat"
+  | "managed-command"
+  | "terminal";
 
 export type ReadingPositionDurability = "durable" | "renderer-live";
 

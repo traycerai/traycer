@@ -1,8 +1,23 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  render as rtlRender,
+  screen,
+  type RenderResult,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
+import * as Y from "yjs";
+import type { ReactElement, ReactNode } from "react";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import { STATUS_DOT_CLASSES } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import type { ArtifactSearchResults } from "@/components/epic-canvas/sidebar/use-artifact-search-results";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 
 interface FixtureRecord {
   readonly id: string;
@@ -38,6 +53,7 @@ interface Holder {
   /** What `useEpicNodeHostId` answers - the row's OWN owner host. */
   ownerHostIdByNodeId: Record<string, string>;
   indicators: IndicatorFixture;
+  search: ArtifactSearchResults;
 }
 
 interface IndicatorFlags {
@@ -65,12 +81,23 @@ const holder = vi.hoisted((): Holder => ({
   indicatorChatIdCalls: [],
   ownerHostIdByNodeId: {},
   indicators: { epics: {}, chats: {} },
+  search: {
+    searchActive: false,
+    results: [],
+    response: null,
+    isUnsupported: false,
+    isError: false,
+    isFetching: false,
+    refetch: () => {},
+  },
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactRecords: () => holder.records,
   useEpicActiveAgentIds: () => holder.workingAgentIds,
   useEpicAgentActivityTiers: () => holder.activityTiers,
+  // Read by the archive rule the Show facet brings with it.
+  useEpicArchivedNodeIds: (): ReadonlyArray<string> => [],
   useEpicChatHarnessId: () => null,
   useMaybeEpicTuiAgentHarnessId: () => null,
   useEpicPermissionRole: () => holder.role,
@@ -96,11 +123,32 @@ vi.mock("@/lib/epic-selectors", () => ({
     ),
   }),
 }));
+// The archive rule asks which tiles are open, so an archived-but-open row is
+// never hidden. Partial mock: everything else in the canvas store stays real.
+vi.mock("@/stores/epics/canvas/store", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useOpenTileContentIds: () => new Set<string>(),
+}));
 vi.mock("@/stores/epics/canvas/canvas-selectors", () => ({
   useIsActiveEpicArtifact: (_tabId: string, id: string) =>
     holder.activeId === id,
   findOpenArtifactInTab: () => null,
 }));
+// The artifact search RPC needs a QueryClient this suite has no reason to
+// provide; the request logic is covered where it lives. Keep the real status
+// message so any surface wording stays under test.
+//
+// `useEpicStore` is deliberately NOT mocked: this suite now renders inside a
+// real `EpicSessionContext`, so the artifact map the list filters against is
+// the genuine projection. Stubbing it here would answer a question the harness
+// already answers, and answer it differently.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-artifact-search-results",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    useArtifactSearchResults: () => holder.search,
+  }),
+);
 vi.mock("@/components/epic-canvas/mobile/use-switcher-activate", () => ({
   // The row hands over the REF alone; the content id it names is the ref's own
   // `id`, which is also what the canvas dedups against.
@@ -159,7 +207,7 @@ vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
 // artifact-kind dropdown) doesn't need to mount here - this file exercises
 // each list's editor gating and row positioning in isolation.
 vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
-  SwitcherNewChatRow: () => (
+  SwitcherNewChatAction: () => (
     <button type="button" data-testid="switcher-new-chat" />
   ),
   SwitcherNewTerminalRow: () => (
@@ -172,6 +220,128 @@ vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
 
 const PROPS = { epicId: "epic-1", tabId: "tab-1", onClose: () => {} };
 
+const INACTIVE_SEARCH: ArtifactSearchResults = {
+  searchActive: false,
+  results: [],
+  response: null,
+  isUnsupported: false,
+  isError: false,
+  isFetching: false,
+  refetch: () => {},
+};
+
+function artifactFixture(
+  id: string,
+  parentId: string | null,
+  name: string,
+  type: string,
+): FixtureRecord {
+  return { id, parentId, name, type, status: null, hostId: "host-A" };
+}
+
+/**
+ * Each rendered artifact row as `[id, depth]`, in DOM order - the two halves of
+ * "this list draws a tree". Depth is read off the row's own marker rather than
+ * measured: a pixel assertion would pass for any indent scale, including one
+ * that had drifted away from the sidebar's.
+ */
+function renderedArtifactNesting(): ReadonlyArray<readonly [string, string]> {
+  return screen
+    .queryAllByTestId(/^switcher-artifact-node-/)
+    .map((node) => [
+      (node.getAttribute("data-testid") ?? "").replace(
+        "switcher-artifact-node-",
+        "",
+      ),
+      node.getAttribute("data-depth") ?? "",
+    ]);
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function makeMeta(): SnapshotMetaEpic {
+  return {
+    schemaVersion: "1.0",
+    epicLight: {
+      id: "epic-1",
+      title: "Epic test",
+      initialUserPrompt: "",
+      ticketCount: 0,
+      specCount: 0,
+      storyCount: 0,
+      reviewCount: 0,
+      status: "open",
+      createdAt: 0,
+      updatedAt: 0,
+      createdBy: "u",
+      version: "1",
+    },
+    permissionRole: "editor",
+    repos: [],
+    workspaces: [],
+    repoMapping: [],
+    workspaceFolders: [],
+    unresolvedRepos: [],
+    hostStateVectorBase64: encodeBase64(Y.encodeStateVector(new Y.Doc())),
+  };
+}
+
+/**
+ * `SwitcherRowActions` (each row's "…" menu) calls `useSwitcherRename`, which
+ * now reads a real session handle for the optimistic overlay
+ * (`beginRenameMutation` / `retirePendingMutation`) rather than firing bare
+ * RPCs - so every render in this suite needs `<EpicSessionContext.Provider>`
+ * around it, not just the tests that exercise a rename. No test here commits
+ * an edit through the menu, so an empty doc is enough for the session to
+ * mount without throwing.
+ */
+function newSessionHandle(): OpenEpicStoreHandle {
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const factory: EpicStreamClientFactory = (_id, callbacks) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  const handle = createOpenEpicStore({
+    epicId: "epic-1",
+    streamClientFactory: factory,
+    userId: null,
+    onAuthError: null,
+  });
+  if (captured.value === null) throw new Error("factory not invoked");
+  captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
+  return handle;
+}
+
+let sessionHandle: OpenEpicStoreHandle;
+
+function SessionWrapper(props: { readonly children: ReactNode }): ReactElement {
+  return (
+    <EpicSessionContext.Provider value={sessionHandle}>
+      {props.children}
+    </EpicSessionContext.Provider>
+  );
+}
+
+/**
+ * The one shared fix: every render in this file goes through the provider.
+ * Uses RTL's `wrapper` option (not a hand-nested element) specifically so it
+ * survives `view.rerender(...)` below - a bare nested element would have the
+ * wrapper swapped OUT the moment a test re-renders with an unwrapped element,
+ * since `rerender` diffs against whatever the root element WAS.
+ */
+function render(ui: ReactElement): RenderResult {
+  return rtlRender(ui, { wrapper: SessionWrapper });
+}
+
 beforeEach(() => {
   holder.records = [];
   holder.activeId = null;
@@ -182,236 +352,14 @@ beforeEach(() => {
   holder.indicatorChatIdCalls = [];
   holder.ownerHostIdByNodeId = {};
   holder.indicators = { epics: {}, chats: {} };
+  // Reset with the rest: a case that activates search would otherwise leave
+  // every later case rendering the results surface instead of the browse list.
+  holder.search = INACTIVE_SEARCH;
+  sessionHandle = newSessionHandle();
 });
-afterEach(cleanup);
-
-describe("<SwitcherAgentsList />", () => {
-  beforeEach(() => {
-    holder.records = [
-      {
-        id: "chat-1",
-        parentId: null,
-        name: "Alpha",
-        type: "chat",
-        status: null,
-        hostId: "host-A",
-      },
-      {
-        id: "tui-1",
-        parentId: null,
-        name: "Beta",
-        type: "terminal-agent",
-        status: null,
-        hostId: "host-A",
-      },
-      {
-        id: "spec-1",
-        parentId: null,
-        name: "Spec",
-        type: "spec",
-        status: null,
-        hostId: "host-A",
-      },
-    ];
-  });
-
-  it("renders chats + terminal-agents interleaved by recency (artifacts excluded)", () => {
-    render(<SwitcherAgentsList {...PROPS} />);
-    expect(
-      screen.getByTestId("switcher-agent-row-chat-1").textContent,
-    ).toContain("Alpha");
-    expect(
-      screen.getByTestId("switcher-agent-row-tui-1").textContent,
-    ).toContain("Beta");
-    expect(screen.queryByTestId("switcher-agent-row-spec-1")).toBeNull();
-    // tui-1 (updatedAt 1) is more recent than chat-1 (updatedAt 0), so the list
-    // interleaves by recency rather than grouping all chats before agents.
-    const order = Array.from(
-      document.querySelectorAll('[data-testid^="switcher-agent-row-"]'),
-    ).map((row) => row.getAttribute("data-testid"));
-    expect(order).toEqual([
-      "switcher-agent-row-tui-1",
-      "switcher-agent-row-chat-1",
-    ]);
-  });
-
-  it("marks the active tile with a check and taps open it (chat ref)", () => {
-    holder.activeId = "chat-1";
-    render(<SwitcherAgentsList {...PROPS} />);
-    const activeRow = screen.getByTestId("switcher-agent-row-chat-1");
-    expect(activeRow.getAttribute("aria-current")).toBe("true");
-    fireEvent.click(activeRow);
-    expect(holder.activateCalls).toHaveLength(1);
-    expect(holder.activateCalls[0].id).toBe("chat-1");
-    expect(holder.activateCalls[0].ref.type).toBe("chat");
-  });
-
-  it("spins a row whose agent is mid-turn and leaves the idle rows alone", () => {
-    holder.workingAgentIds = new Set<string>(["chat-1"]);
-    holder.activityTiers = new Map<string, "turn" | "background">([
-      ["chat-1", "turn"],
-    ]);
-    render(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.getByTestId("switcher-agent-activity-chat-1")).toBeTruthy();
-    expect(screen.queryByTestId("switcher-agent-activity-tui-1")).toBeNull();
-  });
-
-  it("updates a row's status live while the sheet stays open", () => {
-    const view = render(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.queryByTestId("switcher-agent-activity-tui-1")).toBeNull();
-
-    holder.workingAgentIds = new Set<string>(["tui-1"]);
-    holder.activityTiers = new Map<string, "turn" | "background">([
-      ["tui-1", "turn"],
-    ]);
-    view.rerender(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.getByTestId("switcher-agent-activity-tui-1")).toBeTruthy();
-
-    // …and back down when the turn ends.
-    holder.workingAgentIds = new Set<string>();
-    holder.activityTiers = new Map<string, "turn" | "background">();
-    view.rerender(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.queryByTestId("switcher-agent-activity-tui-1")).toBeNull();
-  });
-
-  it("renders the desktop mapping's background glyph, not the busy spinner, for background-only work", () => {
-    holder.workingAgentIds = new Set<string>(["tui-1"]);
-    holder.activityTiers = new Map<string, "turn" | "background">([
-      ["tui-1", "background"],
-    ]);
-    render(<SwitcherAgentsList {...PROPS} />);
-    expect(
-      screen.getByTestId("switcher-agent-background-activity-tui-1"),
-    ).toBeTruthy();
-    expect(screen.queryByTestId("switcher-agent-activity-tui-1")).toBeNull();
-  });
-
-  it("surfaces notification status on a row, outranking a running turn", () => {
-    holder.workingAgentIds = new Set<string>(["chat-1"]);
-    holder.activityTiers = new Map<string, "turn" | "background">([
-      ["chat-1", "turn"],
-    ]);
-    holder.indicators = {
-      epics: {},
-      chats: {
-        "chat-1": {
-          unreadFailure: false,
-          pendingFork: false,
-          pendingApproval: true,
-          pendingInterview: false,
-          unreadDone: false,
-        },
-      },
-    };
-    render(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.getByTestId("switcher-agent-approval-chat-1")).toBeTruthy();
-    expect(screen.queryByTestId("switcher-agent-activity-chat-1")).toBeNull();
-  });
-
-  it("keeps a retained epic's rows reading status from their own host after the active host changes", () => {
-    // Session/provider bound to host A; the user has since switched the app's
-    // active host to B. `useEpicArtifactRecords()` stamps chat rows with the
-    // ACTIVE host, so the record says B while the chat still lives on A.
-    holder.records = [
-      {
-        id: "chat-1",
-        parentId: null,
-        name: "Alpha",
-        type: "chat",
-        status: null,
-        hostId: "host-B",
-      },
-    ];
-    holder.ownerHostIdByNodeId = { "chat-1": "host-A" };
-    holder.indicators = {
-      epics: {},
-      chats: {
-        "chat-1": {
-          unreadFailure: true,
-          pendingFork: false,
-          pendingApproval: false,
-          pendingInterview: false,
-          unreadDone: false,
-        },
-      },
-      byOriginHostId: {
-        "host-A": {
-          epics: {},
-          chats: {
-            "chat-1": {
-              unreadFailure: true,
-              pendingFork: false,
-              pendingApproval: false,
-              pendingInterview: false,
-              unreadDone: false,
-            },
-          },
-        },
-        "host-B": { epics: {}, chats: {} },
-      },
-    };
-    render(<SwitcherAgentsList {...PROPS} />);
-    // Passing the record's `hostId` would read `byOriginHostId["host-B"]` -
-    // empty - and the row would render an inert idle glyph.
-    expect(screen.getByTestId("switcher-agent-failure-chat-1")).toBeTruthy();
-
-    // …and the same rule governs the ref the tap builds. A tab binds its host
-    // FOR LIFE, so a B-bound tile for an A-owned chat asks the wrong machine
-    // for the transcript permanently - not just until the next host switch.
-    fireEvent.click(screen.getByTestId("switcher-agent-row-chat-1"));
-    expect(holder.activateCalls).toHaveLength(1);
-    expect(holder.activateCalls[0].ref.hostId).toBe("host-A");
-  });
-
-  it("falls back to the record's host for a legacy chat with no projected owner", () => {
-    // `useEpicNodeHostId` answers null for a chat predating the field. The
-    // record's host is the active one by construction, matching the desktop
-    // row's `?? activeHostId` - a tap always opens something.
-    holder.records = [
-      {
-        id: "chat-1",
-        parentId: null,
-        name: "Alpha",
-        type: "chat",
-        status: null,
-        hostId: "host-B",
-      },
-    ];
-    holder.ownerHostIdByNodeId = {};
-    render(<SwitcherAgentsList {...PROPS} />);
-    fireEvent.click(screen.getByTestId("switcher-agent-row-chat-1"));
-    expect(holder.activateCalls[0].ref.hostId).toBe("host-B");
-  });
-
-  it("opens a TUI agent against its projected owner host", () => {
-    // In production both sides of the `??` read the same projection field for
-    // a terminal-agent, so they cannot disagree; the fixture drives them apart
-    // only to pin WHICH one the row takes - the owner, uniformly, with no
-    // per-kind branch to fall out of sync.
-    holder.ownerHostIdByNodeId = { "tui-1": "host-C" };
-    render(<SwitcherAgentsList {...PROPS} />);
-    fireEvent.click(screen.getByTestId("switcher-agent-row-tui-1"));
-    expect(holder.activateCalls[0].ref.type).toBe("terminal-agent");
-    expect(holder.activateCalls[0].ref.hostId).toBe("host-C");
-  });
-
-  it("subscribes indicator state for exactly the agent rows it lists", () => {
-    render(<SwitcherAgentsList {...PROPS} />);
-    const chatIds = holder.indicatorChatIdCalls.at(-1);
-    // Agents only - the spec artifact in the fixture is not a chat entity, and
-    // the ids are sorted so the query key does not churn on every re-sort.
-    expect(chatIds).toEqual(["chat-1", "tui-1"]);
-  });
-
-  it("shows the '…' menu for an editor and hides it entirely for a viewer", () => {
-    const editor = render(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.getByTestId("switcher-more-chat-1")).toBeTruthy();
-    editor.unmount();
-
-    holder.role = "viewer";
-    render(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.queryByTestId("switcher-more-chat-1")).toBeNull();
-  });
+afterEach(() => {
+  cleanup();
+  sessionHandle.dispose();
 });
 
 describe("<SwitcherArtifactsList />", () => {
@@ -446,49 +394,150 @@ describe("<SwitcherArtifactsList />", () => {
     expect(statusDot).not.toBeNull();
     expect(statusDot?.className).toContain(STATUS_DOT_CLASSES[1]);
   });
-});
 
-describe("switcher create affordances (editor-gated)", () => {
-  it("shows the New chat row as the first row for an editor and hides it for a viewer", () => {
+  it("nests a child artifact under its parent", () => {
+    // Seeded youngest-first, so the epic's default recency sort would list
+    // these in exactly the reverse order. Nesting has to regroup them for the
+    // assertion to hold - which is the claim.
     holder.records = [
-      {
-        id: "chat-1",
-        parentId: null,
-        name: "Alpha",
-        type: "chat",
-        status: null,
-        hostId: "host-A",
-      },
+      artifactFixture("st-1", null, "Story", "story"),
+      artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
+      artifactFixture("sp-3", "tk-2", "Spec", "spec"),
     ];
-    const editor = render(<SwitcherAgentsList {...PROPS} />);
-    const newChatRow = screen.getByTestId("switcher-new-chat");
-    const firstItemRow = screen.getByTestId("switcher-agent-row-chat-1");
-    // DOCUMENT_POSITION_FOLLOWING on `firstItemRow` relative to `newChatRow`
-    // means the create row comes first in document order.
-    expect(
-      newChatRow.compareDocumentPosition(firstItemRow) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    editor.unmount();
-
-    holder.role = "viewer";
-    render(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.queryByTestId("switcher-new-chat")).toBeNull();
-  });
-
-  it("keeps the New chat row above the empty-state message when there are no agents", () => {
-    render(<SwitcherAgentsList {...PROPS} />);
-    expect(screen.getByTestId("switcher-new-chat")).toBeTruthy();
-    expect(screen.getByText("No agents yet.")).toBeTruthy();
-  });
-
-  it("shows New artifact for an editor and hides it for a viewer", () => {
-    const editor = render(<SwitcherArtifactsList {...PROPS} />);
-    expect(screen.getByTestId("new-artifact-action")).toBeTruthy();
-    editor.unmount();
-
-    holder.role = "viewer";
     render(<SwitcherArtifactsList {...PROPS} />);
-    expect(screen.queryByTestId("new-artifact-action")).toBeNull();
+    expect(renderedArtifactNesting()).toEqual([
+      ["st-1", "0"],
+      ["tk-2", "1"],
+      ["sp-3", "2"],
+    ]);
+  });
+
+  it("exposes the nesting to assistive technology, not just to the eye", () => {
+    // Indentation is a sighted cue only. Without the tree roles a screen
+    // reader is handed a flat run of buttons and told nothing about what
+    // contains what - so the structure is asserted through the roles the
+    // desktop artifact tree also carries, with level coming from the nesting.
+    holder.records = [
+      artifactFixture("st-1", null, "Story", "story"),
+      artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
+      artifactFixture("sp-3", "tk-2", "Spec", "spec"),
+    ];
+    holder.activeId = "tk-2";
+    render(<SwitcherArtifactsList {...PROPS} />);
+
+    const tree = screen.getByRole("tree", { name: "Epic artifacts tree" });
+    const items = screen.getAllByRole("treeitem");
+    expect(items).toHaveLength(3);
+    // One root under the tree; the deeper two each reached through a group.
+    expect(tree.querySelectorAll(':scope > [role="treeitem"]')).toHaveLength(1);
+    expect(
+      items[0].querySelector(':scope > [role="group"] > [role="treeitem"]'),
+    ).toBe(items[1]);
+    expect(
+      items[1].querySelector(':scope > [role="group"] > [role="treeitem"]'),
+    ).toBe(items[2]);
+    // The open tile is the selected item, and only it.
+    expect(items.map((i) => i.getAttribute("aria-selected"))).toEqual([
+      "false",
+      "true",
+      "false",
+    ]);
+    // Branches carry their expansion state; the leaf carries none, because an
+    // absent `aria-expanded` is what tells a screen reader it IS a leaf. A
+    // `false` here would announce the leaf as a collapsed branch hiding rows.
+    expect(items.map((i) => i.getAttribute("aria-expanded"))).toEqual([
+      "true",
+      "true",
+      null,
+    ]);
+  });
+
+  it("gives ranked search hits no tree roles", () => {
+    holder.records = [
+      artifactFixture("st-1", null, "Story", "story"),
+      artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
+    ];
+    holder.search = {
+      ...INACTIVE_SEARCH,
+      searchActive: true,
+      results: [
+        {
+          artifactId: "tk-2",
+          kind: "ticket",
+          title: "Ticket",
+          status: null,
+          relativePath: "tk-2.md",
+          breadcrumb: [],
+          sources: ["title"],
+          score: 1,
+          snippets: [],
+        },
+      ],
+      response: { results: [], outcome: "ready", truncated: false },
+    };
+    render(<SwitcherArtifactsList {...PROPS} />);
+    expect(screen.queryByRole("tree")).toBeNull();
+    expect(screen.queryAllByRole("treeitem")).toHaveLength(0);
+    expect(screen.getByTestId("switcher-artifact-row-tk-2")).toBeDefined();
+  });
+
+  it("lists an artifact whose parent this category excludes as a root", () => {
+    // An artifact parented to a chat. The chat is not an artifact row, so
+    // there is nothing on screen to indent under - and hiding the ticket to
+    // preserve the tree would lose a row the user owns.
+    holder.records = [
+      artifactFixture("chat-1", null, "Agent", "chat"),
+      artifactFixture("tk-1", "chat-1", "Ticket under agent", "ticket"),
+      artifactFixture("tk-2", "tk-1", "Nested under that", "ticket"),
+    ];
+    render(<SwitcherArtifactsList {...PROPS} />);
+    expect(screen.queryByTestId("switcher-artifact-node-chat-1")).toBeNull();
+    expect(renderedArtifactNesting()).toEqual([
+      ["tk-1", "0"],
+      ["tk-2", "1"],
+    ]);
+  });
+
+  it("keeps ranked search hits flat", () => {
+    holder.records = [
+      artifactFixture("st-1", null, "Story", "story"),
+      artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
+    ];
+    holder.search = {
+      ...INACTIVE_SEARCH,
+      searchActive: true,
+      results: [
+        {
+          artifactId: "tk-2",
+          kind: "ticket",
+          title: "Ticket",
+          status: null,
+          relativePath: "tk-2.md",
+          breadcrumb: [],
+          sources: ["title"],
+          score: 1,
+          snippets: [],
+        },
+        {
+          artifactId: "st-1",
+          kind: "story",
+          title: "Story",
+          status: null,
+          relativePath: "st-1.md",
+          breadcrumb: [],
+          sources: ["title"],
+          score: 0.5,
+          snippets: [],
+        },
+      ],
+      response: { results: [], outcome: "ready", truncated: false },
+    };
+    render(<SwitcherArtifactsList {...PROPS} />);
+    // The host's ranking, un-indented: `tk-2` is `st-1`'s child in the tree and
+    // is still drawn above it at depth 0, because a ranking is not a tree.
+    expect(renderedArtifactNesting()).toEqual([
+      ["tk-2", "0"],
+      ["st-1", "0"],
+    ]);
   });
 });

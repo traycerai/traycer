@@ -19,7 +19,8 @@ import { titleCaseFromToken } from "@/lib/provider-rate-limit-content";
 
 /** The account-scoped subscription arms the account-context store can select between. */
 export type TraycerSubscription =
-  TraycerUserSubscription | TraycerTeamSubscription;
+  | TraycerUserSubscription
+  | TraycerTeamSubscription;
 
 export const PERSONAL_VALUE = "personal";
 export const TEAM_VALUE_PREFIX = "team:";

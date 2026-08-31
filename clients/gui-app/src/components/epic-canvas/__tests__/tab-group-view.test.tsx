@@ -29,6 +29,7 @@ import {
   type WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import { useFileTreeRevealStore } from "@/stores/file-tree/file-tree-reveal-store";
+import { useSidebarNodeRevealStore } from "@/stores/epics/sidebar-node-reveal-store";
 import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
@@ -186,8 +187,11 @@ vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicNodeArchived: () => false,
   // Chat tab strip icons (ChatProgressIcon) need activity tiers when a chat
   // tile is the active tab - not exercised by the older spec/terminal-only
-  // fixtures in this file.
+  // fixtures in this file. The icon reads the REGISTERED (keyed,
+  // non-throwing) selectors, so both forms are answered here.
   useEpicAgentActivityTiers: () => new Map<string, false>(),
+  useRegisteredEpicAgentActivityTiers: () => new Map<string, false>(),
+  useRegisteredEpicPermissionRole: () => "owner",
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
@@ -2098,6 +2102,7 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     testState.missingArtifactIds.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useFileTreeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
     useEpicLeftPanelStore.setState(
       useEpicLeftPanelStore.getInitialState(),
       true,
@@ -2158,5 +2163,23 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     expect(
       useEpicLeftPanelStore.getState().activePanelIdByTabId[VIEW_TAB_ID],
     ).toBe("artifacts");
+  });
+
+  it("writes a node reveal request for an agent tab", () => {
+    const tabs = [SPEC, CHAT];
+    seedCanvas(tabs, SPEC.instanceId);
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    fireEvent.contextMenu(screen.getByTestId(`tab-item-${CHAT.instanceId}`));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Reveal in Sidebar" }),
+    );
+
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
+    ).toEqual({ nodeId: CHAT.id, nonce: 1 });
+    expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
+      "chats",
+    );
   });
 });

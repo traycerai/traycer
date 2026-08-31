@@ -256,7 +256,7 @@ describe("PlanSegment", () => {
           fullContentRef: { kind: "plan_content", hash: "hash-2" },
           contentIdentity: "hash-2",
         }),
-        planActionContext({ canAct: true, pending: false }),
+        planActionContext({ canSend: true, pending: false }),
       ),
     );
 
@@ -327,7 +327,7 @@ describe("PlanSegment", () => {
   it("disables preview and modal Implement while an action is pending", () => {
     renderPlanWithContext(
       planSegment({ fullContentRef: null }),
-      planActionContext({ canAct: true, pending: true }),
+      planActionContext({ canSend: true, pending: true }),
     );
 
     const card = screen.getByTestId("plan-segment");
@@ -418,7 +418,7 @@ describe("PlanSegment", () => {
     }));
     render(
       <ChatPlanActionsContext.Provider
-        value={planActionContext({ canAct: true, pending: false })}
+        value={planActionContext({ canSend: true, pending: false })}
       >
         <PlanSegment
           segment={planSegment({
@@ -474,7 +474,7 @@ function renderPublishedPlan() {
           fullContentRef: { kind: "plan_content", hash: "hash-1" },
           contentIdentity: "hash-1",
         }),
-        planActionContext({ canAct: true, pending: false }),
+        planActionContext({ canSend: true, pending: false }),
       )}
     </PublishedChatSourceProvider>,
   );
@@ -483,7 +483,7 @@ function renderPublishedPlan() {
 function renderPlan(segment: PlanSegmentModel) {
   return renderPlanWithContext(
     segment,
-    planActionContext({ canAct: true, pending: false }),
+    planActionContext({ canSend: true, pending: false }),
   );
 }
 
@@ -506,13 +506,13 @@ function planElement(
 }
 
 function planActionContext(input: {
-  readonly canAct: boolean;
+  readonly canSend: boolean;
   readonly pending: boolean;
 }): ChatPlanActionsContextValue {
   return {
     epicId: "epic-1",
     chatId: "chat-1",
-    canAct: input.canAct,
+    canSend: input.canSend,
     pending: input.pending,
     onImplement: implement,
   };

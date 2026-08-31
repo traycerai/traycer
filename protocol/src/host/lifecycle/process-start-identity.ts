@@ -232,7 +232,5 @@ function splitToken(
   if (!isProcessStartIdentity(value)) return null;
   const separator = value.indexOf(":");
   const payload = normalizePayload(value.slice(separator + 1));
-  return payload === null
-    ? null
-    : { tag: value.slice(0, separator), payload };
+  return payload === null ? null : { tag: value.slice(0, separator), payload };
 }

@@ -31,6 +31,7 @@ import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-co
 import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
+import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -49,7 +50,10 @@ import {
   copyComposerContentToClipboard,
 } from "@/lib/composer/composer-clipboard";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
-import { containsImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  containsImageAtoms,
+  omitImageAtomsByHash,
+} from "@/lib/composer/image-atoms";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
 import { cn, formatSingleLine } from "@/lib/utils";
@@ -77,6 +81,7 @@ import type {
 } from "./chat-message";
 import { ChatUserMessageContent } from "./chat-user-message-content";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
+import { BrowserReferenceChips } from "./browser-reference-chips";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -99,6 +104,26 @@ import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fe
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 const NOOP: () => void = () => undefined;
+
+function visibleUserSteerBadge(
+  message: ChatMessageModel,
+): ChatMessageSteerBadge | null {
+  if (message.steerBadge === null) return null;
+  if (message.steerBadge.status === "steered") return null;
+  return message.steerBadge;
+}
+
+function userMessageDisplayContent(
+  message: ChatMessageModel,
+): JsonContent | null {
+  if (message.structuredContent === null) return null;
+  const hashes = new Set(
+    (message.browserAnnotations ?? []).map(
+      (annotation) => annotation.imageHash,
+    ),
+  );
+  return omitImageAtomsByHash(message.structuredContent, hashes);
+}
 
 // Keep long prompts compact: ~3-4 lines (leading-7 ≈ 28px/line) stay visible
 // before the bubble clamps and fades, with "Show more" revealing the rest.
@@ -131,6 +156,7 @@ export function UserMessageBody({
       <>
         <UserMessageAttachmentGallery
           attachments={message.attachments}
+          browserAnnotations={message.browserAnnotations}
           align="end"
         />
         <div className="w-full rounded-lg border border-border/40 bg-muted/20 px-4 py-3 text-ui leading-7 text-muted-foreground">
@@ -152,6 +178,7 @@ export function UserMessageBody({
       <>
         <UserMessageAttachmentGallery
           attachments={message.attachments}
+          browserAnnotations={message.browserAnnotations}
           align="end"
         />
         <AgentMessageDisplayView
@@ -253,9 +280,12 @@ function AgentMessageDisplayView({
       <span aria-hidden className="shrink-0 text-muted-foreground/40">
         ·
       </span>
-      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
-        <span className="min-w-0 truncate">
-          <span className="text-muted-foreground">from agent </span>
+      {/* flex-wrap lets the badge drop to a second line on narrow (mobile)
+          widths; the name group truncates last, so the sender stays visible
+          and tappable instead of collapsing to "from agent …". */}
+      <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-ui-sm">
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="shrink-0 text-muted-foreground">from agent</span>
           <AgentHeaderLink
             name={senderName}
             onOpen={openTarget !== null ? openSenderTab : null}
@@ -331,10 +361,14 @@ function UserMessageDisplayView({
     setExpanded((prev) => !prev);
   }, []);
 
+  const displayContent = useMemo(
+    () => userMessageDisplayContent(message),
+    [message],
+  );
   const body =
-    message.structuredContent !== null ? (
+    displayContent !== null ? (
       <ComposerContentRenderer
-        content={message.structuredContent}
+        content={displayContent}
         variant={undefined}
         className={undefined}
         testId={undefined}
@@ -352,10 +386,7 @@ function UserMessageDisplayView({
   // since the hook's return doesn't narrow `sessionAnchor` for TypeScript.
   const tombstoneIdentity = tombstoneFooterIdentity(message.sessionAnchor);
   const confirmingDelete = actions?.confirmingDelete ?? false;
-  const visibleSteerBadge =
-    message.steerBadge !== null && message.steerBadge.status !== "steered"
-      ? message.steerBadge
-      : null;
+  const visibleSteerBadge = visibleUserSteerBadge(message);
   // Only clamp while collapsed; expanding drops both the height cap and the
   // bottom fade so the full prompt is readable in place. The overflow probe
   // keeps measuring the (now uncapped) content, so the toggle stays visible.
@@ -383,7 +414,11 @@ function UserMessageDisplayView({
         <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
           <UserMessageAttachmentGallery
             attachments={message.attachments}
+            browserAnnotations={message.browserAnnotations}
             align="start"
+          />
+          <BrowserReferenceChips
+            annotations={message.browserAnnotations ?? []}
           />
           <div
             ref={contentRef}
@@ -636,6 +671,8 @@ function InlineUserMessageEditor({
     currentEpicId: editing.currentEpicId,
     // The inline editor mounts only while a message is being edited - active.
     isActive: true,
+    // An edited message is re-sent to THIS chat; there is no fork to offer.
+    localSlashCommands: NO_LOCAL_SLASH_COMMANDS,
   });
 
   const submit = useCallback(() => {
@@ -775,6 +812,7 @@ function InlineUserMessageEditor({
     () => (
       <>
         <ChatComposerAttachmentsStrip
+          taskId={null}
           content={editing.currentContent}
           editingQueueItemId={null}
           onCancelQueueEdit={null}

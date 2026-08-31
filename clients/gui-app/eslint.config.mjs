@@ -11,7 +11,7 @@ import react from "eslint-plugin-react";
 import reactRefresh from "eslint-plugin-react-refresh";
 import pluginQuery from "@tanstack/eslint-plugin-query";
 import pluginRouter from "@tanstack/eslint-plugin-router";
-import { traycerTypeSafetyRestrictions } from "../../eslint/traycer-type-safety-rules.mjs";
+import oxlint from "eslint-plugin-oxlint";
 import { traycerClientsImportBoundaryRestrictions } from "../../eslint/traycer-clients-import-boundary-rules.mjs";
 import {
   nestedFocusBoundaryRestrictions,
@@ -144,6 +144,14 @@ const hooksEpicAppWideByCallerExemptions = [
 // of its own (selection model §2), local-only by its own gate.
 const followingSurfaceAppWideReadExemptions = [
   "src/components/worktree/open-in-editor-button.tsx",
+];
+
+// App chrome: mounted once above the shell split in `traycer-app.tsx`, so it is
+// not inside any tab, Epic session, or picker surface whose host it could read
+// instead. Session import runs against the host the app is pointed at, and the
+// single subscription it owns outlives every wizard that watches it.
+const appChromeAppWideReadExemptions = [
+  "src/components/session-import/session-import-run-controller.tsx",
 ];
 
 // Hook directories whose every RPC now takes the caller's client, because
@@ -344,7 +352,6 @@ function syntaxRestrictions({ exempt, nestedFocus, tabNavigation }) {
   }
   return [
     "error",
-    ...traycerTypeSafetyRestrictions,
     noFullStoreSubscription,
     ...generalCustomSyntaxRestrictions.filter(
       (restriction) => !lifted.has(restriction),
@@ -362,7 +369,7 @@ export default tseslint.config(
   { ignores: [...commonIgnores, "src/routeTree.gen.ts"] },
   linterOptionsConfig,
   js.configs.recommended,
-  ...tseslint.configs.recommendedTypeChecked,
+  ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,
   jsxA11y.flatConfigs.recommended,
   {
@@ -371,10 +378,6 @@ export default tseslint.config(
       ecmaVersion: "latest",
       sourceType: "module",
       globals: { ...globals.browser, ...globals.node, ...globals.es2021 },
-      parserOptions: {
-        projectService: true,
-        tsconfigRootDir: import.meta.dirname,
-      },
     },
     settings: {
       react: { version: "detect" },
@@ -536,6 +539,7 @@ export default tseslint.config(
     files: [
       ...epicCanvasAppWideReadExemptions,
       ...followingSurfaceAppWideReadExemptions,
+      ...appChromeAppWideReadExemptions,
       ...hookWrapperAppWideReadExemptions,
     ],
     rules: {
@@ -868,4 +872,9 @@ export default tseslint.config(
       }),
     },
   },
+  // Oxlint runs first and owns every compatible rule represented in its
+  // generated config, including the type-aware rules. Keep this last so ESLint
+  // retains the repository-specific boundaries and selector-based invariants
+  // whose implementations and executable guard tests remain ESLint-specific.
+  ...oxlint.buildFromOxlintConfigFile(".oxlintrc.json"),
 );

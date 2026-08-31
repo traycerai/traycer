@@ -73,7 +73,8 @@ describe("useHostQueries enabled handling", () => {
           "host.status",
           {
             readonly data:
-              ResponseOfMethod<HostRpcRegistry, "host.status"> | undefined;
+              | ResponseOfMethod<HostRpcRegistry, "host.status">
+              | undefined;
           }
         >({
           client,
@@ -127,6 +128,10 @@ function createHostQueriesFixture(): {
             busySessionCount: 0,
             updateProgress: null,
             busyBreakdown: null,
+            // `null` = this fixture's host did not report the durable attempt,
+            // which is exactly what host.status@1.2-and-older peers send.
+            updateOperation: null,
+            updateTransaction: null,
           };
         },
       },

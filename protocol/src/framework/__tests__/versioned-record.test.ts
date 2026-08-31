@@ -371,10 +371,15 @@ describe("versioned-record framework - loadRecord (parse + migrate)", () => {
   });
 
   it("loadRecord parses against the historical schema and migrates to latest", () => {
-    const parsed = loadRecord(registry, "obj", { id: "x" }, {
-      major: 1,
-      minor: 0,
-    });
+    const parsed = loadRecord(
+      registry,
+      "obj",
+      { id: "x" },
+      {
+        major: 1,
+        minor: 0,
+      },
+    );
     expect(parsed).toEqual({ id: "x", label: "" });
   });
 
@@ -386,10 +391,15 @@ describe("versioned-record framework - loadRecord (parse + migrate)", () => {
 
   it("loadRecord throws on data that does not match the historical schema", () => {
     expect(() =>
-      loadRecord(registry, "obj", { unrelated: true }, {
-        major: 1,
-        minor: 0,
-      }),
+      loadRecord(
+        registry,
+        "obj",
+        { unrelated: true },
+        {
+          major: 1,
+          minor: 0,
+        },
+      ),
     ).toThrow();
   });
 });

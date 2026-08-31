@@ -23,7 +23,8 @@ import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-regis
 
 interface ReadValidityTestState {
   data:
-    { content: string; error: string | null; truncated: boolean } | undefined;
+    | { content: string; error: string | null; truncated: boolean }
+    | undefined;
   isLoading: boolean;
   isError: boolean;
   error: Error | null;

@@ -398,7 +398,8 @@ export function useLandingTerminalReconciliation(
  * Genuine failures (a rejected close or import) still reject.
  */
 export type CapableLandingTerminalReconciliationOutcome =
-  "reconciled" | "snapshot-not-fresh";
+  | "reconciled"
+  | "snapshot-not-fresh";
 
 /**
  * The LEGACY arm of the tombstone drain: retire what the host's own list proves

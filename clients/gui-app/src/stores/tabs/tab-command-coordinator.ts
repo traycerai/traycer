@@ -1417,8 +1417,8 @@ export class TabCommandCoordinator {
       reservedAdditions: additions,
       pendingRemovals: removals,
       // Direct legacy source writers still own their active-id compatibility
-      // fields until T3 converts every activation entry point. Hydration and
-      // external source reconciliation therefore repair layout only; they
+      // fields until every activation entry point uses the coordinator.
+      // Hydration and external source reconciliation therefore repair layout only; they
       // must not echo a source snapshot back through desktop persistence.
       projectSourceCompatibility: false,
       applySources: () => undefined,

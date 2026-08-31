@@ -18,6 +18,7 @@ import {
   adjacentDedupedProgressItems,
   cleanSubagentNotificationText,
 } from "@/components/chat/segments/subagent-display";
+import { importedChatMarkerLabel } from "@/components/chat/segments/imported-chat-marker-display";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
@@ -30,7 +31,7 @@ import {
   planHeadline,
   planStatusBadgeLabel,
 } from "@/components/chat/segments/plan-display";
-import { formatSingleLine } from "@/lib/utils";
+import { formatSingleLine } from "@/lib/text/format-single-line";
 import type {
   ActivityGroupModel,
   ChatActivityTimelineItem,
@@ -173,6 +174,7 @@ function chatFindUnitsForMessage(
   }
 
   // A synthesized row whose single segment is a setup-card / forked-chat-link
+  // / imported-chat-marker
   // renders that segment's own find anchor and no content block (the render side
   // is renderSingleSpecialSegment in chat-message.tsx; both key off the shared
   // singleSpecialSegment predicate), so index the segment.
@@ -450,6 +452,19 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
     case "forked-chat-link":
       return [
         normalizeSearchableText(`Forked from ${segment.sourceChatTitle}`),
+      ];
+    case "imported-chat-marker":
+      // The marker's own label, and nothing else it does not paint. The raw
+      // `sourceProvider` id is never on screen (the row shows "Claude Code"),
+      // and `sourceCwd` lives in a tooltip portal outside the find anchor -
+      // indexing either counts matches the highlighter has no text to paint.
+      return [
+        normalizeSearchableText(
+          importedChatMarkerLabel({
+            sourceProvider: segment.sourceProvider,
+            importedAt: segment.importedAt,
+          }),
+        ),
       ];
     case "setup-card":
       return [

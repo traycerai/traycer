@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { domMax, LazyMotion } from "motion/react";
-import type { ReactNode } from "react";
+import { forwardRef, type ReactNode } from "react";
 import type { Mock } from "vitest";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
@@ -23,13 +23,26 @@ import { useNewConversationModalStore } from "@/stores/epics/new-conversation-mo
 import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
+import {
+  ChatTreeSurfaceContext,
+  type ChatTreeSurface,
+} from "@/components/epic-canvas/sidebar/chat-tree-surface";
+import {
+  requestSidebarNodeReveal,
+  useSidebarNodeRevealStore,
+} from "@/stores/epics/sidebar-node-reveal-store";
 
 interface TestTreeNode {
   readonly id: string;
   readonly parentId: string | null;
   readonly title: string;
   readonly type:
-    "spec" | "ticket" | "story" | "review" | "chat" | "terminal-agent";
+    | "spec"
+    | "ticket"
+    | "story"
+    | "review"
+    | "chat"
+    | "terminal-agent";
   readonly status: number | null;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -58,6 +71,17 @@ interface TestState {
   readonly deleteArtifactMutateAsync: Mock;
   readonly deleteChatMutateAsync: Mock;
   readonly deleteTuiAgentMutateAsync: Mock;
+  /**
+   * Rename RPCs, deliberately NEVER settled by default (they return a promise
+   * that stays pending). The rename editor must close on COMMIT, not on the
+   * ack, so a mock that resolved would make that assertion vacuous - it would
+   * pass on the old close-on-success code too.
+   */
+  readonly renameChatMutateAsync: Mock;
+  readonly renameTuiAgentMutateAsync: Mock;
+  /** Phase 1.1 optimistic-overlay stamps, as the rename path calls them. */
+  readonly beginRenameMutation: Mock;
+  readonly retirePendingMutation: Mock;
   readonly exportArtifactsMutate: Mock;
   readonly localDeleteArtifact: Mock;
   readonly closeCanvasTab: Mock;
@@ -158,6 +182,10 @@ const testState = vi.hoisted<TestState>(() => ({
   deleteArtifactMutateAsync: vi.fn(),
   deleteChatMutateAsync: vi.fn(),
   deleteTuiAgentMutateAsync: vi.fn(),
+  renameChatMutateAsync: vi.fn(() => new Promise(() => {})),
+  renameTuiAgentMutateAsync: vi.fn(() => new Promise(() => {})),
+  beginRenameMutation: vi.fn(() => "req-rename-1"),
+  retirePendingMutation: vi.fn(),
   exportArtifactsMutate: vi.fn(),
   localDeleteArtifact: vi.fn(),
   closeCanvasTab: vi.fn(),
@@ -400,9 +428,14 @@ vi.mock("@/components/ui/sidebar", () => ({
   SidebarGroup: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>
   ),
-  SidebarGroupContent: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
+  SidebarGroupContent: forwardRef<
+    HTMLDivElement,
+    { readonly children: ReactNode; readonly "data-testid"?: string }
+  >((props, ref) => (
+    <div ref={ref} data-testid={props["data-testid"]}>
+      {props.children}
+    </div>
+  )),
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -477,7 +510,17 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     mutateAsync: testState.deleteChatMutateAsync,
     isPending: false,
   }),
-  useEpicRenameChat: () => ({ mutate: vi.fn(), isPending: false }),
+  useEpicRenameChat: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.renameChatMutateAsync,
+    // Honest pending, derived from the spy: every call returns a promise that
+    // never settles, so once one has been issued the rename IS in flight. A
+    // hardcoded `false` makes any "second rename while the first is pending"
+    // assertion VACUOUS - a re-introduced pending guard would never see a
+    // pending state under it, so the test would pass against the very code it
+    // exists to reject. Cleared per test by `vi.clearAllMocks()`.
+    isPending: testState.renameChatMutateAsync.mock.calls.length > 0,
+  }),
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
@@ -580,7 +623,12 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
     mutateAsync: testState.deleteTuiAgentMutateAsync,
     isPending: false,
   }),
-  useEpicRenameTuiAgent: () => ({ mutate: vi.fn(), isPending: false }),
+  useEpicRenameTuiAgent: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.renameTuiAgentMutateAsync,
+    // Honest pending, for the same reason as `useEpicRenameChat` above.
+    isPending: testState.renameTuiAgentMutateAsync.mock.calls.length > 0,
+  }),
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -596,6 +644,14 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
         getState: () => ({
           deleteArtifact: testState.localDeleteArtifact,
           renameArtifact: vi.fn(),
+          // The rename path stamps an optimistic overlay patch before firing
+          // the RPC, and reads the stamp tombstone back on settle. An empty
+          // `tuiAgents` map is the doc-resident reading for an agent row,
+          // which is what an absent union entry means.
+          beginRenameMutation: testState.beginRenameMutation,
+          retirePendingMutation: testState.retirePendingMutation,
+          isLatestRenameStamp: () => true,
+          tuiAgents: { byId: {} },
         }),
         subscribe: () => () => undefined,
       },
@@ -766,6 +822,15 @@ vi.mock("@/lib/epic-selectors", () => ({
         testState.activityTierById.get(id) ?? "turn",
       ]),
     ),
+  // ChatProgressIcon reads the REGISTERED (keyed, non-throwing) selector for
+  // the same data, so a whole-module mock has to answer that form too.
+  useRegisteredEpicAgentActivityTiers: () =>
+    new Map(
+      [...testState.activeAgentIds].map((id) => [
+        id,
+        testState.activityTierById.get(id) ?? "turn",
+      ]),
+    ),
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];
@@ -805,6 +870,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // effect's dependency never changes and it never seeds in these tests.
   useEpicNodeWorkspaceFolders: () => EMPTY_WORKSPACE_FOLDERS,
   useEpicPermissionRole: () => testState.permissionRole,
+  useRegisteredEpicPermissionRole: () => testState.permissionRole,
   useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
@@ -1038,6 +1104,29 @@ describe("epic sidebar selection mode", () => {
       usePanelHeaderSearchStore.getInitialState(),
       true,
     );
+    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+  });
+
+  it("scrolls a requested agent row into view and consumes the request", async () => {
+    seedChatTree();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    requestSidebarNodeReveal(TAB_ID, "agent-root");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const row = screen.getByTestId("epic-sidebar-item-agent-root");
+    await waitFor(() => {
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        block: "nearest",
+        inline: "nearest",
+      });
+    });
+    expect(scrollIntoView.mock.instances).toContain(row);
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
+    ).toBeUndefined();
   });
 
   it("selects chat rows explicitly and bulk-deletes topmost selected chat roots", async () => {
@@ -1859,6 +1948,35 @@ describe("epic sidebar selection mode", () => {
     expect(
       screen.queryByRole("menuitem", { name: "Search artifacts" }),
     ).toBeNull();
+  });
+
+  it("moves focus from the Agents overflow menu into chat search", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Search agents" }));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Search agents" }),
+      );
+    });
+  });
+
+  it("moves focus from the Artifacts overflow menu into artifact search", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Search artifacts" }));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("combobox", { name: "Search artifacts" }),
+      );
+    });
   });
 
   it("hides artifact selection when there are no artifacts to select", () => {
@@ -3041,6 +3159,8 @@ function createSessionHandle(chatId: string): ChatSessionStoreHandle {
     streamClientFactory: () => ({
       sendAction: () => undefined,
       sameTurnSteeringProtocolSupported: () => false,
+      requestTranscriptRange: () => undefined,
+      requestResnapshot: () => undefined,
       close: () => undefined,
     }),
   });
@@ -3847,6 +3967,80 @@ describe("chat row archive", () => {
       screen.getByTestId("epic-sidebar-rename-input-chat-root"),
     ).toBeTruthy();
     expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
+  });
+
+  // --- rename settles the editor on COMMIT, not on the ack ----------------
+
+  it("closes the rename input on commit while the rename RPC is still in flight", () => {
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-rename-chat-root"));
+    const input = screen.getByTestId("epic-sidebar-rename-input-chat-root");
+    fireEvent.change(input, { target: { value: "Renamed while in flight" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    // The optimistic patch is stamped and the RPC issued - and by construction
+    // of `renameChatMutateAsync` that RPC has NOT settled, so this asserts the
+    // editor closed on the commit itself. Under the previous close-on-success
+    // code the input was still mounted here, and stayed mounted for the whole
+    // round trip (and forever on a failure, whose arm never closed it at all).
+    expect(testState.beginRenameMutation).toHaveBeenCalledWith(
+      "chat-root",
+      "Renamed while in flight",
+    );
+    expect(testState.renameChatMutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Renamed while in flight" }),
+    );
+    expect(testState.retirePendingMutation).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId("epic-sidebar-rename-input-chat-root"),
+    ).toBeNull();
+  });
+
+  it("issues a second rename committed while the first is still in flight", () => {
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const commitRename = (value: string): void => {
+      fireEvent.click(screen.getByTestId("epic-sidebar-rename-chat-root"));
+      const input = screen.getByTestId("epic-sidebar-rename-input-chat-root");
+      fireEvent.change(input, { target: { value } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    };
+
+    commitRename("First title");
+    commitRename("Second title");
+
+    // Closing on commit is what makes "renaming" and "pending" concurrent for
+    // the first time, and `renameChatMutateAsync` never settles - so the second
+    // commit here happens with the first rename genuinely still on the wire.
+    // The `if (renamePending) return` guard this change removed sat at the top
+    // of `commitRename`, so under it the second rename reached NEITHER the
+    // overlay nor the RPC and the user got no feedback that it was dropped.
+    // Asserting both calls is the point: a count of 1 was the old behaviour,
+    // and the rename hook mocks report `isPending` from their own call log, so
+    // a re-introduced guard in any form genuinely fires here.
+    expect(testState.beginRenameMutation).toHaveBeenNthCalledWith(
+      1,
+      "chat-root",
+      "First title",
+    );
+    expect(testState.beginRenameMutation).toHaveBeenNthCalledWith(
+      2,
+      "chat-root",
+      "Second title",
+    );
+    expect(testState.renameChatMutateAsync).toHaveBeenCalledTimes(2);
+    expect(testState.renameChatMutateAsync).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Second title" }),
+    );
+    // Neither has acked, so nothing may have been retired yet - a stamp retired
+    // early is what would let a late ack overwrite the newer title.
+    expect(testState.retirePendingMutation).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId("epic-sidebar-rename-input-chat-root"),
+    ).toBeNull();
   });
 
   // --- B6: row menu entry -------------------------------------------------
@@ -4669,3 +4863,139 @@ function recordFromNode(node: TestTreeNode): TestRecord {
     hostId: "host-1",
   };
 }
+
+/**
+ * The tree mounted on a non-desktop SURFACE - the mobile switcher's Agents tab.
+ *
+ * These live beside the desktop cases rather than in a switcher test file
+ * because the harness above is what standing this tree up costs: 45 module
+ * mocks, every one of them derived from a real producer. A second copy of that
+ * set would be fixtures chosen to go green, not fixtures that describe the
+ * system, so the surface's cases reuse this one.
+ */
+describe("chat tree on a mounting surface", () => {
+  afterEach(cleanup);
+  beforeEach(() => {
+    // This describe drives the panel search store directly, and the outer
+    // suite's reset does not reach here - without this, the case that seeds a
+    // query leaks it into the case asserting the store stays untouched.
+    usePanelHeaderSearchStore.setState(
+      usePanelHeaderSearchStore.getInitialState(),
+      true,
+    );
+  });
+
+  function mountedSurface(
+    overrides: Partial<ChatTreeSurface>,
+  ): ChatTreeSurface {
+    return {
+      onRowActivated: () => undefined,
+      revealRowControls: true,
+      searchQuery: null,
+      ...overrides,
+    };
+  }
+
+  function renderOnSurface(surface: ChatTreeSurface | null) {
+    return render(
+      <ChatTreeSurfaceContext.Provider value={surface}>
+        <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+      </ChatTreeSurfaceContext.Provider>,
+    );
+  }
+
+  it("dismisses the surface when a local row is tapped", () => {
+    seedChatTree();
+    let dismissed = 0;
+    renderOnSurface(mountedSurface({ onRowActivated: () => (dismissed += 1) }));
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    expect(dismissed).toBe(1);
+  });
+
+  it("does not dismiss on the desktop sidebar, which mounts no surface", () => {
+    // The control arm. Without it a dismiss that fired unconditionally would
+    // pass the case above and still be wrong.
+    seedChatTree();
+    renderOnSurface(null);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    // Nothing to assert a count on - the point is that the desktop path takes
+    // no surface at all, so reaching this line without throwing IS the result.
+    expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
+  });
+
+  it("dismisses the surface when a row's child create is chosen", () => {
+    // Root create already dismissed. An action that dismisses from one control
+    // and not another is the asymmetry this case exists to catch.
+    seedChatTree();
+    let dismissed = 0;
+    renderOnSurface(mountedSurface({ onRowActivated: () => (dismissed += 1) }));
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-more-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-new-child-chat-root"));
+
+    expect(dismissed).toBe(1);
+  });
+
+  it("narrows by the SURFACE's query when it owns one", () => {
+    seedChatTree();
+    renderOnSurface(mountedSurface({ searchQuery: "Child" }));
+
+    expect(screen.getByTestId("epic-sidebar-item-chat-child")).toBeTruthy();
+    // The TUI agent matches neither the query nor an ancestor of a match.
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+  });
+
+  it("leaves the panel's own query authoritative when the surface owns none", () => {
+    // The other direction. `searchQuery: null` must read the store, or the
+    // desktop panel silently stops filtering the moment anything mounts a
+    // surface anywhere above it.
+    seedChatTree();
+    act(() => {
+      usePanelHeaderSearchStore.getState().openSearch(TAB_ID, "chats", "Child");
+    });
+    renderOnSurface(mountedSurface({ searchQuery: null }));
+
+    expect(screen.getByTestId("epic-sidebar-item-chat-child")).toBeTruthy();
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+  });
+
+  it("does not write the invisible panel query from type-to-filter", () => {
+    // The surface renders its own field; this store's query would be edited by
+    // a control the user cannot see, and would still be there when the desktop
+    // panel next opened.
+    seedChatTree();
+    renderOnSurface(mountedSurface({ searchQuery: "" }));
+    // The two fields `openSearch` would have written. Asserting them by name
+    // rather than snapshotting the store, which holds live DOM nodes in
+    // `slotBySurfaceKey` and cannot be serialized.
+    const before = usePanelHeaderSearchStore.getState();
+    expect(before.openBySurfaceKey).toEqual({});
+    expect(before.queryBySurfaceKey).toEqual({});
+
+    fireEvent.keyDown(screen.getByTestId("epic-chat-tree-region"), {
+      key: "z",
+    });
+
+    const after = usePanelHeaderSearchStore.getState();
+    expect(after.openBySurfaceKey).toEqual({});
+    expect(after.queryBySurfaceKey).toEqual({});
+  });
+
+  it("gives the chevron a hit area only on a mounting surface", () => {
+    seedChatTree();
+    const onSurface = renderOnSurface(mountedSurface({}));
+    expect(
+      onSurface.container.querySelector('[class*="before:-inset-2"]'),
+    ).not.toBeNull();
+    onSurface.unmount();
+
+    const desktop = renderOnSurface(null);
+    expect(
+      desktop.container.querySelector('[class*="before:-inset-2"]'),
+    ).toBeNull();
+  });
+});
