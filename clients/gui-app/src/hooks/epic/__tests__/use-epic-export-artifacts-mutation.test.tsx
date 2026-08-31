@@ -20,9 +20,11 @@ vi.mock("@/lib/runner-error-toast", () => ({
 const acquireResidentArtifactBodyLease = vi.hoisted(() => vi.fn());
 const getArtifactFragment = vi.hoisted(() => vi.fn());
 const createArtifactExport = vi.hoisted(() => vi.fn());
+const serializeArtifactMarkdown = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/artifacts/artifact-export", () => ({
   createArtifactExport,
+  serializeArtifactMarkdown,
 }));
 
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
@@ -56,6 +58,8 @@ describe("useEpicExportArtifacts", () => {
     acquireResidentArtifactBodyLease.mockReset();
     getArtifactFragment.mockReset();
     createArtifactExport.mockReset();
+    serializeArtifactMarkdown.mockReset();
+    serializeArtifactMarkdown.mockReturnValue("# body");
     acquireResidentArtifactBodyLease.mockImplementation(() => ({
       release: vi.fn(),
       resident: Promise.resolve(),
@@ -109,9 +113,13 @@ describe("useEpicExportArtifacts", () => {
 
   it("takes artifact body leases sequentially and releases the first on a second failure", async () => {
     const firstFragment = new Y.Doc().getXmlFragment("first");
-    const firstRelease = vi.fn();
-    const secondRelease = vi.fn();
     const events: string[] = [];
+    const firstRelease = vi.fn(() => {
+      events.push("release:artifact-a");
+    });
+    const secondRelease = vi.fn(() => {
+      events.push("release:artifact-b");
+    });
     acquireResidentArtifactBodyLease.mockImplementation(
       (artifactId: string) => {
         events.push(`acquire:${artifactId}`);
@@ -140,11 +148,18 @@ describe("useEpicExportArtifacts", () => {
         archiveTitle: null,
       }),
     ).rejects.toThrow("“Second” is still loading.");
+    // THE REDDENING ONE. The first body must be RELEASED before the second is
+    // materialized: a lease is what keeps a room resident, so retaining every
+    // hold until the build made the whole selection hot at once - unbounded,
+    // because the sidebar does not bound the selection. Sequential
+    // materialization was never the property that mattered.
     expect(events).toEqual([
       "acquire:artifact-a",
       "fragment:artifact-a",
+      "release:artifact-a",
       "acquire:artifact-b",
       "fragment:artifact-b",
+      "release:artifact-b",
     ]);
     expect(firstRelease).toHaveBeenCalledTimes(1);
     expect(secondRelease).toHaveBeenCalledTimes(1);

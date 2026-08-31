@@ -1,13 +1,12 @@
 import { useMutation } from "@tanstack/react-query";
-import type * as Y from "yjs";
 import {
   createArtifactExport,
+  serializeArtifactMarkdown,
   type ArtifactExportFormat,
 } from "@/lib/artifacts/artifact-export";
 import {
   ArtifactBodyUnavailableError,
   holdArtifactBody,
-  type ArtifactBodyHold,
 } from "@/lib/epic-replica-reads";
 import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
@@ -48,51 +47,50 @@ export function useEpicExportArtifacts() {
       // per artifact for the duration of the read - without one, exporting a
       // body nobody has opened in this session reads as "still loading".
       //
-      // Materializing is awaited one artifact at a time. The hold resolves
-      // when that room's bytes have been transferred back from the runtime
-      // worker - not immediately, as this comment claimed while the cold tier
-      // was still on main - and holding N rooms concurrently would be the byte
-      // spike the accountant exists to prevent. Sequential keeps a settle
-      // boundary between rooms.
-      const holds: ArtifactBodyHold[] = [];
-      try {
-        const artifacts: Array<
-          ArtifactExportSelection & { readonly fragment: Y.XmlFragment }
-        > = [];
-        for (const artifact of input.artifacts) {
-          const hold = await holdArtifactBody(epicHandle, artifact.id).catch(
-            (cause: unknown) => {
-              // The seam names the artifact by id; the user knows it by title.
-              if (cause instanceof ArtifactBodyUnavailableError) {
-                throw new Error(`“${artifact.title}” is still loading.`);
-              }
-              throw cause;
-            },
-          );
-          holds.push(hold);
-          artifacts.push({ ...artifact, fragment: hold.fragment });
-        }
-        const output = await createArtifactExport({
-          artifacts,
-          format: input.format,
-          archive: input.archive,
-          archiveTitle: input.archiveTitle ?? firstArtifact.title,
-        });
-        // The blob is fully built, so the fragments are dead from here on.
-        // Release before the save surface: `saveBlobToDisk` blocks on native OS
-        // UI (a save dialog, a share sheet) the user may leave open for
-        // minutes, and a leased room can never be cooled - holding them across
-        // it would pin every exported body for that whole time. Releases are
-        // idempotent, so the `finally` stays as the throw-path backstop.
-        holds.forEach((hold) => hold.release());
-        return await saveBlobToDisk(
-          output.blob,
-          output.suggestedName,
-          fileSave,
+      // ONE lease at a time, and the body is serialized before the next is
+      // materialized. Holding them all was the byte spike the accountant
+      // exists to prevent: a lease is what keeps a room resident, so retaining
+      // every hold until the build made the whole selection hot at once, with
+      // no bound on how much a user may select. Sequential MATERIALIZATION was
+      // never the property that mattered - sequential RETENTION is.
+      const serialized: Array<{
+        readonly id: string;
+        readonly title: string;
+        readonly markdown: string;
+      }> = [];
+      for (const artifact of input.artifacts) {
+        const hold = await holdArtifactBody(epicHandle, artifact.id).catch(
+          (cause: unknown) => {
+            // The seam names the artifact by id; the user knows it by title.
+            if (cause instanceof ArtifactBodyUnavailableError) {
+              throw new Error(`“${artifact.title}” is still loading.`);
+            }
+            throw cause;
+          },
         );
-      } finally {
-        holds.forEach((hold) => hold.release());
+        try {
+          serialized.push({
+            ...artifact,
+            markdown: serializeArtifactMarkdown(hold.fragment),
+          });
+        } finally {
+          // Before the next materialize, so at most one body is resident -
+          // including on the throw path, where the loop is abandoned.
+          hold.release();
+        }
       }
+      const output = await createArtifactExport({
+        artifacts: serialized,
+        format: input.format,
+        archive: input.archive,
+        archiveTitle: input.archiveTitle ?? firstArtifact.title,
+      });
+      // No leases are held here any more - each was released as its body was
+      // serialized - so `saveBlobToDisk` can block on native OS UI (a save
+      // dialog, a share sheet) the user leaves open for minutes without
+      // pinning a single room. That wait is why holding leases across the
+      // build was worth removing rather than merely bounding.
+      return saveBlobToDisk(output.blob, output.suggestedName, fileSave);
     },
     onSuccess: (saved, input) => {
       if (saved !== null) {
