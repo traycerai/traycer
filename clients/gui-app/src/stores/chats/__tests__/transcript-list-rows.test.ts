@@ -1291,6 +1291,259 @@ describe("transcriptListRows", () => {
       "H:" + queueSteerRowId("q-1"),
     ]);
   });
+
+  /**
+   * A same-turn steer split into TWO host frames, reproduced independently of
+   * the host's publish order.
+   *
+   * The host splits a steered turn into two assistant records around the
+   * steered USER record, then re-projects the skeleton so the steer block's
+   * row (the steered user's own messageId) sits BETWEEN the split's
+   * `:part:0` and `:part:1` slice rows. Observed on staging: the host
+   * published `messageAccepted` for the steered user and an index/snapshot
+   * BEFORE the steer block existed - so that marker-less skeleton still names
+   * the turn as ONE unsplit row (`assistant:<turnId>`) and the steered user's
+   * own messageId as an ordinary TOP-LEVEL row at the last ordinal - and only
+   * afterward did `blockDelta` add the steer block to the live active-turn
+   * assistant. No fresh index/`reindexed` followed before the next paint, so
+   * this is the mixed state the client actually rendered from: a stale,
+   * marker-less skeleton next to LIVE records that already carry the marker.
+   *
+   * Two tests below both hand-build `rendered` rather than driving the real
+   * `useRenderedMessages` hook: that hook needs a full `RenderedMessagesInput`
+   * (pending sends, active turn, display context) that this module's own test
+   * suite deliberately never wires in, and every steer fixture already in this
+   * file (see `steeredAssistant` above, and the two `projects a live steer...`
+   * tests) hand-builds its `rendered` array the same way. The shapes below
+   * mirror those exactly: `modelWithPersistentMessageId(sliceId, transientId)`
+   * for a slice backed by the live transient assistant record (as in "seats
+   * every projected slice backed by one transient assistant record"), and
+   * `modelWithoutPersistentMessageId(steeredMessageId)` for the nested steer
+   * bubble (as in "projects a live steer with its retained span-backed user
+   * dependency") - the row-projection convention that a model answering
+   * through the steer channel carries no `persistentMessageId` of its own.
+   */
+  it("does not seat a mixed-state steer row above its own unplaced turn", () => {
+    const turnId = "turn-mixed-steer";
+    const queueItemId = "queue-mixed";
+    const steeredMessageId = "steered-user-mixed";
+    const transientId = transientLiveAssistantMessageId(turnId);
+
+    const steeredUser: Extract<Message, { role: "user" }> = {
+      role: "user",
+      messageId: steeredMessageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: {
+        kind: "user",
+        content: { type: "doc" },
+        browserAnnotations: [],
+      },
+      timestamp: 2,
+      sessionAnchor: null,
+    };
+    // The POST-blockDelta live assistant record: the steer block now sits
+    // between two completed text blocks, which is what makes the turn SPLIT
+    // (`planAssistantTurnRows`) into `:part:0` / steer / `:part:1` under the
+    // canonical projection - the shape the stale skeleton below does not know
+    // about yet.
+    const transientAssistant: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          type: "text",
+          blockId: "block-before",
+          status: "completed",
+          timestamp: 1,
+          text: "before the steer",
+          providerNotice: null,
+        },
+        {
+          type: "steer",
+          blockId: `steer-${queueItemId}`,
+          status: "completed",
+          timestamp: 2,
+          queueItemId,
+          messageId: steeredMessageId,
+          content: { type: "doc" },
+          mode: "safe_point",
+          sender: null,
+        },
+        {
+          type: "text",
+          blockId: "block-after",
+          status: "completed",
+          timestamp: 3,
+          text: "after the steer",
+          providerNotice: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 3,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+    };
+
+    const part0Id = assistantSliceRowId(turnId, 0, true);
+    const part1Id = assistantSliceRowId(turnId, 1, true);
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        spans: [],
+        // STALE / marker-less: the last skeleton the host published before
+        // the steer block existed. It still names the turn as one unsplit
+        // row and the steered user as an ordinary top-level row at the last
+        // ordinal - no entry anywhere for `:part:0` / `:part:1`.
+        skeleton: [
+          skeletonEntry("prior-user"),
+          skeletonEntry(assistantRowId(turnId)),
+          skeletonEntry(steeredMessageId),
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [steeredUser, transientAssistant],
+      }),
+      rendered: [
+        modelWithPersistentMessageId(part0Id, transientId),
+        modelWithoutPersistentMessageId(steeredMessageId),
+        modelWithPersistentMessageId(part1Id, transientId),
+      ],
+    });
+
+    // No duplicate: the steered user's messageId draws exactly one row,
+    // whichever position it lands at.
+    const steerOccurrences = rows.filter(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    ).length;
+    expect(steerOccurrences).toBe(1);
+
+    const part0Index = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === part0Id,
+    );
+    const part1Index = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === part1Id,
+    );
+    const steerIndex = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    );
+
+    // The canonical placement (what the host's OWN projection puts here, and
+    // what a fresh reindex eventually corrects to): nested inside the turn,
+    // after `:part:0` and before `:part:1` - never ahead of the turn's own
+    // first row, and never merely adjacent to the row before it.
+    expect(steerIndex).toBeGreaterThan(part0Index);
+    expect(steerIndex).toBeLessThan(part1Index);
+  });
+
+  it("lands a pending-blockDelta steer bubble below its turn, not above it", () => {
+    // The OTHER half of the same mixed state, timestamped one frame earlier:
+    // the host has published `messageAccepted` for the steered user, but
+    // `blockDelta` has not yet attached the steer block to the live assistant
+    // record. Nothing here disagrees yet - the skeleton's marker-less shape
+    // (unsplit turn row, steered user as an ordinary top-level row at the
+    // last ordinal) is exactly what the CURRENT live records would also
+    // project, so this is the control: the correct placement is below the
+    // streaming turn, at the last ordinal. If a future change to the seating
+    // rules ever moves it above the turn instead, that IS the staging
+    // placement bug reproduced one frame earlier - so this assertion states
+    // the correct expectation regardless of which way it fails.
+    const turnId = "turn-pre-steer";
+    const steeredMessageId = "steered-user-pre";
+    const transientId = transientLiveAssistantMessageId(turnId);
+
+    const steeredUser: Extract<Message, { role: "user" }> = {
+      role: "user",
+      messageId: steeredMessageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: {
+        kind: "user",
+        content: { type: "doc" },
+        browserAnnotations: [],
+      },
+      timestamp: 2,
+      sessionAnchor: null,
+    };
+    // PRE-blockDelta: no steer block yet, so the turn is still unsplit.
+    const transientAssistant: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          type: "text",
+          blockId: "block-streaming",
+          status: "streaming",
+          timestamp: 1,
+          text: "still going",
+          providerNotice: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 1,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+    };
+
+    const assistantId = assistantRowId(turnId);
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        spans: [],
+        skeleton: [
+          skeletonEntry("prior-user"),
+          skeletonEntry(assistantId),
+          skeletonEntry(steeredMessageId),
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [steeredUser, transientAssistant],
+      }),
+      rendered: [
+        modelWithPersistentMessageId(assistantId, transientId),
+        modelWithPersistentMessageId(steeredMessageId, steeredMessageId),
+      ],
+    });
+
+    const steerOccurrences = rows.filter(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    ).length;
+    expect(steerOccurrences).toBe(1);
+
+    const assistantIndex = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === assistantId,
+    );
+    const steerIndex = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    );
+
+    // Below the streaming turn - the last ordinal, not adjacent to the prior
+    // user row above the turn.
+    expect(steerIndex).toBeGreaterThan(assistantIndex);
+    expect(rows[steerIndex].ordinal).toBe(2);
+  });
 });
 
 describe("tier-parameterized backing", () => {
