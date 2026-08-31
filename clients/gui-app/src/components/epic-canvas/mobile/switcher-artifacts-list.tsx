@@ -241,7 +241,15 @@ function SwitcherArtifactNode(props: {
   const { node, depth, records, epicId, tabId, onClose } = props;
   const isActive = useIsActiveEpicArtifact(tabId, node.record.id);
   return (
-    <li role="treeitem" aria-selected={isActive}>
+    // A tree that never collapses still owes its branches an expansion state:
+    // with none, a parent is announced as a leaf and the group under it reads
+    // as unrelated. Leaves omit the attribute entirely - that omission is what
+    // marks them as leaves, so it must not be `false`.
+    <li
+      role="treeitem"
+      aria-selected={isActive}
+      aria-expanded={node.children.length > 0 ? true : undefined}
+    >
       <SwitcherArtifactRow
         record={node.record}
         depth={depth}

@@ -442,6 +442,14 @@ describe("<SwitcherArtifactsList />", () => {
       "true",
       "false",
     ]);
+    // Branches carry their expansion state; the leaf carries none, because an
+    // absent `aria-expanded` is what tells a screen reader it IS a leaf. A
+    // `false` here would announce the leaf as a collapsed branch hiding rows.
+    expect(items.map((i) => i.getAttribute("aria-expanded"))).toEqual([
+      "true",
+      "true",
+      null,
+    ]);
   });
 
   it("gives ranked search hits no tree roles", () => {
