@@ -271,6 +271,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     setInventoryChanged(false);
     startSweepKickoff({
       hostId,
+      epicId: epicIds?.length === 1 ? epicIds[0] : undefined,
       targets,
       mutate: sweepMutation.mutate,
       onClose: () => onOpenChange(false),
@@ -554,6 +555,7 @@ function startSweepPrimary(input: {
 
 function startSweepKickoff(input: {
   readonly hostId: string | null;
+  readonly epicId: string | undefined;
   readonly targets: ReadonlyArray<EpicSweepWorktreeRow>;
   readonly mutate: ReturnType<typeof useEpicSweepWorktrees>["mutate"];
   readonly onClose: () => void;
@@ -563,6 +565,7 @@ function startSweepKickoff(input: {
   input.mutate(
     {
       hostId: input.hostId,
+      epicId: input.epicId,
       worktrees: input.targets.map((row) => ({
         worktreePath: row.entry.worktreePath,
         branch: row.entry.branch,
