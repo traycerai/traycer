@@ -73,10 +73,14 @@ describe("OnboardingPhoneDiorama", () => {
       expect(
         attributes("onboarding-phone-header-glyph", "data-spotlit"),
       ).toEqual(["true", "false", "false"]);
+      // Three live tasks the cycle walks, then the two dimmed older rows that
+      // keep the drawer's composition honest at miniature scale.
       expect(texts("onboarding-phone-drawer-task")).toEqual([
         "Team usage limits2m",
         "Billing service1h",
         "Usage sync audit3d",
+        "Provider pack audit1w",
+        "Release notes draft2w",
       ]);
       expect(screen.queryByTestId("onboarding-phone-sheet")).toBeNull();
     });
@@ -148,14 +152,14 @@ describe("OnboardingPhoneDiorama", () => {
       });
       expect(drawer.getAttribute("data-open")).toBe("true");
       expect(attributes("onboarding-phone-drawer-task", "data-active")).toEqual(
-        ["true", "false", "false"],
+        ["true", "false", "false", "false", "false"],
       );
 
       act(() => {
         vi.advanceTimersByTime(1900);
       });
       expect(attributes("onboarding-phone-drawer-task", "data-active")).toEqual(
-        ["false", "true", "false"],
+        ["false", "true", "false", "false", "false"],
       );
     });
 
@@ -262,7 +266,7 @@ describe("OnboardingPhoneDiorama", () => {
         screen.getByTestId("onboarding-phone-drawer").getAttribute("data-open"),
       ).toBe("true");
       expect(attributes("onboarding-phone-drawer-task", "data-active")).toEqual(
-        ["true", "false", "false"],
+        ["true", "false", "false", "false", "false"],
       );
     });
 

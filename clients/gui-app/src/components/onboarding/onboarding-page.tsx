@@ -540,6 +540,71 @@ function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
   }
 }
 
+/**
+ * The stage's miniature column. The live miniature follows the user's real
+ * theme on every act, so the preview always matches what the app looks like
+ * for them - it renders with the same semantic tokens as the real shell.
+ */
+function OnboardingMiniatureColumn(props: {
+  readonly actId: OnboardingActId;
+  readonly addon: OnboardingAct["addon"];
+  readonly miniature: OnboardingMiniature;
+  readonly agentGuide: OnboardingAgentGuideState;
+}) {
+  const { actId, addon, miniature, agentGuide } = props;
+  if (miniature.kind === "none") return null;
+  const phone = miniature.kind === "phone";
+  return (
+    <div
+      className={cn(
+        "onboarding-diorama-wrap mx-auto w-full min-w-0 self-start lg:mx-0 lg:self-center",
+        // The providers list carries the act on its own; drop the mini-app
+        // when stacked. (Command-theme keeps its diorama, which itself shows
+        // just the Cmd+K palette when stacked.)
+        addon === "agents" && "max-lg:hidden",
+        // The phone frame is container-led: the grid row it sits in is its
+        // height budget, so it can never run under the actions bar the way a
+        // viewport-led height could.
+        phone && "h-full min-h-0 self-stretch",
+      )}
+    >
+      {/* Fade the mini-app in place on each act so it never slides up from
+          the bottom when reappearing (e.g. providers → handoff). */}
+      <m.div
+        key={actId}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.25, ease: ACT_EASE }}
+        className={cn("w-full min-w-0", phone && "h-full min-h-0")}
+      >
+        {miniature.kind === "phone" ? (
+          <OnboardingPhoneDiorama scene={miniature.scene} />
+        ) : (
+          <OnboardingDiorama actId={miniature.actId} agentGuide={agentGuide} />
+        )}
+      </m.div>
+    </div>
+  );
+}
+
+/**
+ * Stacked screens: blur + fade the desktop mini-app's lower edge behind the
+ * actions bar so it reads as a clean footer, not a cut-off pane. The phone
+ * frame is height-contained by its grid row and never reaches this band, so
+ * the band would only smear its bottom bezel - desktop miniature only.
+ */
+function OnboardingStageEdgeFade(props: {
+  readonly desktopMiniature: boolean;
+}) {
+  if (!props.desktopMiniature) return null;
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] h-[6rem] bg-gradient-to-t from-[#303b37] via-[#303b37]/75 to-transparent backdrop-blur-sm [mask-image:linear-gradient(to_top,black_55%,transparent)] lg:hidden"
+    />
+  );
+}
+
 function ActCopy(props: {
   readonly act: OnboardingAct;
   readonly agentGuide: OnboardingAgentGuideState;
@@ -1001,47 +1066,15 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                 </div>
               </div>
 
-              {/*
-                The live miniature follows the user's real theme on every act, so
-                the preview always matches what the app looks like for them. It
-                renders with the same semantic tokens as the real shell.
-              */}
-              {miniature.kind === "none" ? null : (
-                <div
-                  className={cn(
-                    "onboarding-diorama-wrap mx-auto w-full min-w-0 self-start lg:mx-0 lg:self-center",
-                    // The providers list carries the act on its own; drop the
-                    // mini-app when stacked. (Command-theme keeps its diorama,
-                    // which itself shows just the Cmd+K palette when stacked.)
-                    act.addon === "agents" && "max-lg:hidden",
-                  )}
-                >
-                  {/* Fade the mini-app in place on each act so it never slides up
-                      from the bottom when reappearing (e.g. providers → handoff). */}
-                  <m.div
-                    key={act.id}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ duration: 0.25, ease: ACT_EASE }}
-                    className="w-full min-w-0"
-                  >
-                    {miniature.kind === "phone" ? (
-                      <OnboardingPhoneDiorama scene={miniature.scene} />
-                    ) : (
-                      <OnboardingDiorama
-                        actId={miniature.actId}
-                        agentGuide={agentGuideState}
-                      />
-                    )}
-                  </m.div>
-                </div>
-              )}
+              <OnboardingMiniatureColumn
+                actId={act.id}
+                addon={act.addon}
+                miniature={miniature}
+                agentGuide={agentGuideState}
+              />
             </div>
-            {/* Stacked screens: blur + fade the mini-app's lower edge behind the
-                actions bar so it reads as a clean footer, not a cut-off pane. */}
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] h-[6rem] bg-gradient-to-t from-[#303b37] via-[#303b37]/75 to-transparent backdrop-blur-sm [mask-image:linear-gradient(to_top,black_55%,transparent)] lg:hidden"
+            <OnboardingStageEdgeFade
+              desktopMiniature={miniature.kind === "desktop"}
             />
             <div className="onboarding-actions absolute z-10 flex items-center justify-end gap-3">
               <div className="mr-auto flex min-w-0 max-w-[14rem] flex-1 flex-col gap-1.5 lg:hidden">

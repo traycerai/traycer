@@ -61,17 +61,15 @@ const REVEAL_DELAY_MS = 700;
 const CYCLE_MS = 1900;
 
 /**
- * The frame is height-led: the tour's `--onboarding-diorama-max-height` is the
- * budget every breakpoint in `ONBOARDING_STYLE` sets, so the phone caps its
- * WIDTH at that height times its own 9/19 aspect and lets `w-full` shrink it
- * from there. A width-led frame would blow straight past the height budget the
- * short-viewport breakpoints exist to enforce.
+ * The frame is container-led: its height is whatever the page's grid row
+ * hands down (`h-full`, capped by the tour's `--onboarding-diorama-max-height`
+ * budget), and the 9/19 aspect derives the width from it. `max-w-full` lets a
+ * narrow column clamp the width instead - `aspect-ratio` transfers that cap
+ * back into the height, so the frame letterboxes and never distorts or runs
+ * past the actions bar below its row.
  */
-const PHONE_WIDTH_CLASS =
-  "w-full max-w-[calc(var(--onboarding-diorama-max-height)*9/19)]";
-
 const PHONE_FRAME_CLASS =
-  "relative flex aspect-[9/19] max-h-[var(--onboarding-diorama-max-height)] w-full flex-col overflow-hidden rounded-3xl border border-white/12 bg-background text-foreground shadow-[0_2rem_4rem_-1.75rem_rgba(0,0,0,0.72),0_0.875rem_2rem_-1.25rem_rgba(0,0,0,0.55)] transition-colors duration-500";
+  "relative flex aspect-[9/19] h-full max-h-[var(--onboarding-diorama-max-height)] max-w-full flex-col overflow-hidden rounded-3xl border border-white/12 bg-background text-foreground shadow-[0_2rem_4rem_-1.75rem_rgba(0,0,0,0.72),0_0.875rem_2rem_-1.25rem_rgba(0,0,0,0.55)] transition-colors duration-500";
 
 /** Recency labels for the drawer's task rows, keyed so a rename breaks here. */
 const RECENT_TASK_AGES: Readonly<Record<(typeof TASKS)[number], string>> = {
@@ -79,6 +77,16 @@ const RECENT_TASK_AGES: Readonly<Record<(typeof TASKS)[number], string>> = {
   "Billing service": "1h",
   "Usage sync audit": "3d",
 };
+
+/**
+ * Older history below the three live tasks. A real drawer is never three rows
+ * and a void; these keep the miniature's composition honest without joining
+ * the active-row cycle (they read as settled work, slightly dimmed).
+ */
+const OLDER_DRAWER_TASKS = [
+  ["Provider pack audit", "1w"],
+  ["Release notes draft", "2w"],
+] as const satisfies ReadonlyArray<readonly [string, string]>;
 
 interface SwitcherCategory {
   readonly label: string;
@@ -120,7 +128,7 @@ export function OnboardingPhoneDiorama(props: OnboardingPhoneDioramaProps) {
   const { scene } = props;
   const reducedMotion = useReducedMotion() === true;
   return (
-    <div className={cn("relative mx-auto", PHONE_WIDTH_CLASS)}>
+    <div className="relative mx-auto flex h-full min-h-0 w-full justify-center">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute -inset-[10%] bg-[radial-gradient(closest-side,rgba(255,255,255,0.07),transparent_72%)]"
@@ -153,19 +161,22 @@ function PhoneScene(props: {
   }
   return (
     <>
-      {/* Above the scrim on purpose. In the real app the drawer and the sheet
-          cover the header; here the spotlit glyph IS the lesson, so it stays
-          lit while everything behind the panel dims. */}
+      {/* The panels live in the body layer BELOW the header, unlike the real
+          app where they cover it: the spotlit glyph IS the lesson, so it stays
+          lit while everything behind the panel dims - and the drawer's own top
+          rows never collide with the header band. */}
       <PhoneHeader
         title={TASKS[0]}
         spotlight={scene === "drawer" ? "menu" : "switcher"}
       />
-      <PhoneTaskScreen className="min-h-0 flex-1" />
-      {scene === "drawer" ? (
-        <NavDrawerScene reducedMotion={reducedMotion} />
-      ) : (
-        <SwitcherSheetScene reducedMotion={reducedMotion} />
-      )}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <PhoneTaskScreen className="min-h-0 flex-1" />
+        {scene === "drawer" ? (
+          <NavDrawerScene reducedMotion={reducedMotion} />
+        ) : (
+          <SwitcherSheetScene reducedMotion={reducedMotion} />
+        )}
+      </div>
     </>
   );
 }
@@ -179,7 +190,7 @@ function PhoneHeader(props: {
   readonly spotlight: HeaderGlyphId | null;
 }) {
   return (
-    <header className="relative z-30 flex h-9 shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/90 after:content-['']">
+    <header className="relative flex h-9 shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/90 after:content-['']">
       <HeaderGlyph id="menu" icon={Menu} spotlit={props.spotlight === "menu"} />
       <span className="min-w-0 flex-1 truncate text-ui-xs font-medium text-foreground">
         {props.title}
@@ -300,6 +311,11 @@ function NavDrawerScene(props: { readonly reducedMotion: boolean }) {
               active={index === activeIndex}
             />
           ))}
+          <div className="flex flex-col gap-1 opacity-55">
+            {OLDER_DRAWER_TASKS.map(([task, age]) => (
+              <DrawerTaskRow key={task} label={task} age={age} active={false} />
+            ))}
+          </div>
         </nav>
         <div className="shrink-0 border-t border-border/60 p-2">
           <div className="flex h-7 items-center gap-2 rounded-md px-2 text-ui-xs text-foreground/75">
@@ -463,7 +479,7 @@ function StoryChatScene(props: { readonly reducedMotion: boolean }) {
         </div>
         <div className="shrink-0 border-t border-border p-2">
           <div className="flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-1.5">
-            <span className="flex shrink-0 items-center gap-1 rounded border border-border px-1 py-0.5 text-overline text-foreground/80">
+            <span className="flex shrink-0 items-center gap-1 rounded bg-foreground/6 px-1 py-0.5 text-overline text-foreground/80">
               <HarnessIcon harnessId="codex" className="size-3" />
               Codex
             </span>
@@ -551,7 +567,7 @@ function StoryGuiBubble(props: {
         initial={initial}
         animate={{ opacity: 1 }}
         transition={transition}
-        className="ml-auto flex max-w-[92%] flex-col gap-0.5 rounded-lg rounded-br-sm border border-primary/40 bg-primary/10 px-2 py-1 text-ui-xs"
+        className="ml-auto flex max-w-[92%] flex-col gap-0.5 rounded-lg rounded-br-sm bg-primary/10 px-2 py-1 text-ui-xs"
       >
         <span className="flex items-center gap-1 text-overline uppercase tracking-wider text-primary">
           <ArrowRight className="size-3 shrink-0" />
@@ -569,7 +585,7 @@ function StoryGuiBubble(props: {
         initial={initial}
         animate={{ opacity: 1 }}
         transition={transition}
-        className="mr-auto flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-1.5 py-0.5 text-code-xs text-muted-foreground"
+        className="mr-auto flex items-center gap-1.5 rounded-md bg-foreground/6 px-1.5 py-0.5 text-code-xs text-muted-foreground"
       >
         <FileText className="size-3 shrink-0 text-[var(--term-ansi-yellow)]" />
         {props.text}
@@ -616,6 +632,8 @@ function StoryAgentTick(props: {
   readonly reducedMotion: boolean;
 }) {
   const blocked = props.kind === "blocked";
+  // Colour lives in the status glyph alone; the line itself stays muted so a
+  // run of consecutive ticks reads as one quiet ledger, not competing alerts.
   return (
     <m.p
       data-testid="onboarding-phone-story-beat"
@@ -623,17 +641,12 @@ function StoryAgentTick(props: {
       initial={props.reducedMotion ? false : { opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.25, ease: EASE }}
-      className={cn(
-        "mr-auto flex max-w-[92%] items-center gap-1.5 pl-1 text-code-xs leading-snug",
-        blocked
-          ? "text-[var(--term-ansi-yellow)]"
-          : "text-[var(--term-ansi-green)]",
-      )}
+      className="mr-auto flex max-w-[92%] items-center gap-1.5 pl-1 text-code-xs leading-snug text-muted-foreground"
     >
       {blocked ? (
-        <TriangleAlert className="size-3 shrink-0" />
+        <TriangleAlert className="size-3 shrink-0 text-[var(--term-ansi-yellow)]" />
       ) : (
-        <Check className="size-3 shrink-0" />
+        <Check className="size-3 shrink-0 text-[var(--term-ansi-green)]" />
       )}
       <span className="min-w-0">{props.text}</span>
     </m.p>
@@ -641,17 +654,11 @@ function StoryAgentTick(props: {
 }
 
 /**
- * Accent per terminal agent, matching the desktop's travelling pills
- * (`PANE_ACCENT_CLASS`) so an agent keeps one colour across both platforms.
+ * A terminal agent speaking to another agent: the folded-in handoff pill.
+ * Deliberately the same quiet fill as every other received bubble - the
+ * harness icon and name kicker identify the speaker, so the bubble itself
+ * carries no accent border or colour of its own.
  */
-const STORY_AGENT_ACCENT_CLASS: Readonly<
-  Record<"claude" | "opencode", string>
-> = {
-  claude: "border-l-[var(--term-ansi-cyan)]",
-  opencode: "border-l-[var(--term-ansi-magenta)]",
-};
-
-/** A terminal agent speaking to another agent: the folded-in handoff pill. */
 function StoryAgentPill(props: {
   readonly pane: "claude" | "opencode";
   readonly text: string;
@@ -665,10 +672,7 @@ function StoryAgentPill(props: {
       initial={props.reducedMotion ? false : { opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3, ease: EASE }}
-      className={cn(
-        "mr-auto flex max-w-[92%] flex-col gap-0.5 rounded-lg rounded-bl-sm border-l-2 bg-foreground/5 px-2 py-1 text-ui-xs",
-        STORY_AGENT_ACCENT_CLASS[props.pane],
-      )}
+      className="mr-auto flex max-w-[92%] flex-col gap-0.5 rounded-lg rounded-bl-sm bg-foreground/6 px-2 py-1 text-ui-xs"
     >
       <span className="flex items-center gap-1 text-overline uppercase tracking-wider text-muted-foreground">
         <HarnessIcon harnessId={props.pane} className="size-3" />
