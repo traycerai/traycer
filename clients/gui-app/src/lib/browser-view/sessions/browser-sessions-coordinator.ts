@@ -163,11 +163,13 @@ const TAB_PREVIEW_TIMEOUT_MS = 5_000;
  * store, so that store is the only thing carrying login state across the gap.
  * It must therefore be refreshed while the native tabs are still alive.
  *
- * Only co-located coordinators capture: a stream whose host is not this
- * machine has no Electron partition here to read.
+ * EVERY open stream is flushed, remote hosts included: the partition this
+ * renderer reads is the user's own jar, and it is that jar the remote host has
+ * to be holding when it re-materializes their session (cross-host decision #6).
  *
- * Never rejects: a stream that cannot answer is reported by not having
- * refreshed the store, not by stalling the quit.
+ * Never rejects, and the streams run in parallel under one flush timeout: a
+ * stream that cannot answer is reported by not having refreshed the store, not
+ * by stalling the quit.
  */
 export async function captureFinalPrimaryProfiles(): Promise<void> {
   await Promise.allSettled(
@@ -522,10 +524,9 @@ function createBrowserSessionsCoordinator(args: {
     let connectionStatus: StreamConnectionStatus = "connecting";
     let connectionGeneration = 0;
     // Unsolicited cookie deltas from the durable `primary` jar (spec §6.3).
-    // Gated on this connection having sent `electronTabLifecycleReady`: the
-    // host only hears the elected lifecycle subscriber, so a second window's
-    // forward would be dropped there anyway - not sending it keeps the stream
-    // honest about who speaks for the jar.
+    // Gated on this connection having sent `electronTabLifecycleReady`: that
+    // readiness is exactly what makes the stream jar-authorized on the host, so
+    // a connection that has not sent it would be dropped there anyway.
     const primaryProfileDeltas =
       browserView?.onPrimaryProfileDelta((delta) => {
         if (
@@ -598,8 +599,10 @@ function createBrowserSessionsCoordinator(args: {
       });
       // This machine can hold the host's store key. The host answers with a
       // wrap or an unwrap request (handled below); it ignores the offer when
-      // it already has the key in memory. It belongs with the frame that
-      // elects this connection: the host only hears the elected subscriber.
+      // it already has the key in memory. It rides with the readiness frame
+      // because readiness is what makes this stream jar-authorized - and the
+      // host now also starts the handshake off that frame, so the offer is
+      // usually the second of the two and simply ignored.
       stream?.sendClientFrame({
         kind: "storeKeyOffer",
         hasBinaryPayload: false,
@@ -710,12 +713,6 @@ function createBrowserSessionsCoordinator(args: {
 
     captureFinalPrimaryProfile = async (): Promise<void> => {
       if (actionChannel !== channel || connectionStatus !== "open") return;
-      // Only the host this GUI is CO-LOCATED with. `capturePrimaryProfile`
-      // reads THIS machine's Electron partition, and the host stores what
-      // arrives as the whole jar - fanning it to a remote host would overwrite
-      // that host's own, richer jar with a laptop's on every quit. The same
-      // locality rule gates `electronTabLifecycleReady` above.
-      if (runtime.localHostId !== args.owner.hostId) return;
       const requestId = crypto.randomUUID();
       const acked = awaitCaptureAck(requestId);
       await capturePrimaryProfileOnce({
@@ -912,6 +909,19 @@ type BrowserSessionsSubsystemFrame = Exclude<
   }
 >;
 
+/**
+ * The host has already shredded its slice for this user; this is the desktop's
+ * turn. Fire-and-forget: there is no frame to answer with, and a machine with
+ * no bridge (a browser tab) has no jar to clear.
+ */
+function forgetLocalLogins(browserView: BrowserViewBridge | null): void {
+  void browserView?.forgetLogins().catch((cause: unknown) => {
+    appLogger.warn("[browser] clearing the browser partition failed", {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+  });
+}
+
 function handleBrowserSessionsSubsystemFrame(args: {
   readonly frame: BrowserSessionsSubsystemFrame;
   readonly epicId: string;
@@ -967,14 +977,7 @@ function handleBrowserSessionsSubsystemFrame(args: {
       });
       return;
     case "primaryProfileForgotten":
-      // The host has already shredded its slice for this user; this is the
-      // desktop's turn. Fire-and-forget: there is no frame to answer with, and
-      // a machine with no bridge (a browser tab) has no jar to clear.
-      void args.browserView?.forgetLogins().catch((cause: unknown) => {
-        appLogger.warn("[browser] clearing the browser partition failed", {
-          cause: cause instanceof Error ? cause.message : String(cause),
-        });
-      });
+      forgetLocalLogins(args.browserView);
       return;
     case "primaryProfileEvict":
       handlePrimaryProfileEvictFrame({
