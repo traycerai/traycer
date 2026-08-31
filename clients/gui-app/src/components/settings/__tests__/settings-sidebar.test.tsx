@@ -389,17 +389,17 @@ describe("<SettingsSidebar /> section navigation history", () => {
       </KeybindingProvider>,
     );
 
-    // Driven through the router rather than a DOM click: a click on a
-    // replace-Link is inert under jsdom in this harness (the push case above
-    // clicks fine, and this same click works in the running app), so the
-    // click leg of the rail path cannot be exercised here. What this test
-    // pins is the replace SEMANTICS the rail depends on - a replaced section
-    // entry means one back() leaves settings entirely. The mobile-list test
-    // above covers the Link's click path end to end.
-    await act(async () => {
-      await router.navigate({ to: "/settings/general", replace: true });
-    });
+    // Clicked through a fresh query on every poll: the rail re-renders its
+    // rows as it settles (an exiting copy can coexist with the live one for
+    // a frame), so a node captured once can be detached by the time the
+    // click lands. Clicking the LAST currently-rendered instance until the
+    // navigation commits keeps the test on the real Link.
     await waitFor(() => {
+      const links = screen.getAllByTestId("settings-sidebar-item-general");
+      const current = links[links.length - 1];
+      if (current !== undefined) {
+        fireEvent.click(current);
+      }
       expect(router.state.location.pathname).toBe("/settings/general");
     });
 
