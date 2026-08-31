@@ -377,6 +377,8 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           // migration modal / snapshot error / auth cascade as one on the
           // status lane. Only the cycle bookkeeping is the control lane's.
           ownsControlCycle: false,
+          // This IS the records lane.
+          carriesRecords: true,
         });
       },
       requestReplacement: onReplacementRequested,
@@ -505,6 +507,9 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           // control cycle's boundary - the third consumer of the same
           // one-reconnect-is-one-fact rule the two calls above apply.
           ownsControlCycle: true,
+          // The status lane carries no record rows; the records lane beside it
+          // does, and reports its own transitions above.
+          carriesRecords: false,
         });
       },
       requestReplacement: onReplacementRequested,

@@ -1057,6 +1057,20 @@ export function EpicSessionProvider(
     const adoptWinner = (winner: OpenEpicStoreHandle): void => {
       settled = true;
       nextHandle.dispose();
+      // Same question the replacement path asks of its own candidate, asked
+      // here of a SIBLING's. The winner arrives from `registry.peek`, which -
+      // unlike `acquireMounted` - does not retire a dead entry, so adopting it
+      // unchecked would present `ready` on a corpse. The provider that owns it
+      // retires it on its next pass; this one presents `failed` meanwhile, so
+      // the retry affordance exists rather than a `ready` nothing advances.
+      if (isEpicSessionHandleDead(winner)) {
+        presentSession({
+          kind: "failed",
+          targetHostId,
+          originalHostId: originalHostIdRef.current,
+        });
+        return;
+      }
       const stampedHostId = handleHostIds.get(winner);
       if (stampedHostId === undefined || stampedHostId === null) {
         throw new Error(
@@ -1174,6 +1188,31 @@ export function EpicSessionProvider(
         // and its accounting registrations alive for the life of the tab, with
         // nothing left holding a reference that could ever end them.
         nextHandle.dispose();
+        return;
+      }
+      // A SECOND liveness question, and not the one `lifecycle.cancelled`
+      // answers. That one asks whether this re-point is still wanted; this
+      // asks whether the thing it is about to install still exists.
+      //
+      // `encodeRootState` / `applyRootUpdate` above are awaits, and the
+      // candidate's own worker can fatal inside them. The relay records the
+      // death on the handle and presents `failed` - but nothing here read that,
+      // so the corpse was installed anyway and the tail below overwrote the
+      // failure with `ready`. Nothing retires it afterwards either: the
+      // registry's retirement happens in `acquireMounted`, and this effect does
+      // not re-run for a death it never observed. The tab then sits on a dead
+      // runtime with the retry affordance gone - the one affordance that exists
+      // for exactly this failure.
+      //
+      // Disposed and presented as `failed`, which is what every other
+      // non-adoptable exit in this function already does.
+      if (isEpicSessionHandleDead(nextHandle)) {
+        nextHandle.dispose();
+        presentSession({
+          kind: "failed",
+          targetHostId: hostId,
+          originalHostId: originalHostIdRef.current,
+        });
         return;
       }
       // Identity of the handle being REPLACED, for the retention (F10). Read

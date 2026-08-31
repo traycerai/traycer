@@ -205,6 +205,9 @@ export function createEpicControlReplica(
     sources;
 
   let transportStatus: StreamConnectionStatus = "connecting";
+  // Same initial value as the blended slot: before any lane reports, neither
+  // is open and both say so.
+  let recordsTransportStatus: StreamConnectionStatus = "connecting";
   // Keep the historical optimistic value for functional users of the blended
   // connection status. The sync pill must instead consult
   // `hasFreshCloudSyncStatus`, which is the per-cycle acknowledgement proof.
@@ -238,6 +241,7 @@ export function createEpicControlReplica(
     EpicControlProjection,
     | "connectionStatus"
     | "hostTransportStatus"
+    | "recordsTransportStatus"
     | "cloudSyncStatus"
     | "hasFreshCloudSyncStatus"
     | "hasConnectedOnce"
@@ -245,6 +249,7 @@ export function createEpicControlReplica(
     return {
       connectionStatus: currentStatus,
       hostTransportStatus: transportStatus,
+      recordsTransportStatus,
       cloudSyncStatus,
       hasFreshCloudSyncStatus,
       hasConnectedOnce,
@@ -323,9 +328,17 @@ export function createEpicControlReplica(
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
     ownsControlCycle: boolean,
+    carriesRecords: boolean,
   ): void {
     const previousTransportStatus = transportStatus;
     transportStatus = status;
+    // Tracked SEPARATELY from the blended slot above, and only off the socket
+    // that actually delivers rows. `transportStatus` is deliberately written
+    // by every lane - a required lane going away is the session's problem
+    // whichever lane it was - which makes it the wrong answer for "are records
+    // arriving right now", because a records lane reconnecting under a live
+    // status lane still reads `open` there.
+    if (carriesRecords) recordsTransportStatus = status;
     const startedSubscriptionCycle =
       ownsControlCycle &&
       previousTransportStatus !== "open" &&
@@ -577,6 +590,7 @@ export function createEpicControlReplica(
             event.status,
             event.reason,
             event.ownsControlCycle,
+            event.carriesRecords,
           );
           break;
       }
@@ -712,7 +726,10 @@ export function createEpicControlReplica(
       // QUEUEING post-detach edits into a buffer nothing will ever drain,
       // growing `unsyncedQueueSize` on a handle whose whole promise is that it
       // takes no further input.
-      publish({ hostTransportStatus: "closed" });
+      publish({
+        hostTransportStatus: "closed",
+        recordsTransportStatus: "closed",
+      });
     },
   };
 

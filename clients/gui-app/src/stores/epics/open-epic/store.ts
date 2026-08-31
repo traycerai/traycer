@@ -448,6 +448,8 @@ export interface OpenEpicState {
    * memory.
    */
   readonly hostTransportStatus: StreamConnectionStatus;
+  /** The records lane's own status. See the projection's field of this name. */
+  readonly recordsTransportStatus: StreamConnectionStatus;
   /**
    * Host-observed state of the host↔cloud link for this Epic, mirrored from
    * `epic.subscribe@1.0` `cloudSyncStatus` frames. It remains optimistically

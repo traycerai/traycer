@@ -278,6 +278,26 @@ export type EpicControlEvent =
        * of the connection.
        */
       readonly ownsControlCycle: boolean;
+      /**
+       * Whether the socket reporting this transition is the one that DELIVERS
+       * RECORD ROWS.
+       *
+       * A second discriminator rather than a reuse of `ownsControlCycle`,
+       * because the two arms answer them differently: `@1` has one socket and
+       * is `true` for both, while the lane arm splits them - the status lane
+       * owns the control cycle and carries no records, the records lane
+       * carries records and owns no cycle.
+       *
+       * `hostTransportStatus` is written by EVERY lane that reports, which is
+       * right for the close policy ("a required lane going away is the
+       * session's problem whichever lane it was") and wrong for any consumer
+       * asking whether RECORDS are arriving: a records lane reconnecting while
+       * the status lane stays open leaves the blended slot reading `open`. The
+       * comment-thread source selector asked exactly that question and got the
+       * blended answer, so retained stale lane rows kept outranking a poll
+       * that had already refreshed.
+       */
+      readonly carriesRecords: boolean;
     };
 
 // ─── The adapter's emit type ──────────────────────────────────────────────

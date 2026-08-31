@@ -326,6 +326,9 @@ export function createLegacyEpicStreamAdapter(
             // One socket carries every plane on this arm, the root snapshot
             // included, so its transitions ARE the control cycle's.
             ownsControlCycle: true,
+            // One socket carries everything on `@1`, records included - so it
+            // answers true to both discriminators.
+            carriesRecords: true,
           },
         });
       },

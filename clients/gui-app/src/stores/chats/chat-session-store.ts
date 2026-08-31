@@ -1839,6 +1839,17 @@ export interface ChatSessionNotificationDependencies {
   >;
 }
 
+/**
+ * The six slices charged to the chat-windows plane alongside the transcript.
+ *
+ * THE OBLIGATION: every write to one of these must be followed by a budget
+ * re-settle. The transcript paths get theirs from `commitChatWindowBudget` /
+ * `commitLegacyTranscriptBudget`; everything else calls
+ * `commitWholeSetSliceBudget`. A write with no re-settle behind it leaves the
+ * accountant holding a stale figure for as long as this chat stays quiet on
+ * the transcript, which is the whole of the growth it is supposed to bound.
+ * Adding a slice here adds that obligation to its writers too.
+ */
 function chatSlicesOf(state: ChatSessionState): ChatWholeSetSlices {
   return {
     queue: state.queue,
@@ -3429,6 +3440,38 @@ export function createChatSessionStoreWithNotificationDependencies(
       memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
     };
 
+    /**
+     * Re-settle after a WHOLE-SET slice moved while the transcript did not.
+     *
+     * Both charge formulas fold {@link chatSlicesOf}'s six slices in, but only
+     * the transcript paths used to re-settle. An auxiliary frame - managed
+     * commands, the queue, an approval, an interview, background items - wrote
+     * its slice into the store and left the accountant holding the previous
+     * figure, so that growth sat outside the process-wide chat budget until
+     * some unrelated transcript frame happened to arrive and recompute it.
+     *
+     * Picks the arm the same way the accountant's own `evict` does, off
+     * `windowedLine`, so the two can never disagree about what this holder is
+     * charged for.
+     *
+     * Deliberately does NOT stamp recency, unlike the two commits above.
+     * Recency orders LRU eviction, and a frame arriving is not evidence anyone
+     * is READING this chat; stamping here would quietly reorder eviction as a
+     * side effect of an accounting fix.
+     */
+    const commitWholeSetSliceBudget = (): void => {
+      if (disposed) return;
+      const state = get();
+      memory.chatWindows.settle(
+        memory.accountant,
+        holderId,
+        windowedLine
+          ? chatSessionChargeBytes(state.transcriptWindow, chatSlicesOf(state))
+          : legacyTranscriptChargeBytes(state),
+      );
+      memory.accountant.reconcile(BUDGET_PLANE_IDS.chatWindows);
+    };
+
     const publishWindowedTranscript = (
       window: TranscriptWindow,
       // How the rows got here, when that is something a consumer has to know.
@@ -3822,6 +3865,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // The frame carries the whole set, so a dropped one can never strand a
         // stale row - the next frame replaces everything either way.
         set({ managedCommands: frame.managedCommands });
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux(() => ({
           managedCommands: frame.managedCommands,
         }));
@@ -4681,6 +4725,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // that is what the deferred fold's own merge takes as its input, and
         // handing it a list the optimistic items are already in would keep an
         // item whose pending action has since settled.
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux(() => ({ queue: frame.queue }));
       },
       onTurnStateChanged: (frame) => {
@@ -4935,6 +4980,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.approval,
           ),
         }));
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingApprovals: [
             ...upsertApproval(held.pendingApprovals, frame.approval),
@@ -4950,6 +4996,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             (approval) => approval.approvalId !== frame.approvalId,
           ),
         }));
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingApprovals: held.pendingApprovals.filter(
             (approval) => approval.approvalId !== frame.approvalId,
@@ -4966,6 +5013,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.approval,
           ),
         }));
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingFileEditApprovals: [
             ...upsertFileEditApproval(
@@ -4984,6 +5032,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             (approval) => approval.approvalId !== frame.approvalId,
           ),
         }));
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingFileEditApprovals: held.pendingFileEditApprovals.filter(
             (approval) => approval.approvalId !== frame.approvalId,
@@ -5007,6 +5056,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             requestedAt: frame.requestedAt,
           }),
         }));
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingInterviews: [
             ...upsertPendingInterview(held.pendingInterviews, {
@@ -5067,6 +5117,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // asks whether the STORE still listed this interview; a deferred
         // snapshot is a different list and may still carry it. Settled is
         // settled on either.
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingInterviews: [
             ...withoutPendingInterview(held.pendingInterviews, frame.blockId),
@@ -5129,6 +5180,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // asks whether the STORE still listed this interview; a deferred
         // snapshot is a different list and may still carry it. Settled is
         // settled on either.
+        commitWholeSetSliceBudget();
         advanceDeferredSnapshotAux((held) => ({
           pendingInterviews: [
             ...withoutPendingInterview(held.pendingInterviews, frame.blockId),
@@ -5658,6 +5710,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               optimisticQueuedItem,
             ),
           }));
+          commitWholeSetSliceBudget();
         }
         // Consume the staged worktree once it's on the wire so a later send
         // doesn't re-create it (the frame carries it across transport retries).

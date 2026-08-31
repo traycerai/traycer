@@ -98,10 +98,18 @@ export function useEpicLaneCommentThreads(
  * Whether this surface's state lane is CURRENTLY pushing, for
  * {@link resolveArtifactCommentThreads}'s `laneLive`.
  *
- * `hostTransportStatus === "open"` is the one liveness signal in this store,
- * and deliberately the same predicate the sync pill's own reconnecting arm
- * reads (`lib/epic-sync-pill-state.ts`) - a comment list that believed the
- * lane while the pill said reconnecting would be two answers to one question.
+ * `recordsTransportStatus === "open"` - the RECORDS lane's own liveness, not
+ * the blended `hostTransportStatus`.
+ *
+ * It used to read the blended slot, on the reasoning that the sync pill's
+ * reconnecting arm reads it too (`lib/epic-sync-pill-state.ts`) and that a
+ * comment list believing the lane while the pill said reconnecting would be
+ * two answers to one question. The pill and this predicate turn out to be
+ * asking DIFFERENT questions: the pill asks whether the session is connected,
+ * where every lane's transition counts, while this asks whether the rows
+ * below are still arriving. The blended slot is last-writer-wins across lanes,
+ * so a records lane reconnecting under a live status lane still reported
+ * `open` here and kept stale rows ahead of a refreshed poll.
  *
  * `false` outside an epic session, matching {@link useEpicLaneCommentThreads}'s
  * `null`: no session means no lane, and the poll answers for every host.
@@ -115,9 +123,18 @@ export function useEpicLaneCommentThreadsLive(): boolean {
   );
   // A boolean, so `useSyncExternalStore` compares snapshots by value and never
   // sees a fresh object.
+  //
+  // `recordsTransportStatus`, NOT the blended `hostTransportStatus`. The
+  // blended slot is written by every lane that reports a transition - correct
+  // for the close policy, wrong here - so a records lane that is reconnecting
+  // under a still-open status lane read `open`, and retained stale lane rows
+  // went on outranking a poll that had already refreshed. The rows this
+  // predicate orders come from the records lane, so its liveness is the one
+  // that decides.
   const getSnapshot = useCallback(
     (): boolean =>
-      handle !== null && handle.store.getState().hostTransportStatus === "open",
+      handle !== null &&
+      handle.store.getState().recordsTransportStatus === "open",
     [handle],
   );
   return useSyncExternalStore(subscribe, getSnapshot);

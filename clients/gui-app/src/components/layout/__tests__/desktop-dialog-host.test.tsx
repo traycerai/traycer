@@ -480,6 +480,7 @@ function createDirtyEpicHandle(
     permissionRole: null,
     connectionStatus: "open",
     hostTransportStatus: "open",
+    recordsTransportStatus: "open",
     cloudSyncStatus: "connected",
     hasFreshCloudSyncStatus: true,
     hasConnectedOnce: true,

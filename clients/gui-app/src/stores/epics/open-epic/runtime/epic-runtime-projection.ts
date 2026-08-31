@@ -257,6 +257,12 @@ export interface EpicControlProjection {
    */
   readonly hostTransportStatus: StreamConnectionStatus;
   /**
+   * The RECORDS lane's own transport status, as distinct from the blended
+   * {@link hostTransportStatus}. Read this when the question is whether record
+   * rows are arriving; read the blended one for session-level connectivity.
+   */
+  readonly recordsTransportStatus: StreamConnectionStatus;
+  /**
    * Host-observed state of the host↔cloud link for this Epic. It remains
    * optimistically `connected` for compatibility with functional connection
    * gates; the separate freshness bit prevents that display default from
@@ -315,6 +321,7 @@ export const INITIAL_CONTROL_PROJECTION: EpicControlProjection = Object.freeze({
   permissionRole: null,
   connectionStatus: "connecting",
   hostTransportStatus: "connecting",
+  recordsTransportStatus: "connecting",
   cloudSyncStatus: "connected",
   hasFreshCloudSyncStatus: false,
   hasConnectedOnce: false,
