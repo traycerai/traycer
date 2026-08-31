@@ -83,6 +83,61 @@ export type ReplicaReplacementReason =
   | "security-epoch-changed";
 
 /**
+ * WHICH authority transition a replacement request is about.
+ *
+ * The reason says what KIND of thing happened; this says which occurrence. The
+ * runtime coalesces on this and not on the reason, because a reason cannot
+ * identify an occurrence in either direction:
+ *
+ * - Two lanes observing ONE epoch change can name it differently. The status
+ *   lane says `"migration-completed"` when a migration was in flight and the
+ *   state lane only ever says `"authority-epoch-changed"`, so a reason-keyed
+ *   guard rebuilds the replica twice for the single transition that both are
+ *   correctly describing.
+ * - One reason covers EVERY later occurrence of its kind. The second genuine
+ *   epoch change of a session carries the same string as the first, so a
+ *   reason-keyed guard has to be cleared between them - and what cleared it was
+ *   the first lane's own accompanying snapshot, which arrives synchronously
+ *   right after the request and therefore before the other lane has reported at
+ *   all. The guard was spent before it could do the one job it had.
+ *
+ * A token names the occurrence, so both problems go away and nothing has to be
+ * cleared: two reports of one transition share a token, and a later transition
+ * simply has a different one.
+ *
+ * The three builders below are the only way to make one. Their prefixes are
+ * fixed and pairwise distinct at the first character, so no payload - an epoch
+ * id containing a colon included - can make a token of one kind equal a token
+ * of another.
+ */
+export type ReplicaTransitionToken = string;
+
+/** The transition INTO `authorityEpoch`. */
+export function authorityEpochTransition(
+  authorityEpoch: string,
+): ReplicaTransitionToken {
+  return `authority-epoch:${authorityEpoch}`;
+}
+
+/** The transition INTO `securityEpoch`, within one authority epoch. */
+export function securityEpochTransition(
+  securityEpoch: number,
+): ReplicaTransitionToken {
+  return `security-epoch:${securityEpoch}`;
+}
+
+/**
+ * A reseed forced because the offered cursor could no longer be served.
+ * `watermark` distinguishes two of these within one authority epoch, which is
+ * a thing that legitimately happens.
+ */
+export function resumeTooOldTransition(
+  watermark: string,
+): ReplicaTransitionToken {
+  return `resume-too-old:${watermark}`;
+}
+
+/**
  * A reseed this client asked for, with nothing wrong upstream.
  *
  * Separate from {@link ReplicaReplacementReason} because every member of that

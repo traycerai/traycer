@@ -21,7 +21,10 @@ import type {
   StreamConnectionStatus,
 } from "../host-transport/i-stream-session";
 import type { LaneId, ResumeOffer, ResumeOutcome } from "./lane-cursor";
-import type { ReplicaReplacementReason } from "./replica";
+import type {
+  ReplicaReplacementReason,
+  ReplicaTransitionToken,
+} from "./replica";
 import type { RuntimeEnvironment } from "./runtime-environment";
 
 /**
@@ -100,7 +103,16 @@ export interface AdapterHost<TEvent> {
    * reseed. The runtime widens this to `{ origin: "authority", reason }` when
    * it drives the reset.
    */
-  requestReplacement(reason: ReplicaReplacementReason): void;
+  /**
+   * `transition` names WHICH occurrence this is, so the runtime can collapse
+   * the same one reported by two lanes without having to clear a guard between
+   * genuine ones. Build it with the `*Transition` helpers in `replica.ts`;
+   * see {@link ReplicaTransitionToken} for why the reason cannot do this job.
+   */
+  requestReplacement(
+    reason: ReplicaReplacementReason,
+    transition: ReplicaTransitionToken,
+  ): void;
 }
 
 /**

@@ -40,6 +40,7 @@ import type {
   LaneCursor,
   ReplicaReplacementReason,
   ReplicaResetCause,
+  ReplicaTransitionToken,
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
 import type {
@@ -106,10 +107,15 @@ export interface EpicLaneArmSources {
    */
   readonly onWorkspaceContext: (context: EarlyMetaEpic) => void;
   /**
-   * Either lane asking for the replica to be rebuilt. The runtime coalesces -
-   * two lanes reporting ONE epoch change is two true statements.
+   * Either lane asking for the replica to be rebuilt. The runtime coalesces on
+   * `transition` - two lanes reporting ONE epoch change is two true statements,
+   * and only the transition identifies it as one occurrence (the two can name
+   * the reason differently).
    */
-  readonly onReplacementRequested: (reason: ReplicaReplacementReason) => void;
+  readonly onReplacementRequested: (
+    reason: ReplicaReplacementReason,
+    transition: ReplicaTransitionToken,
+  ) => void;
   readonly artifactStreamClientFactory: ArtifactStreamClientFactory;
   /** What this client holds for one body. Wired to the artifact-body tier. */
   readonly readDocSeed: (
@@ -294,9 +300,12 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
    * one request in flight, and a trigger that arrives during one sets a re-run
    * flag rather than starting a second.
    */
-  function onReplacementRequested(reason: ReplicaReplacementReason): void {
+  function onReplacementRequested(
+    reason: ReplicaReplacementReason,
+    transition: ReplicaTransitionToken,
+  ): void {
     workspaceContext.noteAuthorityEpochChanged();
-    reportReplacementRequested(reason);
+    reportReplacementRequested(reason, transition);
   }
 
   const stateReplica: EpicLaneStateReplica = createEpicLaneStateReplica({
@@ -357,6 +366,17 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           kind: "transport-status",
           status: status.connection,
           reason: status.closeReason,
+          // The records lane rides ALONGSIDE the control snapshot; it never
+          // carries one. So its transitions must not open or close the control
+          // cycle - the same "one reconnect is one fact, and it is the control
+          // lane's" rule the status lane's `reportStatus` applies to the
+          // workspace-context and body-lane reads just below.
+          //
+          // The event is still routed, because the close POLICY is genuinely
+          // shared: a fatal close on the required records lane owes the same
+          // migration modal / snapshot error / auth cascade as one on the
+          // status lane. Only the cycle bookkeeping is the control lane's.
+          ownsControlCycle: false,
         });
       },
       requestReplacement: onReplacementRequested,
@@ -481,6 +501,10 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
           kind: "transport-status",
           status: status.connection,
           reason: status.closeReason,
+          // This lane serves `control-snapshot`, so its open/close IS the
+          // control cycle's boundary - the third consumer of the same
+          // one-reconnect-is-one-fact rule the two calls above apply.
+          ownsControlCycle: true,
         });
       },
       requestReplacement: onReplacementRequested,

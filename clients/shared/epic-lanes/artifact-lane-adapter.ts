@@ -61,7 +61,10 @@ import type {
   ResumeOffer,
   SendOutcome,
 } from "@traycer-clients/shared/replica-runtime";
-import { createGenerationGuard } from "@traycer-clients/shared/replica-runtime";
+import {
+  authorityEpochTransition,
+  createGenerationGuard,
+} from "@traycer-clients/shared/replica-runtime";
 import type {
   ArtifactAwarenessFrame,
   ArtifactDocAckFrame,
@@ -300,7 +303,14 @@ export function createArtifactLaneAdapter(
           reason: frame.reason,
         });
         if (frame.code === "staleAuthorityEpoch") {
-          host?.requestReplacement("authority-epoch-changed");
+          // The epoch on the refusal, which is the one the host IS serving -
+          // the same string the state and status lanes fold for this
+          // transition, so a body discovering it collapses with them instead
+          // of asking for a second rebuild of the replica they just rebuilt.
+          host?.requestReplacement(
+            "authority-epoch-changed",
+            authorityEpochTransition(frame.authorityEpoch),
+          );
         }
       },
       onConnectionStatus: (status, reason) => {

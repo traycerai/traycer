@@ -44,6 +44,7 @@ import type {
   CommandRecord,
   ReplicaReplacementReason,
   ReplicaResetCause,
+  ReplicaTransitionToken,
   RuntimeEnvironment,
   SendOutcome,
 } from "@traycer-clients/shared/replica-runtime";
@@ -508,8 +509,7 @@ export function createEpicReplicaRuntime(
    */
   let replicaGenerationCounter = 0;
   /**
-   * The authority reason this replica was last rebuilt for, while that rebuild
-   * is still untouched by any inbound frame.
+   * The authority TRANSITION this replica was last rebuilt for.
    *
    * This is what makes {@link replaceForAuthority} idempotent per event rather
    * than per call. One epoch change is legitimately reported more than once -
@@ -518,11 +518,14 @@ export function createEpicReplicaRuntime(
    * `requestReplacement` - and every one of those is a true statement about
    * the SAME event.
    *
-   * Cleared by the first frame applied afterwards, which is what keeps this a
-   * coalescer and not a latch: once the fresh cycle has delivered anything, a
-   * later report of the same reason is a NEW event and must rebuild again.
+   * A transition token and not a reason, and never cleared. See
+   * {@link replaceForAuthority} for why a reason can neither identify one
+   * occurrence nor survive to the moment the second lane reports it, and
+   * {@link ReplicaTransitionToken} for how the tokens are built. Keeping only
+   * the LAST one is what keeps this a coalescer rather than a latch: any
+   * transition that is not the one just handled rebuilds.
    */
-  let replacementSettledForReason: ReplicaReplacementReason | null = null;
+  let replacementSettledForTransition: ReplicaTransitionToken | null = null;
   const isDisposed = (): boolean => disposed;
   /**
    * Last snapshot's wire bytes, not a live encode of the resident doc.
@@ -881,7 +884,6 @@ export function createEpicReplicaRuntime(
           getCurrentUserId,
           isDisposed,
           onStateSlices: (slices) => {
-            noteInboundFrameApplied();
             delivery.batch(() => {
               records.applyLaneState(slices);
             });
@@ -893,13 +895,11 @@ export function createEpicReplicaRuntime(
           // two subscriptions - which is exactly why neither could be left
           // implicit in a call the way `@1` leaves both.
           onStateLeadSnapshot: () => {
-            noteInboundFrameApplied();
             delivery.batch(() => {
               records.publishLaneSnapshotLoaded();
             });
           },
           onControlEvent: (event) => {
-            noteInboundFrameApplied();
             delivery.batch(() => {
               control.apply(event);
             });
@@ -914,22 +914,21 @@ export function createEpicReplicaRuntime(
           // moves the display and clears `accessLost`, and deliberately does
           // NOT touch the write gate.
           //
-          // The ONE lane callback that does not call
-          // `noteInboundFrameApplied`, and the omission is load-bearing rather
-          // than an oversight. That hook clears the replacement coalescer, and
-          // this is not an inbound frame: it is a unary answer, and one that a
-          // replacement itself TRIGGERS (`noteAuthorityEpochChanged`). Clearing
-          // there would let the second lane's report of the one epoch change
-          // rebuild the replica a second time - the exact double bump the
-          // coalescer exists to stop, reintroduced through its own trigger.
+          // This used to be the ONE lane callback that deliberately skipped
+          // `noteInboundFrameApplied`, so that a unary answer a replacement
+          // itself triggers could not clear the replacement's own guard. The
+          // guard is keyed on the TRANSITION now and is never cleared by a
+          // frame at all, so the hook - and the carve-out it needed - are both
+          // gone. What that carve-out was working around is stated in full on
+          // `replaceForAuthority`.
           onWorkspaceContext: (context) => {
             delivery.batch(() => {
               records.applyEarlyMeta(context);
               control.apply({ kind: "early-meta", meta: context });
             });
           },
-          onReplacementRequested: (reason) => {
-            replaceForAuthority(reason);
+          onReplacementRequested: (reason, transition) => {
+            replaceForAuthority(reason, transition);
           },
           artifactStreamClientFactory:
             laneSelection.artifactStreamClientFactory,
@@ -938,7 +937,6 @@ export function createEpicReplicaRuntime(
           // against state this client threw away.
           readDocSeed: (artifactId) => tier.readDocSeedOffer(artifactId),
           onRoomEvent: (event) => {
-            noteInboundFrameApplied();
             delivery.batch(() => {
               rooms.apply(event);
             });
@@ -1024,39 +1022,86 @@ export function createEpicReplicaRuntime(
   }
 
   /**
+   * A `resume-too-old` reseed: the records plane only.
+   *
+   * The state lane's contract distinguishes its two failure bases by HOW MUCH
+   * they discard, and this is the smaller one: "`resumeTooOld` keeps the
+   * replica's identity, so per-artifact body state stays valid and only the row
+   * set re-seeds; `authorityEpochChanged` voids everything, bodies included."
+   * Routing it through {@link resetAllPlanes} discarded the control snapshot
+   * and every resident body anyway - and nothing owed them back. The authority
+   * epoch did not move, so the still-open status and artifact subscriptions
+   * have no new snapshot to send: the write gate stayed shut and open editors
+   * stayed without bodies, indefinitely, while the state lane restored exactly
+   * the one plane that was actually stale.
+   *
+   * No generation bump either, for the same reason. The generation asks every
+   * consumer to rebuild, and a body that is still valid must not be.
+   *
+   * Defined as {@link resetAllPlanes} MINUS exactly two steps, and the two it
+   * keeps that look droppable are the point:
+   *
+   *  - `laneArm?.reset(cause)` STAYS. It resets the arm's own state replica -
+   *    the records plane's other half - so dropping it would leave the arm
+   *    holding the old rows and watermark while the runtime's records plane is
+   *    empty. Half a reseed is worse than none.
+   *  - `control.beginFreshCycle()` and `rooms.reset(cause)` GO. They are the
+   *    control snapshot and the bodies, and both are exactly what the state
+   *    lane's contract says a `resumeTooOld` keeps.
+   */
+  function resetStateRecordsOnly(cause: ReplicaResetCause): void {
+    delivery.batch(() => {
+      records.clearUnsyncedQueue();
+      records.replaceReplica();
+      records.resetCoverage();
+      laneArm?.reset(cause);
+      records.publishFreshCycle();
+    });
+  }
+
+  /**
    * An adapter asking for the replica to be rebuilt.
    *
-   * COALESCED by construction: both lanes route here, and one epoch change
-   * reported by both produces one rebuild, because the second call finds the
-   * planes already emptied for that cause. That is the design the seam names -
-   * two lanes each asking once for one real epoch change is two true
+   * COALESCED by construction: every lane routes here, and one transition
+   * reported by several produces one rebuild. That is the design the seam names
+   * - two lanes each asking once for one real epoch change is two true
    * statements, not two replacements.
    */
-  function replaceForAuthority(reason: ReplicaReplacementReason): void {
+  function replaceForAuthority(
+    reason: ReplicaReplacementReason,
+    transition: ReplicaTransitionToken,
+  ): void {
     if (disposed) return;
-    // The coalescing this function's contract promises, made real. It used to
-    // be asserted and not implemented: `resetAllPlanes` is idempotent, but
-    // `replicaGenerationCounter += 1` is not, so two reports of ONE epoch
-    // change bumped the generation twice and asked every consumer to rebuild
-    // twice.
+    if (reason === "resume-too-old") {
+      resetStateRecordsOnly({ origin: "authority", reason });
+      return;
+    }
+    // Keyed on the TRANSITION, not the reason, and that is what finally makes
+    // the coalescing above true. Two earlier attempts were not:
     //
-    // Reachable from more than one place by design - the state and status
-    // lanes both report an epoch change, and a body lane reports a stale epoch
-    // through BOTH its translated `doc-unavailable` and the adapter's own
-    // `requestReplacement`. All of those are true statements about the same
-    // event, which is exactly what has to collapse to one rebuild.
-    if (replacementSettledForReason === reason) return;
+    //  - A reason cannot IDENTIFY an occurrence. The status lane calls a
+    //    completing migration `"migration-completed"` while the state lane
+    //    calls the same epoch change `"authority-epoch-changed"`, so that
+    //    transition could not be collapsed at all.
+    //  - A reason repeats, so a reason-keyed guard had to be CLEARED between
+    //    genuine changes - and what cleared it was `noteInboundFrameApplied`,
+    //    which the first lane's own accompanying snapshot runs microseconds
+    //    later. `requestReplacement` and the `emit` that follows it are one
+    //    synchronous adapter callback, so the guard was always spent before
+    //    the other lane could report. The stamp-after-the-batch ordering below
+    //    was a real fix for the replacement clearing its own guard through the
+    //    republication, and it was only ever half the problem.
+    //
+    // A token names the occurrence, so nothing has to be cleared: the second
+    // report of one transition matches, and a later transition simply does
+    // not. Only the LAST token is kept, so an authority that returns to an
+    // earlier epoch is still a new transition.
+    if (replacementSettledForTransition === transition) return;
+    replacementSettledForTransition = transition;
     delivery.batch(() => {
       resetAllPlanes({ origin: "authority", reason });
       replicaGenerationCounter += 1;
     });
-    // Stamped AFTER the batch, not before, and that ordering is the whole
-    // trick: emptying the planes republishes them, and a republication runs
-    // the same `noteInboundFrameApplied` hook a real frame does. Stamping
-    // first therefore let the replacement clear its OWN guard, and the second
-    // report of one epoch change rebuilt again - which is the exact double
-    // bump this coalescer exists to stop.
-    replacementSettledForReason = reason;
   }
 
   /**
@@ -1178,20 +1223,7 @@ export function createEpicReplicaRuntime(
     executeTransition(outcome === "succeeded" ? "lanes" : "legacy");
   }
 
-  /**
-   * A frame reached the replicas, so any rebuild that was standing is spent.
-   *
-   * Called from every inbound path - the `@1` router and each of the lane
-   * arm's three callbacks - because a coalescer that is never cleared is a
-   * latch, and a latch here would swallow the SECOND genuine epoch change of a
-   * session.
-   */
-  function noteInboundFrameApplied(): void {
-    replacementSettledForReason = null;
-  }
-
   function routeEvent(runtimeEvent: EpicRuntimeEvent): void {
-    noteInboundFrameApplied();
     delivery.batch(() => {
       switch (runtimeEvent.plane) {
         case "root":

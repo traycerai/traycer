@@ -279,6 +279,28 @@ function replacementReasons(log: readonly LogEntry[]): string[] {
     .map((entry) => entry.reason);
 }
 
+/**
+ * The full log, unfiltered, as one ordered token per entry - `emit:<kind>` or
+ * `requestReplacement:<reason>`. `emittedEvents` and `replacementReasons`
+ * above each filter to one channel, which is exactly what throws away the
+ * ORDER between a replacement request and the emits around it - the fact the
+ * snapshot-emission-order test below exists to pin.
+ */
+function timeline(log: readonly LogEntry[]): string[] {
+  return log.map((entry) => {
+    switch (entry.channel) {
+      case "emit":
+        return `emit:${entry.event.kind}`;
+      case "requestReplacement":
+        return `requestReplacement:${entry.reason}`;
+      case "reportResume":
+        return `reportResume:${entry.outcome.kind}`;
+      case "reportStatus":
+        return `reportStatus:${entry.status.connection}`;
+    }
+  });
+}
+
 function createSources(
   streamClientFactory: EpicStatusStreamClientFactory,
   isDisposed: (() => boolean) | undefined,
@@ -698,6 +720,50 @@ describe("createEpicStatusLaneAdapter - security epoch fold", () => {
     // securityEpoch on the epoch-2 snapshot is the FIRST observation under
     // the new epoch and must not fire a second, security-epoch request.
     expect(replacementReasons(log)).toEqual(["authority-epoch-changed"]);
+  });
+});
+
+// ─── Replacement request lands BEFORE the snapshot's own emits ─────────────
+
+describe("createEpicStatusLaneAdapter - security-epoch replacement lands before the snapshot's own emits", () => {
+  it("an unchanged authority epoch with a higher securityEpoch requests the replacement BEFORE control-snapshot-complete and permission-changed", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    // First observation of both epochs: establishes them, requests nothing.
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 1 }),
+    );
+
+    // Same authority epoch, a strictly higher securityEpoch - the ONLY thing
+    // that changed is what `foldSecurityEpoch` folds.
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 2 }),
+    );
+
+    expect(timeline(log)).toEqual([
+      // The first snapshot's own restatement.
+      "emit:control-snapshot-complete",
+      "emit:permission-changed",
+      "emit:cloud-sync-status",
+      // The second snapshot: the replacement request FIRST...
+      "requestReplacement:security-epoch-changed",
+      // ...and only then the snapshot's own emits. `requestReplacement` is
+      // synchronous and RESETS the runtime, so anything already emitted
+      // above it is erased. Before the fix, `foldSecurityEpoch` ran AFTER
+      // these next two emits, so the request landed HERE instead - clearing
+      // the very role and freshness gate they had just established, with
+      // nothing below to re-emit either. Writes were then refused for the
+      // rest of the session, until some later status snapshot happened to
+      // arrive.
+      "emit:control-snapshot-complete",
+      "emit:permission-changed",
+      "emit:cloud-sync-status",
+    ]);
   });
 });
 

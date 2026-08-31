@@ -83,6 +83,12 @@ interface LaneRig {
    * it counts, so both halves are driven.
    */
   readonly reconnectControlLane: () => void;
+  /**
+   * A transport drop and return on the RECORDS lane ALONE - the
+   * `ownsControlCycle: false` half of the same event, never touching the
+   * status lane. Mirrors `reconnectControlLane` on the other lane.
+   */
+  readonly reconnectStateLane: () => void;
 }
 
 function statusSnapshot(
@@ -205,7 +211,21 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     statusCallbacks.onConnectionStatus("open", null);
   }
 
-  return { handle, received, openLanes, reconnectControlLane };
+  function reconnectStateLane(): void {
+    if (stateCallbacks === null) {
+      throw new Error("the state lane factory was not invoked");
+    }
+    stateCallbacks.onConnectionStatus("reconnecting", null);
+    stateCallbacks.onConnectionStatus("open", null);
+  }
+
+  return {
+    handle,
+    received,
+    openLanes,
+    reconnectControlLane,
+    reconnectStateLane,
+  };
 }
 
 async function settle(handle: OpenedStoreForTest): Promise<void> {
@@ -263,6 +283,65 @@ describe("a lane-selected session completes an open cycle", () => {
       title: "Renamed on the lane arm",
       updatedAt: 2000,
     });
+
+    rig.handle.dispose();
+  });
+});
+
+describe("only the CONTROL lane's own reconnect may close the write gate (ownsControlCycle)", () => {
+  it("the records lane's own reconnect leaves freshness intact; the control lane's own reconnect clears it", async () => {
+    // ABSENT unaries, as above - neither assertion depends on a workspace
+    // context.
+    const rig = openLaneRig({ unaries: absentLaneUnaries(), migration: null });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    // The write gate is open: the control snapshot from openLanes() already
+    // established `hasFreshRootSnapshotForOpenCycle`.
+    const first = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "before any reconnect",
+      updatedAt: 1000,
+    });
+    expect(first).not.toBeNull();
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(1);
+
+    // The RECORDS lane alone drops and returns - `ownsControlCycle: false`
+    // on this lane's transport-status event. Only the status (control) lane
+    // may clear this cycle's snapshot freshness, because only a CONTROL
+    // snapshot can restore it; a lane that can clear it but cannot restore
+    // it is a one-way door.
+    rig.reconnectStateLane();
+    await settle(rig.handle);
+
+    const second = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "after the records lane reconnected alone",
+      updatedAt: 2000,
+    });
+    expect(second).not.toBeNull();
+    await settle(rig.handle);
+    // Freshness SURVIVED the records lane's own reconnect: the write reached
+    // the host. Before the fix, `applyTransportStatus` cleared
+    // `hasFreshRootSnapshotForOpenCycle` on EVERY transport-status frame
+    // regardless of which lane reported it, so this command would have been
+    // refused before dispatch and never appear in `rig.received`.
+    expect(rig.received).toHaveLength(2);
+
+    // The CONTROL lane's own reconnect DOES own the cycle and clears it - no
+    // status snapshot has arrived since, so nothing re-establishes it.
+    rig.reconnectControlLane();
+    await settle(rig.handle);
+
+    await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "after the control lane reconnected",
+      updatedAt: 3000,
+    });
+    await settle(rig.handle);
+    // The write gate is now shut: the third command never reached the host.
+    expect(rig.received).toHaveLength(2);
 
     rig.handle.dispose();
   });

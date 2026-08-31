@@ -33,9 +33,11 @@
 import type {
   AdapterDetachReason,
   ReplicaReplacementReason,
+  ReplicaTransitionToken,
   RuntimeEnvironment,
   SendOutcome,
 } from "@traycer-clients/shared/replica-runtime";
+import { authorityEpochTransition } from "@traycer-clients/shared/replica-runtime";
 import type {
   ArtifactLaneAdapter,
   ArtifactStreamClientFactory,
@@ -68,7 +70,10 @@ export interface EpicArtifactBodyLanesSources {
   /** One decoded body frame, already in the rooms plane's vocabulary. */
   readonly onRoomEvent: (event: EpicRoomEvent) => void;
   /** The authority is not serving the epoch a body attached under. */
-  readonly onReplacementRequested: (reason: ReplicaReplacementReason) => void;
+  readonly onReplacementRequested: (
+    reason: ReplicaReplacementReason,
+    transition: ReplicaTransitionToken,
+  ) => void;
   /**
    * The host refuses `artifact.subscribe` outright.
    *
@@ -254,7 +259,16 @@ export function createEpicArtifactBodyLanes(
           // runtime rebuilds and the records lane reports the epoch to attach
           // under next, at which point `syncToAuthorityEpoch` reopens every
           // body still in demand.
-          onReplacementRequested("authority-epoch-changed");
+          // The epoch this body was OPENED under - the stale one. The lane it
+          // came from names the epoch the host is serving; this translated
+          // twin only has the lane's own, so the two do not collapse. That is
+          // the pre-existing behaviour and it is safe in the only direction
+          // that matters: an extra rebuild request for one real transition,
+          // never a missed one.
+          onReplacementRequested(
+            "authority-epoch-changed",
+            authorityEpochTransition(lane.authorityEpoch),
+          );
           return;
         }
         onRoomEvent(translated.event);

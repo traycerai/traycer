@@ -54,7 +54,11 @@ import type {
   ResumeOffer,
   SeedTrust,
 } from "@traycer-clients/shared/replica-runtime";
-import { createGenerationGuard } from "@traycer-clients/shared/replica-runtime";
+import {
+  authorityEpochTransition,
+  createGenerationGuard,
+  resumeTooOldTransition,
+} from "@traycer-clients/shared/replica-runtime";
 import type {
   EpicStateDeltaFrame,
   EpicStateResumedFrame,
@@ -377,9 +381,18 @@ export function createEpicStateLaneAdapter(
         // there is nothing to replace, and requesting one here would be a
         // fabricated authority-side event on the most ordinary path there is.
         if (frame.basis === "resumeTooOld") {
-          host?.requestReplacement("resume-too-old");
+          host?.requestReplacement(
+            "resume-too-old",
+            resumeTooOldTransition(`${frame.authorityEpoch}/${frame.position}`),
+          );
         } else if (frame.basis === "authorityEpochChanged") {
-          host?.requestReplacement("authority-epoch-changed");
+          // The epoch this lane is now serving, which is the same string the
+          // STATUS lane folds for the same transition - so the runtime sees one
+          // occurrence reported twice rather than two.
+          host?.requestReplacement(
+            "authority-epoch-changed",
+            authorityEpochTransition(frame.authorityEpoch),
+          );
         }
         emit({
           kind: "record-snapshot",

@@ -262,6 +262,22 @@ export type EpicControlEvent =
       readonly kind: "transport-status";
       readonly status: StreamConnectionStatus;
       readonly reason: StreamCloseReason | null;
+      /**
+       * Whether this transition opens and closes the CONTROL SNAPSHOT CYCLE -
+       * true for every socket that carries the control snapshot itself, false
+       * for a lane that merely rides alongside one.
+       *
+       * `@1` has one socket and answers `true`. The lane arm has two that open
+       * independently, and only the status lane serves `control-snapshot`; the
+       * records lane forwards its status here as well, because the close
+       * POLICY above is genuinely shared. Without this discriminator that
+       * forwarding also cleared `hasFreshRootSnapshotForOpenCycle`, whose only
+       * writer to `true` is a control snapshot - so a records lane that opened
+       * late or reconnected alone closed the write gate with nothing left that
+       * would ever reopen it, and every queued write was refused for the rest
+       * of the connection.
+       */
+      readonly ownsControlCycle: boolean;
     };
 
 // ─── The adapter's emit type ──────────────────────────────────────────────

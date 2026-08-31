@@ -28,13 +28,18 @@ import type {
   EpicStateStreamClientFactory,
   EpicStatusStreamClientFactory,
 } from "@traycer-clients/shared/epic-lanes";
-import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import type {
+  EpicStateSnapshotFrame,
+  EpicStateStreamCallbacks,
+} from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   EpicStatusSnapshotFrame,
   EpicStatusStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import type { EpicMigrationStatus } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { ArtifactStreamClientFactory } from "@traycer-clients/shared/epic-lanes";
 import type { ArtifactStreamCallbacks } from "@traycer-clients/shared/host-transport/artifact-stream-client";
 import { artifactSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
@@ -761,5 +766,348 @@ describe("lane adapter probe - forever-unknown support must still reach the lane
     releaseB();
 
     expect(rig.artifacts.closeCount()).toBe(1);
+  });
+});
+
+// ── Replacement coalescing (FIX B) and resume-too-old scope (FIX C) ────────
+//
+// A separate rig from `buildRuntimeRig` above: those factories only ever
+// deliver ONE hardcoded epoch-1 snapshot (`deliverSnapshot()`), which is
+// enough for the probe-wiring pins above but cannot drive a SECOND epoch
+// change, a chosen `basis`, or a migration state - all three of which these
+// two fixes need. `ControllableStatusFactory` / `ControllableStateFactory`
+// expose the raw captured callbacks instead, so a test can deliver whatever
+// sequence of frames the fix's contract names.
+
+function statusSnapshotFrameAt(
+  authorityEpoch: string,
+  migration: EpicMigrationStatus | null,
+): EpicStatusSnapshotFrame {
+  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    authorityEpoch,
+    securityEpoch: 1,
+    permissionRole: "owner",
+    cloudSyncStatus: "connected",
+    dirty: false,
+    migration,
+    deletion: { state: "none" },
+  });
+  if (parsed.kind !== "snapshot") {
+    throw new Error(`expected a status snapshot, got ${parsed.kind}`);
+  }
+  return parsed;
+}
+
+function stateSnapshotFrameAt(
+  authorityEpoch: string,
+  basis: "cold" | "resumeTooOld" | "authorityEpochChanged",
+  position: number,
+): EpicStateSnapshotFrame {
+  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    authorityEpoch,
+    basis,
+    position,
+    reconciledWithCloud: true,
+    artifactRecords: [],
+    deletedArtifacts: [],
+    commentThreads: [],
+    roleClaims: { revision: 1, claims: [] },
+    epicMeta: {
+      revision: 1,
+      meta: { title: "Coalescing epic", updatedAt: 1000 },
+    },
+  });
+  if (parsed.kind !== "snapshot") {
+    throw new Error(`expected a state snapshot, got ${parsed.kind}`);
+  }
+  return parsed;
+}
+
+interface ControllableStatusFactory {
+  readonly factory: EpicStatusStreamClientFactory;
+  /** The control lane's transport reaching `"open"`. */
+  open(): void;
+  deliverSnapshot(frame: EpicStatusSnapshotFrame): void;
+}
+
+function createControllableStatusFactory(): ControllableStatusFactory {
+  let live: EpicStatusStreamCallbacks | null = null;
+  const factory: EpicStatusStreamClientFactory = (_epicId, callbacks) => {
+    live = callbacks;
+    return { close: () => undefined };
+  };
+  function requireLive(): EpicStatusStreamCallbacks {
+    if (live === null) throw new Error("no status client was constructed");
+    return live;
+  }
+  return {
+    factory,
+    open: () => requireLive().onConnectionStatus("open", null),
+    deliverSnapshot: (frame) => requireLive().onSnapshot(frame),
+  };
+}
+
+interface ControllableStateFactory {
+  readonly factory: EpicStateStreamClientFactory;
+  /** The records lane's transport reaching `"open"`. */
+  open(): void;
+  deliverSnapshot(frame: EpicStateSnapshotFrame): void;
+}
+
+function createControllableStateFactory(): ControllableStateFactory {
+  let live: EpicStateStreamCallbacks | null = null;
+  const factory: EpicStateStreamClientFactory = (_epicId, callbacks) => {
+    live = callbacks;
+    return { close: () => undefined };
+  };
+  function requireLive(): EpicStateStreamCallbacks {
+    if (live === null) throw new Error("no state client was constructed");
+    return live;
+  }
+  return {
+    factory,
+    open: () => requireLive().onConnectionStatus("open", null),
+    deliverSnapshot: (frame) => requireLive().onSnapshot(frame),
+  };
+}
+
+/**
+ * A lane-capable runtime with CONTROLLABLE status/state factories and a
+ * recording write-command sender, for driving replacement coalescing
+ * (FIX B) and the `resume-too-old` scope (FIX C) directly. Support is marked
+ * fully supported before `start()`, so both lanes attach immediately -
+ * unlike `buildRuntimeRig`, this rig is not about arm SELECTION.
+ */
+function buildCoalescingRig(): {
+  readonly runtime: EpicReplicaRuntime;
+  readonly status: ControllableStatusFactory;
+  readonly state: ControllableStateFactory;
+  readonly sentCommandCount: () => number;
+} {
+  nextEpicSequence += 1;
+  const legacy = createCountingLegacyFactory();
+  const status = createControllableStatusFactory();
+  const state = createControllableStateFactory();
+  const artifacts = createCountingArtifactFactory();
+  const support = createSupportController();
+  markAllLaneMethodsSupported(support);
+  const laneSelection: EpicLaneSelectionSources = {
+    support: support.support,
+    subscribeSupport: support.subscribeSupport,
+    stateStreamClientFactory: state.factory,
+    statusStreamClientFactory: status.factory,
+    artifactStreamClientFactory: artifacts.factory,
+    unaries: absentLaneUnaries(),
+  };
+  let sentCommands = 0;
+  let nextCommandId = 0;
+  const runtime = createEpicReplicaRuntime({
+    epicId: `epic-replacement-coalescing-${nextEpicSequence}`,
+    environment: createRendererRuntimeEnvironment(),
+    streamClientFactory: legacy.factory,
+    delivery: createBatchingDelivery(() => {}),
+    accounting: createRecordingAccountingPort(),
+    getCurrentUserId: () => null,
+    getDocArm: () => DOC_IS_THE_ONLY_RECORD_SOURCE,
+    onAuthError: null,
+    commandIdFactory: {
+      next: () => `coalescing-command-${(nextCommandId += 1)}`,
+    },
+    writeCommandSender: {
+      currentHostId: () => "coalescing-test-host",
+      send: (_commandId: string, _intent: EpicWriteCommandIntent) => {
+        sentCommands += 1;
+        return Promise.resolve({ hostId: "coalescing-test-host" });
+      },
+    },
+    laneSelection,
+  });
+  return { runtime, status, state, sentCommandCount: () => sentCommands };
+}
+
+/** Drains the command queue's async send chain - native Promises only, so one macrotask flushes it regardless of chain depth. */
+async function flushMicrotasks(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+describe("replacement coalescing across the state and status lanes (FIX B)", () => {
+  const runtimes: EpicReplicaRuntime[] = [];
+
+  afterEach(() => {
+    for (const runtime of runtimes.splice(0)) runtime.dispose();
+  });
+
+  it("the state lane and the status lane both reporting the SAME authority epoch produce exactly ONE replica-generation bump", () => {
+    const rig = buildCoalescingRig();
+    runtimes.push(rig.runtime);
+    rig.runtime.start();
+
+    // Establish epoch-1 on both lanes; the first snapshot on each lane never
+    // requests a replacement.
+    rig.status.deliverSnapshot(statusSnapshotFrameAt("epoch-1", null));
+    rig.state.deliverSnapshot(stateSnapshotFrameAt("epoch-1", "cold", 1));
+    const before = rig.runtime.replicaGeneration();
+
+    // ONE authority transition, reported by BOTH lanes. The status lane's
+    // own epoch fold fires first and requests the replacement; its own
+    // emits (control-snapshot-complete, permission-changed, ...) are the
+    // "accompanying frame" that used to clear the OLD reason-keyed guard
+    // (`noteInboundFrameApplied`, which ran on every inbound frame applied).
+    // The state lane then reports the very same epoch change and must be
+    // coalesced against the transition TOKEN, not re-cleared by the status
+    // lane's own emit landing first.
+    rig.status.deliverSnapshot(statusSnapshotFrameAt("epoch-2", null));
+    rig.state.deliverSnapshot(
+      stateSnapshotFrameAt("epoch-2", "authorityEpochChanged", 2),
+    );
+
+    // Exactly one rebuild for the one true occurrence. Under the old guard
+    // this read `before + 2`: the status lane's own accompanying snapshot
+    // cleared its reason-keyed latch microseconds after requesting, so the
+    // state lane's report of the SAME epoch change fired a second,
+    // guard-erasing `resetAllPlanes`.
+    expect(rig.runtime.replicaGeneration()).toBe(before + 1);
+  });
+
+  it("two reports naming DIFFERENT reasons for the same epoch still collapse to ONE rebuild", () => {
+    const rig = buildCoalescingRig();
+    runtimes.push(rig.runtime);
+    rig.runtime.start();
+
+    // epoch-1, with a migration RUNNING - the fact that makes the status
+    // lane call the upcoming epoch change "migration-completed" rather than
+    // a bare "authority-epoch-changed".
+    rig.status.deliverSnapshot(
+      statusSnapshotFrameAt("epoch-1", { state: "running", progress: null }),
+    );
+    rig.state.deliverSnapshot(stateSnapshotFrameAt("epoch-1", "cold", 1));
+    const before = rig.runtime.replicaGeneration();
+
+    // The status lane names this transition "migration-completed" (a
+    // migration was in flight under the previous epoch); the state lane,
+    // which has no memory of the migration, always calls the same
+    // transition "authority-epoch-changed". Both build
+    // `authorityEpochTransition("epoch-2")`, and it is the TOKEN the
+    // runtime coalesces on - a reason-keyed guard could never recognise
+    // these two strings as one occurrence at all.
+    rig.status.deliverSnapshot(statusSnapshotFrameAt("epoch-2", null));
+    rig.state.deliverSnapshot(
+      stateSnapshotFrameAt("epoch-2", "authorityEpochChanged", 2),
+    );
+
+    expect(rig.runtime.replicaGeneration()).toBe(before + 1);
+  });
+
+  it("a LATER, genuinely different epoch still rebuilds - the anti-latch control", () => {
+    const rig = buildCoalescingRig();
+    runtimes.push(rig.runtime);
+    rig.runtime.start();
+
+    rig.status.deliverSnapshot(statusSnapshotFrameAt("epoch-1", null));
+    rig.state.deliverSnapshot(stateSnapshotFrameAt("epoch-1", "cold", 1));
+    const before = rig.runtime.replicaGeneration();
+
+    // epoch-1 -> epoch-2, reported by both lanes and coalesced to one bump.
+    rig.status.deliverSnapshot(statusSnapshotFrameAt("epoch-2", null));
+    rig.state.deliverSnapshot(
+      stateSnapshotFrameAt("epoch-2", "authorityEpochChanged", 2),
+    );
+    expect(rig.runtime.replicaGeneration()).toBe(before + 1);
+
+    // epoch-2 -> epoch-3: a SECOND, genuinely different transition. Without
+    // this control a guard that simply never released (a latch, rather than
+    // a coalescer) would also read as "exactly one bump" on the tests
+    // above - it would just never bump again for the rest of the session.
+    rig.status.deliverSnapshot(statusSnapshotFrameAt("epoch-3", null));
+    rig.state.deliverSnapshot(
+      stateSnapshotFrameAt("epoch-3", "authorityEpochChanged", 3),
+    );
+
+    expect(rig.runtime.replicaGeneration()).toBe(before + 2);
+  });
+});
+
+describe("resume-too-old replacement scope (FIX C)", () => {
+  const runtimes: EpicReplicaRuntime[] = [];
+
+  afterEach(() => {
+    for (const runtime of runtimes.splice(0)) runtime.dispose();
+  });
+
+  it("does not clear the write gate and does not bump the generation, unlike an authority-epoch-changed replacement", async () => {
+    const rig = buildCoalescingRig();
+    runtimes.push(rig.runtime);
+    rig.runtime.start();
+
+    // Transport BEFORE the snapshots - opening after would wipe the
+    // freshness the status snapshot is about to establish (see
+    // `lane-arm-open-cycle.test.ts`'s `openLaneRig` for the same rule).
+    rig.status.open();
+    rig.state.open();
+    // The status lane's snapshot is what adopts the role and opens the
+    // write gate on the lane arm; the state lane's own snapshot never
+    // touches control facts at all (FIX D's own point).
+    rig.status.deliverSnapshot(statusSnapshotFrameAt("epoch-1", null));
+    rig.state.deliverSnapshot(stateSnapshotFrameAt("epoch-1", "cold", 1));
+
+    // The write gate is open: a command enqueued now is delivered.
+    expect(
+      rig.runtime.enqueueWriteCommand({
+        kind: "update-epic-title",
+        title: "before any replacement",
+        updatedAt: 1000,
+      }),
+    ).not.toBeNull();
+    await flushMicrotasks();
+    expect(rig.sentCommandCount()).toBe(1);
+
+    const before = rig.runtime.replicaGeneration();
+
+    // A resume-too-old reply on the STATE lane, under the SAME authority
+    // epoch: the offered cursor could no longer be served, which
+    // `resetStateRecordsOnly` treats as a records-plane-only fact and never
+    // reaches `control.beginFreshCycle()`. Driven through the state lane
+    // ALONE (never touching the status lane again) so nothing here can be
+    // explained by the status lane's own accompanying snapshot.
+    rig.state.deliverSnapshot(
+      stateSnapshotFrameAt("epoch-1", "resumeTooOld", 2),
+    );
+
+    // Neither half of a full replacement happened.
+    expect(rig.runtime.replicaGeneration()).toBe(before);
+    expect(
+      rig.runtime.enqueueWriteCommand({
+        kind: "update-epic-title",
+        title: "after resume-too-old",
+        updatedAt: 2000,
+      }),
+    ).not.toBeNull();
+    await flushMicrotasks();
+    // Still delivered: the control snapshot/role this cycle already adopted
+    // were never touched.
+    expect(rig.sentCommandCount()).toBe(2);
+
+    // Contrast, driven the SAME way (through the state lane alone): a
+    // genuine authority-epoch-changed replacement DOES both. This is the
+    // point of pairing the two cases in one test.
+    rig.state.deliverSnapshot(
+      stateSnapshotFrameAt("epoch-2", "authorityEpochChanged", 3),
+    );
+
+    expect(rig.runtime.replicaGeneration()).toBe(before + 1);
+    rig.runtime.enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "after an authority-epoch-changed replacement",
+      updatedAt: 3000,
+    });
+    await flushMicrotasks();
+    // The write gate is shut: `beginFreshCycle` reset this cycle's
+    // freshness and the transport leg, and nothing has re-established
+    // either for the new epoch, so this command never reaches the host.
+    expect(rig.sentCommandCount()).toBe(2);
   });
 });

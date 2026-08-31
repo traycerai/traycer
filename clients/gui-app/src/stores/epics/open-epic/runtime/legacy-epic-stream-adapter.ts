@@ -319,7 +319,14 @@ export function createLegacyEpicStreamAdapter(
         });
         host?.emit({
           plane: "control",
-          event: { kind: "transport-status", status, reason },
+          event: {
+            kind: "transport-status",
+            status,
+            reason,
+            // One socket carries every plane on this arm, the root snapshot
+            // included, so its transitions ARE the control cycle's.
+            ownsControlCycle: true,
+          },
         });
       },
     };

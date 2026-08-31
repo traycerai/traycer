@@ -51,7 +51,11 @@ import type {
   ResumeOffer,
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
-import { createGenerationGuard } from "@traycer-clients/shared/replica-runtime";
+import {
+  authorityEpochTransition,
+  createGenerationGuard,
+  securityEpochTransition,
+} from "@traycer-clients/shared/replica-runtime";
 import type {
   EpicStatusSnapshotFrame,
   EpicStatusStreamCallbacks,
@@ -188,7 +192,10 @@ export function createEpicStatusLaneAdapter(
     const previous = observedSecurityEpoch;
     observedSecurityEpoch = securityEpoch;
     if (previous === null || securityEpoch <= previous) return;
-    host?.requestReplacement("security-epoch-changed");
+    host?.requestReplacement(
+      "security-epoch-changed",
+      securityEpochTransition(securityEpoch),
+    );
   }
 
   /**
@@ -205,8 +212,14 @@ export function createEpicStatusLaneAdapter(
     if (previous === null) return;
     // A replacement, and this lane is the only one that can say WHICH kind.
     // Completion is the epoch change; there is no completion event to read.
+    //
+    // The REASON differs from what the records lane will call the very same
+    // transition - only this lane knows a migration was running - so the epoch
+    // is what identifies the occurrence to the runtime. Keyed on the reason,
+    // a completing migration could not be coalesced even in principle.
     host?.requestReplacement(
       migrationInFlight ? "migration-completed" : "authority-epoch-changed",
+      authorityEpochTransition(authorityEpoch),
     );
     migrationInFlight = false;
     observedSecurityEpoch = null;
@@ -221,6 +234,25 @@ export function createEpicStatusLaneAdapter(
       onSnapshot: (frame: EpicStatusSnapshotFrame) => {
         if (!accepts(generation)) return;
         foldAuthorityEpoch(frame.authorityEpoch);
+        // BOTH folds before any emit, and the second one used to sit in the
+        // middle of them.
+        //
+        // A replacement request is synchronous and RESETS the runtime, so
+        // whatever this handler has already emitted is erased by it. That is
+        // harmless for the authority-epoch fold, which has always run first;
+        // it was not harmless for the security-epoch one. A snapshot under an
+        // unchanged authority epoch carrying a HIGHER `securityEpoch` emitted
+        // `control-snapshot-complete` and the permission, then requested the
+        // replacement - which cleared the very role and freshness gate those
+        // two had just established. Nothing below re-emits either, so writes
+        // were refused for the rest of the session, until some later status
+        // snapshot happened to arrive.
+        //
+        // Ordered after `foldAuthorityEpoch`, not before: that fold clears
+        // `observedSecurityEpoch` on an authority change, so running it first
+        // is what makes the new epoch's first security value an ESTABLISHING
+        // observation rather than a comparison against the old epoch's.
+        foldSecurityEpoch(frame.securityEpoch);
         // The BOUNDARY first, because it is what makes this cycle's answer
         // authoritative and the facts below are that answer's contents.
         //
@@ -246,7 +278,6 @@ export function createEpicStatusLaneAdapter(
           canWrite: isWritablePermissionRole(frame.permissionRole),
           securityEpoch: frame.securityEpoch,
         });
-        foldSecurityEpoch(frame.securityEpoch);
         emit({
           kind: "cloud-sync-status",
           status: frame.cloudSyncStatus,

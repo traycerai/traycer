@@ -40,7 +40,9 @@ import type {
   ReplicaApplyOutcome,
   ReplicaReplacementReason,
   ReplicaResetCause,
+  ReplicaTransitionToken,
 } from "../replica";
+import { resumeTooOldTransition } from "../replica";
 import type { AdapterHost, LaneAdapter } from "../adapter";
 import type {
   LeaseGrant,
@@ -563,6 +565,8 @@ function createFakeAdapterHost(
       // Smoke test does not exercise connection status.
     },
     requestReplacement(reason: ReplicaReplacementReason): void {
+      // `transition` is accepted and ignored here on purpose: it is the
+      // RUNTIME's coalescing key, and this smoke fake has no coalescer.
       // The runtime side of the seam: `AdapterHost.requestReplacement` is
       // deliberately narrow — an adapter can only hand it an authority
       // reason — and it is the runtime, not the adapter, that turns that
@@ -576,7 +580,10 @@ function createFakeAdapterHost(
 /** A minimal in-memory `LaneAdapter<FakeEvent>` with a test-only frame pump. */
 function createFakeLaneAdapter(laneId: string): LaneAdapter<FakeEvent> & {
   pushFrame(events: readonly FakeEvent[]): void;
-  triggerReplacementRequest(reason: ReplicaReplacementReason): void;
+  triggerReplacementRequest(
+    reason: ReplicaReplacementReason,
+    transition: ReplicaTransitionToken,
+  ): void;
   readonly detachReasons: string[];
 } {
   let host: AdapterHost<FakeEvent> | null = null;
@@ -600,13 +607,16 @@ function createFakeLaneAdapter(laneId: string): LaneAdapter<FakeEvent> & {
       if (host === null) throw new Error("adapter not attached");
       for (const event of events) host.emit(event);
     },
-    triggerReplacementRequest(reason: ReplicaReplacementReason): void {
+    triggerReplacementRequest(
+      reason: ReplicaReplacementReason,
+      transition: ReplicaTransitionToken,
+    ): void {
       if (host === null) throw new Error("adapter not attached");
       // `AdapterHost.requestReplacement` is the only path an adapter has to
       // this — its signature accepts a `ReplicaReplacementReason`, never a
       // `ReplicaResetCause`, so a client-origin cause cannot even be
       // constructed at this call site.
-      host.requestReplacement(reason);
+      host.requestReplacement(reason, transition);
     },
   };
 }
@@ -1848,7 +1858,10 @@ describe("Replica.reset provenance", () => {
     // `AdapterHost.requestReplacement` is deliberately narrow — it accepts
     // only a `ReplicaReplacementReason` — so there is no call an adapter can
     // make here that reaches the replica as a client-origin reset.
-    adapter.triggerReplacementRequest("resume-too-old");
+    adapter.triggerReplacementRequest(
+      "resume-too-old",
+      resumeTooOldTransition("e1/0"),
+    );
 
     expect(replica.resetCauses).toEqual([
       { origin: "authority", reason: "resume-too-old" },

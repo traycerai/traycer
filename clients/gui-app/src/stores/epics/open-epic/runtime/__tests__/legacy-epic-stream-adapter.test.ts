@@ -324,7 +324,15 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
     expect(host.emitted).toEqual([
       {
         plane: "control",
-        event: { kind: "transport-status", status: "closed", reason },
+        event: {
+          kind: "transport-status",
+          status: "closed",
+          reason,
+          // `@1` has one socket carrying every plane, the root snapshot
+          // included, so its transitions ARE the control cycle's. The lane arm
+          // is the only place where that is not automatic.
+          ownsControlCycle: true,
+        },
       },
     ]);
   });
@@ -344,7 +352,12 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
     expect(host.emitted).toEqual([
       {
         plane: "control",
-        event: { kind: "transport-status", status, reason: null },
+        event: {
+          kind: "transport-status",
+          status,
+          reason: null,
+          ownsControlCycle: true,
+        },
       },
     ]);
   });

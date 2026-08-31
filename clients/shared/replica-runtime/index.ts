@@ -53,6 +53,12 @@ export type {
   ReplicaIgnoreReason,
   ReplicaReplacementReason,
   ReplicaResetCause,
+  ReplicaTransitionToken,
+} from "./replica";
+export {
+  authorityEpochTransition,
+  resumeTooOldTransition,
+  securityEpochTransition,
 } from "./replica";
 
 export type {
