@@ -312,6 +312,15 @@ import {
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import {
+  draftsClaimV10,
+  draftsDeleteV10,
+  draftsListV10,
+  draftsPutBlobV10,
+  draftsReadBlobV10,
+  draftsSubscribeV10,
+  draftsUpsertV10,
+} from "@traycer/protocol/host/drafts/contracts";
+import {
   chatLocateRowV10,
   chatReadAccumulatedFileChangeV10,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
@@ -8698,6 +8707,93 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   },
 } as const;
 
+/**
+ * Drafts unary family, split out of the base/tail literals for the same
+ * TS7056 declaration-emit reason as `HOST_RPC_PROVIDERS_REGISTRY_DEFINITION`
+ * and `HOST_RPC_EDITING_REGISTRY_DEFINITION`. Six brand-new optional
+ * methods, none on the released floor.
+ */
+const HOST_RPC_DRAFTS_REGISTRY_DEFINITION = {
+  "drafts.upsert": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsUpsertV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.delete": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.claim": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsClaimV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.putBlob": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsPutBlobV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "drafts.readBlob": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsReadBlobV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+} as const;
+
 const HOST_RPC_EDITING_REGISTRY_DEFINITION = {
   // Additive, post-v1.0.0 optional method. Older hosts render the same file
   // surfaces read-only; newer hosts provide conflict-safe in-place saves.
@@ -8731,7 +8827,7 @@ const HOST_RPC_EDITING_REGISTRY_DEFINITION = {
   },
 } as const;
 
-// The three literals must not declare the same method. Nothing about the merge
+// The five literals must not declare the same method. Nothing about the merge
 // below would tell you if they did: the spread silently keeps the LAST
 // occurrence, while the intersection claims a method that has two
 // contradictory version lines - so a duplicate would compile, type-check, and
@@ -8757,6 +8853,10 @@ type DuplicateHostRpcMethodNames =
       keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
     >
   | Extract<
+      keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION,
+      keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+    >
+  | Extract<
       keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
       keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
     >
@@ -8767,6 +8867,18 @@ type DuplicateHostRpcMethodNames =
   | Extract<
       keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
       keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION
+    >
+  | Extract<
+      keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
+      keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+    >
+  | Extract<
+      keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
+      keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+    >
+  | Extract<
+      keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION,
+      keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
     >;
 
 // `Record<never, never>` is `{}` while the key sets stay disjoint, so this
@@ -8775,6 +8887,7 @@ type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
   typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION &
   typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION &
   typeof HOST_RPC_EDITING_REGISTRY_DEFINITION &
+  typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION &
   Record<AssertNever<DuplicateHostRpcMethodNames>, never>;
 
 const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
@@ -8782,6 +8895,7 @@ const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
   ...HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
   ...HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
   ...HOST_RPC_EDITING_REGISTRY_DEFINITION,
+  ...HOST_RPC_DRAFTS_REGISTRY_DEFINITION,
 };
 
 export const hostRpcRegistry: VersionedRpcRegistry<HostRpcRegistryDefinition> =
@@ -9356,6 +9470,22 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: prSubscribeDetailV10,
+        },
+      },
+    },
+  },
+  // Additive, post-v1.0.0 OPTIONAL stream method: live draft change frames.
+  // HOST-SCOPED — one subscription covers every draft this host holds.
+  // A host that predates it never advertises it and the client's
+  // subscription degrades to `unsupported`, whose contract is device-local
+  // drafts (same as the unary `drafts.*` degrade). Never add it to the
+  // unary released floor — that list is fail-closed on the name set.
+  "drafts.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: draftsSubscribeV10,
         },
       },
     },

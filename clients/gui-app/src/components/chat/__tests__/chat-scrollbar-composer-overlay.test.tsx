@@ -310,9 +310,11 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       // ComposerSlotShell is module-private. Viewer mode mounts it with
       // bottomSpacing="normal" without the real ChatComposer / host stack.
       render(
-        <TooltipProvider delayDuration={0}>
-          <ChatLowerInteractionSurfaces {...viewerSurfacesProps()} />
-        </TooltipProvider>,
+        <TabHostProvider hostId="host-1">
+          <TooltipProvider delayDuration={0}>
+            <ChatLowerInteractionSurfaces {...viewerSurfacesProps()} />
+          </TooltipProvider>
+        </TabHostProvider>,
       );
 
       const notice = screen.getByText(

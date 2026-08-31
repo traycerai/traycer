@@ -546,10 +546,15 @@ export function useLandingComposerActions(
               },
             });
           } else {
-            // A user close and an out-of-band post-intent content change both
-            // preserve their current draft state. The successful server result
-            // remains discoverable without replacing or focusing either one.
+            // Content changed after send: keep that later edit. A close
+            // during create used to be the same branch because close
+            // destroyed the row; now close retains, so `"closed"` must
+            // still delete (decision #13) or the sent text stays as a
+            // draft alongside the new epic.
             placeCreatedEpicInBackground(epicId, epicTitle);
+            if (settlement.kind === "closed") {
+              useLandingDraftStore.getState().deleteDraft(attempt.draftId);
+            }
           }
           draftRuntimeRegistry.complete(attempt);
         })

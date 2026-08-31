@@ -70,6 +70,10 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicConversationPlacement } from "@/hooks/host/use-composer-placement";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import {
+  bindNewChatDraftHost,
+  unbindNewChatDraftHost,
+} from "@/lib/drafts/draft-mirror-coordinator";
 import { resolveLandingPlacement } from "@/lib/composer/landing-placement";
 import { toastRepointedStagingReset } from "@/lib/composer/repointed-staging-toast";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
@@ -499,6 +503,13 @@ export function NewConversationModalBody(props: {
   // body's queries, the host-FROZEN client every create below is sent on, and
   // the submit-time refusal all come out of one hook.
   const sessionHostId = useEpicSessionHostId();
+  useEffect(() => {
+    if (sessionHostId === null) return;
+    bindNewChatDraftHost(epicId, sessionHostId);
+    return () => {
+      unbindNewChatDraftHost(epicId, sessionHostId);
+    };
+  }, [epicId, sessionHostId]);
   const composerPlacement = useEpicConversationPlacement({
     epicId,
     overrideHostId: hostId,
@@ -737,6 +748,7 @@ export function NewConversationModalBody(props: {
     readHashImage: readPromptStashImage,
     source: promptStashSource,
     destination: promptStashDestination,
+    hostId: resolvedHostId,
   });
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
@@ -1089,6 +1101,7 @@ export function NewConversationModalBody(props: {
       initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
+      editorReadOnly={false}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={composerDisabledHint}
       header={header}

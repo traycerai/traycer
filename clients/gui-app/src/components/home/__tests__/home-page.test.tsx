@@ -125,6 +125,10 @@ vi.mock("@/lib/host", () => ({
     getActiveHost: homeMocks.getActiveHost,
     getRequestContextUserId: homeMocks.getRequestContextUserId,
   }),
+  // The landing surface reads the OPTIONAL client (it renders with no host
+  // runtime in the layout suites); null keeps the cloud-drafts section absent
+  // here, which is what this page's cases are about.
+  useOptionalHostClient: () => null,
 }));
 
 /** The composer's resolved placement (P1.2), pointed at the mocked host. */

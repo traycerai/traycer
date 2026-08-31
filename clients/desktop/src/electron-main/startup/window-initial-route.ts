@@ -18,7 +18,7 @@ export function initialRouteForWindowSnapshot(
   // Non-draft surface activation clears the active draft. A valid active draft
   // therefore denotes the visible restore surface, while activeTabId tracks the
   // last active epic tab inside the canvas.
-  if (activeDraft !== null) {
+  if (activeDraft !== null && activeDraft.closed !== true) {
     return `/draft/${encodeURIComponent(activeDraft.id)}`;
   }
 

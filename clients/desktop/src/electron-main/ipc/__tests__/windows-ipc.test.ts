@@ -371,6 +371,7 @@ function buildDraft(id: string): PerWindowLandingDraft {
     settings: null,
     composerMode: null,
     workspace: null,
+    closed: null,
   };
 }
 
