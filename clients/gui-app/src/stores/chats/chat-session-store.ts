@@ -7645,6 +7645,84 @@ type InterviewLifecycleProjection = {
   readonly delivery: InterviewBlock["delivery"];
 };
 
+/**
+ * The host's code for "the Claude runtime was torn down under a running turn".
+ *
+ * Restated here rather than imported because the host is not on this side of
+ * the wire, and `errorBlockSchema.code` is a free-form string with no enum to
+ * share. The value is the contract; the host owns it (`CLAUDE_RUNTIME_DISPOSED`
+ * in `claude-converter.ts`), and this fold is only a live mirror of a decision
+ * the host has already made durably - a mismatch degrades to "the card lingers
+ * until the next snapshot", never to wrong persisted state.
+ */
+const CLAUDE_RUNTIME_DISPOSED_ERROR_CODE = "CLAUDE_RUNTIME_DISPOSED";
+
+/**
+ * Drop the runtime-disposal errors that belong to ONE answered interview.
+ *
+ * Two conditions, and BOTH are needed. Either alone retires a truthful error.
+ *
+ * 1. POSITION - the target must be the disposal's nearest preceding interview.
+ *    The row is not an interview boundary: a provider turn can ask more than
+ *    once and both interview blocks land in the same row, so a turn that
+ *    answers A, asks B, then dies holds `[A answered, B streaming, disposal]`.
+ *    A row-wide filter would let an exact lifecycle frame for A retire the card
+ *    that is B's only explanation, while B is still waiting on the user.
+ *
+ * 2. CHRONOLOGY - the target's settlement must be strictly LATER than the
+ *    disposal. Answering does not end the turn: the continuation streams more
+ *    text and tool calls into the same row and the runtime can die after all of
+ *    it, giving `[A answered, text, disposal]` where A is STILL the nearest
+ *    preceding interview. There the disposal is the honest terminal for the
+ *    later work, and a stale or duplicate exact-settlement frame for A - which
+ *    re-runs this fold, since the effective block stays answered - must leave
+ *    it alone.
+ *
+ * `targetSettledAt` must be the CANONICAL acceptance time - the `resolvedAt` of
+ * the lifecycle frame that speaks for the block's own settlement authority,
+ * which the host derives from the durable settlement envelope. It must NOT be
+ * the block's `timestamp`: the reducer advances that on every contributing
+ * settlement, so a losing cleanup can drag it past a disposal the answer truly
+ * predates, and a stamp-based guard would then delete a truthful error.
+ *
+ * STRICTLY later, not "at or after": both values are millisecond readings, so
+ * equality cannot order them, and retiring on a tie erases an error the user
+ * needed while retaining on a tie only leaves a stale card that the host's
+ * authoritative row clears on the next snapshot.
+ *
+ * One known degradation, deliberately accepted: a LEGACY/partial lifecycle
+ * tuple carries no `settlementId`, so the caller cannot confirm it speaks for
+ * this block's authority and retains. The host has still retired the block
+ * durably, so the next snapshot corrects it.
+ *
+ * The host owns the same predicate over the same array
+ * (`withRuntimeDisposalRetiredForInterview` in `chat-session-manager.ts`); this
+ * is the live mirror for a row the client already hydrated.
+ */
+function withRuntimeDisposalRetiredForInterview(
+  blocks: ReadonlyArray<ContentBlock>,
+  targetInterviewIndex: number,
+  targetSettledAt: number,
+): ReadonlyArray<ContentBlock> {
+  let nearestInterviewIndex = -1;
+  const retained: ContentBlock[] = [];
+  for (const [index, block] of blocks.entries()) {
+    if (block.type === "interview") nearestInterviewIndex = index;
+    if (
+      block.type === "error" &&
+      block.code === CLAUDE_RUNTIME_DISPOSED_ERROR_CODE &&
+      nearestInterviewIndex === targetInterviewIndex &&
+      targetSettledAt > block.timestamp
+    ) {
+      continue;
+    }
+    retained.push(block);
+  }
+  // Same reference when nothing matched, so a fold that changes nothing keeps
+  // the row's identity and every memoized renderer below it.
+  return retained.length === blocks.length ? blocks : retained;
+}
+
 function withInterviewLifecycleBlocks(
   blocks: ReadonlyArray<ContentBlock>,
   projection: InterviewLifecycleProjection,
@@ -7705,10 +7783,60 @@ function withInterviewLifecycleBlocks(
             delivery,
           };
   }
-  if (updated === block) return blocks;
-  const next = blocks.slice();
-  next[targetIndex] = updated;
-  return next;
+  let settled: ReadonlyArray<ContentBlock> = blocks;
+  if (updated !== block) {
+    const next = blocks.slice();
+    next[targetIndex] = updated;
+    settled = next;
+  }
+  // Mirror of the host's settlement projection: an ANSWERED interview resumes
+  // the provider session on a fresh runtime, so the disposal error that was
+  // waiting on this interview stops explaining why the turn stopped and starts
+  // reading as "answering failed". The host removes it in the settlement's own
+  // durable write; folding it here is what a client that already hydrated this
+  // row needs, since a bounded windowed snapshot may never resend an
+  // arbitrarily old row. The host stays the policy owner - this only makes its
+  // accepted projection visible immediately.
+  //
+  // Only this code, and only the disposal correlated to THIS interview by both
+  // position and chronology. An unrelated error and a still-actionable
+  // `QUEUE_PAUSED_AFTER_ERROR` notice both stay, as do a later interview's own
+  // disposal and one that followed work this answer released.
+  if (!lifecycleFrameOwnsInterviewSettlement(updated, projection)) {
+    return settled;
+  }
+  return withRuntimeDisposalRetiredForInterview(
+    settled,
+    targetIndex,
+    projection.resolvedAt,
+  );
+}
+
+/**
+ * Whether this frame is entitled to date the settled interview's answer.
+ *
+ * Retirement needs a canonical acceptance time, and `resolvedAt` is only that
+ * when the frame speaks for the block's OWN settlement authority. A frame
+ * carrying a different settlementId is a loser or a stale duplicate of some
+ * other settlement and says nothing about when THIS answer was accepted; a
+ * legacy/partial tuple carries no settlementId at all. Both retain and wait
+ * for the host's authoritative row, which has already made the durable call.
+ *
+ * Deliberately not the block's own `timestamp`: the reducer advances that on
+ * every contributing settlement, so a losing cleanup can drag it past a
+ * disposal the answer truly predates.
+ */
+function lifecycleFrameOwnsInterviewSettlement(
+  settledInterview: Extract<ContentBlock, { type: "interview" }>,
+  projection: InterviewLifecycleProjection,
+): boolean {
+  if (settledInterview.outcome !== "answered") return false;
+  const authority = settledInterview.settlement;
+  return (
+    authority !== null &&
+    projection.settlementId !== null &&
+    projection.settlementId === authority.settlementId
+  );
 }
 
 function interviewLifecycleBlockIndex(

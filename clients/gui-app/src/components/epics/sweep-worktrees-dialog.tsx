@@ -151,7 +151,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const [step, setStep] = useState<"choose" | "review">("choose");
   const [reviewSnapshot, setReviewSnapshot] =
     useState<SweepReviewSnapshot | null>(null);
-  const [typedSweep, setTypedSweep] = useState("");
   const [inventoryChanged, setInventoryChanged] = useState(false);
   const [sessionOutcomes, setSessionOutcomes] = useState<
     ReadonlyMap<string, SweepSessionOutcome>
@@ -201,7 +200,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     setPreviousInUseByPath,
     setStep,
     setReviewSnapshot,
-    setTypedSweep,
     setInventoryChanged,
     setSessionOutcomes,
   });
@@ -270,7 +268,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     // state. Park the session on Choose before closing so reopening shows the
     // live rows, rather than a spent confirmation receipt.
     setStep("choose");
-    setTypedSweep("");
     setInventoryChanged(false);
     startSweepKickoff({
       hostId,
@@ -285,7 +282,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
           return;
         }
         setInventoryChanged(true);
-        setTypedSweep("");
         setCheckOverrides((current) =>
           uncheckNonResubmittableOverrides(current, result),
         );
@@ -314,7 +310,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       sessionOutcomes,
       setSessionOutcomes,
       setReviewSnapshot,
-      setTypedSweep,
       setInventoryChanged,
       setStep,
     });
@@ -333,14 +328,11 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             selectedEpicIds={selectedEpicIds}
             agentNames={agentNames}
             taskTitles={taskTitles}
-            typedValue={typedSweep}
             inventoryChanged={inventoryChanged}
             activeSweepCount={activeSweepCount}
-            onTypedValueChange={setTypedSweep}
             onBack={() => {
               setStep("choose");
               setReviewSnapshot(null);
-              setTypedSweep("");
               setInventoryChanged(false);
             }}
             onCancel={() => onOpenChange(false)}
@@ -435,7 +427,6 @@ function applySelectionRetarget(input: {
   readonly setPreviousInUseByPath: (next: ReadonlyMap<string, boolean>) => void;
   readonly setStep: (step: "choose" | "review") => void;
   readonly setReviewSnapshot: (next: SweepReviewSnapshot | null) => void;
-  readonly setTypedSweep: (value: string) => void;
   readonly setInventoryChanged: (value: boolean) => void;
   readonly setSessionOutcomes: (
     next: ReadonlyMap<string, SweepSessionOutcome>,
@@ -447,7 +438,6 @@ function applySelectionRetarget(input: {
   input.setPreviousInUseByPath(new Map());
   input.setStep("choose");
   input.setReviewSnapshot(null);
-  input.setTypedSweep("");
   input.setInventoryChanged(false);
   input.setSessionOutcomes(new Map());
 }
@@ -493,7 +483,6 @@ function startSweepPrimary(input: {
     next: ReadonlyMap<string, SweepSessionOutcome>,
   ) => void;
   readonly setReviewSnapshot: (next: SweepReviewSnapshot | null) => void;
-  readonly setTypedSweep: (value: string) => void;
   readonly setInventoryChanged: (value: boolean) => void;
   readonly setStep: (step: "choose" | "review") => void;
 }): void {
@@ -552,7 +541,6 @@ function startSweepPrimary(input: {
           bannersFromSessionOutcomes(nextOutcomes),
         ),
       );
-      input.setTypedSweep("");
       input.setInventoryChanged(false);
       input.setStep("review");
     })

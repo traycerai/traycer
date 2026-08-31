@@ -445,3 +445,183 @@ describe("the append republish interleave (bootstrap → accept → snapshot →
     }
   });
 });
+
+/**
+ * # Retiring the runtime-disposal card on the WINDOWED line
+ *
+ * The host removes the `CLAUDE_RUNTIME_DISPOSED` error from the row owning an
+ * answered interview, in the settlement's own durable write. The client mirrors
+ * that fold — and on this line the mirror has to reach `transcriptWindow`, not
+ * just `state.messages`, because that array is DERIVED: the next skeleton
+ * chunk, delta or range rebuilds it from the window and would resurrect the red
+ * card under a question the user has already answered, with `pendingInterviews`
+ * long since cleared and nothing left to re-settle it.
+ */
+describe("the runtime-disposal card on an already-hydrated windowed row", () => {
+  const INTERVIEW_BLOCK_ID = "toolu-windowed:interview";
+
+  function disposedInterviewRow(): Message {
+    // Narrow before spreading: `assistantMessage` is declared as the `Message`
+    // union, and spreading it resolves the literal against the USER variant,
+    // which has no `blocks`.
+    const base = assistantMessage("a-1", 3);
+    if (base.role !== "assistant") {
+      throw new Error("expected an assistant row");
+    }
+    return {
+      ...base,
+      blocks: [
+        {
+          type: "interview",
+          blockId: INTERVIEW_BLOCK_ID,
+          status: "streaming",
+          timestamp: 3,
+          toolName: "AskUserQuestion",
+          title: null,
+          description: null,
+          questions: [
+            {
+              questionId: null,
+              question: "Which database?",
+              header: null,
+              options: [],
+              multiSelect: false,
+            },
+          ],
+          answers: [],
+          error: null,
+          metadata: null,
+          outcome: null,
+          draftAnswers: [],
+          settlement: null,
+          diagnostics: [],
+          delivery: null,
+          settlementExtensions: {},
+        },
+        {
+          type: "error",
+          blockId: "turn-1",
+          status: "errored",
+          timestamp: 4,
+          message:
+            "Claude Code's session was torn down while this turn was still running. " +
+            "Send your message again to continue on a fresh session.",
+          recoverable: true,
+          code: "CLAUDE_RUNTIME_DISPOSED",
+        },
+        {
+          type: "error",
+          blockId: "queue-paused:m-1",
+          status: "completed",
+          timestamp: 5,
+          message: "1 queued message was held.",
+          recoverable: true,
+          code: "QUEUE_PAUSED_AFTER_ERROR",
+        },
+      ],
+    };
+  }
+
+  function rowShape(harness: Harness): ReadonlyArray<string> {
+    const row = harness.handle.store
+      .getState()
+      .messages.find((message) => message.messageId === "a-1");
+    if (row === undefined || row.role !== "assistant") {
+      throw new Error("expected the hydrated assistant row");
+    }
+    return row.blocks.map((block) =>
+      block.type === "error" ? `error:${block.code ?? "null"}` : block.type,
+    );
+  }
+
+  it("keeps the retirement across the window rebuild that follows it", () => {
+    const harness = createHarness();
+    try {
+      const cb = harness.callbacks();
+      cb.onWindowedSnapshot(
+        republishSnapshot({
+          epoch: 0,
+          rowCount: 1,
+          indexRevision: 0,
+          tailMessages: [disposedInterviewRow()],
+          tailRowIds: ["a-1"],
+        }),
+      );
+      cb.onSkeletonChunk({
+        kind: "skeletonChunk",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 0,
+          fromOrdinal: 0,
+          entries: [skeletonEntry("a-1", 0, "assistant")],
+          isFinal: true,
+        },
+      });
+      expect(rowShape(harness)).toEqual([
+        "interview",
+        "error:CLAUDE_RUNTIME_DISPOSED",
+        "error:QUEUE_PAUSED_AFTER_ERROR",
+      ]);
+
+      cb.onInterviewAnswered({
+        kind: "interviewAnswered",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        blockId: INTERVIEW_BLOCK_ID,
+        answers: [
+          {
+            questionId: null,
+            question: "Which database?",
+            values: ["PostgreSQL"],
+            notes: null,
+            selection: null,
+          },
+        ],
+        resolvedAt: 6,
+        settlementId: "settlement-1",
+        settlementSource: "gui",
+        delivery: null,
+      });
+      expect(rowShape(harness)).toEqual([
+        "interview",
+        "error:QUEUE_PAUSED_AFTER_ERROR",
+      ]);
+
+      // The rebuild. `state.messages` is re-derived from `transcriptWindow`
+      // here, so a fold that wrote only the published array would hand the red
+      // card back at exactly this point.
+      cb.onSkeletonChunk({
+        kind: "skeletonChunk",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 0,
+          fromOrdinal: 0,
+          entries: [skeletonEntry("a-1", 0, "assistant")],
+          isFinal: true,
+        },
+      });
+      expect(rowShape(harness)).toEqual([
+        "interview",
+        "error:QUEUE_PAUSED_AFTER_ERROR",
+      ]);
+      const settled = harness.handle.store
+        .getState()
+        .messages.find((message) => message.messageId === "a-1");
+      const interview =
+        settled?.role === "assistant"
+          ? settled.blocks.find((block) => block.type === "interview")
+          : undefined;
+      expect(interview).toMatchObject({
+        status: "completed",
+        outcome: "answered",
+      });
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
