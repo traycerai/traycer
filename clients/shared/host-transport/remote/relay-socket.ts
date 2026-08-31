@@ -5,12 +5,14 @@ import type {
 } from "../ws-stream-factory";
 import type { WebSocketCloseEvent, WebSocketErrorEvent } from "../ws-factory";
 import type { TimerHandle, IntervalHandle } from "../timer-handle";
+import { createRelayPathEstimator } from "@traycer/protocol/host-transport/relay-liveness";
 import {
   RELAY_DIAL_TIMEOUT_MS,
   RELAY_AWAITING_PING_INTERVAL_MS,
   RELAY_AWAITING_PONG_TIMEOUT_MS,
   RELAY_PING_INTERVAL_MS,
   RELAY_PING_TICK_MS,
+  RELAY_AWAITING_DEADLINE_CAP_MULTIPLE,
   RELAY_PONG_TIMEOUT_MS,
 } from "./config";
 
@@ -136,6 +138,13 @@ export class RelaySocket {
   /** When the current unanswered-send run began; the fast deadline's origin. */
   private awaitingSince = 0;
   private lastPingSentAt = 0;
+  /**
+   * This socket's own path estimator (ticket 24, A8) - deliberately not
+   * shared with any other leg or subscription. Feeds the two liveness
+   * deadlines below, which floor on their constants and can therefore only
+   * be lengthened by it.
+   */
+  private readonly path = createRelayPathEstimator();
 
   constructor(options: RelaySocketOptions) {
     this.handlers = options.handlers;
@@ -385,8 +394,11 @@ export class RelaySocket {
   private handleTextFrame(raw: string): void {
     if (raw === KEEPALIVE_PONG) {
       // `noteInbound` already stamped it (and disarmed any wake probe); a pong
-      // carries no extra meaning now that every inbound frame counts as proof
-      // the socket carries traffic.
+      // carries no extra liveness meaning now that every inbound frame counts
+      // as proof the socket carries traffic. It is still the ONLY frame whose
+      // round trip this end initiated, so it is the only one that can measure
+      // the path (ticket 24, A8).
+      this.path.notePongReceived(Date.now());
       return;
     }
     if (raw === KEEPALIVE_PING) {
@@ -486,9 +498,25 @@ export class RelaySocket {
       const silentSince = awaiting
         ? Math.max(this.lastInboundAt, this.awaitingSince)
         : this.lastInboundAt;
-      const timeoutMs = awaiting
+      // Both deadlines FLOOR on their constant and are lengthened - never
+      // shortened - by what this socket has measured of its own path (ticket
+      // 24, A8): a jittery relayed link is what F11's false-positive
+      // `relay-missed-pongs` teardowns were made of.
+      //
+      // The AWAITING lane is additionally CAPPED, because one estimator sizes
+      // both windows and they are not the same kind of window. The idle lane
+      // can absorb whatever a slow path needs; the awaiting lane is a
+      // DETECTION window whose whole value is being fast, and a single
+      // stalled sample near the clamp would otherwise stretch its 12s out to
+      // over a minute - turning the fast detector back into the slow one it
+      // exists to pre-empt.
+      const floorMs = awaiting
         ? RELAY_AWAITING_PONG_TIMEOUT_MS
         : RELAY_PONG_TIMEOUT_MS;
+      const derivedMs = this.path.deadlineMs(floorMs);
+      const timeoutMs = awaiting
+        ? Math.min(derivedMs, RELAY_AWAITING_DEADLINE_CAP_MULTIPLE * floorMs)
+        : derivedMs;
       if (now - silentSince >= timeoutMs) {
         this.fail(4004, "relay-missed-pongs");
         return;
@@ -506,6 +534,7 @@ export class RelaySocket {
       this.lastPingSentAt = now;
       try {
         socket.send(KEEPALIVE_PING);
+        this.path.notePingSent(now);
       } catch {
         this.fail(4005, "relay-ping-send-failed");
       }
@@ -524,7 +553,10 @@ export class RelaySocket {
     if (this.closed || !this.opened) {
       return;
     }
-    if (Date.now() - this.lastInboundAt >= RELAY_PONG_TIMEOUT_MS) {
+    if (
+      Date.now() - this.lastInboundAt >=
+      this.path.deadlineMs(RELAY_PONG_TIMEOUT_MS)
+    ) {
       this.fail(4004, "relay-missed-pongs");
       return;
     }
@@ -532,6 +564,10 @@ export class RelaySocket {
     if (socket === null) {
       return;
     }
+    // Deliberately NOT timed into the estimator: this ping is sent at wake,
+    // so its round trip carries the runtime's own resume cost and would
+    // report the path as far worse than it is.
+    this.path.retireRun();
     this.lastPingSentAt = Date.now();
     try {
       socket.send(KEEPALIVE_PING);

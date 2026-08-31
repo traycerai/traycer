@@ -3097,9 +3097,10 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(parseText(sockets[0].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "host.notifications.feed.subscribe",
-      // `@1.1` is the newest installed minor of the feed (the arm carrying
-      // `host.operation.finished`); the mirrored handshake negotiates it.
-      schemaVersion: { major: 1, minor: 1, supportedMajors: [1] },
+      // The newest installed minor of the feed, read off the registry's
+      // `latestMinor`; the mirrored handshake negotiates it. A minor added in
+      // `protocol/src/host/registry.ts` moves this literal with it.
+      schemaVersion: { major: 1, minor: 2, supportedMajors: [1] },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,
@@ -3132,9 +3133,10 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "host.notifications.feed.subscribe",
-      // `@1.1` is the newest installed minor of the feed (the arm carrying
-      // `host.operation.finished`); the mirrored handshake negotiates it.
-      schemaVersion: { major: 1, minor: 1, supportedMajors: [1] },
+      // The newest installed minor of the feed, read off the registry's
+      // `latestMinor`; the mirrored handshake negotiates it. A minor added in
+      // `protocol/src/host/registry.ts` moves this literal with it.
+      schemaVersion: { major: 1, minor: 2, supportedMajors: [1] },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,

@@ -1,9 +1,10 @@
-import type {
-  HostNotificationEntryV21,
-  HostNotificationsCloudFeedRowV11,
-  HostNotificationsEntityRef,
-  HostNotificationsIndicatorState,
-  HostNotificationsIndicatorStateResponse,
+import {
+  HOST_NOTIFICATION_PENDING_PROMPT_KINDS,
+  type HostNotificationEntryV22,
+  type HostNotificationsCloudFeedRowV11,
+  type HostNotificationsEntityRef,
+  type HostNotificationsIndicatorState,
+  type HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationPayloadBelongsToEntity,
@@ -294,7 +295,7 @@ interface CloudIndicatorAccumulator {
 /** Exact entity -> origin host -> latest terminal entry in causal write order. */
 type CloudTerminalCandidate = {
   readonly entryId: string;
-  readonly entry: HostNotificationEntryV21;
+  readonly entry: HostNotificationEntryV22;
 };
 
 type CloudTerminalWinners = Map<string, Map<string, CloudTerminalCandidate>>;
@@ -340,18 +341,25 @@ function collectCloudIndicatorEntry(
 
 /** `null` when the entry lights nothing, so an entity with only quiet rows is
  * never allocated an all-false record. */
+/**
+ * `pendingApproval` is the wire's generic "needs a person" flag: every
+ * pending-prompt kind but `interview.requested` lights it, driven off the
+ * shared `HOST_NOTIFICATION_PENDING_PROMPT_KINDS` tuple so a new kind lights
+ * this glyph (and the host SQL projection) by joining that tuple.
+ */
 function indicatorContribution(
-  entry: HostNotificationEntryV21,
+  entry: HostNotificationEntryV22,
 ): HostNotificationsIndicatorState | null {
-  const pendingApproval =
-    entry.kind === "approval.requested" && entry.resolvedAt === null;
-  const pendingInterview =
-    entry.kind === "interview.requested" && entry.resolvedAt === null;
-  if (!pendingApproval && !pendingInterview) {
+  if (
+    !("resolvedAt" in entry) ||
+    entry.resolvedAt !== null ||
+    !HOST_NOTIFICATION_PENDING_PROMPT_KINDS.includes(entry.kind)
+  ) {
     return null;
   }
+  const pendingInterview = entry.kind === "interview.requested";
   return {
-    pendingApproval,
+    pendingApproval: !pendingInterview,
     pendingInterview,
     pendingFork: false,
     unreadFailure: false,
@@ -375,7 +383,7 @@ function retainLatestTerminal(input: {
   readonly entityId: string;
   readonly originHostId: string;
   readonly entryId: string;
-  readonly candidate: HostNotificationEntryV21;
+  readonly candidate: HostNotificationEntryV22;
 }): void {
   if (!isTerminalEntry(input.candidate)) return;
   const originWinners = terminalWinnersForEntity(input.winners, input.entityId);
@@ -410,7 +418,7 @@ function terminalCandidateSupersedes(
   return terminalEntryIsNewer(candidate, current);
 }
 
-function isAutomaticRecoveryEntry(entry: HostNotificationEntryV21): boolean {
+function isAutomaticRecoveryEntry(entry: HostNotificationEntryV22): boolean {
   return (
     entry.kind === "agent.stopped" &&
     "automaticRecovery" in entry.payload &&
@@ -420,19 +428,19 @@ function isAutomaticRecoveryEntry(entry: HostNotificationEntryV21): boolean {
 
 function terminalEntriesForEpic(
   winners: CloudTerminalWinners,
-): ReadonlyArray<HostNotificationEntryV21> {
+): ReadonlyArray<HostNotificationEntryV22> {
   return [...winners.values()].flatMap(terminalEntriesForOrigins);
 }
 
 function terminalEntriesForOrigins(
   winners: Map<string, CloudTerminalCandidate>,
-): ReadonlyArray<HostNotificationEntryV21> {
+): ReadonlyArray<HostNotificationEntryV22> {
   return [...winners.values()].map((candidate) => candidate.entry);
 }
 
 function mergeTerminalContributions(
   current: HostNotificationsIndicatorState | undefined,
-  entries: ReadonlyArray<HostNotificationEntryV21>,
+  entries: ReadonlyArray<HostNotificationEntryV22>,
 ): HostNotificationsIndicatorState | undefined {
   return entries.reduce<HostNotificationsIndicatorState | undefined>(
     (merged, entry) => {
@@ -456,7 +464,7 @@ function terminalWinnersForEntity(
   return created;
 }
 
-function isTerminalEntry(entry: HostNotificationEntryV21): boolean {
+function isTerminalEntry(entry: HostNotificationEntryV22): boolean {
   return entry.severity === "failure" || entry.severity === "done";
 }
 
@@ -475,7 +483,7 @@ function terminalEntryIsNewer(
 }
 
 function terminalIndicatorContribution(
-  entry: HostNotificationEntryV21,
+  entry: HostNotificationEntryV22,
 ): HostNotificationsIndicatorState | null {
   if (entry.readAt !== null || !isTerminalEntry(entry)) return null;
   return {

@@ -110,6 +110,13 @@ export function installNavigationGuard(webContents: WebContents): void {
  * so we allow it for **audio only** (camera/video stays denied). The macOS TCC
  * prompt is gated by `NSMicrophoneUsageDescription` + the audio-input
  * entitlement; this handler is the Chromium-layer gate.
+ *
+ * That audio allowance is load-bearing beyond dictation: Chromium's WebRTC port
+ * allocator consults this same permission CHECK, and a denial makes it gather
+ * from one wildcard-bound socket with mDNS-obfuscated candidates instead of
+ * real per-interface ones - which removes the VPN/tailnet host candidate the
+ * remote browser video plane's direct path depends on. Do not narrow this
+ * without re-reading `traycer-host`'s `BROWSER_CAPTURE_HELPER_PERMISSIONS`.
  */
 const ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
   "clipboard-read",

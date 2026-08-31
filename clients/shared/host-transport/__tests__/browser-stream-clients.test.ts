@@ -6,7 +6,10 @@ import {
   createRequestContext,
   identityFromAuthenticatedUser,
 } from "@traycer/protocol/auth/request-context";
-import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserScreencastServerFrame,
+  BrowserSessionsClientFrame,
+} from "@traycer/protocol/host/browser/contracts";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import type {
@@ -25,6 +28,14 @@ import { WsStreamClient } from "../ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
+const CLOSE_TAB_FRAME: BrowserSessionsClientFrame = {
+  kind: "closeTab",
+  hasBinaryPayload: false,
+  requestId: "close-tab-1",
+  sessionId: "browser-session-1",
+  tabId: "browser-tab-1",
+};
+
 class StubStreamWebSocket implements StreamWebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
   onmessage: ((event: StreamWebSocketMessageEvent) => void) | null = null;
@@ -40,6 +51,12 @@ class StubStreamWebSocket implements StreamWebSocketLike {
   }
 
   close(_code: number, _reason: string): void {}
+
+  fireClose(code: number, reason: string): void {
+    if (this.onclose !== null) {
+      this.onclose({ code, reason, wasClean: false });
+    }
+  }
 
   fireOpen(): void {
     if (this.onopen !== null) {
@@ -175,11 +192,11 @@ describe("BrowserSessionsStreamClient", () => {
 
     completeHandshake(sockets[0]);
     const beforeClose = sockets[0].textSent.length;
-    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+    stream.sendClientFrame(CLOSE_TAB_FRAME);
     expect(sockets[0].textSent).toHaveLength(beforeClose + 1);
 
     stream.close();
-    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+    stream.sendClientFrame(CLOSE_TAB_FRAME);
     expect(sockets[0].textSent).toHaveLength(beforeClose + 1);
   });
 });
@@ -251,6 +268,54 @@ describe("BrowserScreencastStreamClient", () => {
       sequence: 1,
     });
     expect(sockets[0].textSent).toHaveLength(sentBeforeFrames + 1);
+    stream.close();
+  });
+
+  it("delivers the WebRTC video-plane frames and still drops unknown kinds", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const received: BrowserScreencastServerFrame[] = [];
+    const stream = new BrowserScreencastStreamClient({
+      wsStreamClient: client,
+      epicId: "epic-1",
+      sessionId: "browser-session-1",
+      tabId: "browser-tab-1",
+      maxWidth: 1280,
+      maxHeight: 720,
+      quality: 80,
+      format: "jpeg",
+      role: "tile",
+      callbacks: {
+        onServerFrame: (frame) => {
+          received.push(frame);
+        },
+        onConnectionStatus: () => undefined,
+      },
+    });
+
+    completeHandshake(sockets[0]);
+    sockets[0].fireText({
+      kind: "sdpOffer",
+      hasBinaryPayload: false,
+      negotiationId: 1,
+      sdp: "v=0\r\n",
+    });
+    sockets[0].fireText({
+      kind: "captureMode",
+      hasBinaryPayload: false,
+      mode: "video",
+    });
+    // A future frame kind this client build has never heard of - must drop,
+    // not crash the connection.
+    sockets[0].fireText({
+      kind: "aFutureVideoPlaneFrame",
+      hasBinaryPayload: false,
+    });
+
+    expect(received.map((frame) => frame.kind)).toEqual([
+      "sdpOffer",
+      "captureMode",
+    ]);
     stream.close();
   });
 });

@@ -1,5 +1,5 @@
 /**
- * The Link-a-phone panel under the server's one-live-code policy: the
+ * The Link mobile app panel under the server's one-live-code policy: the
  * countdown derives the next-mint moment from the mint response alone, the
  * displayed code is the ONLY watched code (a claim on it swaps the QR for
  * the confirmation card), a rejection resumes rotation with a fresh code,

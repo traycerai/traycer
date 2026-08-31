@@ -2,9 +2,7 @@ import type {
   BrowserCdpCommand,
   BrowserCdpResult,
   BrowserCdpTarget,
-  BrowserElectronTabHandoffSibling,
   BrowserScreencastServerFrame,
-  BrowserSessionsClientFrame,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -211,16 +209,6 @@ export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabC
   readonly command: BrowserCdpCommand;
 }
 
-export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTabCapability {
-  readonly capturedUrl: string;
-  readonly capturedStorageState: BrowserStorageState | null;
-  readonly siblingTabs: readonly BrowserElectronTabHandoffSibling[];
-  readonly reason: Extract<
-    BrowserSessionsClientFrame,
-    { readonly kind: "electronTabHandoff" }
-  >["reason"];
-}
-
 type BrowserCookieCryptoMode = "real" | "basic" | "degraded";
 type BrowserCookiePersistence = "persistent" | "ephemeral";
 export type BrowserCookieStorageBackend =
@@ -386,8 +374,5 @@ export interface BrowserViewBridge {
   ): { dispose: () => void };
   onNativeTabStatusChange(
     handler: (change: BrowserViewNativeTabStatusChange) => void,
-  ): { dispose: () => void };
-  onElectronTabHandoff(
-    handler: (change: BrowserViewElectronTabHandoffChange) => void,
   ): { dispose: () => void };
 }

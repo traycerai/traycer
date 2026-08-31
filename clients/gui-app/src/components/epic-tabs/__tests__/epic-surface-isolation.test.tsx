@@ -62,6 +62,10 @@ vi.mock(
           {props.children}
         </BrowserSessionsContext.Provider>
       ),
+      // Every tile now sits behind the boundary for its own host; this suite
+      // has one ambient stream, so it stays a pass-through.
+      BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
+        props.children,
     };
   },
 );

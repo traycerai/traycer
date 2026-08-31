@@ -42,7 +42,6 @@ export {
   hostUpdateInstallResponseV11Schema,
   type HostAvailableManifest,
   type HostDoctorIssue,
-  type DoctorTransportVantage,
   type HostDoctorRequest,
   type HostDoctorResponse,
   type HostGetInstallationInfoRequest,
