@@ -77,7 +77,7 @@ make dev-ios            # terminal 2, exactly one Simulator booted
 ```
 
 In the Simulator: **Scan from desktop** → paste the code from the desktop's
-Link-a-phone panel (`Cmd-V` pastes the Mac clipboard into the Simulator).
+Link mobile app panel (`Cmd-V` pastes the Mac clipboard into the Simulator).
 
 ## Troubleshooting
 

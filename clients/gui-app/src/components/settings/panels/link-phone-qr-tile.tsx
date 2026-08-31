@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 /**
- * The branded QR tile for the link-a-phone code, drawn here rather than by a
+ * The branded QR tile for the link-mobile-app code, drawn here rather than by a
  * QR-styling library. `qrcode` hands back the raw module matrix synchronously,
  * so the whole symbol is plain SVG: it renders identically under jsdom (a test
  * can compare every drawn module against the encoder's matrix), it takes the

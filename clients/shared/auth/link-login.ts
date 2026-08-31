@@ -13,7 +13,7 @@ import { parseRetryAfterSeconds } from "./device-auth";
 import { composeRequestAbort } from "./request-abort";
 
 /**
- * Link-login ("link a phone") HTTP client for the confirm-gated flow: the
+ * Link-login ("link mobile app") HTTP client for the confirm-gated flow: the
  * desktop mints and approves; the phone claims and polls with the private
  * secret its claim returned. Zero DI, ambient `fetch` only — runs in the
  * browser shell, the Electron renderer, and the Capacitor WebView
