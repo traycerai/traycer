@@ -229,11 +229,21 @@ export interface ArtifactBodyResidentLease {
   /**
    * Resolves when the body doc is RESIDENT.
    *
-   * Rejects with `ArtifactBodyUnavailableError` for the one grant that owes
-   * nothing - `"unavailable"`, i.e. no such artifact, or a body this client
-   * cannot be served - and when the holder releases before residency lands.
-   * An `"awaiting-seed"` grant is NOT that case and does not reject: the
+   * Rejects with `ArtifactBodyUnavailableError` in every case where no body is
+   * coming: the `"unavailable"` grant, which owes nothing (no such artifact, or
+   * a body this client cannot be served); a bridge disposed underneath the
+   * acquire, mapped here so callers render "still loading" rather than a
+   * transport's own words; the holder releasing before residency lands, which
+   * drops the very demand the seed would have answered; and the session tearing
+   * down, after which `bodyDocs.dropAll()` guarantees residency can never
+   * arrive.
+   *
+   * An `"awaiting-seed"` grant is NOT one of those and does not reject: the
    * demand is held and it is the demand that makes the seed arrive.
+   *
+   * Every one of those settles the promise PUSHED - from `release()` or from
+   * the session teardown - never by waiting for a store notification that, in
+   * exactly these cases, is what has stopped coming.
    */
   readonly resident: Promise<void>;
 }
@@ -1187,7 +1197,7 @@ export function createOpenEpicStore(
    */
   function waitForBodyResidency(
     artifactId: string,
-    isReleased: () => boolean,
+    onAbandonReady: (abandon: () => void) => void,
   ): Promise<void> {
     const api = storeApi;
     if (api === null) {
@@ -1197,16 +1207,32 @@ export function createOpenEpicStore(
       return Promise.resolve();
     }
     return new Promise<void>((resolve, reject) => {
-      const unsubscribe = api.subscribe(() => {
-        // A holder that let go while waiting is not owed a body, and leaving
-        // this pending would park its caller for the session.
-        if (isReleased()) {
-          unsubscribe();
-          reject(new ArtifactBodyUnavailableError(artifactId));
-          return;
-        }
+      let unsubscribe: (() => void) | null = null;
+      /**
+       * The two ways this wait ends without a body, both PUSHED rather than
+       * noticed: the holder let go, or the session tore down.
+       *
+       * This used to be an `isReleased()` test inside the subscription below,
+       * which could only fire if some later store notification happened to
+       * arrive - and releasing drops the demand, which is exactly when no seed,
+       * and therefore no notification, ever comes. The doc on
+       * `ArtifactBodyResidentLease.resident` promised this rejection and it
+       * could not happen.
+       */
+      const abandon = (): void => {
+        unsubscribe?.();
+        sessionEndedSettlers.delete(abandon);
+        reject(new ArtifactBodyUnavailableError(artifactId));
+      };
+      onAbandonReady(abandon);
+      // Teardown owes an answer here for the same reason it owes one to a
+      // write-command waiter: `dispose()` drops every body doc, so residency
+      // can never arrive afterwards.
+      sessionEndedSettlers.add(abandon);
+      unsubscribe = api.subscribe(() => {
         if (api.getState().getArtifactFragment(artifactId) === null) return;
-        unsubscribe();
+        unsubscribe?.();
+        sessionEndedSettlers.delete(abandon);
         resolve();
       });
     });
@@ -1223,35 +1249,58 @@ export function createOpenEpicStore(
   ): ArtifactBodyResidentLease {
     let released = false;
     let grantedRelease: (() => void) | null = null;
-    const resident = bodyLeases.acquire(artifactId).then((grant) => {
-      // Discriminated on the ONE outcome that owes nothing. `"awaiting-seed"`
-      // is a grant a holder must release exactly like a granted one - the
-      // retained worker-side demand is the body lane's subscription - so a
-      // `!== "granted"` test here would drop the release for every cold open
-      // on the lane arm and leave the tab subscribed for the session.
-      if (grant.kind === "unavailable") {
-        throw new ArtifactBodyUnavailableError(artifactId);
-      }
-      if (released) {
-        grant.release();
-        throw new ArtifactBodyUnavailableError(artifactId);
-      }
-      // Wrapped, not referenced: `grant.release` is a method, and handing the
-      // bare reference on loses its receiver.
-      grantedRelease = () => {
-        grant.release();
-      };
-      // A `"granted"` grant arrived WITH bytes, so the doc is installed by the
-      // time this resolves. Only the awaiting arm has anything left to wait
-      // for, and what completes it is `retryAwaitingBodies` above.
-      if (grant.kind === "granted") return undefined;
-      return waitForBodyResidency(artifactId, () => released);
-    });
+    let abandonResidency: (() => void) | null = null;
+    const resident = bodyLeases
+      .acquire(artifactId)
+      .catch((cause: unknown) => {
+        // A bridge that went away underneath the call is THIS ARTIFACT'S BODY
+        // being unavailable, said in the only vocabulary the callers have copy
+        // for. Unconverted, it reached the export toast verbatim and a user
+        // closing an Epic mid-export read "The runtime worker bridge was
+        // disposed with calls in flight."
+        if (cause instanceof BridgeDisposedError) {
+          throw new ArtifactBodyUnavailableError(artifactId);
+        }
+        throw cause;
+      })
+      .then((grant) => {
+        // Discriminated on the ONE outcome that owes nothing. `"awaiting-seed"`
+        // is a grant a holder must release exactly like a granted one - the
+        // retained worker-side demand is the body lane's subscription - so a
+        // `!== "granted"` test here would drop the release for every cold open
+        // on the lane arm and leave the tab subscribed for the session.
+        if (grant.kind === "unavailable") {
+          throw new ArtifactBodyUnavailableError(artifactId);
+        }
+        if (released) {
+          grant.release();
+          throw new ArtifactBodyUnavailableError(artifactId);
+        }
+        // Wrapped, not referenced: `grant.release` is a method, and handing the
+        // bare reference on loses its receiver.
+        grantedRelease = () => {
+          grant.release();
+        };
+        // A `"granted"` grant arrived WITH bytes, so the doc is installed by
+        // the time this resolves. Only the awaiting arm has anything left to
+        // wait for, and what completes it is `retryAwaitingBodies` above.
+        if (grant.kind === "granted") return undefined;
+        return waitForBodyResidency(artifactId, (abandon) => {
+          abandonResidency = abandon;
+        });
+      });
     return {
       release: () => {
         if (released) return;
         released = true;
         grantedRelease?.();
+        // SETTLED here, not noticed later. Releasing drops the demand, so the
+        // seed that would have woken the residency wait is exactly what is no
+        // longer coming - which made the documented "rejects when the holder
+        // releases before residency lands" unreachable for the one ordering it
+        // was written for: release AFTER an `awaiting-seed` grant. (Release
+        // BEFORE the grant resolves was already handled above.)
+        abandonResidency?.();
       },
       resident,
     };
@@ -1920,15 +1969,33 @@ export function createOpenEpicStore(
            */
           acquireArtifactBodyLease: (artifactId) => {
             const lease = acquireResidentBodyLease(artifactId);
-            // HANDLED, not ignored. This caller has no residency question -
-            // it is holding the room open for an editor that binds the
-            // fragment by reference and re-reads it on the residency bump -
-            // so the `unavailable` rejection is not news here. Attaching the
-            // no-op is what keeps it from surfacing as an unhandled rejection
-            // for every tile that opens an artifact the host cannot serve;
-            // the promise still carries the rejection to
+            // HANDLED, not ignored, and CLASSIFIED rather than blanket. This
+            // caller has no residency question - it is holding the room open
+            // for an editor that binds the fragment by reference and re-reads
+            // it on the residency bump - so an unavailable body, a released
+            // lease and a torn-down session are all ordinary here, and every
+            // one of them arrives as `ArtifactBodyUnavailableError` (a disposed
+            // bridge included, mapped at the acquire above). Attaching a
+            // handler is what keeps those from surfacing as unhandled
+            // rejections for every tile that opens a body the host cannot
+            // serve; the promise still carries the rejection to
             // `acquireResidentArtifactBodyLease`'s own callers.
-            lease.resident.catch(() => {});
+            //
+            // A `BridgeCallError` or a `BridgeResponseMismatchError` is none of
+            // those - it is a real transport fault - and swallowing all of them
+            // alike made each one invisible. Same rule the lease bridge already
+            // applies to a body that answers byteless while its room reads
+            // ready: report it, because the failure it produces is a tile that
+            // never fills in, with nothing in any log.
+            lease.resident.catch((cause: unknown) => {
+              if (cause instanceof ArtifactBodyUnavailableError) return;
+              appLogger.warn("[epic] artifact body lease failed", {
+                epicId,
+                artifactId,
+                error: cause instanceof Error ? cause.name : "unknown",
+                message: cause instanceof Error ? cause.message : String(cause),
+              });
+            });
             return lease.release;
           },
           acquireResidentArtifactBodyLease: (artifactId) =>
