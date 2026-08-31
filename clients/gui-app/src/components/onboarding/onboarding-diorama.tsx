@@ -30,30 +30,31 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { AgentSelectionGuideEditorSurface } from "@/components/agent-selection-guide-editor-surface";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import type { OnboardingActId } from "@/components/onboarding/onboarding-acts";
+import type { DesktopOnboardingActId } from "@/components/onboarding/onboarding-acts";
+import {
+  OnboardingAgentGuidePane,
+  type OnboardingAgentGuideState,
+} from "@/components/onboarding/onboarding-agent-guide-pane";
+import { EASE, TASKS } from "@/components/onboarding/onboarding-diorama-shared";
 import { OnboardingClaudeTui } from "@/components/onboarding/onboarding-claude-tui";
 import { OnboardingOpencodeTui } from "@/components/onboarding/onboarding-opencode-tui";
+import {
+  PANE_LABEL,
+  STORY_STEPS,
+  useStoryStep,
+  type MeshAgentId,
+  type StoryBeat,
+  type StoryKind,
+} from "@/components/onboarding/onboarding-story-script";
 import { ProviderList } from "@/components/providers/provider-list";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
 import { ORDERED_PROVIDERS } from "@/lib/provider-ordering";
 import { cn } from "@/lib/utils";
 
 interface OnboardingDioramaProps {
-  readonly actId: OnboardingActId;
+  readonly actId: DesktopOnboardingActId;
   readonly agentGuide: OnboardingAgentGuideState;
-}
-
-export interface OnboardingAgentGuideState {
-  readonly value: string;
-  readonly generatedDefaultContent: string;
-  readonly loading: boolean;
-  readonly saving: boolean;
-  readonly error: boolean;
-  readonly onValueChange: (value: string) => void;
-  readonly onRevertToDefault: () => void;
 }
 
 type NodeKind =
@@ -65,6 +66,9 @@ type NodeKind =
   | "file"
   | "diff";
 
+// What this desktop miniature can draw. One scene per DESKTOP act id, and a
+// separate name on purpose: the act union carries mobile members this diorama
+// never renders, and the page's platform branch keeps them away from here.
 type SceneId =
   | "task-tabs"
   | "navigation"
@@ -74,7 +78,6 @@ type SceneId =
   | "command-theme";
 
 type NavigationPhase = "single" | "drag-1" | "split-1" | "drag-2" | "split-2";
-type MeshAgentId = "gui" | "claude" | "opencode";
 type SpotlightRegion =
   | "task-tabs"
   | "sidebar"
@@ -84,8 +87,6 @@ type SpotlightRegion =
   | "providers"
   | "agent-guide"
   | "command-theme";
-
-const EASE = [0.32, 0.72, 0, 1] as const;
 
 const NODE_META: Readonly<
   Record<NodeKind, { icon: LucideIcon; color: string; label: string }>
@@ -98,12 +99,6 @@ const NODE_META: Readonly<
   file: { icon: FileCode2, color: "#94a3b8", label: "File" },
   diff: { icon: GitBranch, color: "#34d399", label: "Diff" },
 };
-
-const TASKS = [
-  "Team usage limits",
-  "Billing service",
-  "Usage sync audit",
-] as const;
 
 const TASK_SCENES = [
   {
@@ -168,12 +163,6 @@ const MESH_ANCHORS: Record<
   claude: { x: "76%", y: "27%" },
   opencode: { x: "76%", y: "73%" },
 };
-// Conversational display names (used in story messages + pills).
-const PANE_LABEL: Record<MeshAgentId, string> = {
-  gui: "Codex",
-  claude: "Claude Code",
-  opencode: "OpenCode",
-};
 // The two right-pane terminal-agent run names. These must match the sidebar
 // list rows so an open tab always corresponds to a list item. Claude's run name
 // is per-task (taskScene.terminal); OpenCode's is fixed.
@@ -184,115 +173,6 @@ const PANE_ACCENT_CLASS: Record<MeshAgentId, string> = {
   opencode:
     "border-[var(--term-ansi-magenta)]/50 text-[var(--term-ansi-magenta)]",
 };
-
-type StoryKind =
-  | "user"
-  | "chat"
-  | "spec"
-  | "handoff"
-  | "term"
-  | "blocked"
-  | "msg"
-  | "decision";
-
-// The rate-limits collaboration: Codex initiates, Claude gets blocked and asks
-// OpenCode, OpenCode answers, Codex records the decision, Claude resumes. Each
-// step reveals one message in its pane (`to` drives the directional pill).
-const STORY_STEPS = [
-  {
-    pane: "gui",
-    kind: "user",
-    text: "We need team usage limits without locking existing customers out.",
-    to: null,
-  },
-  {
-    pane: "gui",
-    kind: "chat",
-    text: "I'll split this into implementation, verification, and risk review.",
-    to: null,
-  },
-  { pane: "gui", kind: "spec", text: "usage-limits.spec", to: null },
-  {
-    pane: "gui",
-    kind: "handoff",
-    text: "Claude Code, implement the billing-service check from usage-limits.spec.",
-    to: "claude",
-  },
-  { pane: "claude", kind: "term", text: "reading usage-limits.spec", to: null },
-  {
-    pane: "claude",
-    kind: "blocked",
-    text: "background jobs may bypass API checks",
-    to: null,
-  },
-  {
-    pane: "claude",
-    kind: "handoff",
-    text: "OpenCode, verify where usage is consumed outside the API path.",
-    to: "opencode",
-  },
-  {
-    pane: "opencode",
-    kind: "msg",
-    text: "Tracing usage paths across the billing service…",
-    to: null,
-  },
-  {
-    pane: "opencode",
-    kind: "msg",
-    text: "Found 2 paths: API + scheduled sync. Enforcement must live below both.",
-    to: "claude",
-  },
-  {
-    pane: "claude",
-    kind: "handoff",
-    text: "Codex, both paths skip the API layer — where should enforcement live?",
-    to: "gui",
-  },
-  {
-    pane: "gui",
-    kind: "decision",
-    text: "Enforce in the billing service, not the API route. Keep a grace period for existing teams.",
-    to: null,
-  },
-  {
-    pane: "gui",
-    kind: "handoff",
-    text: "Claude, move the check down and add the grace-period branch.",
-    to: "claude",
-  },
-  {
-    pane: "claude",
-    kind: "term",
-    text: "moved check to billing service",
-    to: null,
-  },
-  { pane: "claude", kind: "term", text: "added grace-period branch", to: null },
-  { pane: "claude", kind: "term", text: "tests passing", to: null },
-  {
-    pane: "claude",
-    kind: "handoff",
-    text: "OpenCode, re-verify both paths now.",
-    to: "opencode",
-  },
-  {
-    pane: "opencode",
-    kind: "msg",
-    text: "Verified API + scheduled sync paths. No bypass found.",
-    to: "gui",
-  },
-  {
-    pane: "gui",
-    kind: "chat",
-    text: "Shipping with the grace period — thanks, both.",
-    to: null,
-  },
-] as const satisfies ReadonlyArray<{
-  readonly pane: MeshAgentId;
-  readonly kind: StoryKind;
-  readonly text: string;
-  readonly to: MeshAgentId | null;
-}>;
 
 const SIDEBAR_PANEL_RAIL_ITEMS: ReadonlyArray<{
   readonly label: string;
@@ -328,28 +208,25 @@ const THEME_DOCK_SWATCHES = [
 ] as const;
 
 /**
- * Keyed by act id, not by the act's position in the tour. Acts get inserted
- * (session import landed between providers and delegation) and dropped (a host
- * that cannot scan sessions never shows that act at all), so a position names
- * a different act on different hosts while an id names one act everywhere.
- * `null` is an act that shows no mini-app at all; the page does not render the
- * diorama for it, and this map is where that fact is stated.
+ * `null` is an act that shows no mini-app at all (session import, whose stage
+ * is the live wizard). The page does not render the diorama for it, and this
+ * map is where that fact is stated: defaulting to a scene instead would mount
+ * the command-theme mini-app - animations and all - behind an act that
+ * deliberately hides the diorama.
  */
-const SCENE_BY_ACT_ID: Record<OnboardingActId, SceneId | null> = {
-  "task-tabs": "task-tabs",
-  navigation: "navigation",
-  "task-context": "task-context",
-  providers: "providers",
-  "session-import": null,
-  "agent-guide": "agent-guide",
-  "command-theme": "command-theme",
-};
+const SCENE_FOR_ACT: Readonly<Record<DesktopOnboardingActId, SceneId | null>> =
+  {
+    "task-tabs": "task-tabs",
+    navigation: "navigation",
+    "task-context": "task-context",
+    providers: "providers",
+    "session-import": null,
+    "agent-guide": "agent-guide",
+    "command-theme": "command-theme",
+  };
 
 export function OnboardingDiorama(props: OnboardingDioramaProps) {
-  const scene = SCENE_BY_ACT_ID[props.actId];
-  // `null` is an act that shows no mini-app (session import). Defaulting to a
-  // scene here would mount the command-theme mini-app - animations and all -
-  // behind an act that deliberately hides the diorama.
+  const scene = SCENE_FOR_ACT[props.actId];
   if (scene === null) return null;
   return <DioramaScene scene={scene} agentGuide={props.agentGuide} />;
 }
@@ -464,10 +341,7 @@ function DioramaScene(props: {
         </div>
         {scene === "providers" ? <ProvidersFocusScene /> : null}
         {scene === "agent-guide" ? (
-          <AgentGuideModal
-            reducedMotion={reducedMotion}
-            agentGuide={agentGuide}
-          />
+          <AgentGuideModal agentGuide={agentGuide} />
         ) : null}
         {scene === "command-theme" ? (
           <CommandThemeScene reducedMotion={reducedMotion} />
@@ -798,9 +672,9 @@ function CanvasWorkbench(props: {
 }) {
   const { scene, reducedMotion, activeTaskIndex, taskScene, navigationPhase } =
     props;
-  const storyStep = useStoryStep(scene, reducedMotion);
   const isNav = scene === "navigation";
   const isStory = scene === "task-context";
+  const storyStep = useStoryStep(isStory, reducedMotion);
   // Navigation animates the build-up; every other non-task-tabs scene keeps the
   // settled 1-left + 2-right shell so tabs/layout stay constant screen to screen.
   const rightVisible = isNav
@@ -883,34 +757,6 @@ function CanvasWorkbench(props: {
       {isStory && !reducedMotion ? <StoryPills step={storyStep} /> : null}
     </section>
   );
-}
-
-// Drives the scripted A2A story: one extra message revealed per beat, looping
-// (a longer hold on the final beat before it resets). Reduced motion shows the
-// finished conversation immediately.
-// Hold longer on the final beat before looping, and longer on message-passing
-// beats (a directional pill is travelling) so the flow is easy to follow.
-function storyStepDuration(step: number, last: number): number {
-  if (step >= last) return 3200;
-  if (STORY_STEPS[step].to !== null) return 2800;
-  return 1900;
-}
-
-function useStoryStep(scene: SceneId, reducedMotion: boolean): number {
-  const [step, setStep] = useState(0);
-  const last = STORY_STEPS.length - 1;
-  const active = scene === "task-context" && !reducedMotion;
-  useEffect(() => {
-    if (!active) return;
-    const id = window.setTimeout(
-      () => setStep((current) => (current >= last ? 0 : current + 1)),
-      storyStepDuration(step, last),
-    );
-    return () => window.clearTimeout(id);
-  }, [active, step, last]);
-  if (scene !== "task-context") return 0;
-  if (reducedMotion) return last;
-  return step;
 }
 
 // Directional pill on handoff/answer beats, travelling between pane anchors.
@@ -1436,11 +1282,9 @@ function ScriptedAgentPane(props: {
 }
 
 type StoryBeatEntry = {
-  readonly beat: (typeof STORY_STEPS)[number];
+  readonly beat: StoryBeat;
   readonly index: number;
 };
-
-type StoryBeat = (typeof STORY_STEPS)[number];
 
 function claudeLineColor(kind: StoryKind): string {
   if (kind === "blocked") return "text-[var(--term-ansi-yellow)]";
@@ -1509,7 +1353,6 @@ function OpencodeStoryBody(props: {
 // Screen 5: the Agents guide as a centered modal over a dimmed app — just the
 // guide content, no settings nav chrome.
 function AgentGuideModal(props: {
-  readonly reducedMotion: boolean;
   readonly agentGuide: OnboardingAgentGuideState;
 }) {
   return (
@@ -1528,65 +1371,10 @@ function AgentGuideModal(props: {
           transition={{ duration: 0.28, ease: EASE }}
           className="flex h-[80%] w-[80%] min-h-0"
         >
-          <AgentGuidePane
-            reducedMotion={props.reducedMotion}
-            agentGuide={props.agentGuide}
-          />
+          <OnboardingAgentGuidePane agentGuide={props.agentGuide} />
         </m.div>
       </div>
     </>
-  );
-}
-
-function AgentGuidePane(props: {
-  readonly reducedMotion: boolean;
-  readonly agentGuide: OnboardingAgentGuideState;
-}) {
-  const { agentGuide } = props;
-  const isAtDefault = agentGuide.value === agentGuide.generatedDefaultContent;
-  return (
-    <AgentSelectionGuideEditorSurface
-      titleId="onboarding-agent-selection-guide-heading"
-      value={agentGuide.loading ? "" : agentGuide.value}
-      onValueChange={agentGuide.onValueChange}
-      onBlur={null}
-      disabled={agentGuide.loading || agentGuide.saving}
-      placeholder={agentGuide.loading ? "Loading…" : undefined}
-      ariaLabel="Onboarding agent selection instructions"
-      testId="onboarding-agent-guide-input"
-      editorClassName="flex-1"
-      className="size-full overflow-hidden rounded-lg border border-border bg-card p-4 shadow-2xl"
-      revertDisabled={agentGuide.loading || agentGuide.saving || isAtDefault}
-      onRevert={agentGuide.onRevertToDefault}
-      revertTestId={undefined}
-      status={<OnboardingAgentGuideStatus agentGuide={agentGuide} />}
-    />
-  );
-}
-
-function OnboardingAgentGuideStatus(props: {
-  readonly agentGuide: OnboardingAgentGuideState;
-}) {
-  if (props.agentGuide.error) {
-    return <span className="text-code-xs text-destructive">Not saved</span>;
-  }
-  if (props.agentGuide.saving) {
-    return (
-      <span className="flex items-center gap-1 text-code-xs text-muted-foreground">
-        <AgentSpinningDots
-          className="text-muted-foreground"
-          testId={undefined}
-          variant={undefined}
-        />
-        Saving
-      </span>
-    );
-  }
-  return (
-    <span className="flex items-center gap-1 text-code-xs text-muted-foreground">
-      <ArrowRight className="size-3" />
-      Will save when you continue
-    </span>
   );
 }
 
