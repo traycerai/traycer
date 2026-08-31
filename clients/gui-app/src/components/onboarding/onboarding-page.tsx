@@ -6,6 +6,7 @@ import {
   useEffect,
   useEffectEvent,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -16,10 +17,13 @@ import geistPixelSquareUrl from "@/assets/fonts/GeistPixel-Square.woff2?url";
 import onboardingBackdropUrl from "@/assets/brand/gradient-bg.jpg?url";
 import { BrandMark } from "@/components/auth/cinematic-backdrop";
 import {
-  ONBOARDING_ACTS,
+  actEyebrow,
+  actUsesSoloStage,
+  onboardingActsFor,
   type OnboardingAct,
 } from "@/components/onboarding/onboarding-acts";
 import { OnboardingDetectedAgents } from "@/components/onboarding/onboarding-detected-agents";
+import { OnboardingSessionImportStage } from "@/components/onboarding/onboarding-session-import-stage";
 import {
   OnboardingDiorama,
   type OnboardingAgentGuideState,
@@ -27,14 +31,16 @@ import {
 import { OnboardingThemePicker } from "@/components/onboarding/onboarding-theme-picker";
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
+import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { getClientAppVersionLabel } from "@/lib/app-version";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import {
-  selectIsLastStep,
-  selectStep,
+  clampOnboardingStep,
+  isLastOnboardingStep,
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
+import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
@@ -294,10 +300,13 @@ const ONBOARDING_STYLE = `
   }
 }`;
 
-function ActCopy(props: { act: OnboardingAct }) {
-  const { act } = props;
+function ActCopy(props: {
+  readonly act: OnboardingAct;
+  readonly eyebrow: string;
+}) {
+  const { act, eyebrow } = props;
   const headingRef = useRef<HTMLHeadingElement | null>(null);
-  const isAgentsAct = act.addon === "agents";
+  const isSoloAct = actUsesSoloStage(act);
 
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
@@ -305,17 +314,19 @@ function ActCopy(props: { act: OnboardingAct }) {
 
   return (
     <m.div
+      data-testid="onboarding-act"
+      data-act-id={act.id}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.28, ease: ACT_EASE }}
       className={cn(
         "onboarding-copy flex min-h-0 w-full flex-col items-center text-center lg:items-start lg:text-left",
-        isAgentsAct && "h-full",
+        isSoloAct && "h-full",
       )}
     >
       <p className="onboarding-copy-kicker hidden font-mono leading-normal font-medium tracking-[0.07em] text-white/55 uppercase lg:block">
-        {act.eyebrow}
+        {eyebrow}
       </p>
       <div className="onboarding-copy-inner flex w-full flex-col items-center lg:items-start">
         <h1
@@ -329,7 +340,7 @@ function ActCopy(props: { act: OnboardingAct }) {
           {act.body}
         </p>
       </div>
-      {isAgentsAct ? (
+      {act.addon === "agents" ? (
         <div className="onboarding-addon flex min-h-0 w-full flex-1 flex-col self-center overflow-hidden pt-1 text-left lg:self-start">
           <OnboardingDetectedAgents />
         </div>
@@ -343,14 +354,17 @@ function ActCopy(props: { act: OnboardingAct }) {
   );
 }
 
-function ProgressRail(props: { activeIndex: number }) {
-  const { activeIndex } = props;
+function ProgressRail(props: {
+  readonly acts: ReadonlyArray<OnboardingAct>;
+  readonly activeIndex: number;
+}) {
+  const { acts, activeIndex } = props;
   return (
     <div
       aria-hidden="true"
       className="onboarding-progress flex items-center gap-0.5"
     >
-      {ONBOARDING_ACTS.map((act, index) => (
+      {acts.map((act, index) => (
         <span
           key={act.id}
           className={cn(
@@ -412,11 +426,31 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const agentGuideInitializedRef = useRef(false);
   const agentGuideAutoDefaultRef = useRef(false);
   const agentGuideLastDefaultRef = useRef("");
+  // The live wizard's submit, handed over while the session-import act is on
+  // screen. A ref rather than state: it changes on every render of a streaming
+  // scan, and nothing renders off it - Continue only reads it when pressed.
+  const sessionImportSubmitRef = useRef<(() => void) | null>(null);
+  const registerSessionImportSubmit = useCallback((submit: () => void) => {
+    sessionImportSubmitRef.current = submit;
+  }, []);
   const navigate = useNavigate();
   const router = useRouter();
   const { replay } = props;
-  const step = useOnboardingStore(selectStep);
-  const isLastAct = useOnboardingStore(selectIsLastStep);
+  // The tour a host can run, not the full catalog: a host that cannot scan
+  // sessions never reaches the session-import act, whose stage is the live
+  // wizard. Everything below counts acts off this list, so the omitted act is
+  // unreachable rather than merely blank.
+  const sessionImportAvailable = useSessionImportAvailable();
+  const acts = useMemo(
+    () => onboardingActsFor(sessionImportAvailable),
+    [sessionImportAvailable],
+  );
+  // Read the raw step and clamp here: negotiation can retire an act while the
+  // user is already past its new end, and the clamp is what keeps the page on
+  // a real act until the next move re-seats the store.
+  const storedStep = useOnboardingStore((state) => state.step);
+  const step = clampOnboardingStep(storedStep, acts.length);
+  const isLastAct = isLastOnboardingStep(storedStep, acts.length);
   const advanceStep = useOnboardingStore((state) => state.advance);
   const retreat = useOnboardingStore((state) => state.retreat);
   const complete = useOnboardingStore((state) => state.complete);
@@ -430,7 +464,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     reset: resetAgentGuideSetMutation,
   } = agentGuideSetMutation;
 
-  const act = ONBOARDING_ACTS[step];
+  const act = acts[step];
   const isAgentGuideAct = act.id === "agent-guide";
   const agentGuideQueryData = agentGuideQuery.data;
   const agentGuideWaitingForProviderSettlement =
@@ -443,6 +477,14 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   useLayoutEffect(() => {
     restart();
   }, [restart]);
+
+  // Presence, for app-level ambient surfaces: while the tour has the screen,
+  // the import-progress toast holds instead of floating over the stage.
+  const setTourOpen = useOnboardingTourOpenStore((state) => state.setOpen);
+  useEffect(() => {
+    setTourOpen(true);
+    return () => setTourOpen(false);
+  }, [setTourOpen]);
 
   useEffect(() => {
     Analytics.getInstance().track(AnalyticsEvent.OnboardingStarted, {
@@ -586,30 +628,35 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   );
 
   const retreatWithAnalytics = useCallback((): void => {
-    const destination = ONBOARDING_ACTS[Math.max(0, step - 1)] ?? act;
-    retreat();
+    const destination = acts[Math.max(0, step - 1)] ?? act;
+    retreat(acts.length);
     Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
       direction: "back",
       step: destination.id,
     });
-  }, [act, retreat, step]);
+  }, [act, acts, retreat, step]);
 
   const advance = useCallback((): void => {
     if (advanceDisabled) return;
+    // The session-import act has one forward control, and it does both jobs:
+    // start the import for whatever is ticked (nothing ticked is a no-op), then
+    // move on. The run is owned by the app-wide controller, so it outlives this
+    // act and keeps going while the user finishes the tour.
+    if (act.addon === "session-import") sessionImportSubmitRef.current?.();
     const advancePastCurrent = (): void => {
       if (isLastAct) {
         finish("completed");
         return;
       }
-      const destination = ONBOARDING_ACTS[step + 1] ?? act;
-      advanceStep();
+      const destination = acts[step + 1] ?? act;
+      advanceStep(acts.length);
       Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
         direction: "continue",
         step: destination.id,
       });
     };
     advancePastCurrent();
-  }, [act, advanceDisabled, advanceStep, finish, isLastAct, step]);
+  }, [act, acts, advanceDisabled, advanceStep, finish, isLastAct, step]);
   const handleKeyboardAdvance = useEffectEvent((): void => advance());
   const handleKeyboardRetreat = useEffectEvent((): void =>
     retreatWithAnalytics(),
@@ -696,17 +743,21 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
               className={cn(
                 "onboarding-stage-content relative mx-auto grid h-full min-h-0 w-full max-w-[104rem] items-start overflow-hidden",
                 // The providers act needs a stretched copy rail so its list can scroll.
-                act.addon === "agents" && "onboarding-stage-content--solo",
+                actUsesSoloStage(act) && "onboarding-stage-content--solo",
               )}
             >
               <div className="onboarding-copy-rail flex min-h-0 min-w-0 flex-col items-center lg:items-start">
                 <div className="hidden w-full justify-center lg:flex lg:justify-start">
-                  <ProgressRail activeIndex={step} />
+                  <ProgressRail acts={acts} activeIndex={step} />
                 </div>
 
                 <div className="mt-7 w-full min-w-0">
                   <AnimatePresence mode="wait" initial={false}>
-                    <ActCopy key={act.id} act={act} />
+                    <ActCopy
+                      key={act.id}
+                      act={act}
+                      eyebrow={actEyebrow(act, step)}
+                    />
                   </AnimatePresence>
                 </div>
               </div>
@@ -728,16 +779,24 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                 {/* Fade the mini-app in place on each act so it never slides up
                     from the bottom when reappearing (e.g. providers → handoff). */}
                 <m.div
-                  key={step}
+                  key={act.id}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ duration: 0.25, ease: ACT_EASE }}
                   className="w-full min-w-0"
                 >
-                  <OnboardingDiorama
-                    stage={step}
-                    agentGuide={agentGuideState}
-                  />
+                  {/* Session import has no mock-up to preview: this window holds
+                      the real wizard, reading the user's real machine. */}
+                  {act.addon === "session-import" ? (
+                    <OnboardingSessionImportStage
+                      registerSubmit={registerSessionImportSubmit}
+                    />
+                  ) : (
+                    <OnboardingDiorama
+                      actId={act.id}
+                      agentGuide={agentGuideState}
+                    />
+                  )}
                 </m.div>
               </div>
             </div>
@@ -750,9 +809,9 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
             <div className="onboarding-actions absolute z-10 flex items-center justify-end gap-3">
               <div className="mr-auto flex min-w-0 max-w-[14rem] flex-1 flex-col gap-1.5 lg:hidden">
                 <p className="truncate font-mono text-[0.6875rem] leading-none font-medium tracking-[0.07em] text-white/55 uppercase">
-                  {act.eyebrow}
+                  {actEyebrow(act, step)}
                 </p>
-                <ProgressRail activeIndex={step} />
+                <ProgressRail acts={acts} activeIndex={step} />
               </div>
               {step > 0 ? (
                 <button

@@ -96,6 +96,7 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
 import { useHistoryListKeyboardNav } from "@/components/epics/use-history-list-keyboard-nav";
+import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   useHistoryQuery,
@@ -1573,6 +1574,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
               <span className="truncate font-medium text-foreground">
                 {displayTitle}
               </span>
+              <ImportedUnseenDot epicId={item.epicId} />
               <HistoryOpenBadge epicId={item.epicId} isOpen={isOpen} />
               {pinControl}
               {titleEditControl}

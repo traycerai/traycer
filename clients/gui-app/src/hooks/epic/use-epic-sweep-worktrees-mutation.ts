@@ -47,6 +47,8 @@ export interface SweepTargetWorktree {
 export interface SweepWorktreesVariables {
   /** Host on which the dialog's act-time safety proof was computed. */
   readonly hostId: string;
+  /** The one Task that initiated the sweep; absent for bulk Task sweeps. */
+  readonly epicId?: string;
   readonly worktrees: ReadonlyArray<SweepTargetWorktree>;
 }
 
@@ -111,6 +113,7 @@ export function useEpicSweepWorktrees(): UseMutationResult<
         hostId: variables.hostId,
         paths: variables.worktrees.map((target) => target.worktreePath),
         source: "task_sweep",
+        epicId: variables.epicId,
         stopOwnersPaths,
         expectedHoldersRevisionByPath,
       });

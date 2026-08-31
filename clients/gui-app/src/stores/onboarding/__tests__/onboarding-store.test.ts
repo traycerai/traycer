@@ -2,13 +2,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CURRENT_PERSIST_VERSION, STORE_KEYS, persistKey } from "@/lib/persist";
 import { ONBOARDING_ACTS } from "@/components/onboarding/onboarding-acts";
 import {
-  selectIsLastStep,
-  selectStep,
+  clampOnboardingStep,
+  isLastOnboardingStep,
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
 
 const PERSIST_KEY = persistKey(STORE_KEYS.onboarding);
-const LAST_STEP = ONBOARDING_ACTS.length - 1;
+// The full catalog is one host's tour; a host missing an optional capability
+// runs a shorter one, which is why every bound below is a passed count.
+const ACT_COUNT = ONBOARDING_ACTS.length;
+const LAST_STEP = ACT_COUNT - 1;
 
 function resetStore(): void {
   window.localStorage.clear();
@@ -31,7 +34,7 @@ describe("useOnboardingStore", () => {
   });
 
   it("advance moves to the next act for the active session", () => {
-    useOnboardingStore.getState().advance();
+    useOnboardingStore.getState().advance(ACT_COUNT);
 
     expect(useOnboardingStore.getState().step).toBe(1);
   });
@@ -39,33 +42,54 @@ describe("useOnboardingStore", () => {
   it("advance on the last act completes the tour instead of overrunning", () => {
     useOnboardingStore.setState({ step: LAST_STEP });
 
-    useOnboardingStore.getState().advance();
+    useOnboardingStore.getState().advance(ACT_COUNT);
 
     expect(useOnboardingStore.getState().step).toBe(LAST_STEP);
     expect(typeof useOnboardingStore.getState().completedAt).toBe("number");
   });
 
+  it("advance completes on the last act of a SHORTER tour, not of the catalog", () => {
+    const shorterCount = ACT_COUNT - 1;
+    useOnboardingStore.setState({ step: shorterCount - 1 });
+
+    useOnboardingStore.getState().advance(shorterCount);
+
+    expect(useOnboardingStore.getState().step).toBe(shorterCount - 1);
+    expect(typeof useOnboardingStore.getState().completedAt).toBe("number");
+  });
+
   it("retreat moves back and clamps at the first act", () => {
     useOnboardingStore.setState({ step: 2 });
-    useOnboardingStore.getState().retreat();
+    useOnboardingStore.getState().retreat(ACT_COUNT);
     expect(useOnboardingStore.getState().step).toBe(1);
 
     useOnboardingStore.setState({ step: 0 });
-    useOnboardingStore.getState().retreat();
+    useOnboardingStore.getState().retreat(ACT_COUNT);
     expect(useOnboardingStore.getState().step).toBe(0);
   });
 
-  it("selectStep clamps a stale persisted step past the act list", () => {
-    useOnboardingStore.setState({ step: 999 });
+  it("retreat leaves the act the user can SEE when the tour shrank under them", () => {
+    // An act retired mid-tour clamps the view to the new last act; Back has to
+    // move off that act rather than land on it again.
+    const shorterCount = ACT_COUNT - 1;
+    useOnboardingStore.setState({ step: ACT_COUNT - 1 });
 
-    expect(selectStep(useOnboardingStore.getState())).toBe(LAST_STEP);
+    useOnboardingStore.getState().retreat(shorterCount);
+
+    expect(useOnboardingStore.getState().step).toBe(shorterCount - 2);
   });
 
-  it("selectIsLastStep reflects whether the last act is showing", () => {
-    expect(selectIsLastStep(useOnboardingStore.getState())).toBe(false);
+  it("clampOnboardingStep holds a stale step inside the tour being shown", () => {
+    expect(clampOnboardingStep(999, ACT_COUNT)).toBe(LAST_STEP);
+    expect(clampOnboardingStep(999, ACT_COUNT - 1)).toBe(LAST_STEP - 1);
+    expect(clampOnboardingStep(-3, ACT_COUNT)).toBe(0);
+  });
 
-    useOnboardingStore.setState({ step: LAST_STEP });
-    expect(selectIsLastStep(useOnboardingStore.getState())).toBe(true);
+  it("isLastOnboardingStep reflects whether the last act is showing", () => {
+    expect(isLastOnboardingStep(0, ACT_COUNT)).toBe(false);
+    expect(isLastOnboardingStep(LAST_STEP, ACT_COUNT)).toBe(true);
+    // The same step is the last act of a tour one act shorter.
+    expect(isLastOnboardingStep(LAST_STEP - 1, ACT_COUNT - 1)).toBe(true);
   });
 
   it("reset clears both completedAt and step (replay from act 1)", () => {

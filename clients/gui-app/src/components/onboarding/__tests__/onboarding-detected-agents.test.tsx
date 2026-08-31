@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   type RenderResult,
 } from "@testing-library/react";
 import { StrictMode } from "react";
@@ -216,7 +217,7 @@ function latestAwaitLoginOptions(): AwaitLoginOptions {
 }
 
 function signInButton(): HTMLElement {
-  return screen.getByRole("button", { name: /sign in to enable/i });
+  return screen.getByRole("button", { name: /sign in & enable/i });
 }
 
 /**
@@ -324,7 +325,7 @@ describe("OnboardingDetectedAgents", () => {
     render(<OnboardingDetectedAgents />);
 
     expect(
-      screen.queryByRole("button", { name: /sign in to enable/i }),
+      screen.queryByRole("button", { name: /sign in & enable/i }),
     ).toBeNull();
     expect(screen.queryByText("Not signed in")).toBeNull();
     expect(
@@ -351,7 +352,7 @@ describe("OnboardingDetectedAgents", () => {
     render(<OnboardingDetectedAgents />);
 
     expect(
-      screen.queryByRole("button", { name: /sign in to enable/i }),
+      screen.queryByRole("button", { name: /sign in & enable/i }),
     ).toBeNull();
     expect(screen.queryByText("Not signed in")).toBeNull();
     expect(screen.getByRole("switch", { name: /^Enable / })).toBeTruthy();
@@ -387,6 +388,30 @@ describe("OnboardingDetectedAgents", () => {
   });
 });
 
+// A disabled row's "Sign in & enable" button and enable switch live in the
+// same trailing area the dim treatment recedes around them, not over them -
+// a row-level opacity would ghost an outline button to near invisibility. The
+// dim belongs to the identity pieces (icon, label, badge) alone.
+describe("OnboardingDetectedAgents row dimming", () => {
+  afterEach(resetFixtures);
+
+  it("dims the install badge but leaves the sign-in button and switch at full opacity, for a disabled+installed row", () => {
+    fixtures.providers = [fixtures.signInProvider];
+    render(<OnboardingDetectedAgents />);
+
+    expect(signInButton().closest(".opacity-60")).toBeNull();
+    expect(
+      screen.getByRole("switch", { name: /^Enable / }).closest(".opacity-60"),
+    ).toBeNull();
+
+    const row = signInButton().closest("li");
+    if (row === null) throw new Error("Expected the row's <li>.");
+    expect(within(row).getByText("Installed").className).toContain(
+      "opacity-60",
+    );
+  });
+});
+
 // Regression coverage for the declined-sign-in path: the GUI rules
 // (`clients/gui-app/AGENTS.md`, "Backend calls -> TanStack Query") forbid
 // ad-hoc `toast.error` in components, so a `providers.startLogin` success with
@@ -399,7 +424,7 @@ describe("SignInToEnableButton declined sign-in", () => {
     fixtures.providers = [fixtures.signInProvider];
     const view = render(<OnboardingDetectedAgents />);
 
-    fireEvent.click(screen.getByRole("button", { name: /sign in to enable/i }));
+    fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     const [, options] = latestStartLoginCall();
     act(() => {
       fixtures.startLoginPending = false;
@@ -419,7 +444,7 @@ describe("SignInToEnableButton declined sign-in", () => {
     fixtures.providers = [fixtures.signInProvider];
     const view = render(<OnboardingDetectedAgents />);
 
-    fireEvent.click(screen.getByRole("button", { name: /sign in to enable/i }));
+    fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     const [, options] = latestStartLoginCall();
     act(() => {
       fixtures.startLoginPending = false;
@@ -444,7 +469,7 @@ describe("SignInToEnableButton declined sign-in", () => {
     fixtures.providers = [fixtures.signInProvider];
     render(<OnboardingDetectedAgents />);
 
-    fireEvent.click(screen.getByRole("button", { name: /sign in to enable/i }));
+    fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     const [, startOptions] = latestStartLoginCall();
     act(() => {
       startOptions.onSuccess({ started: true });
@@ -490,7 +515,7 @@ describe("SignInToEnableButton declined sign-in", () => {
     fixtures.providers = [fixtures.signInProvider];
     const view = render(<OnboardingDetectedAgents />);
 
-    fireEvent.click(screen.getByRole("button", { name: /sign in to enable/i }));
+    fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     const [, firstOptions] = latestStartLoginCall();
     act(() => {
       fixtures.startLoginPending = false;
@@ -504,7 +529,7 @@ describe("SignInToEnableButton declined sign-in", () => {
     // A fresh `mutate()` resets `isSuccess` synchronously, before the new
     // attempt resolves - the derived `declined` flag must clear at that
     // point, not only once the retry succeeds.
-    fireEvent.click(screen.getByRole("button", { name: /sign in to enable/i }));
+    fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     act(() => {
       fixtures.startLoginPending = true;
       fixtures.startLoginSuccess = false;
@@ -528,7 +553,7 @@ describe("SignInToEnableButton declined sign-in", () => {
     fixtures.providers = [fixtures.signInProvider];
     const view = render(<OnboardingDetectedAgents />);
 
-    fireEvent.click(screen.getByRole("button", { name: /sign in to enable/i }));
+    fireEvent.click(screen.getByRole("button", { name: /sign in & enable/i }));
     const [, options] = latestStartLoginCall();
     act(() => {
       fixtures.startLoginPending = false;
@@ -545,7 +570,7 @@ describe("SignInToEnableButton declined sign-in", () => {
 
 // The window where `providers.awaitLogin` has settled but the host's ambient
 // auth probe has not. It is not a verdict, and a button whose whole promise is
-// "Sign in to enable" must not silently decline to enable on one.
+// "Sign in & enable" must not silently decline to enable on one.
 describe("SignInToEnableButton unsettled auth verdict", () => {
   afterEach(resetFixtures);
 
@@ -967,7 +992,7 @@ describe("SignInToEnableButton mount survival", () => {
 
     // The precondition TanStack actually requires of us.
     expect(
-      screen.queryByRole("button", { name: /sign in to enable/i }),
+      screen.queryByRole("button", { name: /sign in & enable/i }),
     ).not.toBeNull();
 
     // ...and so the completion still reaches the enable.
@@ -1029,7 +1054,7 @@ describe("SignInToEnableButton already-authenticated with sign-in unavailable", 
 
     expect(screen.getByText("Not signed in")).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: /sign in to enable/i }),
+      screen.queryByRole("button", { name: /sign in & enable/i }),
     ).toBeNull();
   });
 });

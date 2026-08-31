@@ -4,8 +4,8 @@ import { MessageSquareLock } from "lucide-react";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import {
-  useEpicAgentActivityTiers,
-  useEpicPermissionRole,
+  useRegisteredEpicAgentActivityTiers,
+  useRegisteredEpicPermissionRole,
 } from "@/lib/epic-selectors";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
@@ -53,9 +53,22 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
   // rollup already reads, so a background-only chat now presents the same way
   // whether you look at its own row or at the collapsed parent standing in
   // for it. A host that has not classified its agents still reports `"turn"`.
+  //
+  // Both reads go through the REGISTERED (keyed, non-throwing) selectors, not
+  // the ambient `useEpicAgentActivityTiers()` / `useEpicPermissionRole()`: this
+  // icon already carries its `epicId`, and it is a presentational leaf that
+  // must stay renderable wherever a chat node is drawn - the same rule the
+  // sibling `TuiAgentLiveTabIcon` follows. With the ambient hooks it was the
+  // least-defended node icon: any render outside an `<EpicSessionProvider>`
+  // (or under one whose handle is momentarily `null`) threw from here and
+  // blanked the window via the root boundary. Outside a session both degrade
+  // - no activity, `null` role - which is the same neutral idle the icon
+  // already shows for an unknown permission.
   const awarenessRunning: IndicatorRunningKind =
-    useEpicAgentActivityTiers().get(props.chatId) ?? false;
-  const fallbackReadOnly = useEpicPermissionRole() === "viewer";
+    useRegisteredEpicAgentActivityTiers(props.epicId).get(props.chatId) ??
+    false;
+  const fallbackReadOnly =
+    useRegisteredEpicPermissionRole(props.epicId) === "viewer";
   const handle = useExistingChatSessionHandle(
     props.epicId,
     props.chatId,

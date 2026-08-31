@@ -403,7 +403,14 @@ export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
-  if (supportsV17(negotiated)) return frame;
+  // BEFORE the 1.7 identity return: `chat.imported` shipped on the 1.8 line,
+  // and a released 1.7 client's strict event enum fails the WHOLE snapshot on
+  // an unknown member - so every pre-1.8 peer must never see the event. A
+  // client that cannot render an import provenance row has nothing to do with
+  // the value anyway.
+  const preImportSafe = projectPreImportedFrame(frame, negotiated);
+  if (supportsV17(negotiated)) return preImportSafe;
+  frame = preImportSafe;
 
   switch (frame.kind) {
     case "actionAck": {
@@ -546,6 +553,63 @@ function projectChatEvent(event: unknown): unknown {
     projectedMetadata[key] = stripAnswerSelection(metadata[key]);
   }
   return { ...event, metadata: projectedMetadata };
+}
+
+const CHAT_SUBSCRIBE_V18_MINOR = 8;
+
+function supportsV18(negotiated: SchemaVersion | null): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_V18_MINOR
+  );
+}
+
+const CHAT_IMPORTED_EVENT_TYPE = "chat.imported";
+
+function isImportedChatEvent(event: unknown): boolean {
+  return isRecord(event) && event.type === CHAT_IMPORTED_EVENT_TYPE;
+}
+
+/**
+ * Withhold `chat.imported` from every pre-`1.8` peer.
+ *
+ * An `eventAppended` carrying it THROWS - the host's send path catches and
+ * drops the frame, the same drop `interviewDeliveryRetry` takes - because
+ * there is no older shape to project it onto. A snapshot instead filters the
+ * event out of the durable log, since the snapshot itself must still land.
+ */
+function projectPreImportedFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (supportsV18(negotiated)) return frame;
+  if (frame.kind === "eventAppended") {
+    if (isImportedChatEvent(frame.event)) {
+      throw new Error(
+        "chat.imported event requires chat.subscribe@1.8 or newer",
+      );
+    }
+    return frame;
+  }
+  if (frame.kind !== "snapshot") return frame;
+  const snapshot = frame.snapshot;
+  if (!isRecord(snapshot)) return frame;
+  const chat = snapshot.chat;
+  if (!isRecord(chat)) return frame;
+  const events = chat.events;
+  if (!Array.isArray(events)) return frame;
+  if (!events.some(isImportedChatEvent)) return frame;
+  return {
+    ...frame,
+    snapshot: {
+      ...snapshot,
+      chat: {
+        ...chat,
+        events: events.filter((event) => !isImportedChatEvent(event)),
+      },
+    },
+  };
 }
 
 function projectChatEvents(value: unknown): unknown {
