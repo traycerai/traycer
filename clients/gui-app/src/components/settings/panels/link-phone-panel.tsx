@@ -315,7 +315,7 @@ function ApprovedCard(props: { readonly onRestart: () => void }) {
         data-testid="link-phone-restart"
         onClick={props.onRestart}
       >
-        Link another phone
+        Link another device
       </Button>
     </div>
   );
