@@ -24,12 +24,19 @@ const { execFileSync } = require("node:child_process");
 // acceptable because the dev shell renders trusted local code.
 function decideDisableChromiumSandbox({
   platform,
+  effectiveUid,
   apparmorRestrictsUserns,
   usernsCloneDisabled,
   sandboxHelperStat,
 }) {
   if (platform !== "linux") {
     return false;
+  }
+  // Chromium refuses to start its browser process as root unless the sandbox
+  // is off, regardless of what the namespace/helper situation looks like -
+  // and root-owned dev containers are exactly where the headless path runs.
+  if (effectiveUid === 0) {
+    return true;
   }
   // With unprivileged userns available the namespace sandbox works and the
   // setuid helper is never consulted.
@@ -65,6 +72,9 @@ function shouldDisableChromiumSandbox(electronBinaryPath) {
   }
   return decideDisableChromiumSandbox({
     platform: process.platform,
+    // `geteuid` is POSIX-only; the platform gate above makes this safe.
+    effectiveUid:
+      typeof process.geteuid === "function" ? process.geteuid() : -1,
     // Ubuntu 24.04+ ships this AppArmor knob defaulted on; processes without
     // a profile granting userns (any node_modules binary) are denied.
     apparmorRestrictsUserns:
@@ -90,8 +100,6 @@ const OZONE_PLATFORMS = ["auto", "headless", "wayland", "x11"];
 //   - an explicit `TRAYCER_DESKTOP_OZONE_PLATFORM` always wins (validated
 //     against the platforms Chromium accepts, so a typo fails here with the
 //     accepted values named rather than deep inside Chromium's startup);
-//   - a user who set Electron's own `ELECTRON_OZONE_PLATFORM_HINT` has
-//     expressed a choice — leave selection to Electron;
 //   - `DISPLAY` present → force `x11`. On real Wayland desktops this is
 //     Xwayland, which universally works; native Wayland stays one env var
 //     away for whoever wants it;
@@ -101,10 +109,14 @@ const OZONE_PLATFORMS = ["auto", "headless", "wayland", "x11"];
 //
 // Returns the `--ozone-platform=<value>` value to force, or null to leave
 // Electron's own selection alone.
+// Deliberately does NOT consult `ELECTRON_OZONE_PLATFORM_HINT`: Electron
+// removed it in 38 (this repo is on 42), so a developer who still exports it
+// gets no platform selection from Electron at all - deferring to it would
+// hand the choice back to `auto` and reinstate the Wayland hang this exists
+// to prevent. `TRAYCER_DESKTOP_OZONE_PLATFORM` is the escape hatch.
 function decideOzonePlatform({
   platform,
   ozonePlatformOverride,
-  electronOzoneHint,
   display,
   waylandDisplay,
 }) {
@@ -128,9 +140,6 @@ function decideOzonePlatform({
       );
     }
     return accepted;
-  }
-  if (typeof electronOzoneHint === "string" && electronOzoneHint.length > 0) {
-    return null;
   }
   if (typeof display === "string" && display.length > 0) {
     return "x11";
