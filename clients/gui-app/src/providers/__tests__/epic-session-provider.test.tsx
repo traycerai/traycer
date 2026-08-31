@@ -1182,12 +1182,14 @@ describe("<EpicSessionProvider />", () => {
       );
     }
 
-    // `useHostClientForHostId` is only ever called with `session?.hostId ??
-    // targetHostId` in this window - which stays "host-a" while the candidate
-    // is establishing - so nothing in the render path has resolved a "host-b"
-    // client yet. Resolve it directly through the same cache the mocked hook
-    // reads from, so a stub exists to assert against regardless of what the
-    // fix's own resolution path turns out to be.
+    // The provider resolves BOTH hosts during this window - the mounted
+    // session's ("host-a") and the re-point target's ("host-b") - so the render
+    // path has already created the stub this asserts on. Calling the resolver
+    // here is get-or-create against the same cache the mocked hook reads
+    // (`:96-105`), which hands back that very object rather than a second one;
+    // a fresh stub per call would make the assertion below unreachable. The
+    // call is kept rather than replaced by a bare `get` so the test does not
+    // depend on WHICH render resolved it first.
     resolveSessionHostClient("host-b");
     const hostBClient = sessionHostClients.byHostId.get("host-b");
     if (hostBClient === undefined) {

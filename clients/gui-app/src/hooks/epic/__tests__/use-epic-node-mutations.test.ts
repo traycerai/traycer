@@ -322,7 +322,7 @@ describe("epic node mutations address the Epic session's host", () => {
 });
 
 /**
- * `useEpicUpdateArtifactStatus("artifact-1").mutate` and `useEpicRenameArtifact().mutate`
+ * The status and rename hooks' `mutate` wrappers
  * both do `void mutateAsync(v)` - `mutateAsync` toasts AND rethrows on a
  * refused write, so every refused status change / rename raises an
  * unhandled rejection nobody consumes. `useEpicDeleteArtifact`'s own `mutate`
@@ -430,8 +430,11 @@ describe("mutate consumes the mutateAsync rejection instead of leaving it unhand
  *
  * Each hook now takes the artifact it speaks for. `null` means "this caller
  * speaks for no single artifact" - the sidebar's bulk-delete controller and
- * the mobile switcher's rename, neither of which reads `isPending` - and
- * reports `isPending` as `false`.
+ * BOTH rename commit hooks, `useSwitcherRename` and its desktop twin
+ * `useRenameCanvasTab`, whose node id arrives as an argument to the returned
+ * callback rather than as a value at hook-call time. Three of the nine
+ * production callers; none of them reads `isPending`, and `null` reports
+ * `false` rather than "any".
  */
 describe("isPending is scoped to the artifact the hook speaks for", () => {
   it("useEpicUpdateArtifactStatus: a pending command for X does not spin Y", () => {

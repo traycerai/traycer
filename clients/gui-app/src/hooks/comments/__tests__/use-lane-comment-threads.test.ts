@@ -122,6 +122,23 @@ describe("resolveArtifactCommentThreads", () => {
     expect(result.threads).not.toBeNull();
   });
 
+  // D.9 - CONTROL, green both sides. The retained-rows pin above only uses a
+  // NON-EMPTY array, so nothing holds the EMPTY case - and `[]` is exactly
+  // what a `laneThreads.length > 0` "simplification" of the third arm would
+  // turn into `null`, silently converting "this artifact has no threads"
+  // into "unknown". This guards the empty-vs-unknown distinction on the
+  // retained-rows arm, not the ordering the two pins above already cover.
+  it("keeps the retained EMPTY lane array (not null) when the lane drops and the poll has nothing either", () => {
+    const result = resolveArtifactCommentThreads({
+      laneThreads: [],
+      pollThreads: null,
+      laneLive: false,
+    });
+    expect(result.threads).toEqual([]);
+    expect(result.threads).not.toBeNull();
+    expect(result.source).toBe("state-lane");
+  });
+
   it("still prefers lane rows over the poll while the lane IS live - the control arm", () => {
     const laneThreads = [threadFixture("live-lane-thread")];
     const pollThreads = [threadFixture("poll-thread")];

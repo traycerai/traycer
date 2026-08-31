@@ -1,7 +1,10 @@
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import * as Y from "yjs";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type {
+  ArtifactBodyResidentLease,
+  OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
 import {
   ArtifactBodyUnavailableError,
   holdArtifactBody,
@@ -9,28 +12,15 @@ import {
   readHeldEpicAttachmentBytes,
 } from "@/lib/epic-replica-reads";
 
-/**
- * The post-fix resident lease `holdArtifactBody` will take instead of reading
- * `getArtifactFragment` in the same tick as `acquireArtifactBodyLease`. Shaped
- * to match `ArtifactBodyResidentLease` (not yet exported by the source - this
- * is a test-local mirror of its documented shape).
- */
-interface FakeResidentLease {
-  release(): void;
-  readonly resident: Promise<void>;
-}
-
 interface FakeState {
   /**
-   * Kept even though the post-fix `holdArtifactBody` stops calling it: today's
-   * UNFIXED source still calls it in the same tick as `getArtifactFragment`,
-   * and dropping it here would make that call site throw a bare TypeError
-   * instead of reddening on the assertion these pins name.
+   * The read seam takes the RESIDENT member and no longer the sync one, so the
+   * sync member is deliberately absent here: a fixture that still offered it
+   * would let a test pin a call `holdArtifactBody` does not make.
    */
-  readonly acquireArtifactBodyLease: (artifactId: string) => () => void;
   readonly acquireResidentArtifactBodyLease: (
     artifactId: string,
-  ) => FakeResidentLease;
+  ) => ArtifactBodyResidentLease;
   readonly getArtifactFragment: (artifactId: string) => Y.XmlFragment | null;
   /**
    * The two attachment legs, and they are DIFFERENT store members - which is
@@ -85,7 +75,6 @@ function createHandle(state: FakeState): OpenEpicStoreHandle {
 
 function createState(overrides: Partial<FakeState>): FakeState {
   return {
-    acquireArtifactBodyLease: () => () => {},
     acquireResidentArtifactBodyLease: () => ({
       release: () => {},
       resident: Promise.resolve(),
@@ -149,9 +138,10 @@ describe("holdArtifactBody", () => {
     residentSettled = true;
     gate.resolve();
 
-    // THE REDDENING ONE - today's `holdArtifactBody` never awaits residency,
-    // so it read `getArtifactFragment` while `residentSettled` was still
-    // `false` and rejected with `ArtifactBodyUnavailableError` instead.
+    // The whole point of the seam: the fragment is read only AFTER residency
+    // settles. Reading it in the same tick as the acquire - which is what this
+    // function used to do - sees `residentSettled === false` and reports a body
+    // that was milliseconds away as `ArtifactBodyUnavailableError`.
     await expect(holdPromise).resolves.toMatchObject({ fragment });
   });
 
