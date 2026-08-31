@@ -21,8 +21,20 @@ import type {
  * {@link hostDialGate} grants a slot - see `ws-dial-gate.ts`. This one has two
  * distinct mid-flight close behaviours as a result, and the difference is the
  * point: a socket that has not dialed is DEQUEUED (the platform never saw it),
- * while one that is already connecting keeps the pre-existing `pendingClose`
- * deferral below.
+ * while one that is already connecting is ABORTED - closed for real, and its
+ * slot handed back at once.
+ *
+ * That second case used to DEFER the close to the `open` handler, to dodge the
+ * browser's "WebSocket is closed before the connection is established" log.
+ * The trade was wrong, because the caller that closes mid-dial has given up:
+ * the only mid-dial closer is `WsStreamClient.teardownSocket`, whose largest
+ * source is its own `dial-timeout`, and it re-dials immediately afterwards. A
+ * deferred close keeps the gate ticket until the BROWSER finally gives up on
+ * the handshake, which against a black-holed host is far longer than
+ * `dialTimeoutMs` - so each timeout stranded a slot while adding a new dial,
+ * and six of them (the gate's whole capacity) starved every other host in the
+ * process, healthy ones included. The unary factory next door never deferred;
+ * this is the stream side matching it.
  */
 class WhatwgStreamWebSocket implements StreamWebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
@@ -33,12 +45,11 @@ class WhatwgStreamWebSocket implements StreamWebSocketLike {
   private readonly url: string;
   private readonly ticket: DialTicket;
   private native: WebSocket | null = null;
-  /** Set when close() is called mid-dial; honored once the socket opens. */
-  private pendingClose: {
-    readonly code: number;
-    readonly reason: string;
-  } | null = null;
-  /** Guards against emitting a second close for a socket already given up on. */
+  /**
+   * Guards against emitting a second close for a socket already given up on,
+   * and - since a mid-dial close now aborts rather than deferring - marks the
+   * socket the caller has abandoned, so a late `open` is not announced to it.
+   */
   private closeRequested = false;
 
   constructor(url: string, priority: DialPriority) {
@@ -79,10 +90,12 @@ class WhatwgStreamWebSocket implements StreamWebSocketLike {
     // pending handshake. Idempotent, so the usual error-then-close pair is free.
     native.addEventListener("open", () => {
       this.ticket.release();
-      if (this.pendingClose !== null) {
-        native.close(this.pendingClose.code, this.pendingClose.reason);
-        return;
-      }
+      // Aborted mid-dial: the caller has given up on this socket and its close
+      // has already been issued, so an `open` that lands anyway is not its
+      // business. Only reachable if the platform completes a handshake it was
+      // told to fail; the guard costs nothing and keeps the abandoned socket
+      // from re-entering the consumer.
+      if (this.closeRequested) return;
       this.onopen?.({ type: "open" });
     });
     native.addEventListener("message", (event: MessageEvent) => {
@@ -143,16 +156,22 @@ class WhatwgStreamWebSocket implements StreamWebSocketLike {
     const native = this.native;
     // Construction failed; its own close is already scheduled.
     if (native === null) return;
-    // Closing a socket that is still CONNECTING makes the browser log
-    // "WebSocket is closed before the connection is established". The close
-    // can't be honored until the handshake finishes, so record the intent and
-    // let the `open` handler issue it. If the socket never opens
-    // (errors/closes mid-dial) the intent is simply dropped with the wrapper -
-    // no dangling listener, no close on an abandoned socket.
-    if (native.readyState === WebSocket.CONNECTING) {
-      this.pendingClose = { code, reason };
-      return;
-    }
+    // Hand the slot back HERE rather than leaving it to the native
+    // `open`/`error`/`close` listeners. Those still release it (the call is
+    // idempotent), but only when the platform gets round to ending a handshake
+    // we have already abandoned - which for the black-holed host that produced
+    // the `dial-timeout` is exactly the wait the gate must not be doing. The
+    // release is unconditional because it is owed for an OPEN socket too: the
+    // listeners will have released that one already, and asking twice is free.
+    this.ticket.release();
+    // Closing a still-CONNECTING socket makes the browser log "WebSocket is
+    // closed before the connection is established", which is the cost this
+    // branch used to defer to avoid. Paying it is the point: it is a console
+    // line, while not closing leaves a real pending connection against the
+    // browser's own per-renderer ceiling - the very ceiling the gate exists to
+    // stay under. Releasing the ticket without closing would be the worst of
+    // the three: the gate would admit a replacement dial while the platform
+    // still held the abandoned one.
     native.close(code, reason);
   }
 }

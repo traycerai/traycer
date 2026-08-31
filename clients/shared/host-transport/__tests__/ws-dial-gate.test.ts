@@ -264,12 +264,25 @@ describe("the WHATWG factories: native construction stays behind the dial gate",
 
     /**
      * Mirrors the platform: closing a socket - CONNECTING or OPEN - always
-     * ends in a `close` event, synchronously for this fake. The stream
-     * factory's `pendingClose` deferral relies on this never being called
-     * while `readyState` is still `CONNECTING`.
+     * ends in a `close` event, synchronously for this fake.
+     *
+     * {@link blackHoleConnectingCloses} suspends the SYNCHRONOUS half for a
+     * still-CONNECTING socket, which is the only way to express the host the
+     * gate's capacity bug needs: one whose handshake goes unanswered, so the
+     * platform accepts `close()` (readyState -> CLOSING) but delivers the
+     * `close` event minutes later, if at all. With the synchronous fire left
+     * in, the native `close` listener hands the slot back on its own and a
+     * capacity assertion passes whether or not `close()` releases anything.
      */
     close(code: number, reason: string): void {
       this.closeCalls.push({ code, reason });
+      if (
+        blackHoleConnectingCloses &&
+        this.readyState === FakeWebSocket.CONNECTING
+      ) {
+        this.readyState = FakeWebSocket.CLOSING;
+        return;
+      }
       this.fireClose(code, reason, true);
     }
 
@@ -293,9 +306,12 @@ describe("the WHATWG factories: native construction stays behind the dial gate",
   }
 
   let constructedSockets: FakeWebSocket[] = [];
+  /** See {@link FakeWebSocket.close}. Reset to `false` before every case. */
+  let blackHoleConnectingCloses = false;
 
   beforeEach(() => {
     constructedSockets = [];
+    blackHoleConnectingCloses = false;
     vi.stubGlobal("WebSocket", FakeWebSocket);
   });
 
@@ -394,35 +410,54 @@ describe("the WHATWG factories: native construction stays behind the dial gate",
     },
   );
 
-  it("the stream factory defers close() on a still-CONNECTING socket, and drops onopen once it does", async () => {
+  it("the stream factory aborts a still-CONNECTING socket on close() and frees its slot without waiting for the platform", async () => {
+    // The host that produces this is one that never answers the handshake:
+    // `WsStreamClient` gives up at `dialTimeoutMs` and calls
+    // `teardownSocket(4000, "dial-timeout")`, then re-dials. The platform is
+    // still sitting on the abandoned socket, so nothing releases the gate
+    // ticket on its own - which is the whole failure.
+    blackHoleConnectingCloses = true;
     const factory = createWhatwgStreamWebSocketFactory();
-    const socket: StreamWebSocketLike = factory.create(
-      "wss://host/stream",
-      "interactive",
+    const sockets: StreamWebSocketLike[] = Array.from(
+      { length: 7 },
+      (_unused, i) => factory.create(`wss://host/stream-${i}`, "interactive"),
     );
     await flush();
 
+    // Six hold the gate; the seventh is queued behind them.
+    expect(constructedSockets).toHaveLength(6);
     const native = constructedSockets[0];
     expect(native.readyState).toBe(FakeWebSocket.CONNECTING);
 
     const onOpenSpy = vi.fn();
-    socket.onopen = onOpenSpy;
-    socket.close(4000, "closing-mid-dial");
+    sockets[0].onopen = onOpenSpy;
+    sockets[0].close(4000, "dial-timeout");
 
-    // Not honored yet - the handshake has not finished, so the fake's own
-    // `close` must not have run.
-    expect(native.closeCalls).toHaveLength(0);
+    // Half 1: the socket is CLOSED FOR REAL, not merely forgotten. A fix that
+    // released the ticket without closing would satisfy Half 2 alone while
+    // leaving a live pending connection against the browser's own ceiling -
+    // the gate would then admit a replacement dial on top of it.
+    expect(native.closeCalls).toEqual([{ code: 4000, reason: "dial-timeout" }]);
 
-    // Firing `open` both releases the slot and, seeing the pending close,
-    // issues it - which the fake resolves synchronously, ending the gate
-    // idle without any further draining.
+    // Half 2: the slot is back NOW. The platform has delivered no `close`
+    // event (that is what `blackHoleConnectingCloses` models), so the native
+    // listeners have not run and this can only be `close()`'s own release.
+    await flush();
+    expect(constructedSockets).toHaveLength(7);
+
+    // A late `open` on the abandoned socket is not announced to the consumer
+    // that already gave up on it. The close above left the fake in `CLOSING`,
+    // where `fireOpen` is a no-op and the assertion would hold for the wrong
+    // reason - so put it back to CONNECTING first and make the platform
+    // genuinely complete a handshake it was told to fail. That is the only
+    // state this guard exists for, and it has to be staged deliberately.
+    native.readyState = FakeWebSocket.CONNECTING;
     native.fireOpen();
-
-    expect(native.closeCalls).toEqual([
-      { code: 4000, reason: "closing-mid-dial" },
-    ]);
     expect(onOpenSpy).not.toHaveBeenCalled();
 
+    // Drain the rest so the gate ends idle for the afterEach assertion.
+    blackHoleConnectingCloses = false;
+    sockets.slice(1).forEach((socket) => socket.close(1000, "done"));
     await flush();
   });
 });
