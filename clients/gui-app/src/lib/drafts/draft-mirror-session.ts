@@ -25,6 +25,9 @@ export interface DraftDirtyWrite {
 
 export interface DraftMirrorSink {
   isDirty(draftId: string): boolean;
+  isDeletePending(draftId: string): boolean;
+  pendingDeleteIdsForHost(hostId: string): readonly string[];
+  completeDelete(draftId: string): void;
   applyUpsert(document: DraftDocument): Promise<void>;
   applyDelete(draftId: string): void;
   collectDirtyWrites(hostId: string): Promise<readonly DraftDirtyWrite[]>;
@@ -112,6 +115,7 @@ export class DraftMirrorSession {
    * restarts its own generation counter (a re-created row) is unaffected.
    */
   private readonly sendChain = new Map<string, PendingSend>();
+  private readonly deleteChain = new Map<string, Promise<boolean>>();
 
   private snapshotSeq = 0;
   private listedScopeId: string | null = null;
@@ -217,9 +221,24 @@ export class DraftMirrorSession {
    * can still find the row.
    */
   async deleteOnHost(draftId: string): Promise<boolean> {
+    const outstanding = this.deleteChain.get(draftId);
+    if (outstanding !== undefined) return outstanding;
+    const deleting = this.runDeleteOnHost(draftId).finally(() => {
+      if (this.deleteChain.get(draftId) === deleting) {
+        this.deleteChain.delete(draftId);
+      }
+    });
+    this.deleteChain.set(draftId, deleting);
+    return deleting;
+  }
+
+  private async runDeleteOnHost(draftId: string): Promise<boolean> {
+    this.clearTimer(draftId);
+    // An upsert may already have passed its send-time fence. Serialize the
+    // tombstone behind it so the host can never observe create-after-delete.
+    await this.sendChain.get(draftId)?.promise;
     if (this.closed) return false;
     if (this.capabilityMissing) return true;
-    this.clearTimer(draftId);
     try {
       const response = await this.rpc.delete(draftId);
       if (!response.deleted) return true;
@@ -295,6 +314,7 @@ export class DraftMirrorSession {
       // Tombstone ids are in `listedIds` so they are not also dropped.
       this.sink.dropAbsentFromList(this.hostId, listedIds);
       if (this.streamSession === null) this.openSubscribe();
+      await this.retryPendingDeletes();
       await this.upsertDirty(null);
     } catch (error: unknown) {
       if (isDraftsCapabilityMissing(error)) {
@@ -475,8 +495,12 @@ export class DraftMirrorSession {
   private async runUpsert(entry: DraftDirtyWrite): Promise<void> {
     if (this.isAbandoned()) return;
     const draftId = entry.write.draftId;
+    if (this.sink.isDeletePending(draftId)) return;
     try {
       const prepared = await this.sink.prepareWrite(this.hostId, entry.write);
+      // Blob preparation is asynchronous. Submission can fence the row while
+      // this write is waiting there, so gate again at actual RPC dispatch.
+      if (this.isAbandoned() || this.sink.isDeletePending(draftId)) return;
       const response = await this.rpc.upsert(prepared);
       this.held.set(response.draft.draftId, {
         kind: "row",
@@ -507,6 +531,14 @@ export class DraftMirrorSession {
       // have a live retry behind it — re-arm with bounded backoff.
       if (this.sink.isDirty(draftId)) {
         this.scheduleRetry(draftId);
+      }
+    }
+  }
+
+  private async retryPendingDeletes(): Promise<void> {
+    for (const draftId of this.sink.pendingDeleteIdsForHost(this.hostId)) {
+      if (await this.deleteOnHost(draftId)) {
+        this.sink.completeDelete(draftId);
       }
     }
   }
@@ -553,6 +585,9 @@ export class DraftMirrorSession {
     this.clearAllTimers();
     this.streamSession?.close();
     this.streamSession = null;
+    for (const draftId of this.sink.pendingDeleteIdsForHost(this.hostId)) {
+      this.sink.completeDelete(draftId);
+    }
   }
 
   /**

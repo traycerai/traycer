@@ -6,6 +6,7 @@ import {
 } from "@/lib/drafts/draft-mirror-coordinator";
 import {
   collectComposerDirtyWrites,
+  applyComposerHostDelete,
   dropComposerAbsentFromList,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
@@ -24,12 +25,18 @@ const TYPED = {
 
 describe("composer draft host-mirror bookkeeping", () => {
   beforeEach(() => {
-    useComposerDraftStore.setState({ drafts: {} });
+    useComposerDraftStore.setState({
+      drafts: {},
+      pendingSubmittedDraftDeletes: {},
+    });
     resetDraftMirrorCoordinatorForTests();
   });
 
   afterEach(() => {
-    useComposerDraftStore.setState({ drafts: {} });
+    useComposerDraftStore.setState({
+      drafts: {},
+      pendingSubmittedDraftDeletes: {},
+    });
     resetDraftMirrorCoordinatorForTests();
   });
 
@@ -76,5 +83,22 @@ describe("composer draft host-mirror bookkeeping", () => {
     expect(draft?.content).toEqual(TYPED);
     expect(draft?.resetEpoch).toBe(3);
     expect(draft?.hostRevision).toBe(4);
+  });
+
+  it("clears a stale second-window editor when the host delete frame arrives", () => {
+    useComposerDraftStore.getState().setSnapshot("chat-window-b", TYPED, {
+      from: 1,
+      to: 8,
+    });
+    const before = useComposerDraftStore.getState().drafts["chat-window-b"];
+    if (before?.draftId === null || before?.draftId === undefined) {
+      throw new Error("missing draft id");
+    }
+
+    applyComposerHostDelete(before.draftId);
+
+    const after = useComposerDraftStore.getState().drafts["chat-window-b"];
+    expect(after?.content).toEqual(EMPTY);
+    expect(after?.resetEpoch).toBe(before.resetEpoch + 1);
   });
 });

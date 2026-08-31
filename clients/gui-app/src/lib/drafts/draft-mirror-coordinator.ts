@@ -38,8 +38,11 @@ import {
   collectComposerDirtyWrites,
   composerDraftIsDirty,
   composerDraftRememberSynced,
+  composerSubmittedDraftDeleteIsPending,
   dropComposerAbsentFromList,
   findComposerChatIdByDraftId,
+  pendingSubmittedDraftDeleteHostId,
+  pendingSubmittedDraftDeleteIdsForHost,
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
@@ -332,10 +335,20 @@ const sink: DraftMirrorSink = {
       newChatDraftIsDirty(draftId)
     );
   },
+  isDeletePending(draftId) {
+    return composerSubmittedDraftDeleteIsPending(draftId);
+  },
+  pendingDeleteIdsForHost(hostId) {
+    return pendingSubmittedDraftDeleteIdsForHost(hostId);
+  },
+  completeDelete(draftId) {
+    useComposerDraftStore.getState().completeSubmittedDraftDelete(draftId);
+  },
   applyUpsert(document) {
     return applyHostDocument(document);
   },
   applyDelete(draftId) {
+    useComposerDraftStore.getState().completeSubmittedDraftDelete(draftId);
     applyLandingHostDelete(draftId);
     applyComposerHostDelete(draftId);
     applyInterviewHostDelete(draftId);
@@ -374,6 +387,10 @@ const sink: DraftMirrorSink = {
 };
 
 async function applyHostDocument(document: DraftDocument): Promise<void> {
+  if (composerSubmittedDraftDeleteIsPending(document.draftId)) {
+    await retrySubmittedDraftDelete(document.draftId);
+    return;
+  }
   const client = sessionClients.get(document.ownerHostId);
   const hashes = blobHashesOfDocument(document);
   if (client !== undefined && hashes.length > 0) {
@@ -533,6 +550,8 @@ function warnUnboundInterviewTarget(
 }
 
 function hostIdForDraft(draftId: string): string | null {
+  const pendingDeleteHostId = pendingSubmittedDraftDeleteHostId(draftId);
+  if (pendingDeleteHostId !== null) return pendingDeleteHostId;
   const landing = useLandingDraftStore
     .getState()
     .drafts.find((draft) => draft.id === draftId);
@@ -743,20 +762,27 @@ export function draftMirrorSessionCountForTests(): number {
 
 export async function submitComposerDraft(chatId: string): Promise<void> {
   const before = readComposerDraftSnapshot(chatId);
+  const hostId =
+    before.draftId === null ? null : hostIdForDraft(before.draftId);
   const store = useComposerDraftStore.getState();
   store.clearDraft(chatId);
-  if (before.draftId === null) return;
-  // Resolve the session while the id is still on the row - `sessionForDraft`
-  // finds it through the store.
-  const session = sessionForDraft(before.draftId);
+  if (before.draftId === null || hostId === null) return;
   // Then retire the id. `clearDraft` keeps it, so an edit made during the
   // flush/delete round-trip below would be published under the id this
   // function is about to tombstone, and the tombstone would mark that
   // content synced. The next edit mints a fresh id and a fresh host row.
-  store.detachSubmittedDraft(chatId);
-  if (session === null) return;
-  await session.flush([before.draftId]);
-  await session.deleteOnHost(before.draftId);
+  store.fenceAndDetachSubmittedDraft(chatId, before.draftId, hostId);
+  await retrySubmittedDraftDelete(before.draftId);
+}
+
+async function retrySubmittedDraftDelete(draftId: string): Promise<void> {
+  const hostId = pendingSubmittedDraftDeleteHostId(draftId);
+  if (hostId === null) return;
+  const session = sessions.get(hostId)?.session;
+  if (session === undefined) return;
+  if (await session.deleteOnHost(draftId)) {
+    useComposerDraftStore.getState().completeSubmittedDraftDelete(draftId);
+  }
 }
 
 export function collectDraftMirrorDirtyWrites(

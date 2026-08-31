@@ -70,8 +70,15 @@ export interface DraftState {
   readonly publication: DraftPublication | null;
 }
 
+export interface PendingSubmittedDraftDelete {
+  readonly hostId: string;
+}
+
 interface ComposerDraftStore {
   readonly drafts: Partial<Record<string, DraftState>>;
+  readonly pendingSubmittedDraftDeletes: Partial<
+    Record<string, PendingSubmittedDraftDelete>
+  >;
   /**
    * Records a real document mutation - callers must only invoke this from the
    * editor boundary's document-change signal (never a selection-only echo),
@@ -138,7 +145,12 @@ interface ComposerDraftStore {
    * one and a fresh host row. The row is left CLEAN because it is empty and
    * its old id is on its way out; nothing is owed to the host.
    */
-  readonly detachSubmittedDraft: (chatId: string) => void;
+  readonly fenceAndDetachSubmittedDraft: (
+    chatId: string,
+    draftId: string,
+    hostId: string,
+  ) => void;
+  readonly completeSubmittedDraftDelete: (draftId: string) => void;
   readonly bindTarget: (chatId: string, epicId: string) => void;
 }
 const EMPTY_COMPOSER_CONTENT: JsonContent = {
@@ -175,9 +187,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function hasDraftMap(
-  value: unknown,
-): value is { readonly drafts: Record<string, unknown> } {
+function hasDraftMap(value: unknown): value is Record<string, unknown> & {
+  readonly drafts: Record<string, unknown>;
+} {
   return isRecord(value) && isRecord(value.drafts);
 }
 
@@ -195,6 +207,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
   persist(
     (set, get) => ({
       drafts: {},
+      pendingSubmittedDraftDeletes: {},
       setSnapshot: (chatId, content, selection) => {
         const draftId = touchLocalComposerDraft(chatId, {
           content,
@@ -309,11 +322,15 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
         );
         scheduleLandingImageReconcile();
       },
-      detachSubmittedDraft: (chatId) => {
+      fenceAndDetachSubmittedDraft: (chatId, draftId, hostId) => {
         set((state) => {
           const current = ensureDraft(state.drafts, chatId);
-          if (current.draftId === null) return state;
+          if (current.draftId !== draftId) return state;
           return {
+            pendingSubmittedDraftDeletes: {
+              ...state.pendingSubmittedDraftDeletes,
+              [draftId]: { hostId },
+            },
             drafts: {
               ...state.drafts,
               [chatId]: {
@@ -327,6 +344,18 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               },
             },
           };
+        });
+      },
+      completeSubmittedDraftDelete: (draftId) => {
+        set((state) => {
+          if (state.pendingSubmittedDraftDeletes[draftId] === undefined) {
+            return state;
+          }
+          const pendingSubmittedDraftDeletes = {
+            ...state.pendingSubmittedDraftDeletes,
+          };
+          delete pendingSubmittedDraftDeletes[draftId];
+          return { pendingSubmittedDraftDeletes };
         });
       },
       bindTarget: (chatId, epicId) => {
@@ -355,9 +384,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
       // before an `onFinishHydration` subscriber can be registered. Normalize
       // at the merge boundary so legacy revisions are safe on initial import.
       merge: (persistedState, currentState) => {
-        if (!hasDraftMap(persistedState)) {
-          return currentState;
-        }
+        if (!hasDraftMap(persistedState)) return currentState;
         const drafts: Partial<Record<string, DraftState>> = {};
         for (const [taskId, value] of Object.entries(persistedState.drafts)) {
           if (!isRecord(value)) continue;
@@ -393,7 +420,20 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             publication: null,
           };
         }
-        return { ...currentState, drafts };
+        const pendingSubmittedDraftDeletes: Partial<
+          Record<string, PendingSubmittedDraftDelete>
+        > = {};
+        if (isRecord(persistedState.pendingSubmittedDraftDeletes)) {
+          for (const [draftId, value] of Object.entries(
+            persistedState.pendingSubmittedDraftDeletes,
+          )) {
+            if (!isRecord(value)) continue;
+            const hostId = normalizedNullableId(value.hostId);
+            if (draftId.length === 0 || hostId === null) continue;
+            pendingSubmittedDraftDeletes[draftId] = { hostId };
+          }
+        }
+        return { ...currentState, drafts, pendingSubmittedDraftDeletes };
       },
     },
   ),
@@ -473,6 +513,34 @@ export function composerDraftIsDirty(draftId: string): boolean {
   const draft = findComposerDraftById(draftId);
   if (draft === null) return false;
   return draft.generation > draft.syncedGeneration;
+}
+
+export function composerSubmittedDraftDeleteIsPending(
+  draftId: string,
+): boolean {
+  return (
+    useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId] !==
+    undefined
+  );
+}
+
+export function pendingSubmittedDraftDeleteHostId(
+  draftId: string,
+): string | null {
+  return (
+    useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId]
+      ?.hostId ?? null
+  );
+}
+
+export function pendingSubmittedDraftDeleteIdsForHost(
+  hostId: string,
+): readonly string[] {
+  return Object.entries(
+    useComposerDraftStore.getState().pendingSubmittedDraftDeletes,
+  ).flatMap(([draftId, pending]) =>
+    pending?.hostId === hostId ? [draftId] : [],
+  );
 }
 
 export function composerDraftRememberSynced(
