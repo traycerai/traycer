@@ -785,8 +785,8 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const epicHandle = useOpenEpicHandle();
 
   const createArtifact = useEpicCreateArtifact();
-  const deleteArtifact = useEpicDeleteArtifact();
-  const renameArtifact = useEpicRenameArtifact(true);
+  const deleteArtifact = useEpicDeleteArtifact(nodeId);
+  const renameArtifact = useEpicRenameArtifact(nodeId, true);
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
   const [pendingChildName, setPendingChildName] = useState<string | null>(null);

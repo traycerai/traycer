@@ -69,7 +69,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const chatWriteUnavailable = writeRoute === "unavailable";
   const deleteChat = useEpicDeleteChat();
   const deleteTuiAgent = useEpicDeleteTuiAgent();
-  const deleteArtifact = useEpicDeleteArtifact();
+  const deleteArtifact = useEpicDeleteArtifact(nodeId);
   // The row's terminal lives on the host the switcher LISTS (the Epic
   // session's), so kill goes to that same client - never the ambient one.
   const killTerminal = useTerminalKillFor(

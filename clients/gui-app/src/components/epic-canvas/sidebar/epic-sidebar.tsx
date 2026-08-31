@@ -1423,7 +1423,10 @@ function SidebarBulkDeleteController(props: {
   const unmarkArtifactSelfDeleted = useEpicCanvasStore(
     (s) => s.unmarkArtifactSelfDeleted,
   );
-  const deleteArtifact = useEpicDeleteArtifact();
+  // `null`: this controller deletes EVERY selected row, so there is no one
+  // artifact it speaks for. It reads its own `deletePending` off the
+  // selection store rather than the hook's flag.
+  const deleteArtifact = useEpicDeleteArtifact(null);
   const deleteChat = useEpicDeleteChat();
   const deleteTerminalAgent = useEpicDeleteTuiAgent();
   const sessionHostId = useEpicSessionHostId();

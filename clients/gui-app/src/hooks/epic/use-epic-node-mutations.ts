@@ -59,6 +59,28 @@ async function enqueueAndWait(
  * rather than silently redirected, which is the difference that matters here:
  * `useHostClientForHostId(null)` would have followed the effective host and
  * reproduced the defect on the exact render where the session is absent.
+ *
+ * ## Why the three command-backed hooks take an `artifactId`
+ *
+ * `isPending` is a per-AFFORDANCE flag - every consumer feeds it to one row's
+ * `disabled` and one row's spinner (`ticket-tile`, `story-tile`,
+ * `switcher-row-actions`, `epic-sidebar-artifact-tree`). Matching on the
+ * command KIND alone made it epic-wide: one artifact's in-flight status change
+ * disabled and spun every status pill in the epic, and an offline-RETAINED
+ * command held all of them for as long as the queue retained it
+ * (`command-overlay.ts`). So each hook is told which artifact it speaks for
+ * and matches the intent's own `artifactId`, which every artifact-shaped
+ * intent already carries.
+ *
+ * `string | null`, not `string`, because THREE of the nine production callers
+ * genuinely speak for no single artifact: the sidebar's bulk-delete controller
+ * (`epic-sidebar.tsx`), which dispatches one `mutateAsync` per selected row,
+ * and the two rename commit hooks - `useSwitcherRename` and its desktop twin
+ * `useRenameCanvasTab` - whose node id arrives as an argument to the returned
+ * callback rather than as a value at hook-call time. None of the three reads
+ * `isPending`; the bulk dialog has its own `deletePending`. `null` reports
+ * `false` rather than "any", so a caller that starts reading it gets an inert
+ * flag instead of a resurrected epic-wide one.
  */
 
 /**
@@ -90,13 +112,14 @@ export function useEpicCreateArtifact() {
  * Caller opens a confirm dialog first; on Delete the button enters
  * pending state; success is silent.
  */
-export function useEpicDeleteArtifact() {
+export function useEpicDeleteArtifact(artifactId: string | null) {
   const handle = useOpenEpicHandle();
   const isPending = useStore(handle.store, (state) =>
     state.writeCommands.some(
       (command) =>
         command.state === "pending" &&
-        command.intent.kind === "delete-artifact",
+        command.intent.kind === "delete-artifact" &&
+        command.intent.artifactId === artifactId,
     ),
   );
   interface Variables {
@@ -146,13 +169,14 @@ export function useEpicDeleteArtifact() {
  * Only valid for ticket and story artifacts.
  * Pill enters pending state; success is silent.
  */
-export function useEpicUpdateArtifactStatus() {
+export function useEpicUpdateArtifactStatus(artifactId: string | null) {
   const handle = useOpenEpicHandle();
   const isPending = useStore(handle.store, (state) =>
     state.writeCommands.some(
       (command) =>
         command.state === "pending" &&
-        command.intent.kind === "update-artifact-status",
+        command.intent.kind === "update-artifact-status" &&
+        command.intent.artifactId === artifactId,
     ),
   );
   interface Variables {
@@ -209,13 +233,17 @@ function analyticsTicketStatus(status: number): 0 | 1 | 2 {
  * Mutation hook for epic.renameArtifact.
  * Input/title enters pending (read-only) state; success is silent.
  */
-export function useEpicRenameArtifact(trackUserIntent: boolean) {
+export function useEpicRenameArtifact(
+  artifactId: string | null,
+  trackUserIntent: boolean,
+) {
   const handle = useOpenEpicHandle();
   const isPending = useStore(handle.store, (state) =>
     state.writeCommands.some(
       (command) =>
         command.state === "pending" &&
-        command.intent.kind === "rename-artifact",
+        command.intent.kind === "rename-artifact" &&
+        command.intent.artifactId === artifactId,
     ),
   );
   interface Variables {

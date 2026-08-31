@@ -29,7 +29,10 @@ const commandFixture = await vi.hoisted(async () => {
   const state = {
     writeCommands: [] as ReadonlyArray<{
       readonly state: string;
-      readonly intent: { readonly kind: string };
+      readonly intent: {
+        readonly kind: string;
+        readonly artifactId?: string;
+      };
     }>,
     enqueueWriteCommand: vi.fn<(intent: unknown) => string | null>(),
     waitForWriteCommand: vi.fn<(commandId: string) => Promise<unknown>>(),
@@ -138,7 +141,7 @@ describe("useEpicCreateArtifact", () => {
 describe("useEpicDeleteArtifact", () => {
   it("enqueues the delete and resolves a committed command", async () => {
     commitCommand();
-    const { result } = renderHook(() => useEpicDeleteArtifact());
+    const { result } = renderHook(() => useEpicDeleteArtifact("artifact-1"));
 
     await expect(
       result.current.mutateAsync({
@@ -157,7 +160,7 @@ describe("useEpicDeleteArtifact", () => {
 
   it("keeps rejected and superseded terminal outcomes on the error path", async () => {
     rejectCommand("write denied");
-    const { result } = renderHook(() => useEpicDeleteArtifact());
+    const { result } = renderHook(() => useEpicDeleteArtifact("artifact-1"));
     await expect(
       result.current.mutateAsync({
         epicId: "epic-1",
@@ -186,7 +189,9 @@ describe("useEpicUpdateArtifactStatus", () => {
   it("enqueues status changes and tracks the committed command", async () => {
     commitCommand();
     const track = vi.spyOn(Analytics.getInstance(), "track");
-    const { result } = renderHook(() => useEpicUpdateArtifactStatus());
+    const { result } = renderHook(() =>
+      useEpicUpdateArtifactStatus("artifact-1"),
+    );
 
     await expect(
       result.current.mutateAsync({
@@ -213,7 +218,9 @@ describe("useEpicRenameArtifact", () => {
   it("tracks ArtifactRenamed after a committed command", async () => {
     commitCommand();
     const track = vi.spyOn(Analytics.getInstance(), "track");
-    const { result } = renderHook(() => useEpicRenameArtifact(true));
+    const { result } = renderHook(() =>
+      useEpicRenameArtifact("artifact-1", true),
+    );
 
     await expect(
       result.current.mutateAsync({
@@ -233,7 +240,9 @@ describe("useEpicRenameArtifact", () => {
   it("does not track a committed command when trackUserIntent is false", async () => {
     commitCommand();
     const track = vi.spyOn(Analytics.getInstance(), "track");
-    const { result } = renderHook(() => useEpicRenameArtifact(false));
+    // `null` rather than an id: this pin is about `trackUserIntent`, and the
+    // hook's artifact is not what it discriminates on.
+    const { result } = renderHook(() => useEpicRenameArtifact(null, false));
 
     await result.current.mutateAsync({
       epicId: "epic-1",
@@ -245,7 +254,9 @@ describe("useEpicRenameArtifact", () => {
 
   it("shows the fallback for a superseded command", async () => {
     supersedeCommand();
-    const { result } = renderHook(() => useEpicRenameArtifact(true));
+    const { result } = renderHook(() =>
+      useEpicRenameArtifact("artifact-1", true),
+    );
 
     await expect(
       result.current.mutateAsync({
@@ -282,21 +293,25 @@ describe("epic node mutations address the Epic session's host", () => {
 
   it("routes migrated node mutations through the command-backed handle", async () => {
     commitCommand();
-    const deleteHook = renderHook(() => useEpicDeleteArtifact());
+    const deleteHook = renderHook(() => useEpicDeleteArtifact("artifact-1"));
     await deleteHook.result.current.mutateAsync({
       epicId: "epic-1",
       artifactId: "artifact-1",
     });
     expect(capturedClients).not.toHaveProperty("epic.deleteArtifact");
 
-    const statusHook = renderHook(() => useEpicUpdateArtifactStatus());
+    const statusHook = renderHook(() =>
+      useEpicUpdateArtifactStatus("artifact-1"),
+    );
     await statusHook.result.current.mutateAsync({
       epicId: "epic-1",
       artifactId: "artifact-1",
       artifactType: "story",
       status: 1,
     });
-    const renameHook = renderHook(() => useEpicRenameArtifact(true));
+    const renameHook = renderHook(() =>
+      useEpicRenameArtifact("artifact-1", true),
+    );
     await renameHook.result.current.mutateAsync({
       epicId: "epic-1",
       artifactId: "artifact-1",
@@ -307,7 +322,7 @@ describe("epic node mutations address the Epic session's host", () => {
 });
 
 /**
- * `useEpicUpdateArtifactStatus().mutate` and `useEpicRenameArtifact().mutate`
+ * `useEpicUpdateArtifactStatus("artifact-1").mutate` and `useEpicRenameArtifact().mutate`
  * both do `void mutateAsync(v)` - `mutateAsync` toasts AND rethrows on a
  * refused write, so every refused status change / rename raises an
  * unhandled rejection nobody consumes. `useEpicDeleteArtifact`'s own `mutate`
@@ -343,7 +358,9 @@ describe("mutate consumes the mutateAsync rejection instead of leaving it unhand
     };
     nodeProcess.on("unhandledRejection", onUnhandledRejection);
     try {
-      const { result } = renderHook(() => useEpicUpdateArtifactStatus());
+      const { result } = renderHook(() =>
+        useEpicUpdateArtifactStatus("artifact-1"),
+      );
       act(() => {
         result.current.mutate({
           epicId: "epic-1",
@@ -381,7 +398,9 @@ describe("mutate consumes the mutateAsync rejection instead of leaving it unhand
     };
     nodeProcess.on("unhandledRejection", onUnhandledRejection);
     try {
-      const { result } = renderHook(() => useEpicRenameArtifact(true));
+      const { result } = renderHook(() =>
+        useEpicRenameArtifact("artifact-1", true),
+      );
       act(() => {
         result.current.mutate({
           epicId: "epic-1",
@@ -400,5 +419,73 @@ describe("mutate consumes the mutateAsync rejection instead of leaving it unhand
     });
     // THE REDDENING ONE.
     expect(rejections).toEqual([]);
+  });
+});
+
+/**
+ * `isPending` on all three command-backed hooks matched ANY pending command of
+ * that KIND, with no regard for which artifact it named - so one artifact's
+ * in-flight status change disabled and spun EVERY status pill in the epic, and
+ * an offline-retained command held every pill for as long as it was retained.
+ *
+ * Each hook now takes the artifact it speaks for. `null` means "this caller
+ * speaks for no single artifact" - the sidebar's bulk-delete controller and
+ * the mobile switcher's rename, neither of which reads `isPending` - and
+ * reports `isPending` as `false`.
+ */
+describe("isPending is scoped to the artifact the hook speaks for", () => {
+  it("useEpicUpdateArtifactStatus: a pending command for X does not spin Y", () => {
+    commandFixture.state.writeCommands = [
+      {
+        state: "pending",
+        intent: { kind: "update-artifact-status", artifactId: "artifact-x" },
+      },
+    ];
+    const forX = renderHook(() => useEpicUpdateArtifactStatus("artifact-x"));
+    const forY = renderHook(() => useEpicUpdateArtifactStatus("artifact-y"));
+
+    expect(forX.result.current.isPending).toBe(true);
+    // THE REDDENING ONE - `true` before the fix, since `isPending` matched any
+    // pending command of this KIND rather than this artifact's.
+    expect(forY.result.current.isPending).toBe(false);
+  });
+
+  it("useEpicDeleteArtifact: a pending command for X does not spin Y", () => {
+    commandFixture.state.writeCommands = [
+      {
+        state: "pending",
+        intent: { kind: "delete-artifact", artifactId: "artifact-x" },
+      },
+    ];
+    const forX = renderHook(() => useEpicDeleteArtifact("artifact-x"));
+    const forY = renderHook(() => useEpicDeleteArtifact("artifact-y"));
+
+    expect(forX.result.current.isPending).toBe(true);
+    expect(forY.result.current.isPending).toBe(false);
+  });
+
+  it("useEpicRenameArtifact: a pending command for X does not spin Y", () => {
+    commandFixture.state.writeCommands = [
+      {
+        state: "pending",
+        intent: { kind: "rename-artifact", artifactId: "artifact-x" },
+      },
+    ];
+    const forX = renderHook(() => useEpicRenameArtifact("artifact-x", true));
+    const forY = renderHook(() => useEpicRenameArtifact("artifact-y", true));
+
+    expect(forX.result.current.isPending).toBe(true);
+    expect(forY.result.current.isPending).toBe(false);
+  });
+
+  it("a null artifactId never reports isPending, even while a command for another artifact is pending", () => {
+    commandFixture.state.writeCommands = [
+      {
+        state: "pending",
+        intent: { kind: "update-artifact-status", artifactId: "artifact-x" },
+      },
+    ];
+    const forNull = renderHook(() => useEpicUpdateArtifactStatus(null));
+    expect(forNull.result.current.isPending).toBe(false);
   });
 });

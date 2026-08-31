@@ -66,7 +66,10 @@ export function useSwitcherRename(
   const epicHandle = useOpenEpicHandle();
   const renameChat = useEpicRenameChat();
   const renameTuiAgent = useEpicRenameTuiAgent();
-  const renameArtifact = useEpicRenameArtifact(true);
+  // `null`: the node being renamed arrives as an argument to the returned
+  // callback, not at hook-call time, and no caller of this hook reads
+  // `isPending`.
+  const renameArtifact = useEpicRenameArtifact(null, true);
   const renameTerminal = useTerminalRenameFor(useEpicSessionHostClient());
 
   const commit = useCallback(

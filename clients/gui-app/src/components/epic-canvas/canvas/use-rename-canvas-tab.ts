@@ -43,7 +43,9 @@ export function useRenameCanvasTab(
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
   const renameChat = useEpicRenameChat();
   const renameTerminalAgent = useEpicRenameTuiAgent();
-  const renameArtifact = useEpicRenameArtifact(true);
+  // `null`, same reason as the mobile twin: the tab this commits for is an
+  // argument to the returned callback, and no caller reads `isPending`.
+  const renameArtifact = useEpicRenameArtifact(null, true);
 
   // ASYNC because the replica moved: the doc write's verdict and the
   // rename-stamp check are both round trips now.

@@ -119,7 +119,7 @@ export function useArtifactDocTitleFollow(params: {
   const nodeType = node.type;
   const handle = useOpenEpicHandle();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
-  const renameArtifact = useEpicRenameArtifact(false);
+  const renameArtifact = useEpicRenameArtifact(artifactId, false);
   const persistRename = renameArtifact.mutateAsync;
 
   useEffect(() => {

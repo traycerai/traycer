@@ -43,9 +43,12 @@ function fakeFactory(): EpicStreamClientFactory {
 }
 
 function TestHarness(props: { readonly renderKey: number }): ReactElement {
-  const del = useEpicDeleteArtifact();
-  const status = useEpicUpdateArtifactStatus();
-  const rename = useEpicRenameArtifact(true);
+  // `art-1` is the artifact the pending command below names: `isPending` is
+  // scoped per artifact now, so an id that does not match makes the flag this
+  // pin toggles inert.
+  const del = useEpicDeleteArtifact("art-1");
+  const status = useEpicUpdateArtifactStatus("art-1");
+  const rename = useEpicRenameArtifact("art-1", true);
   const isPending = del.isPending || status.isPending || rename.isPending;
   return (
     <div data-testid="pending" data-render-key={props.renderKey}>
