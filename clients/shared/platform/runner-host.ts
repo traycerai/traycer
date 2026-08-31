@@ -751,6 +751,18 @@ export interface IFileSaveHost {
   readonly downloadFile:
     | ((request: FileSaveRequest) => Promise<SavedFileLocation>)
     | null;
+  /**
+   * What {@link saveFile} DOES, from the user's point of view: `"download"`
+   * where it commits the file itself (a desktop save dialog), `"share"` where
+   * it hands the bytes to an OS chooser and another app decides.
+   *
+   * Independent of {@link downloadFile}, and it has to be: a shell can own a
+   * chooser and NO direct download (Android 10, where the shared-storage write
+   * has no route). Reading "is this a chooser?" off the presence of a direct
+   * download would answer `false` there and put a Download label on the share
+   * sheet - the exact defect this contract exists to prevent.
+   */
+  readonly saveRoute: "download" | "share";
 }
 
 /**

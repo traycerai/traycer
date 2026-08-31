@@ -19,7 +19,8 @@ export interface MermaidFullscreenDialogProps {
   readonly code: string;
   readonly title: string;
   readonly onCopyCode: () => void;
-  readonly onDownloadPng: () => void;
+  /** `null` where this device has no download destination at all. */
+  readonly onDownloadPng: (() => void) | null;
   /**
    * Hands the PNG to the OS share sheet, or `null` where the shell owns no
    * chooser and Download is already the only route out.
@@ -92,22 +93,24 @@ export function MermaidFullscreenDialog(props: MermaidFullscreenDialogProps) {
                 </Button>
               </TooltipWrapper>
             )}
-            <TooltipWrapper
-              label="Download PNG"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={onDownloadPng}
-                aria-label="Download PNG"
-                disabled={downloadDisabled}
+            {onDownloadPng === null ? null : (
+              <TooltipWrapper
+                label="Download PNG"
+                side="top"
+                sideOffset={undefined}
+                align={undefined}
               >
-                <Download className="size-4" aria-hidden="true" />
-              </Button>
-            </TooltipWrapper>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={onDownloadPng}
+                  aria-label="Download PNG"
+                  disabled={downloadDisabled}
+                >
+                  <Download className="size-4" aria-hidden="true" />
+                </Button>
+              </TooltipWrapper>
+            )}
             <TooltipWrapper
               label={
                 <>

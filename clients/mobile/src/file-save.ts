@@ -185,8 +185,19 @@ function baseMediaType(mediaType: string): string {
  * one would otherwise choose a directory - and an empty result would write to
  * the export directory itself.
  */
+/**
+ * Characters Android's shared storage rejects in a file name. The volumes
+ * behind Documents are FAT-derived, so a name that is perfectly legal on the
+ * machine it came from - an image's alt text, an epic title - makes the write
+ * fail outright rather than land under a mangled name.
+ */
+const INVALID_FILE_NAME_CHARACTERS = /[:*?"<>|\u0000-\u001f]/g;
+
 function toFileName(suggested: string, mediaType: string): string {
-  const leaf = suggested.split(/[\\/]/).at(-1) ?? "";
+  const leaf = (suggested.split(/[\\/]/).at(-1) ?? "").replace(
+    INVALID_FILE_NAME_CHARACTERS,
+    "-",
+  );
   // Trimmed BEFORE the leading dots are stripped, or surrounding whitespace
   // hides them from the strip: `" . "` would survive as `"."` and `" .. "` as
   // `".."`, naming the staging directory itself or its parent rather than a
@@ -443,6 +454,13 @@ export class MobileFileSave implements IFileSaveHost {
    * application, whether or not it knows where the file is.
    */
   readonly openSavedFile = null;
+
+  /**
+   * The share sheet is what `saveFile` reaches, on every platform and every OS
+   * version - unlike { downloadFile}, which one Android level cannot
+   * honour at all.
+   */
+  readonly saveRoute = "share" as const;
 
   async saveFile(request: FileSaveRequest): Promise<SavedFileLocation | null> {
     const name = toFileName(request.name, request.type);

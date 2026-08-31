@@ -7,6 +7,7 @@ import {
   type AnalyticsUsageImageExportSource,
 } from "@/lib/analytics";
 import {
+  canDownloadToDevice,
   downloadBlobToDevice,
   hasSeparateDownloadRoute,
   saveBlobToDisk,
@@ -88,7 +89,8 @@ export interface UseUsageImageExportResult {
   readonly copyImage: (() => void) | null;
   /** `null` where the shell owns no OS share surface to hand the image to. */
   readonly shareImage: (() => void) | null;
-  readonly downloadImage: () => void;
+  /** `null` where this device has no download destination at all. */
+  readonly downloadImage: (() => void) | null;
 }
 
 /**
@@ -136,6 +138,7 @@ export function useUsageImageExport(
   const openSaved = useOpenSavedFile();
   const canShare = hasSeparateDownloadRoute(fileSave);
   const canCopy = useCanCopyImages();
+  const canDownload = canDownloadToDevice(fileSave);
   const mutation = useMutation<SavedFile | null, Error, UsageImageExportInput>({
     mutationKey: imageMutationKeys.usageExport(),
     mutationFn: async (input) => {
@@ -242,6 +245,6 @@ export function useUsageImageExport(
     pendingAction: mutation.isPending ? mutation.variables.action : null,
     copyImage: canCopy ? startCopy : null,
     shareImage: canShare ? startShare : null,
-    downloadImage,
+    downloadImage: canDownload ? downloadImage : null,
   };
 }

@@ -81,6 +81,7 @@ const mocks = vi.hoisted(() => ({
   saveBlobToDisk: vi.fn(),
   downloadBlobToDevice: vi.fn(),
   hasSeparateDownloadRoute: vi.fn<() => boolean>(),
+  canDownloadToDevice: vi.fn<() => boolean>(),
   useCanCopyImages: vi.fn<() => boolean>(),
 }));
 
@@ -116,6 +117,7 @@ vi.mock("@/lib/files/save-blob-to-disk", () => ({
   saveBlobToDisk: mocks.saveBlobToDisk,
   downloadBlobToDevice: mocks.downloadBlobToDevice,
   hasSeparateDownloadRoute: mocks.hasSeparateDownloadRoute,
+  canDownloadToDevice: mocks.canDownloadToDevice,
   canOpenSavedFile: () => false,
   openSavedFile: vi.fn(),
 }));
@@ -124,6 +126,8 @@ beforeEach(() => {
   // The shape of every shell whose own save route IS the download - desktop
   // and a plain browser tab. The share-sheet shape is opted into per case.
   mocks.hasSeparateDownloadRoute.mockReturnValue(false);
+  // Every shell but a chooser-only one can honour a Download.
+  mocks.canDownloadToDevice.mockReturnValue(true);
   mocks.useCanCopyImages.mockReturnValue(true);
 });
 
@@ -136,6 +140,7 @@ afterEach(() => {
   mocks.saveBlobToDisk.mockReset();
   mocks.downloadBlobToDevice.mockReset();
   mocks.hasSeparateDownloadRoute.mockReset();
+  mocks.canDownloadToDevice.mockReset();
   mocks.useCanCopyImages.mockReset();
 });
 

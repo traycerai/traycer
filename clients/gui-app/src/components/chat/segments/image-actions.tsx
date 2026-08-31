@@ -20,11 +20,44 @@ export function ImageActions(props: {
    * remote image, whose control is Open-in-browser rather than any save.
    */
   readonly canShare: boolean;
+  /**
+   * Whether a Download can be honoured at all. False on a shell that hands
+   * everything to a chooser and owns no direct write (Android 10), where the
+   * control would route back into the share sheet it is meant to be distinct
+   * from.
+   */
+  readonly canDownload: boolean;
   readonly remote: ImageRemoteOpen | null;
   readonly onCopy: () => void;
   readonly onShare: () => void;
   readonly onDownload: () => void;
 }): ReactNode {
+  // The trailing slot: Open-in-browser for a remote image (no save capability
+  // gates it), Download for a local one - and nothing at all where the shell
+  // is chooser-only, since a Download there would route back into the share
+  // sheet it is meant to be distinct from.
+  let saveOrOpen: ReactNode = null;
+  if (props.remote !== null) {
+    saveOrOpen = (
+      <ImageActionButton
+        label="Open in browser"
+        disabled={props.pendingAction !== null || props.remote.pending}
+        pending={props.remote.pending}
+        onClick={props.remote.onOpen}
+        icon={<ExternalLink className="size-3.5" aria-hidden />}
+      />
+    );
+  } else if (props.canDownload) {
+    saveOrOpen = (
+      <ImageActionButton
+        label="Download image"
+        disabled={props.pendingAction !== null}
+        pending={props.pendingAction === "download"}
+        onClick={props.onDownload}
+        icon={<Download className="size-3.5" aria-hidden />}
+      />
+    );
+  }
   return (
     <div className="flex items-center gap-1 rounded-md border border-white/15 bg-black/65 p-1 text-white shadow-sm backdrop-blur-sm @max-[8rem]:gap-0 @max-[8rem]:border-0 @max-[8rem]:p-0">
       {props.canCopy ? (
@@ -45,23 +78,7 @@ export function ImageActions(props: {
           icon={<Share2 className="size-3.5" aria-hidden />}
         />
       ) : null}
-      {props.remote === null ? (
-        <ImageActionButton
-          label="Download image"
-          disabled={props.pendingAction !== null}
-          pending={props.pendingAction === "download"}
-          onClick={props.onDownload}
-          icon={<Download className="size-3.5" aria-hidden />}
-        />
-      ) : (
-        <ImageActionButton
-          label="Open in browser"
-          disabled={props.pendingAction !== null || props.remote.pending}
-          pending={props.remote.pending}
-          onClick={props.remote.onOpen}
-          icon={<ExternalLink className="size-3.5" aria-hidden />}
-        />
-      )}
+      {saveOrOpen}
     </div>
   );
 }

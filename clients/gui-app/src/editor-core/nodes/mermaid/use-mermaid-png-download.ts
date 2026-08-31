@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { svgToPngBlob } from "@/editor-core/nodes/mermaid/mermaid-service";
 import { readMermaidPalette } from "@/editor-core/nodes/mermaid/mermaid-theme";
 import {
+  canDownloadToDevice,
   downloadBlobToDevice,
   hasSeparateDownloadRoute,
   saveBlobToDisk,
@@ -24,7 +25,8 @@ export interface UseMermaidPngDownloadParams {
 export type MermaidPngExportAction = "share" | "download";
 
 export interface UseMermaidPngDownloadResult {
-  readonly downloadMermaidPng: () => void;
+  /** `null` where this device has no download destination at all. */
+  readonly downloadMermaidPng: (() => void) | null;
   /** `null` where the shell owns no OS chooser to hand the PNG to. */
   readonly shareMermaidPng: (() => void) | null;
   readonly isDownloading: boolean;
@@ -44,6 +46,7 @@ export function useMermaidPngDownload(
   const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
   const canShare = hasSeparateDownloadRoute(fileSave);
+  const canDownload = canDownloadToDevice(fileSave);
   const mutation = useMutation<
     SavedFile | null,
     Error,
@@ -96,7 +99,7 @@ export function useMermaidPngDownload(
   }, [enabled, mutate, svg]);
 
   return {
-    downloadMermaidPng,
+    downloadMermaidPng: canDownload ? downloadMermaidPng : null,
     shareMermaidPng: canShare ? startShare : null,
     isDownloading: isPending,
     pendingAction: isPending ? mutation.variables.action : null,

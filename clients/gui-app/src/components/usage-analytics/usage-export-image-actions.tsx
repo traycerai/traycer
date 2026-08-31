@@ -16,7 +16,8 @@ export interface UsageExportImageActionsProps {
   /** The controls this shell can honour, from `useUsageImageExport`. */
   readonly copyImage: (() => void) | null;
   readonly shareImage: (() => void) | null;
-  readonly downloadImage: () => void;
+  /** `null` where this device has no download destination at all. */
+  readonly downloadImage: (() => void) | null;
   /**
    * Names this surface's buttons in tests - `usage-copy-image`,
    * `epic-usage-download-image`. Each surface keeps the ids it already had.
@@ -76,13 +77,17 @@ export function UsageExportImageActions(
             onClick: props.shareImage,
           },
         ]),
-    {
-      action: "download" as const,
-      label: "Download image",
-      ariaLabel: "Download usage image",
-      icon: Download,
-      onClick: props.downloadImage,
-    },
+    ...(props.downloadImage === null
+      ? []
+      : [
+          {
+            action: "download" as const,
+            label: "Download image",
+            ariaLabel: "Download usage image",
+            icon: Download,
+            onClick: props.downloadImage,
+          },
+        ]),
   ];
 
   return (

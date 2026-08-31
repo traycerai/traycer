@@ -48,7 +48,7 @@ function fileSaveHost(
 ): IFileSaveHost {
   // No chooser-free download route: these cases are about what a COMPLETED
   // save can offer afterwards, which is the same question either way.
-  return { saveFile, openSavedFile, downloadFile: null };
+  return { saveFile, openSavedFile, downloadFile: null, saveRoute: "share" };
 }
 
 function resolvingSaveFile(result: SavedFileLocation | null): SaveFileMock {

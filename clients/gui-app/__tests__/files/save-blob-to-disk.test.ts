@@ -4,6 +4,7 @@ import type {
   SavedFileLocation,
 } from "@traycer-clients/shared/platform/runner-host";
 import {
+  canDownloadToDevice,
   downloadBlobToDevice,
   hasSeparateDownloadRoute,
   saveBlobToDisk,
@@ -115,6 +116,8 @@ describe("saveBlobToDisk", () => {
         saveFile,
         openSavedFile: () => Promise.resolve(),
         downloadFile: null,
+
+        saveRoute: "download",
       }),
     ).resolves.toEqual({
       name: "diagram.png",
@@ -153,6 +156,7 @@ describe("downloadBlobToDevice", () => {
         saveFile,
         openSavedFile: null,
         downloadFile,
+        saveRoute: "share",
       }),
     ).resolves.toEqual({
       name: "usage.png",
@@ -177,7 +181,12 @@ describe("downloadBlobToDevice", () => {
       downloadBlobToDevice(
         new Blob(["png"], { type: "image/png" }),
         "usage.png",
-        { saveFile, openSavedFile: null, downloadFile: null },
+        {
+          saveFile,
+          openSavedFile: null,
+          downloadFile: null,
+          saveRoute: "download",
+        },
       ),
     ).resolves.toEqual({ name: "usage.png", path: "/tmp/usage.png" });
     expect(saveFile).toHaveBeenCalledTimes(1);
@@ -207,6 +216,51 @@ describe("downloadBlobToDevice", () => {
   });
 });
 
+describe("canDownloadToDevice", () => {
+  const shareOnlyShell = () => ({
+    saveFile: vi.fn<
+      (request: FileSaveRequest) => Promise<SavedFileLocation | null>
+    >(() => Promise.resolve(null)),
+    openSavedFile: null,
+    downloadFile: null,
+    saveRoute: "share" as const,
+  });
+
+  it("is false ONLY where the shell has a chooser and no direct write", () => {
+    // Android 10: the shared-storage route does not exist and `saveFile` is the
+    // share sheet. Offering Download there would route it INTO the sheet - the
+    // exact mislabelling this split removes.
+    expect(canDownloadToDevice(shareOnlyShell())).toBe(false);
+  });
+
+  it("is true for a browser, a direct writer, and a shell that saves itself", () => {
+    expect(canDownloadToDevice(null)).toBe(true);
+    expect(
+      canDownloadToDevice({
+        ...shareOnlyShell(),
+        downloadFile: () => Promise.resolve({ name: "u.png", path: null }),
+      }),
+    ).toBe(true);
+    expect(
+      canDownloadToDevice({ ...shareOnlyShell(), saveRoute: "download" }),
+    ).toBe(true);
+  });
+
+  it("refuses to route a download through a chooser rather than doing it quietly", async () => {
+    // Callers gate on the capability, so reaching this is a bug - and it has to
+    // surface as one instead of silently opening the share sheet.
+    const shell = shareOnlyShell();
+    await expect(
+      downloadBlobToDevice(
+        new Blob(["x"], { type: "image/png" }),
+        "u.png",
+        shell,
+      ),
+    ).rejects.toThrow("no download destination");
+    expect(shell.saveFile).not.toHaveBeenCalled();
+  });
+});
+
 describe("hasSeparateDownloadRoute", () => {
   it("is false for no shell and for a shell whose save route is the download", () => {
     const saveFile = vi.fn<
@@ -218,6 +272,7 @@ describe("hasSeparateDownloadRoute", () => {
         saveFile,
         openSavedFile: null,
         downloadFile: null,
+        saveRoute: "download",
       }),
     ).toBe(false);
   });
@@ -231,6 +286,7 @@ describe("hasSeparateDownloadRoute", () => {
         saveFile,
         openSavedFile: null,
         downloadFile: () => Promise.resolve({ name: "u.png", path: null }),
+        saveRoute: "share",
       }),
     ).toBe(true);
   });

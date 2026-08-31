@@ -9,7 +9,10 @@ import { imageMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 import { useCanCopyImages } from "@/hooks/images/use-can-copy-images";
-import { hasSeparateDownloadRoute } from "@/lib/files/save-blob-to-disk";
+import {
+  canDownloadToDevice,
+  hasSeparateDownloadRoute,
+} from "@/lib/files/save-blob-to-disk";
 
 import {
   type ImageAction,
@@ -148,6 +151,7 @@ function ExpandedImageActionBar(props: {
       // reach the system clipboard with one.
       canCopy={isClipboardImageMediaType(props.mediaType) && canCopyOnShell}
       canShare={hasSeparateDownloadRoute(fileSave)}
+      canDownload={canDownloadToDevice(fileSave)}
       remote={null}
       onCopy={() => imageAction.mutate("copy")}
       onShare={() => imageAction.mutate("share")}
