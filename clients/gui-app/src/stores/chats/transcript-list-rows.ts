@@ -11,6 +11,8 @@ import {
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import {
+  assistantRowId,
+  assistantRowTurnKey,
   projectTranscriptRows,
   type TranscriptRowDescriptor,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
@@ -80,6 +82,19 @@ import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-ass
  * rows stay PLACEHOLDERS rather than being seated at their ordinals: the
  * renderer inferred them from a sibling row's records, so their bodies are this
  * client's guesses at ordinals the host declined to serve.
+ *
+ * The one case where the skeleton is overruled: a LIVE split turn the skeleton
+ * still knows only in its unsplit shape. A same-turn steer renames every slice
+ * of its turn (`assistant:<key>` becomes `assistant:<key>:part:<n>`) and nests
+ * the steered user row between two of them, and the client can learn that from
+ * a live record before the index naming the new shape arrives. Seating the
+ * rows one by one against that skeleton puts the steered user at its old
+ * top-level ordinal while the slices - ids the skeleton has never heard of -
+ * fall to the tail, and the interjection draws ABOVE the turn it interrupted.
+ * So the turn's rows are held for the tail together, in rendered order, and the
+ * ordinals the stale skeleton assigned them are suppressed
+ * ({@link preSplitSkeletonTurnRows}). Narrow by construction: only a turn whose
+ * slices a live record backs, which is the streaming turn.
  *
  * ## A hydrated row the renderer withheld is OMITTED, not placeholder'd
  *
@@ -725,6 +740,79 @@ function seatStaleRows(input: {
 }
 
 /**
+ * The rows of a live split turn the skeleton still names in its UNSPLIT shape,
+ * held back from seating so they reach the tail together, in rendered order.
+ *
+ * A split is sticky for the whole turn (`assistantSliceRowId`): one steer block
+ * renames every slice, and the steered user row moves from a top-level ordinal
+ * to a nested position between two slices. The index that describes the new
+ * shape arrives on its own frame, so there is a window in which the skeleton
+ * names `assistant:<key>` and the steered user's messageId as neighbours while
+ * the renderer - fed by the live assistant record that already carries the
+ * marker - produces `assistant:<key>:part:0`, the steered user, and
+ * `assistant:<key>:part:1`. Seated row by row, the steered user lands at its
+ * stale ordinal and the slices, unnamed, fall to the tail: the interjection
+ * draws above the turn it interrupted, beside the message before it.
+ *
+ * The evidence is exact: the renderer produced split slices for the turn, the
+ * skeleton names the turn's unsplit row and none of the slices, and a live
+ * record backs the slices (so the split is the host's own, delivered whole, not
+ * an inference from a partially-hydrated span). Every rendered row from the
+ * turn's first slice to its last is the unit - a nested steer row is only ever
+ * drawn between slices of its turn. The ordinals the stale skeleton assigned to
+ * the unit (the unsplit row's, and the steered user's old top-level one) are
+ * suppressed so no placeholder holds a position the unit has left.
+ *
+ * Reads only ids, no records: proportional to `rendered`, not to the chat,
+ * which keeps it off the per-token cost this module is arranged around.
+ */
+function preSplitSkeletonTurnRows(input: {
+  readonly rendered: readonly ChatMessageModel[];
+  readonly isLiveBacked: (model: ChatMessageModel) => boolean;
+  readonly skeletonOrdinals: ReadonlyMap<string, number>;
+  readonly suppressedOrdinals: Set<number>;
+}): ReadonlySet<string> {
+  const sliceRangeByTurnKey = new Map<
+    string,
+    { first: number; last: number }
+  >();
+  input.rendered.forEach((model, index) => {
+    const turnKey = assistantRowTurnKey(model.id);
+    // The bare `assistant:<key>` id is the unsplit row, not a slice.
+    if (turnKey === null || model.id === assistantRowId(turnKey)) return;
+    const range = sliceRangeByTurnKey.get(turnKey);
+    if (range === undefined) {
+      sliceRangeByTurnKey.set(turnKey, { first: index, last: index });
+    } else {
+      range.last = index;
+    }
+  });
+  const held = new Set<string>();
+  for (const [turnKey, range] of sliceRangeByTurnKey) {
+    const unsplitOrdinal = input.skeletonOrdinals.get(assistantRowId(turnKey));
+    if (unsplitOrdinal === undefined) continue;
+    const unit = input.rendered.slice(range.first, range.last + 1);
+    const skeletonNamesASlice = unit.some(
+      (model) =>
+        input.skeletonOrdinals.has(model.id) &&
+        assistantRowTurnKey(model.id) === turnKey,
+    );
+    if (skeletonNamesASlice) continue;
+    // The unit's first row is its first slice by construction (a non-empty
+    // range); its backing is what says the split is the host's own.
+    const first = unit.at(0);
+    if (first === undefined || !input.isLiveBacked(first)) continue;
+    input.suppressedOrdinals.add(unsplitOrdinal);
+    for (const model of unit) {
+      held.add(model.id);
+      const ordinal = input.skeletonOrdinals.get(model.id);
+      if (ordinal !== undefined) input.suppressedOrdinals.add(ordinal);
+    }
+  }
+  return held;
+}
+
+/**
  * Seat the live records the index has started naming, in place.
  *
  * Extracted rather than inlined only because the merge below is already at the
@@ -746,15 +834,17 @@ function seatStaleRows(input: {
 function seatLiveRecords(input: {
   readonly window: TranscriptWindow;
   readonly rendered: readonly ChatMessageModel[];
+  readonly isLiveBacked: (model: ChatMessageModel) => boolean;
   readonly skeletonOrdinals: ReadonlyMap<string, number>;
   readonly modelByOrdinal: Map<number, ChatMessageModel>;
   readonly placedRowIds: Set<string>;
   readonly suppressedOrdinals: ReadonlySet<number>;
+  readonly heldForTail: ReadonlySet<string>;
 }): void {
-  const isLiveBacked = liveBackingLookup(input.window, input.rendered);
   for (const model of input.rendered) {
-    if (!isLiveBacked(model)) continue;
+    if (!input.isLiveBacked(model)) continue;
     if (input.placedRowIds.has(model.id)) continue;
+    if (input.heldForTail.has(model.id)) continue;
     const ordinal = input.skeletonOrdinals.get(model.id);
     if (ordinal === undefined || ordinal >= input.window.rowCount) continue;
     if (
@@ -871,6 +961,20 @@ export function transcriptListRows(input: {
   const modelByOrdinal = new Map<number, ChatMessageModel>();
   const suppressedOrdinals = new Set<number>();
   const placedRowIds = new Set<string>();
+  const skeletonOrdinals = skeletonOrdinalByRowId(window.skeleton);
+  const isLiveBacked = liveBackingLookup(window, rendered);
+  // Decided BEFORE any seating, because it is a statement about which ordinals
+  // are stale rather than about any one row - and because the span pass below
+  // would otherwise place a held row first. A span that carries the steered
+  // user row at its pre-split ordinal was served under the SAME pre-split
+  // index the skeleton is stale against, so it is not newer evidence than the
+  // live record that carries the marker.
+  const heldForTail = preSplitSkeletonTurnRows({
+    rendered,
+    isLiveBacked,
+    skeletonOrdinals,
+    suppressedOrdinals,
+  });
   for (const span of window.spans) {
     span.rowIds.forEach((rowId, offset) => {
       const ordinal = span.fromOrdinal + offset;
@@ -879,6 +983,15 @@ export function transcriptListRows(input: {
       // list keeps the list exactly `rowCount` long; the identity echo is what
       // reports the disagreement.
       if (ordinal >= window.rowCount) return;
+      if (heldForTail.has(rowId)) {
+        // The unit has left this ordinal for the tail. Suppress rather than
+        // place: seating it here would draw the interjection above its own
+        // turn, and `placedRowIds` would then keep it out of the tail unit -
+        // the exact split the hold exists to prevent, reached through the span
+        // tier instead of the skeleton.
+        suppressedOrdinals.add(ordinal);
+        return;
+      }
       const model = modelsById.get(rowId);
       if (model === undefined) {
         // The span proves the body is HELD; its absence from `rendered` means
@@ -891,8 +1004,6 @@ export function transcriptListRows(input: {
       placedRowIds.add(rowId);
     });
   }
-
-  const skeletonOrdinals = skeletonOrdinalByRowId(window.skeleton);
 
   // A live record the index has just started naming, seated at the ordinal it
   // names rather than dropped.
@@ -926,10 +1037,12 @@ export function transcriptListRows(input: {
   seatLiveRecords({
     window,
     rendered,
+    isLiveBacked,
     skeletonOrdinals,
     modelByOrdinal,
     placedRowIds,
     suppressedOrdinals,
+    heldForTail,
   });
 
   // Carried stale bodies fill whatever the fresh spans and live records did
@@ -981,8 +1094,10 @@ export function transcriptListRows(input: {
   appendUnplacedRenderedRows({
     window,
     rendered,
+    isLiveBacked,
     placedRowIds,
     skeletonOrdinals,
+    heldForTail,
     rows,
   });
   return rows;
@@ -1007,28 +1122,37 @@ export function transcriptListRows(input: {
  * does. "Also backed by stale" is extremely ordinary for an active row: the
  * turn that is streaming right now is the turn a rebase most recently
  * demoted, so the narrow reading of that test is how an active row disappears.
+ *
+ * A row {@link preSplitSkeletonTurnRows} held for the tail is appended even
+ * though the skeleton names it: the ordinal it names is the stale, pre-split
+ * one, and it was suppressed for exactly that reason.
  */
 function appendUnplacedRenderedRows(input: {
   readonly window: TranscriptWindow;
   readonly rendered: readonly ChatMessageModel[];
+  readonly isLiveBacked: (model: ChatMessageModel) => boolean;
   readonly placedRowIds: ReadonlySet<string>;
   readonly skeletonOrdinals: ReadonlyMap<string, number>;
+  readonly heldForTail: ReadonlySet<string>;
   readonly rows: TranscriptListRow[];
 }): void {
   const { window } = input;
-  let isLiveBacked: ((model: ChatMessageModel) => boolean) | null = null;
   const isStaleBacked = staleBackingLookup(window);
   for (const model of input.rendered) {
     if (input.placedRowIds.has(model.id)) continue;
-    if (input.skeletonOrdinals.has(model.id)) continue;
+    if (
+      input.skeletonOrdinals.has(model.id) &&
+      !input.heldForTail.has(model.id)
+    ) {
+      continue;
+    }
     if (isStaleBacked(model)) {
       // The SAME live-backed question the invalidated merge asks, from the
       // same predicate. Asking a narrower one here - row ids only - suppresses
       // a streaming assistant, a projected setup card or a steer split whose
       // pre-rebase copy happens to sit in the stale tier, and the row vanishes
       // from the tail until replacement hydration arrives.
-      isLiveBacked ??= liveBackingLookup(window, input.rendered);
-      if (!isLiveBacked(model)) continue;
+      if (!input.isLiveBacked(model)) continue;
     }
     input.rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
   }

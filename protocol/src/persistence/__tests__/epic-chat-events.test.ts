@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   chatEventSchema,
   chatEventTypeSchema,
+  chatImportedMetadataSchema,
   chatSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
@@ -138,6 +139,45 @@ describe("ChatEvent persistence schema", () => {
         metadata: restoreResultManifest,
       }),
     ).toMatchObject({ type: "checkpoint.restored" });
+  });
+
+  it("parses the provenance bag a chat.imported event carries", () => {
+    expect(
+      chatImportedMetadataSchema.parse({
+        sourceProvider: "claude",
+        nativeSessionId: "b3b0f0e4-0000-4000-8000-000000000001",
+        importedAt: 1_750_000_000_000,
+        sourceCwd: "/Users/dev/repos/traycer",
+      }),
+    ).toMatchObject({ sourceProvider: "claude" });
+  });
+
+  it("rejects an imported chat whose source directory is empty", () => {
+    // The marker discloses the source directory through a tooltip, and an
+    // empty label renders no tooltip at all - so this would be a provenance
+    // row naming no provenance. A folderless import keeps its path, so there
+    // is no legitimate producer of one.
+    expect(() =>
+      chatImportedMetadataSchema.parse({
+        sourceProvider: "claude",
+        nativeSessionId: "b3b0f0e4-0000-4000-8000-000000000001",
+        importedAt: 1_750_000_000_000,
+        sourceCwd: "",
+      }),
+    ).toThrow();
+  });
+
+  it("keeps the source directory of an import whose folder is gone", () => {
+    // The folder no longer existing is exactly when the path matters most: it
+    // is the only human-readable name that history has left.
+    expect(
+      chatImportedMetadataSchema.parse({
+        sourceProvider: "codex",
+        nativeSessionId: "thread-1",
+        importedAt: 1_750_000_000_000,
+        sourceCwd: "/Users/dev/repos/deleted",
+      }).sourceCwd,
+    ).toBe("/Users/dev/repos/deleted");
   });
 
   it("parses epics with missing and initialized chat event timelines", () => {

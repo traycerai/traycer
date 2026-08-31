@@ -127,6 +127,9 @@ export const worktreeDeleteBatchByPathOpenRequestSchema = z.discriminatedUnion(
       mode: z.literal("start"),
       commandId: commandIdSchema,
       source: worktreeDeletionSourceSchema,
+      /** Task that initiated a single-Task sweep. Absent when there is no
+       * single durable Task destination for the completion notification. */
+      epicId: z.string().min(1).optional(),
       /**
        * Every approved target, in one request. Paths must be unique: the frame
        * tagging keys off `worktreePath`, and a repeated path would make two
