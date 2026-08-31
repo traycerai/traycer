@@ -1512,10 +1512,22 @@ export function createOpenEpicStore(
         .catch((cause: unknown) => {
           // Teardown, not a failure: the session is going away and this edit
           // is already in main's live doc. Narrowed on the error type so a
-          // real fault still reaches the console rather than being swallowed
-          // as "the session closed".
+          // real fault is still reported rather than being swallowed as "the
+          // session closed".
           if (cause instanceof BridgeDisposedError) return;
-          throw cause;
+          // LOGGED, not rethrown. Rethrowing from inside a `.catch` returns a
+          // freshly rejected promise, and this chain is `void`ed - so the
+          // rethrow did not reach the console the comment above promised, it
+          // became an unhandled rejection. In this app it does not even
+          // surface: `vitest.config.ts` ignores them under test and a
+          // process-level handler swallows them at runtime. And because this
+          // fires on EVERY local Yjs update, one broken worker handler
+          // produced one per edit for as long as the person kept typing.
+          appLogger.error(
+            "[open-epic] body update refused by the runtime worker",
+            { docKey },
+            cause,
+          );
         });
     },
     onLocalAwareness: (docKey, frame, localClientId) => {
