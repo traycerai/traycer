@@ -13,6 +13,7 @@ import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
   ChatComposer,
+  type ChatComposerSideChatInput,
   type ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
@@ -195,6 +196,8 @@ export interface ChatLowerComposerState {
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
+  /** `/btw` / `/side`: fork this chat and ask there (`startSideChat`). */
+  readonly onSideChat: (input: ChatComposerSideChatInput) => boolean;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   /** The Location / Mode+branch / Environment chip cluster (+ context usage). */
   readonly workspaceControls: ReactNode;
@@ -617,6 +620,7 @@ function LiveChatComposer(props: {
       }
       fallbackSettingsSeed={model.composer.fallbackSettingsSeed}
       onSubmitMessage={model.composer.onSubmitMessage}
+      onSideChat={model.composer.onSideChat}
       onSettingsChange={model.composer.onSettingsChange}
       activeTurnStatus={model.turn.activeTurnStatus}
       steerCapable={model.turn.steerCapable}

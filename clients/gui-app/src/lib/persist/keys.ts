@@ -336,6 +336,14 @@ export const PERSIST_STORES = [
     leaf: "github-mention-filters",
     kind: "static",
   },
+  // Imported tasks the user has not opened yet: the task list's unread dot.
+  // Epic ids are cloud entities, so no host scoping; entries clear on first
+  // open and the set is small (one import run's worth at most).
+  {
+    camelName: "sessionImportUnseen",
+    leaf: "session-import-unseen",
+    kind: "static",
+  },
   {
     camelName: "notificationsFilter",
     leaf: "notifications-filter",

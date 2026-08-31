@@ -3179,7 +3179,8 @@ export const epicSchemaSurfaceBaseline = {
                                           "enum": [
                                             "model_rerouted",
                                             "model_verification",
-                                            "safety_buffering"
+                                            "safety_buffering",
+                                            "harness_message"
                                           ]
                                         },
                                         "tone": {
@@ -11686,7 +11687,8 @@ export const epicSchemaSurfaceBaseline = {
                                           "enum": [
                                             "model_rerouted",
                                             "model_verification",
-                                            "safety_buffering"
+                                            "safety_buffering",
+                                            "harness_message"
                                           ]
                                         },
                                         "tone": {

@@ -41,6 +41,7 @@ import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
+import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { useProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 import { ProfileRateLimitSwitchBanner } from "@/components/chat/composer/profile-rate-limit-switch-banner";
 import { ProfileDisabledBanner } from "@/components/chat/composer/profile-disabled-banner";
@@ -299,6 +300,8 @@ export function LandingComposer(props: LandingComposerProps) {
     // Mirror the chat editor's activity (see `isActive` below): skip the eager
     // catalog fetch when the landing surface is in Terminal mode or occluded.
     isActive: chatComposerActive,
+    // No chat exists yet, so there is nothing a `/btw` could fork.
+    localSlashCommands: NO_LOCAL_SLASH_COMMANDS,
   });
 
   // Hoisted from below so `isSubmitting` can read it. The create observers

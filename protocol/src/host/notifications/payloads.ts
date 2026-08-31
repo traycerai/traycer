@@ -307,6 +307,8 @@ export const hostNotificationWorktreeDeletionPayloadSchema = z
     /** Open string, not the wire enum: a row minted by a newer host with a
      * source this build has never heard of must still render and route. */
     source: idSchema,
+    /** Task that initiated a single-Task sweep. */
+    epicId: idSchema.optional(),
     requestedCount: z.number().int().nonnegative(),
     deletedCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),

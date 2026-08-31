@@ -3,20 +3,16 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import {
-  CORE_NOTIFICATION_CHIME_SOUNDS,
   isNotificationChimeSound,
   type NotificationChimeEventType,
   NOTIFICATION_CHIME_LABELS,
+  NOTIFICATION_CHIME_SOUNDS,
   type NotificationChimeSound,
-  PLAYFUL_NOTIFICATION_CHIME_SOUNDS,
   playNotificationChimeSound,
 } from "@/lib/notifications/notification-chime";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -105,21 +101,9 @@ function NotificationChimeSelect(props: {
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectGroup>
-          <SelectLabel>Core</SelectLabel>
-          {CORE_NOTIFICATION_CHIME_SOUNDS.map((option) => (
-            <ChimeOption key={option} sound={option} />
-          ))}
-        </SelectGroup>
-        <SelectSeparator />
-        <SelectGroup>
-          <SelectLabel>Playful</SelectLabel>
-          {PLAYFUL_NOTIFICATION_CHIME_SOUNDS.map((option) => (
-            <ChimeOption key={option} sound={option} />
-          ))}
-        </SelectGroup>
-        <SelectSeparator />
-        <ChimeOption sound="none" />
+        {NOTIFICATION_CHIME_SOUNDS.map((option) => (
+          <ChimeOption key={option} sound={option} />
+        ))}
       </SelectContent>
     </Select>
   );

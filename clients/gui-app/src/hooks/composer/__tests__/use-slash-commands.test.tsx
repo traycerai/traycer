@@ -2,6 +2,7 @@ import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ListGuiAgentCommandsResponse } from "@traycer/protocol/host/index";
 import { useSlashCommands } from "../use-slash-commands";
+import type { LocalSlashCommand } from "@/lib/composer/types";
 
 const mockState = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -84,6 +85,7 @@ describe("useSlashCommands", () => {
         harnessId: "codex",
         workingDirectories: ["/repo", "/repo/packages/app"],
         enabled: true,
+        localCommands: [],
       }),
     );
 
@@ -113,6 +115,7 @@ describe("useSlashCommands", () => {
         harnessId: "codex",
         workingDirectories: ["/repo"],
         enabled: true,
+        localCommands: [],
       }),
     );
 
@@ -123,5 +126,67 @@ describe("useSlashCommands", () => {
       kind: "skill",
     });
     expect(result.current.data.map((cmd) => cmd.name)).not.toContain("plan");
+  });
+
+  it("lists localCommands and lets a local row shadow a same-named provider row", () => {
+    mockState.data = {
+      harnessId: "claude",
+      commands: [
+        {
+          harnessId: "claude",
+          name: "btw",
+          description: "Provider's own btw command",
+          argumentHint: null,
+          kind: "slash-command",
+          metadata: {},
+        },
+        {
+          harnessId: "claude",
+          name: "review",
+          description: "Review current changes",
+          argumentHint: null,
+          kind: "slash-command",
+          metadata: {},
+        },
+      ],
+    };
+
+    const localBtw: LocalSlashCommand = {
+      source: "local",
+      harnessId: "claude",
+      name: "btw",
+      description: "Ask a side question in a forked copy of this chat",
+      argumentHint: "<question>",
+      kind: "slash-command",
+      metadata: {},
+      preview: {
+        kind: "text",
+        primary: "Ask a side question <question>",
+        secondary: null,
+        mono: false,
+      },
+    };
+
+    const { result } = renderHook(() =>
+      useSlashCommands("", {
+        hostClient: null,
+        harnessId: "claude",
+        workingDirectories: ["/repo"],
+        enabled: true,
+        localCommands: [localBtw],
+      }),
+    );
+
+    const btwRows = result.current.data.filter(
+      (command) => command.name.toLowerCase() === "btw",
+    );
+    expect(btwRows).toHaveLength(1);
+    expect(btwRows[0]).toMatchObject({
+      source: "local",
+      description: "Ask a side question in a forked copy of this chat",
+    });
+    expect(result.current.data.map((command) => command.name)).toContain(
+      "review",
+    );
   });
 });

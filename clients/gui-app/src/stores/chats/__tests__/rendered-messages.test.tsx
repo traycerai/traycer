@@ -3529,6 +3529,237 @@ describe("useRenderedMessages fork link integration", () => {
   });
 });
 
+function importedEvent(input: {
+  readonly eventId: string;
+  readonly timestamp: number;
+  readonly metadata: Record<string, unknown> | null;
+}): ChatEvent {
+  return {
+    eventId: input.eventId,
+    type: "chat.imported",
+    timestamp: input.timestamp,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: input.metadata,
+  };
+}
+
+describe("useRenderedMessages imported chat marker integration", () => {
+  it("projects a well-formed chat.imported event into a single provenance row", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        importedEvent({
+          eventId: "import-1",
+          timestamp: 500,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 1234,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    const importedRows = result.current.filter(
+      (message) => message.segments[0]?.kind === "imported-chat-marker",
+    );
+    expect(importedRows).toHaveLength(1);
+    const row = importedRows[0];
+    expect(row.id).toBe("imported-chat-marker:import-1");
+    expect(row.role).toBe("system");
+    expect(row.createdAt).toBe(500);
+    expect(row.segments).toHaveLength(1);
+    const segment = row.segments[0];
+    expect(segment.kind).toBe("imported-chat-marker");
+    if (segment.kind !== "imported-chat-marker") {
+      throw new Error("expected imported-chat-marker");
+    }
+    expect(segment.sourceProvider).toBe("claude");
+    expect(segment.importedAt).toBe(1234);
+    expect(segment.sourceCwd).toBe("/repo/work");
+  });
+
+  it("pins the provenance row at the top, above the transcript it introduces", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), userMessage("m2")],
+      events: [
+        importedEvent({
+          eventId: "import-1",
+          // The import necessarily happened AFTER every message it carries in,
+          // which is what a plain `createdAt` sort files at the very bottom.
+          timestamp: 9_000,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 9_000,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual([
+      "imported-chat-marker:import-1",
+      "m1",
+      "m2",
+    ]);
+  });
+
+  it("sits above even a pinned genesis setup card", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        setupEvent({
+          eventId: "s-running",
+          type: "setup.running",
+          timestamp: 1500,
+          metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
+        }),
+        importedEvent({
+          eventId: "import-1",
+          timestamp: 9_000,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 9_000,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    // Provenance first: the workspace the card describes was bound to this
+    // chat after the transcript already existed somewhere else.
+    expect(result.current.map((message) => message.id)).toEqual([
+      "imported-chat-marker:import-1",
+      "setup-card:owner-1:0:1500",
+      "m1",
+    ]);
+  });
+
+  it("derives distinct row ids from the event id so two imports never collide", () => {
+    const { result } = renderRenderedMessages({
+      messages: [],
+      events: [
+        importedEvent({
+          eventId: "import-1",
+          timestamp: 500,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 1234,
+            sourceCwd: "/repo/one",
+          },
+        }),
+        importedEvent({
+          eventId: "import-2",
+          timestamp: 600,
+          metadata: {
+            sourceProvider: "codex",
+            nativeSessionId: "native-session-2",
+            importedAt: 5678,
+            sourceCwd: "/repo/two",
+          },
+        }),
+      ],
+    });
+
+    const ids = result.current.map((message) => message.id);
+    expect(ids).toEqual([
+      "imported-chat-marker:import-1",
+      "imported-chat-marker:import-2",
+    ]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("renders no row when metadata is null", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        importedEvent({
+          eventId: "import-null",
+          timestamp: 500,
+          metadata: null,
+        }),
+      ],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual(["m1"]);
+  });
+
+  it("renders no row when a required field is missing", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        importedEvent({
+          eventId: "import-missing",
+          timestamp: 500,
+          metadata: {
+            sourceProvider: "claude",
+            // nativeSessionId is required and missing here.
+            importedAt: 1234,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual(["m1"]);
+  });
+
+  it("renders no row when a field has the wrong type", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        importedEvent({
+          eventId: "import-wrong-type",
+          timestamp: 500,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: "not-a-number",
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual(["m1"]);
+  });
+
+  it("ignores events of other types", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        forkEvent({
+          eventId: "fork-1",
+          timestamp: 500,
+          metadata: {
+            sourceChatId: "source-chat-1",
+            sourceChatTitle: "Original chat",
+            sourceHostId: "source-host-1",
+          },
+        }),
+      ],
+    });
+
+    expect(
+      result.current.some(
+        (message) => message.segments[0]?.kind === "imported-chat-marker",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("useRenderedMessages setup card integration", () => {
   it("pins the genesis setup card above the first user message", () => {
     const { result } = renderRenderedMessages({

@@ -1629,11 +1629,7 @@ function navigationPayloadFromKnown(
     // all - it renders with common-field copy and no deep link, which is the
     // designed degradation rather than a guessed destination.
     case "worktree_deletion":
-      return {
-        kind: "hostSurface",
-        surface: "worktreeSettings",
-        focus: undefined,
-      };
+      return navigationPayloadForWorktreeDeletion(known);
     // An automatic run DOES have something to focus: its own history entry,
     // which survives the worktrees it removed. The run id is a hint either way -
     // retention GC bounds history, so a row read months later may name a run
@@ -1651,6 +1647,20 @@ function navigationPayloadFromKnown(
         focus: { resourceId: known.runId },
       };
   }
+}
+
+function navigationPayloadForWorktreeDeletion(known: {
+  readonly source: string;
+  readonly epicId?: string;
+}): NotificationPayload {
+  if (known.source === "task_sweep" && known.epicId !== undefined) {
+    return { kind: "epic", epicId: known.epicId };
+  }
+  return {
+    kind: "hostSurface",
+    surface: "worktreeSettings",
+    focus: undefined,
+  };
 }
 
 const HOST_PAGE_LIMIT = 50;
