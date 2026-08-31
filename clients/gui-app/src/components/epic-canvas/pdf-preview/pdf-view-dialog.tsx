@@ -69,7 +69,10 @@ function renderBody(
         key={side}
         url={asset.url}
         fileName={effectivePath}
-        compact={false}
+        // The dialog header already shows the path - compact drops the
+        // viewer's own caption so it is not repeated one row below.
+        compact
+        toolbarActions={null}
         onRenderFailure={asset.reportDecodeFailure}
       />
     );

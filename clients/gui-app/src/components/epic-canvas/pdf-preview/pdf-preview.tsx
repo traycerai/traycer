@@ -15,7 +15,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -29,12 +28,16 @@ import {
   PDFViewer,
 } from "pdfjs-dist/web/pdf_viewer.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
+// Must come after pdf_viewer.css - undoes the Tailwind-preflight box-sizing
+// leak that skews the text/annotation layers (see the file's comment).
+import "./pdf-preview.css";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  ListTree,
   Minus,
   Plus,
   RotateCw,
@@ -45,9 +48,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
+import { PdfOutlinePanel, type PdfOutlineEntry } from "./pdf-outline-panel";
 
 // Same-origin worker chunk emitted by Vite - `script-src 'self'` already
 // covers it. Assigned at module scope so a second mount never races the
@@ -73,9 +77,15 @@ const MAX_SCALE = 5;
 export interface PdfPreviewProps {
   /** Blob URL of the validated PDF bytes (from `useFileAsset`). */
   readonly url: string;
+  /** Toolbar caption; surfaces pass their path-like label of choice. */
   readonly fileName: string;
-  /** Compact mode drops the toolbar label - for narrow diff columns. */
+  /** Compact mode drops the toolbar label - for surfaces with their own title. */
   readonly compact: boolean;
+  /**
+   * Host-surface actions appended to the toolbar (e.g. the tile's Open
+   * Externally button), so the viewer bar can be the surface's ONLY bar.
+   */
+  readonly toolbarActions: ReactNode;
   /**
    * Bytes reached a blob URL but pdf.js could not parse them as a PDF -
    * the exact counterpart of `ImagePreview`'s `onDecodeError`: the caller
@@ -88,6 +98,7 @@ export interface PdfPreviewProps {
 type ViewerBinding = {
   readonly viewer: PDFViewer;
   readonly eventBus: EventBus;
+  readonly linkService: PDFLinkService;
   readonly document: PDFDocumentProxy;
 };
 
@@ -99,12 +110,21 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
   const [pageNumber, setPageNumber] = useState(1);
   const [pageInput, setPageInput] = useState("1");
   const [scalePercent, setScalePercent] = useState<number | null>(null);
+  const [outline, setOutline] = useState<readonly PdfOutlineEntry[]>([]);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [matchState, setMatchState] = useState<{
     readonly current: number;
     readonly total: number;
   } | null>(null);
+
+  // Which automatic scale mode is in force: `"page-width"` until the user
+  // zooms manually, then `null`. A resize observer re-applies the mode so
+  // fit-to-width survives tile resizes AND a mount whose container had no
+  // laid-out width yet when `pagesinit` fired (where pdf.js silently falls
+  // back to 100%).
+  const scaleModeRef = useRef<"page-width" | null>("page-width");
 
   const onRenderFailureRef = useRef(props.onRenderFailure);
   useEffect(() => {
@@ -118,12 +138,12 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     if (searchOpen) searchInputRef.current?.focus();
   }, [searchOpen]);
 
-  const matchCountLabel = useMemo(() => {
+  const matchCountLabel = (() => {
     if (matchState !== null && matchState.total > 0) {
       return `${matchState.current} / ${matchState.total}`;
     }
     return query === "" ? "" : "0 results";
-  }, [matchState, query]);
+  })();
 
   useEffect(() => {
     const container = containerRef.current;
@@ -135,12 +155,15 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     const isCancelled = (): boolean => cancelled;
     let binding: ViewerBinding | null = null;
     let loadingTask: PDFDocumentLoadingTask | null = null;
+    let resizeObserver: ResizeObserver | null = null;
 
+    scaleModeRef.current = "page-width";
     setDocumentReady(false);
     setPageCount(0);
     setPageNumber(1);
     setPageInput("1");
     setScalePercent(null);
+    setOutline([]);
     setMatchState(null);
 
     const open = async (): Promise<void> => {
@@ -221,7 +244,29 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       linkService.setDocument(pdfDocument, null);
       setPageCount(pdfDocument.numPages);
 
-      binding = { viewer, eventBus, document: pdfDocument };
+      // pdf.js types promise an array, but a document without an outline
+      // resolves `null` at runtime.
+      const outlineItems: readonly PdfOutlineEntry[] | null = await pdfDocument
+        .getOutline()
+        .catch((): null => null);
+      if (isCancelled()) {
+        void pdfDocument.destroy();
+        return;
+      }
+      setOutline(outlineItems ?? []);
+
+      // Keep the automatic fit in force across container resizes (tile
+      // resize, outline pane toggle, first layout after a zero-width
+      // mount). Re-applying an unchanged computed scale is a no-op inside
+      // pdf.js, so this never fights a manual zoom (which clears the mode).
+      resizeObserver = new ResizeObserver(() => {
+        if (scaleModeRef.current !== null && bindingRef.current !== null) {
+          bindingRef.current.viewer.currentScaleValue = scaleModeRef.current;
+        }
+      });
+      resizeObserver.observe(container);
+
+      binding = { viewer, eventBus, linkService, document: pdfDocument };
       bindingRef.current = binding;
     };
 
@@ -236,6 +281,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     return () => {
       cancelled = true;
       bindingRef.current = null;
+      resizeObserver?.disconnect();
       if (binding !== null) {
         // Destroying the document tears down the viewer's render loop; the
         // container's DOM goes with this component's unmount. (5.x types
@@ -266,6 +312,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
   const zoomBy = useCallback((factor: number) => {
     const binding = bindingRef.current;
     if (binding === null) return;
+    scaleModeRef.current = null;
     const next = Math.min(
       Math.max(binding.viewer.currentScale * factor, MIN_SCALE),
       MAX_SCALE,
@@ -276,6 +323,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
   const handleFitWidth = useCallback(() => {
     const binding = bindingRef.current;
     if (binding === null) return;
+    scaleModeRef.current = "page-width";
     binding.viewer.currentScaleValue = "page-width";
   }, []);
 
@@ -283,6 +331,20 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     const binding = bindingRef.current;
     if (binding === null) return;
     binding.viewer.pagesRotation = (binding.viewer.pagesRotation + 90) % 360;
+  }, []);
+
+  const handleOutlineNavigate = useCallback((entry: PdfOutlineEntry) => {
+    const binding = bindingRef.current;
+    if (binding === null) return;
+    if (entry.dest !== null) {
+      void binding.linkService.goToDestination(entry.dest);
+      return;
+    }
+    if (entry.url !== null) {
+      // Same exit as the annotation layer's external links (LinkTarget.BLANK):
+      // window.open, governed by the desktop shell's security handlers.
+      window.open(entry.url, "_blank", "noopener");
+    }
   }, []);
 
   const dispatchFind = useCallback(
@@ -333,11 +395,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     [zoomBy],
   );
 
-  const caption = useMemo(() => {
-    if (pageCount === 0) return props.fileName;
-    const scaleSuffix = scalePercent === null ? "" : ` · ${scalePercent}%`;
-    return `${props.fileName} · ${pageCount} page${pageCount === 1 ? "" : "s"}${scaleSuffix}`;
-  }, [pageCount, props.fileName, scalePercent]);
+  const hasOutline = outline.length > 0;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
@@ -346,13 +404,32 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
         aria-label="PDF preview controls"
         className="relative z-10 flex h-8 shrink-0 items-center justify-between gap-2 border-b border-canvas-border/70 px-2"
       >
-        {props.compact ? (
-          <span aria-hidden="true" />
-        ) : (
-          <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
-            {caption}
-          </span>
-        )}
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          {hasOutline ? (
+            <TooltipWrapper
+              label="Document outline"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-pressed={outlineOpen}
+                onClick={() => setOutlineOpen((value) => !value)}
+                aria-label="Document outline"
+              >
+                <ListTree className="size-4" />
+              </Button>
+            </TooltipWrapper>
+          ) : null}
+          {props.compact ? null : (
+            <StartTruncatedText className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
+              {props.fileName}
+            </StartTruncatedText>
+          )}
+        </div>
         <div className="flex shrink-0 items-center gap-1">
           <TooltipWrapper
             label="Previous page"
@@ -421,6 +498,12 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
               <Minus className="size-4" />
             </Button>
           </TooltipWrapper>
+          <span
+            className="min-w-9 whitespace-nowrap text-center text-ui-xs tabular-nums text-muted-foreground"
+            aria-label="Zoom level"
+          >
+            {scalePercent === null ? "" : `${scalePercent}%`}
+          </span>
           <TooltipWrapper
             label="Zoom in"
             side="top"
@@ -497,6 +580,7 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
               <Search className="size-4" />
             </Button>
           </TooltipWrapper>
+          {props.toolbarActions}
         </div>
       </div>
       {searchOpen ? (
@@ -552,26 +636,39 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
           </Button>
         </div>
       ) : null}
-      <div className="relative min-h-0 flex-1 bg-canvas" onWheel={handleWheel}>
-        {/* PDFViewer requires an absolutely-positioned scroll container with
-            a `pdfViewer`-classed child it owns wholesale. Pages keep their
-            own white paper background in dark mode by design (Q5). */}
-        <div
-          ref={containerRef}
-          className="absolute inset-0 overflow-auto"
-          data-testid="pdf-preview-container"
-        >
-          <div className={cn("pdfViewer")} />
-        </div>
-        {documentReady ? null : (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
+      <div className="flex min-h-0 flex-1">
+        {outlineOpen && hasOutline ? (
+          <div className="w-1/3 max-w-64 shrink-0 bg-canvas">
+            <PdfOutlinePanel
+              items={outline}
+              onNavigate={handleOutlineNavigate}
             />
           </div>
-        )}
+        ) : null}
+        <div
+          className="relative min-h-0 min-w-0 flex-1 bg-canvas"
+          onWheel={handleWheel}
+        >
+          {/* PDFViewer requires an absolutely-positioned scroll container with
+              a `pdfViewer`-classed child it owns wholesale. Pages keep their
+              own white paper background in dark mode by design (Q5). */}
+          <div
+            ref={containerRef}
+            className="absolute inset-0 overflow-auto"
+            data-testid="pdf-preview-container"
+          >
+            <div className="pdfViewer" />
+          </div>
+          {documentReady ? null : (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

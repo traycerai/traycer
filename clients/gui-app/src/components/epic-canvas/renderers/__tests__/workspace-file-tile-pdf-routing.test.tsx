@@ -3,8 +3,10 @@
  *
  * - `.pdf` + host >= 1.1 -> the pdf.js viewer tile, streaming over
  *   `useFileAsset`, never the text path.
- * - `.pdf` + old host (or no handshake yet) -> the EXACT pre-PDF behavior:
- *   the text path, untouched. Fails closed.
+ * - `.pdf` + no handshake yet -> attempt the stream so its negotiation can
+ *   establish support; stream rejection still reaches the shared fallback.
+ * - `.pdf` + known old host -> the EXACT pre-PDF behavior: the text path,
+ *   untouched.
  * - Fallback statuses render the shared `BinaryPlaceholder` with the
  *   PDF-specific copy the hook supplies (e.g. the 20 MiB cap message).
  * - Image routing is unaffected by the PDF branch.
@@ -260,24 +262,36 @@ describe("workspace file tile PDF routing", () => {
         filePath: "docs/report.pdf",
       },
     ]);
+    // Single-bar contract: the viewer's own toolbar (carrying the path and
+    // the Open Externally slot) is the tile's ONLY bar in the ready state.
+    expect(screen.queryByTestId("workspace-file-toolbar")).toBeNull();
   });
 
-  it.each([
-    ["no completed handshake", null],
-    ["a 1.0 host", { major: 1, minor: 0 }],
-  ] as const)(
-    "falls back to the pre-PDF text path under %s",
-    (_label, version) => {
-      state.assetStreamVersion = version;
-      renderTile(nodeFor("docs/report.pdf"));
+  it("attempts the PDF stream while the first handshake is still unknown", () => {
+    state.assetStreamVersion = null;
+    renderTile(nodeFor("docs/report.pdf"));
 
-      expect(screen.queryByTestId("workspace-pdf-preview")).toBeNull();
-      // The text path IS the pre-PDF behavior - the router must not invent
-      // a new degraded state for old hosts.
-      expect(state.readFileCalls).toBeGreaterThan(0);
-      expect(state.assetRequests).toEqual([]);
-    },
-  );
+    expect(screen.getByTestId("workspace-pdf-preview")).toBeTruthy();
+    expect(state.readFileCalls).toBe(0);
+    expect(state.assetRequests).toEqual([
+      {
+        method: "workspace",
+        workspacePath: "/work/repo",
+        filePath: "docs/report.pdf",
+      },
+    ]);
+  });
+
+  it("falls back to the pre-PDF text path on a known 1.0 host", () => {
+    state.assetStreamVersion = { major: 1, minor: 0 };
+    renderTile(nodeFor("docs/report.pdf"));
+
+    expect(screen.queryByTestId("workspace-pdf-preview")).toBeNull();
+    // The text path IS the pre-PDF behavior - the router must not invent
+    // a new degraded state for old hosts.
+    expect(state.readFileCalls).toBeGreaterThan(0);
+    expect(state.assetRequests).toEqual([]);
+  });
 
   it("renders the shared placeholder with the hook's PDF copy on fallback", () => {
     state.asset = {
@@ -294,6 +308,9 @@ describe("workspace file tile PDF routing", () => {
       screen.getByText("This PDF is too large to preview (20 MiB limit)."),
     ).toBeTruthy();
     expect(screen.queryByTestId("workspace-pdf-preview")).toBeNull();
+    // No viewer toolbar without a viewer - the fallback keeps the shared
+    // path bar so Open Externally stays reachable.
+    expect(screen.getByTestId("workspace-file-toolbar")).toBeTruthy();
   });
 
   it("keeps image routing untouched by the PDF branch", () => {

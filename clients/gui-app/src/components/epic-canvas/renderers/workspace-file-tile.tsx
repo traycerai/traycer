@@ -168,22 +168,21 @@ function WorkspaceFileTileRouter(props: {
   const isSvg = isSvgAssetPath(node.filePath);
   const isPdf = isPdfAssetPath(node.filePath);
   const [viewAsSource, setViewAsSource] = useState(false);
-  // PDF needs `workspace.streamAsset >= 1.1` (the minor that taught the
-  // host `application/pdf`) - `useHostMethodSchemaVersion` reads the
-  // advertised version from the last handshake. Fails closed: an old host,
-  // or no handshake yet, keeps the pre-PDF behavior below (the text path's
-  // binary handling), exactly what every client showed before this feature.
+  // PDF needs `workspace.streamAsset >= 1.1` (the minor that taught the host
+  // `application/pdf`). A KNOWN older host keeps the pre-PDF text/binary path.
+  // An unknown version must attempt the asset stream: its negotiation is what
+  // can establish support, and the hook already maps rejection by an old host
+  // to the shared fallback placeholder.
   const hostId = useTabHostId();
   const assetStreamVersion = useHostMethodSchemaVersion(
     hostId,
     "workspace.streamAsset",
   );
-  const pdfSupported =
+  const pdfKnownUnsupported =
     assetStreamVersion !== null &&
-    assetStreamVersion.major === 1 &&
-    assetStreamVersion.minor >= 1;
+    (assetStreamVersion.major !== 1 || assetStreamVersion.minor < 1);
 
-  if (isPdf && pdfSupported) {
+  if (isPdf && !pdfKnownUnsupported) {
     return (
       <WorkspacePdfFileTile
         node={node}
@@ -425,6 +424,28 @@ function WorkspacePdfFileTile(props: {
     );
   }
 
+  if (assetState.status === "ready" && assetState.url !== null) {
+    // The viewer's toolbar is the tile's ONE bar: it carries the file path
+    // as its caption and the tile's Open Externally action - a second
+    // path/actions bar above it would repeat both.
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+        <PdfPreviewLazy
+          url={assetState.url}
+          fileName={node.filePath}
+          compact={false}
+          toolbarActions={
+            <OpenExternallyIconButton
+              onOpenExternally={handleOpenExternally}
+              opening={openExternallyOpening}
+            />
+          }
+          onRenderFailure={handleRenderFailure}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
       <WorkspaceImageFileToolbar
@@ -436,24 +457,48 @@ function WorkspacePdfFileTile(props: {
         }}
       />
       <div className="min-h-0 flex-1">
-        {assetState.status === "ready" && assetState.url !== null ? (
-          <PdfPreviewLazy
-            url={assetState.url}
-            fileName={node.name}
-            compact={false}
-            onRenderFailure={handleRenderFailure}
+        <div className="flex size-full items-center justify-center">
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
           />
-        ) : (
-          <div className="flex size-full items-center justify-center">
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          </div>
-        )}
+        </div>
       </div>
     </div>
+  );
+}
+
+function OpenExternallyIconButton(props: {
+  readonly onOpenExternally: () => void;
+  readonly opening: boolean;
+}) {
+  return (
+    <TooltipWrapper
+      label="Open externally"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        disabled={props.opening}
+        onClick={props.onOpenExternally}
+        aria-label="Open externally"
+      >
+        {props.opening ? (
+          <AgentSpinningDots
+            className="size-4"
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : (
+          <ExternalLinkIcon className="size-4" />
+        )}
+      </Button>
+    </TooltipWrapper>
   );
 }
 
@@ -475,31 +520,10 @@ function WorkspaceImageFileToolbar(props: {
       </StartTruncatedText>
       {props.svgToggle}
       {props.openExternally !== null ? (
-        <TooltipWrapper
-          label="Open externally"
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={props.openExternally.opening}
-            onClick={props.openExternally.onOpenExternally}
-            aria-label="Open externally"
-          >
-            {props.openExternally.opening ? (
-              <AgentSpinningDots
-                className="size-4"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : (
-              <ExternalLinkIcon className="size-4" />
-            )}
-          </Button>
-        </TooltipWrapper>
+        <OpenExternallyIconButton
+          onOpenExternally={props.openExternally.onOpenExternally}
+          opening={props.openExternally.opening}
+        />
       ) : null}
     </div>
   );
