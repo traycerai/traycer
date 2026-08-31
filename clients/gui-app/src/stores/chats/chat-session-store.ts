@@ -4,6 +4,7 @@ import {
   noticeCarriesOnlyCopy,
   unrecoverableSendNotice,
   pruneAcceptedActions,
+  withoutResolvedAcceptedQueueCancellations,
   reconcileQueueChange,
   reconcileSnapshotChange,
   reconcileTurnSettled,
@@ -4486,15 +4487,18 @@ export function createChatSessionStoreWithNotificationDependencies(
               new Set(Object.keys(patch.pendingActions)),
             ),
             pendingActions: patch.pendingActions,
-            acceptedActions: pruneAcceptedActions(
-              {
-                ...state.acceptedActions,
-                // Confirmation stamps for records that were already accepted
-                // when this frame arrived, then this pass's own transitions.
-                ...patch.confirmedAcceptedActions,
-                ...patch.acceptedActions,
-              },
-              now,
+            acceptedActions: withoutResolvedAcceptedQueueCancellations(
+              pruneAcceptedActions(
+                {
+                  ...state.acceptedActions,
+                  // Confirmation stamps for records that were already accepted
+                  // when this frame arrived, then this pass's own transitions.
+                  ...patch.confirmedAcceptedActions,
+                  ...patch.acceptedActions,
+                },
+                now,
+              ),
+              frame.queue,
             ),
             pendingUserMessages: patch.pendingUserMessages,
           };

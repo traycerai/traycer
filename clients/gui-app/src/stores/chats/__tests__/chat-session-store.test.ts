@@ -7354,6 +7354,74 @@ describe("createChatSessionStore", () => {
     expect(visibleQueueItemIds()).toEqual([]);
   });
 
+  it("retains an accepted queue cancellation while the accepted-action cap is full", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const queuedItem = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-command-cap",
+      commandId: "command-cap",
+      description: "bun test --watch",
+      monitoring: true,
+      delivery: "next_turn" as const,
+      targetTurnId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "running", items: [queuedItem] },
+      pendingFileEditApprovals: [],
+    });
+
+    for (let index = 0; index < MAX_ACCEPTED_CHAT_ACTION_RECORDS; index += 1) {
+      const actionId = harness.handle.store.getState().resumeQueue();
+      if (actionId === null) throw new Error("Expected resume action");
+      acceptLastAction(harness);
+    }
+
+    const cancelActionId = harness.handle.store
+      .getState()
+      .queueCancel(queuedItem.queueItemId);
+    if (cancelActionId === null)
+      throw new Error("Expected queue cancel action");
+    acceptLastAction(harness);
+
+    const state = harness.handle.store.getState();
+    expect(state.acceptedActions[cancelActionId]).toMatchObject({
+      action: "queueCancel",
+      queueItemId: queuedItem.queueItemId,
+    });
+    expect(
+      projectQueueWithPendingCancellations(
+        state.queue,
+        state.pendingActions,
+        state.acceptedActions,
+      ).items,
+    ).toEqual([]);
+
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "idle", items: [] },
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[cancelActionId],
+    ).toBeUndefined();
+    expect(
+      projectQueueWithPendingCancellations(
+        harness.handle.store.getState().queue,
+        harness.handle.store.getState().pendingActions,
+        harness.handle.store.getState().acceptedActions,
+      ).items,
+    ).toEqual([]);
+  });
+
   it("retains accepted send records when pruning accepted action records by cap", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");
