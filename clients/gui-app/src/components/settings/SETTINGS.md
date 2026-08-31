@@ -94,8 +94,8 @@ keyboard, and is still the end of a pairing that shows the code.
   panel DISPLAYS a QR and a one-time code for another device to read, and in
   the mobile app that device is the one holding the panel: the phone is the
   SCANNER (`layout/header/sign-in/link-code-sign-in.tsx` redeems a code this
-  panel mints, and its own copy says "On your desktop, open Settings → Link a
-  phone"). A phone _could_ show the code to a second phone; linking that way is
+  panel mints, and its own copy says "On your desktop, open Settings → Link
+  mobile app"). A phone _could_ show the code to a second phone; linking that way is
   given up knowingly, because a pairing surface that names the wrong end of
   itself costs more than the case it serves.
 
