@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { browserMutationKeys, browserQueryKeys } from "@/lib/query-keys";
 
@@ -15,20 +20,17 @@ import { browserMutationKeys, browserQueryKeys } from "@/lib/query-keys";
  * can quietly take back.
  */
 
-export interface BrowserSaveLoginsController {
-  /** Null until the first read settles, and after a read that failed. */
-  readonly enabled: boolean | null;
-  /** A set call is in flight. */
-  readonly pending: boolean;
-  readonly setEnabled: (enabled: boolean) => void;
-}
-
-export function useBrowserSaveLogins(
-  browserView: BrowserViewBridge | null,
-): BrowserSaveLoginsController {
-  const queryClient = useQueryClient();
-  const saveLogins = useQuery({
-    queryKey: browserQueryKeys.saveLogins(),
+/**
+ * Key and fetch together, so the bridge the read depends on is named in the
+ * key rather than closed over. The bridge is a shell singleton - built once at
+ * bootstrap and handed down through `RunnerHostContext` - so this factory
+ * returns a stable key across renders, and a method-only bridge hashes to `{}`
+ * anyway (see {@link browserQueryKeys.saveLogins}), which keeps the
+ * machine-wide pref in one entry.
+ */
+function saveLoginsQueryOptions(browserView: BrowserViewBridge | null) {
+  return queryOptions<boolean>({
+    queryKey: browserQueryKeys.saveLogins(browserView),
     queryFn: async (): Promise<boolean> => {
       // Unreachable while `enabled` gates the fetch on the same condition; the
       // bridge is nullable, so the read has to say so rather than assert.
@@ -43,6 +45,21 @@ export function useBrowserSaveLogins(
     // One machine-local read: a retry would only delay the toggle's answer.
     retry: false,
   });
+}
+
+export interface BrowserSaveLoginsController {
+  /** Null until the first read settles, and after a read that failed. */
+  readonly enabled: boolean | null;
+  /** A set call is in flight. */
+  readonly pending: boolean;
+  readonly setEnabled: (enabled: boolean) => void;
+}
+
+export function useBrowserSaveLogins(
+  browserView: BrowserViewBridge | null,
+): BrowserSaveLoginsController {
+  const queryClient = useQueryClient();
+  const saveLogins = useQuery(saveLoginsQueryOptions(browserView));
   const setSaveLogins = useMutation<boolean, Error, boolean>({
     mutationKey: browserMutationKeys.setSaveLogins(),
     mutationFn: async (next: boolean): Promise<boolean> => {
@@ -54,14 +71,17 @@ export function useBrowserSaveLogins(
     // The SETTLED value, not the requested one: a desktop that kept a different
     // answer is the authority on what this machine now does.
     onSuccess: (settled) => {
-      queryClient.setQueryData<boolean>(browserQueryKeys.saveLogins(), settled);
+      queryClient.setQueryData<boolean>(
+        browserQueryKeys.saveLogins(browserView),
+        settled,
+      );
     },
     // A refused write settled nothing, so the toggle goes back to whatever the
     // machine still holds - re-read rather than reconstructed here, which is
     // what keeps this hook from carrying a second copy of the truth.
     onError: () => {
       void queryClient.invalidateQueries({
-        queryKey: browserQueryKeys.saveLogins(),
+        queryKey: browserQueryKeys.saveLogins(browserView),
       });
     },
   });
