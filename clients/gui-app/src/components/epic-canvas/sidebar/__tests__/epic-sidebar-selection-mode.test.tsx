@@ -822,6 +822,15 @@ vi.mock("@/lib/epic-selectors", () => ({
         testState.activityTierById.get(id) ?? "turn",
       ]),
     ),
+  // ChatProgressIcon reads the REGISTERED (keyed, non-throwing) selector for
+  // the same data, so a whole-module mock has to answer that form too.
+  useRegisteredEpicAgentActivityTiers: () =>
+    new Map(
+      [...testState.activeAgentIds].map((id) => [
+        id,
+        testState.activityTierById.get(id) ?? "turn",
+      ]),
+    ),
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];
@@ -861,6 +870,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // effect's dependency never changes and it never seeds in these tests.
   useEpicNodeWorkspaceFolders: () => EMPTY_WORKSPACE_FOLDERS,
   useEpicPermissionRole: () => testState.permissionRole,
+  useRegisteredEpicPermissionRole: () => testState.permissionRole,
   useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
