@@ -25,6 +25,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   EvictionOutcome,
+  MemoryAccountant,
   ProtectedBytes,
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
@@ -32,6 +33,7 @@ import {
   BUDGET_PLANE_IDS,
   createMemoryAccountant,
 } from "@traycer-clients/shared/replica-runtime";
+import type { HotDocBudgetBook } from "@/stores/replica-memory/hot-doc-budget";
 import {
   createHotDocBudgetBook,
   hotDocHolderId,
@@ -67,14 +69,15 @@ function environmentStub(): RuntimeEnvironment {
  * `process-backed-accounting-port.ts` does, minus the host/epic identity
  * plumbing this pin has no need of.
  *
- * `noteHotDocEvictionDeferred` is the post-fix member: it does not exist on
- * `EpicRuntimeAccountingPort` today, so nothing production calls it yet -
- * it is here so that once the bridge starts calling it, this port answers.
+ * `noteHotDocEvictionDeferred` is the member this pin exists for: the bridge
+ * raises it from inside its `evict` closure, and this port answers by raising
+ * the accountant's own flag - which is what makes the zero return readable as
+ * a deferral rather than a refusal.
  */
 function createTestPort(
-  book: ReturnType<typeof createHotDocBudgetBook>,
-  accountant: ReturnType<typeof createMemoryAccountant>,
-): EpicRuntimeAccountingPort & { noteHotDocEvictionDeferred(): void } {
+  book: HotDocBudgetBook,
+  accountant: MemoryAccountant,
+): EpicRuntimeAccountingPort {
   let source: EpicRuntimeAccountingSource | null = null;
   return {
     registerBooks(next): void {
