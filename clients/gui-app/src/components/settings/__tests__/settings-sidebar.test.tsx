@@ -372,7 +372,7 @@ describe("<SettingsSidebar /> section navigation history", () => {
       expect(router.state.location.pathname).toBe("/settings/general");
     });
 
-    await act(async () => {
+    act(() => {
       router.history.back();
     });
     expect(router.state.location.pathname).toBe("/settings");
@@ -403,7 +403,7 @@ describe("<SettingsSidebar /> section navigation history", () => {
       expect(router.state.location.pathname).toBe("/settings/general");
     });
 
-    await act(async () => {
+    act(() => {
       router.history.back();
     });
     expect(router.state.location.pathname).toBe("/task-stub");
