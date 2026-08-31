@@ -187,6 +187,8 @@ function renderDialog(): void {
     <SweepWorktreesDialog
       epicIds={["epic-1"]}
       hostClient={null}
+      hostChoice={null}
+      fleetPending={false}
       taskTitle="Task"
       onOpenChange={vi.fn()}
     />,
@@ -257,6 +259,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -293,6 +297,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -314,6 +320,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={null}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -322,6 +330,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -768,6 +778,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -793,6 +805,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -821,6 +835,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -833,6 +849,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -854,6 +872,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1829,6 +1849,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1855,6 +1877,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1983,6 +2007,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -2016,6 +2042,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -2031,6 +2059,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -2065,6 +2095,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -2078,6 +2110,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={null}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -2087,6 +2121,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,

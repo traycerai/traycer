@@ -16,7 +16,7 @@ import {
   type OnboardingAct,
   type OnboardingActId,
 } from "@/components/onboarding/onboarding-acts";
-import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-diorama";
+import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-agent-guide-pane";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 type GuideQueryState = {
