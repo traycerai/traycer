@@ -120,6 +120,10 @@ const SELECTED_MODEL: ModelOption = {
 
 describe("useTaskProfileRateLimitSwitch", () => {
   beforeEach(() => {
+    epicRecords.setState({
+      chatRecords: { byId: {}, allIds: [] },
+      chats: { byId: {}, allIds: [] },
+    });
     batch.chatIds = [];
     batch.settingsByChatId.clear();
     updateProfile.mockReset();
