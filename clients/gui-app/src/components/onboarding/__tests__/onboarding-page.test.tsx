@@ -10,8 +10,9 @@ import { LazyMotion, domAnimation } from "motion/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { ONBOARDING_ACTS } from "@/components/onboarding/onboarding-acts";
-import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-diorama";
+import { onboardingActs } from "@/components/onboarding/onboarding-acts";
+import type { DesktopOnboardingActId } from "@/components/onboarding/onboarding-acts";
+import type { OnboardingAgentGuideState } from "@/components/onboarding/onboarding-agent-guide-pane";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 type GuideQueryState = {
@@ -41,11 +42,11 @@ vi.mock("@/components/onboarding/onboarding-theme-picker", () => ({
 
 vi.mock("@/components/onboarding/onboarding-diorama", () => ({
   OnboardingDiorama: (props: {
-    readonly stage: number;
+    readonly actId: DesktopOnboardingActId;
     readonly agentGuide: OnboardingAgentGuideState;
   }) => (
-    <div data-testid="onboarding-diorama-stub" data-stage={props.stage}>
-      {props.stage === 4 ? (
+    <div data-testid="onboarding-diorama-stub" data-act={props.actId}>
+      {props.actId === "agent-guide" ? (
         <>
           <textarea
             data-testid="mock-agent-guide-input"
@@ -145,18 +146,19 @@ function createRunnerHost() {
   });
 }
 
-async function advanceToStage(stage: number): Promise<void> {
-  const current = Number(
-    screen.getByTestId("onboarding-diorama-stub").getAttribute("data-stage"),
+function currentStage(): number {
+  return onboardingActs().findIndex(
+    (act) =>
+      act.id ===
+      screen.getByTestId("onboarding-diorama-stub").getAttribute("data-act"),
   );
-  for (let index = current; index < stage; index++) {
+}
+
+async function advanceToStage(stage: number): Promise<void> {
+  for (let index = currentStage(); index < stage; index++) {
     fireEvent.click(screen.getByTestId("onboarding-advance"));
     await waitFor(() => {
-      expect(
-        screen
-          .getByTestId("onboarding-diorama-stub")
-          .getAttribute("data-stage"),
-      ).toBe(String(index + 1));
+      expect(currentStage()).toBe(index + 1);
     });
   }
 }
@@ -187,7 +189,7 @@ describe("OnboardingPage", () => {
   it("renders act 1 copy and the live miniature on initial mount", () => {
     renderPage({ replay: false });
 
-    const firstAct = ONBOARDING_ACTS[0];
+    const firstAct = onboardingActs()[0];
     expect(
       screen.getByText(firstAct.title.replace(/\s+/g, " "), {
         exact: false,
@@ -201,7 +203,7 @@ describe("OnboardingPage", () => {
 
     renderPage({ replay: true });
 
-    const firstAct = ONBOARDING_ACTS[0];
+    const firstAct = onboardingActs()[0];
     await waitFor(() => {
       expect(
         screen.getByText(firstAct.title.replace(/\s+/g, " "), {
@@ -296,17 +298,13 @@ describe("OnboardingPage", () => {
   it("advances through all five acts while keeping the Figma continue label", async () => {
     renderPage({ replay: false });
 
-    const lastActIndex = ONBOARDING_ACTS.length - 1;
+    const lastActIndex = onboardingActs().length - 1;
     for (let index = 0; index < lastActIndex; index++) {
       const advanceButton = screen.getByTestId("onboarding-advance");
       expect(advanceButton.textContent).toContain("Continue");
       fireEvent.click(advanceButton);
       await waitFor(() => {
-        expect(
-          screen
-            .getByTestId("onboarding-diorama-stub")
-            .getAttribute("data-stage"),
-        ).toBe(String(index + 1));
+        expect(currentStage()).toBe(index + 1);
       });
     }
 
@@ -318,7 +316,7 @@ describe("OnboardingPage", () => {
   it("first-run finish (no replay flag) marks complete and opens a fresh draft tab", async () => {
     renderPage({ replay: false });
 
-    await advanceToStage(ONBOARDING_ACTS.length - 1);
+    await advanceToStage(onboardingActs().length - 1);
 
     // Now on the last act.
     expect(useOnboardingStore.getState().completedAt).toBeNull();
@@ -363,11 +361,7 @@ describe("OnboardingPage", () => {
     fireEvent.click(screen.getByTestId("onboarding-advance"));
 
     await waitFor(() => {
-      expect(
-        screen
-          .getByTestId("onboarding-diorama-stub")
-          .getAttribute("data-stage"),
-      ).toBe("5");
+      expect(currentStage()).toBe(5);
     });
     expect(setGlobalGuideMock).not.toHaveBeenCalled();
 

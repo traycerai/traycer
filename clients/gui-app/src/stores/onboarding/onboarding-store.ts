@@ -1,11 +1,13 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
-import { ONBOARDING_ACTS } from "@/components/onboarding/onboarding-acts";
+import { onboardingActs } from "@/components/onboarding/onboarding-acts";
 
-const LAST_STEP = ONBOARDING_ACTS.length - 1;
+// Read per call, not captured: the act list is platform-resolved, and which
+// tour this shell plays is not settled at module-evaluation time.
+const lastStep = (): number => onboardingActs().length - 1;
 const clampStep = (step: number): number =>
-  Math.min(Math.max(Math.trunc(step), 0), LAST_STEP);
+  Math.min(Math.max(Math.trunc(step), 0), lastStep());
 
 /**
  * First-launch onboarding state, persisted locally so the tour runs once per
@@ -34,7 +36,7 @@ export const selectStep = (state: OnboardingState): number =>
   clampStep(state.step);
 
 export const selectIsLastStep = (state: OnboardingState): boolean =>
-  selectStep(state) >= LAST_STEP;
+  selectStep(state) >= lastStep();
 
 const ONBOARDING_PERSIST_KEY = persistKey(STORE_KEYS.onboarding);
 
@@ -54,7 +56,7 @@ export const useOnboardingStore = create<OnboardingState>()(
       step: 0,
       advance: () => {
         const step = clampStep(get().step);
-        if (step >= LAST_STEP) {
+        if (step >= lastStep()) {
           set({ completedAt: Date.now() });
           return;
         }

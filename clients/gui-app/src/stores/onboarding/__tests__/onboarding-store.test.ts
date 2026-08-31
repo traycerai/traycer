@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CURRENT_PERSIST_VERSION, STORE_KEYS, persistKey } from "@/lib/persist";
-import { ONBOARDING_ACTS } from "@/components/onboarding/onboarding-acts";
+import { onboardingActs } from "@/components/onboarding/onboarding-acts";
 import {
   selectIsLastStep,
   selectStep,
@@ -8,7 +8,7 @@ import {
 } from "@/stores/onboarding/onboarding-store";
 
 const PERSIST_KEY = persistKey(STORE_KEYS.onboarding);
-const LAST_STEP = ONBOARDING_ACTS.length - 1;
+const LAST_STEP = onboardingActs().length - 1;
 
 function resetStore(): void {
   window.localStorage.clear();
