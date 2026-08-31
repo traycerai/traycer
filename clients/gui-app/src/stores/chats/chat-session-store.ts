@@ -5402,6 +5402,22 @@ export function createChatSessionStoreWithNotificationDependencies(
       // otherwise the coordinator keeps invoking this store's flush/hasPending
       // callbacks for the lifetime of the process.
       lease.unregister();
+      // The budget holder is attached before the factory runs, and the same
+      // reasoning applies to it: no handle is returned, so `dispose()` - which
+      // holds this exact pair - is unreachable for this id.
+      //
+      // Not hygiene. The leaked `evict` closure calls `get()`, which zustand
+      // has not assigned yet, so measuring residency off `state.messages`
+      // throws a TypeError - and `reconcile` has no catch, so it escapes into
+      // whichever LIVE chat's frame path happened to cross the soft limit.
+      // `touchedAt` is 0 for a holder that never settled, so it sorts first in
+      // LRU order and is the one asked first, every time.
+      //
+      // Rolled back here rather than by moving the attach after the factory:
+      // that ordering would depend on no factory callback settling
+      // synchronously, which nothing enforces.
+      memory.chatWindows.detach(holderId);
+      memory.accountant.release(BUDGET_PLANE_IDS.chatWindows, holderId);
       throw cause;
     }
 
