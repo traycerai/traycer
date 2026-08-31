@@ -220,6 +220,43 @@ vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
 
 const PROPS = { epicId: "epic-1", tabId: "tab-1", onClose: () => {} };
 
+const INACTIVE_SEARCH: ArtifactSearchResults = {
+  searchActive: false,
+  results: [],
+  response: null,
+  isUnsupported: false,
+  isError: false,
+  isFetching: false,
+  refetch: () => {},
+};
+
+function artifactFixture(
+  id: string,
+  parentId: string | null,
+  name: string,
+  type: string,
+): FixtureRecord {
+  return { id, parentId, name, type, status: null, hostId: "host-A" };
+}
+
+/**
+ * Each rendered artifact row as `[id, depth]`, in DOM order - the two halves of
+ * "this list draws a tree". Depth is read off the row's own marker rather than
+ * measured: a pixel assertion would pass for any indent scale, including one
+ * that had drifted away from the sidebar's.
+ */
+function renderedArtifactNesting(): ReadonlyArray<readonly [string, string]> {
+  return screen
+    .queryAllByTestId(/^switcher-artifact-node-/)
+    .map((node) => [
+      (node.getAttribute("data-testid") ?? "").replace(
+        "switcher-artifact-node-",
+        "",
+      ),
+      node.getAttribute("data-depth") ?? "",
+    ]);
+}
+
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
 }
@@ -325,6 +362,9 @@ beforeEach(() => {
   holder.indicatorChatIdCalls = [];
   holder.ownerHostIdByNodeId = {};
   holder.indicators = { epics: {}, chats: {} };
+  // Reset with the rest: a case that activates search would otherwise leave
+  // every later case rendering the results surface instead of the browse list.
+  holder.search = INACTIVE_SEARCH;
   sessionHandle = newSessionHandle();
 });
 afterEach(() => {
@@ -363,5 +403,151 @@ describe("<SwitcherArtifactsList />", () => {
     const statusDot = row.querySelector(".rounded-full");
     expect(statusDot).not.toBeNull();
     expect(statusDot?.className).toContain(STATUS_DOT_CLASSES[1]);
+  });
+
+  it("nests a child artifact under its parent", () => {
+    // Seeded youngest-first, so the epic's default recency sort would list
+    // these in exactly the reverse order. Nesting has to regroup them for the
+    // assertion to hold - which is the claim.
+    holder.records = [
+      artifactFixture("st-1", null, "Story", "story"),
+      artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
+      artifactFixture("sp-3", "tk-2", "Spec", "spec"),
+    ];
+    render(<SwitcherArtifactsList {...PROPS} />);
+    expect(renderedArtifactNesting()).toEqual([
+      ["st-1", "0"],
+      ["tk-2", "1"],
+      ["sp-3", "2"],
+    ]);
+  });
+
+  it("exposes the nesting to assistive technology, not just to the eye", () => {
+    // Indentation is a sighted cue only. Without the tree roles a screen
+    // reader is handed a flat run of buttons and told nothing about what
+    // contains what - so the structure is asserted through the roles the
+    // desktop artifact tree also carries, with level coming from the nesting.
+    holder.records = [
+      artifactFixture("st-1", null, "Story", "story"),
+      artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
+      artifactFixture("sp-3", "tk-2", "Spec", "spec"),
+    ];
+    holder.activeId = "tk-2";
+    render(<SwitcherArtifactsList {...PROPS} />);
+
+    const tree = screen.getByRole("tree", { name: "Epic artifacts tree" });
+    const items = screen.getAllByRole("treeitem");
+    expect(items).toHaveLength(3);
+    // One root under the tree; the deeper two each reached through a group.
+    expect(tree.querySelectorAll(':scope > [role="treeitem"]')).toHaveLength(1);
+    expect(
+      items[0].querySelector(':scope > [role="group"] > [role="treeitem"]'),
+    ).toBe(items[1]);
+    expect(
+      items[1].querySelector(':scope > [role="group"] > [role="treeitem"]'),
+    ).toBe(items[2]);
+    // The open tile is the selected item, and only it.
+    expect(items.map((i) => i.getAttribute("aria-selected"))).toEqual([
+      "false",
+      "true",
+      "false",
+    ]);
+    // Branches carry their expansion state; the leaf carries none, because an
+    // absent `aria-expanded` is what tells a screen reader it IS a leaf. A
+    // `false` here would announce the leaf as a collapsed branch hiding rows.
+    expect(items.map((i) => i.getAttribute("aria-expanded"))).toEqual([
+      "true",
+      "true",
+      null,
+    ]);
+  });
+
+  it("gives ranked search hits no tree roles", () => {
+    holder.records = [
+      artifactFixture("st-1", null, "Story", "story"),
+      artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
+    ];
+    holder.search = {
+      ...INACTIVE_SEARCH,
+      searchActive: true,
+      results: [
+        {
+          artifactId: "tk-2",
+          kind: "ticket",
+          title: "Ticket",
+          status: null,
+          relativePath: "tk-2.md",
+          breadcrumb: [],
+          sources: ["title"],
+          score: 1,
+          snippets: [],
+        },
+      ],
+      response: { results: [], outcome: "ready", truncated: false },
+    };
+    render(<SwitcherArtifactsList {...PROPS} />);
+    expect(screen.queryByRole("tree")).toBeNull();
+    expect(screen.queryAllByRole("treeitem")).toHaveLength(0);
+    expect(screen.getByTestId("switcher-artifact-row-tk-2")).toBeDefined();
+  });
+
+  it("lists an artifact whose parent this category excludes as a root", () => {
+    // An artifact parented to a chat. The chat is not an artifact row, so
+    // there is nothing on screen to indent under - and hiding the ticket to
+    // preserve the tree would lose a row the user owns.
+    holder.records = [
+      artifactFixture("chat-1", null, "Agent", "chat"),
+      artifactFixture("tk-1", "chat-1", "Ticket under agent", "ticket"),
+      artifactFixture("tk-2", "tk-1", "Nested under that", "ticket"),
+    ];
+    render(<SwitcherArtifactsList {...PROPS} />);
+    expect(screen.queryByTestId("switcher-artifact-node-chat-1")).toBeNull();
+    expect(renderedArtifactNesting()).toEqual([
+      ["tk-1", "0"],
+      ["tk-2", "1"],
+    ]);
+  });
+
+  it("keeps ranked search hits flat", () => {
+    holder.records = [
+      artifactFixture("st-1", null, "Story", "story"),
+      artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
+    ];
+    holder.search = {
+      ...INACTIVE_SEARCH,
+      searchActive: true,
+      results: [
+        {
+          artifactId: "tk-2",
+          kind: "ticket",
+          title: "Ticket",
+          status: null,
+          relativePath: "tk-2.md",
+          breadcrumb: [],
+          sources: ["title"],
+          score: 1,
+          snippets: [],
+        },
+        {
+          artifactId: "st-1",
+          kind: "story",
+          title: "Story",
+          status: null,
+          relativePath: "st-1.md",
+          breadcrumb: [],
+          sources: ["title"],
+          score: 0.5,
+          snippets: [],
+        },
+      ],
+      response: { results: [], outcome: "ready", truncated: false },
+    };
+    render(<SwitcherArtifactsList {...PROPS} />);
+    // The host's ranking, un-indented: `tk-2` is `st-1`'s child in the tree and
+    // is still drawn above it at depth 0, because a ranking is not a tree.
+    expect(renderedArtifactNesting()).toEqual([
+      ["tk-2", "0"],
+      ["st-1", "0"],
+    ]);
   });
 });
