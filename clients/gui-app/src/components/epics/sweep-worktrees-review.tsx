@@ -1,8 +1,7 @@
-import { useId, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import {
   formatStopHeading,
   formatTeardownActors,
@@ -24,17 +23,12 @@ export function SweepWorktreesReview(props: {
   readonly selectedEpicIds: ReadonlySet<string>;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly taskTitles: ReadonlyMap<string, string>;
-  readonly typedValue: string;
   readonly inventoryChanged: boolean;
   readonly activeSweepCount: number;
-  readonly onTypedValueChange: (value: string) => void;
   readonly onBack: () => void;
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }): ReactNode {
-  const needsTypedGate = props.snapshot.unproven.length > 0;
-  const typedOk = !needsTypedGate || props.typedValue === "sweep";
-  const typedConfirmId = useId();
   const stopActors = formatTeardownActors(
     props.snapshot.disclosedHolders,
     props.agentNames,
@@ -186,25 +180,6 @@ export function SweepWorktreesReview(props: {
           <p className="text-ui-sm font-medium">{removal.worktrees}</p>
           <p className="text-ui-xs text-muted-foreground">{removal.branches}</p>
         </div>
-        {needsTypedGate ? (
-          <div className="space-y-1.5">
-            <label htmlFor={typedConfirmId} className="text-ui-xs font-medium">
-              Type <code className="font-mono">sweep</code> to confirm possible
-              loss of unmerged work
-            </label>
-            <Input
-              id={typedConfirmId}
-              value={props.typedValue}
-              onChange={(event) =>
-                props.onTypedValueChange(event.currentTarget.value)
-              }
-              placeholder="sweep"
-              autoComplete="off"
-              spellCheck={false}
-              data-testid="sweep-typed-confirm"
-            />
-          </div>
-        ) : null}
       </section>
       <div className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
         <Button
@@ -230,7 +205,6 @@ export function SweepWorktreesReview(props: {
             type="button"
             variant="destructive"
             size="sm"
-            disabled={!typedOk}
             onClick={props.onConfirm}
             data-testid="sweep-worktrees-confirm"
           >
