@@ -8,10 +8,8 @@ import type {
 import { blurTextEntry } from "@/components/layout/shell/shell-gestures";
 import { isMobileApp } from "@/lib/mobile-app";
 import { useChatStore } from "@/stores/composer/chat-store";
-import {
-  readComposerDraftSnapshot,
-  useComposerDraftStore,
-} from "@/stores/composer/composer-draft-store";
+import { submitComposerDraft } from "@/lib/drafts/draft-mirror-coordinator";
+import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
 import { appLogger } from "@/lib/logger";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
@@ -92,6 +90,13 @@ interface UseChatComposerSubmitArgs {
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
   readonly attachmentPreparationPending: boolean;
+  /**
+   * True while this chat's draft is a replica of another host's row that has
+   * not been claimed. The editor is disabled, but the toolbar's send button
+   * and the deferred steer confirm both reach this hook without passing the
+   * editor, so the block belongs in `submitBlocked` beside the others.
+   */
+  readonly draftReadOnly: boolean;
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
@@ -153,10 +158,10 @@ export function useChatComposerSubmit(
     workspaceBlocked,
     imagesUnsupported,
     attachmentPreparationPending,
+    draftReadOnly,
     onSubmitMessage,
   } = args;
   const appendMessage = useChatStore((state) => state.appendMessage);
-  const clearDraftInStore = useComposerDraftStore((state) => state.clearDraft);
   const [pendingConflict, setPendingConflict] =
     useState<PendingSteerConflict | null>(null);
   const [annotationPreparationPending, setAnnotationPreparationPending] =
@@ -177,7 +182,7 @@ export function useChatComposerSubmit(
             }),
             true);
       if (!accepted) return false;
-      clearDraftInStore(taskId);
+      void submitComposerDraft(taskId);
       pickerStore.getState().reset();
       editorRef.current?.clear();
       // Gated on ACCEPTANCE, which is why it sits below the early return: a
@@ -188,14 +193,7 @@ export function useChatComposerSubmit(
       if (isMobileApp()) blurTextEntry();
       return true;
     },
-    [
-      appendMessage,
-      clearDraftInStore,
-      editorRef,
-      onSubmitMessage,
-      pickerStore,
-      taskId,
-    ],
+    [appendMessage, editorRef, onSubmitMessage, pickerStore, taskId],
   );
 
   // The conditions that block a live submit, shared verbatim between the live
@@ -208,10 +206,12 @@ export function useChatComposerSubmit(
       sendDisabled === true ||
       workspaceBlocked ||
       imagesUnsupported ||
-      attachmentPreparationPending,
+      attachmentPreparationPending ||
+      draftReadOnly,
     [
       activeTurnStatus,
       attachmentPreparationPending,
+      draftReadOnly,
       hasPendingApprovals,
       imagesUnsupported,
       sendDisabled,

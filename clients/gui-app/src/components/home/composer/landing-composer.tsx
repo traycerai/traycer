@@ -103,6 +103,8 @@ import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
 import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
+import { DraftAuthorityBanner } from "@/components/drafts/draft-authority-banner";
+import { useDraftAuthorityControl } from "@/hooks/drafts/use-draft-authority";
 import {
   landingStashIdentity,
   useLandingPromptStashDestination,
@@ -150,13 +152,16 @@ function landingComposerCanSubmit(args: {
   readonly submitBlocked: boolean;
   readonly workspaceCanStart: boolean;
   readonly hasSubmittableContent: boolean;
+  /** Another host owns this draft (replica view); claim before submitting. */
+  readonly readOnly: boolean;
 }): boolean {
   return (
     !args.isSubmitting &&
     !args.attachmentPending &&
     !args.submitBlocked &&
     args.workspaceCanStart &&
-    args.hasSubmittableContent
+    args.hasSubmittableContent &&
+    !args.readOnly
   );
 }
 
@@ -244,14 +249,50 @@ export function LandingComposer(props: LandingComposerProps) {
   const setDraftSettings = useLandingDraftStore(
     (state) => state.setDraftSettings,
   );
+  // Hoisted above the toolbar wiring so the settings handler can consult it:
+  // every control that mutates the persisted draft - the editor, the mode
+  // switcher, the workspace controls, the run-settings toolbar, the
+  // attachment strip - is held while another host owns the draft. A
+  // foreign-owned draft must not change under its owner before a claim.
+  const landingOwnerHostId = useLandingDraftStore((state) => {
+    if (draftId === null) return null;
+    return (
+      state.drafts.find((entry) => entry.id === draftId)?.ownerHostId ?? null
+    );
+  });
+  const landingOrigin = useLandingDraftStore((state) => {
+    if (draftId === null) return null;
+    return state.drafts.find((entry) => entry.id === draftId)?.origin ?? null;
+  });
+  const landingPublication = useLandingDraftStore((state) => {
+    if (draftId === null) return null;
+    return (
+      state.drafts.find((entry) => entry.id === draftId)?.publication ?? null
+    );
+  });
+  const authority = useDraftAuthorityControl({
+    draftId,
+    ownerHostId: landingOwnerHostId,
+    origin: landingOrigin,
+    tabHostId: resolvedHostId,
+    client: hostClient,
+    publication: landingPublication,
+  });
   const handleToolbarSettingsChange = useCallback(
     (settings: ChatRunSettings) => {
+      if (authority.readOnly) return;
       setGlobalRunSettings(activeHostId, settings, Date.now());
       if (draftId !== null) {
         setDraftSettings(draftId, settings);
       }
     },
-    [activeHostId, draftId, setDraftSettings, setGlobalRunSettings],
+    [
+      activeHostId,
+      authority.readOnly,
+      draftId,
+      setDraftSettings,
+      setGlobalRunSettings,
+    ],
   );
   const settingsSeed = useMemo(
     () =>
@@ -310,6 +351,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // they could not give.
   const actions = useLandingComposerActions(submitTarget);
   const isSubmitting = runtimeState.isSubmitting || actions.isPending;
+  const mutationsDisabled = isSubmitting || authority.readOnly;
 
   const hasSubmittableContent = contentIsSubmittable(runtimeState.content);
   const draftWorkspace = useLandingDraftStore((state) => {
@@ -601,6 +643,7 @@ export function LandingComposer(props: LandingComposerProps) {
     readHashImage: readPromptStashImage,
     source: promptStashSource,
     destination: promptStashDestination,
+    hostId: resolvedHostId,
   });
   // Send-time gate for the selected provider's managed binary pack. Folded
   // into `canSubmit` rather than checked separately at submit, so the button
@@ -621,6 +664,7 @@ export function LandingComposer(props: LandingComposerProps) {
     submitBlocked,
     workspaceCanStart,
     hasSubmittableContent,
+    readOnly: authority.readOnly,
   });
 
   // Submit-time refusal copy (selection model §54). The G4 re-point used to
@@ -786,30 +830,42 @@ export function LandingComposer(props: LandingComposerProps) {
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!workspaceCanStart || isSubmitting) return;
+      // Terminal mode bypasses `canSubmit` entirely, so the authority gate
+      // has to be restated here: a replica must not create an agent before
+      // the claim lands, and `ComposerBody` disabling Start is only the
+      // affordance half of that.
+      if (authority.readOnly) return;
       const refusal = actions.selectTerminalAgent(launch, draftId);
       raiseHostNotice(
         refusal === null ? null : { kind: "refused", message: refusal.message },
       );
     },
-    [actions, draftId, isSubmitting, raiseHostNotice, workspaceCanStart],
+    [
+      actions,
+      authority.readOnly,
+      draftId,
+      isSubmitting,
+      raiseHostNotice,
+      workspaceCanStart,
+    ],
   );
 
   const handleRemoveImage = useCallback(
     (id: string) => {
-      if (isSubmitting) return;
+      if (mutationsDisabled) return;
       Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
         kind: "image",
         surface: "draft",
       });
       editorRef.current?.removeImageAttachmentById(id);
     },
-    [isSubmitting],
+    [mutationsDisabled],
   );
 
   const switcher = (
     <ComposerModeSwitcher
       composerMode={composerMode}
-      disabled={isSubmitting}
+      disabled={mutationsDisabled}
       onSwitch={() => {
         const next = nextComposerMode(composerMode);
         setGlobalComposerMode(next);
@@ -832,12 +888,24 @@ export function LandingComposer(props: LandingComposerProps) {
       initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
+      editorReadOnly={authority.readOnly}
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-start">{switcher}</div>}
       toolbarLayout={isMobile ? "collapsed" : "full"}
       topBanner={
         <>
+          {authority.readOnly ? (
+            <DraftAuthorityBanner
+              ownerLabel={authority.ownerLabel}
+              claiming={authority.claiming}
+              claimError={authority.claimError}
+              publicationLabel={authority.publicationLabel}
+              onClaim={() => {
+                void authority.claim();
+              }}
+            />
+          ) : null}
           <ComposerHostNotice
             notice={hostNotice}
             onDismiss={dismissHostNotice}
@@ -890,7 +958,7 @@ export function LandingComposer(props: LandingComposerProps) {
           onRemoveImage={handleRemoveImage}
         />
       }
-      workspaceControls={props.workspaceControls(isSubmitting)}
+      workspaceControls={props.workspaceControls(mutationsDisabled)}
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}

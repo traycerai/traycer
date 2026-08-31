@@ -102,6 +102,7 @@ describe("chat-composer submit gate (path resolution)", () => {
           workspaceBlocked: false,
           imagesUnsupported: false,
           attachmentPreparationPending: pending,
+          draftReadOnly: false,
           onSubmitMessage,
         }),
       { initialProps: true },
@@ -233,7 +234,9 @@ describe("chat-composer submit gate (editor readiness)", () => {
     const { rerender: rerenderDraft } = renderHook(
       (tick: number) =>
         useChatComposerDraft({
-          taskId,
+          chatId: taskId,
+          epicId: "epic-1",
+          hostId: "host-1",
           editorRef,
           editorReadyTick: tick,
         }),
@@ -306,14 +309,18 @@ describe("chat-composer submit multi-surface clear", () => {
 
     renderHook(() =>
       useChatComposerDraft({
-        taskId,
+        chatId: taskId,
+        epicId: "epic-1",
+        hostId: "host-1",
         editorRef: editorRefA,
         editorReadyTick: 1,
       }),
     );
     renderHook(() =>
       useChatComposerDraft({
-        taskId,
+        chatId: taskId,
+        epicId: "epic-1",
+        hostId: "host-1",
         editorRef: editorRefB,
         editorReadyTick: 1,
       }),
@@ -380,6 +387,7 @@ function mountSubmitHook(args: {
       workspaceBlocked: false,
       imagesUnsupported: false,
       attachmentPreparationPending: false,
+      draftReadOnly: false,
       onSubmitMessage: args.onSubmitMessage,
     }),
   );

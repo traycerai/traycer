@@ -313,6 +313,42 @@ describe("DraftRuntimeRegistry", () => {
     });
   });
 
+  it("settles closed when the runtime is closed even though the row remains", () => {
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    const runtime = draftRuntimeRegistry.attach("draft-a");
+    if (runtime === null) throw new Error("expected keyed draft runtime");
+
+    runtime.setSnapshot(content("send me"), null);
+    const attempt = runtime.startSubmission(PLACEMENT);
+    if (attempt === null) throw new Error("expected submission attempt");
+    expect(runtime.markCreateStarted(attempt)).toBe(true);
+
+    useLandingDraftStore.getState().closeDraft("draft-a");
+    expect(
+      useLandingDraftStore.getState().drafts.some((d) => d.id === "draft-a"),
+    ).toBe(true);
+    expect(draftRuntimeRegistry.settlement(attempt)).toEqual({
+      kind: "closed",
+    });
+  });
+
+  it("still settles content-changed when the user edits and then closes", () => {
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    const runtime = draftRuntimeRegistry.attach("draft-a");
+    if (runtime === null) throw new Error("expected keyed draft runtime");
+
+    runtime.setSnapshot(content("send me"), null);
+    const attempt = runtime.startSubmission(PLACEMENT);
+    if (attempt === null) throw new Error("expected submission attempt");
+    expect(runtime.markCreateStarted(attempt)).toBe(true);
+
+    runtime.setSnapshot(content("send me too"), null);
+    useLandingDraftStore.getState().closeDraft("draft-a");
+    expect(draftRuntimeRegistry.settlement(attempt)).toEqual({
+      kind: "content-changed",
+    });
+  });
+
   it("tracks a caret move without counting it as a content change", () => {
     // Selection-only updates must go through `setSelection`: update the
     // stored caret (draft restores it on reopen) without bumping the

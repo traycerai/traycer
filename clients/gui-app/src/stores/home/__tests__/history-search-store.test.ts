@@ -81,6 +81,7 @@ describe("useHistorySearchStore persisted-state rehydration", () => {
       chatHosts: ["host-a", "host-b"],
       chatHostMode: "all",
       ownershipScopes: ["mine", "shared"],
+      drafts: ["landing"],
       sort: "title-asc",
       sortExplicit: true,
     };

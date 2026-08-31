@@ -64,6 +64,7 @@ import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-con
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
@@ -96,17 +97,21 @@ const useUsageProbeStore = create<UsageProbeState>()((set) => ({
 
 function render(ui: ReactElement) {
   const result = testingRender(
-    <TooltipProvider delayDuration={0}>
-      <LazyMotion features={domAnimation}>{ui}</LazyMotion>
-    </TooltipProvider>,
+    <TabHostProvider hostId="host-1">
+      <TooltipProvider delayDuration={0}>
+        <LazyMotion features={domAnimation}>{ui}</LazyMotion>
+      </TooltipProvider>
+    </TabHostProvider>,
   );
   return {
     ...result,
     rerender: (nextUi: ReactElement) =>
       result.rerender(
-        <TooltipProvider delayDuration={0}>
-          <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>
-        </TooltipProvider>,
+        <TabHostProvider hostId="host-1">
+          <TooltipProvider delayDuration={0}>
+            <LazyMotion features={domAnimation}>{nextUi}</LazyMotion>
+          </TooltipProvider>
+        </TabHostProvider>,
       ),
   };
 }

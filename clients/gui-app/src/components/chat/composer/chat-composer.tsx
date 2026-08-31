@@ -50,6 +50,9 @@ import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
+import { ChatComposerDraftAuthorityBanner } from "./chat-composer-draft-authority";
+import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
 import { redactEmail } from "@/lib/providers/redact-email";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
@@ -277,7 +280,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
-  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
+  const epicImagePresence = useEpicAttachmentBytesPresence();
+  const hasPastedImageBytes = useCallback(
+    (hash: string) => {
+      if (hasLandingImageBytes(hash)) return true;
+      if (epicImagePresence === null) return true;
+      return epicImagePresence(hash);
+    },
+    [epicImagePresence],
+  );
   // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
   // and re-created editor re-fires). The draft-reset bridge keys its
   // handle-ready catch-up on this - a ref flip alone never re-renders us.
@@ -315,7 +326,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     handleDocumentChange,
     handleSelectionChange,
   } = useChatComposerDraft({
-    taskId,
+    chatId: taskId,
+    epicId: currentEpicId,
+    hostId: tabHostId,
     editorRef,
     editorReadyTick,
   });
@@ -478,6 +491,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     readHashImage: readPromptStashImage,
     source: promptStashSource,
     destination: promptStashDestination,
+    hostId: tabHostId,
+  });
+  const authority = useChatComposerDraftAuthority({
+    chatId: taskId,
+    tabHostId,
+    client: hostClient,
   });
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
@@ -497,6 +516,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       workspaceBlocked,
       imagesUnsupported,
       attachmentPreparationPending: pastePending,
+      draftReadOnly: authority.readOnly,
       onSubmitMessage,
     });
   const attachmentPending = composerAttachmentPending(
@@ -565,6 +585,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
+    draftReadOnly: authority.readOnly,
   });
   const utilityClearanceVisible = composerUtilityNeedsClearance({
     rowCount: promptStash.rows.length,
@@ -574,6 +595,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   return (
     <>
+      <ChatComposerDraftAuthorityBanner authority={authority} />
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
           <div className="pointer-events-none px-4">
@@ -686,6 +708,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     hasPastedImageBytes={hasPastedImageBytes}
                     ingestPastedComposerImages={null}
                     isActive={focused}
+                    disabled={authority.readOnly}
                     onDocumentChange={handleDocumentChange}
                     onSelectionChange={handleSelectionChange}
                     onSubmit={handleSubmitDraft}
@@ -851,6 +874,13 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+  /**
+   * The draft belongs to another host and has not been claimed. Disabling the
+   * editor is not enough on its own: the toolbar's send button and the
+   * editor's own Enter handler both reach `submitDraft` without going through
+   * it, so the gate has to sit on the submit path too.
+   */
+  readonly draftReadOnly: boolean;
 }
 
 /**
@@ -914,6 +944,7 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
     !args.attachmentPreparationPending &&
+    !args.draftReadOnly &&
     (args.draftHasText || args.draftHasImages)
   );
 }

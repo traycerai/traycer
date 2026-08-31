@@ -77,6 +77,7 @@ import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   readInterviewDraftSnapshot,
   useInterviewDraftStore,
+  type StoredInterviewDraft,
 } from "@/stores/composer/interview-draft-store";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
@@ -113,6 +114,30 @@ function sendTestMessage(
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
 const OWNER_ID = "owner-1";
+
+function expectPersistedInterviewDraft(
+  actual: StoredInterviewDraft | null,
+  payload: {
+    readonly pageIndex: number;
+    readonly answers: StoredInterviewDraft["answers"];
+  },
+): void {
+  expect(actual).not.toBeNull();
+  if (actual === null) return;
+  expect(typeof actual.draftId).toBe("string");
+  expect(actual.draftId.length).toBeGreaterThan(0);
+  expect(typeof actual.lastTouchedAt).toBe("number");
+  expect(actual).toEqual({
+    pageIndex: payload.pageIndex,
+    answers: payload.answers,
+    draftId: actual.draftId,
+    hostRevision: 0,
+    targetEpicId: null,
+    lastTouchedAt: actual.lastTouchedAt,
+    generation: actual.generation,
+    syncedGeneration: 0,
+  });
+}
 
 const CONTENT: JsonContent = {
   type: "doc",
@@ -1878,7 +1903,13 @@ describe("createChatSessionStore", () => {
       expect(harness.handle.store.getState().pendingInterviews).toEqual([
         { blockId, requestedAt: 2 },
       ]);
-      expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toEqual(draft);
+      // The stored row also carries the host-mirror bookkeeping (draftId /
+      // hostRevision / generation / ...), which this test says nothing
+      // about; the helper asserts the payload it does own.
+      expectPersistedInterviewDraft(
+        readInterviewDraftSnapshot(CHAT_ID, blockId),
+        draft,
+      );
     };
 
     callbacks.onInterviewAnswered({
@@ -8074,9 +8105,11 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId, requestedAt: 2 },
     ]);
-    expect(
-      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
-    ).toEqual(draft);
+    expectPersistedInterviewDraft(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId] ??
+        null,
+      draft,
+    );
   });
 
   it("refuses a second interviewAnswer while the first is still in flight", () => {
@@ -8162,7 +8195,10 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId, requestedAt: 2 },
     ]);
-    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toEqual(draft);
+    expectPersistedInterviewDraft(
+      readInterviewDraftSnapshot(CHAT_ID, blockId),
+      draft,
+    );
 
     const retryId = harness.handle.store
       .getState()
@@ -8316,7 +8352,10 @@ describe("createChatSessionStore", () => {
       pendingInterviews: [{ blockId: keepBlock, requestedAt: 2 }],
     });
 
-    expect(readInterviewDraftSnapshot(CHAT_ID, keepBlock)).toEqual(keepDraft);
+    expectPersistedInterviewDraft(
+      readInterviewDraftSnapshot(CHAT_ID, keepBlock),
+      keepDraft,
+    );
     expect(readInterviewDraftSnapshot(CHAT_ID, dropBlock)).toBeNull();
     expect(
       window.localStorage.getItem(interviewDraftKey(CHAT_ID, keepBlock)),
@@ -8364,7 +8403,10 @@ describe("createChatSessionStore", () => {
       pendingInterviews: [{ blockId: keepBlock, requestedAt: 2 }],
     });
 
-    expect(readInterviewDraftSnapshot(CHAT_ID, keepBlock)).toEqual(keepDraft);
+    expectPersistedInterviewDraft(
+      readInterviewDraftSnapshot(CHAT_ID, keepBlock),
+      keepDraft,
+    );
     expect(readInterviewDraftSnapshot(CHAT_ID, dropBlock)).toBeNull();
     expect(
       window.localStorage.getItem(interviewDraftKey(CHAT_ID, dropBlock)),

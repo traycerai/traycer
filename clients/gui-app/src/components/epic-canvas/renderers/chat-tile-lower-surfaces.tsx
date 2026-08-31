@@ -28,6 +28,7 @@ import { useAgentStop } from "@/hooks/agent/use-stop-agent-mutation";
 import { StopChildrenDialog } from "@/components/chat/chat-stop-children-dialog";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { UnanswerableInterviewNotice } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
 import { ComposerSlotFileEditApprovalQueue } from "@/components/chat/segments/composer-slot-file-edit-approval-queue";
@@ -511,6 +512,7 @@ function ComposerSurface(props: {
   readonly layout: ComposerSurfaceLayout;
 }): ReactNode {
   const { model, layout } = props;
+  const tabHostId = useTabHostId();
   if (!model.runtime.snapshotLoaded) {
     return null;
   }
@@ -578,6 +580,8 @@ function ComposerSurface(props: {
             onSubmit={model.access.canAct ? model.interview.onAnswer : null}
             onSkip={model.access.canAct ? model.interview.onSkip : null}
             onFork={model.access.canAct ? model.interview.onFork : null}
+            epicId={model.composer.currentEpicId}
+            hostId={tabHostId}
           />
         </ComposerSlotShell>
       </>

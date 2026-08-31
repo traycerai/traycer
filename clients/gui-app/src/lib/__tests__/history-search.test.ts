@@ -3,6 +3,8 @@ import {
   DEFAULT_HISTORY_SEARCH,
   clearHistorySearchParams,
   historySearchToParams,
+  isHistoryDraftsFacetOn,
+  normalizePersistedHistorySearch,
   parseHistorySearch,
   patchHistorySearch,
 } from "@/lib/history-search";
@@ -30,9 +32,37 @@ describe("history search params", () => {
       chatHosts: [],
       chatHostMode: "any",
       ownershipScopes: ["shared"],
+      drafts: [],
       sort: "relevance",
       sortExplicit: false,
     });
+  });
+
+  it("round-trips the drafts facet through URL params", () => {
+    const search = parseHistorySearch({ historyDrafts: "landing" });
+
+    expect(search.drafts).toEqual(["landing"]);
+    expect(historySearchToParams(search)).toMatchObject({
+      historyDrafts: ["landing"],
+    });
+    expect(
+      historySearchToParams(parseHistorySearch({})).historyDrafts,
+    ).toBeUndefined();
+  });
+
+  it("fills a missing drafts field from pre-facet persisted search state", () => {
+    expect(
+      normalizePersistedHistorySearch({
+        query: "api",
+        repos: [],
+        repoMode: "any",
+        workspaces: [],
+        workspaceMode: "any",
+        ownershipScopes: [],
+        sort: "recent",
+        sortExplicit: false,
+      }),
+    ).toMatchObject({ query: "api", drafts: [] });
   });
 
   it("preserves an explicit recent sort while a query is active", () => {
@@ -67,10 +97,19 @@ describe("history search params", () => {
         historyWorkspaces: ["host-1:%2FUsers%2Fme%2Fgui-app"],
         historyWorkspaceMode: "all",
         historyOwnership: ["mine"],
+        historyDrafts: ["landing"],
         historySort: "relevance",
       }),
     ).toEqual({ focusedAt: 1 });
   });
+
+  it("treats an empty drafts facet as off", () => {
+    expect(isHistoryDraftsFacetOn(parseHistorySearch({}))).toBe(false);
+    expect(
+      isHistoryDraftsFacetOn(parseHistorySearch({ historyDrafts: "landing" })),
+    ).toBe(true);
+  });
+
   it("round-trips chat-host selections through the URL, dropping a default mode", () => {
     const parsed = parseHistorySearch({
       historyChatHosts: ["host-b", "host-a"],

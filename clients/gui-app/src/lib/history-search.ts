@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type {
+  HistoryDraftScope,
   HistoryMatchMode,
   HistoryOwnershipScope,
   HistorySortOption,
@@ -10,6 +11,7 @@ import { appLogger, describeLogError } from "@/lib/logger";
 
 const historyMatchModeSchema = z.enum(["any", "all"]);
 const historyOwnershipSchema = z.enum(["mine", "shared"]);
+const historyDraftsSchema = z.enum(["landing"]);
 const historySortSchema = z.enum([
   "recent",
   "last-viewed",
@@ -30,6 +32,9 @@ export const historySearchParamsSchema = z.object({
   historyOwnership: z
     .union([historyOwnershipSchema, z.array(historyOwnershipSchema)])
     .optional(),
+  historyDrafts: z
+    .union([historyDraftsSchema, z.array(historyDraftsSchema)])
+    .optional(),
   historySort: historySortSchema.optional(),
 });
 
@@ -48,6 +53,7 @@ export interface HistorySearchState {
   readonly chatHosts: ReadonlyArray<string>;
   readonly chatHostMode: HistoryMatchMode;
   readonly ownershipScopes: ReadonlyArray<HistoryOwnershipScope>;
+  readonly drafts: ReadonlyArray<HistoryDraftScope>;
   readonly sort: HistorySortOption;
   readonly sortExplicit: boolean;
 }
@@ -63,6 +69,7 @@ export type HistorySearchPatch = Partial<
     | "chatHosts"
     | "chatHostMode"
     | "ownershipScopes"
+    | "drafts"
     | "sort"
   >
 > & {
@@ -78,6 +85,7 @@ export const DEFAULT_HISTORY_SEARCH: HistorySearchState = {
   chatHosts: [],
   chatHostMode: "any",
   ownershipScopes: [],
+  drafts: [],
   sort: "recent",
   sortExplicit: false,
 };
@@ -93,6 +101,7 @@ const persistedHistorySearchSchema = z.object({
   chatHosts: z.array(z.string()).optional(),
   chatHostMode: historyMatchModeSchema.optional(),
   ownershipScopes: z.array(historyOwnershipSchema).optional(),
+  drafts: z.array(historyDraftsSchema).optional(),
   sort: historySortSchema.optional(),
   sortExplicit: z.boolean().optional(),
 });
@@ -122,6 +131,7 @@ export function normalizePersistedHistorySearch(
       parsed.data.chatHostMode ?? DEFAULT_HISTORY_SEARCH.chatHostMode,
     ownershipScopes:
       parsed.data.ownershipScopes ?? DEFAULT_HISTORY_SEARCH.ownershipScopes,
+    drafts: normalizeArray(parsed.data.drafts),
     sort: parsed.data.sort ?? DEFAULT_HISTORY_SEARCH.sort,
     sortExplicit:
       parsed.data.sortExplicit ?? DEFAULT_HISTORY_SEARCH.sortExplicit,
@@ -146,6 +156,7 @@ export function parseHistorySearch(
     chatHostMode:
       parsed.data.historyChatHostMode ?? DEFAULT_HISTORY_SEARCH.chatHostMode,
     ownershipScopes: normalizeArray(parsed.data.historyOwnership),
+    drafts: normalizeArray(parsed.data.historyDrafts),
     sort:
       parsed.data.historySort ??
       (query.trim().length > 0 ? "relevance" : DEFAULT_HISTORY_SEARCH.sort),
@@ -170,6 +181,7 @@ export function patchHistorySearch(
     chatHosts: patch.chatHosts ?? current.chatHosts,
     chatHostMode: patch.chatHostMode ?? current.chatHostMode,
     ownershipScopes: patch.ownershipScopes ?? current.ownershipScopes,
+    drafts: patch.drafts ?? current.drafts,
     sort,
     sortExplicit,
   };
@@ -203,6 +215,7 @@ export function historySearchToParams(
         : undefined,
     historyOwnership:
       state.ownershipScopes.length > 0 ? state.ownershipScopes : undefined,
+    historyDrafts: state.drafts.length > 0 ? state.drafts : undefined,
     historySort:
       state.sortExplicit &&
       (state.sort !== DEFAULT_HISTORY_SEARCH.sort || state.query.length > 0)
@@ -220,6 +233,7 @@ export type HistorySearchParamKey =
   | "historyChatHosts"
   | "historyChatHostMode"
   | "historyOwnership"
+  | "historyDrafts"
   | "historySort";
 
 export type HistorySearchParamsCleared<TPrev> = Omit<
@@ -241,6 +255,7 @@ export function clearHistorySearchParams<
     historyChatHosts: _historyChatHosts,
     historyChatHostMode: _historyChatHostMode,
     historyOwnership: _historyOwnership,
+    historyDrafts: _historyDrafts,
     historySort: _historySort,
     ...rest
   } = prev;
@@ -315,6 +330,10 @@ function parseWorkspaceParam(value: string): HistoryWorkspaceRef[] {
     });
     return [];
   }
+}
+
+export function isHistoryDraftsFacetOn(search: HistorySearchState): boolean {
+  return Array.isArray(search.drafts) && search.drafts.includes("landing");
 }
 
 function implicitHistorySort(

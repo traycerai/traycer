@@ -188,6 +188,7 @@ function mountSubmit(args: {
       workspaceBlocked: false,
       imagesUnsupported: args.imagesUnsupported,
       attachmentPreparationPending: false,
+      draftReadOnly: false,
       onSubmitMessage: args.onSubmitMessage,
     }),
   );
@@ -491,7 +492,9 @@ describe("browser annotation image gating", () => {
 
     const draft = renderHook(() =>
       useChatComposerDraft({
-        taskId,
+        chatId: taskId,
+        epicId: "epic-1",
+        hostId: "host-1",
         editorRef,
         editorReadyTick: 1,
       }),

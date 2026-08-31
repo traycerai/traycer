@@ -32,6 +32,7 @@ import {
 import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
+  freshLandingMirrorState,
   setLandingDraftDesktopProjectionBridge,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
@@ -91,7 +92,8 @@ vi.mock("@tanstack/react-router", () => ({
   }) => options.select({ location: { pathname: routerState.pathname } }),
 }));
 
-vi.mock("@/lib/host", () => ({
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => null,
   useAuthService: () => authMock,
 }));
@@ -813,6 +815,7 @@ describe("<MenuCommandListener />", () => {
           settings: null,
           composerMode: "chat",
           workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
         },
       ],
       activeDraftId: "draft-a",
@@ -847,7 +850,8 @@ describe("<MenuCommandListener />", () => {
       menu.emit("epic.closeTab");
     });
 
-    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0].closed).toBe(true);
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([tabId]);
     const navigation = latestNavigation();
     expect(navigation.to).toBe("/epics/$epicId/$tabId");

@@ -12,6 +12,7 @@ import type {
 } from "@/lib/attachments/image-blob-cache";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { base64ToBytes } from "@/lib/composer/image-base64";
+import { getImageBytes } from "@/lib/composer/landing-image-store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
@@ -195,6 +196,14 @@ export function useChatImageFetcher(): ImageBytesFetcher {
       if (fromChatPlane !== null) return fromChatPlane;
       const fromDoc = await readAttachmentFromEpicDoc(handle, hash, signal);
       if (fromDoc !== null) return fromDoc;
+      try {
+        const fromLanding = await getImageBytes(hash);
+        if (fromLanding !== undefined) {
+          return { bytes: fromLanding, mediaType: null };
+        }
+      } catch {
+        // Partition missing (tests, no IndexedDB) is hash-only unavailable.
+      }
       throw new Error(`Image attachment ${hash} unavailable`);
     },
     [scope, handle],
