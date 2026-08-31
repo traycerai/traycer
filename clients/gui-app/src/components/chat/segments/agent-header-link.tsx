@@ -15,7 +15,11 @@ export function AgentHeaderLink(props: {
 }): ReactNode {
   const { name, onOpen } = props;
   if (onOpen === null) {
-    return <span className="font-medium text-foreground/85">{name}</span>;
+    return (
+      <span className="min-w-0 truncate font-medium text-foreground/85">
+        {name}
+      </span>
+    );
   }
   return (
     <span
@@ -31,7 +35,7 @@ export function AgentHeaderLink(props: {
         event.stopPropagation();
         onOpen();
       }}
-      className="rounded font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      className="min-w-0 truncate rounded font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
       {name}
     </span>
