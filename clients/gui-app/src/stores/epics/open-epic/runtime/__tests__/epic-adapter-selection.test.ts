@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { EPIC_LANE_METHODS } from "@traycer-clients/shared/epic-lanes";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
+  armCarriesRootWrites,
   epicAdapterFingerprint,
   readEpicAdapterVerdict,
   settleEpicAdapterArm,
@@ -145,5 +146,19 @@ describe("fingerprint", () => {
     // about which selection it belongs to.
     expect(epicAdapterFingerprint("lanes")).toBe("epic-adapters:lanes");
     expect(epicAdapterFingerprint("legacy")).toBe("epic-adapters:legacy");
+  });
+});
+
+describe("armCarriesRootWrites", () => {
+  it("is true for `@1` alone, and false for the unknown arm", () => {
+    // `@1` is the only arm whose root document is a write path. On the lane
+    // arm `sendOutbound` routes a `root-update` to the detached `@1` adapter
+    // and drops it, so a local apply into that doc reaches no authority.
+    expect(armCarriesRootWrites("legacy")).toBe(true);
+    expect(armCarriesRootWrites("lanes")).toBe(false);
+    // The conservative direction, and the one that matters most: callers use
+    // this to decide whether they may retire the ONLY copy of somebody's
+    // unsynced edits, so "no arm selected yet" must not read as permission.
+    expect(armCarriesRootWrites(null)).toBe(false);
   });
 });

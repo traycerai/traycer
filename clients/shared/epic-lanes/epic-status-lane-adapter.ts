@@ -316,13 +316,23 @@ export function createEpicStatusLaneAdapter(
         foldAuthorityEpoch(frame.authorityEpoch);
         switch (frame.kind) {
           case "permissionChanged": {
+            // Before the emit, for the reason spelled out in `onSnapshot` - and
+            // this path is the WORSE half of that bug, not a second instance of
+            // it. There the erased permission was re-established by the next
+            // status snapshot; here there is no snapshot to wait for. A
+            // security epoch that advances within an unchanged authority epoch
+            // - an upgrade, or any role change that asks for no reseed - would
+            // emit the role and then synchronously reset the runtime that had
+            // just adopted it. The socket stays open and owes nothing further,
+            // so `currentRole` and the control-freshness latch stay cleared and
+            // every write is refused for the life of the session.
+            foldSecurityEpoch(frame.securityEpoch);
             emit({
               kind: "permission-changed",
               role: frame.permissionRole,
               canWrite: isWritablePermissionRole(frame.permissionRole),
               securityEpoch: frame.securityEpoch,
             });
-            foldSecurityEpoch(frame.securityEpoch);
             return;
           }
           case "cloudSyncStatus": {

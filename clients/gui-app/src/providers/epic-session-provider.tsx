@@ -59,6 +59,7 @@ import {
 } from "@/lib/registries/epic-session-registry";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
+import { armCarriesRootWrites } from "@/stores/epics/open-epic/runtime/epic-adapter-selection";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
 import { openEpicKey } from "@/lib/persist";
 import { adoptLegacyPersistedKey } from "@/lib/persist/zustand-persist-lifecycle";
@@ -1154,7 +1155,32 @@ export function EpicSessionProvider(
       hostId: string,
     ): Promise<void> {
       let editsTransferredToReplacement = false;
-      if (shouldTransferEdits) {
+      // The candidate's ARM decides whether a root apply is a transfer at all.
+      //
+      // `applyRootUpdate` reports the local `Y.applyUpdate` and nothing more,
+      // and on the lane arm that apply is the whole story: `sendOutbound`
+      // routes `root-update` to the DETACHED `@1` adapter and drops it, because
+      // the root doc is not a write path there - that arm's writes go through
+      // the command queue. Reporting an in-memory apply as a transfer retires
+      // the outgoing handle, the only copy of those edits, on the strength of
+      // bytes no authority ever received.
+      //
+      // Retention is the correct outcome here and NOT the duplicate the
+      // registry warns about: that warning is about a replacement that really
+      // does hold the edits, and this one provably does not.
+      //
+      // `null` - no arm selected yet - counts as cannot-carry, for the same
+      // reason the `catch` below answers false. The flag is a data-loss guard,
+      // so the unknown answer is the conservative one.
+      //
+      // Deliberately not applied-and-then-reported-false: merging a whole
+      // legacy root replica into a lane-backed session's root doc would seed
+      // records beside the typed rows the state lane delivers for those same
+      // records, which is a second defect rather than a kinder failure.
+      const destinationCarriesRootWrites = armCarriesRootWrites(
+        nextHandle.store.getState().installedArm,
+      );
+      if (shouldTransferEdits && destinationCarriesRootWrites) {
         try {
           const update = await outgoing.handle.encodeRootState();
           // `true`: LOCAL_ORIGIN, so the union routes through the

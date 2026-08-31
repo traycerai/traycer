@@ -51,7 +51,10 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
-import { settleEpicTitleWrite } from "@/lib/epic-title-write-settlement";
+import {
+  settleDetachedEpicTitleCommit,
+  settleEpicTitleWrite,
+} from "@/lib/epic-title-write-settlement";
 import { useTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import {
@@ -286,7 +289,12 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       }
       const hostId = client.getActiveHostId();
       const userId = client.getRequestContextUserId();
-      void client
+      // RETURNED, not voided: a two-arm `.then` does not catch what its own
+      // handlers throw, so the cache update below - and the toast helper in the
+      // other arm - had no terminal handler at all. Returning the chain routes
+      // that into this callback's own promise, which the commit site now
+      // settles.
+      return client
         .request("epic.updateTitle", {
           epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
         })
@@ -325,9 +333,11 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     value: resolvedTabName,
     canEdit: canEditTitle,
     // Wrapped: the property is declared void-returning and the commit is a
-    // round trip now. `void` states the fire-and-forget explicitly.
+    // round trip now. Fire-and-forget, but SETTLED - the enqueue inside can
+    // reject on a real bridge fault, and unhandled that is a rename which
+    // silently did nothing.
     onCommit: (next: string) => {
-      void commitEpicTitle(next);
+      settleDetachedEpicTitleCommit(commitEpicTitle(next), "Epic tabs");
     },
   });
 

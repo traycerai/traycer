@@ -117,6 +117,25 @@ export type EpicAdapterArm = "legacy" | "lanes";
 export type EpicAdapterVerdict = EpicAdapterArm | "undecided";
 
 /**
+ * Whether an arm can carry ROOT-document writes to its authority.
+ *
+ * Only `@1` can. On the lane arm the root doc is not a write path at all -
+ * records are typed rows and writes go through the command queue - so
+ * `sendOutbound` routes a `root-update` to the detached `@1` adapter and drops
+ * it. A local `Y.applyUpdate` into that document therefore succeeds while
+ * reaching no authority, which is exactly the shape that makes an in-memory
+ * apply look like a completed transfer.
+ *
+ * `null` - no arm selected yet - answers `false`, and that direction is the
+ * whole point. Every caller of this predicate is deciding whether it may retire
+ * the only copy of somebody's unsynced edits, so the unknown answer has to be
+ * the conservative one; retention is recoverable and a discarded handle is not.
+ */
+export function armCarriesRootWrites(arm: EpicAdapterArm | null): boolean {
+  return arm === "legacy";
+}
+
+/**
  * Reads this connection's negotiated support for one stream method.
  *
  * The three-valued vocabulary is the transport's own

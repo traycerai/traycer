@@ -2,6 +2,7 @@ import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import { EpicSessionEndedError } from "@/stores/epics/open-epic/store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { appLogger } from "@/lib/logger";
 
 /**
  * The tail both direct epic-title renames share: wait for the authority's
@@ -56,4 +57,45 @@ export function settleEpicTitleWrite(
       throw cause;
     },
   );
+}
+
+/**
+ * Terminal handler for the DETACHED half of a direct epic-title rename.
+ *
+ * `onCommit` is declared void-returning, so both surfaces hand their async
+ * commit straight to `void` - and everything that commit awaits BEFORE it
+ * reaches `settleEpicTitleWrite` is outside that tail's reach. One awaited call
+ * matters: `enqueueWriteCommand` runs through `callOrNullOnTeardown`, which
+ * answers `null` for a disposed bridge and RETHROWS every real fault, exactly
+ * so a decode failure or a worker that threw is not mistaken for a closed
+ * session. Detached, that fault was an unhandled rejection and - the half the
+ * person renaming actually experiences - a rename that silently did nothing,
+ * on the one path here that raises no toast when every sibling arm does.
+ *
+ * Deliberately NOT modelled on this module's other export. `settleEpicTitleWrite`
+ * rethrows a genuine settlement failure on purpose, and a test pins that: by
+ * then the command is with an authority and the surface has already been told,
+ * so swallowing it would hide a real fault. Here the write never got that far
+ * and nothing has been reported, so the honest answer is the same failure toast
+ * the sibling arms raise - a report, not a blanket catch.
+ */
+export function settleDetachedEpicTitleCommit(
+  commit: Promise<void>,
+  source: string,
+): void {
+  void commit.catch((cause: unknown) => {
+    // Cancellation, exactly as the tail above treats it: the session ending is
+    // the answer, and not one the person renaming can act on.
+    if (cause instanceof EpicSessionEndedError) return;
+    appLogger.warn("epic title rename failed before dispatch", {
+      source,
+      error: cause instanceof Error ? cause.message : String(cause),
+    });
+    reportableErrorToast("Couldn't rename epic.", undefined, {
+      title: "Could not rename Epic",
+      message: null,
+      code: null,
+      source,
+    });
+  });
 }

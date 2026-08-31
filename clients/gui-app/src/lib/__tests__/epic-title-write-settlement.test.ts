@@ -6,7 +6,10 @@ import type {
 } from "@traycer-clients/shared/replica-runtime";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
 import { EpicSessionEndedError } from "@/stores/epics/open-epic/store";
-import { settleEpicTitleWrite } from "@/lib/epic-title-write-settlement";
+import {
+  settleDetachedEpicTitleCommit,
+  settleEpicTitleWrite,
+} from "@/lib/epic-title-write-settlement";
 
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: vi.fn(),
@@ -141,5 +144,63 @@ describe("settleEpicTitleWrite", () => {
     } finally {
       capture.stop();
     }
+  });
+});
+
+describe("settleDetachedEpicTitleCommit", () => {
+  afterEach(() => {
+    vi.mocked(reportableErrorToast).mockClear();
+  });
+
+  it("reports a pre-dispatch fault instead of leaving it unhandled", async () => {
+    const capture = captureUnhandledRejections();
+    try {
+      settleDetachedEpicTitleCommit(
+        // What `enqueueWriteCommand` raises for a real fault:
+        // `callOrNullOnTeardown` answers `null` only for a disposed bridge and
+        // RETHROWS a decode failure or a worker that threw.
+        Promise.reject(new Error("worker threw")),
+        "Epic tabs",
+      );
+      await drainRejections();
+
+      // THE REDDENING PAIR. `onCommit` is void-returning, so the commit was
+      // handed to a bare `void`: the fault was an unhandled rejection AND - the
+      // half the person renaming experiences - a rename that silently did
+      // nothing on the one path here that raised no toast.
+      expect(capture.seen).toEqual([]);
+      expect(reportableErrorToast).toHaveBeenCalledWith(
+        "Couldn't rename epic.",
+        undefined,
+        expect.objectContaining({ source: "Epic tabs" }),
+      );
+    } finally {
+      capture.stop();
+    }
+  });
+
+  it("treats the session ending as cancellation: no toast", async () => {
+    const capture = captureUnhandledRejections();
+    try {
+      settleDetachedEpicTitleCommit(
+        Promise.reject(new EpicSessionEndedError("disposed")),
+        "Epic tabs",
+      );
+      await drainRejections();
+
+      // The discriminating control. Without it a blanket catch would pass the
+      // arm above while turning every host replacement with a rename in flight
+      // into a spurious failure toast.
+      expect(capture.seen).toEqual([]);
+      expect(reportableErrorToast).not.toHaveBeenCalled();
+    } finally {
+      capture.stop();
+    }
+  });
+
+  it("stays silent for a commit that resolves", async () => {
+    settleDetachedEpicTitleCommit(Promise.resolve(), "Epic tabs");
+    await drainRejections();
+    expect(reportableErrorToast).not.toHaveBeenCalled();
   });
 });

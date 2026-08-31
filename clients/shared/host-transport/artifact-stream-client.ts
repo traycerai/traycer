@@ -169,6 +169,17 @@ export class ArtifactStreamClient {
     const parsed = artifactSubscribeServerFrameSchemaV10.safeParse(envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
+    // The address invariant the contract STATES but cannot enforce: every
+    // non-`pong` frame names the artifact it belongs to, and it must be this
+    // stream's. Bodies share one multiplexed connection with every other open
+    // tile's lane, and the adapter above relabels each frame with its own
+    // captured id rather than the wire's - so a misrouted `doc` would install
+    // another artifact's bytes into this replica, and a stray `docAck` would
+    // retire coverage this body never sent. Both are silent corruptions of a
+    // document, which is why this is a drop and not a relabel: the schema
+    // calls a mismatch a host bug, "not a routing instruction", so the one
+    // thing the client must not do is honour it as an address.
+    if (frame.kind !== "pong" && frame.artifactId !== this.artifactId) return;
     switch (frame.kind) {
       case "doc": {
         // A binary-declaring frame that arrived without its payload is a

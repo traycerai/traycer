@@ -19,6 +19,11 @@ import {
   useEpicLaneCommentThreadsLive,
 } from "@/hooks/comments/use-lane-comment-threads";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import {
+  ArtifactAttachmentScopeContext,
+  useArtifactAttachmentScopeValue,
+} from "@/lib/attachments/artifact-attachment-scope-context";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { collabTileNotice } from "./collab-tile-availability-copy";
@@ -338,6 +343,18 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   // one, which answers a different machine mid re-point (D15). Resolved once
   // here and handed to both comment popovers so all three share one cache key.
   const tabHostClient = useTabHostClient();
+  // The byte scope for images inside THIS artifact's body. On the lane arm the
+  // root doc is never seeded, so its `attachments` map cannot answer and the
+  // node view asks the host instead; the id pair is the authorization subject
+  // that read is checked against. Resolved once per tile for the same reason
+  // the chat tile resolves its own: a body can hold many images, and resolving
+  // per image would put a directory query observer behind every one.
+  const artifactAttachmentScope = useArtifactAttachmentScopeValue(
+    epicId,
+    node.id,
+    useTabHostId(),
+    tabHostClient,
+  );
   const threadsQuery = useEpicCommentThreadsForClient({
     client: tabHostClient,
     epicId,
@@ -638,7 +655,11 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
               {editor !== null && isEpicArtifactKind(node.type) ? (
                 <ArtifactFindAdapterRegistration editor={editor} node={node} />
               ) : null}
-              <EditorContent editor={editor} />
+              <ArtifactAttachmentScopeContext.Provider
+                value={artifactAttachmentScope}
+              >
+                <EditorContent editor={editor} />
+              </ArtifactAttachmentScopeContext.Provider>
             </div>
             {editor !== null ? (
               <ArtifactToolbar

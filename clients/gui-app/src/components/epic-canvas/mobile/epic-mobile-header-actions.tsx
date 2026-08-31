@@ -19,7 +19,10 @@ import {
 } from "@/lib/registries/epic-session-registry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
-import { settleEpicTitleWrite } from "@/lib/epic-title-write-settlement";
+import {
+  settleDetachedEpicTitleCommit,
+  settleEpicTitleWrite,
+} from "@/lib/epic-title-write-settlement";
 
 /**
  * Fills the mobile-header right-actions slot on the epic route with the tab
@@ -154,7 +157,7 @@ export function MobileEpicHeaderTitle(props: {
       // round trip now. `void` states the fire-and-forget the caller already
       // assumed, instead of leaking a promise into a void slot.
       onCommit={(next: string) => {
-        void handleCommit(next);
+        settleDetachedEpicTitleCommit(handleCommit(next), "Epic mobile header");
       }}
       inputLabel="Epic title"
       testId="mobile-epic-header-title"

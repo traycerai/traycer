@@ -765,6 +765,43 @@ describe("createEpicStatusLaneAdapter - security-epoch replacement lands before 
       "emit:cloud-sync-status",
     ]);
   });
+
+  it("a permissionChanged TRANSITION carrying a higher securityEpoch requests the replacement before it emits the permission", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    // Establishes both epochs. Requests nothing - a first observation is the
+    // client learning where it stands, not authorization moving underneath it.
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 1 }),
+    );
+
+    // The transition an upgrade produces: same authority epoch, a strictly
+    // higher security epoch, and NO accompanying snapshot. That last part is
+    // what makes this the worse half of the bug the sibling above pins - there,
+    // the next status snapshot re-established the erased role; here the socket
+    // stays open owing nothing further, so nothing ever re-emits it.
+    latest().callbacks.onTransition(
+      permissionChangedFrame("epoch-1", 2, "editor"),
+    );
+
+    expect(timeline(log)).toEqual([
+      "emit:control-snapshot-complete",
+      "emit:permission-changed",
+      "emit:cloud-sync-status",
+      // The request FIRST...
+      "requestReplacement:security-epoch-changed",
+      // ...and the role only after it. Reversed - which is how this path
+      // shipped - the reset erases `currentRole` and the control-freshness
+      // latch that this emit had just set, and every write is refused for the
+      // life of the session.
+      "emit:permission-changed",
+    ]);
+  });
 });
 
 // ─── Migration mapping ────────────────────────────────────────────────────────
