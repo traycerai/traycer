@@ -48,11 +48,12 @@ export function useEpicExportArtifacts() {
       // per artifact for the duration of the read - without one, exporting a
       // body nobody has opened in this session reads as "still loading".
       //
-      // Materializing is awaited one artifact at a time. Today the hold
-      // resolves immediately; once the cold tier lives in the runtime worker
-      // it resolves when that room's bytes have been transferred back, and
-      // holding N rooms concurrently would be the byte spike the accountant
-      // exists to prevent. Sequential keeps a settle boundary between rooms.
+      // Materializing is awaited one artifact at a time. The hold resolves
+      // when that room's bytes have been transferred back from the runtime
+      // worker - not immediately, as this comment claimed while the cold tier
+      // was still on main - and holding N rooms concurrently would be the byte
+      // spike the accountant exists to prevent. Sequential keeps a settle
+      // boundary between rooms.
       const holds: ArtifactBodyHold[] = [];
       try {
         const artifacts: Array<

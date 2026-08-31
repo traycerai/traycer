@@ -17,7 +17,7 @@ vi.mock("@/lib/runner-error-toast", () => ({
   toastFromRunnerError: vi.fn(),
 }));
 
-const acquireArtifactBodyLease = vi.hoisted(() => vi.fn());
+const acquireResidentArtifactBodyLease = vi.hoisted(() => vi.fn());
 const getArtifactFragment = vi.hoisted(() => vi.fn());
 const createArtifactExport = vi.hoisted(() => vi.fn());
 
@@ -33,7 +33,10 @@ vi.mock("@/lib/files/save-blob-to-disk", () => ({
 vi.mock("@/providers/use-open-epic-handle", () => ({
   useOpenEpicHandle: () => ({
     store: {
-      getState: () => ({ acquireArtifactBodyLease, getArtifactFragment }),
+      getState: () => ({
+        acquireResidentArtifactBodyLease,
+        getArtifactFragment,
+      }),
     },
   }),
 }));
@@ -50,10 +53,13 @@ function makeWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
 
 describe("useEpicExportArtifacts", () => {
   beforeEach(() => {
-    acquireArtifactBodyLease.mockReset();
+    acquireResidentArtifactBodyLease.mockReset();
     getArtifactFragment.mockReset();
     createArtifactExport.mockReset();
-    acquireArtifactBodyLease.mockImplementation(() => vi.fn());
+    acquireResidentArtifactBodyLease.mockImplementation(() => ({
+      release: vi.fn(),
+      resident: Promise.resolve(),
+    }));
     getArtifactFragment.mockReturnValue(new Y.Doc().getXmlFragment("body"));
     createArtifactExport.mockResolvedValue({
       blob: new Blob(["export"]),
@@ -78,7 +84,13 @@ describe("useEpicExportArtifacts", () => {
 
   it("surfaces the loading copy and releases an unavailable body", async () => {
     const release = vi.fn();
-    acquireArtifactBodyLease.mockReturnValue(release);
+    // Residency SETTLES and the fragment is still absent: the artifact has no
+    // body this client can materialize at all, which is the case that must
+    // still fail fast with the loading copy rather than park the export.
+    acquireResidentArtifactBodyLease.mockImplementation(() => ({
+      release,
+      resident: Promise.resolve(),
+    }));
     getArtifactFragment.mockReturnValue(null);
     const { result } = renderHook(() => useEpicExportArtifacts(), {
       wrapper: makeWrapper(),
@@ -100,10 +112,15 @@ describe("useEpicExportArtifacts", () => {
     const firstRelease = vi.fn();
     const secondRelease = vi.fn();
     const events: string[] = [];
-    acquireArtifactBodyLease.mockImplementation((artifactId: string) => {
-      events.push(`acquire:${artifactId}`);
-      return events.length === 1 ? firstRelease : secondRelease;
-    });
+    acquireResidentArtifactBodyLease.mockImplementation(
+      (artifactId: string) => {
+        events.push(`acquire:${artifactId}`);
+        return {
+          release: events.length === 1 ? firstRelease : secondRelease,
+          resident: Promise.resolve(),
+        };
+      },
+    );
     getArtifactFragment.mockImplementation((artifactId: string) => {
       events.push(`fragment:${artifactId}`);
       return artifactId === "artifact-a" ? firstFragment : null;

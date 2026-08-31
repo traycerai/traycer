@@ -22,7 +22,10 @@
  * at editor construction - so open artifact bodies remain main-thread objects
  * behind the lease, by design and not by omission. What becomes asynchronous
  * is MATERIALIZING one, which is what {@link holdArtifactBody} expresses: take
- * the lease first, await it, then read the fragment the lease guarantees.
+ * the lease first, await RESIDENCY, then read the fragment the lease
+ * guarantees. That await was described here before it existed - the function
+ * took the lease and read in the same tick, which is the one ordering this
+ * paragraph rules out.
  *
  * The synchronous attachment PRESENCE predicate
  * (`useEpicAttachmentBytesPresence`) is also still on the store, and is the
@@ -72,22 +75,31 @@ export class ArtifactBodyUnavailableError extends Error {
  * early return is invisible - the room simply never cools - so the ordering
  * here is the contract, not a style choice.
  */
-export function holdArtifactBody(
+export async function holdArtifactBody(
   handle: OpenEpicStoreHandle,
   artifactId: string,
 ): Promise<ArtifactBodyHold> {
   const state = handle.store.getState();
   let release: (() => void) | null = null;
   try {
-    release = state.acquireArtifactBodyLease(artifactId);
+    // AWAITED, and this is the `await` this module's header promised: the
+    // lease is a bridge call, so a fragment read in the same tick as the
+    // acquire reads a doc no grant has installed yet. On the lane arm's
+    // ordinary cold open that is the NORMAL path - the grant resolves
+    // `"awaiting-seed"` with no bytes and the install lands milliseconds
+    // later - so the same-tick read reported "still loading" for a body that
+    // was on its way. `resident` rejects for the one grant that owes nothing,
+    // so an artifact this client genuinely cannot be served still fails fast
+    // rather than parking the caller.
+    const lease = state.acquireResidentArtifactBodyLease(artifactId);
+    release = lease.release;
+    await lease.resident;
     const fragment = state.getArtifactFragment(artifactId);
     if (fragment === null) throw new ArtifactBodyUnavailableError(artifactId);
-    return Promise.resolve({ fragment, release: onceOnly(release) });
+    return { fragment, release: onceOnly(release) };
   } catch (cause: unknown) {
     release?.();
-    return Promise.reject(
-      cause instanceof Error ? cause : new Error(String(cause)),
-    );
+    throw cause instanceof Error ? cause : new Error(String(cause));
   }
 }
 

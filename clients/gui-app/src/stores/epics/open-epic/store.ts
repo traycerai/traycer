@@ -65,6 +65,10 @@ import type {
 import type { PendingChatCreation } from "./pending-chat-creations";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { appLogger } from "@/lib/logger";
+// The read seam's own word for "this client has no body to give you", raised
+// HERE because this is the layer that sees the grant say so. The edge back is
+// type-only (`OpenEpicStoreHandle`), so there is no runtime cycle.
+import { ArtifactBodyUnavailableError } from "@/lib/epic-replica-reads";
 import { createArtifactBodyLeaseBridge } from "./runtime/worker/artifact-body-lease-bridge";
 import { createRendererRuntimeEnvironment } from "./runtime/runtime-environment";
 import { ARTIFACT_ROOM_LEASE_POLICY } from "./runtime/artifact-room-tier";
@@ -178,6 +182,35 @@ export interface OpenEpicStoreOptions {
 interface PersistedSlice {
   readonly lastFocusedArtifactId: string | null;
   readonly lastFocusedThreadId: string | null;
+}
+
+/**
+ * An artifact-body lease that also says WHEN the body became readable.
+ *
+ * `release` is the same idempotent closure
+ * {@link OpenEpicState.acquireArtifactBodyLease} returns. `resident` is the
+ * part a synchronous caller has no use for: it settles once
+ * `getArtifactFragment` will answer for this artifact, so a reader can take
+ * the lease and then read, rather than reading in the same tick and calling a
+ * body that has not been served yet "unavailable".
+ */
+export interface ArtifactBodyResidentLease {
+  /**
+   * A PROPERTY holding a closure, not a method: both callers hand this
+   * reference on rather than calling it in place, and a method signature makes
+   * that an unbound-method read.
+   */
+  readonly release: () => void;
+  /**
+   * Resolves when the body doc is RESIDENT.
+   *
+   * Rejects with `ArtifactBodyUnavailableError` for the one grant that owes
+   * nothing - `"unavailable"`, i.e. no such artifact, or a body this client
+   * cannot be served - and when the holder releases before residency lands.
+   * An `"awaiting-seed"` grant is NOT that case and does not reject: the
+   * demand is held and it is the demand that makes the seed arrive.
+   */
+  readonly resident: Promise<void>;
 }
 
 /**
@@ -813,6 +846,24 @@ export interface OpenEpicState {
    * still unacknowledged by the host.
    */
   acquireArtifactBodyLease: (artifactId: string) => () => void;
+  /**
+   * {@link acquireArtifactBodyLease} for a caller that can WAIT for the body,
+   * rather than one that must return a cleanup synchronously.
+   *
+   * The lease above is deliberately sync-in / async-underneath, because its
+   * caller is a `useLayoutEffect`. A holder that reads the fragment right
+   * after taking it therefore reads it before any grant has landed, and
+   * `getArtifactFragment` answers `null` for a doc that is not resident yet -
+   * which on the lane arm's ordinary cold open is the NORMAL outcome, not a
+   * failure: the grant resolves `"awaiting-seed"` with no bytes and the
+   * install arrives later through `retryAwaitingBodies`.
+   *
+   * A SECOND member rather than a `ready` field on the one above, because the
+   * sync caller's signature is the reason that one exists at all.
+   */
+  acquireResidentArtifactBodyLease: (
+    artifactId: string,
+  ) => ArtifactBodyResidentLease;
   /** Snapshot-read the title for optimistic-rename rollback. */
   readArtifactTitle: (artifactId: string) => string | null;
 }
@@ -1066,6 +1117,94 @@ export function createOpenEpicStore(
   function retryBodiesWhoseRoomBecameReady(): void {
     const ready = readyBodyDocKeys();
     bodyLeases.retryAwaitingBodies((docKey) => ready.has(docKey));
+  }
+
+  /**
+   * Settles once `getArtifactFragment` will answer for this artifact.
+   *
+   * The predicate is the FRAGMENT rather than `bodyResidencyVersion`, because
+   * the fragment is what the caller is about to read: a residency bump for
+   * some other doc is not this artifact's answer, and a body whose doc key
+   * only resolves once the projection carries its room (`@1`) becomes
+   * readable on a projection change rather than on a residency one. Any store
+   * notification re-checks it, so both arrivals are covered by one
+   * subscription.
+   *
+   * Waiting is UNBOUNDED on purpose, exactly as the attachment-byte
+   * acquisition in `epic-replica-reads.ts` is: `"awaiting-seed"` means the
+   * demand is held and the seed is coming. The bounded case is the grant that
+   * owes nothing, and the caller rejects on that before ever reaching here.
+   */
+  function waitForBodyResidency(
+    artifactId: string,
+    isReleased: () => boolean,
+  ): Promise<void> {
+    const api = storeApi;
+    if (api === null) {
+      return Promise.reject(new ArtifactBodyUnavailableError(artifactId));
+    }
+    if (api.getState().getArtifactFragment(artifactId) !== null) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const unsubscribe = api.subscribe(() => {
+        // A holder that let go while waiting is not owed a body, and leaving
+        // this pending would park its caller for the session.
+        if (isReleased()) {
+          unsubscribe();
+          reject(new ArtifactBodyUnavailableError(artifactId));
+          return;
+        }
+        if (api.getState().getArtifactFragment(artifactId) === null) return;
+        unsubscribe();
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * The one implementation behind both body-lease members: the sync-in one
+   * the layout effect needs, and the awaitable one a reader needs. Two
+   * acquires would be two demands on the same room, and the second would
+   * outlive the first's release.
+   */
+  function acquireResidentBodyLease(
+    artifactId: string,
+  ): ArtifactBodyResidentLease {
+    let released = false;
+    let grantedRelease: (() => void) | null = null;
+    const resident = bodyLeases.acquire(artifactId).then((grant) => {
+      // Discriminated on the ONE outcome that owes nothing. `"awaiting-seed"`
+      // is a grant a holder must release exactly like a granted one - the
+      // retained worker-side demand is the body lane's subscription - so a
+      // `!== "granted"` test here would drop the release for every cold open
+      // on the lane arm and leave the tab subscribed for the session.
+      if (grant.kind === "unavailable") {
+        throw new ArtifactBodyUnavailableError(artifactId);
+      }
+      if (released) {
+        grant.release();
+        throw new ArtifactBodyUnavailableError(artifactId);
+      }
+      // Wrapped, not referenced: `grant.release` is a method, and handing the
+      // bare reference on loses its receiver.
+      grantedRelease = () => {
+        grant.release();
+      };
+      // A `"granted"` grant arrived WITH bytes, so the doc is installed by the
+      // time this resolves. Only the awaiting arm has anything left to wait
+      // for, and what completes it is `retryAwaitingBodies` above.
+      if (grant.kind === "granted") return undefined;
+      return waitForBodyResidency(artifactId, () => released);
+    });
+    return {
+      release: () => {
+        if (released) return;
+        released = true;
+        grantedRelease?.();
+      },
+      resident,
+    };
   }
 
   function applyProjection(patch: Partial<EpicRuntimeProjection>): void {
@@ -1700,32 +1839,20 @@ export function createOpenEpicStore(
            * never cools.
            */
           acquireArtifactBodyLease: (artifactId) => {
-            let released = false;
-            let grantedRelease: (() => void) | null = null;
-            void bodyLeases.acquire(artifactId).then((grant) => {
-              // Discriminated on the ONE outcome that owes nothing.
-              // `"awaiting-seed"` is a grant a holder must release exactly like
-              // a granted one - the retained worker-side demand is the body
-              // lane's subscription - so a `!== "granted"` test here would drop
-              // the release for every cold open on the lane arm and leave the
-              // tab subscribed for the session.
-              if (grant.kind === "unavailable") return;
-              if (released) {
-                grant.release();
-                return;
-              }
-              // Wrapped, not referenced: `grant.release` is a method, and
-              // handing the bare reference on loses its receiver.
-              grantedRelease = () => {
-                grant.release();
-              };
-            });
-            return () => {
-              if (released) return;
-              released = true;
-              grantedRelease?.();
-            };
+            const lease = acquireResidentBodyLease(artifactId);
+            // HANDLED, not ignored. This caller has no residency question -
+            // it is holding the room open for an editor that binds the
+            // fragment by reference and re-reads it on the residency bump -
+            // so the `unavailable` rejection is not news here. Attaching the
+            // no-op is what keeps it from surfacing as an unhandled rejection
+            // for every tile that opens an artifact the host cannot serve;
+            // the promise still carries the rejection to
+            // `acquireResidentArtifactBodyLease`'s own callers.
+            lease.resident.catch(() => {});
+            return lease.release;
           },
+          acquireResidentArtifactBodyLease: (artifactId) =>
+            acquireResidentBodyLease(artifactId),
           readArtifactTitle: (artifactId) => {
             // The PROJECTION, in the doc read's own family order: artifacts,
             // then chats, then terminal agents, falling through on ENTRY

@@ -43,8 +43,8 @@ const commit = vi.hoisted(() => vi.fn());
 const abort = vi.hoisted(() => vi.fn());
 
 const releaseArtifactBody = vi.hoisted(() => vi.fn());
-const acquireArtifactBodyLease = vi.hoisted(() =>
-  vi.fn(() => releaseArtifactBody),
+const acquireResidentArtifactBodyLease = vi.hoisted(() =>
+  vi.fn(() => ({ release: releaseArtifactBody, resident: Promise.resolve() })),
 );
 const getArtifactFragment = vi.hoisted(() =>
   vi.fn((): Y.XmlFragment | null => null),
@@ -75,7 +75,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   useOpenEpicHandle: () => ({
     store: {
       getState: () => ({
-        acquireArtifactBodyLease,
+        acquireResidentArtifactBodyLease,
         getArtifactFragment,
       }),
     },
@@ -123,7 +123,7 @@ afterEach(() => {
   prepareRemote.mockReset();
   commit.mockReset();
   abort.mockReset();
-  acquireArtifactBodyLease.mockClear();
+  acquireResidentArtifactBodyLease.mockClear();
   releaseArtifactBody.mockClear();
   getArtifactFragment.mockClear();
   getArtifactFragment.mockImplementation(() => fragment);
@@ -191,7 +191,7 @@ describe("AddImageToArtifactButton", () => {
     });
     expect(prepareBytes).toHaveBeenCalledTimes(1);
     expect(imageNodeCount()).toBe(1);
-    expect(acquireArtifactBodyLease).toHaveBeenCalledWith("artifact-a");
+    expect(acquireResidentArtifactBodyLease).toHaveBeenCalledWith("artifact-a");
     expect(releaseArtifactBody).toHaveBeenCalledTimes(1);
   });
 

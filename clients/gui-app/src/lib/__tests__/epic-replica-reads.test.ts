@@ -9,8 +9,28 @@ import {
   readHeldEpicAttachmentBytes,
 } from "@/lib/epic-replica-reads";
 
+/**
+ * The post-fix resident lease `holdArtifactBody` will take instead of reading
+ * `getArtifactFragment` in the same tick as `acquireArtifactBodyLease`. Shaped
+ * to match `ArtifactBodyResidentLease` (not yet exported by the source - this
+ * is a test-local mirror of its documented shape).
+ */
+interface FakeResidentLease {
+  release(): void;
+  readonly resident: Promise<void>;
+}
+
 interface FakeState {
+  /**
+   * Kept even though the post-fix `holdArtifactBody` stops calling it: today's
+   * UNFIXED source still calls it in the same tick as `getArtifactFragment`,
+   * and dropping it here would make that call site throw a bare TypeError
+   * instead of reddening on the assertion these pins name.
+   */
   readonly acquireArtifactBodyLease: (artifactId: string) => () => void;
+  readonly acquireResidentArtifactBodyLease: (
+    artifactId: string,
+  ) => FakeResidentLease;
   readonly getArtifactFragment: (artifactId: string) => Y.XmlFragment | null;
   /**
    * The two attachment legs, and they are DIFFERENT store members - which is
@@ -66,6 +86,10 @@ function createHandle(state: FakeState): OpenEpicStoreHandle {
 function createState(overrides: Partial<FakeState>): FakeState {
   return {
     acquireArtifactBodyLease: () => () => {},
+    acquireResidentArtifactBodyLease: () => ({
+      release: () => {},
+      resident: Promise.resolve(),
+    }),
     getArtifactFragment: () => null,
     awaitAttachmentBytes: () => Promise.resolve(null),
     readAttachmentBytes: () => Promise.resolve(null),
@@ -73,36 +97,73 @@ function createState(overrides: Partial<FakeState>): FakeState {
   };
 }
 
+/** Deferred promise, so a test can settle `resident` on its own schedule. */
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  // Settled through a HOLDER rather than two `let … | null` locals with a
+  // guard: TypeScript does not track the executor's assignments, so the guard
+  // reads as a comparison between literal values and is rejected as an
+  // unnecessary condition. Same shape `provisional-boot-session.test.ts`'s
+  // `createDeferredResponse` uses.
+  const handles: {
+    resolve: (value: T) => void;
+    reject: (reason: unknown) => void;
+  } = { resolve: () => undefined, reject: () => undefined };
+  const promise = new Promise<T>((res, rej) => {
+    handles.resolve = res;
+    handles.reject = rej;
+  });
+  return {
+    promise,
+    resolve: (value) => {
+      handles.resolve(value);
+    },
+    reject: (reason) => {
+      handles.reject(reason);
+    },
+  };
+}
+
 describe("holdArtifactBody", () => {
-  it("takes the lease before reading the fragment", async () => {
-    const order: string[] = [];
-    const doc = new Y.Doc();
-    const fragment = doc.getXmlFragment("artifact-body");
-    const release = vi.fn(() => order.push("release"));
+  it("resolves the fragment that only becomes readable after residency settles", async () => {
+    const fragment = new Y.Doc().getXmlFragment("body");
+    const release = vi.fn();
+    const gate = deferred<void>();
+    let residentSettled = false;
     const state = createState({
-      acquireArtifactBodyLease: () => {
-        order.push("acquire");
-        return release;
-      },
-      getArtifactFragment: () => {
-        order.push("fragment");
-        return fragment;
-      },
+      acquireResidentArtifactBodyLease: () => ({
+        release,
+        resident: gate.promise,
+      }),
+      getArtifactFragment: () => (residentSettled ? fragment : null),
     });
 
-    const hold = await holdArtifactBody(createHandle(state), "artifact-1");
+    const holdPromise = holdArtifactBody(createHandle(state), "artifact-1");
+    // Not resident yet - the fragment must not be readable through this same
+    // fixture until residency settles.
+    expect(state.getArtifactFragment("artifact-1")).toBeNull();
 
-    expect(hold.fragment).toBe(fragment);
-    expect(order).toEqual(["acquire", "fragment"]);
-    hold.release();
-    expect(release).toHaveBeenCalledTimes(1);
+    residentSettled = true;
+    gate.resolve();
+
+    // THE REDDENING ONE - today's `holdArtifactBody` never awaits residency,
+    // so it read `getArtifactFragment` while `residentSettled` was still
+    // `false` and rejected with `ArtifactBodyUnavailableError` instead.
+    await expect(holdPromise).resolves.toMatchObject({ fragment });
   });
 
-  it("releases the lease when the fragment is unavailable", async () => {
+  it("rejects with ArtifactBodyUnavailableError and releases when the grant is unavailable", async () => {
     const release = vi.fn();
     const state = createState({
-      acquireArtifactBodyLease: () => release,
-      getArtifactFragment: () => null,
+      acquireResidentArtifactBodyLease: () => ({
+        release,
+        resident: Promise.reject(
+          new ArtifactBodyUnavailableError("artifact-1"),
+        ),
+      }),
     });
 
     await expect(
@@ -115,7 +176,7 @@ describe("holdArtifactBody", () => {
     const cause = new Error("lease unavailable");
     const release = vi.fn();
     const state = createState({
-      acquireArtifactBodyLease: () => {
+      acquireResidentArtifactBodyLease: () => {
         throw cause;
       },
     });
@@ -123,14 +184,21 @@ describe("holdArtifactBody", () => {
     await expect(
       holdArtifactBody(createHandle(state), "artifact-1"),
     ).rejects.toBe(cause);
+    // Nothing to release: the acquire never handed a lease back, and the
+    // `catch` must not invent one. Kept from before the resident lease
+    // existed - only the member that throws changed.
     expect(release).not.toHaveBeenCalled();
   });
 
   it("makes the returned release idempotent", async () => {
     const release = vi.fn();
+    const fragment = new Y.Doc().getXmlFragment("body");
     const state = createState({
-      acquireArtifactBodyLease: () => release,
-      getArtifactFragment: () => new Y.Doc().getXmlFragment("body"),
+      acquireResidentArtifactBodyLease: () => ({
+        release,
+        resident: Promise.resolve(),
+      }),
+      getArtifactFragment: () => fragment,
     });
 
     const hold = await holdArtifactBody(createHandle(state), "artifact-1");

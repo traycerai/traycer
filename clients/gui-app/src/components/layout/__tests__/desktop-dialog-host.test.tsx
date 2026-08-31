@@ -554,6 +554,10 @@ function createDirtyEpicHandle(
     getArtifactBodyAvailability: () => "unavailable",
     getArtifactBodyDocKey: () => null,
     acquireArtifactBodyLease: () => () => {},
+    acquireResidentArtifactBodyLease: () => ({
+      release: () => {},
+      resident: Promise.resolve(),
+    }),
     readArtifactTitle: () => null,
     detachTransport: () => undefined,
   }));
