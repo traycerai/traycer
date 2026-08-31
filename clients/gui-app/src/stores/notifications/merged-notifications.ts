@@ -1574,24 +1574,8 @@ function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
   switch (known.kind) {
-    case "chat": {
-      // A final, unqualified Done describes the current end-state, so it
-      // always opens at the end of the transcript. Failures and qualified
-      // Done rows retain their occurrence anchor.
-      const includeTranscriptAnchor =
-        known.outcome === "errored" || known.backgroundWorkRunning === true;
-      const scrollToEnd =
-        known.outcome === "completed" && known.backgroundWorkRunning !== true;
-      return {
-        kind: "chat",
-        epicId: known.epicId,
-        chatId: known.chatId ?? undefined,
-        ...(known.hostId === undefined ? {} : { hostId: known.hostId }),
-        messageId: includeTranscriptAnchor ? known.messageId : undefined,
-        eventId: includeTranscriptAnchor ? known.eventId : undefined,
-        ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
-      };
-    }
+    case "chat":
+      return navigationPayloadForChat(known);
     case "agent_stalled":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     case "workspace_operation_failed":
@@ -1623,6 +1607,13 @@ function navigationPayloadFromKnown(
         chatId: known.chatId,
         interviewBlockId: known.interviewBlockId,
       };
+    case "browser_human_needed":
+      return {
+        kind: "browserSession",
+        epicId: known.epicId,
+        sessionId: known.sessionId,
+        tabId: known.tabId,
+      };
     // No focus hint: the deleted worktree's row is gone, and the list's saved
     // filters are the authoritative view to return to. A row from a NEWER host
     // whose operation payload this build cannot parse never reaches here at
@@ -1647,6 +1638,27 @@ function navigationPayloadFromKnown(
         focus: { resourceId: known.runId },
       };
   }
+}
+
+function navigationPayloadForChat(
+  known: Extract<HostNotificationKnownPayload, { kind: "chat" }>,
+): NotificationPayload {
+  // A final, unqualified Done describes the current end-state, so it always
+  // opens at the end of the transcript. Failures and qualified Done rows
+  // retain their occurrence anchor.
+  const includeTranscriptAnchor =
+    known.outcome === "errored" || known.backgroundWorkRunning === true;
+  const scrollToEnd =
+    known.outcome === "completed" && known.backgroundWorkRunning !== true;
+  return {
+    kind: "chat",
+    epicId: known.epicId,
+    chatId: known.chatId ?? undefined,
+    ...(known.hostId === undefined ? {} : { hostId: known.hostId }),
+    messageId: includeTranscriptAnchor ? known.messageId : undefined,
+    eventId: includeTranscriptAnchor ? known.eventId : undefined,
+    ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
+  };
 }
 
 function navigationPayloadForWorktreeDeletion(known: {

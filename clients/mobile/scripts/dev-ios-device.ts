@@ -200,7 +200,7 @@ console.log(
   "[device] app installed and pointed at this server; leave this running.",
 );
 console.log(
-  "[device] loop: desktop Settings → Link a phone → scan (or type the code) in the app.",
+  "[device] loop: desktop Settings → Link mobile app → scan (or type the code) in the app.",
 );
 // Keep serving until Ctrl-C: the installed app loads from this Vite server on
 // every launch.

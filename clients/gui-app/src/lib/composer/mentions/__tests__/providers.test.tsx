@@ -140,6 +140,10 @@ function browserTab(fields: {
     coLocated: fields.coLocated,
     lastActivityAt: fields.lastActivityAt,
     dormant: fields.dormant,
+    hostId: "chat-host",
+    hostLabel: "Chat host",
+    coordinatorKey: "coordinator-chat-host",
+    contextOnly: false,
   };
 }
 
@@ -1767,10 +1771,9 @@ describe("Browser mention category", () => {
       absolutePath: null,
       workspacePath: null,
       label: "Home",
-      // Dead field for this variant - kept only because `MentionAttachment`
-      // requires it on every member (see FIX 3/CLEANUP 4 in
-      // chat-user-message-content.tsx / attachments.ts).
-      description: "",
+      // The sent-message chip renders `description` as the tab chip's tooltip
+      // (chat-user-message-content.tsx `isBrowserTab`), so it carries the URL.
+      description: "https://example.com",
       tabId: "tab-1",
       sessionId: "session-1",
       url: "https://example.com",

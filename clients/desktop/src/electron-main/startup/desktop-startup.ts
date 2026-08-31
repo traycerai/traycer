@@ -349,6 +349,9 @@ async function timed(
 export function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
+  // No `setWebRTCIPHandlingPolicy` call, deliberately - full write-up in
+  // `traycer-host`'s `BROWSER_CAPTURE_HELPER_PERMISSIONS`
+  // (browser-capture-helper.ts).
   applyHardwareAccelerationPreference();
   suppressWslKernelCoreDumps();
   // `initCrashReporter()` must run before `registerAppScheme()`. When a
@@ -433,7 +436,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const windowGeometryPersistence =
     createWindowGeometryPersistence(windowGeometryStore);
   // Set on the first before-quit pass. Ordinary window close remains a
-  // separate lifecycle and hands native browser sessions to the host first.
+  // separate lifecycle and takes one final browser capture first.
   const shellQuitState = new ShellQuitState();
   const closingWindowIds = new Set<string>();
   let zoomController: WindowZoomController | null = null;
@@ -441,7 +444,8 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   /**
    * Read `state.bridge` / `windowRegistry` at call time: a window can close
    * before the bridge exists, and a `close` listener captured at window
-   * construction must not silently skip the browser handoff in that gap.
+   * construction must not silently skip the final browser capture in that
+   * gap.
    */
   function onWindowClose(windowId: string, event: ElectronEvent): void {
     const bridge = state.bridge;
@@ -449,7 +453,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     if (bridge === null || registry === null) return;
     if (
       shellQuitState.isQuitting() ||
-      !bridge.canHandoffBrowserTabsForWindow(windowId)
+      !bridge.needsFinalBrowserCaptureForWindow(windowId)
     ) {
       return;
     }
@@ -459,7 +463,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     void bridge
       .prepareBrowserWindowClose(windowId)
       .catch((error: unknown) => {
-        log.warn("[desktop] browser handoff failed during window close", {
+        log.warn("[desktop] final browser capture failed during window close", {
           windowId,
           error,
         });
@@ -1140,13 +1144,13 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
   };
 
   const authorizeQuitAfterFlush = (): void => {
-    const browserHandoffDrain =
-      state.bridge?.drainBrowserHandoffs() ?? Promise.resolve();
+    const finalBrowserCapture =
+      state.bridge?.captureFinalBrowserState() ?? Promise.resolve();
     void Promise.all([
       flushShellState(),
-      browserHandoffDrain.catch((error) => {
+      finalBrowserCapture.catch((error) => {
         log.warn(
-          "[desktop] browser handoff drain failed - quitting anyway",
+          "[desktop] final browser capture failed - quitting anyway",
           error,
         );
       }),

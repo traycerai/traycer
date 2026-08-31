@@ -354,6 +354,24 @@ describe("loadMainWindow", () => {
     ]);
   });
 
+  it("keeps compositing and timers running while the window is occluded", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        webPreferences: expect.objectContaining({
+          backgroundThrottling: false,
+        }),
+      }),
+    ]);
+  });
+
   it("keeps DevTools enabled for the shipped staging policy", () => {
     configState.isDevBuild = false;
     configState.canOpenDevTools = true;

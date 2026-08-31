@@ -1,5 +1,11 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionTile } from "@/components/epic-canvas/renderers/browser-session-tile";
@@ -12,6 +18,35 @@ const harness = vi.hoisted(() => ({
   lifecycle: "live",
   inventoryReady: true,
   closeCanvasTile: vi.fn(),
+}));
+
+/**
+ * Cross-host fence bookkeeping (ticket 13): who each seam was actually
+ * called for, so a test can prove the tile bound to the TILE's own
+ * `node.hostId` rather than the canvas host.
+ */
+const hostBindingHarness = vi.hoisted(() => ({
+  reachabilityHostIds: [] as string[],
+  electronBindingCalls: [] as Array<{
+    readonly sessionId: string;
+    readonly tabId: string;
+    readonly hostId: string;
+  }>,
+}));
+
+type ReachabilityStatus =
+  | "checking"
+  | "reachable"
+  | "unreachable"
+  | "host-starting";
+
+const reachabilityHarness = vi.hoisted(() => ({
+  status: "reachable" as ReachabilityStatus,
+  hostLabel: "host-test",
+}));
+
+const peekFrameHarness = vi.hoisted(() => ({
+  frame: null as { readonly src: string; readonly sequence: number } | null,
 }));
 
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
@@ -27,7 +62,14 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   }),
 }));
 vi.mock("@/lib/browser-view/sessions/electron-tabs", () => ({
-  useElectronTabBindingOnHost: () => harness.binding,
+  useElectronTabBindingOnHost: (
+    sessionId: string,
+    tabId: string,
+    hostId: string,
+  ) => {
+    hostBindingHarness.electronBindingCalls.push({ sessionId, tabId, hostId });
+    return harness.binding;
+  },
 }));
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => "host-test",
@@ -38,14 +80,6 @@ vi.mock(
     useCloseCanvasTileWithNestedFocus: () => harness.closeCanvasTile,
   }),
 );
-vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
-  BrowserSessionsHostProvider: (props: {
-    readonly children: React.ReactNode;
-  }) => props.children,
-  BrowserSessionsHostBoundary: (props: {
-    readonly children: React.ReactNode;
-  }) => props.children,
-}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
@@ -71,6 +105,28 @@ vi.mock("@/components/epic-canvas/renderers/browser-peek-tile", () => ({
       data-tab={props.node.tabId}
     />
   ),
+}));
+vi.mock("@/lib/browser-view/sessions/peek-frame-cache", () => ({
+  useLastBrowserPeekFrame: () => peekFrameHarness.frame,
+  clearLastBrowserPeekFrame: vi.fn(),
+  browserPeekFrameKey: (node: {
+    readonly hostId: string;
+    readonly sessionId: string;
+    readonly tabId: string;
+    readonly instanceId: string;
+  }) => `${node.hostId}:${node.sessionId}:${node.tabId}:${node.instanceId}`,
+}));
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: (hostId: string) => {
+    hostBindingHarness.reachabilityHostIds.push(hostId);
+    return {
+      status: reachabilityHarness.status,
+      hostLabel: reachabilityHarness.hostLabel,
+      unavailability:
+        reachabilityHarness.status === "unreachable" ? "offline" : null,
+      basis: "directory",
+    };
+  },
 }));
 
 const NODE: BrowserSessionTileRef = {
@@ -138,6 +194,11 @@ describe("BrowserSessionTile lifecycle projection", () => {
     harness.lifecycle = "live";
     harness.inventoryReady = true;
     harness.closeCanvasTile.mockClear();
+    reachabilityHarness.status = "reachable";
+    reachabilityHarness.hostLabel = "host-test";
+    peekFrameHarness.frame = null;
+    hostBindingHarness.reachabilityHostIds = [];
+    hostBindingHarness.electronBindingCalls = [];
   });
 
   afterEach(() => {
@@ -233,5 +294,213 @@ describe("BrowserSessionTile lifecycle projection", () => {
 
     expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
     expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
+  });
+
+  it("renders a dormant placeholder for an unreachable host and never closes the tile", async () => {
+    harness.items = [session("ready", "headless")];
+    reachabilityHarness.status = "unreachable";
+    reachabilityHarness.hostLabel = "mac-mini";
+
+    renderTile();
+
+    expect(
+      screen.getByTestId("browser-session-dormant-placeholder"),
+    ).toBeTruthy();
+    expect(screen.getByText("mac-mini")).toBeTruthy();
+    expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
+    // Give any stray effect a tick to fire before asserting the negative.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.closeCanvasTile).not.toHaveBeenCalled();
+  });
+
+  it("re-renders live once reachability recovers", () => {
+    harness.items = [session("ready", "headless")];
+    reachabilityHarness.status = "unreachable";
+    const view = render(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+
+    expect(
+      screen.getByTestId("browser-session-dormant-placeholder"),
+    ).toBeTruthy();
+
+    reachabilityHarness.status = "reachable";
+    view.rerender(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("browser-session-dormant-placeholder"),
+    ).toBeNull();
+    expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+      "tab-1",
+    );
+  });
+
+  it("shows a dismissible runtime-demotion note when a session flips electron to headless", () => {
+    harness.binding = binding();
+    harness.items = [session("ready", "electron")];
+    const view = render(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+    expect(screen.queryByTestId("browser-runtime-demotion-note")).toBeNull();
+
+    harness.items = [
+      {
+        ...session("ready", "headless"),
+        runtime: { kind: "headless", revision: 2 },
+      },
+    ];
+    view.rerender(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+
+    const note = screen.getByTestId("browser-runtime-demotion-note");
+    expect(note.textContent).toContain("Continuing streamed from host-test");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByTestId("browser-runtime-demotion-note")).toBeNull();
+  });
+
+  it("keeps the placeholder's greyed frame stable across a re-render even if the cache changes underneath it", () => {
+    harness.items = [session("ready", "headless")];
+    reachabilityHarness.status = "unreachable";
+    peekFrameHarness.frame = {
+      src: "data:image/jpeg;base64,seed",
+      sequence: 1,
+    };
+
+    const view = render(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+
+    const img = screen
+      .getByTestId("browser-session-dormant-placeholder")
+      .querySelector("img");
+    expect(img?.getAttribute("src")).toBe("data:image/jpeg;base64,seed");
+
+    // The peek tile's own cache can change (or empty out) underneath an
+    // already-mounted placeholder - it must not re-read it.
+    peekFrameHarness.frame = null;
+    view.rerender(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+
+    const imgAfter = screen
+      .getByTestId("browser-session-dormant-placeholder")
+      .querySelector("img");
+    expect(imgAfter?.getAttribute("src")).toBe("data:image/jpeg;base64,seed");
+  });
+
+  it("clears the runtime-demotion note once the session is re-promoted back to electron", () => {
+    harness.binding = binding();
+    harness.items = [session("ready", "electron")];
+    const view = render(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+
+    harness.items = [
+      {
+        ...session("ready", "headless"),
+        runtime: { kind: "headless", revision: 2 },
+      },
+    ];
+    view.rerender(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+    expect(screen.getByTestId("browser-runtime-demotion-note")).toBeTruthy();
+
+    harness.binding = binding();
+    harness.items = [
+      {
+        ...session("ready", "electron"),
+        runtime: { kind: "electron", revision: 3 },
+      },
+    ];
+    view.rerender(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+
+    expect(screen.queryByTestId("browser-runtime-demotion-note")).toBeNull();
+  });
+
+  it("binds the boundary, reachability, and the electron binding lookup to the tile's OWN hostId, not the canvas host", () => {
+    // The canvas host (`useCanvasHostId`, mocked above) is always
+    // "host-test". This node names a different host - the first case in
+    // this suite where a browser tile's hostId diverges from the canvas
+    // it's rendered on. Every per-host seam the tile touches must key off
+    // `node.hostId`, never the canvas host it happens to be pinned inside.
+    const remoteNode: BrowserSessionTileRef = {
+      ...NODE,
+      hostId: "host-remote",
+    };
+    harness.items = [
+      { ...session("ready", "headless"), hostId: "host-remote" },
+    ];
+
+    render(
+      <BrowserSessionTile
+        node={remoteNode}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+      />,
+    );
+
+    expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+      "tab-1",
+    );
+    expect(hostBindingHarness.reachabilityHostIds).toContain("host-remote");
+    expect(hostBindingHarness.reachabilityHostIds).not.toContain("host-test");
+    expect(hostBindingHarness.electronBindingCalls).toContainEqual({
+      sessionId: "sess-1",
+      tabId: "tab-1",
+      hostId: "host-remote",
+    });
   });
 });
