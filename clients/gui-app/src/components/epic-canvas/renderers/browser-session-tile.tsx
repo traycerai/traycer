@@ -130,7 +130,16 @@ function BrowserSessionDormantPlaceholder(props: {
   readonly hostLabel: string;
   readonly unavailability: HostUnavailability | null;
 }) {
-  const lastFrame = useLastBrowserPeekFrame(browserPeekFrameKey(props.node));
+  const cached = useLastBrowserPeekFrame(browserPeekFrameKey(props.node));
+  // First non-null frame wins for this placeholder's life. The cache read is a
+  // post-commit re-check (the peek tile's teardown writes in the same commit
+  // that mounts this), but it keeps re-reading afterwards - and the cache is
+  // insertion-order evicted, so other tiles streaming can drop this key while
+  // the placeholder is still up. Latching here keeps the greyed frame from
+  // disappearing mid-dormancy. Set during render, the same sanctioned pattern
+  // `useRuntimeDemotionNote` uses below.
+  const [lastFrame, setLastFrame] = useState(cached);
+  if (lastFrame === null && cached !== null) setLastFrame(cached);
   return (
     <div
       className="relative flex h-full w-full flex-col items-center justify-center gap-2 overflow-hidden bg-canvas px-4 text-center"
