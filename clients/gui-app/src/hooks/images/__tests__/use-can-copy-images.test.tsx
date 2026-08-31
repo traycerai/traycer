@@ -15,7 +15,9 @@ function withHost(host: IRunnerHost | null) {
   return function Wrapper(props: { readonly children: ReactNode }): ReactNode {
     if (host === null) return props.children;
     return (
-      <RunnerHostProvider runnerHost={host}>{props.children}</RunnerHostProvider>
+      <RunnerHostProvider runnerHost={host}>
+        {props.children}
+      </RunnerHostProvider>
     );
   };
 }
