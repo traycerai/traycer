@@ -187,7 +187,14 @@ export function useEpicUpdateArtifactStatus() {
     }
   };
   const mutate = (variables: Variables): void => {
-    void mutateAsync(variables);
+    // CONSUMED, exactly as the delete wrapper above consumes it. `mutateAsync`
+    // toasts and then RETHROWS, and a refusal here is ordinary rather than
+    // exceptional - `enqueueAndWait` throws on a refused write, a host
+    // rejection and a supersede alike - so a bare `void` leaves a rejection
+    // nobody handles on every one of them. This is the imitation gap against
+    // TanStack's `mutate`, which swallows by design; the toast the AGENTS.md
+    // rule mandates already fired inside `mutateAsync`.
+    void mutateAsync(variables).then(undefined, () => {});
   };
   return { mutate, mutateAsync, isPending };
 }
@@ -240,7 +247,10 @@ export function useEpicRenameArtifact(trackUserIntent: boolean) {
     }
   };
   const mutate = (variables: Variables): void => {
-    void mutateAsync(variables);
+    // Consumed for the same reason the status wrapper above consumes it: the
+    // rename's refusal path is the same `enqueueAndWait` throw, and this
+    // surface's callers (the mobile switcher rename) are fire-and-forget.
+    void mutateAsync(variables).then(undefined, () => {});
   };
   return { mutate, mutateAsync, isPending };
 }

@@ -61,7 +61,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
 }));
 
 import { toast } from "sonner";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import {
   useEpicCreateArtifact,
   useEpicDeleteArtifact,
@@ -303,5 +303,102 @@ describe("epic node mutations address the Epic session's host", () => {
       title: "Renamed",
     });
     expect(commandFixture.state.enqueueWriteCommand).toHaveBeenCalled();
+  });
+});
+
+/**
+ * `useEpicUpdateArtifactStatus().mutate` and `useEpicRenameArtifact().mutate`
+ * both do `void mutateAsync(v)` - `mutateAsync` toasts AND rethrows on a
+ * refused write, so every refused status change / rename raises an
+ * unhandled rejection nobody consumes. `useEpicDeleteArtifact`'s own `mutate`
+ * (above) already attaches both a success and an error handler; these two do
+ * not.
+ *
+ * Checked through Node's `process` event, not
+ * `window.addEventListener("unhandledrejection")`: that listener does not
+ * reliably fire under this repo's jsdom/vitest setup, and `vitest.config.ts`
+ * sets `dangerouslyIgnoreUnhandledErrors: true` while
+ * `__tests__/test-browser-apis.ts` registers its own process-level swallow -
+ * so only an IN-BAND `process` listener is an honest observable here, not an
+ * empty array that could just as well mean "nothing fired" as "nothing
+ * rejected".
+ */
+interface NodeProcessLike {
+  on(event: string, listener: (value: unknown) => void): void;
+  off(event: string, listener: (value: unknown) => void): void;
+}
+const nodeProcess = (globalThis as { process?: NodeProcessLike }).process;
+
+describe("mutate consumes the mutateAsync rejection instead of leaving it unhandled", () => {
+  it("useEpicUpdateArtifactStatus: mutate toasts and does not unhandled-reject", async () => {
+    if (nodeProcess === undefined) {
+      throw new Error(
+        "expected a Node `process` global in this test environment",
+      );
+    }
+    rejectCommand("write denied");
+    const rejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    nodeProcess.on("unhandledRejection", onUnhandledRejection);
+    try {
+      const { result } = renderHook(() => useEpicUpdateArtifactStatus());
+      act(() => {
+        result.current.mutate({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          artifactType: "ticket",
+          status: 2,
+        });
+      });
+      // Node reports `unhandledRejection` at the END of a turn, not on the
+      // microtask the rejection itself settles on - a microtask flush alone
+      // is not enough to observe it.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    } finally {
+      nodeProcess.off("unhandledRejection", onUnhandledRejection);
+    }
+    expect(toast.error).toHaveBeenCalledWith("Couldn't update status.", {
+      description: "write denied",
+    });
+    // THE REDDENING ONE.
+    expect(rejections).toEqual([]);
+  });
+
+  it("useEpicRenameArtifact: mutate toasts and does not unhandled-reject", async () => {
+    if (nodeProcess === undefined) {
+      throw new Error(
+        "expected a Node `process` global in this test environment",
+      );
+    }
+    rejectCommand("write denied");
+    const rejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    nodeProcess.on("unhandledRejection", onUnhandledRejection);
+    try {
+      const { result } = renderHook(() => useEpicRenameArtifact(true));
+      act(() => {
+        result.current.mutate({
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          title: "Renamed",
+        });
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    } finally {
+      nodeProcess.off("unhandledRejection", onUnhandledRejection);
+    }
+    expect(toast.error).toHaveBeenCalledWith("Couldn't rename artifact.", {
+      description: "write denied",
+    });
+    // THE REDDENING ONE.
+    expect(rejections).toEqual([]);
   });
 });
