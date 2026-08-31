@@ -938,6 +938,128 @@ describe("<ArtifactVersionHistoryEntryPoint />", () => {
       screen.getByText("The saved body for this version is missing."),
     ).toBeTruthy();
   });
+
+  it("compares a version against its resolvable parent", () => {
+    const parent = {
+      ...observation("observation-parent", "Parent snapshot"),
+      contentHash: HASH_A,
+    };
+    const child = {
+      ...observation("observation-child", "Child snapshot"),
+      contentHash: HASH_B,
+      parentContentHash: HASH_A,
+    };
+    state.historyEntries = [child, parent];
+    state.blobByObservationId.set("observation-parent", {
+      contentHash: HASH_A,
+      markdown: "parent body",
+    });
+    state.blobByObservationId.set("observation-child", {
+      contentHash: HASH_B,
+      markdown: "child body",
+    });
+
+    openHistory();
+
+    expect(screen.getByText("Compared with parent version")).toBeTruthy();
+    expect(
+      state.queryCalls.some(
+        (call) =>
+          call.method === "epic.artifactVersions.getBlob" &&
+          call.options.enabled &&
+          call.params.observationId === "observation-parent" &&
+          call.cacheKeyIdentity?.[0] === HASH_A,
+      ),
+    ).toBe(true);
+  });
+
+  it("shows an exact Initial version state for a root version and never requests an adjacent comparison", () => {
+    const root = observation("observation-root", "Root snapshot");
+    const other = {
+      ...observation("observation-other", "Other snapshot"),
+      contentHash: HASH_B,
+    };
+    state.historyEntries = [root, other];
+    state.blobByObservationId.set("observation-root", {
+      contentHash: HASH_A,
+      markdown: "root body",
+    });
+    state.blobByObservationId.set("observation-other", {
+      contentHash: HASH_B,
+      markdown: "other body",
+    });
+
+    openHistory();
+
+    expect(screen.getByText("Initial version")).toBeTruthy();
+    expect(screen.queryByText("Parent version unavailable")).toBeNull();
+    const diffContent = screen.getByTestId("diff-content");
+    expect(diffContent.textContent).toContain("root body");
+    expect(diffContent.textContent).not.toContain("other body");
+    expect(
+      state.queryCalls.some(
+        (call) =>
+          call.method === "epic.artifactVersions.getBlob" &&
+          call.params.observationId === "observation-other",
+      ),
+    ).toBe(false);
+    expect(
+      state.queryCalls.some(
+        (call) =>
+          call.method === "epic.artifactVersions.getBlob" &&
+          call.params.observationId === "unselected" &&
+          !call.options.enabled,
+      ),
+    ).toBe(true);
+  });
+
+  it("shows a parent-unavailable state and never falls back to an adjacent entry", () => {
+    const missingParentHash = "c".repeat(64);
+    const orphan = {
+      ...observation("observation-orphan", "Orphan snapshot"),
+      contentHash: HASH_B,
+      parentContentHash: missingParentHash,
+    };
+    const adjacent = {
+      ...observation("observation-adjacent", "Adjacent snapshot"),
+      contentHash: HASH_A,
+    };
+    state.historyEntries = [orphan, adjacent];
+    state.blobByObservationId.set("observation-orphan", {
+      contentHash: HASH_B,
+      markdown: "orphan body",
+    });
+    state.blobByObservationId.set("observation-adjacent", {
+      contentHash: HASH_A,
+      markdown: "adjacent body",
+    });
+
+    openHistory();
+
+    expect(screen.getByText("Parent version unavailable")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This version's recorded parent is not available in the loaded history.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("diff-content")).toBeNull();
+    expect(
+      state.queryCalls.some(
+        (call) =>
+          call.method === "epic.artifactVersions.getBlob" &&
+          call.options.enabled &&
+          call.params.observationId === "observation-adjacent",
+      ),
+    ).toBe(false);
+    expect(
+      state.queryCalls.some(
+        (call) =>
+          call.method === "epic.artifactVersions.getBlob" &&
+          call.params.observationId === "unselected" &&
+          !call.options.enabled,
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("clampArtifactVersionHistoryPanelWidthPx", () => {
