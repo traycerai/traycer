@@ -204,12 +204,20 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     const respond = appLifecycle?.respondFinalBrowserStateCaptured;
     if (onCapture === undefined || respond === undefined) return;
     const subscription = onCapture((request) => {
-      // `captureFinalPrimaryProfiles` never rejects: a capture that fails is
-      // still "as captured as this renderer can manage", and must be reported
-      // rather than withheld - withholding leaves main's waiter to sit out its
-      // full timeout, a multi-second stall on every quit and window close that
-      // reaches it.
+      // The capture's own failure is swallowed BEFORE the reply: a capture
+      // that fails is still "as captured as this renderer can manage", and
+      // must be reported rather than withheld - withholding leaves main's
+      // waiter to sit out its full timeout, a multi-second stall on every quit
+      // and window close that reaches it. A single trailing `catch` would
+      // report the failed capture and skip the reply, which is that stall.
       void captureFinalPrimaryProfiles()
+        .catch((error: unknown) => {
+          appLogger.error(
+            "[quit-intercept] final browser capture failed",
+            { requestId: request.requestId },
+            error,
+          );
+        })
         .then(() => respond({ requestId: request.requestId }))
         .catch((error: unknown) => {
           appLogger.error(
