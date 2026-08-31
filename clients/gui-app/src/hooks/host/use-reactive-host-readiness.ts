@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 
@@ -55,11 +56,28 @@ export function useReactiveHostReadiness<Registry extends VersionedRpcRegistry>(
 function readHostReadinessSnapshot<Registry extends VersionedRpcRegistry>(
   client: HostRequester<Registry> | null,
 ): string {
+  // A few integration harnesses provide the original requester shape, before
+  // `getActiveHost` was added. Production requesters always implement it; keep
+  // those legacy harnesses on the former identity-and-authority contract.
+  const activeHost = activeHostForCompatibility(client);
+  const hasRpcEndpoint =
+    client !== null &&
+    (activeHost === undefined ||
+      (activeHost !== null && activeHost.websocketUrl !== null));
   return [
     client?.getActiveHostId() ?? "",
     client?.getRequestContextUserId() ?? "",
-    (client?.getActiveHost()?.websocketUrl ?? null) === null ? "" : "1",
+    hasRpcEndpoint ? "1" : "",
   ].join(SNAPSHOT_SEPARATOR);
+}
+
+function activeHostForCompatibility<Registry extends VersionedRpcRegistry>(
+  client: HostRequester<Registry> | null,
+): HostDirectoryEntry | null | undefined {
+  const legacyCompatibleClient: {
+    readonly getActiveHost?: () => HostDirectoryEntry | null;
+  } | null = client;
+  return legacyCompatibleClient?.getActiveHost?.();
 }
 
 function parseHostReadinessSnapshot(snapshot: string): ReactiveHostReadiness {

@@ -109,7 +109,10 @@ export function resolveLandingPlacement(
       message: `Traycer can't access ${target.hostLabel} for this account right now. Sign in again or pick another device.`,
     };
   }
-  const activeHost = target.client.getActiveHost();
+  const clientWithOptionalActiveHost: {
+    readonly getActiveHost?: () => HostDirectoryEntry | null;
+  } = target.client;
+  const activeHost = clientWithOptionalActiveHost.getActiveHost?.();
   if (activeHost === null) {
     return {
       kind: "refused",
@@ -117,6 +120,7 @@ export function resolveLandingPlacement(
     };
   }
   if (
+    activeHost !== undefined &&
     dialableHostEndpointFor(
       activeHost,
       hasReadyRemoteSession(activeHost.hostId),
