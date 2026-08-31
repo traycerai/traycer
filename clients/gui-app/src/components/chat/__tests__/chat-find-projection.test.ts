@@ -15,6 +15,7 @@ import {
   deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
 } from "@/components/chat/chat-collapsible-key";
+import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { deriveInterviewReviewModel } from "@/components/chat/segments/interview-review-model";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
@@ -1178,6 +1179,41 @@ describe("chat find projection", () => {
       chatFindSegmentUnitId("forked-1"),
     ]);
     expect(rowSearchText(row)).toContain("Forked from Legacy Thread");
+  });
+
+  // The marker's anchor paints one line: the provider's DISPLAY name and the
+  // import date. Indexing the harness id or the source directory (tooltip-only,
+  // and rendered in a portal outside the anchor) would count matches the
+  // highlighter has no text to paint.
+  it("indexes an imported-chat-marker by the line it renders, not the raw provider id or the source path", () => {
+    const synthesized: ChatMessageModel = {
+      ...makeMessage(34, "system"),
+      content: "",
+      segments: [
+        {
+          id: "imported-1",
+          kind: "imported-chat-marker",
+          sourceProvider: "claude",
+          importedAt: 1700000000000,
+          sourceCwd: "/repo/work",
+        },
+      ],
+    };
+
+    const row = buildChatFindRows(
+      [synthesized],
+      TILE_INSTANCE_ID,
+      new Set(),
+    )[0];
+
+    expect(row.units.map((unit) => unit.unitId)).toEqual([
+      chatFindSegmentUnitId("imported-1"),
+    ]);
+    const text = rowSearchText(row);
+    expect(text).toBe(
+      `Imported from Claude Code · ${formatAbsoluteDateTime(1700000000000)}`,
+    );
+    expect(text).not.toContain("/repo/work");
   });
 });
 

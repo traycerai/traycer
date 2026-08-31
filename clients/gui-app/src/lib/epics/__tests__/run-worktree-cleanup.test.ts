@@ -20,6 +20,7 @@ const commandMock = vi.hoisted(() => ({
   commands: [] as Array<{
     readonly commandId: string;
     readonly source: string;
+    readonly epicId: string | undefined;
     readonly targets: ReadonlyArray<WorktreeDeleteBatchTarget>;
   }>,
   callbacks: null as WorktreeDeleteBatchStreamCallbacks | null,
@@ -65,12 +66,14 @@ vi.mock(
       constructor(options: {
         readonly commandId: string;
         readonly source: string;
+        readonly epicId: string | undefined;
         readonly targets: ReadonlyArray<WorktreeDeleteBatchTarget>;
         readonly callbacks: WorktreeDeleteBatchStreamCallbacks;
       }) {
         commandMock.commands.push({
           commandId: options.commandId,
           source: options.source,
+          epicId: options.epicId,
           targets: options.targets,
         });
         commandMock.callbacks = options.callbacks;
@@ -228,12 +231,16 @@ describe("runWorktreeCleanup on a current host", () => {
       hostId: "host-1",
       paths: ["/wt/sweep"],
       source: "task_sweep",
+      epicId: "epic-1",
       stopOwnersPaths: new Set(),
       expectedHoldersRevisionByPath: new Map(),
     });
 
     expect(commandMock.commands).toHaveLength(1);
-    expect(commandMock.commands[0]?.source).toBe("task_sweep");
+    expect(commandMock.commands[0]).toMatchObject({
+      source: "task_sweep",
+      epicId: "epic-1",
+    });
     commandCallbacks().onTargetComplete("/wt/sweep", true);
     commandCallbacks().onCommandComplete({
       requestedCount: 1,

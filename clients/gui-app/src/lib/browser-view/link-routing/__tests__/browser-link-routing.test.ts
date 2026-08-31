@@ -144,7 +144,7 @@ describe("browser link routing", () => {
         source,
         kind: "markdown",
         url: "https://example.test/markdown-alt",
-        event: { altKey: true },
+        event: { altKey: true, ctrlKey: false, metaKey: false },
         openInApp,
       }),
     ).toBe("in-app");
@@ -154,7 +154,7 @@ describe("browser link routing", () => {
         source,
         kind: "terminal",
         url: "https://example.test/terminal-alt",
-        event: { altKey: true },
+        event: { altKey: true, ctrlKey: false, metaKey: false },
         openInApp,
       }),
     ).toBe("external");
@@ -164,6 +164,30 @@ describe("browser link routing", () => {
       source,
       "https://example.test/markdown-alt",
     );
+  });
+
+  it.each([
+    ["Command", { metaKey: true, ctrlKey: false, altKey: false }],
+    ["Control", { metaKey: false, ctrlKey: true, altKey: false }],
+  ])("opens %s-clicked web links externally", (_modifier, event) => {
+    const source = seedCanvas(SOURCE_TILE);
+    const runnerHost = mockRunnerHost();
+    const openInApp = vi.fn(() => true);
+
+    const result = routeBrowserLink({
+      runnerHost,
+      source,
+      kind: "markdown",
+      url: "https://example.test/docs",
+      event,
+      openInApp,
+    });
+
+    expect(result).toBe("external");
+    expect(runnerHost.openExternalLink).toHaveBeenCalledWith(
+      "https://example.test/docs",
+    );
+    expect(openInApp).not.toHaveBeenCalled();
   });
 
   it("records terminal dev-server origins from URL output only", () => {

@@ -54,8 +54,8 @@ const mockSessionState = vi.hoisted<{
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
-  useEpicAgentActivityTiers: () => mockSessionState.activityTiers,
-  useEpicPermissionRole: () => mockSessionState.epicPermissionRole,
+  useRegisteredEpicAgentActivityTiers: () => mockSessionState.activityTiers,
+  useRegisteredEpicPermissionRole: () => mockSessionState.epicPermissionRole,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({

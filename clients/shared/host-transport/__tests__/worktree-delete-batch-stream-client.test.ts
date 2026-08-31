@@ -165,6 +165,27 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
     vi.useRealTimers();
   });
 
+  it("sends a Task sweep's destination only on the start request", () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient(factory);
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "task_sweep",
+      epicId: "epic-1",
+      targets: [{ worktreePath: "/wt/a", scripts: null }],
+      callbacks: NOOP_CALLBACKS,
+    });
+
+    completeHandshake(sockets[0]);
+    expect(subscribeParams(sockets[0])).toMatchObject({
+      mode: "start",
+      source: "task_sweep",
+      epicId: "epic-1",
+    });
+    batch.close();
+  });
+
   it("re-subscribes as observe after a drop, so the transport can never replay the start", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);
