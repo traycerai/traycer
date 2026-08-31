@@ -113,17 +113,40 @@ export function registerBrowserViewIpc(
   };
   /**
    * One site gone from every one of those jars, and from the localStorage this
-   * process remembers for it. The prune runs last: each clear reads the same
-   * remembered origins, and pruning first would starve the second one.
+   * process remembers for it.
+   *
+   * EVERY jar is attempted, whatever the ones before it did: they hold
+   * independent copies of the same login, so abandoning the loop on the durable
+   * jar's failure would leave the open tile still signed in. The first failure
+   * is re-thrown once the loop is done, so the IPC caller still learns the site
+   * was not fully cleared.
+   *
+   * The prune runs last, and ONLY when every jar succeeded. Last, because each
+   * clear reads the same remembered origins and pruning first would starve the
+   * ones after it. All-or-nothing, because those remembered origins are the
+   * only record of which localStorage a clear can name - dropping them while a
+   * jar still holds the site would make that site's localStorage unreachable
+   * for the rest of the run, retry included.
    */
   const clearBrowserSiteEverywhere = async (domain: string): Promise<void> => {
+    // Boxed, so a falsy thrown value still counts as a failure.
+    let failure: { readonly error: unknown } | null = null;
     for (const browserSession of primaryProfileJars()) {
-      await clearBrowserSite(
-        domain,
-        browserSession,
-        rememberedClearSiteOrigins,
-      );
+      try {
+        await clearBrowserSite(
+          domain,
+          browserSession,
+          rememberedClearSiteOrigins,
+        );
+      } catch (error) {
+        failure ??= { error };
+        log.warn("[browser-view] clearing one site failed on a jar", {
+          domain,
+          error: describeLogError(error),
+        });
+      }
     }
+    if (failure !== null) throw failure.error;
     primaryProfileSnapshots.forgetOriginsUnder(domain);
   };
   const manager = new BrowserViewManager({
@@ -527,6 +550,7 @@ export function registerBrowserViewIpc(
     // what installs the observer the suppression mutes.
     const jars = primaryProfileJars();
     await suppressAllBrowserPrimaryProfileDeltas(async () => {
+      let failure: { readonly error: unknown } | null = null;
       for (const primarySession of jars) {
         try {
           await primarySession.clearStorageData();
@@ -534,13 +558,22 @@ export function registerBrowserViewIpc(
           // The tiles still have to be recreated: they are sitting on a jar the
           // host no longer holds a key for, and leaving them there is worse.
           // The other jar still gets its turn for the same reason.
+          failure ??= { error };
           log.warn("[browser-view] primary session clear failed", {
             error: describeLogError(error),
           });
         }
       }
+      // Unconditional, unlike `clearBrowserSiteEverywhere`'s prune, and for the
+      // reason that prune is conditional: a whole-jar clear names no origins, so
+      // dropping this memory starves no retry - while KEEPING it after a failed
+      // clear would let the next capture upload to the host the very
+      // localStorage it just shredded its slice for.
       primaryProfileSnapshots.reset();
       await manager.recreateNativeTabsOnCurrentPartition();
+      // Surfaced only once the tiles are back, and surfaced at all so the
+      // caller is not told the logins are gone when a jar still holds them.
+      if (failure !== null) throw failure.error;
     });
     log.info("[browser-view] forgot the saved browser logins");
   });

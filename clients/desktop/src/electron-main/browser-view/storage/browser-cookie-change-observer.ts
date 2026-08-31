@@ -79,11 +79,13 @@ export class BrowserCookieChangeObserver {
   /** Reference-counted whole-jar suppression (`suppressAll`). */
   private suppressedGlobally = 0;
   /**
-   * Bumped on every suppression state change, entry and exit alike. A flush
-   * awaits its slice, and a suppression whose whole lifetime fits inside that
-   * await is seen by neither the check before it nor the one after it - so the
-   * pre-clear slice would be emitted, re-creating what the host just shredded.
-   * The epoch is what makes that window visible.
+   * Bumped on every suppression state change, entry and exit alike, and on
+   * {@link dispose}. A flush awaits its slice, and a suppression whose whole
+   * lifetime fits inside that await is seen by neither the check before it nor
+   * the one after it - so the pre-clear slice would be emitted, re-creating
+   * what the host just shredded. The epoch is what makes that window visible,
+   * and disposal is the same hazard with no exit: an observer torn down
+   * mid-read must not emit once the read lands.
    *
    * Deliberately one counter for the whole jar rather than one per scope: a
    * suppression of ANOTHER domain overlapping this read drops this delta too,
@@ -168,11 +170,18 @@ export class BrowserCookieChangeObserver {
     }
   }
 
+  /**
+   * Detaches for good. The epoch moves here too: dropping the open windows
+   * cannot reach a flush that is already awaiting its slice, and that slice
+   * landing after disposal would emit a delta from an observer the caller has
+   * every reason to believe is silent.
+   */
   dispose(): void {
     if (this.listener !== null) {
       this.options.cookies.off("changed", this.listener);
       this.listener = null;
     }
+    this.suppressionEpoch += 1;
     this.dropAllWindows();
   }
 

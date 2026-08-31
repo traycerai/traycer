@@ -22,10 +22,15 @@ const fixture = vi.hoisted(() => ({
   /** Which jar `primary` guests are born into right now - the pref's answer. */
   activePartition: "persist:traycer-browser",
   clears: [] as ClearCall[],
+  /** Partitions whose per-site clear rejects, so a jar can be made to fail. */
+  failingSiteClears: [] as string[],
   /** Whole-jar `clearStorageData()` calls, by partition ("forget all"). */
   jarClears: [] as string[],
+  /** Partitions whose whole-jar `clearStorageData()` rejects. */
+  failingJarClears: [] as string[],
   forgottenOrigins: [] as string[],
   forgetAllResets: 0,
+  tabRecreations: 0,
   suppressedDomains: [] as string[],
   suppressedAll: 0,
 }));
@@ -77,6 +82,7 @@ vi.mock("../../browser-view/browser-view-manager", () => ({
     }
 
     recreateNativeTabsOnCurrentPartition(): Promise<void> {
+      fixture.tabRecreations += 1;
       return Promise.resolve();
     }
 
@@ -104,7 +110,9 @@ vi.mock("../../browser-view/browser-session", () => {
       partition,
       clearStorageData: (): Promise<void> => {
         fixture.jarClears.push(partition);
-        return Promise.resolve();
+        return fixture.failingJarClears.includes(partition)
+          ? Promise.reject(new Error(`jar clear failed on ${partition}`))
+          : Promise.resolve();
       },
     };
     sessions.set(partition, created);
@@ -180,7 +188,11 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   clearBrowserSite: vi.fn(
     (domain: string, browserSession: { readonly partition: string }) => {
       fixture.clears.push({ domain, partition: browserSession.partition });
-      return Promise.resolve();
+      return fixture.failingSiteClears.includes(browserSession.partition)
+        ? Promise.reject(
+            new Error(`site clear failed on ${browserSession.partition}`),
+          )
+        : Promise.resolve();
     },
   ),
   seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
@@ -252,9 +264,12 @@ async function invokeHandler(
 describe("clear-site IPC jar targeting", () => {
   beforeEach(() => {
     fixture.clears = [];
+    fixture.failingSiteClears = [];
     fixture.jarClears = [];
+    fixture.failingJarClears = [];
     fixture.forgottenOrigins = [];
     fixture.forgetAllResets = 0;
+    fixture.tabRecreations = 0;
     fixture.suppressedDomains = [];
     fixture.suppressedAll = 0;
     fixture.activePartition = fixture.durablePartition;
@@ -315,6 +330,47 @@ describe("clear-site IPC jar targeting", () => {
 
     expect(fixture.jarClears).toEqual([fixture.durablePartition]);
     expect(fixture.forgetAllResets).toBe(1);
+  });
+
+  it("clears the live jar even when the durable clear fails, keeps the origins, and still rejects", async () => {
+    fixture.activePartition = fixture.ephemeralPartition;
+    fixture.failingSiteClears = [fixture.durablePartition];
+
+    await expect(
+      invokeHandler("browserViewClearSite", TILE_KEY),
+    ).rejects.toThrow("site clear failed on persist:traycer-browser");
+
+    // The jars hold independent copies of the same login: giving up on the
+    // durable jar's failure would leave the open tile signed in.
+    expect(fixture.clears).toEqual([
+      { domain: "example.com", partition: fixture.durablePartition },
+      { domain: "example.com", partition: fixture.ephemeralPartition },
+    ]);
+    // The remembered origins are the only record of which localStorage a clear
+    // can name, so they survive a partial clear - pruning them would make the
+    // failed jar's localStorage unreachable for the rest of the run.
+    expect(fixture.forgottenOrigins).toEqual([]);
+  });
+
+  it("forgets from the live jar even when the durable jar clear fails, brings the tiles back, and still rejects", async () => {
+    fixture.activePartition = fixture.ephemeralPartition;
+    fixture.failingJarClears = [fixture.durablePartition];
+
+    await expect(
+      invokeHandler("browserViewForgetLogins", undefined),
+    ).rejects.toThrow("jar clear failed on persist:traycer-browser");
+
+    expect(fixture.jarClears).toEqual([
+      fixture.durablePartition,
+      fixture.ephemeralPartition,
+    ]);
+    // Unlike the per-site prune, this one is unconditional: a whole-jar clear
+    // names no origins, so dropping the memory starves no retry, while keeping
+    // it would let the next capture re-upload what the host just shredded.
+    expect(fixture.forgetAllResets).toBe(1);
+    // And the tiles are back before the failure is surfaced - they are sitting
+    // on a jar the host no longer holds a key for.
+    expect(fixture.tabRecreations).toBe(1);
   });
 
   it("clears once when saving is on and the live jar IS the durable one", async () => {

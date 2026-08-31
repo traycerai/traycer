@@ -132,7 +132,15 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     const forced = this.nextSetSaveLoginsResult;
     if (forced !== null) {
       this.nextSetSaveLoginsResult = null;
-      return forced();
+      // A forced RESOLUTION is a settled write like any other, so the fake's
+      // own state has to follow it - otherwise a later `getSaveLogins()`
+      // answers with a value this bridge never settled on, and a remount or
+      // refetch reads a state that never existed. A rejection settles nothing
+      // and is left alone.
+      return forced().then((settled) => {
+        this.saveLoginsValue = settled;
+        return settled;
+      });
     }
     this.saveLoginsValue = enabled;
     return Promise.resolve(enabled);

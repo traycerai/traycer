@@ -361,6 +361,27 @@ describe("BrowserCookieChangeObserver suppression across an in-flight read", () 
 
     observer.dispose();
   });
+
+  it("stays silent when the observer is disposed while the read is still parked", async () => {
+    const source = new GatedCookieChangeSource();
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.set(makeCookie({ name: "sid", domain: "example.com" }));
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+    expect(source.readIsParked()).toBe(true);
+    expect(deltas).toEqual([]);
+
+    // Torn down mid-read. Dropping the open windows cannot reach this flush -
+    // it took its window out of the map before it awaited - so only the epoch
+    // can tell the resumed read that nobody is listening any more.
+    observer.dispose();
+
+    source.releaseRead();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(deltas).toEqual([]);
+  });
 });
 
 describe("BrowserCookieChangeObserver removedKeys (ticket 14)", () => {

@@ -159,6 +159,27 @@ type SequencedPrimaryProfileOrigin = BrowserPrimaryProfileOriginSnapshot & {
   readonly sequence: number;
 };
 
+/**
+ * One `captureOrigin` read still in flight.
+ *
+ * The origin travels with it because a site clear has to be able to reach it:
+ * {@link BrowserPrimaryProfileSnapshotCoordinator.forgetOriginsUnder} runs
+ * while a read of the same origin may still be out, and that read landing
+ * afterwards would write back the origin the user just cleared - which the next
+ * capture uploads to the host and the seed script then restores into a
+ * recreated tile.
+ */
+interface PendingOriginObservation {
+  readonly origin: string;
+  readonly settled: Promise<void>;
+  /**
+   * Set by a clear whose scope covers {@link origin}; the completion sees it
+   * and drops itself. Per-observation rather than the jar-wide `era`, which
+   * would discard the in-flight reads of unrelated origins with it.
+   */
+  invalidated: boolean;
+}
+
 /** Owns recent localStorage observations and the capture barrier over them. */
 export class BrowserPrimaryProfileSnapshotCoordinator {
   private readonly origins = new Map<string, SequencedPrimaryProfileOrigin>();
@@ -173,7 +194,7 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
    * to read them from.
    */
   private seededOrigins: readonly BrowserPrimaryProfileOriginSnapshot[] = [];
-  private readonly observations = new Set<Promise<void>>();
+  private readonly observations = new Set<PendingOriginObservation>();
   private sequence = 0;
   /** Bumped by `reset()`; observations from an earlier era are discarded. */
   private era = 0;
@@ -219,10 +240,13 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
     if (origin === null) return;
     const sequence = ++this.sequence;
     const era = this.era;
-    let observation: Promise<void>;
-    observation = this.captureOrigin(origin, webContents)
+    let pending: PendingOriginObservation;
+    const settled = this.captureOrigin(origin, webContents)
       .then((snapshot) => {
-        if (snapshot === null || era !== this.era) return;
+        if (snapshot === null) return;
+        // Dropped when the whole jar moved on (`reset`), and when only this
+        // origin did (a site clear that ran while the read was out).
+        if (era !== this.era || pending.invalidated) return;
         const current = this.origins.get(origin);
         if (current !== undefined && current.sequence > sequence) return;
         this.origins.delete(origin);
@@ -240,9 +264,10 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
       })
       .catch(() => undefined)
       .finally(() => {
-        this.observations.delete(observation);
+        this.observations.delete(pending);
       });
-    this.observations.add(observation);
+    pending = { origin, settled, invalidated: false };
+    this.observations.add(pending);
   }
 
   /**
@@ -268,7 +293,13 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
    * tile - so an origin left in either tier puts back the localStorage the
    * user just cleared.
    *
-   * Scoped with {@link originInScope}, which is the predicate
+   * A third tier goes with them: the reads still IN FLIGHT for those origins.
+   * Each was taken from the jar being cleared, so one landing afterwards would
+   * put the origin straight back - and unlike {@link reset}'s `era` bump, this
+   * reaches only the origins in scope, leaving an unrelated site's concurrent
+   * read to complete.
+   *
+   * All three are scoped with {@link originInScope}, which is the predicate
    * {@link clearBrowserSite} selects origins with, so what is pruned here and
    * what Chromium was told to clear cannot drift apart.
    */
@@ -279,6 +310,9 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
     this.seededOrigins = this.seededOrigins.filter(
       (entry) => !originInScope(entry.origin, domain),
     );
+    for (const pending of this.observations) {
+      if (originInScope(pending.origin, domain)) pending.invalidated = true;
+    }
   }
 
   /**
@@ -308,7 +342,7 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
   }
 
   async capture(): Promise<BrowserPrimaryProfileCaptureResult> {
-    await Promise.all([...this.observations]);
+    await Promise.all([...this.observations].map((pending) => pending.settled));
     const observed = [...this.origins.values()]
       .reverse()
       .map(({ origin, localStorage }) => ({ origin, localStorage }));

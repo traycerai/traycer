@@ -239,6 +239,63 @@ describe("clearBrowserSite retained origins", () => {
   });
 });
 
+describe("clearBrowserSite against an in-flight observation", () => {
+  it("drops a read of the cleared site that lands after the prune, and keeps another site's", async () => {
+    const captured: Array<readonly BrowserPrimaryProfileOriginSnapshot[]> = [];
+    // Every localStorage read parked until the test lets it land - the only way
+    // to place a clear INSIDE a read, which is the interval the completion
+    // guard has to see.
+    const parkedReads = new Map<string, () => void>();
+    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
+      (origins) => {
+        captured.push(origins);
+        return Promise.resolve({
+          status: "captured",
+          storageState: { cookies: [], origins: [...origins] },
+          reason: null,
+        });
+      },
+      (origin) =>
+        new Promise<BrowserPrimaryProfileOriginSnapshot | null>((resolve) => {
+          parkedReads.set(origin, () => {
+            resolve({
+              origin,
+              localStorage: [{ name: "token", value: origin }],
+            });
+          });
+        }),
+    );
+    const releaseRead = (origin: string): void => {
+      const resolve = parkedReads.get(origin);
+      if (resolve === undefined) throw new Error(`no parked read: ${origin}`);
+      resolve();
+    };
+    const webContents = {
+      getURL: () => "https://unused.example/",
+      executeJavaScript: () => Promise.resolve([]),
+    };
+
+    coordinator.observe("https://app.example.com/page", webContents);
+    coordinator.observe("https://app.example.org/page", webContents);
+    coordinator.forgetOriginsUnder("example.com");
+    releaseRead("https://app.example.com");
+    releaseRead("https://app.example.org");
+
+    await coordinator.capture();
+
+    // The cleared site's read landed after the prune and was dropped: keeping
+    // it would re-upload the localStorage the user just cleared and re-seed it
+    // into a recreated tile. The OTHER site's read is untouched - which is what
+    // separates this from bumping the jar-wide era.
+    expect(
+      captured.map((origins) => origins.map((entry) => entry.origin)),
+    ).toEqual([["https://app.example.org"]]);
+    expect(
+      coordinator.rememberedOrigins().map((entry) => entry.origin),
+    ).toEqual(["https://app.example.org"]);
+  });
+});
+
 describe("clearBrowserSite delta behaviour", () => {
   function attachObserver(
     session: FakeClearSiteSession,
