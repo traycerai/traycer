@@ -306,6 +306,76 @@ describe("ws-protocol canonical Zod schemas", () => {
       expect(hostFrameSchema.safeParse(frame).success).toBe(true);
     });
 
+    it("keeps WORKTREE_BUSY holders on a `response` error envelope", () => {
+      const frame = {
+        kind: "response" as const,
+        requestId: "req-1",
+        method: "worktree.delete",
+        schemaVersion: { major: 1, minor: 1 },
+        result: null,
+        error: {
+          code: "WORKTREE_BUSY",
+          message: "in use",
+          holders: [
+            {
+              ownerRef: {
+                epicId: "e1",
+                ownerKind: "terminal-agent",
+                ownerId: "a1",
+              },
+              holdKind: "terminal-agent-pty",
+              activity: "idle",
+              label: "Claude Code",
+            },
+          ],
+        },
+      };
+
+      const parsed = hostResponseFrameSchema.parse(frame);
+      expect(parsed.error?.holders).toHaveLength(1);
+      expect(parsed.error?.holders?.[0]?.holdKind).toBe("terminal-agent-pty");
+    });
+
+    it("sanitizes malformed holders instead of rejecting the error envelope", () => {
+      const busy = hostResponseFrameSchema.safeParse({
+        kind: "response",
+        requestId: "req-1",
+        method: "worktree.delete",
+        schemaVersion: { major: 1, minor: 1 },
+        result: null,
+        error: {
+          code: "WORKTREE_BUSY",
+          message: "in use",
+          holders: [{ not: "a holder" }],
+        },
+      });
+      expect(busy.success).toBe(true);
+      if (busy.success) {
+        expect(busy.data.error?.code).toBe("WORKTREE_BUSY");
+        expect(busy.data.error?.message).toBe("in use");
+        expect(busy.data.error?.holders).toBeUndefined();
+      }
+
+      const other = hostResponseFrameSchema.safeParse({
+        kind: "response",
+        requestId: "req-2",
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 },
+        result: null,
+        error: {
+          code: "SOME_OTHER_ERROR",
+          message: "resolver failed",
+          holders: [{ not: "a holder" }],
+        },
+      });
+      expect(other.success).toBe(true);
+      if (other.success) {
+        expect(other.data.error?.code).toBe("SOME_OTHER_ERROR");
+        expect(other.data.error?.message).toBe("resolver failed");
+        expect(other.data.error?.holders).toBeUndefined();
+      }
+    });
+
     it("accepts a host `fatalError` frame with UNAUTHORIZED code", () => {
       const frame = {
         kind: "fatalError" as const,

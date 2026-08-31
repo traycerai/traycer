@@ -31,6 +31,7 @@ const CREATE_REQUEST = {
   rows: 24,
   desiredSessionId: SESSION_ID,
   worktreeBusyPaths: [] as string[],
+  themeHint: null,
 };
 
 function runningSession(sessionId: string): CanonicalTerminalSessionInfo {

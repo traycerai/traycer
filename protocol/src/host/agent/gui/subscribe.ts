@@ -1295,10 +1295,11 @@ const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
     // at send time.
     accountContext: accountContextSchema,
     deliveryPolicy: chatQueueDeliveryPolicySchema.default("auto"),
-    // A worktree staged in the composer (mid-chat "Create new worktree")
-    // rides with the send so the host creates it at turn-start before
-    // gating on setup - mirroring how the landing page bundles the intent
-    // with `epic.create`. `null` for an ordinary send.
+    // A worktree staged in the composer (mid-chat "Create new worktree",
+    // and — from the lifecycle minors — a draft rebind committed at
+    // send) rides with the send so the host materializes it at
+    // turn-start. Same `WorktreeIntent` shape as `worktree.create`.
+    // `null` / absent ⇒ binding-as-stored (today).
     worktreeIntent: worktreeIntentSchemaV10.nullable().default(null),
   }),
   z.object({
@@ -1318,8 +1319,8 @@ const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
     // (not per-chat), stamped onto the frame at send time.
     accountContext: accountContextSchema,
     // Editing and resending a stopped message is another turn-start path. A
-    // worktree staged in the composer must ride on this frame just as it does
-    // on a normal send, otherwise it is not created until the next message.
+    // worktree staged in the composer (create or draft rebind) must ride on
+    // this frame just as it does on a normal send.
     worktreeIntent: worktreeIntentSchemaV10.nullable().default(null),
     // When true, revert all file changes made by the edited message's turn
     // and every turn after it (cumulative, to the state before this message)

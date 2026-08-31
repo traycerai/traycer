@@ -10,6 +10,24 @@
  * folders.
  */
 import { z } from "zod";
+export {
+  worktreeBusyErrorDetailsSchema,
+  worktreeBusyHoldKindSchema,
+  worktreeBusyHolderActivitySchema,
+  worktreeBusyHolderSchema,
+  worktreeBusyHoldersSchema,
+  worktreeBusyOwnerKindSchema,
+  worktreeBusyOwnerRefSchema,
+} from "@traycer/protocol/framework/worktree-busy-holders";
+export type {
+  WorktreeBusyErrorDetails,
+  WorktreeBusyHoldKind,
+  WorktreeBusyHolder,
+  WorktreeBusyHolderActivity,
+  WorktreeBusyHolders,
+  WorktreeBusyOwnerKind,
+  WorktreeBusyOwnerRef,
+} from "@traycer/protocol/framework/worktree-busy-holders";
 
 // Inlined to avoid a circular import with `epic-schemas.ts` (which
 // references `worktreeIntentSchema`). Structurally compatible with
@@ -838,6 +856,24 @@ export const worktreeDeleteRequestSchema = z.object({
   worktreePath: z.string(),
 });
 export type WorktreeDeleteRequest = z.infer<typeof worktreeDeleteRequestSchema>;
+
+/**
+ * `worktree.delete@1.1` request. `stopOwners` defaults to `false` so a 1.1
+ * parse of a 1.0-shaped request is refuse-on-busy — today's behavior.
+ * `true` asks the host to stop enumerated holders, then delete.
+ *
+ * Degrade: a 1.0 host's request schema strips `stopOwners`, so an old host
+ * always refuses on busy. A 1.0 client talking to a 1.1 host is upgraded
+ * with `stopOwners: false`.
+ */
+export const worktreeDeleteRequestSchemaV11 = worktreeDeleteRequestSchema.extend(
+  {
+    stopOwners: z.boolean().default(false),
+  },
+);
+export type WorktreeDeleteRequestV11 = z.infer<
+  typeof worktreeDeleteRequestSchemaV11
+>;
 
 export const worktreeDeleteResponseSchema = z.object({
   deleted: z.boolean(),
