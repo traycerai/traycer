@@ -53,6 +53,7 @@ import {
   MAX_ACCEPTED_CHAT_ACTION_RECORDS,
   MAX_ERROR_NOTICE_RECORDS,
   createChatSessionStore,
+  projectQueueWithPendingCancellations,
   type ChatSessionStoreHandle,
   type SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
@@ -7279,6 +7280,78 @@ describe("createChatSessionStore", () => {
     ).toMatchObject({
       action: "pauseQueue",
     });
+  });
+
+  it("projects pending queue cancellations and rolls them back on rejection or reconnect", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const queuedItem = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-command-1",
+      commandId: "command-1",
+      description: "bun test --watch",
+      monitoring: true,
+      delivery: "next_turn" as const,
+      targetTurnId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const emitQueuedSnapshot = (): void => {
+      emitSnapshotFrame({
+        callbacks,
+        access: "owner",
+        messages: [],
+        queue: { status: "running", items: [queuedItem] },
+        pendingFileEditApprovals: [],
+      });
+    };
+    const visibleQueueItemIds = (): string[] => {
+      const state = harness.handle.store.getState();
+      return projectQueueWithPendingCancellations(
+        state.queue,
+        state.pendingActions,
+        state.acceptedActions,
+      ).items.map((item) => item.queueItemId);
+    };
+
+    emitQueuedSnapshot();
+    const rejectedActionId = harness.handle.store
+      .getState()
+      .queueCancel(queuedItem.queueItemId);
+    expect(rejectedActionId).not.toBeNull();
+    expect(
+      harness.handle.store.getState().pendingActions[rejectedActionId ?? ""],
+    ).toMatchObject({
+      action: "queueCancel",
+      queueItemId: queuedItem.queueItemId,
+    });
+    expect(visibleQueueItemIds()).toEqual([]);
+
+    rejectLastAction(harness, "This delivery can no longer be cancelled.");
+    expect(visibleQueueItemIds()).toEqual([queuedItem.queueItemId]);
+
+    expect(
+      harness.handle.store.getState().queueCancel(queuedItem.queueItemId),
+    ).not.toBeNull();
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitQueuedSnapshot();
+    expect(harness.handle.store.getState().pendingActions).toEqual({});
+    expect(visibleQueueItemIds()).toEqual([queuedItem.queueItemId]);
+
+    expect(
+      harness.handle.store.getState().queueCancel(queuedItem.queueItemId),
+    ).not.toBeNull();
+    acceptLastAction(harness);
+    expect(visibleQueueItemIds()).toEqual([]);
+    callbacks.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      queue: { status: "idle", items: [] },
+    });
+    expect(visibleQueueItemIds()).toEqual([]);
   });
 
   it("retains accepted send records when pruning accepted action records by cap", () => {

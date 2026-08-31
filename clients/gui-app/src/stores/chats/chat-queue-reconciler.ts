@@ -1753,6 +1753,7 @@ export function addAcceptedAction(
       [pending.clientActionId]: {
         clientActionId: pending.clientActionId,
         action: pending.action,
+        queueItemId: pending.queueItemId,
         interviewBlockId: pending.interviewBlockId,
         interviewDeliveryRetry: pending.interviewDeliveryRetry,
         messageId: pending.messageId,
