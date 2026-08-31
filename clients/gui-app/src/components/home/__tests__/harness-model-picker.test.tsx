@@ -326,7 +326,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: (client: MockHostClient | null) => {
     const hostId = client?.getActiveHostId() ?? null;
-    const hasRpcEndpoint = client?.getActiveHost()?.websocketUrl !== null;
+    const hasRpcEndpoint =
+      (client?.getActiveHost()?.websocketUrl ?? null) !== null;
     return {
       hostId,
       requestContextUserId: "user-1",
@@ -1753,11 +1754,10 @@ describe("<HarnessModelPicker />", () => {
     expect(queryMock.calls.refresh).not.toContain("booting-host");
   });
 
-  it("surfaces a confirmed remote outage instead of a provider-catalog error", async () => {
+  it("surfaces a confirmed remote outage before a provider-catalog error", async () => {
     queryMock.harnesses = [];
     queryMock.catalogHarnesses = [];
     queryMock.selectedModelsByHarness = new Map();
-    queryMock.harnessesError = new Error("relay unavailable");
     queryMock.reachabilityByHost.set("remote-offline", {
       status: "unreachable",
       hostLabel: "Remote Mac",
@@ -1776,11 +1776,10 @@ describe("<HarnessModelPicker />", () => {
     ).toBeNull();
   });
 
-  it("surfaces a remote plan restriction instead of a provider-catalog error", async () => {
+  it("surfaces a remote plan restriction before a provider-catalog error", async () => {
     queryMock.harnesses = [];
     queryMock.catalogHarnesses = [];
     queryMock.selectedModelsByHarness = new Map();
-    queryMock.harnessesError = new Error("relay refused");
     queryMock.reachabilityByHost.set("remote-plan-restricted", {
       status: "unreachable",
       hostLabel: "Remote Mac",

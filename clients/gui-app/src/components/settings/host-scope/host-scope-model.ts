@@ -366,12 +366,11 @@ export function resolveScopedHost(input: {
 
 /**
  * The one rule for which directory entry a transient client may be built
- * from. `buildDialableHostClient` checks only that a `websocketUrl` exists —
- * not `status`, not the plan gate — so any caller that hands it an entry from
- * a non-`connectable` row gets back a live-looking client for a route the
- * transport refuses. Panels read `scope.client` before their gate renders
- * (Notifications does), so such a client does not sit unused: it fires real
- * queries. Withholding the ENTRY here means the client never exists.
+ * from. `buildDialableHostClient` independently checks the canonical
+ * transport predicate and authenticated request context, but panels read
+ * `scope.client` before their gate renders (Notifications does). Withholding
+ * a non-`connectable` entry here keeps those panels from mounting a client for
+ * a route the scope already knows cannot be administered.
  *
  * `isFollowing` is not a refusal — the active host already has the ambient
  * client, and building a second one would duplicate its socket.

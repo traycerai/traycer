@@ -515,10 +515,6 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     runTargetHostId,
     runTargetReadiness.hasRpcEndpoint,
     runTargetReachability,
-    hasModelPickerCatalogFailure(
-      catalog.harnessesError,
-      selectedModelsQuery.isError,
-    ),
   );
   const handleRefreshCatalog = useCallback(async () => {
     await refreshCatalog();
@@ -1401,23 +1397,12 @@ function modelRowsListKey(input: ModelRowsListKeyInput): string {
   return `${openVersion}:${modeKey}`;
 }
 
-function hasModelPickerCatalogFailure(
-  harnessesError: Error | null,
-  selectedModelsQueryErrored: boolean,
-): boolean {
-  return harnessesError !== null || selectedModelsQueryErrored;
-}
-
 function modelPickerHostUnavailableLabel(
   hostId: string | null,
   hasRpcEndpoint: boolean,
   reachability: HostReachability,
-  hasCatalogFailure: boolean,
 ): string | null {
-  if (
-    hasRpcEndpoint &&
-    (!hasCatalogFailure || reachability.status !== "unreachable")
-  ) {
+  if (hasRpcEndpoint && reachability.status !== "unreachable") {
     return null;
   }
   if (hostId === null) return "No device available";

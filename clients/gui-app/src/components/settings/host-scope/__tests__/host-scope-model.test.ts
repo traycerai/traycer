@@ -501,11 +501,9 @@ describe("resolveScopedHost", () => {
 
 describe("transientClientEntry", () => {
   it("withholds the entry for a non-connectable host, URL or not", () => {
-    // The leak this closes: `buildDialableHostClient` checks only that a
-    // websocketUrl exists, so handing it the entry of an unavailable or
-    // plan-restricted row produced a live-looking client the status machine
-    // had already ruled unreachable — and panels that read `scope.client`
-    // before their gate renders fired real queries through it.
+    // Panels read `scope.client` before their gate renders, so withholding an
+    // unavailable or plan-restricted row here prevents them mounting a client
+    // for a target the scope has already ruled unreachable.
     const host = hostScopeOptionFixture({
       hostId: "host-a",
       connectable: false,

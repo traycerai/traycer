@@ -137,6 +137,7 @@ describe("useHostClientFor", () => {
     cleanup();
     globalClientRef.value = null;
     remoteSessionReadyRef.value = false;
+    knownHostEntries.delete(OFFLINE_REMOTE_TARGET.hostId);
     RetryTestWebSocket.reset();
     vi.unstubAllGlobals();
   });
