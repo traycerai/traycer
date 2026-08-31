@@ -329,9 +329,11 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
           status: "closed",
           reason,
           // `@1` has one socket carrying every plane, the root snapshot
-          // included, so its transitions ARE the control cycle's. The lane arm
-          // is the only place where that is not automatic.
+          // included, so its transitions ARE the control cycle's and they do
+          // carry records. The lane arm is the only place where either answer
+          // is not automatic.
           ownsControlCycle: true,
+          carriesRecords: true,
         },
       },
     ]);
@@ -357,6 +359,7 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
           status,
           reason: null,
           ownsControlCycle: true,
+          carriesRecords: true,
         },
       },
     ]);
