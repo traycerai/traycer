@@ -268,29 +268,27 @@ function ObservationProvenanceDetail(props: {
   return <p className="px-3 pb-3 text-ui-xs text-muted-foreground">{detail}</p>;
 }
 
+type VersionComparison =
+  | {
+      readonly kind: "parent";
+      readonly entry: ArtifactVersionObservationEntry;
+    }
+  | { readonly kind: "initial" }
+  | { readonly kind: "parent_unavailable" };
+
 function comparisonFor(
   entries: readonly ArtifactVersionObservationEntry[],
   selected: ArtifactVersionObservationEntry | null,
-): {
-  readonly entry: ArtifactVersionObservationEntry;
-  readonly label: string;
-} | null {
+): VersionComparison | null {
   if (selected === null) return null;
-  if (selected.parentContentHash !== null) {
-    const parent = entries.find(
-      (entry) =>
-        entry.available && entry.contentHash === selected.parentContentHash,
-    );
-    if (parent !== undefined)
-      return { entry: parent, label: "Compared with parent version" };
-  }
-  const index = entries.findIndex(
-    (entry) => entry.observationId === selected.observationId,
+  if (selected.parentContentHash === null) return { kind: "initial" };
+  const parent = entries.find(
+    (entry) =>
+      entry.available && entry.contentHash === selected.parentContentHash,
   );
-  const previous = entries.slice(index + 1).find((entry) => entry.available);
-  return previous === undefined
-    ? null
-    : { entry: previous, label: "Compared with previous entry" };
+  return parent === undefined
+    ? { kind: "parent_unavailable" }
+    : { kind: "parent", entry: parent };
 }
 
 function mergeObservationPages(
@@ -476,14 +474,17 @@ function ArtifactVersionHistoryPanel(props: {
     params: {
       epicId: props.epicId,
       artifactId: props.artifactId,
-      observationId: comparison?.entry.observationId ?? "unselected",
+      observationId:
+        comparison?.kind === "parent"
+          ? comparison.entry.observationId
+          : "unselected",
     },
     cacheKeyIdentity:
-      comparison?.entry.contentHash === undefined
+      comparison?.kind !== "parent"
         ? undefined
         : [comparison.entry.contentHash],
     options: {
-      enabled: comparison !== null,
+      enabled: comparison?.kind === "parent",
     },
   });
 
@@ -721,12 +722,16 @@ function ArtifactVersionHistoryPanel(props: {
           <VersionDiffView
             artifactId={props.artifactId}
             selected={selected}
-            comparisonLabel={comparison?.label ?? null}
-            comparisonObservationId={comparison?.entry.observationId ?? null}
+            comparisonKind={comparison?.kind ?? null}
+            comparisonObservationId={
+              comparison?.kind === "parent"
+                ? comparison.entry.observationId
+                : null
+            }
             beforeMarkdown={
-              comparison === null
-                ? null
-                : (comparisonBlob.data?.markdown ?? null)
+              comparison?.kind === "parent"
+                ? (comparisonBlob.data?.markdown ?? null)
+                : null
             }
             afterMarkdown={selectedBlob.data?.markdown ?? null}
             loading={selectedBlob.isLoading || comparisonBlob.isLoading}
@@ -980,7 +985,7 @@ function VersionObservationList(props: {
 function VersionDiffView(props: {
   readonly artifactId: string;
   readonly selected: ArtifactVersionObservationEntry | null;
-  readonly comparisonLabel: string | null;
+  readonly comparisonKind: VersionComparison["kind"] | null;
   readonly comparisonObservationId: string | null;
   readonly beforeMarkdown: string | null;
   readonly afterMarkdown: string | null;
@@ -992,11 +997,12 @@ function VersionDiffView(props: {
   readonly onRestore: () => void;
 }): ReactNode {
   const unchanged =
-    props.comparisonLabel !== null &&
+    props.comparisonKind === "parent" &&
     props.afterMarkdown !== null &&
     props.beforeMarkdown === props.afterMarkdown;
   const patch =
-    props.afterMarkdown === null
+    props.afterMarkdown === null ||
+    props.comparisonKind === "parent_unavailable"
       ? null
       : buildSnapshotUnifiedPatch({
           filePath: `${props.artifactId}.md`,
@@ -1036,7 +1042,7 @@ function VersionDiffView(props: {
             {formatCapturedAt(props.selected.capturedAt)}
           </p>
           <p className="text-ui-xs text-muted-foreground">
-            {props.comparisonLabel ?? "Oldest saved version — shown in full"}
+            {comparisonLabel(props.comparisonKind)}
           </p>
         </div>
         <Button
@@ -1051,6 +1057,7 @@ function VersionDiffView(props: {
       <VersionDiffBody
         loading={props.loading}
         failed={props.failed}
+        parentUnavailable={props.comparisonKind === "parent_unavailable"}
         unchanged={unchanged}
         patch={patch}
         cacheScope={`artifact-version:${props.selected.observationId}:${props.comparisonObservationId ?? "none"}`}
@@ -1060,9 +1067,25 @@ function VersionDiffView(props: {
   );
 }
 
+function comparisonLabel(
+  comparisonKind: VersionComparison["kind"] | null,
+): string {
+  switch (comparisonKind) {
+    case "parent":
+      return "Compared with parent version";
+    case "initial":
+      return "Initial version";
+    case "parent_unavailable":
+      return "Parent version unavailable";
+    case null:
+      return "Version comparison unavailable";
+  }
+}
+
 function VersionDiffBody(props: {
   readonly loading: boolean;
   readonly failed: boolean;
+  readonly parentUnavailable: boolean;
   readonly unchanged: boolean;
   readonly patch: string | null;
   readonly cacheScope: string;
@@ -1086,6 +1109,14 @@ function VersionDiffBody(props: {
           Retry
         </Button>
       </div>
+    );
+  }
+  if (props.parentUnavailable) {
+    return (
+      <p className="p-4 text-muted-foreground">
+        This version&apos;s recorded parent is not available in the loaded
+        history.
+      </p>
     );
   }
   if (props.patch === null) {
