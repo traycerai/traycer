@@ -1447,6 +1447,139 @@ describe("transcriptListRows", () => {
     expect(steerIndex).toBeLessThan(part1Index);
   });
 
+  it("holds a split-turn row a fresh span already seated at its pre-split ordinal", () => {
+    // The same mixed state, with the steered user's stale top-level row also
+    // SERVED: the client asked for that range while the index was still
+    // pre-split, so a fresh span carries the row id at the old ordinal. That
+    // span is not newer evidence than the live record - it was built from the
+    // same pre-split index - so the hold must outrank it. Seated by the span
+    // instead, the row would draw at the stale ordinal AND be barred from the
+    // tail unit by `placedRowIds`, which is the original defect reached
+    // through the span tier.
+    const turnId = "turn-span-seated-steer";
+    const queueItemId = "queue-span-seated";
+    const steeredMessageId = "steered-user-span-seated";
+    const transientId = transientLiveAssistantMessageId(turnId);
+
+    const steeredUser: Extract<Message, { role: "user" }> = {
+      role: "user",
+      messageId: steeredMessageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: {
+        kind: "user",
+        content: { type: "doc" },
+        browserAnnotations: [],
+      },
+      timestamp: 2,
+      sessionAnchor: null,
+    };
+    const transientAssistant: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          type: "text",
+          blockId: "block-before",
+          status: "completed",
+          timestamp: 1,
+          text: "before the steer",
+          providerNotice: null,
+        },
+        {
+          type: "steer",
+          blockId: `steer-${queueItemId}`,
+          status: "completed",
+          timestamp: 2,
+          queueItemId,
+          messageId: steeredMessageId,
+          content: { type: "doc" },
+          mode: "safe_point",
+          sender: null,
+        },
+        {
+          type: "text",
+          blockId: "block-after",
+          status: "completed",
+          timestamp: 3,
+          text: "after the steer",
+          providerNotice: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 3,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+    };
+
+    const part0Id = assistantSliceRowId(turnId, 0, true);
+    const part1Id = assistantSliceRowId(turnId, 1, true);
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        // The served range: the prior user row and, at ordinal 2, the steered
+        // user's own row id under the pre-split topology.
+        spans: [
+          {
+            ...span(0, ["prior-user"]),
+            messages: [],
+          },
+          {
+            ...span(2, [steeredMessageId]),
+            messages: [steeredUser],
+          },
+        ],
+        skeleton: [
+          skeletonEntry("prior-user"),
+          skeletonEntry(assistantRowId(turnId)),
+          skeletonEntry(steeredMessageId),
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [steeredUser, transientAssistant],
+      }),
+      rendered: [
+        modelWithPersistentMessageId("prior-user", "prior-user"),
+        modelWithPersistentMessageId(part0Id, transientId),
+        modelWithoutPersistentMessageId(steeredMessageId),
+        modelWithPersistentMessageId(part1Id, transientId),
+      ],
+    });
+
+    const steerOccurrences = rows.filter(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    ).length;
+    expect(steerOccurrences).toBe(1);
+
+    const part0Index = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === part0Id,
+    );
+    const part1Index = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === part1Id,
+    );
+    const steerIndex = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    );
+    expect(steerIndex).toBeGreaterThan(part0Index);
+    expect(steerIndex).toBeLessThan(part1Index);
+    // The vacated ordinal draws nothing rather than a placeholder: a row is
+    // there, and it is being drawn in the tail unit.
+    expect(
+      rows.some((row) => row.kind === "placeholder" && row.ordinal === 2),
+    ).toBe(false);
+  });
+
   it("lands a pending-blockDelta steer bubble below its turn, not above it", () => {
     // The OTHER half of the same mixed state, timestamped one frame earlier:
     // the host has published `messageAccepted` for the steered user, but

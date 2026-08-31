@@ -961,6 +961,20 @@ export function transcriptListRows(input: {
   const modelByOrdinal = new Map<number, ChatMessageModel>();
   const suppressedOrdinals = new Set<number>();
   const placedRowIds = new Set<string>();
+  const skeletonOrdinals = skeletonOrdinalByRowId(window.skeleton);
+  const isLiveBacked = liveBackingLookup(window, rendered);
+  // Decided BEFORE any seating, because it is a statement about which ordinals
+  // are stale rather than about any one row - and because the span pass below
+  // would otherwise place a held row first. A span that carries the steered
+  // user row at its pre-split ordinal was served under the SAME pre-split
+  // index the skeleton is stale against, so it is not newer evidence than the
+  // live record that carries the marker.
+  const heldForTail = preSplitSkeletonTurnRows({
+    rendered,
+    isLiveBacked,
+    skeletonOrdinals,
+    suppressedOrdinals,
+  });
   for (const span of window.spans) {
     span.rowIds.forEach((rowId, offset) => {
       const ordinal = span.fromOrdinal + offset;
@@ -969,6 +983,15 @@ export function transcriptListRows(input: {
       // list keeps the list exactly `rowCount` long; the identity echo is what
       // reports the disagreement.
       if (ordinal >= window.rowCount) return;
+      if (heldForTail.has(rowId)) {
+        // The unit has left this ordinal for the tail. Suppress rather than
+        // place: seating it here would draw the interjection above its own
+        // turn, and `placedRowIds` would then keep it out of the tail unit -
+        // the exact split the hold exists to prevent, reached through the span
+        // tier instead of the skeleton.
+        suppressedOrdinals.add(ordinal);
+        return;
+      }
       const model = modelsById.get(rowId);
       if (model === undefined) {
         // The span proves the body is HELD; its absence from `rendered` means
@@ -981,8 +1004,6 @@ export function transcriptListRows(input: {
       placedRowIds.add(rowId);
     });
   }
-
-  const skeletonOrdinals = skeletonOrdinalByRowId(window.skeleton);
 
   // A live record the index has just started naming, seated at the ordinal it
   // names rather than dropped.
@@ -1013,15 +1034,6 @@ export function transcriptListRows(input: {
   // A span always wins - it IS the authoritative copy - so an ordinal a span
   // already answered for is left alone, whether it placed a model or the
   // renderer withheld one.
-  const isLiveBacked = liveBackingLookup(window, rendered);
-  // Decided BEFORE seating, because it is a statement about which skeleton
-  // ordinals are stale rather than about any one row.
-  const heldForTail = preSplitSkeletonTurnRows({
-    rendered,
-    isLiveBacked,
-    skeletonOrdinals,
-    suppressedOrdinals,
-  });
   seatLiveRecords({
     window,
     rendered,
