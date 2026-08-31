@@ -522,7 +522,12 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     browser are kept, and the only place they can be turned off, forgotten, or
     inspected per site. Keychain-refactor spec §7.3; the group renders NOTHING
     without a `browserView` bridge (the web build), because every row is about
-    a machine's jar.
+    a machine's jar - nor without a host runtime (`useHostBinding()`, the
+    non-throwing accessor), since the list is a host's answer and both
+    destructive rows travel to hosts. That gate is on what RENDERS: the rows
+    live in their own component so the site-list query, which reaches
+    `useHostClient()` and would THROW with no provider, is never mounted
+    above it.
     Saving is silent and on by default, Chrome-style - there is no consent
     step, no status row and nothing to retry - so this group is passive: a
     toggle, a destructive action, and a list.
@@ -539,6 +544,9 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       module-level `forgetAllBrowserLogins()` on the sessions coordinator and
       so speaks for EVERY host the user has a live browser stream to; that is
       what "all" means, and it is why the action is not tile-scoped.
+      It answers whether any stream took the frame, and the confirm closes only
+      then - the same refusal the per-row Clear makes, so a click that reached
+      no host never reads as a completed forget.
     - **Sites with saved logins** reads `browser.savedLoginSites` from the
       surface's host (`useBrowserSavedLoginSitesQuery`) - registrable domains
       and a relative last-seen, never values. The method is optional
@@ -549,7 +557,10 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       own hint. Per-row **Clear** sends the `clearSite { domain }` frame
       (`clearSavedLoginSite()`) and refetches; the row is hidden optimistically
       because the host merges asynchronously and the refetch behind the click
-      can still read the pre-clear slice.
+      can still read the pre-clear slice. That optimism RELEASES itself: a
+      domain is hidden only while the latest response still names it (retired
+      from state during render), so signing back into a cleared site shows it
+      again instead of hiding it for the session.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions"), Show global resources button, Show

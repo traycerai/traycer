@@ -86,6 +86,39 @@ class FakeCookieChangeSource implements BrowserCookieChangeSource {
   }
 }
 
+/**
+ * The same jar with every `get()` parked until the test releases it. The flush
+ * path reads its slice through `cookies.get()`, so holding that promise open is
+ * the only way to place a WHOLE suppression - entry and exit both - inside the
+ * flush's await, which is the interval neither point-in-time check can see.
+ */
+class GatedCookieChangeSource extends FakeCookieChangeSource {
+  private pendingRead: (() => void) | null = null;
+
+  override get(filter: { readonly domain: string }): Promise<Cookie[]> {
+    // Read the jar now, resolve later: what the flush ends up holding is the
+    // slice as it was when the read started, exactly as a real in-flight read
+    // would be.
+    const slice = super.get(filter);
+    return new Promise<Cookie[]>((resolve) => {
+      this.pendingRead = () => {
+        this.pendingRead = null;
+        resolve(slice);
+      };
+    });
+  }
+
+  readIsParked(): boolean {
+    return this.pendingRead !== null;
+  }
+
+  releaseRead(): void {
+    const pendingRead = this.pendingRead;
+    if (pendingRead === null) throw new Error("no cookie read is parked");
+    pendingRead();
+  }
+}
+
 function makeObserver(
   source: BrowserCookieChangeSource,
   deltas: BrowserPrimaryProfileDelta[],
@@ -253,6 +286,78 @@ describe("BrowserCookieChangeObserver coalescing", () => {
       "example.com",
       "other.test",
     ]);
+
+    observer.dispose();
+  });
+});
+
+describe("BrowserCookieChangeObserver unrepresentable cookies", () => {
+  it("still emits the scope's delta when the jar holds a cookie it cannot normalise", async () => {
+    const source = new FakeCookieChangeSource();
+    // An IDN domain punycodes in the domain check and throws there - a cookie
+    // Chromium hands over for any such site the user visits.
+    source.seed(makeCookie({ name: "idn", domain: "exämple.example.com" }));
+    const gone = makeCookie({ name: "gone", domain: "example.com" });
+    source.seed(gone);
+
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.remove(gone);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    // One unrepresentable cookie used to throw inside the read and take the
+    // whole delta with it - including the removedKeys that are this path's
+    // only logout evidence, so a sign-out went unreported.
+    expect(deltas).toHaveLength(1);
+    const delta = deltas[0];
+    if (delta === undefined) throw new Error("expected a flushed delta");
+    expect(delta.cookies).toEqual([]);
+    expect(delta.removedKeys).toEqual([
+      { domain: "example.com", name: "gone", path: "/" },
+    ]);
+
+    observer.dispose();
+  });
+});
+
+describe("BrowserCookieChangeObserver suppression across an in-flight read", () => {
+  it("drops a slice whose read spanned a whole suppression - one that opened AND closed inside the await", async () => {
+    const source = new GatedCookieChangeSource();
+    const cookie = makeCookie({ name: "sid", domain: "example.com" });
+    const deltas: BrowserPrimaryProfileDelta[] = [];
+    const observer = makeObserver(source, deltas);
+
+    source.set(cookie);
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+    // The flush is parked inside `cookies.get()`, holding a slice that still
+    // has the cookie the clear is about to shred.
+    expect(source.readIsParked()).toBe(true);
+    expect(deltas).toEqual([]);
+
+    // The evict the host asked for, in full: the window this suppression drops
+    // is already gone (the flush deleted it), and the suppression both starts
+    // and finishes before the read resolves - so the check before the await
+    // and the check after it BOTH see an unsuppressed observer.
+    await observer.suppress("example.com", () => {
+      source.remove(cookie);
+      return Promise.resolve();
+    });
+
+    source.releaseRead();
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+
+    // Emitting that slice now would re-create for the host the login it just
+    // shredded, from a read that predates the shredding.
+    expect(deltas).toEqual([]);
+
+    // Muted for that one read, not broken: the next change still coalesces.
+    source.set(makeCookie({ name: "fresh", domain: "example.com" }));
+    await vi.advanceTimersByTimeAsync(BROWSER_COOKIE_DELTA_WINDOW_MS);
+    source.releaseRead();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deltas.map((delta) => delta.domain)).toEqual(["example.com"]);
+    expect(deltas[0]?.cookies.map((entry) => entry.name)).toEqual(["fresh"]);
 
     observer.dispose();
   });

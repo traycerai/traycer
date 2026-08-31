@@ -265,13 +265,14 @@ function sendOncePerHost(
 }
 
 /**
- * "Forget all browser logins" (spec §6.5, ticket 08).
+ * "Forget all browser logins" (spec §6.5, ticket 08). Answers whether any live
+ * stream took it.
  *
  * Module-level, not a tile-scoped action: the trigger lives in Settings ›
  * Browser, which has no tile to hang it off.
  */
-export function forgetAllBrowserLogins(): void {
-  sendOncePerHost((coordinator) => coordinator.forgetLogins());
+export function forgetAllBrowserLogins(): boolean {
+  return sendOncePerHost((coordinator) => coordinator.forgetLogins());
 }
 
 /**

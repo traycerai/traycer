@@ -52,7 +52,7 @@ const desktopStorageStateSchema = protocolStorageStateSchema.extend({
   origins: z.array(desktopStorageOriginSchema),
 });
 
-type DesktopStorageCookie = z.infer<typeof desktopStorageCookieSchema>;
+export type DesktopStorageCookie = z.infer<typeof desktopStorageCookieSchema>;
 type DesktopStorageState = z.infer<typeof desktopStorageStateSchema>;
 
 interface BrowserCookieDomain {
@@ -261,6 +261,27 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
   }
 
   /**
+   * The same forgetting, narrowed to one site ("clear cookies for this site").
+   * Both tiers again, and for the reason {@link reset} gives: a capture merges
+   * the observed and the carried-over origins into the host's whole jar, and
+   * {@link browserLocalStorageSeedScript} writes them back into a recreated
+   * tile - so an origin left in either tier puts back the localStorage the
+   * user just cleared.
+   *
+   * Scoped with {@link originInScope}, which is the predicate
+   * {@link clearBrowserSite} selects origins with, so what is pruned here and
+   * what Chromium was told to clear cannot drift apart.
+   */
+  forgetOriginsUnder(domain: string): void {
+    for (const origin of [...this.origins.keys()]) {
+      if (originInScope(origin, domain)) this.origins.delete(origin);
+    }
+    this.seededOrigins = this.seededOrigins.filter(
+      (entry) => !originInScope(entry.origin, domain),
+    );
+  }
+
+  /**
    * Every origin this process knows localStorage for, newest first, without
    * awaiting in-flight observations. Both tiers again: a site clear must reach
    * a demoted or seeded origin too, or the site keeps the localStorage the
@@ -346,11 +367,43 @@ export function browserLocalStorageSeedScript(
  * Electron cookies as the protocol shape, with the one normalisation the whole
  * store depends on: a host-only cookie loses its leading dot, so `{domain,
  * name, path}` is the same identity here as in the host's tombstone keys.
+ *
+ * A cookie this shell cannot normalise is SKIPPED, not thrown on - see
+ * {@link safeStorageCookie}. The callers here are the observers of a jar they
+ * do not control, and one unrepresentable cookie must not cost them the batch.
  */
 export function browserStorageCookies(
   cookies: readonly Cookie[],
 ): readonly ProtocolStorageCookie[] {
-  return cookies.map(toStorageCookie).map(toProtocolStorageCookie);
+  return cookies.flatMap((cookie) => {
+    const storageCookie = safeStorageCookie(cookie);
+    return storageCookie === null
+      ? []
+      : [toProtocolStorageCookie(storageCookie)];
+  });
+}
+
+/**
+ * {@link toStorageCookie} for a jar that may hold a cookie this shell cannot
+ * represent, answering `null` instead of throwing.
+ *
+ * That is reachable, not hypothetical: {@link readCookieDomain} rejects a
+ * domain the URL parser rewrites, and an IDN domain punycodes there. The
+ * delta, the site clear and the removal-key path all want the same thing from
+ * such a cookie - skip it and keep going - so they share this one guard rather
+ * than each growing a `try`.
+ *
+ * The CAPTURE path deliberately does not use it: a capture replaces the host's
+ * whole jar, so quietly dropping a cookie there would delete that login for
+ * good. Failing loudly is the safe direction on that path and the wrong one
+ * here.
+ */
+export function safeStorageCookie(cookie: Cookie): DesktopStorageCookie | null {
+  try {
+    return toStorageCookie(cookie);
+  } catch {
+    return null;
+  }
 }
 
 export async function seedBrowserViewCookies(
@@ -389,7 +442,10 @@ export async function seedBrowserViewCookies(
  *
  * `rememberedOrigins` is the capture coordinator's memory: cookies are
  * enumerable from the jar, localStorage is not, so those are the only origins
- * a clear can name.
+ * a clear can name. Clearing the jar is only half the work - the caller must
+ * follow with {@link BrowserPrimaryProfileSnapshotCoordinator.forgetOriginsUnder},
+ * or the coordinator keeps the origins it just cleared and the next capture
+ * uploads them back to the host.
  */
 export async function clearBrowserSite(
   domain: string,
@@ -399,24 +455,41 @@ export async function clearBrowserSite(
   const cookies = (await browserSession.cookies.get({ domain })).filter(
     (cookie) => cookieDomainInScope(cookie.domain ?? "", domain),
   );
-  for (const cookie of cookies) {
-    // Through the same normalisation the capture path uses, so the URL names
-    // the cookie's own scope (host-only vs domain, path, secure) rather than a
-    // guess - Electron removes by {url, name}.
-    const scoped = toStorageCookie(cookie);
-    await browserSession.cookies.remove(cookieUrl(scoped), scoped.name);
+  try {
+    for (const cookie of cookies) {
+      // Through the same normalisation the capture path uses, so the URL names
+      // the cookie's own scope (host-only vs domain, path, secure) rather than
+      // a guess - Electron removes by {url, name}. A cookie that will not
+      // normalise has no URL to remove it by; skipping it clears the rest of
+      // the site instead of abandoning the clear on the first one.
+      const scoped = safeStorageCookie(cookie);
+      if (scoped === null) continue;
+      await browserSession.cookies.remove(cookieUrl(scoped), scoped.name);
+    }
+    for (const origin of rememberedOrigins()) {
+      if (!originInScope(origin, domain)) continue;
+      await browserSession.clearStorageData({
+        origin,
+        storages: ["localstorage"],
+      });
+    }
+  } finally {
+    // Cookie removals are held in memory until the store is flushed; without
+    // this, a quit right after the clear could resurrect the site's logins.
+    // In the `finally` because a clear that aborted part-way is exactly when
+    // the removals it did issue most need to be durable.
+    await browserSession.cookies.flushStore();
   }
-  for (const origin of rememberedOrigins()) {
-    const host = originHost(origin);
-    if (host === null || !cookieDomainInScope(host, domain)) continue;
-    await browserSession.clearStorageData({
-      origin,
-      storages: ["localstorage"],
-    });
-  }
-  // Cookie removals are held in memory until the store is flushed; without
-  // this, a quit right after the clear could resurrect the site's logins.
-  await browserSession.cookies.flushStore();
+}
+
+/**
+ * Whether one remembered origin belongs to the site being cleared. The single
+ * definition of that scope: the clear and the coordinator's prune both read it,
+ * so neither can reach an origin the other keeps.
+ */
+function originInScope(origin: string, domain: string): boolean {
+  const host = originHost(origin);
+  return host !== null && cookieDomainInScope(host, domain);
 }
 
 function originHost(origin: string): string | null {

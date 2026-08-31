@@ -78,6 +78,19 @@ export class BrowserCookieChangeObserver {
   private readonly suppressedDomains = new Map<string, number>();
   /** Reference-counted whole-jar suppression (`suppressAll`). */
   private suppressedGlobally = 0;
+  /**
+   * Bumped on every suppression state change, entry and exit alike. A flush
+   * awaits its slice, and a suppression whose whole lifetime fits inside that
+   * await is seen by neither the check before it nor the one after it - so the
+   * pre-clear slice would be emitted, re-creating what the host just shredded.
+   * The epoch is what makes that window visible.
+   *
+   * Deliberately one counter for the whole jar rather than one per scope: a
+   * suppression of ANOTHER domain overlapping this read drops this delta too,
+   * which costs one coalesced frame the next change re-sends, while a
+   * per-scope counter would have to be kept for scopes no window is open on.
+   */
+  private suppressionEpoch = 0;
   private listener:
     | ((
         event: unknown,
@@ -118,6 +131,7 @@ export class BrowserCookieChangeObserver {
     if (scope === null) return await action();
     const depth = this.suppressedDomains.get(scope) ?? 0;
     this.suppressedDomains.set(scope, depth + 1);
+    this.suppressionEpoch += 1;
     this.dropWindow(scope);
     try {
       return await action();
@@ -125,6 +139,7 @@ export class BrowserCookieChangeObserver {
       const remaining = (this.suppressedDomains.get(scope) ?? 1) - 1;
       if (remaining <= 0) this.suppressedDomains.delete(scope);
       else this.suppressedDomains.set(scope, remaining);
+      this.suppressionEpoch += 1;
       this.dropWindow(scope);
     }
   }
@@ -142,11 +157,13 @@ export class BrowserCookieChangeObserver {
    */
   async suppressAll<T>(action: () => Promise<T>): Promise<T> {
     this.suppressedGlobally += 1;
+    this.suppressionEpoch += 1;
     this.dropAllWindows();
     try {
       return await action();
     } finally {
       this.suppressedGlobally = Math.max(0, this.suppressedGlobally - 1);
+      this.suppressionEpoch += 1;
       this.dropAllWindows();
     }
   }
@@ -205,13 +222,18 @@ export class BrowserCookieChangeObserver {
     if (window === undefined) return;
     this.windows.delete(domain);
     if (this.isSuppressed(domain)) return;
+    const epoch = this.suppressionEpoch;
     try {
       const delta = await this.readSlice(
         domain,
         window.removedKeys,
         window.issuedAt,
       );
-      if (this.isSuppressed(domain)) return;
+      // Any suppression that opened, closed, or did both while the slice was
+      // being read moved the epoch. The slice describes the jar from before
+      // it, so it is dropped - which subsumes asking whether a suppression
+      // happens to be standing right now.
+      if (this.suppressionEpoch !== epoch) return;
       this.options.emit(delta);
     } catch (error) {
       log.warn("[browser-view] cookie delta capture failed", {
@@ -231,7 +253,10 @@ export class BrowserCookieChangeObserver {
   ): Promise<BrowserPrimaryProfileDelta> {
     // `get({ domain })` already answers with the domain and its subdomains;
     // the domain-match filter is what proves that to the reader, and drops
-    // anything Chromium's looser matching might add.
+    // anything Chromium's looser matching might add. A cookie the shell cannot
+    // normalise is skipped by `browserStorageCookies` rather than thrown on:
+    // this whole delta - the removedKeys that carry the logout evidence
+    // included - would otherwise be lost to one unrepresentable cookie.
     const cookies = browserStorageCookies(
       await this.options.cookies.get({ domain }),
     ).filter((cookie) => cookieDomainInScope(cookie.domain, domain));
@@ -268,17 +293,16 @@ function removedKeysNotPresent(
  * produced.
  */
 function cookieKeyOf(cookie: Cookie): BrowserCookieKey | null {
-  try {
-    const [normalized] = browserStorageCookies([cookie]);
-    if (normalized === undefined) return null;
-    return {
-      domain: normalized.domain,
-      name: normalized.name,
-      path: normalized.path,
-    };
-  } catch {
-    return null;
-  }
+  // `browserStorageCookies` is the guard as well as the normalisation: a
+  // cookie it cannot represent comes back as an empty batch, which is the same
+  // `null` this used to build its own `try` to produce.
+  const [normalized] = browserStorageCookies([cookie]);
+  if (normalized === undefined) return null;
+  return {
+    domain: normalized.domain,
+    name: normalized.name,
+    path: normalized.path,
+  };
 }
 
 function cookieKeyId(key: BrowserCookieKey): string {

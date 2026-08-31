@@ -29,7 +29,14 @@ import type {
  */
 export class FakeBrowserViewBridge implements BrowserViewBridge {
   private saveLoginsValue: boolean;
-  private nextSetSaveLoginsResult: Promise<boolean> | null = null;
+  /**
+   * A FACTORY, not a promise: a rejected promise handed in at arrange time is
+   * already rejected while the test renders and waits, which surfaces as an
+   * unhandled rejection well before the code under test ever attaches a
+   * handler. Built inside `setSaveLogins`, it is rejected only once someone is
+   * there to catch it.
+   */
+  private nextSetSaveLoginsResult: (() => Promise<boolean>) | null = null;
 
   constructor(input?: { readonly saveLogins?: boolean }) {
     this.saveLoginsValue = input?.saveLogins ?? true;
@@ -125,15 +132,16 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     const forced = this.nextSetSaveLoginsResult;
     if (forced !== null) {
       this.nextSetSaveLoginsResult = null;
-      return forced;
+      return forced();
     }
     this.saveLoginsValue = enabled;
     return Promise.resolve(enabled);
   }
 
-  /** Forces the NEXT `setSaveLogins` call to settle with this promise instead
-   * - a rejection, or a resolution that disagrees with what was requested. */
-  setNextSetSaveLoginsResult(result: Promise<boolean>): void {
+  /** Forces the NEXT `setSaveLogins` call to settle with what this returns
+   * instead - a rejection, or a resolution that disagrees with what was
+   * requested. Called at that moment, not now. */
+  setNextSetSaveLoginsResult(result: () => Promise<boolean>): void {
     this.nextSetSaveLoginsResult = result;
   }
 

@@ -20,6 +20,7 @@ import {
   forgetAllBrowserLogins,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
+import { useHostBinding } from "@/lib/host";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import type {
@@ -256,14 +257,37 @@ function BrowserDevOriginsControl(props: {
  * bridge rather than from any host.
  *
  * Renders nothing without a browser bridge (the web build, a host-less test
- * harness): there is no machine here whose jar this could be about.
+ * harness): there is no machine here whose jar this could be about. Nor
+ * without a host runtime: the list is a host's own answer and both destructive
+ * actions travel to hosts, so with no runtime above this group there is
+ * nothing to show and no button here that could work.
  */
 function BrowserSavedLoginsGroup(): ReactNode {
   const browserView = useRunnerHostOrNull()?.browserView ?? null;
+  // The non-throwing accessor, deliberately: Settings panels render in shells
+  // with no host runtime bound, and `useHostClient()` - which the site-list
+  // query reaches - throws there rather than answering null.
+  const hostBinding = useHostBinding();
   const saveLogins = useBrowserSaveLogins(browserView);
   const enabled = saveLogins.enabled;
-  const sites = useBrowserSavedLoginSitesQuery({ enabled: enabled !== null });
-  if (browserView === null || enabled === null) return null;
+  if (browserView === null || hostBinding === null || enabled === null) {
+    return null;
+  }
+  return <BrowserSavedLoginsRows saveLogins={saveLogins} enabled={enabled} />;
+}
+
+/**
+ * The group's rows, in their own component so the host query lives BELOW the
+ * runtime gate: the gate has to govern what renders, since a hook cannot be
+ * called conditionally.
+ */
+function BrowserSavedLoginsRows(props: {
+  readonly saveLogins: BrowserSaveLoginsController;
+  readonly enabled: boolean;
+}): ReactNode {
+  // Unconditionally enabled here: this only mounts once the machine has
+  // answered the pref, which is what the gate stood for.
+  const sites = useBrowserSavedLoginSitesQuery({ enabled: true });
   return (
     <SettingsGroup
       title="Saved logins"
@@ -271,7 +295,10 @@ function BrowserSavedLoginsGroup(): ReactNode {
       dataTestId="settings-saved-logins"
       fill={false}
     >
-      <SavedLoginsToggleRow saveLogins={saveLogins} enabled={enabled} />
+      <SavedLoginsToggleRow
+        saveLogins={props.saveLogins}
+        enabled={props.enabled}
+      />
       <ForgetAllLoginsRow />
       <SavedLoginSitesRow
         data={sites.data ?? null}
@@ -334,7 +361,9 @@ function SavedLoginsToggleRow(props: {
 /**
  * The destructive one, moved here from the tile shield (ticket 08's temporary
  * home). It speaks for every host the user has a live browser stream to, which
- * is what "all" means and why it is not tile-scoped.
+ * is what "all" means and why it is not tile-scoped - and when there is no such
+ * stream the frame reaches nobody, so the confirm stays open instead of closing
+ * on work that never happened.
  */
 function ForgetAllLoginsRow(): ReactNode {
   const [confirming, setConfirming] = useState(false);
@@ -366,7 +395,10 @@ function ForgetAllLoginsRow(): ReactNode {
         actionLabel="Forget logins"
         isPending={false}
         onConfirm={() => {
-          forgetAllBrowserLogins();
+          // Same refusal as the per-site Clear: with no live browser stream
+          // nothing went out, so the dialog stays where it is rather than
+          // closing on a promise the app did not keep.
+          if (!forgetAllBrowserLogins()) return;
           setConfirming(false);
         }}
       />
@@ -394,6 +426,21 @@ function SavedLoginSitesRow(props: {
   const [cleared, setCleared] = useState<readonly string[]>([]);
   const data = props.data;
   if (data === null) return null;
+  const sites = data.kind === "sealed" ? [] : data.sites;
+  // The optimism releases itself. A domain is hidden only while the LATEST
+  // answer still names it: once the merge lands and the row leaves the
+  // response, it leaves this list too - so signing back into that site while
+  // Settings is open shows it again instead of hiding it for the rest of the
+  // session.
+  //
+  // Retired from state during render (React's documented way to sync state off
+  // a changing external value) rather than in an Effect, because the entry has
+  // to be gone BEFORE a later response can re-introduce that domain - deriving
+  // alone would hide the re-login too.
+  const activeCleared = cleared.filter((domain) =>
+    sites.some((site) => site.domain === domain),
+  );
+  if (activeCleared.length !== cleared.length) setCleared(activeCleared);
   return (
     <SettingsRow
       label="Sites with saved logins"
@@ -406,12 +453,14 @@ function SavedLoginSitesRow(props: {
             </p>
           ) : (
             <SavedLoginSiteList
-              sites={data.sites.filter(
-                (site) => !cleared.includes(site.domain),
+              sites={sites.filter(
+                (site) => !activeCleared.includes(site.domain),
               )}
               onClear={(domain) => {
                 if (!clearSavedLoginSite(domain)) return;
-                setCleared((current) => [...current, domain]);
+                // The pruned list, not the raw one: a domain the host has
+                // since dropped never comes back into it.
+                setCleared([...activeCleared, domain]);
                 props.onCleared();
               }}
             />

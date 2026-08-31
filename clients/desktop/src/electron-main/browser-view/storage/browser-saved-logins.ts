@@ -1,7 +1,7 @@
 import { app, safeStorage } from "electron";
 import { join } from "node:path";
 import { z } from "zod";
-import { log } from "../../app/logger";
+import { describeLogError, log } from "../../app/logger";
 import {
   createJsonFileStore,
   type StrictJsonFileStore,
@@ -85,8 +85,10 @@ export async function setBrowserSavedLoginsEnabled(
 export function wrapStoreKey(rawKeyBase64: string): string | null {
   try {
     return safeStorage.encryptString(rawKeyBase64).toString("base64");
-  } catch (err) {
-    log.warn("[browser-view] store key wrap failed", { err });
+  } catch (error) {
+    log.warn("[browser-view] store key wrap failed", {
+      error: describeLogError(error),
+    });
     return null;
   }
 }
@@ -95,8 +97,10 @@ export function wrapStoreKey(rawKeyBase64: string): string | null {
 export function unwrapStoreKey(wrappedKeyBase64: string): string | null {
   try {
     return safeStorage.decryptString(Buffer.from(wrappedKeyBase64, "base64"));
-  } catch (err) {
-    log.warn("[browser-view] store key unwrap failed", { err });
+  } catch (error) {
+    log.warn("[browser-view] store key unwrap failed", {
+      error: describeLogError(error),
+    });
     return null;
   }
 }

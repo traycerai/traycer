@@ -54,7 +54,11 @@ describe("useBrowserSaveLogins", () => {
 
   it("leaves the last known value when a set rejects", async () => {
     const bridge = new FakeBrowserViewBridge({ saveLogins: true });
-    bridge.setNextSetSaveLoginsResult(Promise.reject(new Error("denied")));
+    // Rejected at CALL time, not here: a promise rejected during arrange goes
+    // unhandled through the render and the waitFor below it.
+    bridge.setNextSetSaveLoginsResult(() =>
+      Promise.reject(new Error("denied")),
+    );
     render(<Probe bridge={bridge} />);
     await waitFor(() => {
       expect(screen.getByTestId("enabled").textContent).toBe("true");

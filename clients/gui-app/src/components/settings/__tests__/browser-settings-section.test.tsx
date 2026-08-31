@@ -20,11 +20,19 @@ const sites = vi.hoisted(
   (): { current: BrowserSavedLoginSitesResponse | null } => ({ current: null }),
 );
 const refetch = vi.hoisted(() => vi.fn());
-const forgetAllBrowserLogins = vi.hoisted(() => vi.fn());
+/** Whatever a host runtime IS here - the group only asks whether one exists. */
+const hostBinding = vi.hoisted((): { current: object | null } => ({
+  current: {},
+}));
+const forgetAllBrowserLogins = vi.hoisted(() => vi.fn(() => true));
 const clearSavedLoginSite = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({ browserView: {} }),
+}));
+
+vi.mock("@/lib/host", () => ({
+  useHostBinding: () => hostBinding.current,
 }));
 
 vi.mock("@/lib/browser-view/use-browser-save-logins", () => ({
@@ -70,6 +78,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     forgetAllBrowserLogins.mockClear();
     clearSavedLoginSite.mockClear();
     refetch.mockClear();
+    hostBinding.current = {};
   });
 
   it("reflects the machine's decision", () => {
@@ -128,6 +137,41 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
+    // Taken by a live stream, so the dialog is done.
+    expect(screen.queryByText("Forget all browser logins?")).toBeNull();
+  });
+
+  it("keeps the confirm open when no live stream took the forget", () => {
+    renderSection(controller({}), null);
+    forgetAllBrowserLogins.mockReturnValueOnce(false);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Forget all browser logins…" }),
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // Nothing went out, so nothing may look done: closing here would report a
+    // forget the app never performed. Same refusal as the per-row Clear.
+    expect(forgetAllBrowserLogins).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Forget all browser logins?")).not.toBeNull();
+  });
+
+  it("renders nothing at all without a host runtime", () => {
+    hostBinding.current = null;
+    renderSection(controller({ enabled: true }), {
+      kind: "sites",
+      sites: [{ domain: "example.com", lastSeen: Date.now() }],
+    });
+
+    // The whole group goes, not just the list: with no host to answer, both
+    // destructive actions would reach nobody.
+    expect(screen.queryByText("Saved logins")).toBeNull();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Forget all browser logins…" }),
+    ).toBeNull();
+    // The rest of the Browser section is unaffected.
+    expect(screen.getByText("Web link default")).not.toBeNull();
   });
 
   it("lists site names and last-seen times, and never a value", () => {
@@ -159,6 +203,45 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     renderSection(controller({}), { kind: "sites", sites: [] });
 
     expect(screen.getByText("No saved logins yet.")).not.toBeNull();
+  });
+
+  it("holds the cleared row through the pre-merge window, then releases it", () => {
+    const bothSites: BrowserSavedLoginSitesResponse = {
+      kind: "sites",
+      sites: [
+        { domain: "example.com", lastSeen: Date.now() },
+        { domain: "example.org", lastSeen: Date.now() },
+      ],
+    };
+    saveLogins.current = controller({});
+    sites.current = bothSites;
+    const view = render(<BrowserSettingsSection />);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Clear saved logins for example.com",
+      }),
+    );
+    expect(screen.queryByText("example.com")).toBeNull();
+
+    // The host merges asynchronously, so the answer behind the click can still
+    // name the site. The row stays hidden - that is what the optimism is for.
+    view.rerender(<BrowserSettingsSection />);
+    expect(screen.queryByText("example.com")).toBeNull();
+
+    // The merge lands and the host drops it.
+    sites.current = {
+      kind: "sites",
+      sites: [{ domain: "example.org", lastSeen: Date.now() }],
+    };
+    view.rerender(<BrowserSettingsSection />);
+    expect(screen.queryByText("example.com")).toBeNull();
+
+    // The user signs into that site again. The row has to come back: before
+    // this it stayed hidden for the rest of the session.
+    sites.current = bothSites;
+    view.rerender(<BrowserSettingsSection />);
+    expect(screen.getByText("example.com")).not.toBeNull();
   });
 
   it("sends clearSite for one row and refetches the list", () => {

@@ -351,7 +351,9 @@ export interface BrowserViewBridge {
   unwrapStoreKey(wrappedKey: string): Promise<BrowserStoreKeyUnwrapResult>;
   /**
    * "Forget all browser logins" (spec §6.5), this machine's half: clear the
-   * durable `primary` partition, drop the remembered localStorage origins, and
+   * `primary` jars - the durable partition always, and the ephemeral one the
+   * live guests are on when saving is off, which otherwise keeps them signed
+   * in until the app restarts - drop the remembered localStorage origins, and
    * recreate the open primary tiles at their URLs on the empty jar.
    *
    * Called only in answer to the host's `primaryProfileForgotten`, so the key
@@ -374,16 +376,18 @@ export interface BrowserViewBridge {
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
   /**
    * "Clear cookies for this site" (spec §6.5): removes the tile's registrable
-   * domain from the shared `primary` jar - cookies and the localStorage of
+   * domain from the shared `primary` jars - cookies and the localStorage of
    * every remembered origin under it - and reports the emptied slice to the
-   * host as one delta, which is what turns it into tombstones. A tile with no
-   * site to name - a private session, or a non-http(s) page - is a no-op.
+   * host as one delta, which is what turns it into tombstones. The durable jar
+   * always, and the ephemeral one as well when saving is off, since it is the
+   * one the live tiles are on then. A tile with no site to name - a private
+   * session, or a non-http(s) page - is a no-op.
    */
   clearSite(input: BrowserViewTileKey): Promise<void>;
   /**
    * The receiving half of the same action: the host says one site was cleared
-   * somewhere else for this user (`primaryProfileEvict`), so this partition
-   * drops it too. Emits **no** delta - the store already recorded the
+   * somewhere else for this user (`primaryProfileEvict`), so this machine's
+   * `primary` jars drop it too. Emits **no** delta - the store already recorded the
    * tombstones, and an echo would only re-assert what it just decided.
    */
   evictSite(domain: string): Promise<void>;

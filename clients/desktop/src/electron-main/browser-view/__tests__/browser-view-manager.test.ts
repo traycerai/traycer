@@ -879,7 +879,7 @@ async function attachNativeTab(
 }
 
 describe("BrowserViewManager primary profile observation", () => {
-  it("observes a committed main-frame URL once", async () => {
+  it("observes each committed main-frame URL, and nothing a mere load emits", async () => {
     const harness = createHarness();
     const { view } = await attachNativeTab(
       harness,
@@ -888,18 +888,24 @@ describe("BrowserViewManager primary profile observation", () => {
       "https://first.example/",
     );
 
+    // `did-navigate` is the event the entry factory actually registers for a
+    // committed main-frame navigation - the only path into the observation
+    // plane.
     view.webContents.emit(
-      "did-frame-navigate",
+      "did-navigate",
       {},
-      "https://duplicate.example/",
+      "https://second.example/",
       200,
       "OK",
-      true,
     );
+    await Promise.resolve();
+    // A load finishing is not a commit and adds nothing.
     view.webContents.emit("did-finish-load");
+    await Promise.resolve();
 
     expect(harness.primaryProfileObservedUrls).toEqual([
       "https://first.example/",
+      "https://second.example/",
     ]);
   });
 });
@@ -936,14 +942,17 @@ describe("BrowserViewManager isolated sessions", () => {
 
     const view = harness.views[0];
     if (view === undefined) throw new Error("expected native guest");
+    // A real committed navigation, through the event the factory registers -
+    // so what this pins is the profile filter, not a listener that was never
+    // there.
     view.webContents.emit(
-      "did-frame-navigate",
+      "did-navigate",
       {},
       "https://private.example/",
       200,
       "OK",
-      true,
     );
+    await Promise.resolve();
     // The private jar is invisible to the primary-profile capture plane.
     expect(harness.primaryProfileObservedUrls).toEqual([]);
 

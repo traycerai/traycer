@@ -6,8 +6,10 @@ import {
   BrowserCookieChangeObserver,
 } from "../browser-cookie-change-observer";
 import {
+  BrowserPrimaryProfileSnapshotCoordinator,
   browserStorageCookies,
   clearBrowserSite,
+  type BrowserPrimaryProfileOriginSnapshot,
   type BrowserSiteClearSession,
 } from "../browser-storage-state";
 import {
@@ -95,6 +97,16 @@ const SITE_JAR: readonly Cookie[] = [
 
 const noOrigins = (): readonly string[] => [];
 
+/**
+ * A cookie this shell cannot represent, and not a contrived one: the domain
+ * check rejects any host the URL parser rewrites, and an IDN domain punycodes
+ * there. Chromium will hand one over for any site the user visits.
+ */
+const IDN_COOKIE = makeCookie({
+  name: "exämple",
+  domain: "exämple.example.com",
+});
+
 describe("clearBrowserSite", () => {
   it("removes the site's own cookies and leaves every other site alone", async () => {
     const session = new FakeClearSiteSession(SITE_JAR);
@@ -123,12 +135,107 @@ describe("clearBrowserSite", () => {
     ]);
   });
 
+  it("clears the rest of the site around a cookie it cannot represent, and still flushes", async () => {
+    const session = new FakeClearSiteSession([...SITE_JAR, IDN_COOKIE]);
+
+    await clearBrowserSite("example.com", session, () => [
+      "https://app.example.com",
+    ]);
+
+    // The unrepresentable cookie has no URL to remove it by, so it stays - but
+    // it does not abort the clear: every other cookie of the site is gone, the
+    // localStorage pass still ran, and the removals that were issued are
+    // durable. Before this, one such cookie left the site half signed out with
+    // its removals unflushed.
+    expect(session.names()).toEqual(["exämple", "lookalike", "other-site"]);
+    expect(session.clearedStorage).toEqual([
+      { origin: "https://app.example.com", storages: ["localstorage"] },
+    ]);
+    expect(session.flushes).toBe(1);
+  });
+
   it("flushes the jar, so a quit right after the clear cannot resurrect it", async () => {
     const session = new FakeClearSiteSession(SITE_JAR);
 
     await clearBrowserSite("example.com", session, noOrigins);
 
     expect(session.flushes).toBe(1);
+  });
+});
+
+/**
+ * The coordinator holding one origin of the cleared site and one of another
+ * site in EACH tier: the live tier this run observed, and the retained tier
+ * carried over from the host's seed. A fixture with a single tier could not
+ * tell a half-fix from a fix, since a capture merges both.
+ */
+async function coordinatorWithBothTiers(
+  captured: Array<readonly BrowserPrimaryProfileOriginSnapshot[]>,
+): Promise<BrowserPrimaryProfileSnapshotCoordinator> {
+  const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
+    (origins) => {
+      captured.push(origins);
+      return Promise.resolve({
+        status: "captured",
+        storageState: { cookies: [], origins: [...origins] },
+        reason: null,
+      });
+    },
+    (origin) =>
+      Promise.resolve({
+        origin,
+        localStorage: [{ name: "token", value: origin }],
+      }),
+  );
+  coordinator.retainSeededOrigins({
+    cookies: [],
+    origins: [
+      {
+        origin: "https://seeded.example.com",
+        localStorage: [{ name: "token", value: "cleared-site" }],
+      },
+      {
+        origin: "https://seeded.example.org",
+        localStorage: [{ name: "token", value: "other-site" }],
+      },
+    ],
+  });
+  const webContents = {
+    getURL: () => "https://unused.example/",
+    executeJavaScript: () => Promise.resolve([]),
+  };
+  coordinator.observe("https://app.example.com/page", webContents);
+  coordinator.observe("https://app.example.org/page", webContents);
+  // The only way to await the observations; the capture it takes on the way is
+  // not the one under test.
+  await coordinator.capture();
+  captured.length = 0;
+  return coordinator;
+}
+
+describe("clearBrowserSite retained origins", () => {
+  it("forgets exactly the origins the clear reached, in both retained tiers", async () => {
+    const captured: Array<readonly BrowserPrimaryProfileOriginSnapshot[]> = [];
+    const coordinator = await coordinatorWithBothTiers(captured);
+    const session = new FakeClearSiteSession(SITE_JAR);
+
+    await clearBrowserSite("example.com", session, () =>
+      coordinator.rememberedOrigins().map((origin) => origin.origin),
+    );
+    coordinator.forgetOriginsUnder("example.com");
+
+    // What Chromium was told to clear - one origin from each tier.
+    expect(session.clearedStorage.map((options) => options.origin)).toEqual([
+      "https://app.example.com",
+      "https://seeded.example.com",
+    ]);
+    // And exactly that is what the coordinator forgot: the next capture carries
+    // the other site alone, so it neither re-uploads the cleared localStorage
+    // to the host nor re-seeds a recreated tile with it.
+    await coordinator.capture();
+    expect(
+      captured.map((origins) => origins.map((entry) => entry.origin)),
+    ).toEqual([["https://app.example.org", "https://seeded.example.org"]]);
   });
 });
 

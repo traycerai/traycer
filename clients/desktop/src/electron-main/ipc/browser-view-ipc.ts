@@ -3,6 +3,7 @@ import {
   WebContentsView,
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
+  type Session,
 } from "electron";
 import {
   RunnerHostEvent,
@@ -86,6 +87,45 @@ export function registerBrowserViewIpc(
   // visited are the only ones a site clear can name.
   const rememberedClearSiteOrigins = (): readonly string[] =>
     primaryProfileSnapshots.rememberedOrigins().map((origin) => origin.origin);
+  /**
+   * Every jar a `primary` login can be sitting in right now, durable one first.
+   *
+   * The durable `persist:` jar is always in the list, for the same reason
+   * "forget all" used to open it explicitly: it survives the saved-logins pref,
+   * so a clear taken while saving is OFF would leave the login on disk and
+   * turning the pref back on would restore what the user deleted. When saving
+   * is off the live guests are on the EPHEMERAL jar instead, which is not
+   * `persist:` but does outlive the toggle for the whole process run - so
+   * leaving it out signs nobody out until the app restarts.
+   *
+   * Sessions are memoised per partition, so the two entries are the very same
+   * object whenever the pref leaves `primary` guests on the durable jar, and
+   * identity is what collapses the list back to one.
+   */
+  const primaryProfileJars = (): readonly Session[] => {
+    const durableSession = ensureBrowserViewSessionForPartition(
+      BROWSER_VIEW_PARTITION,
+    );
+    const activeSession = ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST);
+    return activeSession === durableSession
+      ? [durableSession]
+      : [durableSession, activeSession];
+  };
+  /**
+   * One site gone from every one of those jars, and from the localStorage this
+   * process remembers for it. The prune runs last: each clear reads the same
+   * remembered origins, and pruning first would starve the second one.
+   */
+  const clearBrowserSiteEverywhere = async (domain: string): Promise<void> => {
+    for (const browserSession of primaryProfileJars()) {
+      await clearBrowserSite(
+        domain,
+        browserSession,
+        rememberedClearSiteOrigins,
+      );
+    }
+    primaryProfileSnapshots.forgetOriginsUnder(domain);
+  };
   const manager = new BrowserViewManager({
     createView: createElectronBrowserView,
     getWindow: (windowId) =>
@@ -340,12 +380,12 @@ export function registerBrowserViewIpc(
   );
 
   // "Clear cookies for this site" (spec §6.5). The manager derives the site
-  // from the tile's own current URL; the jar is the one `primary` guests share
-  // right now, which is the only jar a tile menu may reach. A tile with no site
-  // to name - a private session, or a non-http(s) page - has nothing to clear.
+  // from the tile's own current URL; the jars are the shared `primary` ones,
+  // which are the only jars a tile menu may reach. A tile with no site to name
+  // - a private session, or a non-http(s) page - has nothing to clear.
   //
-  // No suppression here: the removals fire the jar's own change events, which
-  // coalesce into the single delta that tells the host the slice is empty.
+  // No suppression here: the removals fire the durable jar's own change events,
+  // which coalesce into the single delta that tells the host the slice is empty.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewClearSite,
     async (event, payload) => {
@@ -355,11 +395,7 @@ export function registerBrowserViewIpc(
         browserViewIpcPayload.tileKey.parse(payload),
       );
       if (domain === null) return;
-      await clearBrowserSite(
-        domain,
-        ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST),
-        rememberedClearSiteOrigins,
-      );
+      await clearBrowserSiteEverywhere(domain);
       log.info("[browser-view] cleared cookies for one site", { domain });
     },
   );
@@ -373,11 +409,7 @@ export function registerBrowserViewIpc(
     async (_event, payload) => {
       const domain = browserViewIpcPayload.evictDomain.parse(payload).domain;
       await suppressBrowserPrimaryProfileDelta(domain, () =>
-        clearBrowserSite(
-          domain,
-          ensureBrowserViewSession(PRIMARY_PROFILE_REQUEST),
-          rememberedClearSiteOrigins,
-        ),
+        clearBrowserSiteEverywhere(domain),
       );
       log.info("[browser-view] evicted one site on the host's request", {
         domain,
@@ -490,21 +522,22 @@ export function registerBrowserViewIpc(
   // re-seeded from an origin remembered pre-forget, and the tiles are recreated
   // last, at their current URLs.
   bridge.handleInvoke(RunnerHostInvoke.browserViewForgetLogins, async () => {
-    // Opened here, outside the suppression: the durable jar survives the pref,
-    // so it must be cleared even with saved logins off or no tile opened this
-    // run, and opening it is what installs the observer the suppression mutes.
-    const persistentSession = ensureBrowserViewSessionForPartition(
-      BROWSER_VIEW_PARTITION,
-    );
+    // Opened here, outside the suppression: the durable jar must be cleared
+    // even with saved logins off or no tile opened this run, and opening it is
+    // what installs the observer the suppression mutes.
+    const jars = primaryProfileJars();
     await suppressAllBrowserPrimaryProfileDeltas(async () => {
-      try {
-        await persistentSession.clearStorageData();
-      } catch (error) {
-        // The tiles still have to be recreated: they are sitting on a jar the
-        // host no longer holds a key for, and leaving them there is worse.
-        log.warn("[browser-view] persistent session clear failed", {
-          error: describeLogError(error),
-        });
+      for (const primarySession of jars) {
+        try {
+          await primarySession.clearStorageData();
+        } catch (error) {
+          // The tiles still have to be recreated: they are sitting on a jar the
+          // host no longer holds a key for, and leaving them there is worse.
+          // The other jar still gets its turn for the same reason.
+          log.warn("[browser-view] primary session clear failed", {
+            error: describeLogError(error),
+          });
+        }
       }
       primaryProfileSnapshots.reset();
       await manager.recreateNativeTabsOnCurrentPartition();
