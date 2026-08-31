@@ -1000,6 +1000,14 @@ export class AuthService {
         this.applySignedIn(stored.token, outcome.user, undefined);
         return;
       }
+      // Same user, but not necessarily the same PERSON-FACING identity: the
+      // provisional apply painted the CACHED snapshot, and a name, avatar or
+      // team membership changed since the last launch is only in the verdict.
+      // Without this the header, the mobile drawer, the home hero and the
+      // share picker's team list all stayed one launch behind, and nothing
+      // else on this path ever corrected them - `commitSubscriptionStatus`
+      // above writes the entitlement alone.
+      this.reprojectSameUserIdentity(outcome.user);
       void writeProvisionalSessionSnapshot(
         this.runnerHost.secureStorage,
         outcome.user,
@@ -3768,6 +3776,60 @@ export class AuthService {
     // `signIn` settled any loop that was nursing one). Re-arm; the first tick
     // settles itself when the file turns out to be empty.
     this.scheduleSessionRecovery("interactive-failure");
+  }
+
+  /**
+   * Re-projects a same-user verdict's person-facing identity into the auth
+   * store, and ONLY the store.
+   *
+   * Deliberately not `applySignedIn` / `applySessionProjection`. Those
+   * re-broadcast the session, restart the refresh scheduler, and - the part
+   * that is load-bearing rather than merely wasteful - would put the identity
+   * back through the context provider, where "same user => same context
+   * object" is an invariant the remote-session cache keys its auth epoch on.
+   * A fresh context here retires that epoch under every live session while its
+   * holders keep using it. So the profile, the context METADATA (a plain
+   * projected value, not the `RequestContext`) and the shareable teams are
+   * written straight to the store, and nothing else moves.
+   *
+   * GATED on a real difference, which is what keeps the ordinary boot silent:
+   * `setSignedIn` fires `Analytics.identify` (`auth-store.ts`), so an
+   * unconditional call would emit one identify per launch for an identity that
+   * did not change. With the gate it fires only when the account's own details
+   * actually moved.
+   *
+   * The comparison is shallow by construction - `AuthProfile` and
+   * `AuthContextMetadata` are flat, and a team is compared on the three fields
+   * `projectShareableTeams` emits - so it can be read against those types
+   * rather than trusted.
+   */
+  private reprojectSameUserIdentity(user: AuthenticatedUser): void {
+    const profile = this.profileFromUser(user);
+    const contextMetadata = this.contextMetadataFromUser(user);
+    const shareableTeams = projectShareableTeams(user);
+    const current = useAuthStore.getState();
+    const unchanged =
+      current.profile !== null &&
+      current.contextMetadata !== null &&
+      current.profile.userId === profile.userId &&
+      current.profile.userName === profile.userName &&
+      current.profile.email === profile.email &&
+      current.profile.avatarUrl === profile.avatarUrl &&
+      current.contextMetadata.userId === contextMetadata.userId &&
+      current.contextMetadata.username === contextMetadata.username &&
+      current.shareableTeams.length === shareableTeams.length &&
+      current.shareableTeams.every((team, index) => {
+        const next = shareableTeams[index];
+        return (
+          team.teamId === next.teamId &&
+          team.slug === next.slug &&
+          team.avatarUrl === next.avatarUrl
+        );
+      });
+    if (unchanged) return;
+    useAuthStore
+      .getState()
+      .setSignedIn(profile, contextMetadata, shareableTeams);
   }
 
   private profileFromUser(user: AuthenticatedUser): AuthProfile {

@@ -192,6 +192,94 @@ function validSnapshotEnvelope(
   };
 }
 
+/**
+ * A local variant of {@link authenticatedUserRawPayload} that parameterizes
+ * `user.name`, for A5/A6 below - the same-user re-projection pins. A separate
+ * function rather than a new parameter on the shared helper, so every
+ * existing call site of `authenticatedUserRawPayload` / `authenticatedUser` /
+ * `okWithUser` keeps working unchanged.
+ */
+function authenticatedUserRawPayloadWithName(
+  userId: string,
+  subscriptionStatus: SubscriptionStatus,
+  name: string,
+): unknown {
+  return {
+    user: {
+      id: userId,
+      name,
+      providerId: `gh-${userId}`,
+      providerHandle: userId,
+      providerType: "GITHUB",
+      email: `${userId}@example.com`,
+      avatarUrl: null,
+      activatedAt: null,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      lastSeenAt: null,
+      privacyMode: false,
+      isLearningEnabled: true,
+    },
+    userSubscription: {
+      id: `sub-${userId}`,
+      userID: userId,
+      orgID: null,
+      teamID: null,
+      customerId: `cus-${userId}`,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      subscriptionExpiry: null,
+      trialEndsAt: null,
+      subscriptionStatus,
+      hasPaymentMethod: false,
+      isInTrial: false,
+      rechargeRateSeconds: 0,
+    },
+    teamSubscriptions: [],
+    payAsYouGoUsage: { allowPayAsYouGo: false },
+  };
+}
+
+function authenticatedUserWithName(
+  userId: string,
+  subscriptionStatus: SubscriptionStatus,
+  name: string,
+): AuthenticatedUser {
+  return authenticatedUserResponseRecordV100.schema.parse(
+    authenticatedUserRawPayloadWithName(userId, subscriptionStatus, name),
+  );
+}
+
+function okWithUserNamed(
+  userId: string,
+  subscriptionStatus: SubscriptionStatus,
+  name: string,
+): Promise<Response> {
+  return Promise.resolve(
+    new Response(
+      JSON.stringify(
+        authenticatedUserRawPayloadWithName(userId, subscriptionStatus, name),
+      ),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    ),
+  );
+}
+
+function validSnapshotEnvelopeWithName(
+  userId: string,
+  subscriptionStatus: SubscriptionStatus,
+  name: string,
+): SnapshotEnvelope {
+  return {
+    schemaVersion: authenticatedUserResponseRecordV100.schemaVersion,
+    userId,
+    user: authenticatedUserWithName(userId, subscriptionStatus, name),
+  };
+}
+
 function base64url(value: unknown): string {
   return btoa(JSON.stringify(value))
     .replace(/\+/g, "-")
@@ -304,6 +392,57 @@ describe("AuthService provisional boot session", () => {
       expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-2");
       expect(service.currentSubscriptionStatus()).toBe("PRO");
       expect(emissions).toBe(3);
+    });
+
+    it("A5: a same-user valid verdict re-projects a profile that changed since the cached snapshot", async () => {
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(
+        host,
+        validSnapshotEnvelopeWithName("user-1", "FREE", "Old Name"),
+      );
+      const deferred = createDeferredResponse();
+      restoreFetch();
+      restoreFetch = installFetch(() => deferred.promise);
+
+      await service.start();
+      // The provisional paint shows the CACHED (snapshot) name.
+      expect(useAuthStore.getState().profile?.userName).toBe("Old Name");
+
+      deferred.resolve(await okWithUserNamed("user-1", "FREE", "New Name"));
+      await flush();
+
+      // THE REDDENING ONE - today the same-user `valid` branch only commits
+      // the subscription and re-writes the snapshot; it never re-projects
+      // profile/context metadata/teams, so this stays "Old Name".
+      expect(useAuthStore.getState().profile?.userName).toBe("New Name");
+    });
+
+    it("A6: an identical same-user verdict leaves the store object untouched", async () => {
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(
+        host,
+        validSnapshotEnvelopeWithName("user-1", "FREE", "Stable Name"),
+      );
+      const deferred = createDeferredResponse();
+      restoreFetch();
+      restoreFetch = installFetch(() => deferred.promise);
+
+      await service.start();
+      const before = useAuthStore.getState().profile;
+      const teamsBefore = useAuthStore.getState().shareableTeams;
+
+      // Same user, same name, same subscription tier - nothing differs from
+      // what the provisional paint already committed.
+      deferred.resolve(await okWithUserNamed("user-1", "FREE", "Stable Name"));
+      await flush();
+
+      // `setSignedIn` always builds a fresh `safeProfile` object, so object
+      // identity is the in-band observable for "the reducer did not run" -
+      // no spy needed.
+      expect(useAuthStore.getState().profile).toBe(before);
+      expect(useAuthStore.getState().shareableTeams).toBe(teamsBefore);
     });
   });
 
