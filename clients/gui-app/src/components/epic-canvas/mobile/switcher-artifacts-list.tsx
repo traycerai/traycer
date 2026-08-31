@@ -8,7 +8,10 @@ import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row
 import { SwitcherNewArtifactMenu } from "@/components/epic-canvas/mobile/switcher-create-actions";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
 import { useNarrowedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
-import { buildSwitcherTreeRows } from "@/components/epic-canvas/mobile/switcher-tree-rows";
+import {
+  buildSwitcherArtifactTree,
+  type SwitcherTreeNode,
+} from "@/components/epic-canvas/mobile/switcher-artifact-tree";
 import { SwitcherArtifactsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
 import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
 import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
@@ -70,12 +73,15 @@ interface SwitcherListProps {
 /**
  * Artifacts category: spec / ticket / story / review over the shared
  * `useEpicArtifactRecords()` projection (everything that is not a chat or
- * terminal-agent). Reuses the desktop status-dot helpers, and the desktop
- * indent step, so a nested artifact reads as nested here exactly as it does in
- * the sidebar and in the Agents category beside it - which mounts the desktop
- * chat tree outright. Rows carry indentation only: with no chevron column to
- * collapse against, this surface has nothing for the sidebar's indent-guide
- * rails to descend from.
+ * terminal-agent). Reuses the desktop status-dot helpers, the desktop indent
+ * step and the desktop tree's roles, so a nested artifact reads as nested here
+ * exactly as it does in the sidebar and in the Agents category beside it -
+ * which mounts the desktop chat tree outright.
+ *
+ * What this surface does NOT take from the sidebar is collapsing. Every node is
+ * always drawn, so there is no chevron column - which is also why the sidebar's
+ * indent-guide rails are absent: `TreeGroupGuide` is positioned against the
+ * parent's chevron, and a rail here would descend from nothing.
  */
 export function SwitcherArtifactsList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
@@ -188,8 +194,11 @@ function SwitcherArtifactBrowseList(props: {
   readonly onClose: () => void;
 }) {
   const { artifacts, records, epicId, tabId, onClose } = props;
-  const rows = useMemo(() => buildSwitcherTreeRows(artifacts), [artifacts]);
-  if (rows.length === 0) {
+  const roots = useMemo(
+    () => buildSwitcherArtifactTree(artifacts),
+    [artifacts],
+  );
+  if (roots.length === 0) {
     return (
       <SwitcherArtifactsEmpty
         hasAnyArtifacts={props.hasAnyArtifacts}
@@ -198,19 +207,66 @@ function SwitcherArtifactBrowseList(props: {
     );
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-      {rows.map((row) => (
-        <SwitcherArtifactRow
-          key={row.record.id}
-          record={row.record}
-          depth={row.depth}
-          records={records}
-          epicId={epicId}
-          tabId={tabId}
-          onClose={onClose}
-        />
-      ))}
+    <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
+      {/* The desktop artifact tree's roles, for the same reason it carries
+          them: indentation is a sighted reader's only cue, and a screen
+          reader that is handed a flat run of buttons is told nothing at all
+          about what contains what. Level comes from the nesting itself
+          (`role="group"`), exactly as it does on the sidebar. */}
+      <ul role="tree" aria-label="Epic artifacts tree" className="space-y-0.5">
+        {roots.map((node) => (
+          <SwitcherArtifactNode
+            key={node.record.id}
+            node={node}
+            depth={0}
+            records={records}
+            epicId={epicId}
+            tabId={tabId}
+            onClose={onClose}
+          />
+        ))}
+      </ul>
     </div>
+  );
+}
+
+function SwitcherArtifactNode(props: {
+  readonly node: SwitcherTreeNode;
+  readonly depth: number;
+  readonly records: ReadonlyArray<EpicTreeRecord>;
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly onClose: () => void;
+}) {
+  const { node, depth, records, epicId, tabId, onClose } = props;
+  const isActive = useIsActiveEpicArtifact(tabId, node.record.id);
+  return (
+    <li role="treeitem" aria-selected={isActive}>
+      <SwitcherArtifactRow
+        record={node.record}
+        depth={depth}
+        active={isActive}
+        records={records}
+        epicId={epicId}
+        tabId={tabId}
+        onClose={onClose}
+      />
+      {node.children.length === 0 ? null : (
+        <ul role="group" className="mt-0.5 space-y-0.5">
+          {node.children.map((child) => (
+            <SwitcherArtifactNode
+              key={child.record.id}
+              node={child}
+              depth={depth + 1}
+              records={records}
+              epicId={epicId}
+              tabId={tabId}
+              onClose={onClose}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }
 
@@ -332,14 +388,14 @@ function SwitcherArtifactSearchBody(props: {
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-      {/* Hits stay flat at depth 0. They are a ranking, not a tree: indenting
-          one under another would claim a containment the host's ordering never
-          asserted, and the parent it looked nested under may not be a hit. */}
+      {/* Hits stay flat at depth 0, and carry no tree roles. They are a
+          ranking, not a tree: indenting one under another would claim a
+          containment the host's ordering never asserted, and the parent it
+          looked nested under may not even be a hit. */}
       {hitRecords.map((record) => (
-        <SwitcherArtifactRow
+        <SwitcherArtifactSearchRow
           key={record.id}
           record={record}
-          depth={0}
           records={records}
           epicId={epicId}
           tabId={tabId}
@@ -390,14 +446,14 @@ function SwitcherArtifactsEmpty(props: {
 function SwitcherArtifactRow(props: {
   readonly record: EpicTreeRecord;
   readonly depth: number;
+  readonly active: boolean;
   readonly records: ReadonlyArray<EpicTreeRecord>;
   readonly epicId: string;
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { record, depth, records, epicId, tabId, onClose } = props;
+  const { record, depth, active, records, epicId, tabId, onClose } = props;
   const activate = useSwitcherActivate(epicId, tabId, onClose);
-  const isActive = useIsActiveEpicArtifact(tabId, record.id);
 
   const onSelect = useCallback(() => {
     const type = record.type;
@@ -434,7 +490,7 @@ function SwitcherArtifactRow(props: {
         label={record.name}
         secondaryLabel={null}
         badge={null}
-        active={isActive}
+        active={active}
         onSelect={onSelect}
         selectTestId={`switcher-artifact-row-${record.id}`}
         actions={
@@ -450,6 +506,21 @@ function SwitcherArtifactRow(props: {
       />
     </div>
   );
+}
+
+/**
+ * A ranked hit. Same row, no tree membership: it reads its own active state
+ * because there is no enclosing `treeitem` to have read it already.
+ */
+function SwitcherArtifactSearchRow(props: {
+  readonly record: EpicTreeRecord;
+  readonly records: ReadonlyArray<EpicTreeRecord>;
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly onClose: () => void;
+}) {
+  const isActive = useIsActiveEpicArtifact(props.tabId, props.record.id);
+  return <SwitcherArtifactRow {...props} depth={0} active={isActive} />;
 }
 
 function SwitcherArtifactIcon(props: {

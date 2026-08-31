@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildSwitcherTreeRows } from "@/components/epic-canvas/mobile/switcher-tree-rows";
+import {
+  buildSwitcherArtifactTree,
+  type SwitcherTreeNode,
+} from "@/components/epic-canvas/mobile/switcher-artifact-tree";
 import type { EpicTreeRecord } from "@/lib/epic-selectors";
 
 function record(id: string, parentId: string | null): EpicTreeRecord {
@@ -13,16 +16,29 @@ function record(id: string, parentId: string | null): EpicTreeRecord {
   };
 }
 
+/**
+ * The nested result flattened to `[id, depth]` in render order. Depth is
+ * counted by this walk rather than read off the value under test, so a builder
+ * that nested wrongly cannot report itself as correct.
+ */
 function shape(
   records: ReadonlyArray<EpicTreeRecord>,
 ): ReadonlyArray<readonly [string, number]> {
-  return buildSwitcherTreeRows(records).map((row) => [
-    row.record.id,
-    row.depth,
-  ]);
+  const out: Array<readonly [string, number]> = [];
+  const walk = (
+    nodes: ReadonlyArray<SwitcherTreeNode>,
+    depth: number,
+  ): void => {
+    for (const node of nodes) {
+      out.push([node.record.id, depth]);
+      walk(node.children, depth + 1);
+    }
+  };
+  walk(buildSwitcherArtifactTree(records), 0);
+  return out;
 }
 
-describe("buildSwitcherTreeRows", () => {
+describe("buildSwitcherArtifactTree", () => {
   it("groups children under their parent at increasing depth", () => {
     expect(
       shape([
@@ -72,11 +88,13 @@ describe("buildSwitcherTreeRows", () => {
   });
 
   it("emits records that no root reaches rather than dropping them", () => {
-    // A parent cycle: neither record descends from a root, so the walk never
-    // reaches either. Both are still listed, un-indented.
+    // A parent cycle: neither record descends from a root, so the root walk
+    // reaches neither. The first is adopted as a root afterwards and the cycle
+    // breaks at it, so both are listed - the position is arbitrary, the
+    // presence is not.
     expect(shape([record("x", "y"), record("y", "x")])).toEqual([
       ["x", 0],
-      ["y", 0],
+      ["y", 1],
     ]);
   });
 
@@ -92,12 +110,12 @@ describe("buildSwitcherTreeRows", () => {
       record("loop-b", "loop-a"),
       record("orphan", "gone"),
     ];
-    const rows = buildSwitcherTreeRows(records);
-    expect(rows).toHaveLength(records.length);
-    expect(new Set(rows.map((row) => row.record.id)).size).toBe(records.length);
+    const flattened = shape(records);
+    expect(flattened).toHaveLength(records.length);
+    expect(new Set(flattened.map(([id]) => id)).size).toBe(records.length);
   });
 
   it("returns nothing for an empty slice", () => {
-    expect(buildSwitcherTreeRows([])).toEqual([]);
+    expect(buildSwitcherArtifactTree([])).toEqual([]);
   });
 });

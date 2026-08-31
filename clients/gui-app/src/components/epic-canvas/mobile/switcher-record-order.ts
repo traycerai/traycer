@@ -48,7 +48,7 @@ export function useOrderedSwitcherRecords(
  * sidebar's tree expands its matches because a row there is unreachable until
  * every ancestor above it is drawn and expanded; nothing on this surface is
  * reachable only through a parent. The Artifacts category draws nesting
- * (`buildSwitcherTreeRows`) but derives each depth from the records that
+ * (`buildSwitcherArtifactTree`) but derives each depth from the records that
  * SURVIVED this narrowing, so a match whose parent it removed is promoted to a
  * root rather than hidden under one.
  */

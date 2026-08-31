@@ -412,6 +412,67 @@ describe("<SwitcherArtifactsList />", () => {
     ]);
   });
 
+  it("exposes the nesting to assistive technology, not just to the eye", () => {
+    // Indentation is a sighted cue only. Without the tree roles a screen
+    // reader is handed a flat run of buttons and told nothing about what
+    // contains what - so the structure is asserted through the roles the
+    // desktop artifact tree also carries, with level coming from the nesting.
+    holder.records = [
+      artifactFixture("st-1", null, "Story", "story"),
+      artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
+      artifactFixture("sp-3", "tk-2", "Spec", "spec"),
+    ];
+    holder.activeId = "tk-2";
+    render(<SwitcherArtifactsList {...PROPS} />);
+
+    const tree = screen.getByRole("tree", { name: "Epic artifacts tree" });
+    const items = screen.getAllByRole("treeitem");
+    expect(items).toHaveLength(3);
+    // One root under the tree; the deeper two each reached through a group.
+    expect(tree.querySelectorAll(':scope > [role="treeitem"]')).toHaveLength(1);
+    expect(
+      items[0].querySelector(':scope > [role="group"] > [role="treeitem"]'),
+    ).toBe(items[1]);
+    expect(
+      items[1].querySelector(':scope > [role="group"] > [role="treeitem"]'),
+    ).toBe(items[2]);
+    // The open tile is the selected item, and only it.
+    expect(items.map((i) => i.getAttribute("aria-selected"))).toEqual([
+      "false",
+      "true",
+      "false",
+    ]);
+  });
+
+  it("gives ranked search hits no tree roles", () => {
+    holder.records = [
+      artifactFixture("st-1", null, "Story", "story"),
+      artifactFixture("tk-2", "st-1", "Ticket", "ticket"),
+    ];
+    holder.search = {
+      ...INACTIVE_SEARCH,
+      searchActive: true,
+      results: [
+        {
+          artifactId: "tk-2",
+          kind: "ticket",
+          title: "Ticket",
+          status: null,
+          relativePath: "tk-2.md",
+          breadcrumb: [],
+          sources: ["title"],
+          score: 1,
+          snippets: [],
+        },
+      ],
+      response: { results: [], outcome: "ready", truncated: false },
+    };
+    render(<SwitcherArtifactsList {...PROPS} />);
+    expect(screen.queryByRole("tree")).toBeNull();
+    expect(screen.queryAllByRole("treeitem")).toHaveLength(0);
+    expect(screen.getByTestId("switcher-artifact-row-tk-2")).toBeDefined();
+  });
+
   it("lists an artifact whose parent this category excludes as a root", () => {
     // An artifact parented to a chat. The chat is not an artifact row, so
     // there is nothing on screen to indent under - and hiding the ticket to
