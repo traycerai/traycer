@@ -181,9 +181,14 @@ export type AnalyticsSessionAgeBucket =
  * 4 GB old-space ceiling with room to still report before an OOM. */
 export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
 
+/** Every act id either tour can show, desktop and mobile alike. Mirrors
+ * `OnboardingActId` - a step the union does not carry is dropped by the
+ * allowed-values pinning below. */
 export type AnalyticsOnboardingStep =
   | "agent-guide"
   | "command-theme"
+  | "mobile-switcher"
+  | "mobile-tasks"
   | "navigation"
   | "providers"
   | "session-import"
@@ -1142,6 +1147,8 @@ const ANALYTICS_THEMES = new Set<string>([
 const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "agent-guide",
   "command-theme",
+  "mobile-switcher",
+  "mobile-tasks",
   "navigation",
   "providers",
   "session-import",
