@@ -19,6 +19,8 @@ export interface BrowserLinkSource {
 
 export interface BrowserLinkClickEvent {
   readonly altKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly metaKey: boolean;
 }
 
 /**
@@ -66,6 +68,11 @@ export function routeBrowserLink(
   const webUrl = parsed.href;
 
   if (args.source === null) {
+    void args.runnerHost.openExternalLink(webUrl);
+    return "external";
+  }
+
+  if (args.event?.metaKey === true || args.event?.ctrlKey === true) {
     void args.runnerHost.openExternalLink(webUrl);
     return "external";
   }

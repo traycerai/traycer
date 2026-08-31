@@ -18,7 +18,7 @@ describe("OnboardingDiorama", () => {
   it("renders the provider picker in the shared provider order", () => {
     render(
       <LazyMotion features={domAnimation}>
-        <OnboardingDiorama stage={3} agentGuide={agentGuide} />
+        <OnboardingDiorama actId="providers" agentGuide={agentGuide} />
       </LazyMotion>,
     );
 
@@ -67,5 +67,15 @@ describe("OnboardingDiorama", () => {
           return longestMatch(text);
         }),
     ).toEqual(expectedNames);
+  });
+
+  it("renders no mini-app for the act whose stage is the real wizard", () => {
+    const { container } = render(
+      <LazyMotion features={domAnimation}>
+        <OnboardingDiorama actId="session-import" agentGuide={agentGuide} />
+      </LazyMotion>,
+    );
+
+    expect(container.innerHTML).toBe("");
   });
 });

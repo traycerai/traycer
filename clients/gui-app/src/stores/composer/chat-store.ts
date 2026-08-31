@@ -426,6 +426,17 @@ export type MessageSegment =
     }
   | {
       id: string;
+      kind: "imported-chat-marker";
+      /**
+       * Synthesized in `rendered-messages` from the chat's `chat.imported`
+       * event and never persisted - the event itself is the record.
+       */
+      sourceProvider: GuiHarnessId;
+      importedAt: number;
+      sourceCwd: string;
+    }
+  | {
+      id: string;
       kind: "setup-card";
       /**
        * Consolidated worktree-setup view-model (T2 deriver output). The segment
