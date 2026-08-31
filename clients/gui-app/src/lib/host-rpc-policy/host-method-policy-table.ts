@@ -1248,6 +1248,24 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Automatic-cleanup policy + history. The two reads are plain latest-wins
+  // panel reads. Writing the policy is `fifo`: it persists a setting whose
+  // revision is the token queued deletions are validated against, so two
+  // in-flight writes must not be reordered - and the host refuses a stale
+  // `expectedRevision` outright rather than letting the later write win.
+  //
+  // No polling on any of them. A cleanup pass runs about once a day and emits
+  // a notification when it finds anything, so a background poll would spend a
+  // request every interval to learn nothing - the panel refetches on mount and
+  // after a policy write, which is when the answer can actually differ.
+  "worktree.getAutoCleanupPolicy": { ...LATEST_SCHEDULING, poll: null },
+  "worktree.setAutoCleanupPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "worktree.listAutoCleanupRuns": { ...LATEST_SCHEDULING, poll: null },
+  "worktree.getAutoCleanupRun": { ...LATEST_SCHEDULING, poll: null },
   "worktree.getBinding": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("worktree.getBinding", {

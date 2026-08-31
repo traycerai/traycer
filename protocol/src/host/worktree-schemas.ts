@@ -1413,6 +1413,33 @@ export type WorktreeListAllForHostResponseV16 = z.infer<
 >;
 
 /**
+ * `worktree.listAllForHost` v1.7 - a SEMANTIC minor. Request and response
+ * shapes are byte-identical to v1.6 (aliased, not re-declared, so the two can
+ * never drift): what the minor negotiates is what `lastActivityAt` MEANS.
+ *
+ * On v1.7 it is the authoritative activity timestamp
+ *   `max(worktree birthtime, git HEAD reflog, durable worktree activity)`,
+ * the same formula automatic cleanup applies its inactivity cutoff to. Through
+ * v1.6 it was `max(git HEAD reflog, binding-row updatedAt)` - and a binding
+ * row's `updatedAt` is a bookkeeping touch, not evidence anyone worked in the
+ * worktree, which is why it is not an input here.
+ *
+ * The minor exists because Settings and cleanup history must not present two
+ * different inactivity ages for the same worktree, and a client cannot tell the
+ * two formulas apart from the value alone. Older negotiated minors keep their
+ * released behavior; a client that needs the authoritative age must require
+ * v1.7 rather than assume it.
+ */
+export const worktreeListAllForHostRequestSchemaV17 =
+  worktreeListAllForHostRequestSchemaV16;
+export type WorktreeListAllForHostRequestV17 = WorktreeListAllForHostRequestV16;
+
+export const worktreeListAllForHostResponseSchemaV17 =
+  worktreeListAllForHostResponseSchemaV16;
+export type WorktreeListAllForHostResponseV17 =
+  WorktreeListAllForHostResponseV16;
+
+/**
  * Returns `null` when no row exists yet so a fresh terminal-agent
  * renders "not selected" without throwing.
  */

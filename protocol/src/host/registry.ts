@@ -646,6 +646,8 @@ import {
   worktreeListAllForHostResponseSchemaV15,
   worktreeListAllForHostRequestSchemaV16,
   worktreeListAllForHostResponseSchemaV16,
+  worktreeListAllForHostRequestSchemaV17,
+  worktreeListAllForHostResponseSchemaV17,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
   worktreeListBranchesRequestSchema,
@@ -678,6 +680,16 @@ import {
   worktreeGetBindingResponseSchema,
   LEGACY_HOST_RESOLVED_AT,
 } from "@traycer/protocol/host/worktree-schemas";
+import {
+  worktreeGetAutoCleanupPolicyRequestSchema,
+  worktreeGetAutoCleanupPolicyResponseSchema,
+  worktreeSetAutoCleanupPolicyRequestSchema,
+  worktreeSetAutoCleanupPolicyResponseSchema,
+  worktreeListAutoCleanupRunsRequestSchema,
+  worktreeListAutoCleanupRunsResponseSchema,
+  worktreeGetAutoCleanupRunRequestSchema,
+  worktreeGetAutoCleanupRunResponseSchema,
+} from "@traycer/protocol/host/worktree-auto-cleanup-schemas";
 import {
   snapshotsClearLocalSnapshotsRequestSchema,
   snapshotsClearLocalSnapshotsResponseSchema,
@@ -1403,6 +1415,84 @@ export const worktreeListAllForHostUpgradeV15ToV16 = defineUpgradePath<
       gitUnreadable: false,
     })),
   }),
+});
+
+// v1.7 changes no field. It negotiates the MEANING of `lastActivityAt`: on
+// this minor the host derives it as `max(birthtime, HEAD reflog, durable
+// worktree activity)` - the same authoritative age automatic cleanup applies
+// its inactivity cutoff to - instead of the v1.1 formula that mixed in a
+// binding row's `updatedAt`. Settings and cleanup history would otherwise show
+// two different inactivity ages for one worktree, and no field on the wire
+// distinguishes the two formulas. Shapes are aliased to v1.6, so the released
+// line and this one are the same frozen structure by construction.
+export const worktreeListAllForHostV17 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 7 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV17,
+  responseSchema: worktreeListAllForHostResponseSchemaV17,
+});
+
+// Identity on both legs: a v1.6 host's rows are already well-formed v1.7 rows.
+// Bridging cannot RECOMPUTE `lastActivityAt` - the older host never derived the
+// authoritative value and the client has none of the inputs - so a v1.6 peer's
+// rows keep the v1.6 meaning. That is the whole reason the semantics ride a
+// negotiated minor rather than a field a client could mistake for authoritative.
+export const worktreeListAllForHostUpgradeV16ToV17 = defineUpgradePath<
+  typeof worktreeListAllForHostV16,
+  typeof worktreeListAllForHostV17
+>({
+  from: worktreeListAllForHostV16.schemaVersion,
+  to: worktreeListAllForHostV17.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `worktree.getAutoCleanupPolicy@1.0` / `worktree.setAutoCleanupPolicy@1.0` -
+ * the per-host automatic-cleanup setting. Brand-new methods added long after
+ * the released floor was frozen, so both ride the optional-capabilities channel
+ * with `degrade: { kind: "unsupported" }`.
+ *
+ * There is deliberately NO fallback degrade target. A host that lacks these
+ * methods cannot clean up worktrees on a schedule at all, and the only
+ * client-side "fallback" would be the GUI running its own timer - which would
+ * delete worktrees with the renderer's authority, without the host's freshness
+ * proof, and only while a window happens to be open. The correct degradation is
+ * an unavailable control.
+ */
+export const worktreeGetAutoCleanupPolicyV10 = defineRpcContract({
+  method: "worktree.getAutoCleanupPolicy",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeGetAutoCleanupPolicyRequestSchema,
+  responseSchema: worktreeGetAutoCleanupPolicyResponseSchema,
+});
+
+export const worktreeSetAutoCleanupPolicyV10 = defineRpcContract({
+  method: "worktree.setAutoCleanupPolicy",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeSetAutoCleanupPolicyRequestSchema,
+  responseSchema: worktreeSetAutoCleanupPolicyResponseSchema,
+});
+
+/**
+ * `worktree.listAutoCleanupRuns@1.0` / `worktree.getAutoCleanupRun@1.0` -
+ * cursor-paged cleanup history and one run's target detail, read from the
+ * selected host's local store. Same optional-capability posture as the policy
+ * pair: an older host has no history to show, and a client must render that as
+ * "unavailable", never as "no cleanups happened".
+ */
+export const worktreeListAutoCleanupRunsV10 = defineRpcContract({
+  method: "worktree.listAutoCleanupRuns",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeListAutoCleanupRunsRequestSchema,
+  responseSchema: worktreeListAutoCleanupRunsResponseSchema,
+});
+
+export const worktreeGetAutoCleanupRunV10 = defineRpcContract({
+  method: "worktree.getAutoCleanupRun",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeGetAutoCleanupRunRequestSchema,
+  responseSchema: worktreeGetAutoCleanupRunResponseSchema,
 });
 
 export const worktreeSetRepoScriptsV10 = defineRpcContract({
@@ -7428,7 +7518,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.listAllForHost": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: worktreeListAllForHostV10,
@@ -7457,6 +7547,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         6: {
           contract: worktreeListAllForHostV16,
           upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV15ToV16,
+        },
+        7: {
+          contract: worktreeListAllForHostV17,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV16ToV17,
         },
       },
       downgradePathsFromLatest: {},
@@ -7832,6 +7926,64 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: mentionGithubSearchV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Automatic worktree cleanup: the per-host policy plus its local run history.
+  // All four are optional capabilities - a host that predates them has no
+  // scheduler, and `unsupported` is the ONLY honest degrade. There is no
+  // fallback target on purpose: the client-side alternative would be the GUI
+  // scheduling deletions itself, without the host's freshness proof and only
+  // while a window is open. The controls go unavailable instead.
+  "worktree.getAutoCleanupPolicy": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeGetAutoCleanupPolicyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "worktree.setAutoCleanupPolicy": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeSetAutoCleanupPolicyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "worktree.listAutoCleanupRuns": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeListAutoCleanupRunsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "worktree.getAutoCleanupRun": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeGetAutoCleanupRunV10,
           upgradeFromPreviousVersion: null,
         },
       },

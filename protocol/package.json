@@ -27,6 +27,7 @@
     "./framework/*": "./src/framework/*.ts",
     "./notifications/*": "./src/notifications/*.ts",
     "./persistence/*": "./src/persistence/*.ts",
+    "./worktree/*": "./src/worktree/*.ts",
     "./utils/yjs-utils": "./utils/yjs-utils/index.ts",
     "./utils/yjs-utils/*": "./utils/yjs-utils/*.ts",
     "./utils/text/*": "./utils/text/*.ts"
@@ -105,6 +106,10 @@
       "./persistence/*": {
         "types": "./dist/src/persistence/*.d.ts",
         "import": "./dist/src/persistence/*.js"
+      },
+      "./worktree/*": {
+        "types": "./dist/src/worktree/*.d.ts",
+        "import": "./dist/src/worktree/*.js"
       },
       "./utils/yjs-utils": {
         "types": "./dist/utils/yjs-utils/index.d.ts",
