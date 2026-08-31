@@ -309,10 +309,15 @@ function SettingsSidebarRouteItem(props: {
   const Icon = section.icon;
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const active = isSectionPathname(pathname, section.id);
+  // The rail replaces: its sections are peers on one screen, and back should
+  // leave settings, not replay every section clicked. The mobile list pushes:
+  // there a section is a full-screen drill-down BELOW the list, and a replace
+  // would make back-swipe skip the list and land on whatever preceded
+  // settings entirely.
   return (
     <Link
       to={`/settings/${section.id}`}
-      replace
+      replace={variant !== "mobile-list"}
       data-testid={`settings-sidebar-item-${section.id}`}
       onClick={() => {
         Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
