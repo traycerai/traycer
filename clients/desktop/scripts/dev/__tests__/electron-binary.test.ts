@@ -13,6 +13,7 @@ const electronBinary = require("../electron-binary.cjs") as {
   }) => string;
   decideDisableChromiumSandbox: (options: {
     platform: NodeJS.Platform;
+    effectiveUid: number;
     apparmorRestrictsUserns: boolean;
     usernsCloneDisabled: boolean;
     sandboxHelperStat: { uid: number; mode: number } | null;
@@ -20,7 +21,6 @@ const electronBinary = require("../electron-binary.cjs") as {
   decideOzonePlatform: (options: {
     platform: NodeJS.Platform;
     ozonePlatformOverride: string | undefined;
-    electronOzoneHint: string | undefined;
     display: string | undefined;
     waylandDisplay: string | undefined;
   }) => string | null;
@@ -55,6 +55,7 @@ describe("dev Electron bundle state", () => {
 describe("decideDisableChromiumSandbox", () => {
   const linuxDefaults = {
     platform: "linux" as const,
+    effectiveUid: 1000,
     apparmorRestrictsUserns: false,
     usernsCloneDisabled: false,
     sandboxHelperStat: null,
@@ -97,6 +98,17 @@ describe("decideDisableChromiumSandbox", () => {
     ).toBe(true);
   });
 
+  it("disables when running as root, which Chromium refuses to sandbox", () => {
+    expect(
+      electronBinary.decideDisableChromiumSandbox({
+        ...linuxDefaults,
+        effectiveUid: 0,
+        // Even the otherwise-ideal case: userns available AND a setuid helper.
+        sandboxHelperStat: { uid: 0, mode: 0o104755 },
+      }),
+    ).toBe(true);
+  });
+
   it("keeps the sandbox when a root-owned setuid helper can take over", () => {
     expect(
       electronBinary.decideDisableChromiumSandbox({
@@ -112,7 +124,6 @@ describe("decideOzonePlatform", () => {
   const bare = {
     platform: "linux" as const,
     ozonePlatformOverride: undefined,
-    electronOzoneHint: undefined,
     display: undefined,
     waylandDisplay: undefined,
   };
@@ -164,15 +175,5 @@ describe("decideOzonePlatform", () => {
         display: ":0",
       }),
     ).toThrow(/TRAYCER_DESKTOP_OZONE_PLATFORM must be one of/);
-  });
-
-  it("defers to a user-set ELECTRON_OZONE_PLATFORM_HINT", () => {
-    expect(
-      electronBinary.decideOzonePlatform({
-        ...bare,
-        electronOzoneHint: "auto",
-        display: ":0",
-      }),
-    ).toBeNull();
   });
 });

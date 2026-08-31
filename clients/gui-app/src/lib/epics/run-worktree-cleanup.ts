@@ -79,6 +79,7 @@ export interface WorktreeCleanupRequest {
   readonly hostId: string;
   readonly paths: ReadonlyArray<string>;
   readonly source: WorktreeDeletionSource;
+  readonly epicId?: string;
   readonly stopOwnersPaths: ReadonlySet<string>;
   readonly expectedHoldersRevisionByPath: ReadonlyMap<string, string>;
 }
@@ -97,12 +98,12 @@ export function runWorktreeCleanup(
     (path) => !request.stopOwnersPaths.has(path),
   );
   if (forcePaths.length === 0) {
-    return runCleanupCommand(
-      openStreamTransport,
-      request.hostId,
-      normalPaths,
-      request.source,
-    );
+    return runCleanupCommand(openStreamTransport, {
+      hostId: request.hostId,
+      paths: normalPaths,
+      source: request.source,
+      epicId: request.epicId,
+    });
   }
   // Force paths first: a HOLDERS_CHANGED refusal must not start the batch
   // delete of the remaining selection.
@@ -116,12 +117,12 @@ export function runWorktreeCleanup(
     if (force.holdersChanged.length > 0 || normalPaths.length === 0) {
       return force;
     }
-    return runCleanupCommand(
-      openStreamTransport,
-      request.hostId,
-      normalPaths,
-      request.source,
-    ).then((normal) => ({
+    return runCleanupCommand(openStreamTransport, {
+      hostId: request.hostId,
+      paths: normalPaths,
+      source: request.source,
+      epicId: request.epicId,
+    }).then((normal) => ({
       removed: [...normal.removed, ...force.removed],
       failed: [...normal.failed, ...force.failed],
       uncertain: [...normal.uncertain, ...force.uncertain],
@@ -143,10 +144,14 @@ export function runWorktreeCleanup(
  */
 function runCleanupCommand(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
-  hostId: string,
-  paths: ReadonlyArray<string>,
-  source: WorktreeDeletionSource,
+  input: {
+    readonly hostId: string;
+    readonly paths: ReadonlyArray<string>;
+    readonly source: WorktreeDeletionSource;
+    readonly epicId: string | undefined;
+  },
 ): Promise<WorktreeCleanupOutcome> {
+  const { hostId, paths, source, epicId } = input;
   return new Promise<WorktreeCleanupOutcome>((resolve) => {
     const removed: string[] = [];
     const failed: string[] = [];
@@ -250,6 +255,7 @@ function runCleanupCommand(
             wsStreamClient,
             commandId: crypto.randomUUID(),
             source,
+            epicId,
             targets: paths.map((worktreePath) => ({
               worktreePath,
               scripts: null,

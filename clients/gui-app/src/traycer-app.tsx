@@ -5,6 +5,7 @@ import { HostControllerStatusListener } from "@/components/layout/bridges/host-c
 import { LinkLoginDeepLinkBridge } from "@/components/layout/bridges/link-login-deep-link-bridge";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
+import { SessionImportProgressToastBridge } from "@/components/layout/bridges/session-import-progress-toast-bridge";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
 import { HostRuntimeBootFallback } from "@/components/host/host-runtime-boot-fallback";
 import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
@@ -17,6 +18,7 @@ import {
   type MessengerFactory,
 } from "@/lib/host";
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
+import { SessionImportRunController } from "@/components/session-import/session-import-run-controller";
 import {
   HostReadinessControllerProvider,
   HostScopeReady,
@@ -276,6 +278,12 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                 <ProvidersChangedStreamMount />
                                 <ChatRecordsStreamMount />
                               </HostScopeReady>
+                              {/* Above the shell split on purpose: the onboarding tour
+                                  renders through `StandaloneShell`, not `AppShell`, so a
+                                  mount inside the app shell left the tour's Import button
+                                  with no run handle to call. This is the lowest node both
+                                  shells share that still has the host stream. */}
+                              <SessionImportRunController />
                               <AppLocalNotificationsPersistLifecycleBridge>
                                 <ReadingPositionPersistLifecycleBridge>
                                   <NotificationsSessionProvider
@@ -319,6 +327,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <AppUpdateToastController />
       <LinkLoginDeepLinkBridge />
       <WorktreeDeleteProgressToastBridge />
+      <SessionImportProgressToastBridge />
       <HarnessCatalogPrefetcher />
       <RateLimitQueueProvider />
       <HistoryPruneProvider router={props.router} />
