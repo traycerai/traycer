@@ -2004,7 +2004,7 @@ export class AuthService {
   }
 
   /**
-   * Mints a one-time link-login code for the "Link a phone" QR surface. The
+   * Mints a one-time link-login code for the "Link mobile app" QR surface. The
    * raw bearer stays inside this auth boundary; the panel consumes only the
    * short-lived one-time code, which is itself the thing being displayed.
    */
@@ -3032,7 +3032,7 @@ export class AuthService {
   }
 
   /**
-   * The "Link a phone" panel's view of its current code — whether a phone
+   * The "Link mobile app" panel's view of its current code — whether a phone
    * has claimed it and the claimant metadata for the confirmation prompt.
    * The raw bearer stays inside this auth boundary.
    */
