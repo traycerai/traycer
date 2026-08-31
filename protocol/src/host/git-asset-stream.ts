@@ -23,6 +23,7 @@ import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-s
 import {
   assetStreamClientFrameSchema,
   assetStreamServerFrameSchema,
+  assetStreamServerFrameSchemaV11,
 } from "@traycer/protocol/host/asset-stream-schemas";
 
 export const gitStreamFileAssetSideSchema = z.enum(["old", "new"]);
@@ -55,14 +56,15 @@ export const gitStreamFileAssetV10 = defineStreamRpcContract({
 });
 
 /**
- * 1.1 adds PDF - same delta and same emission-gating obligation as
- * `workspace.streamAsset@1.1` (see `workspace/asset-stream.ts`); the two
- * methods share their frame schemas and move minors together.
+ * 1.1 adds PDF - same delta, same per-version frame schema, and same
+ * emission-gating obligation as `workspace.streamAsset@1.1` (see
+ * `workspace/asset-stream.ts`); the two methods share their frame schemas
+ * and move minors together.
  */
 export const gitStreamFileAssetV11 = defineStreamRpcContract({
   method: "git.streamFileAsset",
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: gitStreamFileAssetOpenRequestSchema,
-  serverFrameSchema: assetStreamServerFrameSchema,
+  serverFrameSchema: assetStreamServerFrameSchemaV11,
   clientFrameSchema: assetStreamClientFrameSchema,
 });

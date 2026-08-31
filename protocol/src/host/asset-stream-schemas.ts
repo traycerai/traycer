@@ -28,19 +28,39 @@ import { z } from "zod";
  */
 export const MAX_ASSET_BYTES = 20 * 1024 * 1024;
 
+/**
+ * The 1.0 media-type set - FROZEN: 1.0 is released, so this enum can never
+ * change again (the compat gate diffs released wire schemas literally).
+ * `epic.readChatAttachment` and the artifact-attachment response reuse it,
+ * which is exactly right: attachments are an image-only channel.
+ */
 export const assetMediaTypeSchema = z.enum([
   "image/png",
   "image/jpeg",
   "image/gif",
   "image/webp",
   "image/svg+xml",
-  // Added in 1.1. A host must never emit it on a 1.0-negotiated stream: a
-  // 1.0 client's copy of this enum predates the literal, so the whole
-  // header frame would fail its parse. The resolvers gate admission and
-  // emission on the negotiated minor for exactly this reason.
+]);
+
+/**
+ * The 1.1 media-type set: PDF joins the five image formats. A separate
+ * schema object rather than a widening of the 1.0 enum, so each released
+ * minor keeps its exact wire schema (a 1.0 parse must keep REJECTING
+ * `application/pdf` - a 1.0 client's copy of the enum predates the
+ * literal). The host's resolvers additionally gate admission and emission
+ * on the negotiated minor, so the new literal never reaches a 1.0 peer.
+ */
+export const assetMediaTypeSchemaV11 = z.enum([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/svg+xml",
   "application/pdf",
 ]);
-export type AssetMediaType = z.infer<typeof assetMediaTypeSchema>;
+
+/** Application-facing media type: the LATEST minor's set. */
+export type AssetMediaType = z.infer<typeof assetMediaTypeSchemaV11>;
 
 export const assetStreamErrorReasonSchema = z.enum([
   "not-found",
@@ -59,47 +79,78 @@ export type AssetStreamErrorReason = z.infer<
   typeof assetStreamErrorReasonSchema
 >;
 
+/**
+ * `assetHeader` fields shared by every minor except the media-type set,
+ * which is per-version (see the enum pair above).
+ */
+const assetHeaderFrameFields = {
+  kind: z.literal("assetHeader"),
+  hasBinaryPayload: z.literal(false),
+  sizeBytes: z.number().int().nonnegative(),
+  // `null` when the asset has no known intrinsic raster dimensions: an
+  // SVG that declares no width/height/viewBox, or a non-raster document
+  // (PDF - pages have geometry, but the client learns it from the bytes;
+  // the host stays a validate-and-stream layer and parses no documents).
+  width: z.number().int().positive().nullable(),
+  height: z.number().int().positive().nullable(),
+  // The git OID for an object side, else a `size:mtimeMs` fingerprint for
+  // a worktree file - the blob-cache key's identity component.
+  contentIdentity: z.string(),
+};
+
+const assetChunkFrameSchema = z.object({
+  kind: z.literal("assetChunk"),
+  hasBinaryPayload: z.literal(true),
+  index: z.number().int().nonnegative(),
+  byteLength: z.number().int().positive(),
+});
+
+const assetCompleteFrameSchema = z.object({
+  kind: z.literal("assetComplete"),
+  hasBinaryPayload: z.literal(false),
+});
+
+const assetErrorFrameSchema = z.object({
+  kind: z.literal("assetError"),
+  hasBinaryPayload: z.literal(false),
+  error: z.string(),
+  reason: assetStreamErrorReasonSchema,
+});
+
+const pongFrameSchema = z.object({
+  kind: z.literal("pong"),
+  hasBinaryPayload: z.literal(false),
+});
+
+/** The FROZEN 1.0 server-frame union: image media types only. */
 export const assetStreamServerFrameSchema = z.discriminatedUnion("kind", [
   z.object({
-    kind: z.literal("assetHeader"),
-    hasBinaryPayload: z.literal(false),
+    ...assetHeaderFrameFields,
     // Host-authoritative, derived from magic bytes - never trusted from the
     // requested file's extension.
     mediaType: assetMediaTypeSchema,
-    sizeBytes: z.number().int().nonnegative(),
-    // `null` when the asset has no known intrinsic raster dimensions: an
-    // SVG that declares no width/height/viewBox, or a non-raster document
-    // (PDF - pages have geometry, but the client learns it from the bytes;
-    // the host stays a validate-and-stream layer and parses no documents).
-    width: z.number().int().positive().nullable(),
-    height: z.number().int().positive().nullable(),
-    // The git OID for an object side, else a `size:mtimeMs` fingerprint for
-    // a worktree file - the blob-cache key's identity component.
-    contentIdentity: z.string(),
   }),
-  z.object({
-    kind: z.literal("assetChunk"),
-    hasBinaryPayload: z.literal(true),
-    index: z.number().int().nonnegative(),
-    byteLength: z.number().int().positive(),
-  }),
-  z.object({
-    kind: z.literal("assetComplete"),
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("assetError"),
-    hasBinaryPayload: z.literal(false),
-    error: z.string(),
-    reason: assetStreamErrorReasonSchema,
-  }),
-  z.object({
-    kind: z.literal("pong"),
-    hasBinaryPayload: z.literal(false),
-  }),
+  assetChunkFrameSchema,
+  assetCompleteFrameSchema,
+  assetErrorFrameSchema,
+  pongFrameSchema,
 ]);
+
+/** The 1.1 server-frame union: identical shape, PDF-capable media type. */
+export const assetStreamServerFrameSchemaV11 = z.discriminatedUnion("kind", [
+  z.object({
+    ...assetHeaderFrameFields,
+    mediaType: assetMediaTypeSchemaV11,
+  }),
+  assetChunkFrameSchema,
+  assetCompleteFrameSchema,
+  assetErrorFrameSchema,
+  pongFrameSchema,
+]);
+
+/** Application-facing frame type: the LATEST minor's shape. */
 export type AssetStreamServerFrame = z.infer<
-  typeof assetStreamServerFrameSchema
+  typeof assetStreamServerFrameSchemaV11
 >;
 
 export const assetStreamClientFrameSchema = z.discriminatedUnion("kind", [
