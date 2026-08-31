@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assistantRowId,
   assistantSliceRowId,
+  projectTranscriptRows,
+  queueSteerRowId,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type {
   ChatEvent,
@@ -10,16 +12,37 @@ import type {
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { transientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type {
-  HydratedSpan,
-  TranscriptWindow,
+import {
+  applyIndexChange,
+  type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
+import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   transcriptListRows,
   unplacedRowKey,
   visibleOrdinalRange,
   type TranscriptListRow,
 } from "@/stores/chats/transcript-list-rows";
+
+/*
+ * A counting PASSTHROUGH, not a stub: every test in this file still runs the
+ * real projection, so nothing here relocates the invariant into a fake. The
+ * count is only readable by the one test that asserts how many whole-history
+ * folds a single render pays.
+ */
+vi.mock(
+  "@traycer/protocol/persistence/chat-transcript/row-projection",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer/protocol/persistence/chat-transcript/row-projection")
+      >();
+    return {
+      ...actual,
+      projectTranscriptRows: vi.fn(actual.projectTranscriptRows),
+    };
+  },
+);
 
 /**
  * The merge that makes the transcript list `rowCount` long on the windowed
@@ -88,29 +111,142 @@ function skeletonEntry(rowId: string): RowSkeletonEntry {
   };
 }
 
-function span(fromOrdinal: number, rowIds: readonly string[]): HydratedSpan {
+/**
+ * An assistant carrying a steer block whose steered USER record is absent.
+ *
+ * That absence is what makes the projected steer row take a synthesized
+ * `steer:<queueItemId>` id rather than the user record's own - so the row is an
+ * INFERENCE with no served identity anywhere, which is the case the id-set
+ * channels structurally cannot answer.
+ */
+function steeredAssistant(
+  turnId: string,
+  queueItemId: string,
+): Extract<Message, { role: "assistant" }> {
   return {
-    fromOrdinal,
-    rowIds,
-    messages: [],
-    events: [],
-    rowContext: {},
-    bytes: rowIds.length * 32,
-    contextBytes: 0,
-    touchedAt: 1,
-    servedAt: 1,
+    role: "assistant",
+    messageId: `assistant-${turnId}`,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "steer" as const,
+        blockId: `steer-${queueItemId}`,
+        status: "completed" as const,
+        timestamp: 1,
+        queueItemId,
+        messageId: "absent-steered-user",
+        content: { type: "doc" as const },
+        mode: "safe_point" as const,
+        sender: null,
+      },
+    ],
+    startedAt: 1,
+    timestamp: 2,
+    turnId,
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
   };
+}
+
+/**
+ * The old per-span fixture shape (`fromOrdinal`, `rowIds`, and optionally the
+ * records a span used to carry directly, plus its warmth/serve clocks).
+ *
+ * `class E` moved records and clocks off the span onto the window's ledger, so
+ * `windowOf` is what actually seats a fixture's `messages`/`events` into
+ * `records` and turns this into a real `HydratedSpan` holding only ids. Kept
+ * as a plain data shape (not a `HydratedSpan`) so a call site can still spread
+ * one and override `servedAt`/`touchedAt` the way the old per-span fields let
+ * it - those overrides now describe the LEDGER entry the fixture seats, not a
+ * field on the span itself.
+ */
+interface SpanFixture {
+  readonly fromOrdinal: number;
+  readonly rowIds: readonly string[];
+  readonly messages?: readonly Message[];
+  readonly events?: readonly ChatEvent[];
+  readonly servedAt?: number;
+  readonly touchedAt?: number;
+}
+
+function span(fromOrdinal: number, rowIds: readonly string[]): SpanFixture {
+  return { fromOrdinal, rowIds };
 }
 
 function windowOf(input: {
   rowCount: number;
-  spans: readonly HydratedSpan[];
+  spans: readonly SpanFixture[];
   skeleton: readonly (RowSkeletonEntry | undefined)[];
   skeletonComplete: boolean;
   invalidated: boolean;
   liveMessages?: readonly Message[];
   liveEvents?: readonly ChatEvent[];
+  staleSpans?: readonly SpanFixture[];
 }): TranscriptWindow {
+  const messageLedger = new Map<
+    string,
+    { record: Message; bytes: number; servedAt: number; touchedAt: number }
+  >();
+  const eventLedger = new Map<
+    string,
+    { record: ChatEvent; bytes: number; servedAt: number; touchedAt: number }
+  >();
+
+  // Fresh spans seated before stale ones, so where a fixture id is shared
+  // across the two tiers the LATER (stale) fixture's stamps win - single
+  // ownership means there is only one ledger entry to hold them.
+  const seat = (fixture: SpanFixture) => {
+    const servedAt = fixture.servedAt ?? 1;
+    const touchedAt = fixture.touchedAt ?? 1;
+    for (const message of fixture.messages ?? []) {
+      messageLedger.set(message.messageId, {
+        record: message,
+        bytes: recordByteLength(message),
+        servedAt,
+        touchedAt,
+      });
+    }
+    for (const event of fixture.events ?? []) {
+      eventLedger.set(event.eventId, {
+        record: event,
+        bytes: recordByteLength(event),
+        servedAt,
+        touchedAt,
+      });
+    }
+    return {
+      fromOrdinal: fixture.fromOrdinal,
+      rowIds: fixture.rowIds,
+      messageIds: (fixture.messages ?? []).map((message) => message.messageId),
+      eventIds: (fixture.events ?? []).map((event) => event.eventId),
+      rowContext: {},
+      contextBytes: 0,
+    };
+  };
+
+  const spans = input.spans.map(seat);
+  const staleSpans = (input.staleSpans ?? []).map(seat);
+
+  const freshMessageIds = new Set(spans.flatMap((held) => held.messageIds));
+  const freshEventIds = new Set(spans.flatMap((held) => held.eventIds));
+  let hydratedBytes = 0;
+  for (const id of freshMessageIds) {
+    hydratedBytes += messageLedger.get(id)?.bytes ?? 0;
+  }
+  for (const id of freshEventIds) {
+    hydratedBytes += eventLedger.get(id)?.bytes ?? 0;
+  }
+
   return {
     epoch: 1,
     rowCount: input.rowCount,
@@ -119,16 +255,20 @@ function windowOf(input: {
     skeleton: input.skeleton,
     skeletonComplete: input.skeletonComplete,
     skeletonStreamCoveredThrough: input.skeletonComplete ? input.rowCount : 0,
-    spans: input.spans,
+    records: { messages: messageLedger, events: eventLedger, revision: 0 },
+    spans,
+    staleSpans,
     liveMessages: [...(input.liveMessages ?? [])],
     liveEvents: [...(input.liveEvents ?? [])],
     snapshotProvisionalMessageIds: [],
     snapshotProvisionalEventIds: [],
     unavailableRowIds: [],
     unavailableRowOrdinals: [],
-    hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
+    hydratedBytes,
+    evictionTerminal: "none",
     unsettledByteMessageIds: [],
     invalidated: input.invalidated,
+    visibleOrdinals: null,
     clock: 1,
   };
 }
@@ -617,6 +757,48 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["P:0", "H:pending-user"]);
   });
 
+  it("a send-induced reindex keeps every drawn row on screen through the void", () => {
+    // An ordinary send can legitimately re-key a row - a queued steer's
+    // `queue-steer:<id>` becomes the persisted messageId, a growing turn's
+    // slices re-plan - which fails ordinal preservation, advances the epoch,
+    // and voids this client's index. Without the stale tier that rendered the
+    // WHOLE chat as placeholders for the void->resnapshot->rehydrate round
+    // trip: a full-screen flash on every such send. Each half of the mask is
+    // pinned on its own (the fold carries spans into `staleSpans`;
+    // `seatStaleRows` draws carries), but the halves have been green together
+    // while the composition was broken before - so this feeds the REAL fold's
+    // output straight into the real merge.
+    const before = windowOf({
+      rowCount: 3,
+      spans: [span(0, ["u-1", "a-1", "u-2"])],
+      skeleton: [
+        skeletonEntry("u-1"),
+        skeletonEntry("a-1"),
+        skeletonEntry("u-2"),
+      ],
+      skeletonComplete: true,
+      invalidated: false,
+    });
+    const rendered = [model("u-1"), model("a-1"), model("u-2")];
+    const drawn = kinds(transcriptListRows({ window: before, rendered }));
+    expect(drawn).toEqual(["H:u-1", "H:a-1", "H:u-2"]);
+
+    const voided = applyIndexChange(before, {
+      activeTurnId: null,
+      epoch: 2,
+      rowCount: 3,
+      indexRevision: 1,
+      changes: [{ type: "reindexed" }],
+    });
+    expect(voided.invalidated).toBe(true);
+
+    // Same rows under the same keys: the void is invisible, and the list
+    // never remounts a row it had already measured.
+    expect(kinds(transcriptListRows({ window: voided, rendered }))).toEqual(
+      drawn,
+    );
+  });
+
   it("keeps an orphaned steer projected from the live assistant during invalidation", () => {
     const turnId = "turn-live-steer";
     const transientId = transientLiveAssistantMessageId(turnId);
@@ -735,6 +917,62 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["P:0", `H:${steeredMessageId}`]);
   });
 
+  it("withholds a sibling slice of a stale-held record from the live tail", () => {
+    // A stale span lists only the row ids its partial range SERVED, while one
+    // assistant record projects into every slice of its turn. Asking whether a
+    // model is stale-backed by row id alone therefore answers "no" for every
+    // sibling of a record the tier holds - and before the replacement skeleton
+    // names that sibling nothing else catches it either, so pre-rebase history
+    // is published as an ordinal-less live-tail row at the wrong end.
+    //
+    // The counterpart is the test above: a record riding in `span.messages` to
+    // render a DIFFERENT row is not itself drawn, so this wider question is
+    // asked only about backing, never about whether a row is already drawn.
+    const staleAssistant: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: "stale-assistant",
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [],
+      startedAt: 1,
+      timestamp: 2,
+      turnId: "turn-carried",
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+    };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [
+          {
+            ...span(0, [assistantRowId("turn-carried")]),
+            messages: [staleAssistant],
+          },
+        ],
+      }),
+      // A slice projected from that record: its own row id was never served,
+      // so only the record it names identifies it as history.
+      rendered: [
+        modelWithPersistentMessageId("carried-slice", "stale-assistant"),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0"]);
+  });
+
   it("does not retain an unrelated historical orphan steer during invalidation", () => {
     const turnId = "turn-unrelated-live";
     const transient: Extract<Message, { role: "assistant" }> = {
@@ -823,6 +1061,778 @@ describe("transcriptListRows", () => {
     // The list stays `rowCount` long; the unplaceable row falls to the tail
     // rather than rendering beyond the end of the transcript.
     expect(kinds(rows)).toEqual(["P:0", "H:r-1", "H:r-2-past-end"]);
+  });
+
+  it("keeps a streaming row at the tail when a stale span also backs it", () => {
+    // The row cannot take its old ordinal - the replacement skeleton has
+    // already filled that slot without naming it - so it reaches the tail
+    // gate as unplaced. It is also STREAMING, which makes it the newest thing
+    // the client holds, and "stale also backs it" is the ordinary condition
+    // for an active row: the turn streaming now is the turn a rebase most
+    // recently demoted. Suppressing it here is how an active row disappears
+    // until replacement hydration arrives.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 2,
+        spans: [],
+        skeleton: [skeletonEntry("r-0"), skeletonEntry("r-1")],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [span(0, ["streaming-row"])],
+      }),
+      rendered: [{ ...model("streaming-row"), statusLabel: "Streaming" }],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "P:1", "H:streaming-row"]);
+  });
+
+  it("still withholds a stale-only row that nothing live backs", () => {
+    // The other half of the same gate, and the reason it exists: pre-rebase
+    // history whose place in the new space is unknown stays behind its
+    // placeholder rather than being published at the tail, a position it
+    // never had.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 2,
+        spans: [],
+        skeleton: [skeletonEntry("r-0"), skeletonEntry("r-1")],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [span(0, ["history-row"])],
+      }),
+      rendered: [model("history-row")],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "P:1"]);
+  });
+
+  it("suppresses the ordinal of a carried row the index names and the renderer withheld", () => {
+    // The same inference the fresh-span pass makes from the same evidence: the
+    // tier proves the body is HELD, so a missing model is renderer POLICY
+    // (an assistant row whose only segments were lifted into the pinned-todo
+    // dock) rather than a row this client is waiting for. Falling through to a
+    // placeholder makes a rebase materialize a row that was deliberately
+    // absent before it and will be absent again after it.
+    //
+    // Gated on the replacement index still NAMING the row, which is what
+    // separates a withheld row from one the rebase merely re-sliced under new
+    // ids - `withholds a sibling slice of a stale-held record from the live
+    // tail` is that case, and it must keep its placeholder.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 2,
+        spans: [],
+        skeleton: [skeletonEntry("withheld-row"), skeletonEntry("carried-row")],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [span(0, ["withheld-row", "carried-row"])],
+      }),
+      rendered: [model("carried-row")],
+    });
+
+    expect(kinds(rows)).toEqual(["H:carried-row"]);
+  });
+
+  // This pin used to guard "the FRESHEST carry wins a
+  // duplicated row", back when `servedAt`/`touchedAt` were independent SCALARS
+  // per span - two spans could disagree about a shared row's recency even
+  // while (as here) neither carries any backing record at all. Class E moved
+  // those clocks onto the per-record LEDGER (`spanServeStamp`/derived from
+  // `window.records`), so a span with no `messages`/`events` now derives a
+  // serve stamp of 0 regardless of any `servedAt` fixture override - and even
+  // if both fixtures DID reference the same messageId for "dup", single
+  // ownership means they would read the identical ledger entry and tie
+  // anyway (the same dissolution `transcript-window.test.ts`'s "keeps the
+  // carry the renderer draws from..." pin already documents). Either way the
+  // two carries here tie, and `staleSpansByFreshestServe`'s documented,
+  // load-bearing tie-break - stable, earliest-first - is what now decides:
+  // the OLDER coordinate wins. This is not a content regression (there is
+  // only one copy of "dup" to render, whichever ordinal it lands on), so the
+  // test is migrated to pin that actual, deterministic tie-break outcome
+  // rather than a freshness rule the ledger no longer has the vocabulary to
+  // express.
+  it("resolves a duplicated stale row via the tie-break's earliest-span order", () => {
+    const older: SpanFixture = {
+      ...span(0, ["only-in-old", "dup"]),
+      servedAt: 5,
+    };
+    const newer: SpanFixture = { ...span(4, ["dup"]), servedAt: 9 };
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 6,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [older, newer],
+      }),
+      rendered: [model("only-in-old"), model("dup")],
+    });
+
+    // Both carries tie at a derived serve stamp of 0 (see the migration note
+    // above), so the stable earliest-first tie-break in
+    // `staleSpansByFreshestServe` hands `dup` to `older`'s coordinate (1),
+    // not `newer`'s (4). Exactly one "dup" row renders either way.
+    expect(kinds(rows)).toEqual([
+      "H:only-in-old",
+      "H:dup",
+      "P:2",
+      "P:3",
+      "P:4",
+      "P:5",
+    ]);
+  });
+
+  it("withholds a steer row inferred from a turn only the stale tier holds", () => {
+    // An INFERRED row was never served, so no id-set fold can contain it: the
+    // steer entry `planAssistantTurnRows` emits for a turn holding a steer
+    // block takes a synthesized `steer:<queueItemId>` id when the steered user
+    // record is absent, and that string appears in no span's `rowIds` and in
+    // no record. Both id channels therefore miss, and pre-rebase steer content
+    // is published at the live tail - a position it never had.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [
+          {
+            ...span(0, [assistantRowId("turn-steered")]),
+            messages: [steeredAssistant("turn-steered", "q-1")],
+          },
+        ],
+      }),
+      rendered: [
+        modelWithoutPersistentMessageId(queueSteerRowId("q-1")),
+        model(assistantRowId("turn-steered")),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual(["H:" + assistantRowId("turn-steered")]);
+  });
+
+  it("projects the whole history ONCE when both tiers ask a steer question", () => {
+    // `appendUnplacedRenderedRows` reaches both lookups for a single model: a
+    // synthesized steer row answers the stale question through the projection,
+    // and is then asked the live one. Both used to project independently, so a
+    // render paid two O(history) folds - on the per-token path, in the module
+    // arranged to keep that shape off it.
+    //
+    // Both turn sets have to be non-empty or this passes for the wrong reason:
+    // each side skips the fold outright on an empty set, so a fixture with only
+    // a stale steer would count one either way. Hence a transient live
+    // assistant on a DIFFERENT turn - same turn would make the stale-ONLY
+    // scoping delete it and take the stale side back to zero.
+    const liveTransient = {
+      ...steeredAssistant("turn-live", "q-2"),
+      messageId: transientLiveAssistantMessageId("turn-live"),
+    };
+    vi.mocked(projectTranscriptRows).mockClear();
+
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: false,
+        liveMessages: [liveTransient],
+        staleSpans: [
+          {
+            ...span(0, [assistantRowId("turn-stale")]),
+            messages: [steeredAssistant("turn-stale", "q-1")],
+          },
+        ],
+      }),
+      rendered: [
+        modelWithoutPersistentMessageId(queueSteerRowId("q-1")),
+        model(assistantRowId("turn-stale")),
+      ],
+    });
+
+    // The answer both folds produced, unchanged: the stale-only steer row is
+    // withheld from the tail.
+    expect(kinds(rows)).toEqual(["H:" + assistantRowId("turn-stale")]);
+    expect(vi.mocked(projectTranscriptRows)).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a steer row whose turn the LIVE tier also holds", () => {
+    // The other direction, and the one this pass has twice been bitten by:
+    // a turn the live tier also holds is not pre-rebase history, and the turn
+    // streaming right now is the turn a rebase most recently demoted. Scoping
+    // the steer projection to stale-ONLY turns is what keeps the current row
+    // at the tail instead of hiding it until replacement hydration arrives.
+    const streaming = steeredAssistant("turn-steered", "q-1");
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [],
+        skeletonComplete: false,
+        invalidated: false,
+        liveMessages: [streaming],
+        staleSpans: [
+          {
+            ...span(0, [assistantRowId("turn-steered")]),
+            messages: [streaming],
+          },
+        ],
+      }),
+      rendered: [
+        modelWithoutPersistentMessageId(queueSteerRowId("q-1")),
+        model(assistantRowId("turn-steered")),
+      ],
+    });
+
+    expect(kinds(rows)).toEqual([
+      "H:" + assistantRowId("turn-steered"),
+      "H:" + queueSteerRowId("q-1"),
+    ]);
+  });
+
+  /**
+   * A same-turn steer split into TWO host frames, reproduced independently of
+   * the host's publish order.
+   *
+   * The host splits a steered turn into two assistant records around the
+   * steered USER record, then re-projects the skeleton so the steer block's
+   * row (the steered user's own messageId) sits BETWEEN the split's
+   * `:part:0` and `:part:1` slice rows. Observed on staging: the host
+   * published `messageAccepted` for the steered user and an index/snapshot
+   * BEFORE the steer block existed - so that marker-less skeleton still names
+   * the turn as ONE unsplit row (`assistant:<turnId>`) and the steered user's
+   * own messageId as an ordinary TOP-LEVEL row at the last ordinal - and only
+   * afterward did `blockDelta` add the steer block to the live active-turn
+   * assistant. No fresh index/`reindexed` followed before the next paint, so
+   * this is the mixed state the client actually rendered from: a stale,
+   * marker-less skeleton next to LIVE records that already carry the marker.
+   *
+   * Two tests below both hand-build `rendered` rather than driving the real
+   * `useRenderedMessages` hook: that hook needs a full `RenderedMessagesInput`
+   * (pending sends, active turn, display context) that this module's own test
+   * suite deliberately never wires in, and every steer fixture already in this
+   * file (see `steeredAssistant` above, and the two `projects a live steer...`
+   * tests) hand-builds its `rendered` array the same way. The shapes below
+   * mirror those exactly: `modelWithPersistentMessageId(sliceId, transientId)`
+   * for a slice backed by the live transient assistant record (as in "seats
+   * every projected slice backed by one transient assistant record"), and
+   * `modelWithoutPersistentMessageId(steeredMessageId)` for the nested steer
+   * bubble (as in "projects a live steer with its retained span-backed user
+   * dependency") - the row-projection convention that a model answering
+   * through the steer channel carries no `persistentMessageId` of its own.
+   */
+  it("does not seat a mixed-state steer row above its own unplaced turn", () => {
+    const turnId = "turn-mixed-steer";
+    const queueItemId = "queue-mixed";
+    const steeredMessageId = "steered-user-mixed";
+    const transientId = transientLiveAssistantMessageId(turnId);
+
+    const steeredUser: Extract<Message, { role: "user" }> = {
+      role: "user",
+      messageId: steeredMessageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: {
+        kind: "user",
+        content: { type: "doc" },
+        browserAnnotations: [],
+      },
+      timestamp: 2,
+      sessionAnchor: null,
+    };
+    // The POST-blockDelta live assistant record: the steer block now sits
+    // between two completed text blocks, which is what makes the turn SPLIT
+    // (`planAssistantTurnRows`) into `:part:0` / steer / `:part:1` under the
+    // canonical projection - the shape the stale skeleton below does not know
+    // about yet.
+    const transientAssistant: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          type: "text",
+          blockId: "block-before",
+          status: "completed",
+          timestamp: 1,
+          text: "before the steer",
+          providerNotice: null,
+        },
+        {
+          type: "steer",
+          blockId: `steer-${queueItemId}`,
+          status: "completed",
+          timestamp: 2,
+          queueItemId,
+          messageId: steeredMessageId,
+          content: { type: "doc" },
+          mode: "safe_point",
+          sender: null,
+        },
+        {
+          type: "text",
+          blockId: "block-after",
+          status: "completed",
+          timestamp: 3,
+          text: "after the steer",
+          providerNotice: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 3,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+    };
+
+    const part0Id = assistantSliceRowId(turnId, 0, true);
+    const part1Id = assistantSliceRowId(turnId, 1, true);
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        spans: [],
+        // STALE / marker-less: the last skeleton the host published before
+        // the steer block existed. It still names the turn as one unsplit
+        // row and the steered user as an ordinary top-level row at the last
+        // ordinal - no entry anywhere for `:part:0` / `:part:1`.
+        skeleton: [
+          skeletonEntry("prior-user"),
+          skeletonEntry(assistantRowId(turnId)),
+          skeletonEntry(steeredMessageId),
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [steeredUser, transientAssistant],
+      }),
+      rendered: [
+        modelWithPersistentMessageId(part0Id, transientId),
+        modelWithoutPersistentMessageId(steeredMessageId),
+        modelWithPersistentMessageId(part1Id, transientId),
+      ],
+    });
+
+    // No duplicate: the steered user's messageId draws exactly one row,
+    // whichever position it lands at.
+    const steerOccurrences = rows.filter(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    ).length;
+    expect(steerOccurrences).toBe(1);
+
+    const part0Index = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === part0Id,
+    );
+    const part1Index = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === part1Id,
+    );
+    const steerIndex = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    );
+
+    // The canonical placement (what the host's OWN projection puts here, and
+    // what a fresh reindex eventually corrects to): nested inside the turn,
+    // after `:part:0` and before `:part:1` - never ahead of the turn's own
+    // first row, and never merely adjacent to the row before it.
+    expect(steerIndex).toBeGreaterThan(part0Index);
+    expect(steerIndex).toBeLessThan(part1Index);
+  });
+
+  it("holds a split-turn row a fresh span already seated at its pre-split ordinal", () => {
+    // The same mixed state, with the steered user's stale top-level row also
+    // SERVED: the client asked for that range while the index was still
+    // pre-split, so a fresh span carries the row id at the old ordinal. That
+    // span is not newer evidence than the live record - it was built from the
+    // same pre-split index - so the hold must outrank it. Seated by the span
+    // instead, the row would draw at the stale ordinal AND be barred from the
+    // tail unit by `placedRowIds`, which is the original defect reached
+    // through the span tier.
+    const turnId = "turn-span-seated-steer";
+    const queueItemId = "queue-span-seated";
+    const steeredMessageId = "steered-user-span-seated";
+    const transientId = transientLiveAssistantMessageId(turnId);
+
+    const steeredUser: Extract<Message, { role: "user" }> = {
+      role: "user",
+      messageId: steeredMessageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: {
+        kind: "user",
+        content: { type: "doc" },
+        browserAnnotations: [],
+      },
+      timestamp: 2,
+      sessionAnchor: null,
+    };
+    const transientAssistant: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          type: "text",
+          blockId: "block-before",
+          status: "completed",
+          timestamp: 1,
+          text: "before the steer",
+          providerNotice: null,
+        },
+        {
+          type: "steer",
+          blockId: `steer-${queueItemId}`,
+          status: "completed",
+          timestamp: 2,
+          queueItemId,
+          messageId: steeredMessageId,
+          content: { type: "doc" },
+          mode: "safe_point",
+          sender: null,
+        },
+        {
+          type: "text",
+          blockId: "block-after",
+          status: "completed",
+          timestamp: 3,
+          text: "after the steer",
+          providerNotice: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 3,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+    };
+
+    const part0Id = assistantSliceRowId(turnId, 0, true);
+    const part1Id = assistantSliceRowId(turnId, 1, true);
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        // The served range: the prior user row and, at ordinal 2, the steered
+        // user's own row id under the pre-split topology.
+        spans: [
+          {
+            ...span(0, ["prior-user"]),
+            messages: [],
+          },
+          {
+            ...span(2, [steeredMessageId]),
+            messages: [steeredUser],
+          },
+        ],
+        skeleton: [
+          skeletonEntry("prior-user"),
+          skeletonEntry(assistantRowId(turnId)),
+          skeletonEntry(steeredMessageId),
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [steeredUser, transientAssistant],
+      }),
+      rendered: [
+        modelWithPersistentMessageId("prior-user", "prior-user"),
+        modelWithPersistentMessageId(part0Id, transientId),
+        modelWithoutPersistentMessageId(steeredMessageId),
+        modelWithPersistentMessageId(part1Id, transientId),
+      ],
+    });
+
+    const steerOccurrences = rows.filter(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    ).length;
+    expect(steerOccurrences).toBe(1);
+
+    const part0Index = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === part0Id,
+    );
+    const part1Index = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === part1Id,
+    );
+    const steerIndex = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    );
+    expect(steerIndex).toBeGreaterThan(part0Index);
+    expect(steerIndex).toBeLessThan(part1Index);
+    // The vacated ordinal draws nothing rather than a placeholder: a row is
+    // there, and it is being drawn in the tail unit.
+    expect(
+      rows.some((row) => row.kind === "placeholder" && row.ordinal === 2),
+    ).toBe(false);
+  });
+
+  it("lands a pending-blockDelta steer bubble below its turn, not above it", () => {
+    // The OTHER half of the same mixed state, timestamped one frame earlier:
+    // the host has published `messageAccepted` for the steered user, but
+    // `blockDelta` has not yet attached the steer block to the live assistant
+    // record. Nothing here disagrees yet - the skeleton's marker-less shape
+    // (unsplit turn row, steered user as an ordinary top-level row at the
+    // last ordinal) is exactly what the CURRENT live records would also
+    // project, so this is the control: the correct placement is below the
+    // streaming turn, at the last ordinal. If a future change to the seating
+    // rules ever moves it above the turn instead, that IS the staging
+    // placement bug reproduced one frame earlier - so this assertion states
+    // the correct expectation regardless of which way it fails.
+    const turnId = "turn-pre-steer";
+    const steeredMessageId = "steered-user-pre";
+    const transientId = transientLiveAssistantMessageId(turnId);
+
+    const steeredUser: Extract<Message, { role: "user" }> = {
+      role: "user",
+      messageId: steeredMessageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: {
+        kind: "user",
+        content: { type: "doc" },
+        browserAnnotations: [],
+      },
+      timestamp: 2,
+      sessionAnchor: null,
+    };
+    // PRE-blockDelta: no steer block yet, so the turn is still unsplit.
+    const transientAssistant: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          type: "text",
+          blockId: "block-streaming",
+          status: "streaming",
+          timestamp: 1,
+          text: "still going",
+          providerNotice: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 1,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+    };
+
+    const assistantId = assistantRowId(turnId);
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 3,
+        spans: [],
+        skeleton: [
+          skeletonEntry("prior-user"),
+          skeletonEntry(assistantId),
+          skeletonEntry(steeredMessageId),
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [steeredUser, transientAssistant],
+      }),
+      rendered: [
+        modelWithPersistentMessageId(assistantId, transientId),
+        modelWithPersistentMessageId(steeredMessageId, steeredMessageId),
+      ],
+    });
+
+    const steerOccurrences = rows.filter(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    ).length;
+    expect(steerOccurrences).toBe(1);
+
+    const assistantIndex = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === assistantId,
+    );
+    const steerIndex = rows.findIndex(
+      (row) => row.kind === "hydrated" && row.model.id === steeredMessageId,
+    );
+
+    // Below the streaming turn - the last ordinal, not adjacent to the prior
+    // user row above the turn.
+    expect(steerIndex).toBeGreaterThan(assistantIndex);
+    expect(rows[steerIndex].ordinal).toBe(2);
+  });
+});
+
+describe("tier-parameterized backing", () => {
+  it("a Pending model the skeleton names with no live record behind it seats at its ordinal", () => {
+    // BACKING_CHANNELS' status-label channel is live-only, and seatLiveRecords
+    // now consumes the FULL live channel set (not the old row-id/persistent-id
+    // subset). A model the renderer itself calls "Pending" is live-backed
+    // through that channel alone - no span, no live record, no persistent id
+    // needed - so it must seat at the ordinal the skeleton names for it.
+    // Under the old two-channel seatLiveRecords this model backed nothing:
+    // seating skipped it, and appendUnplacedRenderedRows also skips every
+    // model the skeleton names, so it used to vanish behind a bare
+    // placeholder instead of ever drawing.
+    const pendingRowId = "pending-named-in-skeleton";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [skeletonEntry(pendingRowId)],
+        skeletonComplete: true,
+        invalidated: false,
+      }),
+      rendered: [pendingModel(pendingRowId)],
+    });
+
+    expect(kinds(rows)).toEqual([`H:${pendingRowId}`]);
+    expect(rows.filter((row) => row.key === pendingRowId)).toHaveLength(1);
+  });
+
+  it("a skeleton-named setup card projected from live events seats at its ordinal", () => {
+    // The setup-card channel is also live-only and was likewise absent from
+    // the old two-channel seatLiveRecords. Mirrors the module's own
+    // `projectedLiveSetupRowIds` fixture shape (see "keeps a setup card
+    // projected from live events while invalidated" above): one live
+    // `setup.*` event projects exactly one setup-card row for window index 0
+    // at the event's timestamp, and the rendered model carrying that same
+    // synthesized id is the only candidate for that createdAt, so it is the
+    // one `projectedLiveSetupRowIds` returns.
+    const setup: ChatEvent = {
+      eventId: "setup-live-seated",
+      type: "setup.running",
+      timestamp: 2,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { workspacePath: "/workspace" },
+    };
+    const setupRowId = "setup-card:chat-1:0:2";
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [skeletonEntry(setupRowId)],
+        skeletonComplete: true,
+        invalidated: false,
+        liveEvents: [setup],
+      }),
+      rendered: [modelWithoutPersistentMessageId(setupRowId)],
+    });
+
+    expect(kinds(rows)).toEqual([`H:${setupRowId}`]);
+    expect(rows[0].ordinal).toBe(0);
+  });
+
+  it("a Pending status backs nothing in the stale tier", () => {
+    // The status-label channel is declared live-only in BACKING_CHANNELS
+    // precisely so a model the renderer calls Pending can never be read as
+    // STALE-backed off the label alone. Pin the observable half of that: a
+    // Pending model with no record membership in any stale span still reaches
+    // the tail (through its own live channel), while a row that genuinely
+    // sits ONLY in a stale span, carries no Pending/Streaming label, and has
+    // no live backing of its own stays withheld behind its placeholder - the
+    // same contrast "still withholds a stale-only row that nothing live
+    // backs" pins, with a Pending model added alongside to show the tier
+    // boundary does not swallow it too.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 2,
+        spans: [],
+        skeleton: [skeletonEntry("r-0"), skeletonEntry("r-1")],
+        skeletonComplete: false,
+        invalidated: false,
+        staleSpans: [span(0, ["history-row"])],
+      }),
+      rendered: [pendingModel("pending-user"), model("history-row")],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "P:1", "H:pending-user"]);
+  });
+
+  it("a steer-split model with no persistent id resolves through the steer channel on both tiers", () => {
+    // The append-tail half of steer eligibility (stale-only suppression vs.
+    // live-turn survival) is already pinned by "withholds a steer row
+    // inferred from a turn only the stale tier holds" and "keeps a steer row
+    // whose turn the LIVE tier also holds" above. What those never exercise
+    // is seatLiveRecords: the old two-channel version (row ids + persistent
+    // ids) could not answer for a steer row at all, since a steer projection
+    // with no steered user record carries neither a row id any span drew nor
+    // a persistent id any record owns - only the synthesized `steer:<queueItemId>`
+    // id the steer channel matches. Seated at the ordinal the skeleton names
+    // for it, exactly like the Pending and setup-card cases above.
+    const turnId = "turn-live-steer-seated";
+    const transient: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId: transientLiveAssistantMessageId(turnId),
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [
+        {
+          blockId: "steer-seated",
+          status: "completed",
+          timestamp: 1,
+          type: "steer",
+          queueItemId: "queue-seated",
+          messageId: "missing-steered-user-seated",
+          content: { type: "doc" },
+          mode: "safe_point",
+          sender: null,
+        },
+      ],
+      startedAt: 1,
+      timestamp: 2,
+      turnId,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+    };
+    const steerRowId = queueSteerRowId("queue-seated");
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 1,
+        spans: [],
+        skeleton: [skeletonEntry(steerRowId)],
+        skeletonComplete: true,
+        invalidated: false,
+        liveMessages: [transient],
+      }),
+      rendered: [modelWithoutPersistentMessageId(steerRowId)],
+    });
+
+    expect(kinds(rows)).toEqual([`H:${steerRowId}`]);
+    expect(rows[0].ordinal).toBe(0);
   });
 });
 

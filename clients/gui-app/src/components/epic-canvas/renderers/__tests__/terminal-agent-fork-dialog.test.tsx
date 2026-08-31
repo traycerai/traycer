@@ -8,7 +8,6 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
-import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
@@ -23,6 +22,7 @@ import {
 } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { modLabel } from "@/lib/keybindings/platform";
+import type { ForkableTuiAgent } from "../terminal-agent-fork-dialog";
 
 const dialogMocks = vi.hoisted(() => ({
   create: vi.fn<(input: TerminalForkCreateInput) => Promise<string | null>>(),
@@ -1049,22 +1049,23 @@ function expectTextInputValue(label: string, value: string): void {
   expect(input.value).toBe(value);
 }
 
-function sourceAgent(): TuiAgentProjection {
+function sourceAgent(): ForkableTuiAgent {
   return sourceAgentWithTerminalArgs(null);
 }
 
-function sourceAgentWithProfile(profileId: string | null): TuiAgentProjection {
+function sourceAgentWithProfile(profileId: string | null): ForkableTuiAgent {
   return { ...sourceAgentWithTerminalArgs(null), profileId };
 }
 
 function sourceAgentWithTerminalArgs(
   terminalAgentArgs: string | null,
-): TuiAgentProjection {
+): ForkableTuiAgent {
   return {
     id: "source-agent",
     // An ordinary registry-backed agent - this suite exercises the fork
     // dialog's terminal-args plumbing, not doc residency.
     docResident: false,
+    origin: "registry",
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",

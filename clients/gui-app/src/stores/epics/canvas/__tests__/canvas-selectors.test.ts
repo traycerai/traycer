@@ -36,6 +36,16 @@ function chatTile(id: string, hostId: string): EpicCanvasTileRef {
   };
 }
 
+function terminalAgentTile(id: string, hostId: string): EpicCanvasTileRef {
+  return {
+    id,
+    instanceId: `inst-${id}`,
+    type: "terminal-agent",
+    name: id,
+    hostId,
+  };
+}
+
 function liveness(
   overrides: Partial<TileRefLivenessCheck>,
 ): TileRefLivenessCheck {
@@ -117,6 +127,53 @@ describe("isTileRefRecordLive", () => {
         null,
       ),
     ).toBe(true);
+  });
+
+  it("TRIPWIRE: exempts a cross-host TERMINAL-AGENT ref, or the tile self-closes", () => {
+    // The roster's phase 2 put terminal agents into the host-authoritative
+    // population: this device may hold a REPLICA of an agent bound to another
+    // of the user's machines, and a replica arrives on the record feed's
+    // schedule. Any window before the inbox has caught up - a cold open, a
+    // reconnect - has the tile bound to `host-b` with no local record.
+    //
+    // ABLATION: narrow `isHostAuthoritativeRef` back to `chat` and this
+    // answers `false`, which the route-synchronization cleanup reads as
+    // "remotely deleted" and auto-closes the tile of an agent that is alive
+    // and running on its own host. Nothing errors; the tab just vanishes.
+    expect(
+      isTileRefRecordLive(
+        terminalAgentTile("tui-remote", "host-b"),
+        new Set(),
+        liveness({}),
+        "host-a",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a TERMINAL-AGENT live while the projection host identity is unresolved", () => {
+    // Same reason as the chat arm's: with no projection host there is nothing
+    // to compare the ref's binding against, so absence cannot be classified.
+    expect(
+      isTileRefRecordLive(
+        terminalAgentTile("tui-unresolved", "host-b"),
+        new Set(),
+        liveness({}),
+        null,
+      ),
+    ).toBe(true);
+  });
+
+  it("still polices a TERMINAL-AGENT ref bound to the projection's own host", () => {
+    // The exemption is about CROSS-host refs only. An agent on this very host
+    // whose record is gone really is gone, and the tile must still close.
+    expect(
+      isTileRefRecordLive(
+        terminalAgentTile("tui-local", "host-a"),
+        new Set(),
+        liveness({}),
+        "host-a",
+      ),
+    ).toBe(false);
   });
 
   it("still polices a cross-host ARTIFACT ref - artifact records are doc-shared", () => {

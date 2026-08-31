@@ -566,6 +566,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.getRegisteredUrlSchemes,
         RunnerHostInvoke.requestMicrophoneAccess,
         RunnerHostInvoke.openMicrophoneSettings,
+        RunnerHostInvoke.notificationOpenSystemSettings,
         RunnerHostInvoke.requestHostRespawn,
         RunnerHostInvoke.lastKnownLocalHostId,
         RunnerHostInvoke.localHostSnapshot,

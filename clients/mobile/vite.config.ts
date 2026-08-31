@@ -272,7 +272,20 @@ export default defineConfig(async (): Promise<UserConfig> => {
       typeof hostRaw === "string" && hostRaw.trim().length > 0
         ? hostRaw.trim()
         : "127.0.0.1";
-    server = { host, port, strictPort: true };
+    server = {
+      host,
+      port,
+      strictPort: true,
+      // Pre-transform the app from its entry at server start instead of on
+      // the first browser request: the entry pulls in effectively all of
+      // gui-app through the react-compiler babel pass, which otherwise
+      // makes the first page load of a fresh stack take tens of seconds.
+      // Warmup shares the normal transform cache and module graph, so HMR,
+      // invalidation, and every later request behave exactly as before —
+      // nothing observes the request-triggered laziness, it only moves the
+      // same work earlier.
+      warmup: { clientFiles: ["./main.tsx"] },
+    };
   }
 
   return {

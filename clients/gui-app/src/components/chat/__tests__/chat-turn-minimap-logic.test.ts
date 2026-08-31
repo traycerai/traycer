@@ -185,29 +185,33 @@ describe("chatTurnMinimapItems caching", () => {
       skeletonComplete: true,
       // Fully delivered: the prefix reached the end of the index.
       skeletonStreamCoveredThrough: entries.length,
-      // The assistant row is hydrated - it is the one taking tokens.
+      // The assistant row is hydrated - it is the one taking tokens. It
+      // draws no ledger record in this fixture (the minimap derive reads only
+      // `skeleton`/`spans` shape, never record bodies or byte figures), so
+      // the ledger stays empty and the span references nothing.
+      records: { messages: new Map(), events: new Map(), revision: 0 },
       spans: [
         {
           fromOrdinal: 1,
           rowIds: ["r-1"],
-          messages: [],
-          events: [],
+          messageIds: [],
+          eventIds: [],
           rowContext: {},
-          bytes: 32,
           contextBytes: 0,
-          touchedAt: 1,
-          servedAt: 1,
         },
       ],
+      staleSpans: [],
       liveMessages: [],
       liveEvents: [],
       snapshotProvisionalMessageIds: [],
       snapshotProvisionalEventIds: [],
       unavailableRowIds: [],
       unavailableRowOrdinals: [],
-      hydratedBytes: 32,
+      hydratedBytes: 0,
+      evictionTerminal: "none",
       unsettledByteMessageIds: [],
       invalidated: false,
+      visibleOrdinals: null,
       clock: 1,
     };
   }

@@ -3,7 +3,11 @@
 const { existsSync } = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-const { prepareElectronBinary } = require("./electron-binary.cjs");
+const {
+  decideOzonePlatform,
+  prepareElectronBinary,
+  shouldDisableChromiumSandbox,
+} = require("./electron-binary.cjs");
 const {
   DEV_DESKTOP_DISPLAY_NAME_ENV,
   resolveDevDesktopDisplayName,
@@ -56,6 +60,20 @@ if (devDesktopDisplayName === null) {
 
 delete childEnv.ELECTRON_RUN_AS_NODE;
 
+// See shouldDisableChromiumSandbox: on Linux kernels that restrict
+// unprivileged user namespaces, an un-setuid dev Electron aborts at launch
+// rather than run unsandboxed. Scoped to this dev child (trusted local code);
+// a caller-provided value still wins.
+if (
+  childEnv.ELECTRON_DISABLE_SANDBOX === undefined &&
+  shouldDisableChromiumSandbox(electronBin)
+) {
+  childEnv.ELECTRON_DISABLE_SANDBOX = "1";
+  console.log(
+    "[dev-main] this kernel restricts unprivileged user namespaces and the dev electron has no setuid sandbox helper — disabling the Chromium sandbox for this dev run",
+  );
+}
+
 // Expose a Chromium remote-debugging (CDP) endpoint on loopback so browser
 // automation (the Playwright MCP) can attach to the live app window. This is
 // the dev-only runner and the port stays bound to 127.0.0.1, so the open
@@ -72,6 +90,24 @@ const remoteDebuggingPort =
     : remoteDebuggingSetting;
 
 const electronArgs = [];
+// See decideOzonePlatform: Chromium's own Wayland-preferring selection hangs
+// without a log line on stale/unanswering compositor sockets, so the dev
+// runner picks deterministically on Linux.
+const ozonePlatform = decideOzonePlatform({
+  platform: process.platform,
+  ozonePlatformOverride: childEnv.TRAYCER_DESKTOP_OZONE_PLATFORM,
+  display: childEnv.DISPLAY,
+  waylandDisplay: childEnv.WAYLAND_DISPLAY,
+});
+if (ozonePlatform !== null) {
+  electronArgs.push(`--ozone-platform=${ozonePlatform}`);
+  console.log(
+    `[dev-main] using --ozone-platform=${ozonePlatform}` +
+      (ozonePlatform === "headless"
+        ? " (no display detected — drive the app over the CDP endpoint)"
+        : ""),
+  );
+}
 if (remoteDebuggingPort !== null) {
   electronArgs.push(`--remote-debugging-port=${remoteDebuggingPort}`);
   // Chromium rejects DevTools WebSocket upgrades whose Origin header isn't

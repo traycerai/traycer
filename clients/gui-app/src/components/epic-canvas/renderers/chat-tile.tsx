@@ -20,6 +20,7 @@ import type {
   InterviewAnswer,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
+import { importedProvenance } from "@traycer/protocol/persistence/epic/chat-events";
 import type {
   BackgroundItem,
   ChatQueuedPromptItem,
@@ -89,7 +90,17 @@ import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-con
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
 import type { ChatMessageActions } from "@/components/chat/chat-message";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
-import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
+import type {
+  ChatComposerSideChatInput,
+  ChatComposerSubmitInput,
+} from "@/components/chat/composer/chat-composer";
+import {
+  sideChatPlacementForTile,
+  startSideChat,
+} from "@/lib/commands/actions/start-side-chat";
+import type { CancelFn } from "@/lib/commands/actions/new-chat";
+import { visibleWorktreeIntent } from "@/lib/worktree/fork-workspace-seed";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   useChatById,
   useEpicLiveArtifactTitle,
@@ -148,7 +159,10 @@ import {
 } from "@/hooks/agent/use-host-reachability";
 import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { TileHostLoadState } from "./tile-host-load-state";
-import { useEpicUpdateChatRunSettings } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  useEpicCreateChatForHost,
+  useEpicUpdateChatRunSettings,
+} from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatCloneOnHostSwitch } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
 import { CloneProfileRecovery } from "@/components/epic-canvas/renderers/clone-profile-recovery";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
@@ -156,7 +170,10 @@ import {
   findManualCompactCommand,
   promoteQueuedMessageToFront,
 } from "@/lib/chats/compact-conversation";
-import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
+import {
+  NO_LOCAL_SLASH_COMMANDS,
+  useSlashCommands,
+} from "@/hooks/composer/use-slash-commands";
 import { chatTileActivationQueryPolicy } from "./chat-tile-activation-query-policy";
 import {
   ChatDeadTileBanner,
@@ -185,7 +202,11 @@ import {
   buildSubmittedChatJSONContent,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
-import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
+import {
+  buildChatRunSettings,
+  importedChatSettingsSeed,
+} from "@/lib/composer/chat-run-settings";
+import type { ProviderId } from "@/components/home/data/landing-options";
 import {
   deriveWorktreeBindingWorkspaceAvailability,
   effectiveMissingWorktreePaths,
@@ -1358,6 +1379,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const profile = useAuthStore((state) => state.profile);
   const activeHostId = useTabHostId();
   const currentUserId = profile?.userId ?? null;
+  // The `/btw` side chat's create, on this tab's own host client: the fork is
+  // bound to the source's host for life, like the source itself.
+  const createSideChat = useEpicCreateChatForHost();
   const localSnapshotClearMarker = useLocalSnapshotClearStore((store) =>
     localSnapshotsClearedAt(
       store.clearedAtByScope,
@@ -1453,6 +1477,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       accumulatedFileChanges: s.accumulatedFileChanges,
       accumulatedFileChangeSummaries: s.accumulatedFileChangeSummaries,
       accumulatedSummaryGenerationSeated: s.accumulatedSummaryGenerationSeated,
+      accumulatedSummaryAssemblyStarted: s.accumulatedSummaryAssemblyStarted,
       accumulatedFileChangeCount: s.accumulatedFileChangeCount,
       backgroundItems: s.backgroundItems,
       pendingBackgroundStops: s.pendingBackgroundStops,
@@ -1666,16 +1691,17 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ) ?? null;
   const activeEditingQueueItemId = editingQueueItem?.queueItemId ?? null;
   const chatSettingsSeed = state.chat?.settings ?? null;
+  const importedSourceProvider =
+    importedProvenance(state.events)?.sourceProvider ?? null;
   const {
     composerFallbackSettingsSeed,
-    epicRunSettings,
-    globalLastRunSettings,
     initialComposerSettings,
     setEpicRunSettings,
   } = useChatTileComposerSettingsSeeds({
     currentEpicId,
     persistedChatSettings: chatSettingsSeed,
     defaultRunSettings,
+    importedSourceProvider,
   });
   useInitializeChatComposerSettings({
     snapshotLoaded: state.snapshotLoaded,
@@ -1780,6 +1806,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     hostChangeCount: state.accumulatedFileChangeCount,
     deliveredSummaryCount: state.accumulatedFileChangeSummaries.length,
     generationSeated: state.accumulatedSummaryGenerationSeated,
+    assemblyStarted: state.accumulatedSummaryAssemblyStarted,
   });
   const restoreContext = useMemo(
     () => ({
@@ -1831,16 +1858,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         editingQueueItemSettings:
           editingQueueItem === null ? null : editingQueueItem.settings,
         persistedChatSettings: state.chat?.settings ?? null,
-        epicRunSettings,
-        globalLastRunSettings,
+        fallbackSettingsSeed: composerFallbackSettingsSeed,
         defaultRunSettings,
       }),
     [
       state.currentComposerSettings,
       editingQueueItem,
       state.chat?.settings,
-      epicRunSettings,
-      globalLastRunSettings,
+      composerFallbackSettingsSeed,
       defaultRunSettings,
     ],
   );
@@ -1867,6 +1892,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     // and resolving against a catalog the composer never saw.
     workingDirectories: resolvedComposerMentionRoots,
     enabled: activationQueries.discoverActionSlashCommands,
+    localCommands: NO_LOCAL_SLASH_COMMANDS,
   });
   // Null until loaded, which makes a `$` prompt stay plain text rather than
   // chip against a catalog we have not seen yet.
@@ -2299,6 +2325,71 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       dispatchUserSend,
       profile,
       submitThroughRebindGate,
+    ],
+  );
+  // `/btw` / `/side`: fork this chat and ask there. The tile contributes what
+  // only it knows about its own chat - owner, title, lineage, workspace, pane -
+  // and `startSideChat` owns the create, its recovery, and the open. Deliberately
+  // not gated on `canAct`: a viewer of someone else's chat can still fork it
+  // (the fork dialog allows exactly that), and the side chat is the viewer's own.
+  const sideChatCancelsRef = useRef(new Set<CancelFn>());
+  useEffect(() => {
+    const cancels = sideChatCancelsRef.current;
+    return () => {
+      for (const cancel of cancels) cancel();
+      cancels.clear();
+    };
+  }, []);
+  const startSideChatFromComposer = useCallback(
+    (input: ChatComposerSideChatInput): boolean => {
+      if (profile === null) return false;
+      const stagedKey: WorktreeStagingKey = {
+        surface: "owner",
+        hostId: activeHostId,
+        epicId: currentEpicId,
+        ownerKind: "chat",
+        ownerId: node.id,
+      };
+      const cancel = startSideChat({
+        epicId: currentEpicId,
+        tabId: viewTabId,
+        hostId: activeHostId,
+        userId: profile.userId,
+        sourceChatId: node.id,
+        sourceChatTitle: state.chat?.title ?? "",
+        sourceOwnerUserId: state.chat?.userId ?? null,
+        content: input.content,
+        settings: input.settings,
+        accountContext: useAccountContextStore.getState().accountContext,
+        // The source's visible workspace - its binding overlaid with any unsent
+        // staged pick - so the fork works where the source's composer shows.
+        worktreeIntent: visibleWorktreeIntent(
+          state.worktreeBinding,
+          readStagedWorktreeIntent(stagedKey),
+        ),
+        placement: sideChatPlacementForTile(viewTabId, node.id),
+        createChat: (request, callbacks) =>
+          createSideChat.mutate(request, callbacks),
+        onHistoryUnavailable: (reason) => {
+          toast(
+            reason === "no-checkpoint"
+              ? "This agent hasn't replied yet, so the side chat starts without its history."
+              : "This host can't fork chat history yet, so the side chat starts without it.",
+          );
+        },
+      });
+      sideChatCancelsRef.current.add(cancel);
+      return true;
+    },
+    [
+      activeHostId,
+      createSideChat,
+      currentEpicId,
+      node.id,
+      profile,
+      state.chat,
+      state.worktreeBinding,
+      viewTabId,
     ],
   );
   const canSendNextStep =
@@ -2855,6 +2946,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       onSubmitMessage: submitMessage,
+      onSideChat: startSideChatFromComposer,
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -2869,6 +2961,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       isFolderlessWorkspace,
       currentEpicId,
       submitMessage,
+      startSideChatFromComposer,
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -3082,6 +3175,7 @@ function ContextUsageChipForChat(props: {
     harnessId: props.harnessId,
     workingDirectories: props.workingDirectories,
     enabled: props.commandsEnabled,
+    localCommands: NO_LOCAL_SLASH_COMMANDS,
   });
   const compactCommand = findManualCompactCommand(commands);
   const requestCompact = props.onCompact;
@@ -3162,6 +3256,8 @@ function useChatTileComposerSettingsSeeds(input: {
   readonly currentEpicId: string;
   readonly persistedChatSettings: ChatRunSettings | null;
   readonly defaultRunSettings: ChatRunSettings;
+  /** The provider an imported chat came from, `null` for a native chat. */
+  readonly importedSourceProvider: ProviderId | null;
 }) {
   // This tile's composer is bound to the TAB host for life, so its last-run
   // fallback seeds read that host's buckets and the on-send write below lands
@@ -3181,17 +3277,28 @@ function useChatTileComposerSettingsSeeds(input: {
     );
   const epicRunSettings =
     settingsFromEpicRunSettingsEntry(epicRunSettingsEntry);
-  const composerFallbackSettingsSeed = fallbackSettingsSeedForChatComposer(
-    epicRunSettings,
-    globalLastRunSettings,
+  const { defaultRunSettings, importedSourceProvider } = input;
+  const composerFallbackSettingsSeed = useMemo(
+    () =>
+      fallbackSettingsSeedForChatComposer({
+        epicRunSettings,
+        globalLastRunSettings,
+        defaultRunSettings,
+        importedSourceProvider,
+      }),
+    [
+      epicRunSettings,
+      globalLastRunSettings,
+      defaultRunSettings,
+      importedSourceProvider,
+    ],
   );
   const initialComposerSettings = currentSettingsForChatTile({
     liveSettings: null,
     editingQueueItemSettings: null,
     persistedChatSettings: input.persistedChatSettings,
-    epicRunSettings,
-    globalLastRunSettings,
-    defaultRunSettings: input.defaultRunSettings,
+    fallbackSettingsSeed: composerFallbackSettingsSeed,
+    defaultRunSettings,
   });
   // Consumers (the send/steer paths) keep the pre-host 3-param shape; the tab
   // host is bound here, the single site that knows it.
@@ -3203,8 +3310,6 @@ function useChatTileComposerSettingsSeeds(input: {
 
   return {
     composerFallbackSettingsSeed,
-    epicRunSettings,
-    globalLastRunSettings,
     initialComposerSettings,
     setEpicRunSettings: setEpicRunSettingsForTabHost,
   };
@@ -3277,11 +3382,33 @@ function useChatWorkspaceAvailability(
   );
 }
 
-function fallbackSettingsSeedForChatComposer(
-  epicRunSettings: ChatRunSettings | null,
-  globalLastRunSettings: ChatRunSettings | null,
-): ChatRunSettings | null {
-  return epicRunSettings ?? globalLastRunSettings;
+/**
+ * What seeds this chat until (or unless) the chat's own settings do.
+ *
+ * For a native chat that is the last-used pair, epic-scoped first. An imported
+ * chat overrides the PROVIDER with the one it was imported from - see
+ * `importedChatSettingsSeed` - because a chat whose own settings never resolved
+ * would otherwise continue a Codex transcript under whatever the user last ran.
+ *
+ * Both readers of an unsettled chat's provider take this one answer: the lower
+ * composer as its `fallbackSettingsSeed`, and the tile's own send paths through
+ * `currentSettingsForChatTile`. They used to derive it separately, and the tile
+ * won - it committed the remembered pair as the chat's live settings on mount,
+ * which then outranked the composer's imported fallback from the next render on.
+ */
+function fallbackSettingsSeedForChatComposer(input: {
+  readonly epicRunSettings: ChatRunSettings | null;
+  readonly globalLastRunSettings: ChatRunSettings | null;
+  readonly defaultRunSettings: ChatRunSettings;
+  readonly importedSourceProvider: ProviderId | null;
+}): ChatRunSettings | null {
+  const remembered = input.epicRunSettings ?? input.globalLastRunSettings;
+  if (input.importedSourceProvider === null) return remembered;
+  return importedChatSettingsSeed(
+    remembered,
+    input.defaultRunSettings,
+    input.importedSourceProvider,
+  );
 }
 
 function settingsFromEpicRunSettingsEntry(
@@ -3290,6 +3417,16 @@ function settingsFromEpicRunSettingsEntry(
   return entry === null ? null : entry.settings;
 }
 
+/**
+ * Commits the mount-time seed as the chat's live composer settings, once.
+ *
+ * The resolved-model gate is what lets an imported chat's provenance survive
+ * this hop: `importedChatSettingsSeed` names the source provider and no model,
+ * so nothing is committed here and the toolbar resolves that provider's own
+ * catalog default instead. Committing an unresolved seed would freeze a model
+ * this hook only guessed, and `state.currentComposerSettings` outranks the
+ * composer's fallback seed for the rest of the chat's life.
+ */
 function useInitializeChatComposerSettings(input: {
   readonly snapshotLoaded: boolean;
   readonly currentComposerSettings: ChatRunSettings | null;
@@ -3319,20 +3456,29 @@ function chatRunSettingsModelResolved(settings: ChatRunSettings): boolean {
   return settings.model.length > 0;
 }
 
+/**
+ * What this chat runs its next turn under, most specific source first.
+ *
+ * `fallbackSettingsSeed` is the single slot the remembered pair and an imported
+ * chat's provenance share (see `fallbackSettingsSeedForChatComposer`), and it
+ * sits BELOW `persistedChatSettings` on purpose: a chat whose own
+ * `ChatRunSettings` resolved has already committed to a provider, and neither a
+ * remembered pair nor a provenance guess may overrule it. Above that slot is
+ * only what the user is doing right now - a live toolbar edit, or the queue
+ * item open for editing.
+ */
 function currentSettingsForChatTile(input: {
   readonly liveSettings: ChatRunSettings | null;
   readonly editingQueueItemSettings: ChatRunSettings | null;
   readonly persistedChatSettings: ChatRunSettings | null;
-  readonly epicRunSettings: ChatRunSettings | null;
-  readonly globalLastRunSettings: ChatRunSettings | null;
+  readonly fallbackSettingsSeed: ChatRunSettings | null;
   readonly defaultRunSettings: ChatRunSettings;
 }): ChatRunSettings {
   return (
     input.liveSettings ??
     input.editingQueueItemSettings ??
     input.persistedChatSettings ??
-    input.epicRunSettings ??
-    input.globalLastRunSettings ??
+    input.fallbackSettingsSeed ??
     input.defaultRunSettings
   );
 }

@@ -124,6 +124,7 @@ if (runsFirstShard) {
   );
   if (runsBrowserRegressions) {
     runBrowserRegression("scripts/diff-edit-browser-regression.mjs");
+    runBrowserRegression("scripts/pierre-tree-zoom-browser-regression.mjs");
     // Same gate, same reason: the claim is "after Cancel the window is usable
     // again", and jsdom has no hit testing, so only a real layout engine can
     // tell a released modal from a modal that merely stopped being asserted

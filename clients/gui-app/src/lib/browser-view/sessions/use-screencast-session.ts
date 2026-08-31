@@ -34,10 +34,12 @@ import {
   type ScreencastSessionRefs,
 } from "@/lib/browser-view/sessions/screencast-controller";
 import type { ScreencastFrameSize } from "@/lib/browser-view/sessions/screencast-input-encoding";
+import {
+  clampScreencastDpr,
+  screencastProfile,
+  type ScreencastProfile,
+} from "@/lib/browser-view/sessions/screencast-profile";
 
-const DEFAULT_MAX_WIDTH = 1280;
-const DEFAULT_MAX_HEIGHT = 720;
-const DEFAULT_QUALITY = 70;
 const STALE_WITHOUT_FRAME_MS = 8_000;
 const VIEWPORT_DEBOUNCE_MS = 200;
 
@@ -123,6 +125,9 @@ export function useScreencastSession(
   options: ScreencastSessionOptions,
 ): ScreencastSession {
   const { client, epicId, sessionId, tabId, visible } = options;
+  // A module constant chosen by the shell this bundle booted into, so the
+  // reference is stable across renders and safe to depend on below.
+  const profile = screencastProfile();
   const streamRef = useRef<BrowserScreencastStreamClient | null>(null);
   const tileRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -342,9 +347,9 @@ export function useScreencastSession(
       epicId,
       sessionId,
       tabId,
-      maxWidth: DEFAULT_MAX_WIDTH,
-      maxHeight: DEFAULT_MAX_HEIGHT,
-      quality: DEFAULT_QUALITY,
+      maxWidth: profile.maxWidth,
+      maxHeight: profile.maxHeight,
+      quality: profile.quality,
       format: "jpeg",
       role: "tile",
       callbacks: { onServerFrame, onConnectionStatus },
@@ -367,6 +372,7 @@ export function useScreencastSession(
     setDetails,
     setFrameSize,
     setImage,
+    profile,
     setLifecycle,
     tabId,
     visible,
@@ -379,7 +385,7 @@ export function useScreencastSession(
       ...viewport,
     });
   }, []);
-  useScreencastViewportBridge(viewportRef, visible, sendViewport);
+  useScreencastViewportBridge(viewportRef, visible, profile, sendViewport);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -601,6 +607,7 @@ function handleScreencastFrame(args: {
 function useScreencastViewportBridge(
   ref: RefObject<HTMLElement | null>,
   visible: boolean,
+  profile: ScreencastProfile,
   sendViewport: (viewport: ScreencastViewportInput) => void,
 ): void {
   useEffect(() => {
@@ -615,7 +622,7 @@ function useScreencastViewportBridge(
         sendViewport({
           width: Math.max(1, Math.round(width)),
           height: Math.max(1, Math.round(height)),
-          dpr: window.devicePixelRatio,
+          dpr: clampScreencastDpr(profile, window.devicePixelRatio),
         });
       }, VIEWPORT_DEBOUNCE_MS);
     };
@@ -631,7 +638,7 @@ function useScreencastViewportBridge(
       observer.disconnect();
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [ref, sendViewport, visible]);
+  }, [profile, ref, sendViewport, visible]);
 }
 
 type ScreencastControlResult = "armed" | "teardown" | "ignore";

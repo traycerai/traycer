@@ -10,6 +10,7 @@ import {
   listChatHeadParts,
   type ChatHeadRecord,
 } from "@traycer/protocol/persistence/chat-sync/head";
+import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import { describe, expect, it } from "vitest";
 import {
   CHAT_ID,
@@ -387,7 +388,7 @@ describe("chat assembly fails closed", () => {
     // Content addressing proves the bytes are the ones the head named; this
     // proves they MEAN what the head assumed.
     const foreign = publishShard({
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
       chatId: "chat-somewhere-else",
       section: "messages",
       messages: [unknownMessage],

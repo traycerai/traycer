@@ -98,6 +98,9 @@ const testState = vi.hoisted(() => {
     hostId: "host-1",
     agentNames: new Map<string, string>(),
     taskTitles: new Map<string, string>(),
+    sweepingPaths: new Set<string>(),
+    deferOutcome: false,
+    deferredOutcome: null as ((result: unknown) => void) | null,
     refresh: vi.fn(() => Promise.resolve(testState.rows)),
   };
 });
@@ -116,13 +119,17 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
 
 vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
   useEpicSweepWorktrees: () => ({
-    isPending: false,
+    isPending: testState.sweepingPaths.size > 0,
     mutate: (
       variables: unknown,
       options: { onSuccess?: (result: unknown) => void } | undefined,
     ) => {
       testState.lastVariables = testState.parseSweepVariables(variables);
       testState.mutate(variables);
+      if (testState.deferOutcome) {
+        testState.deferredOutcome = options?.onSuccess ?? null;
+        return;
+      }
       options?.onSuccess?.({
         hostId: "host-1",
         removed: testState.removed,
@@ -132,7 +139,7 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
       });
     },
   }),
-  useSweepingWorktreePaths: () => new Set<string>(),
+  useSweepingWorktreePaths: () => testState.sweepingPaths,
 }));
 
 vi.mock("@/components/worktree/worktree-pr-metadata", () => ({
@@ -180,6 +187,8 @@ function renderDialog(): void {
     <SweepWorktreesDialog
       epicIds={["epic-1"]}
       hostClient={null}
+      hostChoice={null}
+      fleetPending={false}
       taskTitle="Task"
       onOpenChange={vi.fn()}
     />,
@@ -198,6 +207,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
     testState.agentNames = new Map();
     testState.taskTitles = new Map();
     testState.hostId = "host-1";
+    testState.sweepingPaths = new Set();
+    testState.deferOutcome = false;
+    testState.deferredOutcome = null;
     testState.refresh.mockReset();
     testState.refresh.mockImplementation(() => Promise.resolve(testState.rows));
     testState.rows = [];
@@ -226,7 +238,165 @@ describe("SweepWorktreesDialog ergonomics", () => {
     expect(testState.lastVariables.worktrees[0]?.stopOwners).toBe(false);
   });
 
-  it("opens review for in-use, unproven, and shared selections; typing only for unproven", async () => {
+  it("closes at kickoff so a safe sweep runs in the background", () => {
+    testState.rows = [
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/idle",
+          branch: "feat-idle",
+          inUse: false,
+        }),
+        tier: "merged",
+        defaultChecked: true,
+        disabled: false,
+        note: null,
+        holders: [],
+        holdersStatus: "none",
+      },
+    ];
+    const onOpenChange = vi.fn();
+    render(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
+        taskTitle="Task"
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sweep selected" }));
+
+    expect(testState.mutate).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("reopens a confirmed sweep on Choose with per-row progress", async () => {
+    testState.rows = [
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/review",
+          branch: "feat-review",
+          inUse: false,
+          uncommittedCount: 1,
+          prState: "none",
+          branchStatus: { ahead: 1, behind: 0, mergedIntoDefault: false },
+        }),
+        tier: "review",
+        defaultChecked: false,
+        disabled: false,
+        note: "not-landed",
+        holders: [],
+        holdersStatus: "none",
+      },
+    ];
+    testState.deferOutcome = true;
+    const onOpenChange = vi.fn();
+    const view = render(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
+        taskTitle="Task"
+        onOpenChange={onOpenChange}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Sweep worktree feat-review" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review consequences" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Review this sweep")).toBeTruthy();
+    });
+    testState.sweepingPaths = new Set(["/wt/review"]);
+    fireEvent.click(screen.getByRole("button", { name: "Sweep anyway" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+
+    view.rerender(
+      <SweepWorktreesDialog
+        epicIds={null}
+        hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
+        taskTitle="Task"
+        onOpenChange={onOpenChange}
+      />,
+    );
+    view.rerender(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
+        taskTitle="Task"
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    expect(screen.queryByText("Review this sweep")).toBeNull();
+    expect(screen.queryByTestId("sweep-background-notice")).toBeNull();
+    expect(screen.getByText("Sweeping…")).toBeTruthy();
+    expect(
+      screen.getByTestId("sweep-worktrees-row-sweeping-spinner"),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+  });
+
+  it("keeps unrelated rows actionable while another sweep is running", () => {
+    testState.rows = [
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/sweeping",
+          branch: "feat-sweeping",
+          inUse: false,
+        }),
+        tier: "merged",
+        defaultChecked: true,
+        disabled: false,
+        note: null,
+        holders: [],
+        holdersStatus: "none",
+      },
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/ready",
+          branch: "feat-ready",
+          inUse: false,
+        }),
+        tier: "merged",
+        defaultChecked: true,
+        disabled: false,
+        note: null,
+        holders: [],
+        holdersStatus: "none",
+      },
+    ];
+    testState.sweepingPaths = new Set(["/wt/sweeping"]);
+
+    renderDialog();
+
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Sweep worktree feat-sweeping" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Sweep worktree feat-ready" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: "Sweep selected" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("opens review for elevated selections without requiring typed confirmation", async () => {
     testState.rows = [
       {
         entry: worktreeEntry({
@@ -244,22 +414,25 @@ describe("SweepWorktreesDialog ergonomics", () => {
       },
     ];
     renderDialog();
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
-    );
+    const retriedBusy = screen.getByRole("checkbox", {
+      name: "Sweep worktree feat-busy",
+    });
+    if (retriedBusy.getAttribute("aria-checked") === "false") {
+      fireEvent.click(retriedBusy);
+    }
     fireEvent.click(
       screen.getByRole("button", { name: "Review consequences" }),
     );
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    expect(screen.queryByTestId("sweep-typed-confirm")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Stop work & sweep" }),
     ).toBeTruthy();
   });
 
-  it("requires typing sweep only when an unproven row is selected", async () => {
+  it("allows click confirmation when an unproven row is selected", async () => {
     testState.rows = [
       {
         entry: worktreeEntry({
@@ -286,13 +459,12 @@ describe("SweepWorktreesDialog ergonomics", () => {
       screen.getByRole("button", { name: "Review consequences" }),
     );
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-typed-confirm")).toBeTruthy();
+      expect(
+        screen.getByRole("heading", { name: "Review this sweep" }),
+      ).toBeTruthy();
     });
     const confirm = screen.getByRole("button", { name: "Sweep anyway" });
-    expect(confirm.hasAttribute("disabled")).toBe(true);
-    fireEvent.change(screen.getByTestId("sweep-typed-confirm"), {
-      target: { value: "sweep" },
-    });
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(confirm.hasAttribute("disabled")).toBe(false);
   });
 
@@ -315,9 +487,12 @@ describe("SweepWorktreesDialog ergonomics", () => {
     ];
     renderDialog();
     expect(screen.queryByTestId("teardown-disclosure")).toBeNull();
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
-    );
+    const retriedBusy = screen.getByRole("checkbox", {
+      name: "Sweep worktree feat-busy",
+    });
+    if (retriedBusy.getAttribute("aria-checked") === "false") {
+      fireEvent.click(retriedBusy);
+    }
     expect(
       screen.getByTestId("teardown-disclosure-inline").textContent,
     ).toContain(
@@ -375,7 +550,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     );
   });
 
-  it("select-all includes unproven rows, excludes in-use, and deselect-all clears in-use", () => {
+  it("select-all includes unproven and in-use rows, expands disclosures, and deselect-all clears in-use", () => {
     testState.rows = [
       {
         entry: worktreeEntry({
@@ -419,17 +594,52 @@ describe("SweepWorktreesDialog ergonomics", () => {
         holdersStatus: "ready",
         holdersRevision: REV_A,
       },
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/octopus",
+          branch: "feat-octopus",
+          inUse: true,
+        }),
+        tier: "in-use",
+        defaultChecked: false,
+        disabled: false,
+        note: "in-use",
+        holders: [],
+        holdersStatus: "unknown",
+      },
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/loading",
+          branch: "feat-loading",
+          inUse: true,
+        }),
+        tier: "in-use",
+        defaultChecked: false,
+        disabled: true,
+        note: "in-use",
+        holders: [],
+        holdersStatus: "loading",
+      },
     ];
     renderDialog();
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
+    const selectAll = screen.getByRole("checkbox", { name: "Select all" });
+    expect(selectAll.getAttribute("aria-checked")).toBe("mixed");
+    expect(screen.getByTestId("sweep-worktrees-count").textContent).toBe(
+      "1 of 5 selected",
+    );
+    expect(screen.getByTestId("sweep-worktrees-count").textContent).not.toMatch(
+      /require individual selection/,
     );
     expect(
       screen
         .getByRole("checkbox", { name: "Sweep worktree feat-busy" })
         .getAttribute("aria-checked"),
-    ).toBe("true");
-    fireEvent.click(screen.getByTestId("sweep-worktrees-select-all"));
+    ).toBe("false");
+    expect(screen.queryByTestId("teardown-disclosure-inline")).toBeNull();
+    expect(screen.getAllByText(/Check to review/).length).toBeGreaterThan(0);
+    fireEvent.click(selectAll);
+    expect(selectAll.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("checkbox", { name: "Deselect all" })).toBeTruthy();
     expect(
       screen
         .getByRole("checkbox", { name: "Sweep worktree feat-review" })
@@ -440,12 +650,113 @@ describe("SweepWorktreesDialog ergonomics", () => {
         .getByRole("checkbox", { name: "Sweep worktree feat-busy" })
         .getAttribute("aria-checked"),
     ).toBe("true");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Sweep worktree feat-octopus" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Sweep worktree feat-loading" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    const disclosures = screen.getAllByTestId("teardown-disclosure-inline");
+    expect(disclosures).toHaveLength(2);
+    expect(disclosures[0]?.textContent).toContain(
+      "Terminal agent “Claude Code agent polite-ocelot” is working — will be stopped",
+    );
+    expect(disclosures[1]?.textContent).toContain(
+      formatUnknownHolderConsequence("feat-octopus"),
+    );
+    expect(screen.getByTestId("sweep-worktrees-count").textContent).toBe(
+      "4 of 5 selected",
+    );
+    expect(
+      screen.getByRole("button", { name: "Review consequences" }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("checkbox", { name: "Deselect all" }));
     expect(
       screen
         .getByRole("checkbox", { name: "Sweep worktree feat-busy" })
         .getAttribute("aria-checked"),
     ).toBe("false");
+    expect(screen.queryByTestId("teardown-disclosure-inline")).toBeNull();
+  });
+
+  it("bulk-selected in-use rows produce the same review entries and request consent as individually selected ones", async () => {
+    const mixed = [
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/idle",
+          branch: "feat-idle",
+          inUse: false,
+        }),
+        tier: "merged" as const,
+        defaultChecked: true,
+        disabled: false,
+        note: null,
+        holders: [] as const,
+        holdersStatus: "none" as const,
+      },
+      {
+        entry: worktreeEntry({
+          worktreePath: "/wt/busy",
+          branch: "feat-busy",
+          inUse: true,
+        }),
+        tier: "in-use" as const,
+        defaultChecked: false,
+        disabled: false,
+        note: "in-use" as const,
+        holders: HOLDERS,
+        holdersStatus: "ready" as const,
+        holdersRevision: REV_A,
+      },
+    ];
+    testState.rows = mixed;
+    renderDialog();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Sweep worktree feat-busy" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review consequences" }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Review this sweep" }),
+      ).toBeTruthy();
+    });
+    const individualStops =
+      screen.getByTestId("sweep-review-stops").textContent;
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
+    const individualRequest = testState.lastVariables;
+
+    cleanup();
+    testState.mutate.mockReset();
+    testState.lastVariables = { worktrees: [] };
+    testState.rows = mixed;
+    renderDialog();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review consequences" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Review this sweep")).toBeTruthy();
+    });
+    expect(screen.getByTestId("sweep-review-stops").textContent).toBe(
+      individualStops,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
+    expect(testState.lastVariables).toEqual(individualRequest);
+    expect(testState.lastVariables.worktrees).toEqual(
+      expect.arrayContaining([
+        {
+          worktreePath: "/wt/busy",
+          stopOwners: true,
+          expectedHoldersRevision: REV_A,
+        },
+      ]),
+    );
   });
 
   it("drops a checked override when an idle row refreshes to in-use", async () => {
@@ -467,6 +778,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -492,6 +805,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -520,6 +835,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -532,6 +849,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -553,6 +872,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -566,7 +887,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
   });
 
-  it("returns to review with What is running changed when holders change", async () => {
+  it("returns to Choose when holders change so the next sweep gets a fresh review", async () => {
     testState.holdersChanged = [
       {
         worktreePath: "/wt/busy",
@@ -602,11 +923,11 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
-      expect(
-        screen.getByTestId("sweep-inventory-changed").textContent,
-      ).toContain("What is running changed");
+      expect(screen.queryByText("Review this sweep")).toBeNull();
     });
-    expect(screen.getByText("Review this sweep")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Review consequences" }),
+    ).toBeTruthy();
   });
 
   it("Back from review preserves selection; Escape is owned by the dialog", async () => {
@@ -762,7 +1083,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     );
   });
 
-  it("drops a removed force path from re-review and keeps idle unsubmitted", async () => {
+  it("returns partial results to Choose instead of a stale review receipt", async () => {
     const idle = {
       entry: worktreeEntry({
         worktreePath: "/wt/idle",
@@ -827,30 +1148,14 @@ describe("SweepWorktreesDialog ergonomics", () => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
-    await waitFor(() => {
-      expect(screen.getByTestId("sweep-inventory-changed")).toBeTruthy();
-    });
-    expect(screen.queryByText("feat-ok")).toBeNull();
-    expect(screen.getByText("feat-busy")).toBeTruthy();
-    expect(screen.getByTestId("sweep-review-removal").textContent).toContain(
-      "2 worktrees will be removed",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
-    expect(testState.mutate).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("Review this sweep")).toBeNull();
+    expect(testState.mutate).toHaveBeenCalledTimes(1);
     const firstKickoff = testState.parseSweepVariables(
       testState.mutate.mock.calls[0]?.[0],
     );
     expect(
       firstKickoff.worktrees.map((target) => target.worktreePath).sort(),
     ).toEqual(["/wt/busy", "/wt/idle", "/wt/ok"]);
-    expect(
-      testState.lastVariables.worktrees.map((target) => target.worktreePath),
-    ).toEqual(["/wt/idle", "/wt/busy"]);
-    expect(
-      testState.lastVariables.worktrees.find(
-        (target) => target.worktreePath === "/wt/busy",
-      )?.expectedHoldersRevision,
-    ).toBe(REV_B);
   });
 
   it("activates select-all with A, Space, and Enter, and does not claim A on step 2", async () => {
@@ -930,15 +1235,10 @@ describe("SweepWorktreesDialog ergonomics", () => {
       screen.getByRole("button", { name: "Review consequences" }),
     );
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-typed-confirm")).toBeTruthy();
+      expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
     fireEvent.keyDown(window, { key: "a" });
-    fireEvent.change(screen.getByTestId("sweep-typed-confirm"), {
-      target: { value: "a" },
-    });
-    expect(
-      screen.getByTestId<HTMLInputElement>("sweep-typed-confirm").value,
-    ).toBe("a");
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
   it("names full shell commands in the review receipt", async () => {
@@ -1210,7 +1510,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     ]);
   });
 
-  it("resubmits only the refused path after uncertain + HOLDERS_CHANGED", async () => {
+  it("shows uncertain and refused outcomes on Choose after a partial sweep", async () => {
     const uncertainBusy = {
       entry: worktreeEntry({
         worktreePath: "/wt/maybe",
@@ -1263,21 +1563,13 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
-      expect(
-        screen.getByTestId("sweep-review-uncertain").textContent,
-      ).toContain("feat-maybe");
+      expect(screen.getByTestId("sweep-worktrees-row-outcome")).toBeTruthy();
     });
-    expect(screen.getByTestId("sweep-review-removal").textContent).toContain(
-      "1 worktree will be removed",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
-    expect(testState.mutate).toHaveBeenCalledTimes(2);
-    expect(
-      testState.lastVariables.worktrees.map((target) => target.worktreePath),
-    ).toEqual(["/wt/busy"]);
-    expect(testState.lastVariables.worktrees[0]?.expectedHoldersRevision).toBe(
-      REV_B,
-    );
+    const uncertainBox = screen.getByRole("checkbox", {
+      name: "Sweep worktree feat-maybe",
+    });
+    expect(uncertainBox.hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText("Review this sweep")).toBeNull();
   });
 
   it("stays on choose when pre-review refresh rejects", async () => {
@@ -1429,10 +1721,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-review-uncertain")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByTestId("sweep-worktrees-back"));
-    await waitFor(() => {
       expect(
         screen.getByRole("checkbox", { name: "Sweep worktree feat-maybe" }),
       ).toBeTruthy();
@@ -1459,7 +1747,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     expect(failedBox.getAttribute("aria-checked")).toBe("false");
   });
 
-  it("keeps an earlier uncertain banner when a later refusal rebuilds the receipt", async () => {
+  it("keeps an uncertain row outcome on the resumed Choose view", async () => {
     const uncertainBusy = {
       entry: worktreeEntry({
         worktreePath: "/wt/maybe",
@@ -1513,30 +1801,10 @@ describe("SweepWorktreesDialog ergonomics", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
       expect(
-        screen.getByTestId("sweep-review-uncertain").textContent,
-      ).toContain("feat-maybe");
+        screen.getByTestId("sweep-worktrees-row-outcome").textContent,
+      ).toMatch(/unconfirmed/i);
     });
-    testState.uncertain = [];
-    testState.holdersChanged = [
-      {
-        worktreePath: "/wt/busy",
-        holders: HOLDERS,
-        holdersRevision: REV_B,
-      },
-    ];
-    fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("sweep-review-uncertain").textContent,
-      ).toContain("feat-maybe");
-    });
-    expect(testState.mutate).toHaveBeenCalledTimes(2);
-    expect(
-      testState.lastVariables.worktrees.map((target) => target.worktreePath),
-    ).toEqual(["/wt/busy"]);
-    expect(testState.lastVariables.worktrees[0]?.expectedHoldersRevision).toBe(
-      REV_B,
-    );
+    expect(screen.queryByText("Review this sweep")).toBeNull();
   });
 
   it("drops an uncertain path that vanishes on refresh", async () => {
@@ -1581,6 +1849,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1599,15 +1869,16 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-review-uncertain")).toBeTruthy();
+      expect(screen.getByTestId("sweep-worktrees-row-outcome")).toBeTruthy();
     });
-    fireEvent.click(screen.getByTestId("sweep-worktrees-back"));
     testState.rows = [refuseBusy];
     fireEvent.click(screen.getByTestId("sweep-worktrees-refresh"));
     rerender(
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1672,9 +1943,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-review-uncertain")).toBeTruthy();
+      expect(screen.getByTestId("sweep-worktrees-row-outcome")).toBeTruthy();
     });
-    fireEvent.click(screen.getByTestId("sweep-worktrees-back"));
     const locked = screen.getByRole("checkbox", {
       name: "Sweep worktree feat-maybe",
     });
@@ -1737,6 +2007,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1755,9 +2027,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Stop work & sweep" }));
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-review-uncertain")).toBeTruthy();
+      expect(screen.getByTestId("sweep-worktrees-row-outcome")).toBeTruthy();
     });
-    fireEvent.click(screen.getByTestId("sweep-worktrees-back"));
     expect(
       screen
         .getByRole("checkbox", { name: "Sweep worktree feat-wt" })
@@ -1771,6 +2042,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1786,6 +2059,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1794,6 +2069,77 @@ describe("SweepWorktreesDialog ergonomics", () => {
       name: "Sweep worktree feat-wt",
     });
     expect(backOnA.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByTestId("sweep-worktrees-row-outcome")).toBeNull();
+  });
+
+  it("ignores a host A outcome after retargeting the parked session to host B", () => {
+    const path = "/repo/wt";
+    const sharedPathRow = {
+      entry: worktreeEntry({
+        worktreePath: path,
+        branch: "feat-wt",
+        inUse: false,
+      }),
+      tier: "merged" as const,
+      defaultChecked: true,
+      disabled: false,
+      note: null,
+      holders: [],
+      holdersStatus: "none" as const,
+    };
+    testState.hostId = "host-a";
+    testState.rows = [sharedPathRow];
+    testState.deferOutcome = true;
+    const onOpenChange = vi.fn();
+    const view = render(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
+        taskTitle="Task"
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sweep selected" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(testState.deferredOutcome).not.toBeNull();
+
+    view.rerender(
+      <SweepWorktreesDialog
+        epicIds={null}
+        hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
+        taskTitle="Task"
+        onOpenChange={onOpenChange}
+      />,
+    );
+    testState.hostId = "host-b";
+    view.rerender(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
+        taskTitle="Task"
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    testState.deferredOutcome?.({
+      hostId: "host-a",
+      removed: [],
+      failed: [path],
+      uncertain: [],
+      holdersChanged: [],
+    });
+
+    const onB = screen.getByRole("checkbox", {
+      name: "Sweep worktree feat-wt",
+    });
+    expect(onB.hasAttribute("disabled")).toBe(false);
     expect(screen.queryByTestId("sweep-worktrees-row-outcome")).toBeNull();
   });
 

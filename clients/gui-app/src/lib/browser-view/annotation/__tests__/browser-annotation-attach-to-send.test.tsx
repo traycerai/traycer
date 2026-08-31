@@ -127,6 +127,7 @@ function mountSubmit(args: {
       imagesUnsupported: false,
       attachmentPreparationPending: false,
       onSubmitMessage: args.onSubmitMessage,
+      onSideChat: null,
     }),
   );
 }

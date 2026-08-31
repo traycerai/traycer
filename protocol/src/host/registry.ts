@@ -424,8 +424,10 @@ import {
 } from "@traycer/protocol/host/epic/contracts";
 import {
   epicListTuiAgentsUpgradeV10ToV11,
+  epicListTuiAgentsUpgradeV11ToV12,
   epicListTuiAgentsV10,
   epicListTuiAgentsV11,
+  epicListTuiAgentsV12,
 } from "@traycer/protocol/host/epic/tui-agent-records";
 import {
   workspaceBrowseFoldersV10,
@@ -566,6 +568,9 @@ import {
   migrationRunV10,
   phaseMigrateToEpicV10,
 } from "@traycer/protocol/host/migration/contracts";
+import { sessionImportScanV10 } from "@traycer/protocol/host/session-import/scan";
+import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
+import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import {
   worktreeDeleteByPathStreamV10,
@@ -581,6 +586,7 @@ import {
 import {
   hostChatRecordsSubscribeV10,
   hostChatRecordsSubscribeV11,
+  hostChatRecordsSubscribeV12,
 } from "@traycer/protocol/host/epic/chat-records";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
@@ -6131,6 +6137,24 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // Optional (non-floor) capability: the only way to ask whether a session
+  // import is in flight without subscribing to `sessionImport.run` and thereby
+  // attaching to (or starting) one. `unsupported` degrade because a host that
+  // predates session import cannot be running an import, and the surface that
+  // reads this is hidden anyway when the stream methods are missing.
+  "sessionImport.status": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: sessionImportStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "epic.deleteChat": {
     1: {
       latestMinor: 0,
@@ -6685,7 +6709,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // surface of its own. Never on the unary released floor.
   "epic.listTuiAgents": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicListTuiAgentsV10,
@@ -6723,6 +6747,33 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           // IMPORT, so the registry throws for every consumer - the app, not
           // just a test. `bun run compile` passes clean through that, because
           // it is a runtime assertion over registry values, not a type.
+        },
+        2: {
+          contract: epicListTuiAgentsV12,
+          upgradeFromPreviousVersion: epicListTuiAgentsUpgradeV11ToV12,
+          // 1.2 DOES declare it, and the contrast with 1.1 above is the
+          // whole rule rather than an inconsistency.
+          //
+          // 1.1 added a plain object KEY (`docResident`), which zod strips
+          // unconditionally - nothing an older peer's schema refuses, so
+          // there was no growth to gate and declaring it would have thrown.
+          //
+          // 1.2 replaces the row OBJECT with a discriminated `origin` union
+          // whose third arm (`cloud`) is NARROW: it carries no
+          // `workspaceFolders` and no `agentMode`, both required on the 1.0
+          // row a 1.1 peer validates against. That is exactly the response
+          // VALUE GROWTH an older peer actively refuses, and the annotation
+          // is the reviewed claim that its emission is gated: the resolver
+          // serves cloud replicas only when `ctx.schemaVersion` is at least
+          // 1.2, so a 1.1 caller receives none and keeps parsing every row
+          // it is handed. The `registry` / `doc` arms are the 1.1 row plus
+          // one added key, which is why the older shape still projects.
+          //
+          // The gate is the NEGOTIATED VERSION here, unlike 1.1's, because
+          // the question is what the caller can PARSE rather than what it
+          // already holds - `hasDocReplica` answers the second and is
+          // untouched by this minor.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -8914,15 +8965,23 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // @1.0 stays installed and FROZEN: a client that negotiated it never
   // receives the new kinds, and the host gates emission on the negotiated
   // version.
+  // @1.2 keeps the same four frame kinds and widens the row `tuiUpsert`
+  // carries to the three-arm `origin` union, so a delta about a terminal agent
+  // owned by ANOTHER of the viewer's hosts can be pushed. @1.1 stays installed
+  // and FROZEN on its registry-shaped row; the host gates the narrow `cloud`
+  // arm on the negotiated version exactly as it gates the @1.1 kinds.
   "host.chatRecords.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostChatRecordsSubscribeV10,
         },
         1: {
           contract: hostChatRecordsSubscribeV11,
+        },
+        2: {
+          contract: hostChatRecordsSubscribeV12,
         },
       },
     },
@@ -8933,6 +8992,31 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: migrationRunV10,
+        },
+      },
+    },
+  },
+  // Additive, post-v1.0.0 OPTIONAL stream methods: session import. A host that
+  // predates them never advertises them, so the wizard's subscription degrades
+  // to `unsupported` and the client hides the "Import sessions" entry
+  // entirely - the feature is de-emphasised by design (spec §5), so there is
+  // nothing to fall back to and nothing lost by its absence.
+  "sessionImport.scan": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: sessionImportScanV10,
+        },
+      },
+    },
+  },
+  "sessionImport.run": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: sessionImportRunV10,
         },
       },
     },

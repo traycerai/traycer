@@ -31,6 +31,7 @@ import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-co
 import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
+import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -667,6 +668,8 @@ function InlineUserMessageEditor({
     currentEpicId: editing.currentEpicId,
     // The inline editor mounts only while a message is being edited - active.
     isActive: true,
+    // An edited message is re-sent to THIS chat; there is no fork to offer.
+    localSlashCommands: NO_LOCAL_SLASH_COMMANDS,
   });
 
   const submit = useCallback(() => {

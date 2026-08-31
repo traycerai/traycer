@@ -130,12 +130,16 @@ function disablingLastEnabledFor(
 function installBadge(
   installDetected: boolean,
   installLabel: string,
+  dimmed: boolean,
 ): ReactNode {
   return (
     <span
       className={cn(
         "font-mono text-overline uppercase tracking-wider",
         installDetected ? "text-[#7fd6a4]" : "text-white/40",
+        // The list deliberately leaves a dimmed row's opacity alone so the
+        // row's controls stay readable, so the badge recedes on its own.
+        dimmed && "opacity-60",
       )}
     >
       {installLabel}
@@ -165,7 +169,7 @@ function accountDescription(state: ProviderCliState | undefined): ReactNode {
 }
 
 /**
- * Whether this row should offer "Sign in to enable": the provider is off, and
+ * Whether this row should offer "Sign in & enable": the provider is off, and
  * its CLI is actually on this machine.
  *
  * The host leaves a provider disabled at first boot when it found no account
@@ -430,7 +434,7 @@ function SignInToEnableButton(props: {
           // host's auth probe still running behind a login that may well have
           // succeeded (see `isAmbientAuthVerdictPending`). Deciding on it would
           // make the button's advertised action silently not happen, which is
-          // the one outcome a screen called "Sign in to enable" cannot have. So
+          // the one outcome a screen called "Sign in & enable" cannot have. So
           // the same bounded re-poll Settings runs applies here, and only a
           // settled - or budget-exhausted - "not authenticated" stops the
           // chain.
@@ -534,7 +538,7 @@ function SignInToEnableButton(props: {
           onSignIn(state.providerId);
         }}
       >
-        Sign in to enable
+        Sign in &amp; enable
         {/* Unchanged label + inline spinner: starting a login spawns the
             provider CLI host-side, so a press with no feedback invites a
             second one. */}
@@ -639,12 +643,13 @@ export function OnboardingDetectedAgents() {
       enabledProviderCount,
     );
     const name = providerDisplayName(providerId);
+    const dimmed = state !== undefined && !enabled;
     return {
       providerId,
       active: false,
-      dimmed: state !== undefined && !enabled,
+      dimmed,
       enabled: state?.enabled ?? null,
-      badge: installBadge(installDetected, installLabel),
+      badge: installBadge(installDetected, installLabel, dimmed),
       description: accountDescription(state),
       trailing:
         state === undefined ? null : (

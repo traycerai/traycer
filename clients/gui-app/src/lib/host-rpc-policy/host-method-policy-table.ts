@@ -728,6 +728,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A pure read of whether an import run is in flight. `latest` because only
+  // the newest answer means anything to the surface that shows it, and no
+  // fixed poll: the wizard subscribes to `sessionImport.run` while it is open,
+  // so the only reader of this is the Settings entry, which asks on mount.
+  "sessionImport.status": { ...LATEST_SCHEDULING, poll: null },
   "epic.listTasks": { ...LATEST_SCHEDULING, poll: null },
   // Recording a view updates the user's central task ordering preference.
   "epic.recordViewed": {

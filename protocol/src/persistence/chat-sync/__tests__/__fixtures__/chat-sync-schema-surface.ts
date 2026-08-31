@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 2
+              "const": 3
             }
           },
           "required": [
@@ -457,7 +457,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 2
+              "const": 3
             }
           },
           "required": [
@@ -827,6 +827,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "harness.error",
                               "history.deleted",
                               "chat.forked",
+                              "chat.imported",
                               "setup.creating",
                               "setup.running",
                               "setup.succeeded",
@@ -1213,7 +1214,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 2
+              "const": 3
             }
           },
           "required": [
@@ -1288,7 +1289,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 2
+              "const": 3
             }
           },
           "required": [
@@ -1958,11 +1959,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                     },
                                                     "noticeKind": {
                                                       "type": "string",
-                                                      "enum": [
-                                                        "model_rerouted",
-                                                        "model_verification",
-                                                        "safety_buffering"
-                                                      ]
+                                                      "minLength": 1
                                                     },
                                                     "tone": {
                                                       "type": "string",
@@ -5270,6 +5267,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                           "harness.error",
                           "history.deleted",
                           "chat.forked",
+                          "chat.imported",
                           "setup.creating",
                           "setup.running",
                           "setup.succeeded",

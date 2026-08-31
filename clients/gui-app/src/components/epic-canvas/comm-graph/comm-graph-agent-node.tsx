@@ -26,6 +26,8 @@ import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { cn } from "@/lib/utils";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import {
   useEpicAgentRoleClaims,
   useEpicNodeHostId,
@@ -93,6 +95,13 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
   // own `data` carries only what the CANVAS needs, and duplicating hover facts
   // into it is how the two surfaces would drift apart.
   const hoverHostId = useEpicNodeHostId(data.agentId);
+  // The hover's owner-metadata outcome is a live RPC chain against this host,
+  // so an unreachable one has to fall back rather than spin. The sidebar reads
+  // the same verdict for its offline lock; here there is no lock, so this is
+  // the only consumer and the hook is resolved at the call site.
+  const hoverHostReachability = useHostReachability(
+    hoverHostId ?? UNKNOWN_HOST_PLACEHOLDER,
+  );
   const hoverOwnerKind = useEpicNodeOwnerKind(data.agentId);
   const roleClaims = useEpicAgentRoleClaims(data.agentId);
   const button = (
@@ -173,6 +182,11 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
       nodeId={data.agentId}
       nodeName={data.name}
       hostId={hoverHostId}
+      // `unreachable` ALONE, not `!== "reachable"`: `checking` and
+      // `host-starting` are pending states the metadata card renders through,
+      // and collapsing on them would flicker the richer card away and back
+      // while a local host finishes booting.
+      ownerHostUnreachable={hoverHostReachability.status === "unreachable"}
       ownerKind={hoverOwnerKind}
       roleClaims={roleClaims}
       // Upward: a node can sit anywhere on the canvas, and the space below it

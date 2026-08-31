@@ -1,9 +1,7 @@
-import { useId, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   formatStopHeading,
   formatTeardownActors,
@@ -25,17 +23,22 @@ export function SweepWorktreesReview(props: {
   readonly selectedEpicIds: ReadonlySet<string>;
   readonly agentNames: ReadonlyMap<string, string>;
   readonly taskTitles: ReadonlyMap<string, string>;
-  readonly typedValue: string;
+  /**
+   * The host this review's snapshot was proven on, or `null` when the fleet
+   * gave the person no choice to make (and so nothing to be told about).
+   *
+   * READ-ONLY here, deliberately. The snapshot below is one machine's disk at
+   * one moment, and the typed-nothing-changed contract of a review step is
+   * that the thing being confirmed is the thing that was proven. Back is the
+   * route to another host, and it discards this snapshot on the way.
+   */
+  readonly hostName: string | null;
   readonly inventoryChanged: boolean;
-  readonly submitting: boolean;
-  readonly onTypedValueChange: (value: string) => void;
+  readonly activeSweepCount: number;
   readonly onBack: () => void;
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }): ReactNode {
-  const needsTypedGate = props.snapshot.unproven.length > 0;
-  const typedOk = !needsTypedGate || props.typedValue === "sweep";
-  const typedConfirmId = useId();
   const stopActors = formatTeardownActors(
     props.snapshot.disclosedHolders,
     props.agentNames,
@@ -66,6 +69,14 @@ export function SweepWorktreesReview(props: {
           <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
             Only the consequences of your current selection are shown.
           </DialogDescription>
+          {props.hostName === null ? null : (
+            <p
+              className="text-ui-xs text-muted-foreground wrap-anywhere"
+              data-testid="sweep-review-host"
+            >
+              {`On ${props.hostName} — go Back to change host.`}
+            </p>
+          )}
         </div>
       </div>
       <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-y-auto border-t border-border/60 bg-foreground/2 px-5 py-4">
@@ -187,25 +198,6 @@ export function SweepWorktreesReview(props: {
           <p className="text-ui-sm font-medium">{removal.worktrees}</p>
           <p className="text-ui-xs text-muted-foreground">{removal.branches}</p>
         </div>
-        {needsTypedGate ? (
-          <div className="space-y-1.5">
-            <label htmlFor={typedConfirmId} className="text-ui-xs font-medium">
-              Type <code className="font-mono">sweep</code> to confirm possible
-              loss of unmerged work
-            </label>
-            <Input
-              id={typedConfirmId}
-              value={props.typedValue}
-              onChange={(event) =>
-                props.onTypedValueChange(event.currentTarget.value)
-              }
-              placeholder="sweep"
-              autoComplete="off"
-              spellCheck={false}
-              data-testid="sweep-typed-confirm"
-            />
-          </div>
-        ) : null}
       </section>
       <div className="flex min-w-0 shrink-0 items-center justify-between gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
         <Button
@@ -225,23 +217,15 @@ export function SweepWorktreesReview(props: {
             onClick={props.onCancel}
             data-testid="sweep-worktrees-cancel"
           >
-            Cancel
+            {props.activeSweepCount > 0 ? "Close" : "Cancel"}
           </Button>
           <Button
             type="button"
             variant="destructive"
             size="sm"
-            disabled={!typedOk || props.submitting}
             onClick={props.onConfirm}
             data-testid="sweep-worktrees-confirm"
           >
-            {props.submitting ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
             {confirmLabel}
           </Button>
         </div>

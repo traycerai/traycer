@@ -341,6 +341,7 @@ class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      clock: null,
       hostCredentialMint: null,
       onHostCredentialState: null,
       evidence: NO_TRANSPORT_EVIDENCE,
@@ -1558,6 +1559,504 @@ describe("createChatSessionStore", () => {
         generation: 1,
       },
     });
+  });
+
+  // ─── The pre-restart runtime disposal is not an answer failure ───────────
+  //
+  // A Claude runtime torn down under a pending question leaves a coded `error`
+  // block in the SAME row as the interview. The host retires exactly that block
+  // when the answer settles, because the answer resumes on a fresh runtime. The
+  // fold below mirrors that projection so a client which already hydrated this
+  // (arbitrarily old) row sees it immediately, instead of keeping a red card
+  // under the answered question until some later frame happens to resend the
+  // row - which, on the windowed line, a bounded snapshot may never do.
+  function disposedInterviewRow(): Extract<Message, { role: "assistant" }> {
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const interview = persisted.blocks[0];
+    if (interview.type !== "interview") throw new Error("Expected interview");
+    return {
+      ...persisted,
+      blocks: [
+        {
+          ...interview,
+          status: "streaming",
+          answers: [],
+          outcome: null,
+          settlement: null,
+          delivery: null,
+        },
+        {
+          type: "error",
+          blockId: "turn-1:unrelated-error",
+          status: "errored",
+          timestamp: 4,
+          message: "A tool call failed.",
+          recoverable: true,
+          code: "TOOL_EXECUTION_FAILED",
+        },
+        {
+          type: "error",
+          blockId: "turn-1",
+          status: "errored",
+          timestamp: 5,
+          message:
+            "Claude Code's session was torn down while this turn was still running. " +
+            "Send your message again to continue on a fresh session.",
+          recoverable: true,
+          code: "CLAUDE_RUNTIME_DISPOSED",
+        },
+        {
+          type: "error",
+          blockId: "queue-paused:message-1",
+          status: "completed",
+          timestamp: 6,
+          message:
+            "1 queued message was held because this turn ended with an error, and it was not sent. Resume the queue to send it.",
+          recoverable: true,
+          code: "QUEUE_PAUSED_AFTER_ERROR",
+        },
+      ],
+    };
+  }
+
+  function rowBlockShape(harness: Harness): ReadonlyArray<string> {
+    const message = harness.handle.store.getState().messages[0];
+    if (message.role !== "assistant") throw new Error("Expected assistant");
+    return message.blocks.map((block) =>
+      block.type === "error" ? `error:${block.code ?? "null"}` : block.type,
+    );
+  }
+
+  it("retires only the same-row runtime-disposal error when the interview is answered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [disposedInterviewRow()],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:TOOL_EXECUTION_FAILED",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+      "error:QUEUE_PAUSED_AFTER_ERROR",
+    ]);
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      // Strictly after the disposal at 5: on this path the runtime died while
+      // the question was outstanding and the user answered afterwards, which is
+      // the chronology retirement requires.
+      resolvedAt: 10,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({ status: "completed", outcome: "answered" });
+    // The unrelated failure and the still-actionable queue-paused notice keep
+    // their places; only the coded disposal goes.
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:TOOL_EXECUTION_FAILED",
+      "error:QUEUE_PAUSED_AFTER_ERROR",
+    ]);
+  });
+
+  it("keeps the runtime-disposal error when the interview settles unanswered", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [disposedInterviewRow()],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "No longer needed.",
+      resolvedAt: 5,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      outcome: "failed",
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({ status: "errored", outcome: "failed" });
+    // Nothing resumed, so the disposal is still the only account of why the
+    // prior turn stopped.
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:TOOL_EXECUTION_FAILED",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+      "error:QUEUE_PAUSED_AFTER_ERROR",
+    ]);
+  });
+
+  it("keeps a disposal that followed later work when the row's only interview settled before it", () => {
+    // Answering does not end the turn: the continuation streams more text into
+    // the same row, and only then is the runtime disposed. Position cannot tell
+    // this row from the one retirement is for - A is the nearest preceding
+    // interview either way - so the fold also compares chronology. A settled
+    // BEFORE the disposal, so the disposal is not about A.
+    //
+    // A stale or duplicate exact-settlement frame for A is the reachable
+    // trigger on this side: the effective block stays answered, so the fold
+    // re-runs on every one.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const template = persisted.blocks[0];
+    if (template.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            // Accepted at 5 - but the block's own stamp has since DRIFTED to 9,
+            // past the disposal at 7. That is not corruption: the reducer
+            // advances the stamp on every contributing settlement, so a late
+            // losing cleanup or a delivery-generation bump moves it without
+            // touching the outcome. A stamp-based guard would read 9 > 7 and
+            // delete a truthful error; the canonical acceptance is what the
+            // frame carries as `resolvedAt`.
+            {
+              ...template,
+              blockId: "interview-a",
+              status: "completed",
+              timestamp: 9,
+              outcome: "answered",
+              settlement: { settlementId: "settlement-a", source: "gui" },
+              delivery: null,
+            },
+            {
+              type: "text",
+              blockId: "turn-1:text",
+              status: "completed",
+              timestamp: 6,
+              text: "Wiring up PostgreSQL now.",
+              providerNotice: null,
+            },
+            // Disposed at 7, after the work the answer released.
+            {
+              type: "error",
+              blockId: "turn-1",
+              status: "errored",
+              timestamp: 7,
+              message:
+                "Claude Code's session was torn down while this turn was still running. " +
+                "Send your message again to continue on a fresh session.",
+              recoverable: true,
+              code: "CLAUDE_RUNTIME_DISPOSED",
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // The exact settlement frame for A - a reconnect redelivering the same
+    // settlement it already applied.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-a",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-a",
+      settlementSource: "gui",
+      delivery: null,
+    });
+
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "text",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+    ]);
+  });
+
+  it("keeps the disposal when a legacy lifecycle frame settles the block without settlement authority", () => {
+    // `settlementId` is nullable on the wire: a peer on the pre-settlement
+    // line sends a legacy tuple, and the fold's legacy branch settles the block
+    // to answered WITHOUT installing any authority. There is then nothing to
+    // confirm the frame's `resolvedAt` is this block's canonical acceptance, so
+    // the fold retains and waits for the host's authoritative row - the host
+    // has already made the durable decision either way.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const template = persisted.blocks[0];
+    if (template.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            {
+              ...template,
+              blockId: "interview-a",
+              status: "streaming",
+              timestamp: 5,
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+            {
+              type: "error",
+              blockId: "turn-1",
+              status: "errored",
+              timestamp: 7,
+              message:
+                "Claude Code's session was torn down while this turn was still running. " +
+                "Send your message again to continue on a fresh session.",
+              recoverable: true,
+              code: "CLAUDE_RUNTIME_DISPOSED",
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-a",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      // Comfortably after the disposal, so only the missing authority can be
+      // what holds the card.
+      resolvedAt: 20,
+      settlementId: null,
+      settlementSource: null,
+      delivery: null,
+    });
+
+    // The card still settles - this fold has never gated that on authority.
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({ status: "completed", outcome: "answered" });
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+    ]);
+  });
+
+  it("correlates the disposal to the nearest preceding interview when a row holds two", () => {
+    // The row is not an interview boundary: a provider turn can ask twice, and
+    // the accumulator appends both interview blocks to the same row. Here A is
+    // already answered, B is still streaming, and the disposal follows B - so
+    // it explains B, and an exact lifecycle frame for A must leave it alone.
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-1",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const template = persisted.blocks[0];
+    if (template.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            // A: answered, with its canonical settlement already recorded.
+            {
+              ...template,
+              blockId: "interview-a",
+              status: "completed",
+              outcome: "answered",
+              settlement: { settlementId: "settlement-a", source: "gui" },
+              delivery: null,
+            },
+            // B: still awaiting the user.
+            {
+              ...template,
+              blockId: "interview-b",
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+            {
+              type: "error",
+              blockId: "turn-1",
+              status: "errored",
+              timestamp: 6,
+              message:
+                "Claude Code's session was torn down while this turn was still running. " +
+                "Send your message again to continue on a fresh session.",
+              recoverable: true,
+              code: "CLAUDE_RUNTIME_DISPOSED",
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // An EXACT settlement frame for A - the strongest match the fold has - and
+    // it still must not reach B's disposal.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-a",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 7,
+      settlementId: "settlement-a",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    expect(rowBlockShape(harness)).toEqual([
+      "interview",
+      "interview",
+      "error:CLAUDE_RUNTIME_DISPOSED",
+    ]);
+
+    // Answering B is what the disposal was waiting on.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-b",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 8,
+      settlementId: "settlement-b",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    expect(rowBlockShape(harness)).toEqual(["interview", "interview"]);
+  });
+
+  it("leaves the row untouched when the lifecycle frame names another interview", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [disposedInterviewRow()],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    const before = harness.handle.store.getState().messages[0];
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "some-other-interview",
+      answers: [],
+      resolvedAt: 5,
+      settlementId: "settlement-other",
+      settlementSource: "gui",
+      delivery: null,
+    });
+
+    // Referential no-op: an unmatched frame must not rewrite the row, or every
+    // memoized row renderer downstream re-runs for nothing.
+    expect(harness.handle.store.getState().messages[0]).toBe(before);
   });
 
   it("installs lifecycle authority on a streaming block and ignores a stale settlement", () => {

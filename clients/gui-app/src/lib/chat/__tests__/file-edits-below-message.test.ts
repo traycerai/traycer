@@ -188,12 +188,17 @@ describe("resolveRevertScope", () => {
   });
 
   it("answers from the records when the window holds everything below", () => {
-    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 2,
-      indexRevision: null,
-      tail: { fromOrdinal: 0, messages, events },
-    });
+    const window = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 2,
+        indexRevision: null,
+        tail: { fromOrdinal: 0, messages, events },
+      },
+      null,
+      null,
+    );
     expect(
       resolveRevertScope({
         messages,
@@ -212,16 +217,21 @@ describe("resolveRevertScope", () => {
    * about to revert.
    */
   it("refuses to answer when the rows below the edit point are cold", () => {
-    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
-      epoch: 1,
-      rowCount: 40,
-      indexRevision: null,
-      tail: {
-        fromOrdinal: 38,
-        messages: [userMessage("u38"), userMessage("u39")],
-        events: [],
+    const window = applyWindowedSnapshot(
+      emptyTranscriptWindow(),
+      {
+        epoch: 1,
+        rowCount: 40,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 38,
+          messages: [userMessage("u38"), userMessage("u39")],
+          events: [],
+        },
       },
-    });
+      null,
+      null,
+    );
     expect(
       resolveRevertScope({
         messages: [userMessage("u1")],

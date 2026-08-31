@@ -822,6 +822,15 @@ vi.mock("@/lib/epic-selectors", () => ({
         testState.activityTierById.get(id) ?? "turn",
       ]),
     ),
+  // ChatProgressIcon reads the REGISTERED (keyed, non-throwing) selector for
+  // the same data, so a whole-module mock has to answer that form too.
+  useRegisteredEpicAgentActivityTiers: () =>
+    new Map(
+      [...testState.activeAgentIds].map((id) => [
+        id,
+        testState.activityTierById.get(id) ?? "turn",
+      ]),
+    ),
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];
@@ -861,6 +870,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // effect's dependency never changes and it never seeds in these tests.
   useEpicNodeWorkspaceFolders: () => EMPTY_WORKSPACE_FOLDERS,
   useEpicPermissionRole: () => testState.permissionRole,
+  useRegisteredEpicPermissionRole: () => testState.permissionRole,
   useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
@@ -1938,6 +1948,35 @@ describe("epic sidebar selection mode", () => {
     expect(
       screen.queryByRole("menuitem", { name: "Search artifacts" }),
     ).toBeNull();
+  });
+
+  it("moves focus from the Agents overflow menu into chat search", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Search agents" }));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Search agents" }),
+      );
+    });
+  });
+
+  it("moves focus from the Artifacts overflow menu into artifact search", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Search artifacts" }));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByRole("combobox", { name: "Search artifacts" }),
+      );
+    });
   });
 
   it("hides artifact selection when there are no artifacts to select", () => {

@@ -603,6 +603,7 @@ function tuiAgent(id: string, harnessId: TuiHarnessId): TuiAgentProjection {
     // An ordinary registry-backed agent - this suite exercises selector
     // behavior, not doc residency.
     docResident: false,
+    origin: "registry",
     harnessId,
     title: "Codex",
     parentId: null,

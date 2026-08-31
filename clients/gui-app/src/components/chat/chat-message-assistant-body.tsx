@@ -1042,6 +1042,10 @@ function AssistantSegment({
       // Fork provenance only ever rides a synthesized `role: "system"` row,
       // never an assistant turn's segments; it is rendered by `ChatMessage`.
       return null;
+    case "imported-chat-marker":
+      // Import provenance, same as the fork link above: synthesized system row
+      // only. Listed here so the exhaustive switch stays complete.
+      return null;
     default: {
       const _exhaustive: never = segment;
       void _exhaustive;
