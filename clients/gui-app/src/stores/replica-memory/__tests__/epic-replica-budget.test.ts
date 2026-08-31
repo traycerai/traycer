@@ -52,6 +52,35 @@ describe("epic replica holder identity", () => {
       epicColdRoomHolderId("h1", "e", "t2", "room"),
     );
   });
+
+  it("epicReplicaBookKey is injective - a `:` inside one segment must not fold two distinct tuples onto the same key", () => {
+    // THE REDDENING ONE.
+    expect(epicReplicaBookKey("host:a", "b", "t")).not.toBe(
+      epicReplicaBookKey("host", "a:b", "t"),
+    );
+  });
+
+  it("epicRootHolderId is injective - a `:` inside one segment must not fold two distinct tuples onto the same holder id", () => {
+    // THE REDDENING ONE. `epicFixedHolderId` (module-private) suffixes
+    // `epicReplicaBookKey`'s own `:`-join, so the same collision surfaces here.
+    expect(epicRootHolderId("host:a", "b", "t")).not.toBe(
+      epicRootHolderId("host", "a:b", "t"),
+    );
+  });
+
+  it("epicCommandOverlayHolderId is injective - a `:` inside one segment must not fold two distinct tuples onto the same holder id", () => {
+    // THE REDDENING ONE.
+    expect(epicCommandOverlayHolderId("host:a", "b", "t")).not.toBe(
+      epicCommandOverlayHolderId("host", "a:b", "t"),
+    );
+  });
+
+  it("epicColdRoomHolderId is injective - a `:` inside one segment must not fold two distinct tuples onto the same holder id", () => {
+    // THE REDDENING ONE.
+    expect(epicColdRoomHolderId("host:a", "b", "t", "room")).not.toBe(
+      epicColdRoomHolderId("host", "a:b", "t", "room"),
+    );
+  });
 });
 
 describe("createEpicReplicaBudgetBook", () => {

@@ -373,6 +373,14 @@ describe("createChatWindowBudgetBook", () => {
     expect(chatHolderId("h1", "e", "c")).not.toBe(chatHolderId("h2", "e", "c"));
   });
 
+  it("chatHolderId is injective - a `:` inside one segment must not fold two distinct tuples onto the same id", () => {
+    // THE REDDENING ONE - `:`-joining is not injective: "host:a" + "b" + "chat-1"
+    // and "host" + "a:b" + "chat-1" both stringify to "host:a:b:chat-1" today.
+    expect(chatHolderId("host:a", "b", "chat-1")).not.toBe(
+      chatHolderId("host", "a:b", "chat-1"),
+    );
+  });
+
   it("orders eviction by process-wide recency, not per-session publish count", () => {
     const runtime = createProcessMemoryRuntime(fakeEnvironment());
     const aEvict = vi.fn((): EvictionOutcome => ({

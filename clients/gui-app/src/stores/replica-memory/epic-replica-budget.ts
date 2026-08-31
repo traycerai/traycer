@@ -3,7 +3,10 @@ import type {
   EvictionOutcome,
   MemoryAccountant,
 } from "@traycer-clients/shared/replica-runtime";
-import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
+import {
+  BUDGET_PLANE_IDS,
+  sessionKeyOf,
+} from "@traycer-clients/shared/replica-runtime";
 
 /**
  * Projection-row telemetry for one epic replica. These counts are the
@@ -63,7 +66,7 @@ export function epicReplicaBookKey(
   epicId: string,
   runtimeToken: string,
 ): string {
-  return `${hostId}:${epicId}:${runtimeToken}`;
+  return sessionKeyOf([hostId, epicId, runtimeToken]);
 }
 
 /**
@@ -82,7 +85,9 @@ function epicFixedHolderId(
   bookKey: string,
   kind: (typeof EPIC_REPLICA_FIXED_HOLDER_KINDS)[number],
 ): BudgetHolderId {
-  return `${bookKey}:${kind}`;
+  // `bookKey` is itself NUL-joined, so this appends a fourth segment rather
+  // than nesting one encoding inside another.
+  return sessionKeyOf([bookKey, kind]);
 }
 
 export function epicRootHolderId(
@@ -113,7 +118,7 @@ export function epicColdRoomHolderId(
   runtimeToken: string,
   artifactRoomId: string,
 ): BudgetHolderId {
-  return `${hostId}:${epicId}:${runtimeToken}:cold:${artifactRoomId}`;
+  return sessionKeyOf([hostId, epicId, runtimeToken, "cold", artifactRoomId]);
 }
 
 export function createEpicReplicaBudgetBook(): EpicReplicaBudgetBook {

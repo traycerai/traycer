@@ -4,7 +4,10 @@ import type {
   MemoryAccountant,
   ProtectedBytes,
 } from "@traycer-clients/shared/replica-runtime";
-import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
+import {
+  BUDGET_PLANE_IDS,
+  sessionKeyOf,
+} from "@traycer-clients/shared/replica-runtime";
 import type {
   ChatEvent,
   Message,
@@ -207,5 +210,5 @@ export function chatHolderId(
   epicId: string,
   chatId: string,
 ): BudgetHolderId {
-  return `${hostId}:${epicId}:${chatId}`;
+  return sessionKeyOf([hostId, epicId, chatId]);
 }

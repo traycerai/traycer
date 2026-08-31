@@ -4,7 +4,10 @@ import type {
   MemoryAccountant,
   ProtectedBytes,
 } from "@traycer-clients/shared/replica-runtime";
-import { BUDGET_PLANE_IDS } from "@traycer-clients/shared/replica-runtime";
+import {
+  BUDGET_PLANE_IDS,
+  sessionKeyOf,
+} from "@traycer-clients/shared/replica-runtime";
 
 /**
  * What the artifact-room tier calls at encode boundaries. One object —
@@ -59,7 +62,7 @@ export function hotDocHolderId(
   runtimeToken: string,
   artifactRoomId: string,
 ): BudgetHolderId {
-  return `${hostId}:${epicId}:${runtimeToken}:${artifactRoomId}`;
+  return sessionKeyOf([hostId, epicId, runtimeToken, artifactRoomId]);
 }
 
 export function createHotDocBudgetBook(): HotDocBudgetBook {

@@ -301,6 +301,13 @@ describe("hot-doc holder identity", () => {
     );
   });
 
+  it("is injective - a `:` inside one segment must not fold two distinct tuples onto the same holder id", () => {
+    // THE REDDENING ONE.
+    expect(hotDocHolderId("host:a", "b", "t", "room")).not.toBe(
+      hotDocHolderId("host", "a:b", "t", "room"),
+    );
+  });
+
   it("the loser of a replaceMounted-shaped re-point does not release the winner", () => {
     const environment = createFakeEnvironment();
     const accountant = createMemoryAccountant({
