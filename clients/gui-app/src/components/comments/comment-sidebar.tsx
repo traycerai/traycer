@@ -41,6 +41,11 @@ export interface CommentSidebarProps {
    *  {@link hostClient} is: this surface reads no ambient context. `null` here
    *  is not "no threads" - it hands the question to the poll below. */
   readonly laneThreads: readonly CommentThreadWire[] | null;
+  /**
+   * Whether the lane pushing {@link laneThreads} is up. A prop for the same
+   * reason the rows are: this component reads no ambient context.
+   */
+  readonly laneLive: boolean;
   /** Threads-anchored-in-document positions, derived from the active tile's
    *  Tiptap editor by the parent. Used both for sort order and orphan
    *  detection (no entry → orphan). */
@@ -69,6 +74,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
     artifactType,
     artifactId,
     laneThreads,
+    laneLive,
     anchorPositions,
     currentUserId,
     canModerate,
@@ -95,9 +101,10 @@ export function CommentSidebar(props: CommentSidebarProps) {
     () =>
       resolveArtifactCommentThreads({
         laneThreads,
+        laneLive,
         pollThreads: query.data === undefined ? null : query.data.threads,
       }),
-    [laneThreads, query.data],
+    [laneLive, laneThreads, query.data],
   );
 
   const sorted = useMemo(() => {

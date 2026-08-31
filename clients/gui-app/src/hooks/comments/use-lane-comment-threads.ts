@@ -95,13 +95,52 @@ export function useEpicLaneCommentThreads(
 }
 
 /**
+ * Whether this surface's state lane is CURRENTLY pushing, for
+ * {@link resolveArtifactCommentThreads}'s `laneLive`.
+ *
+ * `hostTransportStatus === "open"` is the one liveness signal in this store,
+ * and deliberately the same predicate the sync pill's own reconnecting arm
+ * reads (`lib/epic-sync-pill-state.ts`) - a comment list that believed the
+ * lane while the pill said reconnecting would be two answers to one question.
+ *
+ * `false` outside an epic session, matching {@link useEpicLaneCommentThreads}'s
+ * `null`: no session means no lane, and the poll answers for every host.
+ */
+export function useEpicLaneCommentThreadsLive(): boolean {
+  const handle = useMaybeOpenEpicHandle();
+  const subscribe = useCallback(
+    (onStoreChange: () => void): (() => void) =>
+      handle === null ? () => {} : handle.store.subscribe(onStoreChange),
+    [handle],
+  );
+  // A boolean, so `useSyncExternalStore` compares snapshots by value and never
+  // sees a fresh object.
+  const getSnapshot = useCallback(
+    (): boolean =>
+      handle !== null && handle.store.getState().hostTransportStatus === "open",
+    [handle],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/**
  * Picks the source that has actually spoken about this artifact.
  *
- * Lane first when present: it is pushed, so it is the fresher of the two by
- * construction. Otherwise the poll's last successful snapshot, which is what
- * every host can serve and what a legacy connection has always used. Unknown
- * only when NEITHER has an answer - a lane silence beside a loaded poll is not
- * unknown, and a poll error beside lane rows is not unknown either.
+ * Lane first WHILE IT IS LIVE: it is pushed, so it is the fresher of the two
+ * by construction - but only while the transport pushing it is up. Otherwise
+ * the poll's last successful snapshot, which is what every host can serve and
+ * what a legacy connection has always used. Unknown only when NEITHER has an
+ * answer - a lane silence beside a loaded poll is not unknown, and a poll
+ * error beside lane rows is not unknown either.
+ *
+ * `laneLive` is an ORDERING input, not a clearing one, and the distinction is
+ * the whole point. Retaining lane rows across a flaky connection is a
+ * documented goal (`state-subscribe.ts`), so a dropped lane still answers when
+ * it is the only source with rows - the third arm below. What changes is that
+ * a poll answer with a strictly newer view no longer loses to rows whose
+ * pusher is gone. The two transports are separate (`/rpc` and `/stream`), and
+ * mutations invalidate only the poll cache, so the window where the poll is
+ * ahead is reachable rather than theoretical.
  *
  * Pure, and shared by every comment surface, so the sidebar, the hover preview
  * and the tile's decoration layer can never disagree about which threads exist
@@ -110,12 +149,17 @@ export function useEpicLaneCommentThreads(
 export function resolveArtifactCommentThreads(args: {
   readonly laneThreads: readonly CommentThreadWire[] | null;
   readonly pollThreads: readonly CommentThreadWire[] | null;
+  /** Whether the state lane's transport is up right now. */
+  readonly laneLive: boolean;
 }): ArtifactCommentThreads {
-  if (args.laneThreads !== null) {
+  if (args.laneThreads !== null && args.laneLive) {
     return { threads: args.laneThreads, source: "state-lane" };
   }
   if (args.pollThreads !== null) {
     return { threads: args.pollThreads, source: "poll" };
+  }
+  if (args.laneThreads !== null) {
+    return { threads: args.laneThreads, source: "state-lane" };
   }
   return { threads: null, source: null };
 }

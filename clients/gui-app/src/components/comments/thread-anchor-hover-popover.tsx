@@ -45,6 +45,8 @@ export interface ThreadAnchorHoverPopoverProps {
    *  value it feeds its own decoration layer, so a thread this preview can
    *  show can never be one the tile has stripped the anchor for. */
   readonly laneThreads: readonly CommentThreadWire[] | null;
+  /** Whether the lane pushing {@link laneThreads} is up. */
+  readonly laneLive: boolean;
   /** Tiptap editor for the active tile. We attach pointer listeners to
    *  `editor.view.dom` and read its DOM bounding rects for positioning. */
   readonly editor: Editor;
@@ -97,6 +99,7 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
     artifactType,
     artifactId,
     laneThreads,
+    laneLive,
     editor,
     resolvedThreadIds,
     onActivateThread,
@@ -128,6 +131,7 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
     const map = new Map<string, CommentThreadWire>();
     const { threads } = resolveArtifactCommentThreads({
       laneThreads,
+      laneLive,
       pollThreads:
         threadsQuery.data === undefined ? null : threadsQuery.data.threads,
     });
@@ -136,7 +140,7 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
       map.set(thread.threadId, thread);
     }
     return map;
-  }, [laneThreads, threadsQuery.data]);
+  }, [laneLive, laneThreads, threadsQuery.data]);
 
   const cancelTimers = useCallback(() => {
     if (showTimerRef.current !== null) {

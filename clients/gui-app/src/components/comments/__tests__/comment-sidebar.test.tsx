@@ -161,6 +161,7 @@ function renderSidebar(laneThreads: readonly CommentThreadWire[] | null) {
         artifactType="spec"
         artifactId={ARTIFACT_ID}
         laneThreads={laneThreads}
+        laneLive
         anchorPositions={{ positions: new Map() }}
         currentUserId="user-1"
         canModerate={false}
@@ -322,6 +323,7 @@ describe("<CommentSidebar /> host scope", () => {
           artifactType="spec"
           artifactId={ARTIFACT_ID}
           laneThreads={null}
+          laneLive
           anchorPositions={{ positions: new Map() }}
           currentUserId="user-1"
           canModerate={false}

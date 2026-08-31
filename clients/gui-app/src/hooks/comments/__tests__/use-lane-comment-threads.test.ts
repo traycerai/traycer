@@ -47,6 +47,7 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads,
       pollThreads: [threadFixture("poll-thread")],
+      laneLive: true,
     });
     expect(result).toEqual({ threads: laneThreads, source: "state-lane" });
   });
@@ -55,6 +56,7 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads: [],
       pollThreads: [threadFixture("poll-thread")],
+      laneLive: true,
     });
     expect(result).toEqual({ threads: [], source: "state-lane" });
   });
@@ -64,6 +66,7 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads: null,
       pollThreads,
+      laneLive: true,
     });
     expect(result).toEqual({ threads: pollThreads, source: "poll" });
   });
@@ -72,6 +75,7 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads: null,
       pollThreads: [],
+      laneLive: true,
     });
     expect(result).toEqual({ threads: [], source: "poll" });
   });
@@ -80,7 +84,62 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads: null,
       pollThreads: null,
+      laneLive: true,
     });
     expect(result).toEqual({ threads: null, source: null });
+  });
+
+  /**
+   * Lane rows win ONLY while the state lane's transport is live. A poll
+   * answer that is strictly newer must not lose to stale RETAINED lane rows
+   * once the lane has dropped - `resolveArtifactCommentThreads` used to
+   * prefer lane rows whenever the key was present, with no regard for
+   * whether the transport backing them was still connected.
+   */
+  it("falls back to poll rows once the lane is no longer live, even though lane rows are present", () => {
+    const laneThreads = [threadFixture("stale-lane-thread")];
+    const pollThreads = [threadFixture("fresh-poll-thread")];
+    const result = resolveArtifactCommentThreads({
+      laneThreads,
+      pollThreads,
+      laneLive: false,
+    });
+    // THE REDDENING ONE - today this still returns `source: "state-lane"`
+    // with the stale lane rows, because presence alone decides.
+    expect(result).toEqual({ threads: pollThreads, source: "poll" });
+  });
+
+  it("keeps the RETAINED lane rows (never null) when the lane drops and the poll has nothing either", () => {
+    const laneThreads = [threadFixture("retained-lane-thread")];
+    const result = resolveArtifactCommentThreads({
+      laneThreads,
+      pollThreads: null,
+      laneLive: false,
+    });
+    expect(result).toEqual({ threads: laneThreads, source: "state-lane" });
+    // Explicitly not null: retention across a flaky connection is a
+    // documented design goal, not an accidental non-null.
+    expect(result.threads).not.toBeNull();
+  });
+
+  it("still prefers lane rows over the poll while the lane IS live - the control arm", () => {
+    const laneThreads = [threadFixture("live-lane-thread")];
+    const pollThreads = [threadFixture("poll-thread")];
+    const result = resolveArtifactCommentThreads({
+      laneThreads,
+      pollThreads,
+      laneLive: true,
+    });
+    expect(result).toEqual({ threads: laneThreads, source: "state-lane" });
+  });
+
+  it("falls back to poll rows when the lane has said nothing, regardless of liveness - unchanged fallback", () => {
+    const pollThreads = [threadFixture("poll-thread")];
+    const result = resolveArtifactCommentThreads({
+      laneThreads: null,
+      pollThreads,
+      laneLive: false,
+    });
+    expect(result).toEqual({ threads: pollThreads, source: "poll" });
   });
 });
