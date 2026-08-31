@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { fireEvent } from "@testing-library/react";
 import {
   FRAME_SIZE,
   firePointerPress,
@@ -10,6 +11,13 @@ const CLICK_POINT = { clientX: 200, clientY: 300 } as const;
 
 function clickUnarmed(overlay: HTMLElement): void {
   firePointerPress(overlay, CLICK_POINT);
+}
+
+/** A finger's tap - translated on its own path, not through the arm buffer. */
+function tapUnarmed(overlay: HTMLElement): void {
+  const touch = { pointerId: 2, pointerType: "touch", ...CLICK_POINT };
+  fireEvent.pointerDown(overlay, { ...touch, button: 0, buttons: 1 });
+  fireEvent.pointerUp(overlay, { ...touch, button: 0, buttons: 0 });
 }
 
 describe("screencast input correlation", () => {
@@ -124,6 +132,20 @@ describe("screencast input correlation", () => {
     controller.notePresentedSequence(7);
 
     clickUnarmed(overlay);
+    controller.setCaptureMode("video");
+    controller.noteViewportEpoch(7);
+    controller.noteArmed(1);
+
+    expect(pointerFrames(sent)).toEqual([]);
+  });
+
+  it("drops a queued tap buffered on the other plane's token space", () => {
+    // The finger's half of the case above: a tap waiting on `armed` carries
+    // the JPEG plane's castSequence, which must not match an equal epoch.
+    const { controller, sent, overlay } = mountController();
+    controller.notePresentedSequence(7);
+
+    tapUnarmed(overlay);
     controller.setCaptureMode("video");
     controller.noteViewportEpoch(7);
     controller.noteArmed(1);

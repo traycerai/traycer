@@ -62,7 +62,9 @@ const VIEWPORT_DEBOUNCE_MS = 200;
  * Server frames that start a fresh capture, so the ack-tracking sequence resets
  * and the ended plane's stale one cannot linger.
  */
-const PRESENTED_SEQUENCE_RESET_KINDS: ReadonlySet<string> = new Set([
+const PRESENTED_SEQUENCE_RESET_KINDS: ReadonlySet<
+  BrowserScreencastServerFrame["kind"]
+> = new Set<BrowserScreencastServerFrame["kind"]>([
   "started",
   "resized",
   "failed",

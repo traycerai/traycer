@@ -259,6 +259,24 @@ function parseBrowserSessionPayload(
   };
 }
 
+/**
+ * The already-normalized shape, as it rides a native activation envelope's
+ * `route`. `parseBrowserSessionPayload` above reads the RAW host payload
+ * (`browser.human.needed`); this reads what that produced, because
+ * `parseEnvelopeV1` re-parses its own route on the way back in.
+ */
+function parseNormalizedBrowserSessionPayload(
+  value: Record<string, unknown>,
+): BrowserSessionNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const sessionId = readString(value.sessionId);
+  const tabId = readString(value.tabId);
+  if (epicId === null || sessionId === null || tabId === null) {
+    return null;
+  }
+  return { kind: "browserSession", epicId, sessionId, tabId };
+}
+
 function parseApprovalPayload(
   value: Record<string, unknown>,
 ): ApprovalNotificationPayload | null {
@@ -341,6 +359,8 @@ export function parseNotificationPayload(
       return parseTerminalPayload(value);
     case "browser_human_needed":
       return parseBrowserSessionPayload(value);
+    case "browserSession":
+      return parseNormalizedBrowserSessionPayload(value);
     case "approval":
       return parseApprovalPayload(value);
     case "interview":

@@ -140,7 +140,10 @@ export function armViaGesture(
   fireEvent.focus(mounted.imeInput);
   mounted.controller.noteArmed(armEpoch);
   const armIndex = mounted.sent.findIndex((frame) => frame.kind === "arm");
-  if (armIndex >= 0) mounted.sent.splice(armIndex, 1);
+  if (armIndex < 0) {
+    throw new Error("armViaGesture: focus emitted no `arm` frame");
+  }
+  mounted.sent.splice(armIndex, 1);
 }
 
 export interface PointerPoint {

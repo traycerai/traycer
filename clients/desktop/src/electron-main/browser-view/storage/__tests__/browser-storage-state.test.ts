@@ -395,6 +395,54 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
     ]);
   });
 
+  it("keeps a demoted origin's fresh value when a LATER tab re-seeds the same jar", async () => {
+    // `retainSeededOrigins` runs once per PROVISIONED TAB, not once per run.
+    // A wholesale replace on the second tab's seed drops what LRU eviction
+    // demoted, and the capture then ships the STALE seeded copy - which the
+    // seed script writes back over the newer data on the next run.
+    const { coordinator, captured } = createTestCoordinator((origin) =>
+      Promise.resolve({
+        origin,
+        localStorage: [{ name: "value", value: "fresh" }],
+      }),
+    );
+    const seed = {
+      cookies: [],
+      origins: [
+        {
+          origin: "https://origin-0.example",
+          localStorage: [{ name: "value", value: "stale" }],
+        },
+      ],
+    };
+
+    coordinator.retainSeededOrigins(seed);
+    const webContents = {
+      getURL: () => "https://unused.example/",
+      executeJavaScript: () => Promise.resolve([]),
+    };
+    // Nine origins against a limit of eight: `origin-0` is evicted from the
+    // live map and demoted into the seeded tier carrying "fresh".
+    for (let index = 0; index < 9; index += 1) {
+      coordinator.observe(`https://origin-${index}.example/path`, webContents);
+    }
+    // Let the observations (and the eviction they trigger) settle before the
+    // second tab seeds, which is the production order.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    coordinator.retainSeededOrigins(seed);
+
+    await coordinator.capture();
+
+    expect(
+      captured[0]?.find(
+        (origin) => origin.origin === "https://origin-0.example",
+      ),
+    ).toEqual({
+      origin: "https://origin-0.example",
+      localStorage: [{ name: "value", value: "fresh" }],
+    });
+  });
+
   it("carries the seeded origins this run never navigated", async () => {
     // The host replaces its whole jar with what a capture sends, and the
     // coordinator's own origin map only holds origins navigated in THIS

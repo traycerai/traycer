@@ -238,14 +238,17 @@ export type HostNotificationEntryV22 = z.infer<
   typeof hostNotificationEntrySchemaV22
 >;
 
-/** Narrows a `@2.2` entry to the released union. */
+/**
+ * Narrows a `@2.2` entry to the released union. Derived from
+ * {@link RELEASED_HOST_NOTIFICATION_KINDS} rather than listing the exclusions:
+ * this predicate is the downgrade bridge's last guard against an
+ * unrepresentable arm reaching a released client, so a new arm has to be
+ * excluded by DEFAULT, not by remembering to name it here.
+ */
 export function isReleasedHostNotificationEntry(
   entry: HostNotificationEntryV22,
 ): entry is HostNotificationEntry {
-  return (
-    entry.kind !== "host.operation.finished" &&
-    entry.kind !== "browser.human.needed"
-  );
+  return RELEASED_HOST_NOTIFICATION_KINDS.includes(entry.kind);
 }
 
 /**

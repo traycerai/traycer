@@ -647,9 +647,9 @@ const browserScreencastIceCandidateFields = {
 } as const;
 
 /** One candidate as it rides `sdpAnswer.candidates` (perf-hardening A12). */
-const browserScreencastBatchedIceCandidateSchema = z.object(
-  browserScreencastIceCandidateBaseFields,
-);
+const browserScreencastBatchedIceCandidateSchema = z
+  .object(browserScreencastIceCandidateBaseFields)
+  .strict();
 export type BrowserScreencastBatchedIceCandidate = z.infer<
   typeof browserScreencastBatchedIceCandidateSchema
 >;
@@ -663,7 +663,7 @@ export type BrowserScreencastBatchedIceCandidate = z.infer<
  */
 export const browserScreencastIceServerSchema = z
   .object({
-    urls: z.array(z.string()),
+    urls: z.array(z.string().max(2_048)).max(16),
     username: z.string().nullable(),
     credential: z.string().nullable(),
   })
@@ -1142,7 +1142,8 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       networkPlusJitterMs: z.number().nonnegative().nullable().default(null),
       decodeCompositeMs: z.number().nonnegative().nullable().default(null),
       // Round trip of one `ping` sent on the `input-reliable` DataChannel: up
-      // the DataChannel, back over the mux as `pong`. Deliberately asymmetric -
+      // the DataChannel, back over the mux as `inputPong`. Deliberately
+      // asymmetric -
       // that IS the human input path's shape, and the uplink half is the leg
       // ticket 18 derives its deadlines from. Null until a ping has completed.
       dataChannelRttMs: z.number().nonnegative().nullable().default(null),

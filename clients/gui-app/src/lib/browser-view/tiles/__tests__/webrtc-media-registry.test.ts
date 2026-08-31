@@ -1415,6 +1415,24 @@ describe("createBrowserMediaPeer connectionState 'failed' grace (blocker 2)", ()
     expect(failures).toEqual(["connection-closed"]);
   });
 
+  it("disarms the grace timer when the peer is closed without a state event", () => {
+    // What supersede and `fail()` do: `close()` alone, which the spec updates
+    // `connectionState` for WITHOUT dispatching the event. A timer left armed
+    // here reports a dead peer's failure into the round that reuses its id.
+    const connection = stubPeerConnection();
+    const failures: string[] = [];
+    const peer = createBrowserMediaPeer(
+      { ...NOOP_HANDLERS, onFailure: (reason) => failures.push(reason) },
+      [],
+    );
+
+    connection.setConnectionState("failed");
+    peer.close();
+    vi.advanceTimersByTime(GRACE_MS * 2);
+
+    expect(failures).toEqual([]);
+  });
+
   it("closing while a failure grace timer is armed reports once, not twice", () => {
     const connection = stubPeerConnection();
     const failures: string[] = [];

@@ -256,6 +256,10 @@ export function createVideoPlaneSession(options: {
       .getStats()
       .then((report) => {
         if (closed) return;
+        // A round superseded while the read was in flight: the report describes
+        // a peer that is gone, and `latency` is already the NEW round's window,
+        // so publishing here would date one round's stats to the other's.
+        if (entry.getSnapshot().negotiationId !== negotiationId) return;
         const reportFields =
           report === null ? null : mapWebrtcVideoStats(report);
         const sample: WebrtcVideoStatsSample | null =

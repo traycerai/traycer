@@ -170,13 +170,27 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
   /**
    * Records the origin list of a jar just seeded into this partition. A null
    * or origin-less seed carries no jar and must not retire what is retained.
+   *
+   * Merged, never replaced: this runs once per PROVISIONED TAB, not once per
+   * process run, and {@link retainObservedOrigin} writes LRU-demoted
+   * observations into the same field. A wholesale replace on the second tab's
+   * seed would drop those demoted values and let the capture ship the stale
+   * seeded copy - exactly what the demotion exists to prevent. What is already
+   * retained wins: the seed is the host's jar as of this run's start, so a
+   * retained entry is never older than the incoming one.
    */
   retainSeededOrigins(storageState: ProtocolStorageState | null): void {
     if (storageState === null || storageState.origins.length === 0) return;
-    this.seededOrigins = storageState.origins.map((origin) => ({
-      origin: origin.origin,
-      localStorage: [...origin.localStorage],
-    }));
+    const retained = new Set(this.seededOrigins.map((entry) => entry.origin));
+    this.seededOrigins = [
+      ...this.seededOrigins,
+      ...storageState.origins
+        .filter((origin) => !retained.has(origin.origin))
+        .map((origin) => ({
+          origin: origin.origin,
+          localStorage: [...origin.localStorage],
+        })),
+    ];
   }
 
   observe(url: string, webContents: BrowserStorageCaptureWebContents): void {

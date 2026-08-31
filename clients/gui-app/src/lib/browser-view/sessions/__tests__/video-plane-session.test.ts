@@ -520,6 +520,22 @@ describe("video plane session", () => {
     expect(plane.statsFrames.at(-1)?.framesDecoded).toBe(300);
   });
 
+  it("discards a stats read that a superseding round outran", async () => {
+    const plane = setup();
+    await goLive(plane, 1);
+    await settle();
+    const sampledOnRoundOne = plane.statsFrames.length;
+
+    // The read is in flight (the interval fired, the promise has not settled)
+    // when the next round replaces it - and with it the latency window the
+    // continuation would otherwise summarize.
+    vi.advanceTimersByTime(5_000);
+    plane.session.handleServerFrame(offerFrame(2, "second"));
+    await settle();
+
+    expect(plane.statsFrames).toHaveLength(sampledOnRoundOne);
+  });
+
   it("stops sampling stats once the round is no longer live", async () => {
     const plane = setup();
     plane.session.handleServerFrame(offerFrame(1, "offer-sdp"));

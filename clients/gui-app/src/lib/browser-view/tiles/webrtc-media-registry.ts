@@ -830,6 +830,12 @@ export function createBrowserMediaPeer(
    */
   let connectionFailedTimer: number | null = null;
 
+  const clearConnectionFailedTimer = (): void => {
+    if (connectionFailedTimer === null) return;
+    window.clearTimeout(connectionFailedTimer);
+    connectionFailedTimer = null;
+  };
+
   connection.onicecandidate = (event) => {
     const candidate = event.candidate;
     if (candidate === null) return;
@@ -878,20 +884,14 @@ export function createBrowserMediaPeer(
     const state = connection.connectionState;
     if (state === "closed") {
       // Terminal - nothing left to restart, unlike "failed" below.
-      if (connectionFailedTimer !== null) {
-        window.clearTimeout(connectionFailedTimer);
-        connectionFailedTimer = null;
-      }
+      clearConnectionFailedTimer();
       handlers.onFailure("connection-closed");
       return;
     }
     if (state !== "failed") {
       // Recovered (a same-id ICE restart landing, or a transient blip
       // clearing on its own) - the grace timer's job is done.
-      if (connectionFailedTimer !== null) {
-        window.clearTimeout(connectionFailedTimer);
-        connectionFailedTimer = null;
-      }
+      clearConnectionFailedTimer();
       return;
     }
     if (connectionFailedTimer !== null) return;
@@ -920,6 +920,10 @@ export function createBrowserMediaPeer(
       });
     },
     close: () => {
+      // `close()` sets `connectionState` to "closed" without dispatching the
+      // event, so nothing else disarms the grace timer: left armed it would
+      // report a dead peer's failure into whatever round holds its id next.
+      clearConnectionFailedTimer();
       for (const track of stream?.getTracks() ?? []) track.stop();
       stream = null;
       connection.close();

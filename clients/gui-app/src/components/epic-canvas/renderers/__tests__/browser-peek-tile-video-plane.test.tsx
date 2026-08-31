@@ -11,6 +11,7 @@ import { useEffect } from "react";
 import {
   FakeStreamClient,
   type FakeStreamSession,
+  clearScreencastOwner,
   epicNestedFocusNavigationModule,
   fakeMediaPeerModule,
   fakeMediaStream,
@@ -353,6 +354,7 @@ describe("BrowserPeekTile video plane", () => {
 
   afterEach(() => {
     cleanup();
+    clearScreencastOwner();
     vi.useRealTimers();
     clearLastBrowserPeekFrame(browserPeekFrameKey(peekNode));
     restoreCanvasPrototype();
@@ -787,6 +789,7 @@ describe("BrowserPeekTile input ack", () => {
 
   afterEach(() => {
     cleanup();
+    clearScreencastOwner();
     vi.restoreAllMocks();
   });
 

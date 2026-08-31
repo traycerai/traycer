@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeStreamClient,
   PEEK_NODE,
+  clearScreencastOwner,
   hostDirectoryEntryModule,
   hostStreamClientForWithAuthModule,
   liveStream as fixtureLiveStream,
@@ -153,6 +154,7 @@ describe("BrowserPeekTile on a coarse pointer", () => {
 
   afterEach(() => {
     cleanup();
+    clearScreencastOwner();
     vi.restoreAllMocks();
   });
 

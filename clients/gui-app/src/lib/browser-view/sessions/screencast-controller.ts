@@ -1115,6 +1115,15 @@ export function createScreencastController(options: {
       // buffered under the old one must not be matched against the new one:
       // a press held at `castSequence` 37 would replay against epoch 37.
       armBuffer.drop();
+      // The finger's side of the same hazard: a queued tap carries the old
+      // plane's token, and so does the finger still down. The scroll it may
+      // still be making is token-free and keeps going; only the tap it could
+      // end with is refused, by the `null` both delivery paths reject.
+      pendingTouchGestures = [];
+      pointerClickCount = null;
+      if (activeTouch !== null) {
+        activeTouch = { ...activeTouch, downSequence: null };
+      }
     },
     setInputTransport: (transport) => {
       pendingInputTransport = transport;

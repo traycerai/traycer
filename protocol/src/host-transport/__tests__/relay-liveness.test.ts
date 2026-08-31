@@ -64,4 +64,18 @@ describe("createRelayPathEstimator", () => {
 
     expect(estimator.deadlineMs(0)).toBe(0);
   });
+
+  it("measures again on the run after the one a retirement poisoned", () => {
+    const estimator = createRelayPathEstimator();
+    estimator.notePingSent(0);
+    estimator.retireRun();
+    estimator.notePingSent(10);
+    estimator.notePongReceived(110);
+    // A retirement poisons ONE run. Leaving the flag set would keep every
+    // later deadline at the floor for the whole socket lifetime.
+    estimator.notePingSent(1_000);
+    estimator.notePongReceived(1_100);
+
+    expect(estimator.deadlineMs(0)).toBe(900);
+  });
 });

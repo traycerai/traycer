@@ -200,7 +200,16 @@ export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
     (event, payload: unknown) => {
       const windowId = bridge.resolveSenderWindowId(event);
       const parsed = finalBrowserStateCapturedSchema.safeParse(payload);
-      if (windowId === null || !parsed.success) return;
+      if (windowId === null || !parsed.success) {
+        // Without this the sender's `requestFinalBrowserCapture` waits out
+        // FINAL_BROWSER_CAPTURE_TIMEOUT_MS and logs only a timeout, so the
+        // real cause of a quit-path stall is unrecoverable from the logs.
+        log.warn("[runner-ipc] finalBrowserStateCaptured ack rejected", {
+          windowId,
+          payload,
+        });
+        return;
+      }
       bridge.acknowledgeFinalBrowserCapture(windowId, parsed.data.requestId);
     },
   );
