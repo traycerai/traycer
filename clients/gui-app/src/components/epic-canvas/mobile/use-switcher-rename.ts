@@ -7,6 +7,7 @@ import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-m
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { getEpicSessionHandleHostId } from "@/lib/registries/epic-session-registry";
+import { appLogger } from "@/lib/logger";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /** The renameable kinds a mobile surface can address, and how they rename. */
@@ -102,7 +103,24 @@ export function useSwitcherRename(
         if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
           // `void`: the doc write is a round trip now, and this arm's whole
           // point is that it needs no stamp to retire and nothing to await.
-          void epicHandle.store.getState().renameArtifact(nodeId, trimmed);
+          //
+          // Detached is not the same as unhandled, though. The write crosses
+          // the worker bridge, and `mutation/apply` rejects for faults that
+          // are not disposal - a handler throw, a malformed bridge response -
+          // so without a terminal rejection arm this surface is an unhandled
+          // rejection rather than a rename that quietly did not happen. There
+          // is nothing to roll back (no optimistic stamp was taken) and
+          // nothing to tell the user that the doc itself will not tell them:
+          // the title simply stays as it was. So this records and stops.
+          void epicHandle.store
+            .getState()
+            .renameArtifact(nodeId, trimmed)
+            .catch((error: unknown) => {
+              appLogger.warn("mobile switcher: doc-resident rename failed", {
+                artifactId: nodeId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
           return;
         }
       }

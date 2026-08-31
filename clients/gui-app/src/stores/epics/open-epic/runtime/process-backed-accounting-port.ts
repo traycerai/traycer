@@ -67,6 +67,16 @@ export function createProcessBackedAccountingPort(
   // emptily rather than throw.
   let source: EpicRuntimeAccountingSource | null = null;
 
+  // Every artifact room this runtime currently holds a hot-docs charge for.
+  //
+  // The hot-docs plane charges PER ROOM, and unlike `epicReplicas` - whose
+  // `release` derives every holder id it owns from `bookKey` - a hot-doc
+  // holder id is only recoverable from the room id that built it. Nothing else
+  // remembers those, and `materializedIds()` cannot stand in: `unregisterBooks`
+  // drops `source` before it detaches, deliberately, so by then the tier
+  // answers emptily. So the port keeps the list itself.
+  const chargedHotRooms = new Set<string>();
+
   return {
     registerBooks(next): void {
       source = next;
@@ -97,6 +107,21 @@ export function createProcessBackedAccountingPort(
       // emptily is safer than one answering from a runtime mid-teardown.
       source = null;
       memory.hotDocs.detach(bookKey);
+      // The counterpart of `epicReplicas.release` below, and needed for the
+      // same reason: `detach` removes the TIER - the thing eviction walks -
+      // while the accountant keeps every charge this runtime made. A worker
+      // fatal or a spawner disposal reaches here after event routing is
+      // already unsubscribed, so the per-room releases never arrive on their
+      // own. Without this, those bytes stay charged to a plane that no longer
+      // has a tier able to evict them: permanent phantom usage that pushes
+      // live documents out of a budget the dead runtime is still occupying.
+      for (const artifactRoomId of chargedHotRooms) {
+        memory.hotDocs.release(
+          memory.accountant,
+          hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
+        );
+      }
+      chargedHotRooms.clear();
       memory.epicReplicas.detach(bookKey);
       memory.epicReplicas.release(memory.accountant, bookKey);
     },
@@ -139,6 +164,7 @@ export function createProcessBackedAccountingPort(
     },
 
     settleHotDocBytes(artifactRoomId, bytes): void {
+      chargedHotRooms.add(artifactRoomId);
       memory.hotDocs.settle(
         memory.accountant,
         hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
@@ -148,6 +174,7 @@ export function createProcessBackedAccountingPort(
     },
 
     chargeHotDocProvisional(artifactRoomId, bytes): void {
+      chargedHotRooms.add(artifactRoomId);
       memory.hotDocs.chargeProvisional(
         memory.accountant,
         hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
@@ -156,6 +183,7 @@ export function createProcessBackedAccountingPort(
     },
 
     releaseHotDoc(artifactRoomId): void {
+      chargedHotRooms.delete(artifactRoomId);
       memory.hotDocs.release(
         memory.accountant,
         hotDocHolderId(hostId, epicId, runtimeToken, artifactRoomId),
