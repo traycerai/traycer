@@ -8,7 +8,7 @@ import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-t
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
-import { useNativeKeyboardOpen } from "@/lib/native-keyboard";
+import { useNativeKeyboardOpen } from "@/hooks/ui/use-native-keyboard-open";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
 import { firstPaneId } from "@/stores/epics/canvas/tile-tree";
 import type { TileLayoutNode } from "@/stores/epics/canvas/types";

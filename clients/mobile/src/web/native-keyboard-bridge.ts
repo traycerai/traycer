@@ -17,29 +17,37 @@ import { setNativeKeyboardState } from "@traycer-clients/gui-app";
  */
 const TRANSITION_WATCHDOG_MS = 700;
 
+let started = false;
 let watchdog: number | null = null;
 
-function settle(open: boolean, heightPx: number): void {
+function settle(open: boolean): void {
   if (watchdog !== null) {
     clearTimeout(watchdog);
     watchdog = null;
   }
-  setNativeKeyboardState({ open, transitioning: false, heightPx });
+  setNativeKeyboardState({ open, transitioning: false });
 }
 
-function transition(open: boolean, heightPx: number): void {
-  setNativeKeyboardState({ open, transitioning: true, heightPx });
+function transition(open: boolean): void {
+  setNativeKeyboardState({ open, transitioning: true });
   if (watchdog !== null) clearTimeout(watchdog);
   watchdog = window.setTimeout(() => {
     watchdog = null;
-    setNativeKeyboardState({ open, transitioning: false, heightPx });
-    console.info("[kbd] transition watchdog fired", { open, heightPx });
+    setNativeKeyboardState({ open, transitioning: false });
+    console.info("[kbd] transition watchdog fired", { open });
   }, TRANSITION_WATCHDOG_MS);
 }
 
+/**
+ * Tag + test-id, with any test-id carrying a path separator redacted: some
+ * test-ids embed user filesystem paths (e.g. the folder-location rows'
+ * `folder-location-import-<worktreePath>`), which must not land in a log.
+ */
 function describeTarget(el: Element): string {
   const testId = el.getAttribute("data-testid");
-  return `${el.tagName.toLowerCase()}${testId === null ? "" : `[${testId}]`}`;
+  const tag = el.tagName.toLowerCase();
+  if (testId === null) return tag;
+  return testId.includes("/") ? `${tag}[redacted-path]` : `${tag}[${testId}]`;
 }
 
 function describeActiveElement(): string {
@@ -51,7 +59,9 @@ function describeActiveElement(): string {
  * TEMPORARY instrumentation (with gui-app's "[kbd] dismiss" log) for the
  * reported keyboard open/close flap: every keyboard event and every
  * focus/blur is stamped so a keyboard that closes right after opening can be
- * attributed from a device log (Safari Web Inspector / `xcrun simctl`).
+ * attributed from a device log. Console-only, so it is readable where the
+ * flap is reproduced - the dev loop, whose debug-signed build Safari Web
+ * Inspector can attach to; a distribution build forwards none of it.
  * Remove once the flap is diagnosed.
  */
 function logKeyboardEvent(name: string, heightPx: number): void {
@@ -62,23 +72,31 @@ function logKeyboardEvent(name: string, heightPx: number): void {
   });
 }
 
+function warnListenerAttachFailure(event: string): (error: unknown) => void {
+  return (error: unknown) => {
+    console.error(`[kbd] ${event} listener failed to attach`, error);
+  };
+}
+
 export function startNativeKeyboardBridge(): void {
-  void Keyboard.addListener("keyboardWillShow", (info) => {
+  if (started) return;
+  started = true;
+  Keyboard.addListener("keyboardWillShow", (info) => {
     logKeyboardEvent("willShow", info.keyboardHeight);
-    transition(true, info.keyboardHeight);
-  });
-  void Keyboard.addListener("keyboardDidShow", (info) => {
+    transition(true);
+  }).catch(warnListenerAttachFailure("keyboardWillShow"));
+  Keyboard.addListener("keyboardDidShow", (info) => {
     logKeyboardEvent("didShow", info.keyboardHeight);
-    settle(true, info.keyboardHeight);
-  });
-  void Keyboard.addListener("keyboardWillHide", () => {
+    settle(true);
+  }).catch(warnListenerAttachFailure("keyboardDidShow"));
+  Keyboard.addListener("keyboardWillHide", () => {
     logKeyboardEvent("willHide", 0);
-    transition(false, 0);
-  });
-  void Keyboard.addListener("keyboardDidHide", () => {
+    transition(false);
+  }).catch(warnListenerAttachFailure("keyboardWillHide"));
+  Keyboard.addListener("keyboardDidHide", () => {
     logKeyboardEvent("didHide", 0);
-    settle(false, 0);
-  });
+    settle(false);
+  }).catch(warnListenerAttachFailure("keyboardDidHide"));
 
   document.addEventListener(
     "focusin",

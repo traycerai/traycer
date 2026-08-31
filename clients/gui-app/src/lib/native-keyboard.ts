@@ -1,5 +1,3 @@
-import * as React from "react";
-
 /**
  * The NATIVE shell's word on the soft keyboard, fed by the Capacitor entry
  * point from the Keyboard plugin's will/did show/hide events - the same
@@ -16,6 +14,12 @@ import * as React from "react";
  * reading a signal that could never fire. The plugin events are the only
  * authoritative source in that mode, and they arrive BEFORE the animation
  * starts, which the measured inset never could.
+ *
+ * Deliberately height-free: the plugin's keyboard height belongs to the
+ * animated-inset work (which needs it alongside the animation's duration and
+ * curve), and publishing it here before anything consumes it invites reading
+ * a value that is wrong for half the transition - at will-hide the keyboard
+ * still fills its full height while "0" would already be published.
  */
 export interface NativeKeyboardState {
   /** Keyboard is up (or animating up). Flips on will-show/will-hide. */
@@ -26,29 +30,18 @@ export interface NativeKeyboardState {
    * this to clear so they repaint once, at the settled size.
    */
   readonly transitioning: boolean;
-  /** Keyboard height in CSS px as reported by the plugin; 0 while closed. */
-  readonly heightPx: number;
 }
 
-const CLOSED: NativeKeyboardState = {
-  open: false,
-  transitioning: false,
-  heightPx: 0,
-};
-
-let state: NativeKeyboardState = CLOSED;
+let state: NativeKeyboardState = { open: false, transitioning: false };
 const listeners = new Set<() => void>();
 
 /** Fed exclusively by the native shell's keyboard bridge. */
 export function setNativeKeyboardState(next: NativeKeyboardState): void {
-  if (
-    next.open === state.open &&
-    next.transitioning === state.transitioning &&
-    next.heightPx === state.heightPx
-  ) {
+  if (next.open === state.open && next.transitioning === state.transitioning) {
     return;
   }
   state = next;
+  // Iterated over a copy so a listener unsubscribing mid-notify is safe.
   for (const listener of [...listeners]) listener();
 }
 
@@ -86,25 +79,4 @@ export function runWhenNativeKeyboardSettled(fn: () => void): () => void {
     cancelled = true;
     unsubscribe();
   };
-}
-
-function subscribeForHook(onChange: () => void): () => void {
-  return subscribeNativeKeyboardState(onChange);
-}
-
-function readOpen(): boolean {
-  return state.open;
-}
-
-function readOpenServer(): boolean {
-  return false;
-}
-
-/** Reactive "the native shell says the keyboard is up". */
-export function useNativeKeyboardOpen(): boolean {
-  return React.useSyncExternalStore(
-    subscribeForHook,
-    readOpen,
-    readOpenServer,
-  );
 }

@@ -37,7 +37,7 @@ import {
   useMobileHeaderStore,
 } from "@/stores/layout/mobile-header-store";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
-import { useNativeKeyboardOpen } from "@/lib/native-keyboard";
+import { useNativeKeyboardOpen } from "@/hooks/ui/use-native-keyboard-open";
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";

@@ -10,7 +10,6 @@ import {
 const CLOSED: NativeKeyboardState = {
   open: false,
   transitioning: false,
-  heightPx: 0,
 };
 
 beforeEach(() => {
@@ -22,25 +21,24 @@ describe("setNativeKeyboardState", () => {
     const listener = vi.fn();
     const unsubscribe = subscribeNativeKeyboardState(listener);
 
-    setNativeKeyboardState({ open: true, transitioning: true, heightPx: 300 });
+    setNativeKeyboardState({ open: true, transitioning: true });
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(getNativeKeyboardState()).toEqual({
       open: true,
       transitioning: true,
-      heightPx: 300,
     });
 
     unsubscribe();
   });
 
   it("does not re-notify on an identical state write", () => {
-    setNativeKeyboardState({ open: true, transitioning: false, heightPx: 300 });
+    setNativeKeyboardState({ open: true, transitioning: false });
 
     const listener = vi.fn();
     const unsubscribe = subscribeNativeKeyboardState(listener);
 
-    setNativeKeyboardState({ open: true, transitioning: false, heightPx: 300 });
+    setNativeKeyboardState({ open: true, transitioning: false });
 
     expect(listener).not.toHaveBeenCalled();
 
@@ -58,26 +56,26 @@ describe("runWhenNativeKeyboardSettled", () => {
   });
 
   it("defers until transitioning flips false", () => {
-    setNativeKeyboardState({ open: true, transitioning: true, heightPx: 300 });
+    setNativeKeyboardState({ open: true, transitioning: true });
 
     const fn = vi.fn();
     runWhenNativeKeyboardSettled(fn);
 
     expect(fn).not.toHaveBeenCalled();
 
-    setNativeKeyboardState({ open: true, transitioning: false, heightPx: 300 });
+    setNativeKeyboardState({ open: true, transitioning: false });
 
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("never runs a cancelled callback, even after settle", () => {
-    setNativeKeyboardState({ open: true, transitioning: true, heightPx: 300 });
+    setNativeKeyboardState({ open: true, transitioning: true });
 
     const fn = vi.fn();
     const cancel = runWhenNativeKeyboardSettled(fn);
     cancel();
 
-    setNativeKeyboardState({ open: true, transitioning: false, heightPx: 300 });
+    setNativeKeyboardState({ open: true, transitioning: false });
 
     expect(fn).not.toHaveBeenCalled();
   });

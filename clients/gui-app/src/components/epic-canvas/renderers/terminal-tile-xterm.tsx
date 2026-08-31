@@ -998,7 +998,7 @@ function createXtermEntry(
   // min(cols/rows) is pinned tiny) is `reconcileWithHost`'s job, not this one's
   // - except for a reconcile that was deferred because the box was unmeasurable
   // at the time, which this path completes on the next good measurement.
-  const fitToContainer = (): void => {
+  const fitToContainerNow = (): void => {
     const dims = proposeContainerDims();
     if (dims === null) return;
     if (pendingHostGrid !== null) {
@@ -1068,6 +1068,26 @@ function createXtermEntry(
     reportDims(dims.cols, dims.rows);
   };
 
+  // While the mobile soft keyboard is animating (native-resize mode shrinks
+  // this container as part of the show/hide transition), hold the fit until
+  // the transition settles so the PTY re-grids once, at the final size,
+  // instead of repainting at intermediate sizes. Gated here, at the single
+  // choke point, because every fit source funnels through this wrapper -
+  // the ResizeObserver AND `term.onRender`, which fires on every committed
+  // render and would otherwise re-grid mid-transition whenever the PTY is
+  // streaming output. Re-arming cancels the previous pending fit, so a burst
+  // of calls during the transition coalesces into one settled fit. Outside
+  // the installed app the keyboard state never transitions and this runs
+  // synchronously.
+  let keyboardSettleCancel: (() => void) | null = null;
+  const fitToContainer = (): void => {
+    keyboardSettleCancel?.();
+    keyboardSettleCancel = runWhenNativeKeyboardSettled(() => {
+      keyboardSettleCancel = null;
+      fitToContainerNow();
+    });
+  };
+
   // Recovery: when the host's authoritative grid disagrees with what this
   // healthy container would naturally propose, re-report our natural size. This
   // unsticks a session whose shared grid was latched to a stale/tiny value by a
@@ -1099,23 +1119,13 @@ function createXtermEntry(
     fitToContainer();
   });
 
-  // While the mobile soft keyboard is animating (native-resize mode shrinks
-  // this container as part of the show/hide transition), hold the fit until
-  // the transition settles so the PTY re-grids once, at the final size,
-  // instead of repainting mid-animation. Outside the installed app the
-  // keyboard state never transitions and this runs synchronously.
-  let keyboardSettleCancel: (() => void) | null = null;
   const observer = new ResizeObserver(() => {
     if (resizeDebounce !== null) {
       clearTimeout(resizeDebounce);
     }
     resizeDebounce = window.setTimeout(() => {
       resizeDebounce = null;
-      keyboardSettleCancel?.();
-      keyboardSettleCancel = runWhenNativeKeyboardSettled(() => {
-        keyboardSettleCancel = null;
-        fitToContainer();
-      });
+      fitToContainer();
     }, RESIZE_DEBOUNCE_MS);
   });
   observer.observe(containerEl);

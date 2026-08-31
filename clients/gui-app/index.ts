@@ -4,10 +4,7 @@ export {
   setMobileApp,
   setMobileAppPlatform,
 } from "@/lib/mobile-app";
-export {
-  setNativeKeyboardState,
-  type NativeKeyboardState,
-} from "@/lib/native-keyboard";
+export { setNativeKeyboardState } from "@/lib/native-keyboard";
 export {
   hostRpcRegistry,
   type HostRpcRegistry,
