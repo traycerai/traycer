@@ -30,7 +30,11 @@ import { useAuthService } from "@/lib/host";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useReactiveOwnerIdentityKey } from "@/hooks/host/use-reactive-owner-identity-key";
-import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  cloudEpicTasksQueryKeyMatchesScope,
+  epicTaskContextsQueryKeyMatchesScope,
+  updateEpicTitleInCloudTaskCaches,
+} from "@/lib/cloud-epic-tasks-query/cache";
 import {
   claimDesktopEpicOwnership,
   getDesktopEpicOwnershipBridge,
@@ -952,6 +956,14 @@ function useCloudTaskTitleCacheSync(args: CloudTaskTitleCacheSyncArgs): void {
     };
     const syncMatchingQueryUpdate = (event: QueryCacheNotifyEvent): void => {
       if (event.type !== "updated") return;
+      const queryKey: unknown = event.query.queryKey;
+      if (!Array.isArray(queryKey)) return;
+      if (
+        !cloudEpicTasksQueryKeyMatchesScope(queryKey, scope) &&
+        !epicTaskContextsQueryKeyMatchesScope(queryKey, scope)
+      ) {
+        return;
+      }
       const title = currentTitle();
       if (title !== null) writeThroughTitle(title);
     };
