@@ -280,6 +280,122 @@ function validSnapshotEnvelopeWithName(
   };
 }
 
+interface RawTeam {
+  readonly id: string;
+  readonly slug: string;
+}
+
+/**
+ * A local variant of {@link authenticatedUserRawPayload} that parameterizes
+ * `teamSubscriptions`, for C.8 - the reorder-vs-change pin on
+ * `reprojectSameUserIdentity`'s teams comparison.
+ */
+function authenticatedUserRawPayloadWithTeams(
+  userId: string,
+  subscriptionStatus: SubscriptionStatus,
+  teams: readonly RawTeam[],
+): unknown {
+  return {
+    user: {
+      id: userId,
+      name: `${userId} display`,
+      providerId: `gh-${userId}`,
+      providerHandle: userId,
+      providerType: "GITHUB",
+      email: `${userId}@example.com`,
+      avatarUrl: null,
+      activatedAt: null,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      lastSeenAt: null,
+      privacyMode: false,
+      isLearningEnabled: true,
+    },
+    userSubscription: {
+      id: `sub-${userId}`,
+      userID: userId,
+      orgID: null,
+      teamID: null,
+      customerId: `cus-${userId}`,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      subscriptionExpiry: null,
+      trialEndsAt: null,
+      subscriptionStatus,
+      hasPaymentMethod: false,
+      isInTrial: false,
+      rechargeRateSeconds: 0,
+    },
+    teamSubscriptions: teams.map((team) => ({
+      id: `sub-team-${team.id}`,
+      userID: null,
+      orgID: null,
+      teamID: team.id,
+      customerId: `cus-team-${team.id}`,
+      createdAt: "2024-01-01T00:00:00.000Z",
+      updatedAt: "2024-01-01T00:00:00.000Z",
+      subscriptionExpiry: null,
+      trialEndsAt: null,
+      subscriptionStatus,
+      hasPaymentMethod: false,
+      isInTrial: false,
+      rechargeRateSeconds: 0,
+      totalPlanCredits: 0,
+      hasActiveBundle: false,
+      bundleSummary: { bundleTotal: 0, bundleConsumed: 0, bundleRemaining: 0 },
+      team: {
+        id: team.id,
+        slug: team.slug,
+        avatarUrl: null,
+        privacyMode: false,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+      },
+    })),
+    payAsYouGoUsage: { allowPayAsYouGo: false },
+  };
+}
+
+function authenticatedUserWithTeams(
+  userId: string,
+  subscriptionStatus: SubscriptionStatus,
+  teams: readonly RawTeam[],
+): AuthenticatedUser {
+  return authenticatedUserResponseRecordV100.schema.parse(
+    authenticatedUserRawPayloadWithTeams(userId, subscriptionStatus, teams),
+  );
+}
+
+function okWithUserTeams(
+  userId: string,
+  subscriptionStatus: SubscriptionStatus,
+  teams: readonly RawTeam[],
+): Promise<Response> {
+  return Promise.resolve(
+    new Response(
+      JSON.stringify(
+        authenticatedUserRawPayloadWithTeams(userId, subscriptionStatus, teams),
+      ),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    ),
+  );
+}
+
+function validSnapshotEnvelopeWithTeams(
+  userId: string,
+  subscriptionStatus: SubscriptionStatus,
+  teams: readonly RawTeam[],
+): SnapshotEnvelope {
+  return {
+    schemaVersion: authenticatedUserResponseRecordV100.schemaVersion,
+    userId,
+    user: authenticatedUserWithTeams(userId, subscriptionStatus, teams),
+  };
+}
+
 function base64url(value: unknown): string {
   return btoa(JSON.stringify(value))
     .replace(/\+/g, "-")
@@ -443,6 +559,84 @@ describe("AuthService provisional boot session", () => {
       // no spy needed.
       expect(useAuthStore.getState().profile).toBe(before);
       expect(useAuthStore.getState().shareableTeams).toBe(teamsBefore);
+    });
+
+    // C.8 - `reprojectSameUserIdentity`'s `unchanged` check (auth-service.ts
+    // :3820-3828) compares `shareableTeams` INDEX-BY-INDEX, and
+    // `projectShareableTeams` preserves server order verbatim - so the same
+    // team set returned in a different order reads as "changed" and fires a
+    // spurious re-projection (and, in production, `Analytics.identify`).
+    it("A7: THE REDDENING ONE - same teams in a different order is treated as unchanged", async () => {
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(
+        host,
+        validSnapshotEnvelopeWithTeams("user-1", "FREE", [
+          { id: "team-a", slug: "alpha" },
+          { id: "team-b", slug: "beta" },
+        ]),
+      );
+      const deferred = createDeferredResponse();
+      restoreFetch();
+      restoreFetch = installFetch(() => deferred.promise);
+
+      await service.start();
+      const profileBefore = useAuthStore.getState().profile;
+      const teamsBefore = useAuthStore.getState().shareableTeams;
+      expect(teamsBefore.map((team) => team.teamId)).toEqual([
+        "team-a",
+        "team-b",
+      ]);
+
+      // Same two teams, reversed order, everything else identical.
+      deferred.resolve(
+        await okWithUserTeams("user-1", "FREE", [
+          { id: "team-b", slug: "beta" },
+          { id: "team-a", slug: "alpha" },
+        ]),
+      );
+      await flush();
+
+      // Red today - the index compare finds index 0 and 1 both changed and
+      // calls `setSignedIn`, replacing both objects even though the set is
+      // identical.
+      expect(useAuthStore.getState().shareableTeams).toBe(teamsBefore);
+      expect(useAuthStore.getState().profile).toBe(profileBefore);
+    });
+
+    it("A8: CONTROL - a genuinely different team set (one added) is still treated as changed", async () => {
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(
+        host,
+        validSnapshotEnvelopeWithTeams("user-1", "FREE", [
+          { id: "team-a", slug: "alpha" },
+          { id: "team-b", slug: "beta" },
+        ]),
+      );
+      const deferred = createDeferredResponse();
+      restoreFetch();
+      restoreFetch = installFetch(() => deferred.promise);
+
+      await service.start();
+      const teamsBefore = useAuthStore.getState().shareableTeams;
+
+      // The same two teams, PLUS a third - a real change, not a reorder.
+      deferred.resolve(
+        await okWithUserTeams("user-1", "FREE", [
+          { id: "team-a", slug: "alpha" },
+          { id: "team-b", slug: "beta" },
+          { id: "team-c", slug: "charlie" },
+        ]),
+      );
+      await flush();
+
+      // Green both sides - without this, deleting the teams comparison
+      // outright would also make pin A7 pass.
+      expect(useAuthStore.getState().shareableTeams).not.toBe(teamsBefore);
+      expect(
+        useAuthStore.getState().shareableTeams.map((team) => team.teamId),
+      ).toEqual(["team-a", "team-b", "team-c"]);
     });
   });
 
@@ -680,6 +874,62 @@ describe("AuthService provisional boot session", () => {
 
       expect(rotateCalls).toBe(0);
       expect(service.getLastError()).toBe(AUTH_ERROR_LAUNCH_FAILED);
+    });
+
+    // C.7 - `revalidateCurrentContextOnce`'s same-user `valid` arm (auth-service.ts
+    // :2303-2316) is the exact predicate A5/A6 pin at BOOT, unapplied at the
+    // mid-session revalidation this reactive 401 path drives. It commits
+    // subscription status only and never calls `reprojectSameUserIdentity`.
+    it("C16: a mid-session same-user valid verdict re-projects a profile that changed since the last projection", async () => {
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(
+        host,
+        validSnapshotEnvelopeWithName("user-1", "FREE", "Old Name"),
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        okWithUserNamed("user-1", "FREE", "Old Name"),
+      );
+
+      await service.start();
+      expect(useAuthStore.getState().profile?.userName).toBe("Old Name");
+
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        okWithUserNamed("user-1", "FREE", "New Name"),
+      );
+      const outcome = await service.revalidateCurrentContext();
+      expect(outcome?.kind).toBe("valid");
+
+      // THE REDDENING ONE - today this arm only commits the subscription
+      // status, so this stays "Old Name" instead of picking up the changed
+      // display name.
+      expect(useAuthStore.getState().profile?.userName).toBe("New Name");
+    });
+
+    it("C17: an identical mid-session same-user verdict leaves the store's profile object untouched", async () => {
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(
+        host,
+        validSnapshotEnvelopeWithName("user-1", "FREE", "Stable Name"),
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        okWithUserNamed("user-1", "FREE", "Stable Name"),
+      );
+
+      await service.start();
+      const before = useAuthStore.getState().profile;
+
+      const outcome = await service.revalidateCurrentContext();
+      expect(outcome?.kind).toBe("valid");
+
+      // CONTROL, green both sides - what stops pin C16 being satisfied by an
+      // unconditional write, which would fire one `Analytics.identify` per
+      // revalidation instead of only when identity actually moved.
+      expect(useAuthStore.getState().profile).toBe(before);
     });
   });
 

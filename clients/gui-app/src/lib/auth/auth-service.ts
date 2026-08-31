@@ -2311,6 +2311,14 @@ export class AuthService {
         // The bearer now validates to a different user (a cross-user re-seed) -
         // treat as a fresh sign-in so the old context aborts cleanly.
         this.applySignedIn(currentToken, outcome.user, undefined);
+      } else {
+        // Same argument as the subscription commit above, applied to the rest
+        // of the person-facing identity: a display name, avatar or team
+        // membership can change without a bearer rotation, and projecting only
+        // entitlement left every other field one launch stale. Store-only and
+        // gated on a real difference - see `reprojectSameUserIdentity` for why
+        // re-entering `applySignedIn` is not available here.
+        this.reprojectSameUserIdentity(outcome.user);
       }
       return outcome;
     }
@@ -3808,6 +3816,14 @@ export class AuthService {
     const contextMetadata = this.contextMetadataFromUser(user);
     const shareableTeams = projectShareableTeams(user);
     const current = useAuthStore.getState();
+    // Keyed by id, not by INDEX. `projectShareableTeams` preserves the server's
+    // order verbatim, so an index-wise compare reads a pure reorder of an
+    // identical team set as a change - which writes the store and fires an
+    // `Analytics.identify` for nothing. Team ids are unique, so a same-length
+    // set whose every id is found with matching fields is the same set.
+    const currentTeamsById = new Map(
+      current.shareableTeams.map((team) => [team.teamId, team]),
+    );
     const unchanged =
       current.profile !== null &&
       current.contextMetadata !== null &&
@@ -3818,10 +3834,10 @@ export class AuthService {
       current.contextMetadata.userId === contextMetadata.userId &&
       current.contextMetadata.username === contextMetadata.username &&
       current.shareableTeams.length === shareableTeams.length &&
-      current.shareableTeams.every((team, index) => {
-        const next = shareableTeams[index];
+      shareableTeams.every((next) => {
+        const team = currentTeamsById.get(next.teamId);
         return (
-          team.teamId === next.teamId &&
+          team !== undefined &&
           team.slug === next.slug &&
           team.avatarUrl === next.avatarUrl
         );
