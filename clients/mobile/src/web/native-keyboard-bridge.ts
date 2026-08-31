@@ -20,16 +20,20 @@ const TRANSITION_WATCHDOG_MS = 700;
 
 let started = false;
 let watchdog: number | null = null;
+/** Bridge-local mirror of the last state fed to gui-app. */
+let keyboardOpen = false;
 
 function settle(open: boolean): void {
   if (watchdog !== null) {
     clearTimeout(watchdog);
     watchdog = null;
   }
+  keyboardOpen = open;
   setNativeKeyboardState({ open, transitioning: false });
 }
 
 function transition(open: boolean): void {
+  keyboardOpen = open;
   setNativeKeyboardState({ open, transitioning: true });
   if (watchdog !== null) clearTimeout(watchdog);
   watchdog = window.setTimeout(() => {
@@ -73,6 +77,11 @@ export function startNativeKeyboardBridge(): void {
     settle(true);
   }).catch(warnListenerAttachFailure("keyboardDidShow"));
   Keyboard.addListener("keyboardWillHide", () => {
+    // iOS 26 can deliver the hide pair in reverse (didHide first, e.g. on an
+    // instant dismiss). By then the state is already settled closed, and
+    // honoring the stale willHide would start a phantom 700ms transition
+    // that needlessly holds the terminal's settled re-grid.
+    if (!keyboardOpen && watchdog === null) return;
     if (drivesInset) setKeyboardInset(0);
     transition(false);
   }).catch(warnListenerAttachFailure("keyboardWillHide"));

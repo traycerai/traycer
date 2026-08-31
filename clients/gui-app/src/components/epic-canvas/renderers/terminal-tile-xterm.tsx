@@ -43,7 +43,10 @@ import {
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
-import { runWhenNativeKeyboardSettled } from "@/lib/native-keyboard";
+import {
+  getNativeKeyboardState,
+  runWhenNativeKeyboardSettled,
+} from "@/lib/native-keyboard";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
@@ -1098,6 +1101,15 @@ function createXtermEntry(
   // host grid only changes once per resize, so a dropped reconcile never
   // re-fires and the session latches at the stale size.
   const reconcileWithHost = (hostCols: number, hostRows: number): void => {
+    // Mid-keyboard-transition the container is animating through intermediate
+    // heights, so measuring now would report a grid that is wrong by the time
+    // the glide ends. Defer through the same pending slot as an unmeasurable
+    // box: a transition implies ResizeObserver activity, whose settled fit
+    // completes the pending reconcile.
+    if (getNativeKeyboardState().transitioning) {
+      pendingHostGrid = { cols: hostCols, rows: hostRows };
+      return;
+    }
     const dims = proposeContainerDims();
     if (dims === null) {
       pendingHostGrid = { cols: hostCols, rows: hostRows };
