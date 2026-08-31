@@ -61,6 +61,15 @@ export const RPC_ERROR_CODES = [
   // live, but it can no longer promise a committed or rejected answer to a
   // later joiner. Clients reconcile this ambiguous outcome through echo/TTL.
   "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+  // The original keyed unary SETTLED, and its response was too large for the
+  // host to retain for replay. Distinct from E_IDEMPOTENCY_OUTCOME_UNKNOWN in
+  // the one way a client acts on: there the answer is unknowable, here it is
+  // known and simply not kept, so the command definitely ran and must NOT be
+  // retried under the same key expecting a result. The host keeps the key
+  // precisely so the retry cannot re-execute it. Additive and degrade-safe
+  // like E_INVALID_ARGUMENT - a client that does not know this code sees an
+  // ordinary 409.
+  "E_IDEMPOTENCY_REPLAY_TOO_LARGE",
   "TERMINAL_ID_TAKEN",
   // A durable terminal is mid-delete. 409, not 500: the caller can retry
   // after the marker settles. Additive and degrade-safe like E_INVALID_ARGUMENT.
