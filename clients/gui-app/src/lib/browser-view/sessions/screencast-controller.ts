@@ -588,7 +588,12 @@ export function createScreencastController(options: {
         if (frame !== null) sendDiscretePointer(frame);
         continue;
       }
-      if (gesture.down.castSequence !== correlationToken()) {
+      // Whichever plane stamped it: exactly one of the two tokens is set, and
+      // it is the one `correlationToken` was reading when the finger landed.
+      if (
+        (gesture.down.castSequence ?? gesture.down.viewportEpoch) !==
+        correlationToken()
+      ) {
         chainBroken = true;
         continue;
       }
@@ -1001,22 +1006,18 @@ export function createScreencastController(options: {
     // the tap has survived every check: focusing before them raises the
     // keyboard over a gesture that is then discarded, leaving it covering the
     // screen for a tap the page never received. Still inside the pointer-up
-    // handler, so it is still the user gesture iOS requires.
-    //
-    // Blurring later is not the alternative: the tile treats focus leaving the
-    // IME input as the user releasing control (`onFocusExit` -> `clearLocalArm`),
-    // so a corrective blur would disarm the tab.
+    // handler, so it is still the user gesture iOS requires. Nothing has to
+    // undo it: only a deliberate release disarms, so focus leaving the IME
+    // input later costs the tile nothing.
     refs.imeInputRef.current?.focus();
-    const down = { ...pressed, castSequence: downSequence };
-    const up = { ...released, castSequence: downSequence };
     if (activeArmEpoch !== null) {
-      sendDiscretePointer(down);
-      sendDiscretePointer(up);
+      sendDiscretePointer(pressed);
+      sendDiscretePointer(released);
       return;
     }
     // Still waiting on the host's `armed`: queue the pair behind whatever the
     // finger did before it.
-    pendingTouchGestures.push({ kind: "tap", down, up });
+    pendingTouchGestures.push({ kind: "tap", down: pressed, up: released });
   };
 
   const onTouchPointerCancel = (

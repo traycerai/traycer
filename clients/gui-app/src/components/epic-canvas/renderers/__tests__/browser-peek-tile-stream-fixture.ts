@@ -21,14 +21,15 @@ export class FakeStreamSession {
   closed = false;
 
   /**
-   * Drops anything handed to it before the stream is open, exactly as
-   * `WsStreamSession.sendClientFrame` does while its phase is not
-   * `subscribed` - silently, with no retry. A fixture that recorded regardless
+   * Drops anything handed to it before the stream is open or after it is
+   * closed, exactly as `WsStreamSession.sendClientFrame` does while it is
+   * disposed or its phase is not `subscribed` - silently, with no retry. A
+   * fixture that recorded regardless
    * is what let a viewport bridge which only ever wrote into the pre-subscribe
    * window pass its tests and state nothing in the field.
    */
   sendClientFrame(frame: Record<string, unknown>): void {
-    if (this.currentStatus !== "open") return;
+    if (this.closed || this.currentStatus !== "open") return;
     this.sentFrames.push(frame);
   }
 

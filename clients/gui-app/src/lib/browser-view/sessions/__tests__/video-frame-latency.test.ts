@@ -71,7 +71,7 @@ describe("readVideoFrameLatency", () => {
     assertAllFinite(sample);
   });
 
-  it("nulls every leg when a timestamp is NaN", () => {
+  it("nulls only the legs touching a NaN timestamp", () => {
     const sample = readVideoFrameLatency(
       metadata({
         captureTime: Number.NaN,
@@ -85,7 +85,7 @@ describe("readVideoFrameLatency", () => {
     assertAllFinite(sample);
   });
 
-  it("nulls every leg when a timestamp is Infinity", () => {
+  it("nulls only the legs touching an Infinity timestamp", () => {
     const sample = readVideoFrameLatency(
       metadata({
         captureTime: 100,

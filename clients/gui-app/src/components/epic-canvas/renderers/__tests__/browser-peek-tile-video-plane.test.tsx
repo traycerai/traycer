@@ -599,6 +599,49 @@ describe("BrowserPeekTile video plane", () => {
     expect(pointerFrames().map((frame) => frame.type)).toEqual(["down", "up"]);
   });
 
+  it("stamps a queued finger tap on the video plane with the epoch alone", async () => {
+    renderTile();
+    emitStarted();
+    await offer(1);
+    const button = screen.getByRole("button", {
+      name: "Browser screencast controls",
+    });
+    giveSurfaceABox(button);
+    const video = attachTrack(0);
+    giveSurfaceABox(video);
+    markDecodedSize(video, 800, 600);
+    act(() => {
+      fireEvent(video, new Event("resize"));
+    });
+    decodeFrame(video);
+
+    // The press asks for control, so the whole tap happens inside the arm
+    // round trip and is replayed by `armed`.
+    const init = {
+      pointerId: 3,
+      pointerType: "touch",
+      clientX: 400,
+      clientY: 300,
+      button: 0,
+      detail: 0,
+    };
+    fireEvent.pointerDown(button, { ...init, buttons: 1 });
+    fireEvent.pointerUp(button, { ...init, buttons: 0 });
+    act(() => {
+      liveStream().emit(
+        { kind: "armed", hasBinaryPayload: false, armEpoch: 1 },
+        null,
+      );
+    });
+
+    const tap = pointerFrames();
+    expect(tap.map((frame) => frame.type)).toEqual(["down", "up"]);
+    // A frame naming BOTH surfaces names no single one, and the host's
+    // `inputCorrelation` maps it to nothing at all.
+    expect(tap.map((frame) => frame.castSequence)).toEqual([null, null]);
+    expect(tap.map((frame) => frame.viewportEpoch)).toEqual([9, 9]);
+  });
+
   it("ignores a duplicate offer for the round already in flight", async () => {
     renderTile();
     await offer(2);

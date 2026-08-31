@@ -3183,6 +3183,85 @@ describe("RunnerIpcBridge", () => {
     }
   });
 
+  it("keeps waiting for a reachable window's final browser capture after an undeliverable sibling", async () => {
+    vi.useFakeTimers();
+    try {
+      const mod = await import("../register-runner-ipc");
+      const { BrowserViewManager } =
+        await import("../../browser-view/browser-view-manager");
+      const hasNativeTabs = vi
+        .spyOn(BrowserViewManager.prototype, "hasNativeTabsForWindow")
+        .mockReturnValue(true);
+      const registry = new FakeWindowRegistry();
+      // The dead window is registered FIRST so its synchronous send failure is
+      // the first settled outcome of the fan-out.
+      const deadWindow = buildDestroyedWindow();
+      const liveWindow = buildWindow();
+      registry.add("window-a", 101, deadWindow);
+      registry.add("window-b", 202, liveWindow);
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+      bridge.appLifecycleReadyWindowIds.add("window-a");
+      bridge.appLifecycleReadyWindowIds.add("window-b");
+      liveWindow.sentMessages.length = 0;
+
+      const drain = bridge.captureFinalBrowserState();
+      const settled = { value: false };
+      void drain.then(
+        () => {
+          settled.value = true;
+        },
+        () => {
+          settled.value = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      const request = liveWindow.sentMessages.find(
+        (message) =>
+          message.channel === RunnerHostEvent.captureFinalBrowserState,
+      );
+      const responseHandler = ipcMainState.handlers.get(
+        RunnerHostInvoke.finalBrowserStateCaptured,
+      );
+      if (request === undefined) {
+        throw new Error("final browser capture request missing");
+      }
+      if (responseHandler === undefined) {
+        throw new Error("final browser capture response handler missing");
+      }
+      // The undeliverable window must not end the fan-out: `window-b` has not
+      // reported yet, so quit is still blocked.
+      expect(settled.value).toBe(false);
+
+      await responseHandler(sender(202), {
+        requestId: (request.payload as { readonly requestId: string })
+          .requestId,
+      });
+      // Only now does the undeliverable window's failure surface.
+      await expect(drain).rejects.toThrow(
+        "Final browser capture request could not be delivered to window window-a",
+      );
+      hasNativeTabs.mockRestore();
+      bridge.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resolves the final browser capture after the timeout when the renderer never acknowledges", async () => {
     vi.useFakeTimers();
     try {

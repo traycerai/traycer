@@ -840,9 +840,19 @@ export class RunnerIpcBridge {
       .records()
       .map((record) => record.windowId)
       .filter((windowId) => this.appLifecycleReadyWindowIds.has(windowId));
-    await Promise.all(
-      windowIds.map((windowId) => this.requestFinalBrowserCapture(windowId)),
+    // Every window gets its full chance BEFORE the first failure is re-raised.
+    // A bare `Promise.all` settles on the first rejection (an undeliverable
+    // window whose renderer is already gone), and `authorizeQuitAfterFlush`
+    // catches that and calls `app.quit()` with a healthy sibling's capture
+    // still in flight - losing the jar this path exists to save. The failure
+    // is still surfaced afterwards so the quit path can log it.
+    const attempts = windowIds.map((windowId) =>
+      this.requestFinalBrowserCapture(windowId),
     );
+    await Promise.allSettled(attempts);
+    // Everything has settled, so this only re-raises the first failure for the
+    // caller to log; it never shortens the wait.
+    await Promise.all(attempts);
   }
 
   /** The native-teardown gate: this window owns guests that are about to die. */

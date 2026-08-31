@@ -1121,17 +1121,36 @@ describe("browser.human.needed stays off every released contract", () => {
   });
 
   it("is hidden from every released version and visible only on the newest", () => {
-    const released = [
-      { method: "host.notifications.list", major: 1, minor: 0 },
-      { method: "host.notifications.list", major: 2, minor: 0 },
-      { method: "host.notifications.list", major: 2, minor: 1 },
-      { method: "host.notifications.subscribe", major: 1, minor: 0 },
-      { method: "host.notifications.feed.subscribe", major: 1, minor: 0 },
-      { method: "host.notifications.feed.subscribe", major: 1, minor: 1 },
-      { method: "host.notifications.cloudFeed.subscribe", major: 1, minor: 0 },
-    ] as const;
-    for (const { method, major, minor } of released) {
-      const surface = { method } as HostNotificationsSurface;
+    const released: ReadonlyArray<{
+      readonly surface: HostNotificationsSurface;
+      readonly major: number;
+      readonly minor: number;
+    }> = [
+      { surface: { method: "host.notifications.list" }, major: 1, minor: 0 },
+      { surface: { method: "host.notifications.list" }, major: 2, minor: 0 },
+      { surface: { method: "host.notifications.list" }, major: 2, minor: 1 },
+      {
+        surface: { method: "host.notifications.subscribe" },
+        major: 1,
+        minor: 0,
+      },
+      {
+        surface: { method: "host.notifications.feed.subscribe" },
+        major: 1,
+        minor: 0,
+      },
+      {
+        surface: { method: "host.notifications.feed.subscribe" },
+        major: 1,
+        minor: 1,
+      },
+      {
+        surface: { method: "host.notifications.cloudFeed.subscribe" },
+        major: 1,
+        minor: 0,
+      },
+    ];
+    for (const { surface, major, minor } of released) {
       expect(
         visibleHostNotificationKinds(surface, { major, minor }),
       ).not.toContain("browser.human.needed");
@@ -1139,18 +1158,28 @@ describe("browser.human.needed stays off every released contract", () => {
         "browser.human.needed",
       );
     }
-    for (const { method, major, minor } of [
-      { method: "host.notifications.list", major: 2, minor: 2 },
-      { method: "host.notifications.feed.subscribe", major: 1, minor: 2 },
+    const newest: ReadonlyArray<{
+      readonly surface: HostNotificationsSurface;
+      readonly major: number;
+      readonly minor: number;
+    }> = [
+      { surface: { method: "host.notifications.list" }, major: 2, minor: 2 },
+      {
+        surface: { method: "host.notifications.feed.subscribe" },
+        major: 1,
+        minor: 2,
+      },
       // The cloud feed's `@1.1` has not shipped, so it grows in place.
-      { method: "host.notifications.cloudFeed.subscribe", major: 1, minor: 1 },
-    ] as const) {
-      expect(
-        visibleHostNotificationKinds({ method } as HostNotificationsSurface, {
-          major,
-          minor,
-        }),
-      ).toContain("browser.human.needed");
+      {
+        surface: { method: "host.notifications.cloudFeed.subscribe" },
+        major: 1,
+        minor: 1,
+      },
+    ];
+    for (const { surface, major, minor } of newest) {
+      expect(visibleHostNotificationKinds(surface, { major, minor })).toContain(
+        "browser.human.needed",
+      );
     }
   });
 });
