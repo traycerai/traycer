@@ -1629,12 +1629,22 @@ function navigationPayloadFromKnown(
     // all - it renders with common-field copy and no deep link, which is the
     // designed degradation rather than a guessed destination.
     case "worktree_deletion":
-      return {
-        kind: "hostSurface",
-        surface: "worktreeSettings",
-        focus: undefined,
-      };
+      return navigationPayloadForWorktreeDeletion(known);
   }
+}
+
+function navigationPayloadForWorktreeDeletion(known: {
+  readonly source: string;
+  readonly epicId?: string;
+}): NotificationPayload {
+  if (known.source === "task_sweep" && known.epicId !== undefined) {
+    return { kind: "epic", epicId: known.epicId };
+  }
+  return {
+    kind: "hostSurface",
+    surface: "worktreeSettings",
+    focus: undefined,
+  };
 }
 
 const HOST_PAGE_LIMIT = 50;
