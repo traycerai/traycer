@@ -59,7 +59,6 @@ describe("onboardingActsFor", () => {
       "task-context",
       "providers",
       "agent-guide",
-      "mobile-flow",
     ]);
     // The phone tour never lists session-import, so the capability cannot
     // change its shape.
@@ -94,7 +93,6 @@ describe("onboardingActsFor", () => {
       "ACT 03 - HANDOFF",
       "ACT 04 - PROVIDERS",
       "ACT 05 - DELEGATION",
-      "ACT 06 - FLOW",
     ]);
   });
 
@@ -124,7 +122,7 @@ describe("onboardingActsFor", () => {
     });
   });
 
-  it("teaches the drawer, the switcher and the gestures in place of desktop chrome", () => {
+  it("teaches the drawer and the switcher in place of desktop chrome", () => {
     setMobileApp(true);
     const acts = onboardingActsFor(true);
 
@@ -142,14 +140,8 @@ describe("onboardingActsFor", () => {
       body: "The stack icon, top right, is the whole Task: chats, terminals, artifacts, diffs. Pick one; it fills the screen.",
       addon: null,
     });
-    // The theme picker comes across from the desktop act it replaces; Cmd+K,
-    // which a phone cannot open, does not.
-    expect(actById(acts, "mobile-flow")).toEqual({
-      id: "mobile-flow",
-      eyebrowLabel: "FLOW",
-      title: "Move with a swipe.\nMake it yours.",
-      body: "Swipe from the left edge to go back, the right edge to go forward. Pick a theme before you enter; terminals and app surfaces follow it together.",
-      addon: "theme",
-    });
+    // Desktop's closing flow act has no phone counterpart: the tour ends on
+    // delegation.
+    expect(acts[acts.length - 1].id).toBe("agent-guide");
   });
 });

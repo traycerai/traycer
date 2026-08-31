@@ -303,13 +303,14 @@ describe("OnboardingPage on the installed mobile app", () => {
     expect(screen.queryByTestId("onboarding-phone-diorama-stub")).toBeNull();
     expect(screen.getByTestId("detected-agents-stub")).not.toBeNull();
 
+    // Delegation closes the tour: no miniature, and the advance control is
+    // already the finishing one.
     await advanceToStage(4);
     expect(screen.queryByTestId("onboarding-phone-diorama-stub")).toBeNull();
-
-    await advanceToStage(5);
-    expect(phoneScene()).toBe("gestures");
-    expect(screen.getByTestId("theme-picker-stub")).not.toBeNull();
     expect(screen.queryByTestId("onboarding-diorama-stub")).toBeNull();
+    expect(screen.getByTestId("onboarding-advance").textContent).toContain(
+      "Start building",
+    );
   });
 
   it("puts the agent-guide editor in the copy rail and stretches the stage for it", async () => {
@@ -336,13 +337,7 @@ describe("OnboardingPage on the installed mobile app", () => {
     fireEvent.change(screen.getByTestId("mock-agent-guide-input"), {
       target: { value: "guide typed on a phone" },
     });
-    fireEvent.click(screen.getByTestId("onboarding-advance"));
-
-    await waitFor(() => {
-      expect(currentStage()).toBe(5);
-    });
-    expect(setGlobalGuideMock).not.toHaveBeenCalled();
-
+    // The guide act is the tour's last, so the same press saves and finishes.
     fireEvent.click(screen.getByTestId("onboarding-advance"));
 
     await waitFor(() => {

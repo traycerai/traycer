@@ -122,15 +122,6 @@ describe("OnboardingPhoneDiorama", () => {
       expect(screen.queryByTestId("onboarding-phone-drawer")).toBeNull();
       expect(screen.queryByTestId("onboarding-phone-sheet")).toBeNull();
     });
-
-    it("rests the gesture screen on the task page before the first swipe", () => {
-      renderScene("gestures");
-
-      const stage = screen.getByTestId("onboarding-phone-gestures");
-      expect(stage.getAttribute("data-edge")).toBe("none");
-      expect(stage.getAttribute("data-page")).toBe("1");
-      expect(screen.queryByTestId("onboarding-phone-gesture-touch")).toBeNull();
-    });
   });
 
   describe("motion", () => {
@@ -207,40 +198,6 @@ describe("OnboardingPhoneDiorama", () => {
         STORY_STEPS[0].text,
       ]);
     });
-
-    it("sweeps back from the left bezel, then forward from the right", () => {
-      renderScene("gestures");
-
-      const stage = screen.getByTestId("onboarding-phone-gestures");
-      const state = (): ReadonlyArray<string | null> => [
-        stage.getAttribute("data-edge"),
-        stage.getAttribute("data-page"),
-      ];
-      expect(state()).toEqual(["none", "1"]);
-
-      act(() => {
-        vi.advanceTimersByTime(900);
-      });
-      expect(state()).toEqual(["left", "0"]);
-      expect(texts("onboarding-phone-gesture-caption")).toEqual(["Back"]);
-
-      act(() => {
-        vi.advanceTimersByTime(1700);
-      });
-      expect(state()).toEqual(["none", "0"]);
-
-      act(() => {
-        vi.advanceTimersByTime(900);
-      });
-      expect(state()).toEqual(["right", "1"]);
-      expect(texts("onboarding-phone-gesture-caption")).toEqual(["Forward"]);
-
-      // Back to the opening rest: the lesson loops.
-      act(() => {
-        vi.advanceTimersByTime(1700);
-      });
-      expect(state()).toEqual(["none", "1"]);
-    });
   });
 
   describe("reduced motion", () => {
@@ -301,27 +258,6 @@ describe("OnboardingPhoneDiorama", () => {
       expect(attributes("onboarding-phone-story-beat", "data-pane")).toEqual(
         storyPanesThrough(LAST_STORY_STEP),
       );
-    });
-
-    it("pins the two-arrow gesture illustration and never sweeps", () => {
-      renderScene("gestures");
-
-      const stage = screen.getByTestId("onboarding-phone-gestures");
-      expect(texts("onboarding-phone-gesture-hint")).toEqual([
-        "Back",
-        "Forward",
-      ]);
-      expect(screen.queryByTestId("onboarding-phone-gesture-touch")).toBeNull();
-
-      act(() => {
-        vi.advanceTimersByTime(10_000);
-      });
-      expect(stage.getAttribute("data-edge")).toBe("none");
-      expect(stage.getAttribute("data-page")).toBe("1");
-      expect(texts("onboarding-phone-gesture-hint")).toEqual([
-        "Back",
-        "Forward",
-      ]);
     });
   });
 });

@@ -355,29 +355,6 @@ const ONBOARDING_STYLE = `
   border-radius: 0.625rem;
 }
 
-/* The theme presets relax into one snap-scrolling gallery row of larger
-   swatches instead of a dense two-row wrap. */
-.onboarding-shell--mobile-app .onboarding-theme-presets {
-  max-width: min(92vw, 24rem);
-  flex-wrap: nowrap;
-  justify-content: flex-start;
-  gap: 0.625rem;
-  overflow-x: auto;
-  padding: 0.25rem 0.125rem;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
-}
-
-.onboarding-shell--mobile-app .onboarding-theme-presets::-webkit-scrollbar {
-  display: none;
-}
-
-.onboarding-shell--mobile-app .onboarding-theme-presets button {
-  width: 2.25rem;
-  height: 2.25rem;
-  scroll-snap-align: center;
-}
-
 /* One orchestrated entrance per act: eyebrow band, then copy, then addon rise
    in turn. The act wrapper remounts per act (key=act.id), so the beat replays
    on every advance. */
@@ -439,8 +416,8 @@ const ACT_SWIPE_CROSS_FAIL_PX = 24;
  * The strip at each side of the screen the platform's own back/forward swipes
  * own - the same 32px `use-edge-nav-swipe.ts` reserves, measured the same way
  * (from the app surface, so a landscape sensor housing moves the zone rather
- * than swallowing it). A tour whose last act teaches the edge swipe must not be
- * the thing that answers one.
+ * than swallowing it). The platform's own navigation must keep working over
+ * the tour, so the tour never answers a swipe that starts in its strip.
  */
 const ACT_SWIPE_EDGE_ZONE_PX = 32;
 
@@ -639,8 +616,6 @@ function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
       return { kind: "phone", scene: "drawer" };
     case "mobile-switcher":
       return { kind: "phone", scene: "switcher" };
-    case "mobile-flow":
-      return { kind: "phone", scene: "gestures" };
   }
 }
 

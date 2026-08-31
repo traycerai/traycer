@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { m, useReducedMotion } from "motion/react";
 import {
-  ArrowLeft,
   ArrowRight,
   Bell,
   Check,
@@ -39,20 +38,16 @@ import { cn } from "@/lib/utils";
  * pinning every scene to its settled end state).
  *
  * It teaches the two affordances a phone user must find and the desktop tour
- * never mentions (the hamburger drawer and the top-right switcher sheet), the
- * gestures that move between screens, and it replays the shared agent story
- * (`onboarding-story-script.ts`) down a single column.
+ * never mentions (the hamburger drawer and the top-right switcher sheet), and
+ * it replays the shared agent story (`onboarding-story-script.ts`) down a
+ * single column.
  */
 interface OnboardingPhoneDioramaProps {
   readonly scene: OnboardingPhoneSceneId;
 }
 
 /** What this phone miniature can draw. */
-export type OnboardingPhoneSceneId =
-  | "drawer"
-  | "switcher"
-  | "story"
-  | "gestures";
+export type OnboardingPhoneSceneId = "drawer" | "switcher" | "story";
 
 /** Which mini-header glyph the scene spotlights. */
 type HeaderGlyphId = "menu" | "switcher" | "bell";
@@ -147,7 +142,7 @@ export function OnboardingPhoneDiorama(props: OnboardingPhoneDioramaProps) {
 }
 
 /**
- * The story and gesture scenes own the whole screen; the nav scenes raise a
+ * The story scene owns the whole screen; the nav scenes raise a
  * panel over the shared task tile.
  */
 function PhoneScene(props: {
@@ -157,9 +152,6 @@ function PhoneScene(props: {
   const { scene, reducedMotion } = props;
   if (scene === "story") {
     return <StoryChatScene reducedMotion={reducedMotion} />;
-  }
-  if (scene === "gestures") {
-    return <GestureScene reducedMotion={reducedMotion} />;
   }
   return (
     <>
@@ -719,236 +711,6 @@ function StoryAgentPill(props: {
       <span className="text-foreground/85">{props.text}</span>
     </m.div>
   );
-}
-
-/** Which bezel a swipe starts from. */
-type GestureEdge = "left" | "right";
-
-interface GestureBeat {
-  readonly edge: GestureEdge | null;
-  /** Which page of the two-page track the screen rests on after this beat. */
-  readonly page: 0 | 1;
-  readonly ms: number;
-}
-
-/**
- * The looped lesson: sit on the task, swipe back from the left bezel to the
- * list behind it, sit there, swipe forward from the right bezel to return.
- */
-const GESTURE_BEATS = [
-  { edge: null, page: 1, ms: 900 },
-  { edge: "left", page: 0, ms: 1700 },
-  { edge: null, page: 0, ms: 900 },
-  { edge: "right", page: 1, ms: 1700 },
-] as const satisfies ReadonlyArray<GestureBeat>;
-
-/** How long the touch dot takes to cross, well inside a swipe beat. */
-const GESTURE_SWEEP_SECONDS = 1.35;
-
-function GestureScene(props: { readonly reducedMotion: boolean }) {
-  const { reducedMotion } = props;
-  const beatIndex = useGestureBeat(reducedMotion);
-  const beat = GESTURE_BEATS[beatIndex];
-  // Reduced motion rests on the task screen and states both gestures instead.
-  const page = reducedMotion ? 1 : beat.page;
-  const edge = reducedMotion ? null : beat.edge;
-  return (
-    <>
-      <PhoneHeader title={page === 0 ? "Tasks" : TASKS[0]} spotlight={null} />
-      <div
-        data-testid="onboarding-phone-gestures"
-        data-edge={edge ?? "none"}
-        data-page={String(page)}
-        className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas"
-      >
-        {/* Two screens on one track: the swipe drags the track, which is what
-            an edge swipe does to the app. No fake chrome, just the content. */}
-        <m.div
-          initial={reducedMotion ? false : { x: "-100%" }}
-          animate={{ x: page === 0 ? "0%" : "-100%" }}
-          transition={{ duration: 0.62, ease: EASE }}
-          className="flex min-h-0 w-full flex-1"
-        >
-          <GestureTaskListPage />
-          <PhoneTaskScreen className="w-full min-h-0 shrink-0" />
-        </m.div>
-        {reducedMotion ? (
-          <GestureStaticHints />
-        ) : (
-          <>
-            <GestureEdgeGlow edge={edge} />
-            {edge !== null ? (
-              <>
-                <GestureTouch beatIndex={beatIndex} edge={edge} />
-                <GestureCaption beatIndex={beatIndex} edge={edge} />
-              </>
-            ) : null}
-          </>
-        )}
-      </div>
-    </>
-  );
-}
-
-/** The screen behind the task: where "back" lands. */
-function GestureTaskListPage() {
-  return (
-    <div
-      aria-hidden="true"
-      className="flex w-full min-h-0 shrink-0 flex-col gap-1.5 overflow-hidden bg-canvas p-2.5"
-    >
-      {TASKS.map((task) => (
-        <div
-          key={task}
-          className="flex h-8 shrink-0 items-center gap-2 rounded-lg border border-border/70 bg-foreground/3 px-2 text-ui-xs text-foreground/80"
-        >
-          <span className="min-w-0 flex-1 truncate">{task}</span>
-          <span className="shrink-0 text-overline text-muted-foreground">
-            {RECENT_TASK_AGES[task]}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/** The bezel lighting up under the finger. */
-function GestureEdgeGlow(props: { readonly edge: GestureEdge | null }) {
-  return (
-    <>
-      {(["left", "right"] as const).map((edge) => (
-        <m.span
-          key={edge}
-          aria-hidden="true"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: props.edge === edge ? 1 : 0 }}
-          transition={{ duration: 0.3, ease: EASE }}
-          className={cn(
-            "pointer-events-none absolute inset-y-0 z-10 w-[18%]",
-            edge === "left"
-              ? "left-0 bg-[linear-gradient(to_right,hsl(var(--primary)/0.3),transparent)]"
-              : "right-0 bg-[linear-gradient(to_left,hsl(var(--primary)/0.3),transparent)]",
-          )}
-        />
-      ))}
-    </>
-  );
-}
-
-/** The touch itself: in from the bezel, across, gone. Keyed per beat so each
- *  swipe replays from its own edge. */
-function GestureTouch(props: {
-  readonly beatIndex: number;
-  readonly edge: GestureEdge;
-}) {
-  const from = props.edge === "left" ? "4%" : "96%";
-  const to = props.edge === "left" ? "58%" : "42%";
-  return (
-    <m.span
-      key={props.beatIndex}
-      aria-hidden="true"
-      data-testid="onboarding-phone-gesture-touch"
-      initial={{ left: from, opacity: 0, scale: 0.6 }}
-      animate={{
-        left: [from, from, to, to],
-        opacity: [0, 1, 1, 0],
-        scale: [0.6, 1, 1, 0.82],
-      }}
-      transition={{
-        duration: GESTURE_SWEEP_SECONDS,
-        ease: EASE,
-        times: [0, 0.14, 0.8, 1],
-      }}
-      className="pointer-events-none absolute top-1/2 z-20 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/25 ring-2 ring-primary/60 shadow-[0_0_1.5rem_-0.25rem_hsl(var(--primary)/0.8)]"
-    />
-  );
-}
-
-/** Names the gesture as it happens, so the motion is not a guess. */
-function GestureCaption(props: {
-  readonly beatIndex: number;
-  readonly edge: GestureEdge;
-}) {
-  const isBack = props.edge === "left";
-  return (
-    <m.div
-      key={props.beatIndex}
-      aria-hidden="true"
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: [0, 1, 1, 0], y: [6, 0, 0, 0] }}
-      transition={{
-        duration: GESTURE_SWEEP_SECONDS,
-        ease: EASE,
-        times: [0, 0.16, 0.78, 1],
-      }}
-      className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center"
-    >
-      <span
-        data-testid="onboarding-phone-gesture-caption"
-        className="flex items-center gap-1 rounded-full border border-border bg-popover px-2 py-0.5 text-overline uppercase tracking-wider text-foreground/80 shadow-lg"
-      >
-        {isBack ? (
-          <>
-            <ArrowLeft className="size-3 shrink-0 text-primary" />
-            Back
-          </>
-        ) : (
-          <>
-            Forward
-            <ArrowRight className="size-3 shrink-0 text-primary" />
-          </>
-        )}
-      </span>
-    </m.div>
-  );
-}
-
-/** Reduced motion: no sweep to watch, so both edges state their gesture. */
-function GestureStaticHints() {
-  return (
-    <div
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0 z-20 flex items-center justify-between"
-    >
-      <GestureStaticHint edge="left" />
-      <GestureStaticHint edge="right" />
-    </div>
-  );
-}
-
-function GestureStaticHint(props: { readonly edge: GestureEdge }) {
-  const isBack = props.edge === "left";
-  return (
-    <span
-      data-testid="onboarding-phone-gesture-hint"
-      data-edge={props.edge}
-      className={cn(
-        "flex h-[22%] items-center gap-1 border-y border-primary/25 bg-primary/10 px-1.5 text-overline uppercase tracking-wider text-primary",
-        isBack ? "rounded-r-full" : "flex-row-reverse rounded-l-full",
-      )}
-    >
-      {isBack ? (
-        <ArrowLeft className="size-3.5 shrink-0" />
-      ) : (
-        <ArrowRight className="size-3.5 shrink-0" />
-      )}
-      {isBack ? "Back" : "Forward"}
-    </span>
-  );
-}
-
-/** The gesture script's current beat, advancing on its own per-beat hold. */
-function useGestureBeat(reducedMotion: boolean): number {
-  const [index, setIndex] = useState(0);
-  useEffect(() => {
-    if (reducedMotion) return;
-    const id = window.setTimeout(
-      () => setIndex((current) => (current + 1) % GESTURE_BEATS.length),
-      GESTURE_BEATS[index].ms,
-    );
-    return () => window.clearTimeout(id);
-  }, [reducedMotion, index]);
-  return reducedMotion ? 0 : index;
 }
 
 /**

@@ -24,8 +24,7 @@ export type MobileOnboardingActId =
   | "mobile-switcher"
   | "task-context"
   | "providers"
-  | "agent-guide"
-  | "mobile-flow";
+  | "agent-guide";
 
 export type OnboardingActId = DesktopOnboardingActId | MobileOnboardingActId;
 
@@ -133,10 +132,11 @@ export const ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
 ];
 
 /**
- * The phone tour. Acts 1, 2 and 6 replace the desktop lessons that teach chrome
- * a phone does not have (tab strip, drag-to-split canvas, Cmd+K) with the three
- * things a phone user must actually find: the drawer, the switcher sheet, and
- * the edge-swipe gestures.
+ * The phone tour, five acts. Acts 1 and 2 replace the desktop lessons that
+ * teach chrome a phone does not have (tab strip, drag-to-split canvas) with
+ * the two things a phone user must actually find: the drawer and the switcher
+ * sheet. Desktop's closing flow act (Cmd+K, the theme picker) has no phone
+ * counterpart at all - the tour ends on delegation instead.
  *
  * No session-import act here: its stage is the live desktop-sized wizard
  * reading the host's own disk, and the phone tour's fixed six-act arc was
@@ -163,13 +163,6 @@ const MOBILE_ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
   // The one shared act that differs: same id and copy, but the editor rides in
   // the copy rail instead of a modal inside the miniature.
   { ...AGENT_GUIDE_ACT, addon: "agent-guide" },
-  {
-    id: "mobile-flow",
-    eyebrowLabel: "FLOW",
-    title: "Move with a swipe.\nMake it yours.",
-    body: "Swipe from the left edge to go back, the right edge to go forward. Pick a theme before you enter; terminals and app surfaces follow it together.",
-    addon: "theme",
-  },
 ];
 
 // Precomputed so the accessor hands back a stable reference per (platform,

@@ -187,7 +187,6 @@ export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
 export type AnalyticsOnboardingStep =
   | "agent-guide"
   | "command-theme"
-  | "mobile-flow"
   | "mobile-switcher"
   | "mobile-tasks"
   | "navigation"
@@ -1148,7 +1147,6 @@ const ANALYTICS_THEMES = new Set<string>([
 const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "agent-guide",
   "command-theme",
-  "mobile-flow",
   "mobile-switcher",
   "mobile-tasks",
   "navigation",
