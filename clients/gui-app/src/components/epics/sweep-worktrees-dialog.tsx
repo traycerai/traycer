@@ -29,6 +29,12 @@ import { SelectAllToggle } from "@/components/ui/select-all-toggle";
 import { TeardownInlineDisclosure } from "@/components/worktree/teardown-disclosure";
 import { SweepWorktreesReview } from "@/components/epics/sweep-worktrees-review";
 import {
+  SweepHostChoiceScope,
+  SweepHostRedirectButton,
+  type SweepHostChoice,
+  type SweepHostChoiceView,
+} from "@/components/epics/sweep-host-chip";
+import {
   useEpicSweepWorktreeCandidatesForClient,
   type EpicSweepWorktreeRow,
 } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
@@ -86,6 +92,25 @@ interface SweepWorktreesDialogProps {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   /** Title for a single-Task sweep; `null` for bulk or unknown. */
   readonly taskTitle: string | null;
+  /**
+   * The host decision this dialog CARRIES, or `null` when there is none to
+   * carry - one usable host in the fleet, which is every single-host install.
+   *
+   * `null` is the byte-identical path on purpose: no chip, no nudge, no fleet
+   * list mounted, and the same empty-state sentence Sweep has always shown.
+   * Everything the choice adds is inside this one branch.
+   */
+  readonly hostChoice: SweepHostChoice | null;
+  /**
+   * The fleet has not been described yet, so nothing about the host has been
+   * decided — not even whether there is a choice to make.
+   *
+   * Distinct from `hostChoice === null`, which is the settled answer "this
+   * account has one usable host". A dialog that conflated them would show a
+   * single-host install's empty-census sentence for the length of a directory
+   * query, claiming a disk nobody has walked.
+   */
+  readonly fleetPending: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -128,6 +153,18 @@ const NOTE_COPY: Record<NonNullable<EpicSweepWorktreeRow["note"]>, string> = {
  */
 export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const { epicIds, taskTitle, onOpenChange } = props;
+  // Read before the session key, because the key needs it: an OPEN dialog with
+  // no host is a session in its own right, not the gap between two.
+  //
+  // Asked of the whole dialog rather than of `hostChoice`'s shape, which is
+  // the generalisation both hostless states needed. There are two ways to be
+  // open without a host and they arrive differently - the fleet has not been
+  // described (`fleetPending`, which carries NO `hostChoice` at all), or it has
+  // and nobody has picked yet (`hostChoice.hostId === null`) - so a rule
+  // written against one of those shapes silently missed the other.
+  const hostUnchosen =
+    props.hostChoice !== null && props.hostChoice.hostId === null;
+  const hostlessSession = props.fleetPending || hostUnchosen;
   const {
     hostId,
     rows,
@@ -151,7 +188,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const [step, setStep] = useState<"choose" | "review">("choose");
   const [reviewSnapshot, setReviewSnapshot] =
     useState<SweepReviewSnapshot | null>(null);
-  const [typedSweep, setTypedSweep] = useState("");
   const [inventoryChanged, setInventoryChanged] = useState(false);
   const [sessionOutcomes, setSessionOutcomes] = useState<
     ReadonlyMap<string, SweepSessionOutcome>
@@ -175,7 +211,10 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const [checkOverrides, setCheckOverrides] = useState<
     ReadonlyMap<string, boolean>
   >(() => new Map());
-  const selectionKey = sweepSessionKey(hostId, epicIds);
+  const selectionKey = sweepSessionKey(
+    hostlessSession ? HOSTLESS_SESSION : { kind: "host", hostId },
+    epicIds,
+  );
   const activeSessionKeyRef = useRef(selectionKey);
   useEffect(() => {
     if (selectionKey !== null) {
@@ -201,7 +240,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     setPreviousInUseByPath,
     setStep,
     setReviewSnapshot,
-    setTypedSweep,
     setInventoryChanged,
     setSessionOutcomes,
   });
@@ -270,10 +308,10 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     // state. Park the session on Choose before closing so reopening shows the
     // live rows, rather than a spent confirmation receipt.
     setStep("choose");
-    setTypedSweep("");
     setInventoryChanged(false);
     startSweepKickoff({
       hostId,
+      epicId: epicIds?.length === 1 ? epicIds[0] : undefined,
       targets,
       mutate: sweepMutation.mutate,
       onClose: () => onOpenChange(false),
@@ -285,7 +323,6 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
           return;
         }
         setInventoryChanged(true);
-        setTypedSweep("");
         setCheckOverrides((current) =>
           uncheckNonResubmittableOverrides(current, result),
         );
@@ -314,11 +351,109 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       sessionOutcomes,
       setSessionOutcomes,
       setReviewSnapshot,
-      setTypedSweep,
       setInventoryChanged,
       setStep,
     });
   };
+
+  const { hostChoice } = props;
+  // The host this dialog is pointed at is LATCHED, and its client either
+  // resolves or does not. `null` here means the machine the chip names has
+  // stopped answering under an open confirmation - which is a thing to say,
+  // not a reason to point the dialog somewhere else.
+  const hostUnreachable =
+    hostChoice !== null &&
+    hostChoice.hostId !== null &&
+    props.hostClient === null;
+  // A Review is a receipt for ONE machine's proof, so it may not be shown
+  // without one. `startSweepPrimary` already refuses to ENTER review with no
+  // host; this is the other half - a review PARKED from a previous session
+  // must not paint over a dialog that has since lost its host, which is a
+  // destructive confirmation naming a machine it is no longer pointed at.
+  const reviewable =
+    step === "review" && reviewSnapshot !== null && hostId !== null;
+  const renderBody = (host: SweepHostChoiceView | null): ReactNode =>
+    reviewable ? (
+      <SweepWorktreesReview
+        snapshot={reviewSnapshot}
+        selectedEpicIds={selectedEpicIds}
+        agentNames={agentNames}
+        taskTitles={taskTitles}
+        hostName={host?.hostName ?? null}
+        inventoryChanged={inventoryChanged}
+        activeSweepCount={activeSweepCount}
+        onBack={() => {
+          setStep("choose");
+          setReviewSnapshot(null);
+          setInventoryChanged(false);
+        }}
+        onCancel={() => onOpenChange(false)}
+        onConfirm={() =>
+          kickoff(
+            reviewSnapshot.all.filter(
+              (row) =>
+                sessionOutcomes.get(row.entry.worktreePath)?.kind !==
+                "uncertain",
+            ),
+          )
+        }
+      />
+    ) : (
+      <SweepWorktreesChoose
+        taskCount={taskCount}
+        taskTitle={taskTitle}
+        host={host}
+        fleetPending={props.fleetPending}
+        hostUnchosen={hostUnchosen}
+        hostUnreachable={hostUnreachable}
+        hostId={hostId}
+        isPending={isPending}
+        isError={isError}
+        proofReady={proofReady}
+        rows={rows}
+        isRowChecked={isRowChecked}
+        isRowSweeping={isRowSweeping}
+        interactionDisabled={refresh.refreshing || !proofReady}
+        bulkRows={bulkRows}
+        bulkSelectedCount={bulkSelectedCount}
+        allBulkSelected={allBulkSelected}
+        selectedCount={checkedRows.length}
+        checkedAt={checkedAt}
+        refreshing={refresh.refreshing}
+        canRefresh={canRefresh}
+        onRefresh={triggerRefresh}
+        onToggle={(path, checked) => {
+          setCheckOverrides((prev) => {
+            const next = new Map(prev);
+            next.set(path, checked);
+            return next;
+          });
+        }}
+        onToggleSelectAll={() =>
+          toggleSweepSelectAll({
+            allBulkSelected,
+            bulkRows,
+            rows,
+            isRowSweeping,
+            checkOverrides,
+            setCheckOverrides,
+          })
+        }
+        onCancel={() => onOpenChange(false)}
+        onPrimary={handlePrimary}
+        primaryDisabled={
+          hostId === null ||
+          !proofReady ||
+          refresh.refreshing ||
+          checkedRows.length === 0
+        }
+        elevated={!selectionIsSafeOnly(checkedRows)}
+        activeSweepCount={activeSweepCount}
+        selectedEpicIds={selectedEpicIds}
+        agentNames={agentNames}
+        sessionOutcomes={sessionOutcomes}
+      />
+    );
 
   return (
     <Dialog open={taskCount > 0} onOpenChange={onOpenChange}>
@@ -327,83 +462,21 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         className="flex max-h-[min(90dvh,42rem)] w-[min(92vw,45rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
         data-testid="sweep-worktrees-dialog"
       >
-        {step === "review" && reviewSnapshot !== null ? (
-          <SweepWorktreesReview
-            snapshot={reviewSnapshot}
-            selectedEpicIds={selectedEpicIds}
-            agentNames={agentNames}
-            taskTitles={taskTitles}
-            typedValue={typedSweep}
-            inventoryChanged={inventoryChanged}
-            activeSweepCount={activeSweepCount}
-            onTypedValueChange={setTypedSweep}
-            onBack={() => {
-              setStep("choose");
-              setReviewSnapshot(null);
-              setTypedSweep("");
-              setInventoryChanged(false);
-            }}
-            onCancel={() => onOpenChange(false)}
-            onConfirm={() =>
-              kickoff(
-                reviewSnapshot.all.filter(
-                  (row) =>
-                    sessionOutcomes.get(row.entry.worktreePath)?.kind !==
-                    "uncertain",
-                ),
-              )
-            }
-          />
+        {hostChoice === null ? (
+          renderBody(null)
         ) : (
-          <SweepWorktreesChoose
-            taskCount={taskCount}
-            taskTitle={taskTitle}
-            hostId={hostId}
-            isPending={isPending}
-            isError={isError}
-            proofReady={proofReady}
-            rows={rows}
-            isRowChecked={isRowChecked}
-            isRowSweeping={isRowSweeping}
-            interactionDisabled={refresh.refreshing || !proofReady}
-            bulkRows={bulkRows}
-            bulkSelectedCount={bulkSelectedCount}
-            allBulkSelected={allBulkSelected}
-            selectedCount={checkedRows.length}
-            checkedAt={checkedAt}
-            refreshing={refresh.refreshing}
-            canRefresh={canRefresh}
-            onRefresh={triggerRefresh}
-            onToggle={(path, checked) => {
-              setCheckOverrides((prev) => {
-                const next = new Map(prev);
-                next.set(path, checked);
-                return next;
-              });
-            }}
-            onToggleSelectAll={() =>
-              toggleSweepSelectAll({
-                allBulkSelected,
-                bulkRows,
-                rows,
-                isRowSweeping,
-                checkOverrides,
-                setCheckOverrides,
-              })
-            }
-            onCancel={() => onOpenChange(false)}
-            onPrimary={handlePrimary}
-            primaryDisabled={
-              hostId === null ||
-              !proofReady ||
-              refresh.refreshing ||
-              checkedRows.length === 0
-            }
-            elevated={!selectionIsSafeOnly(checkedRows)}
-            activeSweepCount={activeSweepCount}
-            selectedEpicIds={selectedEpicIds}
-            agentNames={agentNames}
-            sessionOutcomes={sessionOutcomes}
+          <SweepHostChoiceScope
+            hostId={hostChoice.hostId}
+            occupiedHostIds={hostChoice.occupiedHostIds}
+            unavailableHostId={hostChoice.unavailableHostId}
+            // Review has no chip at all - it renders the frozen host read-only
+            // and Back is the route to change it - so the review case is
+            // structural rather than a disabled control. What is left is the
+            // census being unsettled underneath a chip that IS on screen.
+            disabled={refresh.refreshing || activeSweepCount > 0}
+            hasSelectionOverrides={checkOverrides.size > 0}
+            onSwitch={hostChoice.onSwitch}
+            render={renderBody}
           />
         )}
       </DialogContent>
@@ -412,19 +485,48 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
 }
 
 /**
+ * Which host a dialog session is about: one this proof ran against, or none at
+ * all.
+ *
+ * A union rather than a sentinel string, so no host id can ever be mistaken
+ * for the hostless case. The distinction is load-bearing: "no host" and "not
+ * open" are both absences, and sharing one key made a hostless re-open look
+ * like the gap between two opens - the previous host's parked step and Review
+ * snapshot survived it, and a person was shown a destructive confirmation for
+ * a machine the dialog was no longer pointed at, whose Sweep button silently
+ * did nothing.
+ *
+ * ONE hostless arm covers both ways of getting there - waiting on the fleet,
+ * and waiting on a person - because for SESSION purposes they are the same
+ * state: no host, no census, and nothing yet to preserve or discard. The copy
+ * differs because the reason differs; the identity does not, because the
+ * content does not. Splitting them would only add a retarget between two
+ * states that have nothing to retarget.
+ */
+type SweepSessionHost =
+  | { readonly kind: "host"; readonly hostId: string | null }
+  | { readonly kind: "hostless" };
+
+const HOSTLESS_SESSION: SweepSessionHost = { kind: "hostless" };
+
+/**
  * Dialog-session identity. Matches the candidates query key
  * (`hostQueryKeys.sweepWorktreeCandidates(hostId, epicKey)`): a host
  * change with the same Task set is a retarget, so host A's uncertain/
  * failed map cannot attach to host B's identically named path.
+ *
+ * `null` means CLOSED — no session at all. An open dialog always has one,
+ * including one that has yet to be pointed at a machine.
  */
 function sweepSessionKey(
-  hostId: string | null,
+  host: SweepSessionHost,
   epicIds: ReadonlyArray<string> | null,
 ): string | null {
-  if (hostId === null || epicIds === null || epicIds.length === 0) {
-    return null;
-  }
-  return `${hostId}\n${[...new Set(epicIds)].sort().join(",")}`;
+  if (epicIds === null || epicIds.length === 0) return null;
+  const epicKey = [...new Set(epicIds)].sort().join(",");
+  if (host.kind === "hostless") return `hostless\n${epicKey}`;
+  if (host.hostId === null) return null;
+  return `host:${host.hostId}\n${epicKey}`;
 }
 
 function applySelectionRetarget(input: {
@@ -435,7 +537,6 @@ function applySelectionRetarget(input: {
   readonly setPreviousInUseByPath: (next: ReadonlyMap<string, boolean>) => void;
   readonly setStep: (step: "choose" | "review") => void;
   readonly setReviewSnapshot: (next: SweepReviewSnapshot | null) => void;
-  readonly setTypedSweep: (value: string) => void;
   readonly setInventoryChanged: (value: boolean) => void;
   readonly setSessionOutcomes: (
     next: ReadonlyMap<string, SweepSessionOutcome>,
@@ -447,7 +548,6 @@ function applySelectionRetarget(input: {
   input.setPreviousInUseByPath(new Map());
   input.setStep("choose");
   input.setReviewSnapshot(null);
-  input.setTypedSweep("");
   input.setInventoryChanged(false);
   input.setSessionOutcomes(new Map());
 }
@@ -493,7 +593,6 @@ function startSweepPrimary(input: {
     next: ReadonlyMap<string, SweepSessionOutcome>,
   ) => void;
   readonly setReviewSnapshot: (next: SweepReviewSnapshot | null) => void;
-  readonly setTypedSweep: (value: string) => void;
   readonly setInventoryChanged: (value: boolean) => void;
   readonly setStep: (step: "choose" | "review") => void;
 }): void {
@@ -552,7 +651,6 @@ function startSweepPrimary(input: {
           bannersFromSessionOutcomes(nextOutcomes),
         ),
       );
-      input.setTypedSweep("");
       input.setInventoryChanged(false);
       input.setStep("review");
     })
@@ -566,6 +664,7 @@ function startSweepPrimary(input: {
 
 function startSweepKickoff(input: {
   readonly hostId: string | null;
+  readonly epicId: string | undefined;
   readonly targets: ReadonlyArray<EpicSweepWorktreeRow>;
   readonly mutate: ReturnType<typeof useEpicSweepWorktrees>["mutate"];
   readonly onClose: () => void;
@@ -575,6 +674,7 @@ function startSweepKickoff(input: {
   input.mutate(
     {
       hostId: input.hostId,
+      epicId: input.epicId,
       worktrees: input.targets.map((row) => ({
         worktreePath: row.entry.worktreePath,
         branch: row.entry.branch,
@@ -684,9 +784,41 @@ function identityByPathFromRows(
   return next;
 }
 
+/**
+ * The proof settled and found nothing on a host we could actually reach.
+ *
+ * Everything it excludes is a state where the row list is ALSO empty and the
+ * emptiness means something else entirely - the fleet has not been described,
+ * no host has been chosen, the chosen one stopped answering, the walk failed.
+ * Only this one has earned the sentence "there is nothing here", and only this
+ * one carries the redirect, which is why the header's nudge stands down for it
+ * and for none of the others.
+ */
+function sweepCensusIsEmpty(input: {
+  readonly proofReady: boolean;
+  readonly isError: boolean;
+  readonly rows: ReadonlyArray<EpicSweepWorktreeRow>;
+  readonly fleetPending: boolean;
+  readonly hostUnchosen: boolean;
+  readonly hostUnreachable: boolean;
+}): boolean {
+  if (input.fleetPending || input.hostUnchosen || input.hostUnreachable) {
+    return false;
+  }
+  return input.proofReady && !input.isError && input.rows.length === 0;
+}
+
 function SweepWorktreesChoose(props: {
   readonly taskCount: number;
   readonly taskTitle: string | null;
+  /** The host decision, name-resolved; `null` on a single-host fleet. */
+  readonly host: SweepHostChoiceView | null;
+  /** The fleet has not answered; nothing about the host is decided yet. */
+  readonly fleetPending: boolean;
+  /** Nobody has named a host yet; the dialog is asking. */
+  readonly hostUnchosen: boolean;
+  /** The latched host has stopped answering; there is no census to show. */
+  readonly hostUnreachable: boolean;
   readonly hostId: string | null;
   readonly isPending: boolean;
   readonly isError: boolean;
@@ -714,22 +846,22 @@ function SweepWorktreesChoose(props: {
   readonly agentNames: ReadonlyMap<string, string>;
   readonly sessionOutcomes: ReadonlyMap<string, SweepSessionOutcome>;
 }): ReactNode {
+  // Named rather than inlined into the prop: as a `&&` chain in JSX position
+  // the linter's autofix rewrites it into a ternary whose else-arm is `null`,
+  // which is a third state this flag does not have.
+  // The proof settled and found nothing on a host we could actually reach.
+  // That, and only that, is when the empty state carries the redirect - so a
+  // host that has gone unreachable keeps the header's nudge, which is then the
+  // only route out of the dialog other than the chip itself.
+  const censusIsEmpty = sweepCensusIsEmpty(props);
   return (
     <>
-      <div className="flex min-w-0 shrink-0 items-start gap-3 px-5 pt-5 pb-4">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-primary/15">
-          <Paintbrush className="size-4" aria-hidden />
-        </div>
-        <div className="min-h-0 min-w-0 flex-1 space-y-1.5">
-          <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-            {sweepDialogTitle(props.taskCount, props.taskTitle)}
-          </DialogTitle>
-          <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
-            Choose the worktrees to remove from this host. Proven-safe worktrees
-            are selected for you.
-          </DialogDescription>
-        </div>
-      </div>
+      <SweepChooseHeader
+        taskCount={props.taskCount}
+        taskTitle={props.taskTitle}
+        host={props.host}
+        censusIsEmpty={censusIsEmpty}
+      />
       <TooltipProvider>
         <section
           className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-foreground/2 px-5 py-4"
@@ -763,6 +895,11 @@ function SweepWorktreesChoose(props: {
             </span>
           </div>
           <SweepRowList
+            host={props.host}
+            fleetPending={props.fleetPending}
+            hostUnchosen={props.hostUnchosen}
+            hostUnreachable={props.hostUnreachable}
+            taskCount={props.taskCount}
             isPending={props.isPending}
             isError={props.isError}
             rows={props.rows}
@@ -825,6 +962,65 @@ function SweepWorktreesChoose(props: {
         </Button>
       </div>
     </>
+  );
+}
+
+/**
+ * What is being swept, on which machine, and — when the records point at
+ * another one — where else to look.
+ *
+ * The nudge and the empty state's redirect are the same offer with different
+ * standing. While there are rows to judge, the badge is a quiet aside above
+ * them; once the census comes back empty it is the only thing left to say, and
+ * it moves down into the space the rows would have occupied. Exactly one of
+ * them is ever on screen.
+ */
+function SweepChooseHeader(props: {
+  readonly taskCount: number;
+  readonly taskTitle: string | null;
+  readonly host: SweepHostChoiceView | null;
+  /** The proof settled, and found nothing on this host. */
+  readonly censusIsEmpty: boolean;
+}): ReactNode {
+  const host = props.host;
+  const nudge = host?.nudge ?? null;
+  const headerNudge =
+    host === null ||
+    nudge === null ||
+    host.currentHostBadged ||
+    props.censusIsEmpty
+      ? null
+      : nudge;
+  return (
+    <div className="flex min-w-0 shrink-0 items-start gap-3 px-5 pt-5 pb-4">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-primary/15">
+        <Paintbrush className="size-4" aria-hidden />
+      </div>
+      <div className="min-h-0 min-w-0 flex-1 space-y-1.5">
+        <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
+          {sweepDialogTitle(props.taskCount, props.taskTitle)}
+        </DialogTitle>
+        <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
+          Choose the worktrees to remove from this host. Proven-safe worktrees
+          are selected for you.
+        </DialogDescription>
+        {host?.chip}
+        {headerNudge === null || host === null ? null : (
+          <p
+            className="flex min-w-0 flex-wrap items-center gap-1 text-ui-xs text-muted-foreground wrap-anywhere"
+            data-testid="sweep-worktrees-host-nudge"
+          >
+            {`This task's agents also ran on ${headerNudge.name}.`}
+            <SweepHostRedirectButton
+              hostName={headerNudge.name}
+              hostId={headerNudge.hostId}
+              onSwitch={host.requestSwitch}
+              testId="sweep-worktrees-nudge-redirect"
+            />
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -994,6 +1190,11 @@ function sweepDialogTitle(taskCount: number, taskTitle: string | null): string {
 }
 
 function SweepRowList(props: {
+  readonly host: SweepHostChoiceView | null;
+  readonly fleetPending: boolean;
+  readonly hostUnchosen: boolean;
+  readonly hostUnreachable: boolean;
+  readonly taskCount: number;
   readonly isPending: boolean;
   readonly isError: boolean;
   readonly rows: ReadonlyArray<EpicSweepWorktreeRow>;
@@ -1005,6 +1206,46 @@ function SweepRowList(props: {
   readonly sessionOutcomes: ReadonlyMap<string, SweepSessionOutcome>;
   readonly onToggle: (worktreePath: string, checked: boolean) => void;
 }) {
+  // Both of these are asked BEFORE the pending and empty branches, because
+  // neither of those is true of a census that has not run. The candidates
+  // query gates on readiness, so with no client it never fetches and never
+  // reports pending - it simply hands back nothing, which the empty branch
+  // would read as "this machine's disk is clean". That is a claim about a disk
+  // nobody walked, and here nobody even said which disk.
+  if (props.fleetPending) {
+    return (
+      <div className="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground">
+        <AgentSpinningDots
+          variant="dots"
+          className="text-muted-foreground"
+          testId="sweep-worktrees-fleet-pending-spinner"
+        />
+        <span data-testid="sweep-worktrees-fleet-pending">
+          Checking which hosts are available…
+        </span>
+      </div>
+    );
+  }
+  if (props.hostUnchosen) {
+    return (
+      <p
+        className="py-2 text-ui-sm text-muted-foreground wrap-anywhere"
+        data-testid="sweep-worktrees-host-unchosen"
+      >
+        Choose a host to check its worktrees.
+      </p>
+    );
+  }
+  if (props.hostUnreachable) {
+    return (
+      <p
+        className="py-2 text-ui-sm text-muted-foreground wrap-anywhere"
+        data-testid="sweep-worktrees-host-unreachable"
+      >
+        {unreachableHostCopy(props.host?.hostName ?? null)}
+      </p>
+    );
+  }
   if (props.isPending && props.rows.length === 0) {
     return (
       <div className="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground">
@@ -1018,16 +1259,17 @@ function SweepRowList(props: {
     );
   }
   if (props.rows.length === 0) {
-    return (
-      <p
-        className="py-2 text-ui-sm text-muted-foreground"
-        data-testid="sweep-worktrees-empty"
-      >
-        {props.isError
-          ? "Couldn't check these worktrees. Try again from Settings ▸ Worktrees."
-          : "No worktrees on this host for the selected tasks."}
-      </p>
-    );
+    if (props.isError) {
+      return (
+        <p
+          className="py-2 text-ui-sm text-muted-foreground"
+          data-testid="sweep-worktrees-empty"
+        >
+          {`Couldn't check these worktrees. Try again from Settings ▸ Worktrees.`}
+        </p>
+      );
+    }
+    return <SweepEmptyCensus host={props.host} taskCount={props.taskCount} />;
   }
   return (
     <ul className="flex min-h-0 min-w-0 flex-col gap-1 overflow-y-auto overscroll-contain rounded-lg border border-border/60 bg-background/40 p-1">
@@ -1045,6 +1287,76 @@ function SweepRowList(props: {
         />
       ))}
     </ul>
+  );
+}
+
+/**
+ * What a dialog says when the machine it is pointed at stops answering.
+ *
+ * Not "no worktrees", which is what an unguarded null client would have
+ * produced, and not a retarget either: the host was chosen and is still the
+ * one this session is about. The chip stays live, so the way out is the same
+ * gesture that got here.
+ */
+function unreachableHostCopy(hostName: string | null): string {
+  if (hostName === null) {
+    return `Can't reach this host right now, so its worktrees aren't shown.`;
+  }
+  return `Can't reach ${hostName} right now, so its worktrees aren't shown. Pick another host, or try again once it is back.`;
+}
+
+/**
+ * The census came back empty — the one place a zero-RPC badge can be worth
+ * more than the proof next to it.
+ *
+ * "No worktrees here" is the honest end of the walk for THIS machine, and on a
+ * single-host install it is the whole answer, so that sentence is untouched.
+ * With a fleet it is only half of one: the Task's own records may name another
+ * machine, and if they do, the useful thing to say is not that this host is
+ * clean but where to look instead. The badge finally does something — it stops
+ * being a decoration on a list and becomes the next step.
+ */
+function SweepEmptyCensus(props: {
+  readonly host: SweepHostChoiceView | null;
+  readonly taskCount: number;
+}): ReactNode {
+  const host = props.host;
+  if (host === null || host.hostName === null) {
+    return (
+      <p
+        className="py-2 text-ui-sm text-muted-foreground"
+        data-testid="sweep-worktrees-empty"
+      >
+        No worktrees on this host for the selected tasks.
+      </p>
+    );
+  }
+  const nudge = host.nudge;
+  return (
+    <div className="flex flex-col items-start gap-1 py-2">
+      <p
+        className="text-ui-sm text-muted-foreground wrap-anywhere"
+        data-testid="sweep-worktrees-empty"
+      >
+        {props.taskCount > 1
+          ? `No worktrees for these tasks on ${host.hostName}.`
+          : `No worktrees for this task on ${host.hostName}.`}
+      </p>
+      {nudge === null ? null : (
+        <p
+          className="flex min-w-0 flex-wrap items-center gap-1 text-ui-sm text-foreground wrap-anywhere"
+          data-testid="sweep-worktrees-empty-redirect"
+        >
+          {`Its agents ran on ${nudge.name} — its worktrees are probably there.`}
+          <SweepHostRedirectButton
+            hostName={nudge.name}
+            hostId={nudge.hostId}
+            onSwitch={host.requestSwitch}
+            testId="sweep-worktrees-empty-redirect-action"
+          />
+        </p>
+      )}
+    </div>
   );
 }
 

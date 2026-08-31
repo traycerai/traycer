@@ -763,6 +763,7 @@ function startWorktreeDeleteCommand(
           wsStreamClient,
           commandId,
           source: "settings",
+          epicId: undefined,
           targets: batchTargets.map((item) => ({
             worktreePath: item.target.worktreePath,
             scripts: item.scripts,
