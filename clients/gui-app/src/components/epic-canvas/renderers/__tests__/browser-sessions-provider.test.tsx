@@ -46,10 +46,18 @@ const hookState = vi.hoisted(() => ({
   ownerIdentityKey: "local\u0000host-test\u0000user-test",
   browserViewBridge: null as FakeBridge | null,
   localHostId: "host-test" as string | null,
+  desktopWindowId: "window-1" as string | null,
 }));
 
 vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
   useReactiveLocalHostId: () => hookState.localHostId,
+}));
+
+vi.mock("@/providers/windows-bridge-context", () => ({
+  useWindowsBridge: () =>
+    hookState.desktopWindowId === null
+      ? null
+      : { windowId: hookState.desktopWindowId },
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
@@ -447,6 +455,30 @@ function electronProvisionedFrames(
   return frames.filter((frame) => frame.kind === "electronTabProvisioned");
 }
 
+/**
+ * Acks the Nth `primaryProfileCaptured` this stream sent, the way the host
+ * does once it has DURABLY stored that jar. Keyed by the capture's own
+ * requestId, which is what makes an ack answer ONE flush waiter.
+ */
+function ackCapture(stream: FakeStreamSession, index: number): void {
+  const captured = framesOfKind(stream.sentFrames, "primaryProfileCaptured").at(
+    index,
+  );
+  if (captured === undefined) {
+    throw new Error(`expected a primaryProfileCaptured frame at ${index}`);
+  }
+  act(() => {
+    stream.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: String(captured.requestId),
+      },
+      null,
+    );
+  });
+}
+
 function installNativeBridge(bridge: FakeBridge): void {
   hookState.browserViewBridge = bridge;
 }
@@ -820,6 +852,12 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         kind: "electronTabLifecycleReady",
         hasBinaryPayload: false,
         coLocatedHostId: "local-machine",
+        // Carried from the typed windows bridge, not probed off `window`.
+        // Mutation: dropping the field, or reading a structural
+        // `window.runnerHost.windows.windowId` that no test shell defines -
+        // either way the host would see `null` and hand the Electron
+        // lifecycle to whichever window announced last.
+        desktopWindowId: "window-1",
       },
     ]);
   });
@@ -861,6 +899,12 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         kind: "electronTabLifecycleReady",
         hasBinaryPayload: false,
         coLocatedHostId: "local-machine",
+        // Carried from the typed windows bridge, not probed off `window`.
+        // Mutation: dropping the field, or reading a structural
+        // `window.runnerHost.windows.windowId` that no test shell defines -
+        // either way the host would see `null` and hand the Electron
+        // lifecycle to whichever window announced last.
+        desktopWindowId: "window-1",
       },
     ]);
   });
@@ -1579,11 +1623,8 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
     expect(
       framesOfKind(hostBStream.sentFrames, "primaryProfileCaptured"),
     ).toEqual([]);
-    // The co-located stream also asks for the one ordered round trip that
-    // proves the capture left this renderer, and holds the quit until it comes
-    // back. The remote stream is never pinged.
-    expect(framesOfKind(hostAStream.sentFrames, "ping")).toHaveLength(1);
-    expect(framesOfKind(hostBStream.sentFrames, "ping")).toEqual([]);
+    // The quit holds until the host acks that jar as DURABLY stored. Nothing
+    // is sent to the remote stream to wait on.
     expect(drained).toBe(false);
 
     // The durable tabs are NOT closed: the host suspends the session to
@@ -1591,16 +1632,14 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
     expect(framesOfKind(hostAStream.sentFrames, "closeTab")).toEqual([]);
     expect(framesOfKind(hostBStream.sentFrames, "closeTab")).toEqual([]);
 
-    act(() => {
-      hostAStream.emit({ kind: "pong", hasBinaryPayload: false }, null);
-    });
+    ackCapture(hostAStream, 0);
     await drain;
     expect(drained).toBe(true);
     expect(framesOfKind(hostAStream.sentFrames, "closeTab")).toEqual([]);
     expect(framesOfKind(hostBStream.sentFrames, "closeTab")).toEqual([]);
   });
 
-  it("resolves one flush waiter per pong when two captures overlap", async () => {
+  it("resolves the flush waiter whose requestId the host acked", async () => {
     const bridge = new FakeBridge();
     installNativeBridge(bridge);
     const hostTransport = installTransportForHost(
@@ -1626,8 +1665,10 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
       stream.emitStatus("open");
     });
 
-    // Quit and window-close can both run a final capture: two captures, two
-    // pings, and each promise must wait for ITS OWN pong.
+    // Quit and window-close can both run a final capture. Maximal-break: the
+    // acks arrive in REVERSE order here, so a FIFO waiter queue (or resolving
+    // every waiter on any ack) passes the "both eventually settle" shape while
+    // crediting the wrong capture - only requestId keying gets this right.
     let firstDrained = false;
     let secondDrained = false;
     const first = captureFinalPrimaryProfiles().then(() => {
@@ -1638,26 +1679,24 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
     });
 
     await waitFor(() => {
-      expect(framesOfKind(stream.sentFrames, "ping")).toHaveLength(2);
+      expect(
+        framesOfKind(stream.sentFrames, "primaryProfileCaptured"),
+      ).toHaveLength(2);
     });
     expect(firstDrained).toBe(false);
     expect(secondDrained).toBe(false);
 
-    act(() => {
-      stream.emit({ kind: "pong", hasBinaryPayload: false }, null);
-    });
-    await first;
-    expect(firstDrained).toBe(true);
-    expect(secondDrained).toBe(false);
-
-    act(() => {
-      stream.emit({ kind: "pong", hasBinaryPayload: false }, null);
-    });
+    ackCapture(stream, 1);
     await second;
     expect(secondDrained).toBe(true);
+    expect(firstDrained).toBe(false);
+
+    ackCapture(stream, 0);
+    await first;
+    expect(firstDrained).toBe(true);
   });
 
-  it("credits a timed-out waiter's late pong to that waiter, not the next one", async () => {
+  it("settles a flush waiter the host never acked on its own timeout", async () => {
     vi.useFakeTimers();
     try {
       installNativeBridge(new FakeBridge());
@@ -1690,10 +1729,13 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
         firstDrained = true;
       });
       await vi.waitFor(() => {
-        expect(framesOfKind(stream.sentFrames, "ping")).toHaveLength(1);
+        expect(
+          framesOfKind(stream.sentFrames, "primaryProfileCaptured"),
+        ).toHaveLength(1);
       });
 
-      // The first capture's pong never comes; its own timeout settles it.
+      // An older host sends no ack at all. Maximal-break: dropping the
+      // timeout leg would hang the quit here forever.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(
           FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
@@ -1706,24 +1748,21 @@ describe("BrowserSessionsProvider final capture before route loss", () => {
         secondDrained = true;
       });
       await vi.waitFor(() => {
-        expect(framesOfKind(stream.sentFrames, "ping")).toHaveLength(2);
+        expect(
+          framesOfKind(stream.sentFrames, "primaryProfileCaptured"),
+        ).toHaveLength(2);
       });
       expect(secondDrained).toBe(false);
 
-      // The FIRST ping's pong finally lands. It answers a ping sent before the
-      // second capture's frame went out, so it proves nothing about that frame
-      // and must be absorbed by the waiter that timed out.
-      act(() => {
-        stream.emit({ kind: "pong", hasBinaryPayload: false }, null);
-      });
+      // The timed-out capture's ack finally lands. It names a requestId no
+      // waiter holds any more, so it must not settle the live one.
+      ackCapture(stream, 0);
       await act(async () => {
         await Promise.resolve();
       });
       expect(secondDrained).toBe(false);
 
-      act(() => {
-        stream.emit({ kind: "pong", hasBinaryPayload: false }, null);
-      });
+      ackCapture(stream, 1);
       await second;
       expect(secondDrained).toBe(true);
     } finally {

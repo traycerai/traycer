@@ -109,27 +109,29 @@ describe("browser.sessions Electron tab birth", () => {
     ).toBe(false);
   });
 
-  it("rejects every superseded birth frame", () => {
+  it("carries no arm for any superseded birth frame", () => {
+    // Asserted on the DISCRIMINATOR, not on a hand-built payload: a
+    // `safeParse` of one made-up body fails for whatever reason comes first,
+    // so it would keep passing even if the arm came back with different
+    // fields. The absent `kind` literal is the actual claim.
     for (const kind of [
       "electronTabRegistered",
       "electronTabRegistrationFailed",
       "registerElectronTab",
       "electronTabCreated",
       "electronTabReady",
+      "electronTabHandoff",
     ]) {
-      const schema = kind.startsWith("electronTabR")
-        ? browserSessionsServerFrameSchema
-        : browserSessionsClientFrameSchema;
       expect(
-        schema.safeParse({
-          kind,
-          hasBinaryPayload: false,
-          requestId: "legacy-1",
-          registrationId: "native-1",
-          sessionId: "session-1",
-          tabId: "tab-1",
-        }).success,
-      ).toBe(false);
+        browserSessionsServerFrameSchema.options.every(
+          (option) => option.shape.kind.value !== kind,
+        ),
+      ).toBe(true);
+      expect(
+        browserSessionsClientFrameSchema.options.every(
+          (option) => option.shape.kind.value !== kind,
+        ),
+      ).toBe(true);
     }
   });
 
@@ -137,22 +139,5 @@ describe("browser.sessions Electron tab birth", () => {
     expect(browserSessionsServerFrameSchema.safeParse(ACCEPTED).success).toBe(
       true,
     );
-  });
-
-  it("no longer carries a live Electron-to-headless handoff frame", () => {
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        kind: "electronTabHandoff",
-        hasBinaryPayload: false,
-        requestId: "req-handoff-1",
-        sessionId: "session-1",
-        tabId: "tab-minted-9",
-        registrationId: "native-1",
-        capturedUrl: "https://example.com/agent",
-        capturedStorageState: null,
-        siblingTabs: [],
-        reason: "gui-quit",
-      }).success,
-    ).toBe(false);
   });
 });

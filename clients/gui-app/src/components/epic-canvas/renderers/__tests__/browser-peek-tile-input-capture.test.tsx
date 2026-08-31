@@ -8,60 +8,48 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  BrowserPeekTile,
-  type BrowserPeekNode,
-} from "@/components/epic-canvas/renderers/browser-peek-tile";
-import {
   FakeStreamClient,
+  PEEK_NODE,
+  hostDirectoryEntryModule,
+  hostStreamClientForWithAuthModule,
+  liveStream as fixtureLiveStream,
+  streamAuthRevalidatorModule,
+  tabHostIdModule,
+  tileBodyVisibleModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
   visible: true,
 }));
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-test",
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
+  tabHostIdModule(),
+);
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
-  useTileBodyVisible: () => hookState.visible,
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
+  tileBodyVisibleModule(hookState),
+);
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => ({ hostId: "host-test" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", () =>
+  hostDirectoryEntryModule(),
+);
 
-vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: () => hookState.streamClient,
-  authenticatedHostStreamKey: () => "authenticated-host-test",
-  authenticatedOwnerIdentityKey: () => "local\u0000host-test\u0000user-test",
-}));
+vi.mock("@/hooks/host/use-host-stream-client-for", () =>
+  hostStreamClientForWithAuthModule(hookState),
+);
 
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
-
-const PEEK_NODE: BrowserPeekNode = {
-  id: "browser-peek-headless-1",
-  instanceId: "peek-instance-1",
-  hostId: "host-test",
-  sessionId: "headless-1",
-  tabId: "headless-tab-1",
-  initialUrl: "http://localhost:3000",
-};
+vi.mock("@/lib/host/stream-auth-revalidator", () =>
+  streamAuthRevalidatorModule(),
+);
 
 const JPEG_SEQ_7 = new Uint8Array([1, 2, 3]);
 const JPEG_SEQ_8 = new Uint8Array([4, 5, 6]);
 
 function liveStream(): FakeStreamSession {
-  const sessions = hookState.streamClient?.sessions ?? [];
-  const stream = sessions.at(-1);
-  if (stream === undefined) {
-    throw new Error("expected browser.screencast stream");
-  }
-  return stream;
+  return fixtureLiveStream(hookState);
 }
 
 function overlayButton(): HTMLElement {
@@ -1120,8 +1108,8 @@ describe("BrowserPeekTile input capture", () => {
     ]);
   });
 
-  it("flushes the coalesced wheel immediately when scroll direction reverses", () => {
-    installAnimationFrameQueue();
+  it("sums a direction reversal into the same frame's single wheel", () => {
+    const frames = installAnimationFrameQueue();
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -1151,14 +1139,15 @@ describe("BrowserPeekTile input capture", () => {
 
     dispatchWheel(10);
     dispatchWheel(6);
+    // A reversal inside one animation frame is summed like any other tick -
+    // it does not buy its own send out of the host's shared control budget.
+    dispatchWheel(-8);
     expect(framesOfKind(stream, "pointer")).toEqual([]);
 
-    // Direction reversal flushes the accumulated downward scroll without
-    // waiting for the next animation frame.
-    dispatchWheel(-8);
+    frames.runNextFrame();
 
     expect(framesOfKind(stream, "pointer")).toEqual([
-      expect.objectContaining({ type: "wheel", deltaX: 0, deltaY: 16 }),
+      expect.objectContaining({ type: "wheel", deltaX: 0, deltaY: 8 }),
     ]);
   });
 

@@ -8,12 +8,6 @@ import {
   type PipTarget,
 } from "@/lib/browser-view/pip/pip-store";
 
-/**
- * The non-pixel half of PiP's own subscription: frame geometry and the agent
- * cursor. Everything below the transport is real - only the stream itself is
- * stood in, so the frames travel the same `applyCaptureFrame` path production
- * uses.
- */
 type OpenStreamHandle = {
   onFrame:
     | ((
@@ -23,7 +17,9 @@ type OpenStreamHandle = {
     | null;
 };
 
-const openStream = vi.hoisted((): OpenStreamHandle => ({ onFrame: null }));
+const openStream = vi.hoisted((): OpenStreamHandle => ({
+  onFrame: null,
+}));
 
 vi.mock("@/lib/browser-view/pip/pip-headless-stream", () => ({
   PIP_HEADLESS_MAX_WIDTH: 480,
@@ -65,7 +61,7 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientFor: () => ({ hostId: "host-1" }),
 }));
 
-function target(selectionId: string): PipTarget {
+function pipTarget(selectionId: string): PipTarget {
   return {
     hostId: "host-1",
     sessionId: "session-1",
@@ -75,6 +71,41 @@ function target(selectionId: string): PipTarget {
   };
 }
 
+function emitPipFrame(frame: BrowserScreencastServerFrame): void {
+  act(() => {
+    openStream.onFrame?.(frame, null);
+  });
+}
+
+function pipTestDataset(testId: string): DOMStringMap {
+  return screen.getByTestId(testId).dataset;
+}
+
+const PIP_STARTED_FRAME: BrowserScreencastServerFrame = {
+  kind: "started",
+  hasBinaryPayload: false,
+  frameWidth: 800,
+  frameHeight: 600,
+  deviceScaleFactor: 1,
+};
+
+const PIP_CURSOR_FRAME: BrowserScreencastServerFrame = {
+  kind: "agentCursor",
+  hasBinaryPayload: false,
+  type: "move",
+  epoch: 4,
+  normalizedX: 0.5,
+  normalizedY: 0.25,
+  label: "Agent",
+};
+
+/**
+ * The non-pixel half of PiP's own subscription: frame geometry and the agent
+ * cursor. Everything below the transport is real - only the stream itself is
+ * stood in, so the frames travel the same `applyCaptureFrame` path production
+ * uses. The transport's own key/probe behaviour is pinned against the real
+ * module in `pip-headless-stream.test.ts`.
+ */
 function PipMetaProbe(props: { readonly snapshot: PipSnapshot }) {
   const preview = usePipOwnedFrame("epic-1", props.snapshot);
   return (
@@ -90,34 +121,6 @@ function PipMetaProbe(props: { readonly snapshot: PipSnapshot }) {
   );
 }
 
-function probe(): DOMStringMap {
-  return screen.getByTestId("pip-meta-probe").dataset;
-}
-
-function emit(frame: BrowserScreencastServerFrame): void {
-  act(() => {
-    openStream.onFrame?.(frame, null);
-  });
-}
-
-const STARTED: BrowserScreencastServerFrame = {
-  kind: "started",
-  hasBinaryPayload: false,
-  frameWidth: 800,
-  frameHeight: 600,
-  deviceScaleFactor: 1,
-};
-
-const CURSOR: BrowserScreencastServerFrame = {
-  kind: "agentCursor",
-  hasBinaryPayload: false,
-  type: "move",
-  epoch: 4,
-  normalizedX: 0.5,
-  normalizedY: 0.25,
-  label: "Agent",
-};
-
 afterEach(() => {
   cleanup();
   openStream.onFrame = null;
@@ -127,15 +130,16 @@ describe("usePipOwnedFrame meta", () => {
   it("surfaces the frame geometry and the agent cursor of the displayed tab", () => {
     render(
       <PipMetaProbe
-        snapshot={{ ...HIDDEN_PIP_SNAPSHOT, target: target("selection-a") }}
+        snapshot={{ ...HIDDEN_PIP_SNAPSHOT, target: pipTarget("selection-a") }}
       />,
     );
 
-    emit(STARTED);
-    emit(CURSOR);
+    emitPipFrame(PIP_STARTED_FRAME);
+    emitPipFrame(PIP_CURSOR_FRAME);
 
-    expect(probe().frameSize).toBe("800x600");
-    expect(probe().cursor).toBe("Agent");
+    const dataset = pipTestDataset("pip-meta-probe");
+    expect(dataset.frameSize).toBe("800x600");
+    expect(dataset.cursor).toBe("Agent");
   });
 
   it("drops meta from the pending tab so it cannot paint over the displayed one", () => {
@@ -145,16 +149,17 @@ describe("usePipOwnedFrame meta", () => {
       <PipMetaProbe
         snapshot={{
           ...HIDDEN_PIP_SNAPSHOT,
-          target: target("selection-a"),
-          pendingTarget: target("selection-b"),
+          target: pipTarget("selection-a"),
+          pendingTarget: pipTarget("selection-b"),
         }}
       />,
     );
 
-    emit(STARTED);
-    emit(CURSOR);
+    emitPipFrame(PIP_STARTED_FRAME);
+    emitPipFrame(PIP_CURSOR_FRAME);
 
-    expect(probe().frameSize).toBe("");
-    expect(probe().cursor).toBe("");
+    const dataset = pipTestDataset("pip-meta-probe");
+    expect(dataset.frameSize).toBe("");
+    expect(dataset.cursor).toBe("");
   });
 });

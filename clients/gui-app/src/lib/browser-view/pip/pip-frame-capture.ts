@@ -55,12 +55,15 @@ interface PipFrameMeta {
   readonly cursor: AgentCursorPosition | null;
 }
 
-type PipMetaUpdate =
-  | { readonly kind: "frameSize"; readonly frameSize: ScreencastFrameSize }
-  | {
-      readonly kind: "cursor";
-      readonly cursor: Omit<AgentCursorPosition, "id">;
-    };
+/**
+ * A patch over {@link PipFrameMeta}: exactly one field is non-null per frame,
+ * and the cursor's id is minted here (the overlay restarts its linger on a new
+ * id) rather than by a counter of its own.
+ */
+interface PipMetaPatch {
+  readonly frameSize: ScreencastFrameSize | null;
+  readonly cursor: Omit<AgentCursorPosition, "id"> | null;
+}
 
 export interface PipPreview {
   readonly src: string | null;
@@ -95,7 +98,6 @@ export function usePipOwnedFrame(
     selectionId,
   );
   const [meta, setMeta] = useState<PipFrameMeta | null>(null);
-  const cursorSerialRef = useRef(0);
 
   // One arm for both transports. Every value below is render-stable (the
   // binding comes from the Electron-tab directory store, the client from the
@@ -111,19 +113,19 @@ export function usePipOwnedFrame(
         return { selectionId, src };
       });
     };
-    const onMeta = (update: PipMetaUpdate): void => {
+    const onMeta = (patch: PipMetaPatch): void => {
       setMeta((previous) => {
-        const base =
+        const base: PipFrameMeta =
           previous?.selectionId === selectionId
             ? previous
             : { selectionId, frameSize: null, cursor: null };
-        if (update.kind === "frameSize") {
-          return { ...base, frameSize: update.frameSize };
-        }
-        cursorSerialRef.current += 1;
         return {
-          ...base,
-          cursor: { ...update.cursor, id: cursorSerialRef.current },
+          selectionId,
+          frameSize: patch.frameSize ?? base.frameSize,
+          cursor:
+            patch.cursor === null
+              ? base.cursor
+              : { ...patch.cursor, id: (base.cursor?.id ?? 0) + 1 },
         };
       });
     };
@@ -241,7 +243,7 @@ function startNativePipCapture(input: {
   readonly bridge: BrowserViewBridge;
   readonly epicId: string;
   readonly selectionId: string;
-  readonly onMeta: (update: PipMetaUpdate) => void;
+  readonly onMeta: (patch: PipMetaPatch) => void;
   readonly onUrl: (src: string) => void;
 }): () => void {
   let disposed = false;
@@ -288,7 +290,7 @@ function startHeadlessPipCapture(input: {
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
   readonly epicId: string;
   readonly selectionId: string;
-  readonly onMeta: (update: PipMetaUpdate) => void;
+  readonly onMeta: (patch: PipMetaPatch) => void;
   readonly onUrl: (src: string) => void;
   readonly sessionId: string;
   readonly tabId: string;
@@ -325,22 +327,22 @@ function applyCaptureFrame(input: {
   readonly selectionId: string;
   readonly frame: BrowserScreencastServerFrame;
   readonly jpegBytes: Uint8Array | null;
-  readonly onMeta: (update: PipMetaUpdate) => void;
+  readonly onMeta: (patch: PipMetaPatch) => void;
   readonly onUrl: (url: string) => void;
 }): void {
   if (input.frame.kind === "started" || input.frame.kind === "resized") {
     input.onMeta({
-      kind: "frameSize",
       frameSize: {
         width: input.frame.frameWidth,
         height: input.frame.frameHeight,
       },
+      cursor: null,
     });
     return;
   }
   if (input.frame.kind === "agentCursor") {
     input.onMeta({
-      kind: "cursor",
+      frameSize: null,
       cursor: {
         type: input.frame.type,
         normalizedX: input.frame.normalizedX,

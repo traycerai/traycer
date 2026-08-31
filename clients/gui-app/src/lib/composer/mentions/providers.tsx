@@ -22,10 +22,6 @@ import type {
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { mentionAttachmentFromSuggestion } from "./attachments";
 import {
-  browserTabPreviewRequest,
-  type BrowserTabPreviewRequest,
-} from "./browser-tab-preview";
-import {
   githubMentionAttachmentFromRow,
   githubMentionCategoryIcon,
   githubMentionPreview,
@@ -111,7 +107,7 @@ export type MentionMenuAction =
    */
   | {
       readonly kind: "attach-tab-preview";
-      readonly request: BrowserTabPreviewRequest;
+      readonly entry: BrowserTabMentionEntry;
     };
 
 export interface MentionMenuEntry {
@@ -1445,10 +1441,7 @@ function suggestionAction(
   entry: MentionSuggestionEntry,
 ): MentionMenuAction | null {
   if (entry.kind === "browser-tab" && entry.contextOnly) {
-    return {
-      kind: "attach-tab-preview",
-      request: browserTabPreviewRequest(entry),
-    };
+    return { kind: "attach-tab-preview", entry };
   }
   const mention = mentionAttachmentFromSuggestion(entry);
   return mention === null ? null : { kind: "complete", mention };

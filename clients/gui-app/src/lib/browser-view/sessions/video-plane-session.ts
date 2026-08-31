@@ -1,4 +1,7 @@
-import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserScreencastServerFrame,
+  BrowserVideoPlaneFailureReason,
+} from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserMediaEntry,
   BrowserMediaSnapshot,
@@ -7,10 +10,26 @@ import type {
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
 import { mapWebrtcVideoStats } from "@/lib/browser-view/sessions/webrtc-video-stats";
 import { createVideoFrameLatencyWindow } from "@/lib/browser-view/sessions/video-frame-latency";
-import {
-  deriveViewerDeadlineMs,
-  VIEWER_CONTROL_PLANE_DEADLINES,
-} from "@/lib/browser-view/sessions/control-plane-deadlines";
+import { deriveSpecDeadlineMs } from "@traycer/protocol/host-transport/rtt-deadlines";
+import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
+
+/**
+ * `muted` + `playsInline` autoplay is allowed, but a source attached after
+ * mount still needs the kick. jsdom (and any runtime without a media stack)
+ * throws instead of returning a promise, which is not a plane failure.
+ *
+ * Lives beside the video plumbing rather than in the tile's hook, because
+ * every surface that attaches a `MediaStream` to a `<video>` needs the same
+ * kick - the peek tile and the PiP preview alike.
+ */
+export function startPlayback(element: HTMLVideoElement): void {
+  try {
+    const started = element.play();
+    if (started instanceof Promise) void started.catch(() => {});
+  } catch {
+    // No media stack; the plane simply never reports a decoded frame.
+  }
+}
 
 /**
  * The tile's video plane, as what a render needs to know about it: whether a
@@ -61,7 +80,7 @@ export interface VideoPlaneSession {
   /** When the video plane owns liveness, the last decoded frame's time. */
   readonly lastVideoFrameAt: () => number | null;
   /** A sink-level failure the registry cannot see (frames stopped arriving). */
-  readonly fail: (reason: string) => void;
+  readonly fail: (reason: BrowserVideoPlaneFailureReason) => void;
   /** Drops the snapshot subscription and releases the registry entry. */
   readonly close: () => void;
 }
@@ -102,7 +121,9 @@ export function createVideoPlaneSession(options: {
   let cancelDeadline: (() => void) | null = null;
   let statsTimer: number | null = null;
   let closed = false;
-  const latency = createVideoFrameLatencyWindow();
+  /** The round the per-round measurements below belong to; see `sdpOffer`. */
+  let measuredRound: number | null = null;
+  let latency = createVideoFrameLatencyWindow();
   /**
    * The DataChannel RTT probe (ticket 17). One `ping` in flight at a time:
    * the screencast `pong` frame carries no correlation id, so a second
@@ -160,9 +181,9 @@ export function createVideoPlaneSession(options: {
           return;
         }
         deadlineRound = null;
-        entry.reportFailure("no decoded video frame before deadline");
+        entry.reportFailure("no-first-frame");
       },
-      deriveViewerDeadlineMs(
+      deriveSpecDeadlineMs(
         VIEWER_CONTROL_PLANE_DEADLINES.firstFrame,
         options.readControlPlaneRttMs(),
       ),
@@ -294,6 +315,17 @@ export function createVideoPlaneSession(options: {
         return;
       }
       if (frame.kind === "sdpOffer") {
+        // A new round is a new path: the previous one's latency window and
+        // DataChannel round trip describe a connection that no longer exists,
+        // and an outstanding ping's reply can never be matched now that the
+        // channels it went out on are gone. A same-id ICE restart keeps them,
+        // which is the point - it is the same round, re-pathed.
+        if (frame.negotiationId !== measuredRound) {
+          measuredRound = frame.negotiationId;
+          pingSentAt = null;
+          dataChannelRttMs = null;
+          latency = createVideoFrameLatencyWindow();
+        }
         // Duplicate and superseded rounds are the registry's call: it owns the
         // round in flight, and this session is not necessarily its only viewer.
         entry.acceptOffer({
@@ -337,6 +369,10 @@ export function createVideoPlaneSession(options: {
       clearDeadline();
       stopStatsTimer();
       unsubscribe();
+      // The registry outlives this subscription (PiP may still hold it), but
+      // the reply channel does not: without this the round keeps answering
+      // into a stream nobody is reading.
+      entry.detachPort(port);
       media.release();
     },
   };

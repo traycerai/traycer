@@ -39,17 +39,13 @@ const sessionsHarness = vi.hoisted(() => ({
 vi.mock(
   "@/lib/browser-view/sessions/browser-sessions-coordinator",
   async () => {
-    const actual = await vi.importActual<
-      typeof import("@/lib/browser-view/sessions/browser-sessions-coordinator")
-    >("@/lib/browser-view/sessions/browser-sessions-coordinator");
-    return {
-      ...actual,
-      subscribeToBrowserSessionsCoordinators: () => () => undefined,
-      browserSessionAcrossCoordinators: (sessionId: string) =>
-        (sessionsHarness.items ?? []).find(
-          (item) => item.sessionId === sessionId,
-        ) ?? null,
-    };
+    // Dynamic import: the factory is hoisted above the static imports, so
+    // the fixture binding is not initialized yet when this runs.
+    const { browserSessionsCoordinatorMockFactory } =
+      await import("./browser-sessions-coordinator-mock-fixture");
+    return browserSessionsCoordinatorMockFactory(
+      () => sessionsHarness.items ?? [],
+    );
   },
 );
 

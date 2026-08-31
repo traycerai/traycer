@@ -6,10 +6,8 @@ import {
   type ScreencastArmGestureDown,
   type ScreencastArmGestureUp,
 } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
-import {
-  deriveViewerDeadlineMs,
-  VIEWER_CONTROL_PLANE_DEADLINES,
-} from "@/lib/browser-view/sessions/control-plane-deadlines";
+import { deriveSpecDeadlineMs } from "@traycer/protocol/host-transport/rtt-deadlines";
+import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
 
 /** What the buffer holds a press for with no measured RTT: the floor. */
 const SCREENCAST_ARM_BUFFER_TIMEOUT_MS =
@@ -184,7 +182,7 @@ describe("createScreencastArmBuffer", () => {
     const buffer = createScreencastArmBuffer<string>(
       () => {},
       () =>
-        deriveViewerDeadlineMs(
+        deriveSpecDeadlineMs(
           VIEWER_CONTROL_PLANE_DEADLINES.armBuffer,
           measuredRttMs,
         ),
@@ -202,7 +200,7 @@ describe("createScreencastArmBuffer", () => {
     const buffer = createScreencastArmBuffer<string>(
       () => {},
       () =>
-        deriveViewerDeadlineMs(
+        deriveSpecDeadlineMs(
           VIEWER_CONTROL_PLANE_DEADLINES.armBuffer,
           measuredRttMs,
         ),

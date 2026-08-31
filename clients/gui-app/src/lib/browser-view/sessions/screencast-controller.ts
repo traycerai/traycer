@@ -13,20 +13,16 @@ import type {
   BrowserScreencastServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import { createScreencastArmBuffer } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
-import {
-  deriveViewerDeadlineMs,
-  VIEWER_CONTROL_PLANE_DEADLINES,
-} from "@/lib/browser-view/sessions/control-plane-deadlines";
+import { deriveSpecDeadlineMs } from "@traycer/protocol/host-transport/rtt-deadlines";
+import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
 import {
   buildScreencastPointerFrame,
-  correlationToken,
   inputModifiers,
   isScreencastModChord,
   nextPointerClickCount,
   pointerButton,
   type PointerClickCount,
   type ScreencastFrameSize,
-  type ScreencastInputCorrelation,
   type ScreencastInputFrame,
   type ScreencastKeyboardInput,
   type ScreencastNavInput,
@@ -56,6 +52,11 @@ export interface ScreencastOverlayHandlers {
   readonly onFocus: () => void;
   /** Hover pre-arms, so the click that follows costs no arm round trip. */
   readonly onPointerEnter: () => void;
+  /**
+   * Releases a hover pre-arm's host-side claim. A deliberate gesture arm is
+   * left alone: the pointer leaving the tile is not a release of control.
+   */
+  readonly onPointerLeave: () => void;
   readonly onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   readonly onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   readonly onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => void;
@@ -124,11 +125,14 @@ export interface ScreencastController {
    * as an unpainted JPEG tile does.
    */
   readonly noteViewportEpoch: (epoch: number | null) => void;
+  /** The latched viewport epoch, for callers judging a frame against it. */
+  readonly viewportEpoch: () => number | null;
   /**
    * Which plane's token the tile is correlating against. The host announces
    * it (`captureMode` frame); nothing else about the mode lives here.
    */
   readonly setCaptureMode: (mode: BrowserScreencastCaptureMode) => void;
+  readonly captureMode: () => BrowserScreencastCaptureMode;
   /**
    * The DataChannel sink for human input, or `null` for mux-only. Only the
    * high-frequency input frames ever look at it; arm/disarm, nav, dialog,
@@ -259,10 +263,6 @@ export function createScreencastController(options: {
   let frameSize: ScreencastFrameSize | null = null;
   let capturedPointer: CapturedPointer | null = null;
   let suppressPointerId: number | null = null;
-  let pendingMove: ScreencastPointerInput | null = null;
-  let moveRaf: number | null = null;
-  let pendingWheel: ScreencastPointerInput | null = null;
-  let wheelRaf: number | null = null;
   let pointerClickCount: PointerClickCount | null = null;
   let pendingNav: ScreencastNavInput[] = [];
   const acceptedPointerDowns = new Map<
@@ -290,10 +290,8 @@ export function createScreencastController(options: {
    * covers the whole time its cast is stopped, live track or not - so the
    * epoch is the only token that exists in that window.
    */
-  const inputCorrelation = (): ScreencastInputCorrelation =>
-    captureMode === "video"
-      ? { castSequence: null, viewportEpoch }
-      : { castSequence: presentedSequence, viewportEpoch: null };
+  const correlationToken = (): number | null =>
+    captureMode === "video" ? viewportEpoch : presentedSequence;
 
   const armBuffer = createScreencastArmBuffer<ScreencastPointerInput>(
     () => {
@@ -302,7 +300,7 @@ export function createScreencastController(options: {
       suppressPointerId = capturedPointer.pointerId;
     },
     () =>
-      deriveViewerDeadlineMs(
+      deriveSpecDeadlineMs(
         VIEWER_CONTROL_PLANE_DEADLINES.armBuffer,
         readControlPlaneRttMs(),
       ),
@@ -364,104 +362,34 @@ export function createScreencastController(options: {
     }
   };
 
-  const cancelPendingMove = (): void => {
-    pendingMove = null;
-    if (moveRaf === null) return;
-    window.cancelAnimationFrame(moveRaf);
-    moveRaf = null;
-  };
-
-  const flushPendingMove = (): void => {
-    const pending = pendingMove;
-    pendingMove = null;
-    if (moveRaf !== null) {
-      window.cancelAnimationFrame(moveRaf);
-      moveRaf = null;
-    }
-    if (pending === null) return;
-    sendInput(pending);
-  };
-
-  const scheduleMove = (frame: ScreencastPointerInput): void => {
-    pendingMove = frame;
-    if (moveRaf !== null) return;
-    moveRaf = window.requestAnimationFrame(() => {
-      moveRaf = null;
-      const pending = pendingMove;
-      pendingMove = null;
-      if (pending === null) return;
-      sendInput(pending);
-    });
-  };
+  // Budget: keys + wheel + clicks share the host's 120/s control window
+  // (`BROWSER_CONTROL_MAX_FRAMES_PER_WINDOW`, browser-screencast-control.ts).
+  // Coalescing every tick into at most one send per animation frame caps each
+  // continuous stream at ~60/s, leaving headroom for keyboard bursts and
+  // clicks sharing the same budget.
+  const moveInput = rafCoalescer((_pending, next) => next, sendInput);
+  const wheelInput = rafCoalescer(
+    (pending, next) => ({
+      ...next,
+      deltaX: pending.deltaX + next.deltaX,
+      deltaY: pending.deltaY + next.deltaY,
+    }),
+    // A pending move belongs ahead of the wheel it preceded.
+    (frame) => {
+      moveInput.flush();
+      sendInput(frame);
+    },
+  );
 
   const sendDiscretePointer = (frame: ScreencastPointerInput): void => {
-    flushPendingWheel();
-    flushPendingMove();
+    wheelInput.flush();
+    moveInput.flush();
     sendInput(frame);
     if (frame.type === "down") {
       acceptedPointerDowns.set(frame.button, frame);
       return;
     }
     if (frame.type === "up") acceptedPointerDowns.delete(frame.button);
-  };
-
-  const wheelDirectionReversed = (
-    previous: ScreencastPointerInput,
-    next: ScreencastPointerInput,
-  ): boolean => {
-    const previousX = Math.sign(previous.deltaX);
-    const previousY = Math.sign(previous.deltaY);
-    const nextX = Math.sign(next.deltaX);
-    const nextY = Math.sign(next.deltaY);
-    return (
-      (previousX !== 0 && nextX !== 0 && previousX !== nextX) ||
-      (previousY !== 0 && nextY !== 0 && previousY !== nextY)
-    );
-  };
-
-  const cancelPendingWheel = (): void => {
-    pendingWheel = null;
-    if (wheelRaf === null) return;
-    window.cancelAnimationFrame(wheelRaf);
-    wheelRaf = null;
-  };
-
-  // sendInput directly, not sendDiscretePointer - sendDiscretePointer calls
-  // flushPendingWheel first, and this IS that flush.
-  const flushPendingWheel = (): void => {
-    const pending = pendingWheel;
-    pendingWheel = null;
-    if (wheelRaf !== null) {
-      window.cancelAnimationFrame(wheelRaf);
-      wheelRaf = null;
-    }
-    if (pending === null) return;
-    flushPendingMove();
-    sendInput(pending);
-  };
-
-  // Budget: keys + wheel + clicks share the host's 120/s control window
-  // (`BROWSER_CONTROL_MAX_FRAMES_PER_WINDOW`, browser-screencast-control.ts).
-  // Coalescing every wheel tick into at most one send per animation frame
-  // caps wheel at ~60/s, leaving headroom under 120/s for keyboard bursts
-  // and clicks sharing the same budget.
-  const scheduleWheel = (frame: ScreencastPointerInput): void => {
-    if (pendingWheel !== null && wheelDirectionReversed(pendingWheel, frame)) {
-      flushPendingWheel();
-    }
-    pendingWheel =
-      pendingWheel === null
-        ? frame
-        : {
-            ...frame,
-            deltaX: pendingWheel.deltaX + frame.deltaX,
-            deltaY: pendingWheel.deltaY + frame.deltaY,
-          };
-    if (wheelRaf !== null) return;
-    wheelRaf = window.requestAnimationFrame(() => {
-      wheelRaf = null;
-      flushPendingWheel();
-    });
   };
 
   const resetTransientInput = (): void => {
@@ -472,8 +400,8 @@ export function createScreencastController(options: {
     suppressPointerId = null;
     acceptedPointerDowns.clear();
     pointerClickCount = null;
-    cancelPendingMove();
-    cancelPendingWheel();
+    moveInput.cancel();
+    wheelInput.cancel();
     releaseCapturedPointer();
   };
 
@@ -557,9 +485,7 @@ export function createScreencastController(options: {
 
   const deliverArmBuffer = (): void => {
     const hadPending = armBuffer.hasPending();
-    const gesture = armBuffer.takeIfCurrent(
-      correlationToken(inputCorrelation()),
-    );
+    const gesture = armBuffer.takeIfCurrent(correlationToken());
     if (gesture === null) {
       if (hadPending && capturedPointer !== null) {
         suppressPointerId = capturedPointer.pointerId;
@@ -631,24 +557,30 @@ export function createScreencastController(options: {
       deltaX: request.deltaX,
       deltaY: request.deltaY,
       clickCount,
-      correlation: inputCorrelation(),
+      correlationToken: correlationToken(),
+      captureMode,
       surface: paintSurface(),
       frameSize,
     });
   };
 
+  /**
+   * The overlay button by ref, NOT `event.currentTarget`: a touch tap is
+   * replayed out of the tile's gesture buffer at pointerup, by which time
+   * React has nulled `currentTarget` on the stored down event - and it is the
+   * same node either way, since the ref and these handlers sit on one button.
+   */
   const capturePointer = (
     event: ReactPointerEvent<HTMLButtonElement>,
   ): void => {
+    const element = refs.overlayButtonRef.current;
+    if (element === null) return;
     try {
-      event.currentTarget.setPointerCapture(event.pointerId);
+      element.setPointerCapture(event.pointerId);
     } catch {
       // Pointer capture is best-effort; local teardown still needs the id.
     }
-    capturedPointer = {
-      element: event.currentTarget,
-      pointerId: event.pointerId,
-    };
+    capturedPointer = { element, pointerId: event.pointerId };
   };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLButtonElement>): void => {
@@ -676,13 +608,7 @@ export function createScreencastController(options: {
           deltaX: 0,
           deltaY: 0,
         });
-        const token =
-          frame === null
-            ? null
-            : correlationToken({
-                castSequence: frame.castSequence,
-                viewportEpoch: frame.viewportEpoch,
-              });
+        const token = correlationToken();
         if (frame !== null && token !== null) {
           armBuffer.storeDown({
             payload: frame,
@@ -715,7 +641,7 @@ export function createScreencastController(options: {
       deltaY: 0,
     });
     if (frame === null) return;
-    scheduleMove(frame);
+    moveInput.schedule(frame);
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLButtonElement>): void => {
@@ -768,8 +694,8 @@ export function createScreencastController(options: {
     armBuffer.drop();
     suppressPointerId = null;
     acceptedPointerDowns.clear();
-    cancelPendingMove();
-    cancelPendingWheel();
+    moveInput.cancel();
+    wheelInput.cancel();
     releaseCapturedPointer();
   };
 
@@ -846,6 +772,8 @@ export function createScreencastController(options: {
     noteViewportEpoch: (epoch) => {
       viewportEpoch = epoch;
     },
+    viewportEpoch: () => viewportEpoch,
+    captureMode: () => captureMode,
     setCaptureMode: (mode) => {
       if (mode === captureMode) return;
       captureMode = mode;
@@ -955,13 +883,19 @@ export function createScreencastController(options: {
         ),
       });
       if (frame === null) return;
-      scheduleWheel(frame);
+      wheelInput.schedule(frame);
     },
     overlayHandlers: {
       onFocus: () => {
         refs.imeInputRef.current?.focus();
       },
       onPointerEnter: preArm,
+      // A speculative claim the pointer merely raised is released the moment
+      // it leaves; a deliberate gesture arm is not, so control survives the
+      // pointer wandering off the tile.
+      onPointerLeave: () => {
+        if (!gestureArmed) detachLocalArm();
+      },
       onPointerDown,
       onPointerMove,
       onPointerUp,
@@ -998,6 +932,58 @@ export function createScreencastController(options: {
       onInput: (event) => {
         if (!composing) event.currentTarget.value = "";
       },
+    },
+  };
+}
+
+interface RafCoalescer {
+  readonly schedule: (frame: ScreencastPointerInput) => void;
+  /** Emits whatever is pending right now (a discrete frame needs it ordered ahead). */
+  readonly flush: () => void;
+  /** Drops whatever is pending without emitting it (teardown, pointer cancel). */
+  readonly cancel: () => void;
+}
+
+/**
+ * At most one emission per animation frame, with `merge` deciding what several
+ * ticks inside one frame add up to: the latest position for moves, the summed
+ * deltas for wheels.
+ */
+function rafCoalescer(
+  merge: (
+    pending: ScreencastPointerInput,
+    next: ScreencastPointerInput,
+  ) => ScreencastPointerInput,
+  emit: (frame: ScreencastPointerInput) => void,
+): RafCoalescer {
+  let pending: ScreencastPointerInput | null = null;
+  let raf: number | null = null;
+
+  const cancelRaf = (): void => {
+    if (raf === null) return;
+    window.cancelAnimationFrame(raf);
+    raf = null;
+  };
+  const flush = (): void => {
+    const frame = pending;
+    pending = null;
+    cancelRaf();
+    if (frame !== null) emit(frame);
+  };
+
+  return {
+    schedule: (frame) => {
+      pending = pending === null ? frame : merge(pending, frame);
+      if (raf !== null) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = null;
+        flush();
+      });
+    },
+    flush,
+    cancel: () => {
+      pending = null;
+      cancelRaf();
     },
   };
 }

@@ -105,7 +105,9 @@ vi.mock("@/components/epic-canvas/renderers/browser-peek-tile", () => ({
       data-tab={props.node.tabId}
     />
   ),
-  getLastBrowserPeekFrame: () => peekFrameHarness.frame,
+}));
+vi.mock("@/lib/browser-view/sessions/peek-frame-cache", () => ({
+  useLastBrowserPeekFrame: () => peekFrameHarness.frame,
   clearLastBrowserPeekFrame: vi.fn(),
   browserPeekFrameKey: (node: {
     readonly hostId: string;

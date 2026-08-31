@@ -2,12 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { PipPreviewSurface } from "@/components/epic-canvas/pip/pip-preview-surface";
 import type { PipPreview } from "@/lib/browser-view/pip/pip-frame-capture";
-
-/** jsdom has no `MediaStream`; only its identity travels to `srcObject`. */
-function fakeStream(id: string): MediaStream {
-  const partial: Pick<MediaStream, "id"> = { id };
-  return partial as MediaStream;
-}
+import { fakeMediaStream as fakeStream } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
 
 const jpegPreview: PipPreview = {
   src: "blob:pip-frame",

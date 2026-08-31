@@ -1,4 +1,5 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
+import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
 import {
   acquireBrowserMediaEntry,
   createBrowserMediaPeer,
@@ -42,7 +43,11 @@ export function usePipSharedVideoStream(input: {
   readonly tabId: string;
 }): MediaStream | null {
   const { hostId, sessionId, tabId } = input;
-  const entryRef = useRef<BrowserMediaEntry | null>(null);
+  const entryRef = useRef<{
+    readonly key: string;
+    readonly entry: BrowserMediaEntry;
+  } | null>(null);
+  const key = compositeKey(hostId, sessionId, tabId);
   const attachable =
     hostId.length > 0 && sessionId.length > 0 && tabId.length > 0;
 
@@ -53,7 +58,7 @@ export function usePipSharedVideoStream(input: {
         key: { hostId, sessionId, tabId },
         createPeer: createBrowserMediaPeer,
       });
-      entryRef.current = handle.entry;
+      entryRef.current = { key, entry: handle.entry };
       onStoreChange();
       const unsubscribe = handle.entry.subscribe(onStoreChange);
       return () => {
@@ -62,14 +67,19 @@ export function usePipSharedVideoStream(input: {
         handle.release();
       };
     },
-    [attachable, hostId, sessionId, tabId],
+    [attachable, hostId, key, sessionId, tabId],
   );
 
+  // Keyed: React reads the snapshot during a render whose key has already
+  // changed but whose subscription has not been re-run yet, and the entry still
+  // held here is the PREVIOUS tab's - painting its track in this tab's mirror.
   const readStream = useCallback((): MediaStream | null => {
-    const snapshot = entryRef.current?.getSnapshot() ?? null;
-    if (snapshot === null || snapshot.phase !== "streaming") return null;
+    const held = entryRef.current;
+    if (held === null || held.key !== key) return null;
+    const snapshot = held.entry.getSnapshot();
+    if (snapshot.phase !== "streaming") return null;
     return snapshot.stream;
-  }, []);
+  }, [key]);
 
   return useSyncExternalStore(subscribe, readStream, readStream);
 }

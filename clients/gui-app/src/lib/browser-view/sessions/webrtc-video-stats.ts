@@ -18,7 +18,7 @@ import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-med
  * payload is `WebrtcVideoStatsSample`, defined with the rest of the wire shape
  * in `webrtc-media-registry.ts`.
  */
-export type WebrtcVideoStatsReportFields = Omit<
+type WebrtcVideoStatsReportFields = Omit<
   WebrtcVideoStatsSample,
   | "glassToGlassMs"
   | "glassToGlassP95Ms"
@@ -27,132 +27,107 @@ export type WebrtcVideoStatsReportFields = Omit<
   | "dataChannelRttMs"
 >;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+/** One `RTCStatsReport` entry: an untyped bag carrying its own `type` discriminant. */
+type StatRecord = Record<string, unknown>;
+
+function isStatRecord(value: unknown): value is StatRecord {
   return typeof value === "object" && value !== null;
 }
 
-function numberField(record: Record<string, unknown>, key: string): number {
+function numberField(record: StatRecord, key: string): number {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function isInboundVideoRtp(value: Record<string, unknown>): boolean {
-  return value.type === "inbound-rtp" && value.kind === "video";
+function inboundVideoRtp(report: RTCStatsReport): StatRecord | null {
+  for (const value of report.values()) {
+    if (!isStatRecord(value)) continue;
+    if (value.type === "inbound-rtp" && value.kind === "video") return value;
+  }
+  return null;
 }
 
 /**
- * Only a fallback: after an ICE restart more than one candidate pair can
- * carry `nominated: true` (the retired pair from the old round, the new
- * winner), so a bare `nominated` scan can pick the wrong one and misreport
- * both `iceCandidatePairType` and `roundTripTimeMs`. The authoritative
- * answer is the `transport` stat's `selectedCandidatePairId`; this is only
- * consulted when no transport stat is present (older Chrome, or a synthetic
- * report in a test), narrowed further to `state === "succeeded"` so a
- * still-checking pair from a fresh restart cannot win over a genuinely
- * connected one either.
+ * The inbound video RTP stat's jitter, in milliseconds - `null` when the report
+ * carries none yet (pre-first-sample). Read by the registry's adaptive
+ * jitter-buffer tuning, which needs this one field and not the whole shape.
  */
-function isFallbackNominatedCandidatePair(
-  value: Record<string, unknown>,
-): boolean {
-  return (
-    value.type === "candidate-pair" &&
-    value.nominated === true &&
-    value.state === "succeeded"
-  );
+export function inboundVideoJitterMs(report: RTCStatsReport): number | null {
+  const jitter = inboundVideoRtp(report)?.jitter;
+  return typeof jitter === "number" ? jitter * 1000 : null;
 }
 
-function isTransportStat(value: Record<string, unknown>): boolean {
-  return value.type === "transport";
-}
-
-function isCandidatePair(
-  value: Record<string, unknown>,
-): value is Record<string, unknown> & { readonly id: string } {
-  return value.type === "candidate-pair" && typeof value.id === "string";
-}
-
-function isLocalCandidate(
-  value: Record<string, unknown>,
-): value is Record<string, unknown> & { readonly id: string } {
-  return value.type === "local-candidate" && typeof value.id === "string";
-}
-
+/** The stat entries `mapWebrtcVideoStats` needs, indexed in one pass. */
 interface CollectedStats {
-  readonly inboundRtp: Record<string, unknown> | null;
-  readonly selectedPair: Record<string, unknown> | null;
-  readonly localCandidatesById: Map<string, Record<string, unknown>>;
+  transport: StatRecord | null;
+  /**
+   * Only consulted when no `transport` stat names the selected pair (older
+   * Chrome, or a synthetic report in a test): after an ICE restart more than
+   * one pair can carry `nominated: true`, so `state === "succeeded"` narrows
+   * it further - a still-checking pair from a fresh restart must not win over
+   * a genuinely connected one.
+   */
+  nominatedPair: StatRecord | null;
+  inboundRtp: StatRecord | null;
+  readonly candidatePairsById: Map<string, StatRecord>;
+  readonly localCandidatesById: Map<string, StatRecord>;
 }
 
-/**
- * `RTCStatsReport` is a `ReadonlyMap<string, unknown>` keyed by stat id; each
- * value carries its own `type` discriminant. Walks it once, collecting every
- * candidate pair and local candidate by id, then resolves the selected pair
- * (`resolveSelectedPair`).
- */
 function collectStats(report: RTCStatsReport): CollectedStats {
-  let inboundRtp: Record<string, unknown> | null = null;
-  let transport: Record<string, unknown> | null = null;
-  let fallbackPair: Record<string, unknown> | null = null;
-  const candidatePairsById = new Map<string, Record<string, unknown>>();
-  const localCandidatesById = new Map<string, Record<string, unknown>>();
+  const collected: CollectedStats = {
+    transport: null,
+    nominatedPair: null,
+    inboundRtp: null,
+    candidatePairsById: new Map<string, StatRecord>(),
+    localCandidatesById: new Map<string, StatRecord>(),
+  };
+  const { candidatePairsById, localCandidatesById } = collected;
 
   for (const value of report.values()) {
-    if (!isRecord(value)) continue;
-    if (inboundRtp === null && isInboundVideoRtp(value)) {
-      inboundRtp = value;
-      continue;
-    }
-    if (transport === null && isTransportStat(value)) {
-      transport = value;
-      continue;
-    }
-    if (isCandidatePair(value)) {
-      candidatePairsById.set(value.id, value);
-      if (fallbackPair === null && isFallbackNominatedCandidatePair(value)) {
-        fallbackPair = value;
+    if (!isStatRecord(value)) continue;
+    const id = typeof value.id === "string" ? value.id : null;
+    if (value.type === "inbound-rtp" && value.kind === "video") {
+      collected.inboundRtp ??= value;
+    } else if (value.type === "transport") {
+      collected.transport ??= value;
+    } else if (value.type === "candidate-pair" && id !== null) {
+      candidatePairsById.set(id, value);
+      if (
+        collected.nominatedPair === null &&
+        value.nominated === true &&
+        value.state === "succeeded"
+      ) {
+        collected.nominatedPair = value;
       }
-      continue;
-    }
-    if (isLocalCandidate(value)) {
-      localCandidatesById.set(value.id, value);
+    } else if (value.type === "local-candidate" && id !== null) {
+      localCandidatesById.set(id, value);
     }
   }
-
-  return {
-    inboundRtp,
-    selectedPair: resolveSelectedPair(
-      transport,
-      candidatePairsById,
-      fallbackPair,
-    ),
-    localCandidatesById,
-  };
-}
-
-/** Transport-authoritative, `fallbackPair` only when no transport stat resolves it. */
-function resolveSelectedPair(
-  transport: Record<string, unknown> | null,
-  candidatePairsById: Map<string, Record<string, unknown>>,
-  fallbackPair: Record<string, unknown> | null,
-): Record<string, unknown> | null {
-  const selectedPairId = transport?.selectedCandidatePairId;
-  if (typeof selectedPairId !== "string") return fallbackPair;
-  return candidatePairsById.get(selectedPairId) ?? fallbackPair;
+  return collected;
 }
 
 export function mapWebrtcVideoStats(
   report: RTCStatsReport,
 ): WebrtcVideoStatsReportFields | null {
-  const { inboundRtp, selectedPair, localCandidatesById } =
-    collectStats(report);
+  const {
+    transport,
+    nominatedPair,
+    inboundRtp,
+    candidatePairsById,
+    localCandidatesById,
+  } = collectStats(report);
   if (inboundRtp === null) return null;
 
+  const selectedPairId = transport?.selectedCandidatePairId;
+  const selectedPair =
+    (typeof selectedPairId === "string"
+      ? candidatePairsById.get(selectedPairId)
+      : undefined) ?? nominatedPair;
   const localCandidateId = selectedPair?.localCandidateId;
   const localCandidate =
     typeof localCandidateId === "string"
       ? localCandidatesById.get(localCandidateId)
       : undefined;
-  const candidateType = localCandidate?.candidateType;
 
   return {
     framesDecoded: numberField(inboundRtp, "framesDecoded"),
@@ -165,10 +140,12 @@ export function mapWebrtcVideoStats(
     packetsLost: Math.max(0, numberField(inboundRtp, "packetsLost")),
     jitterMs: numberField(inboundRtp, "jitter") * 1000,
     roundTripTimeMs:
-      numberField(selectedPair ?? {}, "currentRoundTripTime") * 1000,
+      selectedPair === null
+        ? 0
+        : numberField(selectedPair, "currentRoundTripTime") * 1000,
     // The wire vocabulary is closed; anything else the DOM reports is "unknown".
     iceCandidatePairType: browserScreencastIcePairTypeSchema
       .catch("unknown")
-      .parse(candidateType),
+      .parse(localCandidate?.candidateType),
   };
 }

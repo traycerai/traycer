@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Editor } from "@tiptap/core";
 
 import { bumpComposerDraftGeneration } from "@/lib/composer/composer-draft-generation";
-import type { BrowserTabPreviewImage } from "@/lib/composer/mentions/browser-tab-preview";
+import type { ImageAttachmentAttrs } from "../editor/extensions/image-attachment-extension";
+import type { BrowserTabMentionEntry } from "@/lib/composer/types";
 
 import { buildComposerExtensions } from "../editor/editor-config";
 import { commitBrowserTabPreviewInsertion } from "../editor/extensions/mention-extension";
@@ -10,7 +11,7 @@ import { createComposerPickerStore } from "../picker/composer-picker-store";
 
 /** Resolvers for the captures the mocked fetch left in flight. */
 const pending = vi.hoisted(
-  () => [] as Array<(image: BrowserTabPreviewImage | null) => void>,
+  () => [] as Array<(image: ImageAttachmentAttrs | null) => void>,
 );
 
 vi.mock("@/lib/composer/mentions/browser-tab-preview", async (original) => {
@@ -21,7 +22,7 @@ vi.mock("@/lib/composer/mentions/browser-tab-preview", async (original) => {
   return {
     ...actual,
     fetchBrowserTabPreviewImage: () =>
-      new Promise<BrowserTabPreviewImage | null>((resolve) => {
+      new Promise<ImageAttachmentAttrs | null>((resolve) => {
         pending.push(resolve);
       }),
   };
@@ -36,15 +37,23 @@ afterEach(() => {
   elements.splice(0).forEach((element) => element.remove());
 });
 
-const REQUEST = {
-  coordinatorKey: "coordinator-remote",
+const REQUEST: BrowserTabMentionEntry = {
+  kind: "browser-tab",
+  id: "browser-tab:host-remote:s1:tab-1",
   tabId: "tab-1",
-  hostName: "Studio",
-  title: "Docs",
+  sessionId: "s1",
+  hostId: "host-remote",
+  hostLabel: "Studio",
+  coordinatorKey: "coordinator-remote",
+  contextOnly: true,
+  label: "Docs",
   url: "https://example.com/docs",
+  coLocated: false,
+  lastActivityAt: 0,
+  dormant: false,
 };
 
-const IMAGE: BrowserTabPreviewImage = {
+const IMAGE: ImageAttachmentAttrs = {
   id: "img-preview",
   fileName: "Studio-tab.jpg",
   mimeType: "image/jpeg",
@@ -101,7 +110,7 @@ describe("cross-host browser tab preview insertion", () => {
 });
 
 async function settlePreview(
-  image: BrowserTabPreviewImage | null,
+  image: ImageAttachmentAttrs | null,
 ): Promise<void> {
   const resolve = pending.shift();
   if (resolve === undefined) throw new Error("no preview capture in flight");

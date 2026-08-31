@@ -204,6 +204,30 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
     ).toBe(false);
   });
 
+  it("round-trips primaryProfileCaptureAck back to the capture's requestId", () => {
+    // The desktop's quit flush waits on this ack, keyed by requestId. Mutation:
+    // dropping `requestId` from the variant, or sending it the client -> host
+    // direction (the ack is the HOST's durability answer, so an ack arriving
+    // from a client must not settle anyone's flush).
+    const ack = {
+      kind: "primaryProfileCaptureAck",
+      hasBinaryPayload: false,
+      requestId: CAPTURE_REQUEST.requestId,
+    } as const;
+    const parsed = browserSessionsServerFrameSchema.safeParse(ack);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    if (parsed.data.kind !== "primaryProfileCaptureAck") {
+      throw new Error("expected a primaryProfileCaptureAck frame");
+    }
+    expect(parsed.data.requestId).toBe(CAPTURE_REQUEST.requestId);
+    expect(browserSessionsClientFrameSchema.safeParse(ack).success).toBe(false);
+    const { requestId: _requestId, ...withoutId } = ack;
+    expect(browserSessionsServerFrameSchema.safeParse(withoutId).success).toBe(
+      false,
+    );
+  });
+
   it("advertises the new frame kinds on the browser.sessions schemas", () => {
     const serverKinds = browserSessionsServerFrameSchema.def.options.map(
       (option): string => String(option.shape.kind.def.values[0]),

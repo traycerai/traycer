@@ -1,29 +1,53 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactElement,
+  type RefObject,
+} from "react";
 import { AlertTriangle, Pause, Radio, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import {
   BrowserTileToolbar,
+  BrowserTileToolbarCompact,
   type BrowserPictureInPictureControl,
 } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
+import { SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
-import { AgentCursorOverlay } from "@/components/epic-canvas/renderers/agent-cursor-overlay";
 import { ScreencastSurface } from "@/components/epic-canvas/renderers/screencast-surface";
 import { useScreencastTileChrome } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
 import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
 import {
+  browserPeekFrameKey,
+  snapshotVideoFrameIntoPeekCache,
+  useRetainLastBrowserPeekFrame,
+} from "@/lib/browser-view/sessions/peek-frame-cache";
+import type { ScreencastOverlayHandlers } from "@/lib/browser-view/sessions/screencast-controller";
+import {
   useScreencastSession,
   type ScreencastDialog,
-  type ScreencastImage,
   type ScreencastLifecycle,
 } from "@/lib/browser-view/sessions/use-screencast-session";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
@@ -46,143 +70,6 @@ export type BrowserPeekNode = Pick<
   readonly initialUrl: string;
 };
 
-/**
- * Best-effort last-known frame per tab, outside React state on purpose.
- *
- * The dormant placeholder (`browser-session-tile.tsx`, decision #9) greys
- * this out when a tab's host goes unreachable - and by the time that happens
- * this tile has usually already unmounted, since the parent stops rendering
- * it in favour of the placeholder. A frame kept only in this component's own
- * state would already be gone by then, so it is retained here, keyed the
- * same way the screencast session itself is (host+session+tab+tile
- * instance), and read directly rather than through a subscription - the
- * placeholder only ever needs the value at the moment it first renders.
- *
- * NOT freed on this tile's own unmount: the same key remounts on every
- * `runtime.revision` bump (`<BrowserPeekTile key={revision}>` in
- * browser-session-tile.tsx) and again whenever the placeholder replaces this
- * tile and later hands back to it, and an unmount-cleanup delete raced the
- * placeholder's own read of this cache in that same commit. Freed instead by
- * `clearLastBrowserPeekFrame`, called from the one place that knows the tab
- * is genuinely gone rather than merely swapping surfaces.
- */
-const lastFrameCache = new Map<string, ScreencastImage>();
-
-/**
- * Every tile open/close cycle mints a fresh `instanceId`, so keys are never
- * reused and the targeted `clearLastBrowserPeekFrame` cannot reclaim the
- * strays. Insertion-order eviction bounds what the strays can cost.
- */
-const LAST_FRAME_CACHE_LIMIT = 20;
-
-function retainLastFrame(key: string, image: ScreencastImage): void {
-  lastFrameCache.delete(key);
-  lastFrameCache.set(key, image);
-  for (const stale of lastFrameCache.keys()) {
-    if (lastFrameCache.size <= LAST_FRAME_CACHE_LIMIT) break;
-    lastFrameCache.delete(stale);
-  }
-}
-
-/**
- * The one key builder for a browser peek tile's frame cache / dormant
- * placeholder lookup - host+session+tab+tile-instance. Shared by both
- * viewers (`BrowserPeekTile`, `BrowserPeekTileMobile`) and by
- * `browser-session-tile.tsx`'s own placeholder/self-close reads, so the
- * shape cannot drift between the write side and any of its readers.
- */
-// eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
-export function browserPeekFrameKey(node: {
-  readonly hostId: string;
-  readonly sessionId: string;
-  readonly tabId: string;
-  readonly instanceId: string;
-}): string {
-  return compositeKey(node.hostId, node.sessionId, node.tabId, node.instanceId);
-}
-
-// eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
-export function getLastBrowserPeekFrame(key: string): ScreencastImage | null {
-  return lastFrameCache.get(key) ?? null;
-}
-
-// eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
-export function clearLastBrowserPeekFrame(key: string): void {
-  lastFrameCache.delete(key);
-}
-
-/**
- * Exported for {@link BrowserPeekTileMobile} (`browser-peek-tile-mobile.tsx`),
- * which retains into this same module-scoped cache under the identical key so
- * the dormant placeholder in `browser-session-tile.tsx` sees a last frame
- * regardless of which viewer (desktop or touch) last streamed it.
- */
-// eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
-export function useRetainLastBrowserPeekFrame(
-  key: string,
-  image: ScreencastImage | null,
-): void {
-  useEffect(() => {
-    if (image !== null) retainLastFrame(key, image);
-  }, [key, image]);
-}
-
-const VIDEO_SNAPSHOT_JPEG_QUALITY = 0.7;
-const VIDEO_SNAPSHOT_MAX_EDGE_PX = 960;
-
-/**
- * Draws a `<video>` element's currently decoded frame into the SAME dormant
- * frame cache the JPEG pump writes (`lastFrameCache`, `useRetainLastBrowserPeekFrame`
- * above), under the SAME key - so the dormant placeholder in
- * `browser-session-tile.tsx` still has something to show when a tab's last
- * live pixels arrived over WebRTC rather than JPEG.
- *
- * Called from the video plane's teardown (`use-screencast-session.ts`'s
- * `captureDormantSnapshot` option), while the element still has its last
- * frame and before `srcObject` is cleared.
- *
- * Both guards live here, not at the call site, so a test can pin them
- * directly against this pure function:
- * - `wasActivePlane` - only write when the video plane was actually the one
- *   painting (not merely attached-but-negotiating); otherwise this would
- *   overwrite a fresher JPEG frame with stale/blank video pixels on every
- *   ordinary fallback-to-JPEG teardown.
- * - `videoWidth`/`videoHeight` - a video element with no decoded frame yet
- *   reports 0x0; drawing that would cache a blank image.
- *
- * Same-origin media (the host's own peer connection) never taints the
- * canvas, so `toDataURL` needs no `crossOrigin` handling here the way a
- * cross-origin `<video>` would.
- */
-// eslint-disable-next-line react-refresh/only-export-components -- shares this file's module-scoped lastFrameCache; not a component.
-export function snapshotVideoFrameIntoPeekCache(
-  key: string,
-  video: HTMLVideoElement,
-  wasActivePlane: boolean,
-): void {
-  if (!wasActivePlane) return;
-  if (video.videoWidth <= 0 || video.videoHeight <= 0) return;
-  // The placeholder renders this at opacity-30/grayscale/object-contain, so
-  // native resolution buys nothing and costs a ~16MiB RGBA buffer plus a
-  // synchronous `toDataURL` on the main thread during unmount.
-  const scale = Math.min(
-    1,
-    VIDEO_SNAPSHOT_MAX_EDGE_PX / Math.max(video.videoWidth, video.videoHeight),
-  );
-  const canvas = document.createElement("canvas");
-  // Clamped: an extreme aspect ratio can round a scaled axis to 0, and
-  // `toDataURL` on a zero-dimension canvas throws inside this unmount path.
-  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-  const context = canvas.getContext("2d");
-  if (context === null) return;
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  retainLastFrame(key, {
-    src: canvas.toDataURL("image/jpeg", VIDEO_SNAPSHOT_JPEG_QUALITY),
-    sequence: -1, // never read back; the dormant placeholder only reads `.src`.
-  });
-}
-
 interface BrowserPeekTileProps {
   readonly epicId: string;
   readonly node: BrowserPeekNode;
@@ -190,8 +77,18 @@ interface BrowserPeekTileProps {
   readonly paneId: string;
 }
 
+/**
+ * The streamed browser viewer, for both pointer grades (decision #13).
+ *
+ * The transport, arm/epoch protocol, viewport bridge and nav-state derivation
+ * are device-agnostic, so `useCoarsePointer()` only picks between two things:
+ * the input handler bag (a touch drag scrolls the remote page instead of
+ * dragging a selection - see {@link useTouchScreencastOverlayHandlers}) and the
+ * chrome/dialog containers a finger can actually reach.
+ */
 export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const { epicId, node } = props;
+  const coarsePointer = useCoarsePointer();
   const hostEntry = useHostDirectoryEntry(node.hostId);
   const auth = useStreamAuthRevalidator();
   const client = useHostStreamClientFor(hostEntry, auth);
@@ -259,6 +156,12 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     },
   });
 
+  const touchOverlayHandlers = useTouchScreencastOverlayHandlers({
+    overlayHandlers: session.overlayHandlers,
+    overlayButtonRef,
+    armed: armedEpoch !== null,
+  });
+
   // Focus in the address field must also drop any page keys still forwarded to
   // the screencast, so typing a URL does not reach the remote page.
   const controller: TileController = {
@@ -276,27 +179,34 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       className="flex h-full w-full flex-col bg-canvas text-foreground"
       data-testid={`browser-peek-tile-${node.instanceId}`}
     >
-      <ScreencastPeekChromeBar
-        controller={controller}
-        pictureInPicture={{
-          disabled: client === null,
-          convert: () => {
-            convertBrowserTabToPip({
-              epicId,
-              hostId: node.hostId,
-              sessionId: node.sessionId,
-              tabId: node.tabId,
-              origin: "manual",
-              onReady: closeCanvasTile,
-              onError: (message) => toast.error(message),
-            });
-          },
-        }}
-        loading={navState.loading}
-        armed={armedEpoch !== null}
-        status={status}
-        onRelease={session.disarm}
-      />
+      {coarsePointer ? (
+        <BrowserTileToolbarCompact
+          controller={controller}
+          loading={navState.loading}
+        />
+      ) : (
+        <ScreencastPeekChromeBar
+          controller={controller}
+          pictureInPicture={{
+            disabled: client === null,
+            convert: () => {
+              convertBrowserTabToPip({
+                epicId,
+                hostId: node.hostId,
+                sessionId: node.sessionId,
+                tabId: node.tabId,
+                origin: "manual",
+                onReady: closeCanvasTile,
+                onError: (message) => toast.error(message),
+              });
+            },
+          }}
+          loading={navState.loading}
+          armed={armedEpoch !== null}
+          status={status}
+          onRelease={session.disarm}
+        />
+      )}
       <div
         ref={viewportRef}
         className={cn(
@@ -316,28 +226,24 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           ref={overlayButtonRef}
           type="button"
           hidden={showStartPage}
-          className="absolute inset-0 h-full w-full cursor-default overflow-hidden bg-background p-0 text-left outline-none"
+          className={cn(
+            "absolute inset-0 h-full w-full cursor-default overflow-hidden bg-background p-0 text-left outline-none",
+            coarsePointer && "touch-none",
+          )}
           aria-label="Browser screencast controls"
-          {...session.overlayHandlers}
+          {...(coarsePointer ? touchOverlayHandlers : session.overlayHandlers)}
         >
-          <ScreencastSurface
-            session={session}
-            emptyHint="Click the screencast to control this browser tab."
-          />
-          <AgentCursorOverlay
-            cursor={session.agentCursor}
-            frameSize={frameSize}
-          />
+          <ScreencastSurface session={session} />
           {status.overlay === null ? null : (
             <div className="pointer-events-none absolute inset-x-3 bottom-3 rounded border border-border bg-popover/95 px-3 py-2 text-ui-sm text-popover-foreground shadow-sm">
               {status.overlay}
             </div>
           )}
-          {frameSize === null ? null : (
+          {import.meta.env.DEV && frameSize !== null ? (
             <div className="pointer-events-none absolute left-3 top-3 rounded-sm bg-background/80 px-2 py-1 font-mono text-ui-xs text-muted-foreground">
               {frameSize.width} x {frameSize.height}
             </div>
-          )}
+          ) : null}
         </button>
         <input
           ref={imeInputRef}
@@ -359,11 +265,156 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           <BrowserDialogOverlay
             key={dialog.generation}
             dialog={dialog}
+            sheet={coarsePointer}
             onRespond={session.respondToDialog}
           />
         )}
       </div>
     </div>
+  );
+}
+
+interface BufferedTouchGesture {
+  readonly pointerId: number;
+  readonly downEvent: ReactPointerEvent<HTMLButtonElement>;
+  readonly origin: { readonly clientX: number; readonly clientY: number };
+  last: { readonly clientX: number; readonly clientY: number };
+  exceededSlop: boolean;
+}
+
+/**
+ * Reuses `session.overlayHandlers` verbatim for every mouse/pen pointer and
+ * for the touch handshake that establishes the arm (the arm buffer's own
+ * click-slop drop already disambiguates a tap from the first drag there -
+ * see `screencast-arm-buffer.ts`).
+ *
+ * Once the tile is already armed, a touch gesture is buffered locally instead
+ * of being forwarded immediately: forwarding `down` at touch-start would
+ * bracket every scroll with a down/up pair, and Chrome synthesizes a `click`
+ * from that pair - scrolling past a link would navigate. So the down is held
+ * back and resolved only at `pointerup`, mirroring the arm buffer's click-slop
+ * rule: never exceeded the slop -> forward `down` then `up` (a tap); exceeded
+ * it -> drop both and let the wheel deltas already sent during the move stand
+ * as the whole gesture (a scroll, no click).
+ *
+ * Move deltas past the slop become synthetic `wheel` events dispatched at the
+ * overlay button - which the session already listens for and routes through
+ * `controller.handleWheel` unchanged. They are inverted like native touch
+ * scrolling: dragging a finger UP moves the content up under it, which reads
+ * as scrolling DOWN.
+ */
+function useTouchScreencastOverlayHandlers(args: {
+  readonly overlayHandlers: ScreencastOverlayHandlers;
+  readonly overlayButtonRef: RefObject<HTMLButtonElement | null>;
+  readonly armed: boolean;
+}): ScreencastOverlayHandlers {
+  const { overlayHandlers, overlayButtonRef, armed } = args;
+  const buffered = useRef<BufferedTouchGesture | null>(null);
+
+  // A disarm mid-gesture (e.g. `Release`) must drop whatever is buffered -
+  // otherwise the next pointermove for that pointerId would still read as a
+  // live drag against a gesture the arm epoch underneath it already ended.
+  useEffect(() => {
+    if (!armed) buffered.current = null;
+  }, [armed]);
+
+  return useMemo<ScreencastOverlayHandlers>(
+    () => ({
+      ...overlayHandlers,
+      // Touch has no hover: `pointerenter` fires as part of the tap itself, so
+      // pre-arming here would only put a speculative claim on the wire a
+      // millisecond before the tap's own arm supersedes it.
+      onPointerEnter: () => {},
+      onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (event.pointerType === "touch" && armed) {
+          const point = { clientX: event.clientX, clientY: event.clientY };
+          buffered.current = {
+            pointerId: event.pointerId,
+            downEvent: event,
+            origin: point,
+            last: point,
+            exceededSlop: false,
+          };
+          return;
+        }
+        overlayHandlers.onPointerDown(event);
+      },
+      onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        const gesture = buffered.current;
+        if (
+          event.pointerType === "touch" &&
+          gesture !== null &&
+          gesture.pointerId === event.pointerId
+        ) {
+          if (!gesture.exceededSlop) {
+            const dx = event.clientX - gesture.origin.clientX;
+            const dy = event.clientY - gesture.origin.clientY;
+            gesture.exceededSlop =
+              Math.abs(dx) > SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX ||
+              Math.abs(dy) > SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX;
+          }
+          if (gesture.exceededSlop) {
+            const deltaX = gesture.last.clientX - event.clientX;
+            const deltaY = gesture.last.clientY - event.clientY;
+            if (deltaX !== 0 || deltaY !== 0) {
+              dispatchSyntheticWheel(overlayButtonRef.current, {
+                clientX: event.clientX,
+                clientY: event.clientY,
+                deltaX,
+                deltaY,
+              });
+            }
+          }
+          gesture.last = { clientX: event.clientX, clientY: event.clientY };
+          return;
+        }
+        overlayHandlers.onPointerMove(event);
+      },
+      onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+        const gesture = buffered.current;
+        if (
+          event.pointerType === "touch" &&
+          gesture !== null &&
+          gesture.pointerId === event.pointerId
+        ) {
+          buffered.current = null;
+          if (!gesture.exceededSlop) {
+            overlayHandlers.onPointerDown(gesture.downEvent);
+            overlayHandlers.onPointerUp(event);
+          }
+          return;
+        }
+        overlayHandlers.onPointerUp(event);
+      },
+      onPointerCancel: () => {
+        buffered.current = null;
+        overlayHandlers.onPointerCancel();
+      },
+    }),
+    [armed, overlayButtonRef, overlayHandlers],
+  );
+}
+
+function dispatchSyntheticWheel(
+  button: HTMLButtonElement | null,
+  input: {
+    readonly clientX: number;
+    readonly clientY: number;
+    readonly deltaX: number;
+    readonly deltaY: number;
+  },
+): void {
+  if (button === null) return;
+  button.dispatchEvent(
+    new WheelEvent("wheel", {
+      deltaX: input.deltaX,
+      deltaY: input.deltaY,
+      deltaMode: 0,
+      clientX: input.clientX,
+      clientY: input.clientY,
+      bubbles: true,
+      cancelable: true,
+    }),
   );
 }
 
@@ -423,8 +474,16 @@ function ScreencastPeekChromeBar(props: {
   );
 }
 
+/**
+ * One dialog body, two containers: a bottom sheet where a finger has to reach
+ * the buttons, the tile-local `<dialog>` otherwise. A backdrop dismiss has no
+ * button to read intent from - an alert has only one action (OK), so the
+ * dismiss is that; confirm/prompt read it as Cancel, exactly as Escape does
+ * for `window.confirm()`/`window.prompt()` on a real page.
+ */
 function BrowserDialogOverlay(props: {
   readonly dialog: ScreencastDialog;
+  readonly sheet: boolean;
   readonly onRespond: (
     generation: number,
     accept: boolean,
@@ -437,6 +496,66 @@ function BrowserDialogOverlay(props: {
   let title = "Confirm";
   if (isAlert) title = "Alert";
   else if (isPrompt) title = "Prompt";
+  const respond = (accept: boolean): void => {
+    props.onRespond(
+      props.dialog.generation,
+      accept,
+      accept && isPrompt ? promptText : null,
+    );
+  };
+  const promptInput = (className: string): ReactElement | null =>
+    isPrompt ? (
+      <input
+        aria-label="Prompt response"
+        className={cn(
+          "rounded border border-input bg-background px-3 py-2 text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          className,
+        )}
+        value={promptText}
+        onChange={(event) => setPromptText(event.currentTarget.value)}
+      />
+    ) : null;
+  const actions = (
+    <>
+      {isAlert ? null : (
+        <Button type="button" variant="ghost" onClick={() => respond(false)}>
+          Cancel
+        </Button>
+      )}
+      <Button type="button" onClick={() => respond(true)}>
+        OK
+      </Button>
+    </>
+  );
+
+  if (props.sheet) {
+    return (
+      <Sheet
+        open
+        onOpenChange={(open) => {
+          if (open) return;
+          respond(isAlert);
+        }}
+      >
+        <SheetContent
+          side="bottom"
+          showCloseButton={false}
+          className="pb-safe-bottom"
+        >
+          <SheetHeader>
+            <SheetTitle>{title}</SheetTitle>
+            <SheetDescription className="whitespace-pre-wrap break-words text-foreground">
+              {props.dialog.message}
+            </SheetDescription>
+          </SheetHeader>
+          {promptInput("mx-4 w-auto")}
+          <SheetFooter className="flex-row justify-end gap-2">
+            {actions}
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+    );
+  }
   return (
     <dialog
       open
@@ -449,40 +568,8 @@ function BrowserDialogOverlay(props: {
         <div className="mt-2 whitespace-pre-wrap break-words text-ui-sm">
           {props.dialog.message}
         </div>
-        {isPrompt ? (
-          <input
-            aria-label="Prompt response"
-            className="mt-3 w-full rounded border border-input bg-background px-3 py-2 text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            value={promptText}
-            onChange={(event) => setPromptText(event.currentTarget.value)}
-          />
-        ) : null}
-        <div className="mt-4 flex justify-end gap-2">
-          {isAlert ? null : (
-            <button
-              type="button"
-              className="rounded border border-border px-3 py-1.5 text-ui-sm hover:bg-foreground/8"
-              onClick={() =>
-                props.onRespond(props.dialog.generation, false, null)
-              }
-            >
-              Cancel
-            </button>
-          )}
-          <button
-            type="button"
-            className="rounded bg-primary px-3 py-1.5 text-ui-sm text-primary-foreground hover:bg-primary/90"
-            onClick={() =>
-              props.onRespond(
-                props.dialog.generation,
-                true,
-                isPrompt ? promptText : null,
-              )
-            }
-          >
-            OK
-          </button>
-        </div>
+        {promptInput("mt-3 w-full")}
+        <div className="mt-4 flex justify-end gap-2">{actions}</div>
       </div>
     </dialog>
   );

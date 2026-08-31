@@ -3,7 +3,7 @@ import {
   clearLastBrowserPeekFrame,
   getLastBrowserPeekFrame,
   snapshotVideoFrameIntoPeekCache,
-} from "@/components/epic-canvas/renderers/browser-peek-tile";
+} from "@/lib/browser-view/sessions/peek-frame-cache";
 
 /**
  * `snapshotVideoFrameIntoPeekCache` guards (ticket 13). jsdom has no real

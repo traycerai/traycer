@@ -7,19 +7,33 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  BrowserPeekTile,
-  browserPeekFrameKey,
-  clearLastBrowserPeekFrame,
-  getLastBrowserPeekFrame,
-  type BrowserPeekNode,
-} from "@/components/epic-canvas/renderers/browser-peek-tile";
+import { useEffect } from "react";
 import {
   FakeStreamClient,
   type FakeStreamSession,
+  epicNestedFocusNavigationModule,
+  fakeMediaPeerModule,
+  fakeMediaStream,
+  hostDirectoryEntryModule,
+  liveStream as fixtureLiveStream,
+  makeFreshPeekNode,
+  streamAuthRevalidatorModule,
+  tabHostIdModule,
+  tileBodyVisibleModule,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+import {
+  BrowserPeekTile,
+  type BrowserPeekNode,
+} from "@/components/epic-canvas/renderers/browser-peek-tile";
+import {
+  browserPeekFrameKey,
+  clearLastBrowserPeekFrame,
+  getLastBrowserPeekFrame,
+  snapshotVideoFrameIntoPeekCache,
+  useLastBrowserPeekFrame,
+} from "@/lib/browser-view/sessions/peek-frame-cache";
 import type {
-  MediaPeer,
+  MediaDataChannel,
   MediaPeerHandlers,
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
@@ -32,93 +46,44 @@ const peers = vi.hoisted(
   () => [] as Array<{ readonly handlers: MediaPeerHandlers; closed: boolean }>,
 );
 
-vi.mock("@/lib/browser-view/tiles/webrtc-media-registry", async (original) => {
-  const actual =
-    await original<
-      typeof import("@/lib/browser-view/tiles/webrtc-media-registry")
-    >();
-  const createBrowserMediaPeer = (handlers: MediaPeerHandlers): MediaPeer => {
-    const peer = { handlers, closed: false };
-    peers.push(peer);
-    return {
-      answerOffer: (sdp) => {
-        // Models gathering finishing before the answer settles - the A12
-        // batching mechanics are `webrtc-media-registry.test.ts`'s to pin.
-        handlers.onIceGatheringComplete();
-        return Promise.resolve(`answer-for:${sdp}`);
-      },
-      addRemoteCandidate: () => Promise.resolve(),
-      getStats: () => Promise.resolve(new Map()),
-      close: () => {
-        peer.closed = true;
-      },
-    };
-  };
-  return { ...actual, createBrowserMediaPeer };
-});
-
-/** jsdom has no `MediaStream`; only its identity travels to `srcObject`. */
-function fakeStream(id: string): MediaStream {
-  const partial: Pick<MediaStream, "id"> = { id };
-  return partial as MediaStream;
-}
+vi.mock("@/lib/browser-view/tiles/webrtc-media-registry", (original) =>
+  fakeMediaPeerModule(peers)(original),
+);
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
   visible: true,
 }));
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-test",
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
+  tabHostIdModule(),
+);
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
-  useTileBodyVisible: () => hookState.visible,
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
+  tileBodyVisibleModule(hookState),
+);
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => ({ hostId: "host-test" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", () =>
+  hostDirectoryEntryModule(),
+);
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientFor: () => hookState.streamClient,
 }));
 
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
+vi.mock("@/lib/host/stream-auth-revalidator", () =>
+  streamAuthRevalidatorModule(),
+);
 
-vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
-  useEpicNestedFocusNavigation:
-    () =>
-    (_epicId: string, _tabId: string, prepare: () => unknown): unknown =>
-      prepare(),
-}));
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () =>
+  epicNestedFocusNavigationModule(),
+);
 
-let nodeCounter = 0;
+const freshNode = makeFreshPeekNode("headless");
 let peekNode: BrowserPeekNode = freshNode();
 
-/**
- * A distinct session id per test: the media registry is module-scoped and its
- * entries outlive a test by the release grace, so a shared key would carry a
- * previous test's round into the next one.
- */
-function freshNode(): BrowserPeekNode {
-  nodeCounter += 1;
-  return {
-    id: "browser-peek-headless-1",
-    instanceId: "peek-instance-1",
-    hostId: "host-test",
-    sessionId: `headless-${nodeCounter}`,
-    tabId: "headless-tab-1",
-    initialUrl: "http://localhost:3000",
-  };
-}
-
 function liveStream(): FakeStreamSession {
-  const stream = hookState.streamClient?.sessions.at(-1);
-  if (stream === undefined) throw new Error("expected screencast stream");
-  return stream;
+  return fixtureLiveStream(hookState);
 }
 
 function sentKinds(stream: FakeStreamSession): string[] {
@@ -297,7 +262,7 @@ function loaderShown(): boolean {
 /** The tile mounts the element on `ontrack`; a decoded frame makes it live. */
 function attachTrack(index: number): HTMLVideoElement {
   act(() => {
-    peers[index]?.handlers.onStream(fakeStream(`track-${index}`));
+    peers[index]?.handlers.onStream(fakeMediaStream(`track-${index}`));
   });
   const video = screen.getByTestId("browser-screencast-video");
   if (!(video instanceof HTMLVideoElement)) {
@@ -422,6 +387,7 @@ describe("BrowserPeekTile video plane", () => {
         negotiationId: 1,
         state: "live",
         reason: null,
+        detail: null,
       },
     ]);
     expect(video.className).not.toContain("opacity-0");
@@ -487,6 +453,7 @@ describe("BrowserPeekTile video plane", () => {
       negotiationId: 1,
       state: "failed",
       reason: "track-ended",
+      detail: null,
     });
     expect(peers[0]?.closed).toBe(true);
     expect(screen.queryByTestId("browser-screencast-video")).toBeNull();
@@ -574,7 +541,8 @@ describe("BrowserPeekTile video plane", () => {
       hasBinaryPayload: false,
       negotiationId: 1,
       state: "failed",
-      reason: "video frames stopped",
+      reason: "frames-stopped",
+      detail: null,
     });
     expect(screen.queryByTestId("browser-screencast-video")).toBeNull();
   });
@@ -676,7 +644,8 @@ describe("BrowserPeekTile video plane", () => {
       hasBinaryPayload: false,
       negotiationId: 1,
       state: "failed",
-      reason: "video frames stopped",
+      reason: "frames-stopped",
+      detail: null,
     });
   });
 
@@ -731,7 +700,8 @@ describe("BrowserPeekTile video plane", () => {
       hasBinaryPayload: false,
       negotiationId: 1,
       state: "failed",
-      reason: "no decoded video frame before deadline",
+      reason: "no-first-frame",
+      detail: null,
     });
   });
 
@@ -772,5 +742,227 @@ describe("BrowserPeekTile video plane", () => {
 
     expect(pointerFrames().map((frame) => frame.type)).toEqual(["down", "up"]);
     expect(pointerFrames()[0]?.castSequence).toBe(37);
+  });
+});
+
+/**
+ * The `inputAck` promotion end to end: the frame is parsed and dispatched by
+ * the REAL `handleServerFrame`, not by calling the controller directly.
+ * Ticket 17's DataChannel ping was swallowed by the transport before any
+ * contract handler ran, and a controller-level test could never have seen it -
+ * hence this one.
+ */
+describe("BrowserPeekTile input ack", () => {
+  function imeInput(): HTMLElement {
+    return screen.getByRole("textbox", { name: "Browser IME input" });
+  }
+
+  function keyboardFrameCount(stream: FakeStreamSession): number {
+    return stream.sentFrames.filter((frame) => frame.kind === "keyboard")
+      .length;
+  }
+
+  interface FakeChannel extends MediaDataChannel {
+    readonly sends: string[];
+  }
+
+  function fakeChannel(label: string): FakeChannel {
+    const sends: string[] = [];
+    return {
+      label,
+      sends,
+      isOpen: () => true,
+      send: (payload) => sends.push(payload),
+      close: () => {},
+      onStateChange: null,
+    };
+  }
+
+  beforeEach(() => {
+    peers.length = 0;
+    peekNode = freshNode();
+    hookState.visible = true;
+    hookState.streamClient = new FakeStreamClient(true);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("promotes input to the channels when a host inputAck drains the mux", async () => {
+    render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={peekNode}
+      />,
+    );
+    const stream = liveStream();
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        { kind: "captureMode", hasBinaryPayload: false, mode: "video" },
+        null,
+      );
+      stream.emit(
+        { kind: "viewportEpoch", hasBinaryPayload: false, epoch: 4 },
+        null,
+      );
+    });
+
+    // Armed, and typing while the channels are still down.
+    fireEvent.focus(
+      screen.getByRole("button", { name: "Browser screencast controls" }),
+    );
+    act(() => {
+      stream.emit(
+        { kind: "armed", hasBinaryPayload: false, armEpoch: 1 },
+        null,
+      );
+    });
+    fireEvent.keyDown(imeInput(), { code: "KeyA", key: "a" });
+    const beforeChannels = keyboardFrameCount(stream);
+    expect(beforeChannels).toBeGreaterThan(0);
+
+    // The round comes up mid-arm.
+    await act(async () => {
+      stream.emit(
+        {
+          kind: "sdpOffer",
+          hasBinaryPayload: false,
+          negotiationId: 1,
+          sdp: "offer-1",
+          iceServers: [],
+        },
+        null,
+      );
+      await Promise.resolve();
+    });
+    const peer = peers.at(0);
+    if (peer === undefined) throw new Error("no peer was created");
+    const handlers = peer.handlers;
+    const reliable = fakeChannel("input-reliable");
+    act(() => {
+      handlers.onDataChannel(fakeChannel("input-lossy"));
+      handlers.onDataChannel(reliable);
+    });
+
+    // Still the mux: the host has not said it consumed what is already there.
+    fireEvent.keyDown(imeInput(), { code: "KeyB", key: "b" });
+    expect(reliable.sends).toEqual([]);
+    const beforeAck = keyboardFrameCount(stream);
+    expect(beforeAck).toBeGreaterThan(beforeChannels);
+
+    act(() => {
+      stream.emit(
+        {
+          kind: "inputAck",
+          hasBinaryPayload: false,
+          armEpoch: 1,
+          lastSeq: beforeAck - 1,
+        },
+        null,
+      );
+    });
+    fireEvent.keyDown(imeInput(), { code: "KeyC", key: "c" });
+
+    // Promoted mid-arm: the next key rides the channel and the mux sees none.
+    expect(reliable.sends.length).toBeGreaterThan(0);
+    expect(keyboardFrameCount(stream)).toBe(beforeAck);
+  });
+});
+
+/**
+ * M52: the dormant placeholder replaces the peek tile in ONE commit, and React
+ * runs the outgoing tile's destroys before the incoming placeholder's creates.
+ * So the frame the tile stashes on its way out lands after the placeholder has
+ * already rendered - which is why the read is a `useSyncExternalStore` snapshot
+ * re-check rather than a render-phase `useState` initializer.
+ */
+describe("useLastBrowserPeekFrame", () => {
+  const M52_KEY = "peek-cache-teardown-write";
+  const originalGetContext = Object.getOwnPropertyDescriptor(
+    HTMLCanvasElement.prototype,
+    "getContext",
+  );
+  const originalToDataURL = Object.getOwnPropertyDescriptor(
+    HTMLCanvasElement.prototype,
+    "toDataURL",
+  );
+
+  beforeEach(() => {
+    // jsdom has no canvas 2D backend; only the cache write matters here.
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      configurable: true,
+      value: () => ({ drawImage: () => undefined }),
+    });
+    Object.defineProperty(HTMLCanvasElement.prototype, "toDataURL", {
+      configurable: true,
+      value: () => "data:image/jpeg;base64,teardown",
+    });
+    clearLastBrowserPeekFrame(M52_KEY);
+  });
+
+  afterEach(() => {
+    cleanup();
+    clearLastBrowserPeekFrame(M52_KEY);
+    if (originalGetContext !== undefined) {
+      Object.defineProperty(
+        HTMLCanvasElement.prototype,
+        "getContext",
+        originalGetContext,
+      );
+    }
+    if (originalToDataURL !== undefined) {
+      Object.defineProperty(
+        HTMLCanvasElement.prototype,
+        "toDataURL",
+        originalToDataURL,
+      );
+    }
+  });
+
+  function OutgoingTile() {
+    // The tile's `captureDormantSnapshot`: it runs in the UNMOUNT cleanup, so
+    // the write lands after the placeholder below has already rendered.
+    useEffect(() => {
+      const video = document.createElement("video");
+      Object.defineProperties(video, {
+        videoWidth: { configurable: true, value: 800 },
+        videoHeight: { configurable: true, value: 600 },
+      });
+      return () => {
+        snapshotVideoFrameIntoPeekCache(M52_KEY, video, true);
+      };
+    }, []);
+    return <div data-testid="peek-tile" />;
+  }
+
+  function DormantPlaceholder() {
+    const frame = useLastBrowserPeekFrame(M52_KEY);
+    return <div data-testid="peek-placeholder" data-src={frame?.src ?? ""} />;
+  }
+
+  function Swap(props: { readonly dormant: boolean }) {
+    return props.dormant ? <DormantPlaceholder /> : <OutgoingTile />;
+  }
+
+  it("shows a frame written during the outgoing tile's teardown", () => {
+    // Mutation: reading the cache with a render-phase `useState(() => ...)`
+    // initializer instead of `useSyncExternalStore` - React runs the outgoing
+    // tile's destroys AFTER the incoming placeholder renders, so the dormant
+    // tile would stay blank on exactly the swap it exists for.
+    const view = render(<Swap dormant={false} />);
+    expect(getLastBrowserPeekFrame(M52_KEY)).toBeNull();
+
+    act(() => {
+      view.rerender(<Swap dormant />);
+    });
+
+    expect(screen.getByTestId("peek-placeholder").dataset.src).toBe(
+      "data:image/jpeg;base64,teardown",
+    );
   });
 });

@@ -13,7 +13,6 @@ import {
   RELAY_PING_INTERVAL_MS,
   RELAY_PING_TICK_MS,
   RELAY_AWAITING_DEADLINE_CAP_MULTIPLE,
-  RELAY_PONG_DEADLINE_ROUND_TRIPS,
   RELAY_PONG_TIMEOUT_MS,
 } from "./config";
 
@@ -139,21 +138,6 @@ export class RelaySocket {
   /** When the current unanswered-send run began; the fast deadline's origin. */
   private awaitingSince = 0;
   private lastPingSentAt = 0;
-  /**
-   * When the OLDEST currently-unanswered keepalive ping went out, or `null`
-   * when none is outstanding.
-   */
-  private pingSentAt: number | null = null;
-  /**
-   * Karn's algorithm (RFC 6298 §3): once a second ping goes out with the
-   * first still unanswered, the next `relay-pong` cannot be attributed to
-   * either of them, so that exchange measures nothing. Without this, a pong
-   * answering the LAST of three pings would record the whole run as one round
-   * trip - and since the estimate only ever LENGTHENS the deadline, the
-   * inflation would relax the very detector that was supposed to catch the
-   * silence.
-   */
-  private pingAmbiguous = false;
   /**
    * This socket's own path estimator (ticket 24, A8) - deliberately not
    * shared with any other leg or subscription. Feeds the two liveness
@@ -376,8 +360,6 @@ export class RelaySocket {
       this.awaitingResponse = false;
       this.awaitingSince = 0;
       this.lastPingSentAt = now;
-      this.pingSentAt = null;
-      this.pingAmbiguous = false;
       this.startKeepalive();
     };
     socket.onmessage = (event: StreamWebSocketMessageEvent) => {
@@ -412,7 +394,7 @@ export class RelaySocket {
       // as proof the socket carries traffic. It is still the ONLY frame whose
       // round trip this end initiated, so it is the only one that can measure
       // the path (ticket 24, A8).
-      this.notePongReceived(Date.now());
+      this.path.notePongReceived(Date.now());
       return;
     }
     if (raw === KEEPALIVE_PING) {
@@ -527,10 +509,7 @@ export class RelaySocket {
       const floorMs = awaiting
         ? RELAY_AWAITING_PONG_TIMEOUT_MS
         : RELAY_PONG_TIMEOUT_MS;
-      const derivedMs = this.path.deadlineMs(
-        floorMs,
-        RELAY_PONG_DEADLINE_ROUND_TRIPS,
-      );
+      const derivedMs = this.path.deadlineMs(floorMs);
       const timeoutMs = awaiting
         ? Math.min(derivedMs, RELAY_AWAITING_DEADLINE_CAP_MULTIPLE * floorMs)
         : derivedMs;
@@ -551,7 +530,7 @@ export class RelaySocket {
       this.lastPingSentAt = now;
       try {
         socket.send(KEEPALIVE_PING);
-        this.notePingSent(now);
+        this.path.notePingSent(now);
       } catch {
         this.fail(4005, "relay-ping-send-failed");
       }
@@ -572,10 +551,7 @@ export class RelaySocket {
     }
     if (
       Date.now() - this.lastInboundAt >=
-      this.path.deadlineMs(
-        RELAY_PONG_TIMEOUT_MS,
-        RELAY_PONG_DEADLINE_ROUND_TRIPS,
-      )
+      this.path.deadlineMs(RELAY_PONG_TIMEOUT_MS)
     ) {
       this.fail(4004, "relay-missed-pongs");
       return;
@@ -586,36 +562,14 @@ export class RelaySocket {
     }
     // Deliberately NOT timed into the estimator: this ping is sent at wake,
     // so its round trip carries the runtime's own resume cost and would
-    // report the path as far worse than it is. RETIRING the open run is what
-    // makes that exclusion real - a scheduled ping sent before the suspend is
-    // still outstanding here, and the pong that eventually lands would
-    // otherwise be credited to it and record the whole sleep as one trip.
-    this.pingSentAt = null;
-    this.pingAmbiguous = true;
+    // report the path as far worse than it is.
+    this.path.retireRun();
     this.lastPingSentAt = Date.now();
     try {
       socket.send(KEEPALIVE_PING);
     } catch {
       this.fail(4005, "relay-ping-send-failed");
     }
-  }
-
-  /** Opens an unanswered run, or marks the open one ambiguous. See {@link pingAmbiguous}. */
-  private notePingSent(now: number): void {
-    if (this.pingSentAt === null) {
-      this.pingSentAt = now;
-      return;
-    }
-    this.pingAmbiguous = true;
-  }
-
-  /** Closes the run, sampling it only when exactly one ping was outstanding. */
-  private notePongReceived(now: number): void {
-    if (this.pingSentAt !== null && !this.pingAmbiguous) {
-      this.path.noteRoundTrip(now - this.pingSentAt);
-    }
-    this.pingSentAt = null;
-    this.pingAmbiguous = false;
   }
 
   private clearKeepalive(): void {

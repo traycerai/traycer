@@ -7,12 +7,14 @@ import {
   mentionAttrsFromAttachment,
   mentionPlainTextFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
-import type { MentionAttachment } from "@/lib/composer/types";
+import type {
+  BrowserTabMentionEntry,
+  MentionAttachment,
+} from "@/lib/composer/types";
 import { composerDraftGeneration } from "@/lib/composer/composer-draft-generation";
 import {
   browserTabPreviewText,
   fetchBrowserTabPreviewImage,
-  type BrowserTabPreviewRequest,
 } from "@/lib/composer/mentions/browser-tab-preview";
 
 import { MentionNodeView } from "../nodes/mention-node-view";
@@ -109,7 +111,7 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
           return;
         }
         if (action.kind === "attach-tab-preview") {
-          commitBrowserTabPreviewInsertion(editor, range, action.request);
+          commitBrowserTabPreviewInsertion(editor, range, action.entry);
           return;
         }
         commitMentionInsertion(editor, range, action.mention);
@@ -129,7 +131,7 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
 export function commitBrowserTabPreviewInsertion(
   editor: Editor,
   range: { from: number; to: number },
-  request: BrowserTabPreviewRequest,
+  entry: BrowserTabMentionEntry,
 ): void {
   const overrideSpace =
     editor.state.doc.textBetween(range.to, range.to + 1) === " ";
@@ -138,11 +140,11 @@ export function commitBrowserTabPreviewInsertion(
     .focus()
     .insertContentAt(
       { from: range.from, to: overrideSpace ? range.to + 1 : range.to },
-      [{ type: "text", text: `${browserTabPreviewText(request)} ` }],
+      [{ type: "text", text: `${browserTabPreviewText(entry)} ` }],
     )
     .run();
   const draftGeneration = composerDraftGeneration(editor);
-  void fetchBrowserTabPreviewImage(request).then((image) => {
+  void fetchBrowserTabPreviewImage(entry).then((image) => {
     if (image === null || editor.isDestroyed) return;
     // The draft this pick belonged to is gone (the user sent it, or it was
     // replaced): the editor is still alive, so without this the screenshot

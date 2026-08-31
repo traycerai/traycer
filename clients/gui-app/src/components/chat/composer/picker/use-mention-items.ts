@@ -13,6 +13,7 @@ import { useEpicMentionEntries } from "@/hooks/composer/use-epic-mention-entries
 import {
   browserSessionsCoordinatorsForEpic,
   subscribeToBrowserSessionsCoordinators,
+  type BrowserSessionsCoordinatorEntry,
   type BrowserSessionsState,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { resolveTabTitle } from "@/lib/browser-view/browser-tab-display";
@@ -930,11 +931,33 @@ export function epicTerminalMentionEntriesFromSessions(
 
 /**
  * One host's browser inventory as the picker sees it: the coordinator that
- * reaches it, and the snapshot it last published.
+ * reaches it, the snapshot it last published, and that host's directory
+ * label - resolved once per source so the functions below read it off the
+ * object instead of each taking their own `hostLabelOf` resolver.
  */
 export interface BrowserTabMentionSource {
   readonly key: string;
   readonly state: BrowserSessionsState;
+  readonly hostLabel: string | null;
+}
+
+/**
+ * Resolves each open coordinator's directory label once, so the projection
+ * below reads it off the source object instead of threading a resolver.
+ *
+ * A coordinator with no host id yet (its stream has not answered) carries a
+ * null label rather than being dropped: its rows are still mentionable, just
+ * unattributed.
+ */
+export function browserTabMentionSourcesFrom(
+  coordinators: ReadonlyArray<BrowserSessionsCoordinatorEntry>,
+  hostLabelOf: (hostId: string) => string | null,
+): ReadonlyArray<BrowserTabMentionSource> {
+  return coordinators.map((source) => ({
+    ...source,
+    hostLabel:
+      source.state.hostId === null ? null : hostLabelOf(source.state.hostId),
+  }));
 }
 
 /**
@@ -952,7 +975,6 @@ export interface BrowserTabMentionSource {
 export function browserTabMentionEntriesFromSessions(
   sources: ReadonlyArray<BrowserTabMentionSource>,
   chatHostId: string | null,
-  hostLabelOf: (hostId: string) => string | null,
   active: boolean,
 ): ReadonlyArray<BrowserTabMentionEntry> {
   // A null `chatHostId` is "readiness has not resolved yet", not "the chat
@@ -964,7 +986,7 @@ export function browserTabMentionEntriesFromSessions(
     const hostId = source.state.hostId;
     if (hostId === null) return [];
     const contextOnly = hostId !== chatHostId;
-    const hostLabel = hostLabelOf(hostId);
+    const hostLabel = source.hostLabel;
     return source.state.items.flatMap((session) =>
       session.tabs.map((tab) => ({
         kind: "browser-tab" as const,
@@ -991,7 +1013,7 @@ export function browserTabMentionEntriesFromSessions(
       })),
     );
   });
-  return entries.length === 0 ? EMPTY_BROWSER_TAB_ENTRIES : entries;
+  return entries;
 }
 
 /**
@@ -1017,10 +1039,9 @@ export function browserTabMentionEntriesFromSessions(
  * open (until some OTHER field changes and rebuilds the array anyway) is an
  * acceptable trade for not rebuilding the ranked menu at frame rate.
  */
-export function browserTabMentionEntriesContentKey(
+function browserTabMentionEntriesContentKey(
   sources: ReadonlyArray<BrowserTabMentionSource>,
   chatHostId: string | null,
-  hostLabelOf: (hostId: string) => string | null,
 ): string {
   const perHost: string[] = [];
   for (const source of sources) {
@@ -1037,7 +1058,7 @@ export function browserTabMentionEntriesContentKey(
     // attached text line, so a renamed host must not keep serving the old
     // name out of the cache.
     perHost.push(
-      `${source.key}\x1f${hostId ?? ""}\x1f${(hostId === null ? null : hostLabelOf(hostId)) ?? ""}\x1f${parts.join("\x1e")}`,
+      `${source.key}\x1f${hostId ?? ""}\x1f${source.hostLabel ?? ""}\x1f${parts.join("\x1e")}`,
     );
   }
   return `${chatHostId ?? ""}\x1d${perHost.join("\x1d")}`;
@@ -1055,25 +1076,19 @@ export function browserTabMentionEntriesContentKey(
 export function createBrowserTabMentionEntriesSnapshotCache(): (
   sources: ReadonlyArray<BrowserTabMentionSource>,
   chatHostId: string | null,
-  hostLabelOf: (hostId: string) => string | null,
   active: boolean,
 ) => ReadonlyArray<BrowserTabMentionEntry> {
   let cachedKey: string | null = null;
   let cachedEntries: ReadonlyArray<BrowserTabMentionEntry> =
     EMPTY_BROWSER_TAB_ENTRIES;
-  return (sources, chatHostId, hostLabelOf, active) => {
+  return (sources, chatHostId, active) => {
     if (!active || chatHostId === null) return EMPTY_BROWSER_TAB_ENTRIES;
-    const key = browserTabMentionEntriesContentKey(
-      sources,
-      chatHostId,
-      hostLabelOf,
-    );
+    const key = browserTabMentionEntriesContentKey(sources, chatHostId);
     if (key === cachedKey) return cachedEntries;
     cachedKey = key;
     cachedEntries = browserTabMentionEntriesFromSessions(
       sources,
       chatHostId,
-      hostLabelOf,
       active,
     );
     return cachedEntries;
@@ -1111,7 +1126,6 @@ function useBrowserTabMentionEntries(args: {
     | ((
         sources: ReadonlyArray<BrowserTabMentionSource>,
         chatHostId: string | null,
-        hostLabelOf: (hostId: string) => string | null,
         active: boolean,
       ) => ReadonlyArray<BrowserTabMentionEntry>)
     | null
@@ -1128,18 +1142,16 @@ function useBrowserTabMentionEntries(args: {
         : () => undefined,
     [active],
   );
-  const getSnapshot = useCallback(
-    (): ReadonlyArray<BrowserTabMentionEntry> =>
-      snapshotCache(
-        active && epicId !== null
-          ? browserSessionsCoordinatorsForEpic(epicId)
-          : EMPTY_BROWSER_TAB_SOURCES,
-        chatHostId,
-        hostLabelOf,
-        active,
-      ),
-    [active, chatHostId, epicId, hostLabelOf, snapshotCache],
-  );
+  const getSnapshot = useCallback((): ReadonlyArray<BrowserTabMentionEntry> => {
+    const sources =
+      active && epicId !== null
+        ? browserTabMentionSourcesFrom(
+            browserSessionsCoordinatorsForEpic(epicId),
+            hostLabelOf,
+          )
+        : EMPTY_BROWSER_TAB_SOURCES;
+    return snapshotCache(sources, chatHostId, active);
+  }, [active, chatHostId, epicId, hostLabelOf, snapshotCache]);
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

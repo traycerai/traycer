@@ -1168,27 +1168,4 @@ describe("ElectronTabs", () => {
       },
     ]);
   });
-
-  it("no longer claims the shared actionAck frame kind", () => {
-    const tabs = trackElectronTabs(
-      createElectronTabs({
-        hostId: "host-1",
-        native: nativeWith(() => provisionedTab("registration-1"), null),
-        sendFrame: () => undefined,
-      }),
-    );
-
-    // Close acks are the only `actionAck` consumer now that the live
-    // Electron -> headless handoff (and its ack) is gone; the Electron layer
-    // must leave the frame for the coordinator.
-    expect(
-      tabs.handleFrame({
-        kind: "actionAck",
-        hasBinaryPayload: false,
-        requestId: "request-close-1",
-        ok: true,
-        reason: null,
-      }),
-    ).toBe(false);
-  });
 });

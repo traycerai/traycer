@@ -1,12 +1,15 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createFakeMediaPeer,
+  fakeMediaStream,
+} from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
 import { usePipSharedVideoStream } from "@/lib/browser-view/pip/pip-video-plane";
 import {
   acquireBrowserMediaEntry,
   activeBrowserMediaKeyIds,
   browserMediaKeyId,
   type BrowserMediaEntry,
-  type MediaPeer,
   type MediaPeerHandlers,
   type WebrtcSignalPort,
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
@@ -17,28 +20,9 @@ import {
  * assert nothing. Only the peer connection is stood in (jsdom has no
  * `RTCPeerConnection`), through the registry's own `createPeer` seam.
  */
-const peers: Array<{ readonly handlers: MediaPeerHandlers }> = [];
-
-function createFakePeer(handlers: MediaPeerHandlers): MediaPeer {
-  peers.push({ handlers });
-  return {
-    answerOffer: (sdp) => {
-      // Models gathering finishing before the answer settles - the A12
-      // batching mechanics are `webrtc-media-registry.test.ts`'s to pin.
-      handlers.onIceGatheringComplete();
-      return Promise.resolve(`answer-for:${sdp}`);
-    },
-    addRemoteCandidate: () => Promise.resolve(),
-    getStats: () => Promise.resolve(new Map()),
-    close: () => undefined,
-  };
-}
-
-/** jsdom has no `MediaStream`; only its identity travels to `srcObject`. */
-function fakeStream(id: string): MediaStream {
-  const partial: Pick<MediaStream, "id"> = { id };
-  return partial as MediaStream;
-}
+const peers: Array<{ readonly handlers: MediaPeerHandlers; closed: boolean }> =
+  [];
+const createFakePeer = createFakeMediaPeer(peers);
 
 interface RecorderPort {
   readonly port: WebrtcSignalPort;
@@ -66,12 +50,16 @@ function recorderPort(): RecorderPort {
   };
 }
 
+/** Every value the hook returned, in render order - not just the committed one. */
+const renderedStreamIds: string[] = [];
+
 function PipProbe(props: {
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
 }) {
   const stream = usePipSharedVideoStream(props);
+  renderedStreamIds.push(stream?.id ?? "");
   return <div data-testid="pip-probe" data-stream-id={stream?.id ?? ""} />;
 }
 
@@ -119,7 +107,7 @@ async function tileNegotiate(
     await Promise.resolve();
   });
   act(() => {
-    peers.at(-1)?.handlers.onStream(fakeStream(streamId));
+    peers.at(-1)?.handlers.onStream(fakeMediaStream(streamId));
   });
 }
 
@@ -139,6 +127,7 @@ async function tileWithLiveTrack(input: {
 afterEach(() => {
   cleanup();
   peers.length = 0;
+  renderedStreamIds.length = 0;
   vi.useRealTimers();
 });
 
@@ -188,6 +177,29 @@ describe("PiP shared video stream", () => {
 
     expect(probeStreamId()).toBe("");
     expect(peers).toHaveLength(0);
+  });
+
+  it("never paints the previous tab's track for one render after a tab switch", async () => {
+    // M12: React reads the snapshot during a render whose key has already
+    // changed but whose subscription effect has not re-run yet, so `entryRef`
+    // still holds the OUTGOING tab's entry. Mutation: dropping the
+    // `held.key !== key` guard in `readStream` - the committed DOM still ends
+    // up empty, so only the per-render trace catches the wrong tab's pixels.
+    const live = { hostId: "host-e", sessionId: "session-e", tabId: "tab-e" };
+    const idle = { hostId: "host-e", sessionId: "session-e", tabId: "tab-f" };
+    const tile = await tileWithLiveTrack({ key: live, streamId: "track-e" });
+    const view = render(<PipProbe {...live} />);
+    expect(probeStreamId()).toBe("track-e");
+
+    renderedStreamIds.length = 0;
+    act(() => {
+      view.rerender(<PipProbe {...idle} />);
+    });
+
+    expect(renderedStreamIds).not.toContain("track-e");
+    expect(probeStreamId()).toBe("");
+    tile.release();
+    view.unmount();
   });
 
   it("holds the entry open when the tile closes, and releases on its own close", async () => {

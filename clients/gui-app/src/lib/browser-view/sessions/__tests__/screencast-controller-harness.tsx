@@ -142,3 +142,58 @@ export function armViaGesture(
   const armIndex = mounted.sent.findIndex((frame) => frame.kind === "arm");
   if (armIndex >= 0) mounted.sent.splice(armIndex, 1);
 }
+
+export interface PointerPoint {
+  readonly clientX: number;
+  readonly clientY: number;
+}
+
+/** pointerId every synthetic pointer gesture in these suites shares - no test varies it. */
+const SYNTHETIC_POINTER_ID = 1;
+
+export function firePointerDown(
+  overlay: HTMLElement,
+  point: PointerPoint,
+): void {
+  fireEvent.pointerDown(overlay, {
+    pointerId: SYNTHETIC_POINTER_ID,
+    clientX: point.clientX,
+    clientY: point.clientY,
+    button: 0,
+    buttons: 1,
+    detail: 1,
+  });
+}
+
+export function firePointerUp(overlay: HTMLElement, point: PointerPoint): void {
+  fireEvent.pointerUp(overlay, {
+    pointerId: SYNTHETIC_POINTER_ID,
+    clientX: point.clientX,
+    clientY: point.clientY,
+    button: 0,
+    buttons: 0,
+    detail: 1,
+  });
+}
+
+export function firePointerMove(
+  overlay: HTMLElement,
+  point: PointerPoint,
+): void {
+  fireEvent.pointerMove(overlay, {
+    pointerId: SYNTHETIC_POINTER_ID,
+    clientX: point.clientX,
+    clientY: point.clientY,
+    button: 0,
+    buttons: 0,
+  });
+}
+
+/** A full click gesture - press then release at the same point. */
+export function firePointerPress(
+  overlay: HTMLElement,
+  point: PointerPoint,
+): void {
+  firePointerDown(overlay, point);
+  firePointerUp(overlay, point);
+}

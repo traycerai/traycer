@@ -12,41 +12,13 @@
  */
 import { v4 as uuidv4 } from "uuid";
 import { captureBrowserTabPreview } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
+import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { BrowserTabMentionEntry } from "@/lib/composer/types";
 
-export interface BrowserTabPreviewRequest {
-  readonly coordinatorKey: string;
-  readonly tabId: string;
-  readonly hostName: string;
-  readonly title: string;
-  readonly url: string;
-}
-
-export interface BrowserTabPreviewImage {
-  readonly id: string;
-  readonly fileName: string;
-  readonly mimeType: string;
-  readonly size: null;
-  readonly b64content: string;
-}
-
-export function browserTabPreviewRequest(
-  entry: BrowserTabMentionEntry,
-): BrowserTabPreviewRequest {
-  return {
-    coordinatorKey: entry.coordinatorKey,
-    tabId: entry.tabId,
-    hostName: entry.hostLabel ?? entry.hostId,
-    title: entry.label,
-    url: entry.url,
-  };
-}
-
 /** The one line the agent reads; it names the host so "localhost" is not ambiguous. */
-export function browserTabPreviewText(
-  request: BrowserTabPreviewRequest,
-): string {
-  return `browser tab on ${request.hostName}: ${request.title} - ${request.url}`;
+export function browserTabPreviewText(entry: BrowserTabMentionEntry): string {
+  const hostName = entry.hostLabel ?? entry.hostId;
+  return `browser tab on ${hostName}: ${entry.label} - ${entry.url}`;
 }
 
 /**
@@ -55,18 +27,18 @@ export function browserTabPreviewText(
  * text line is already in the composer and stands on its own.
  */
 export async function fetchBrowserTabPreviewImage(
-  request: BrowserTabPreviewRequest,
-): Promise<BrowserTabPreviewImage | null> {
+  entry: BrowserTabMentionEntry,
+): Promise<ImageAttachmentAttrs | null> {
   const preview = await captureBrowserTabPreview(
-    request.coordinatorKey,
-    request.tabId,
+    entry.coordinatorKey,
+    entry.tabId,
   ).catch(() => null);
   if (preview === null || !preview.ok || preview.screenshotBase64 === null) {
     return null;
   }
   return {
     id: uuidv4(),
-    fileName: `${request.hostName}-tab.jpg`,
+    fileName: `${entry.hostLabel ?? entry.hostId}-tab.jpg`,
     mimeType: "image/jpeg",
     size: null,
     b64content: preview.screenshotBase64,

@@ -243,6 +243,28 @@ export type ElectronTabCreateFailureCode = z.infer<
 // Reserved evolution room, not yet added:
 // - A `downloadEvent` server frame for file downloads/uploads (deferred,
 //   spec decision #12); the honest unsupported toast stays until then.
+/**
+ * The host's verdict on one `captureTabPreview`. Snapshot-only cross-host
+ * context (spec decision #10): a still, a url and a title, never a drive
+ * handle. `ok: false` is an ordinary answer carrying `reason` and nothing else
+ * - notably a dormant tab, which is reported rather than woken.
+ */
+export const browserTabPreviewSchema = z
+  .object({
+    ok: z.boolean(),
+    /** Base64 JPEG, capped host-side to the wire bound below. */
+    screenshotBase64: z.string().max(2_097_152).nullable(),
+    // Deliberately uncapped: a real `data:`/`blob:` url or a long title would
+    // otherwise fail the whole frame's parse and the picker would just wait
+    // out its timeout. Only the screenshot is bounded, and the host clamps
+    // that at the producer.
+    url: z.string().nullable(),
+    title: z.string().nullable(),
+    reason: z.string().nullable(),
+  })
+  .strict();
+export type BrowserTabPreview = z.infer<typeof browserTabPreviewSchema>;
+
 export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -311,24 +333,18 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      // Answers one `captureTabPreview`. Snapshot-only cross-host context
-      // (spec decision #10): a still, a url and a title, never a drive
-      // handle. `ok: false` carries `reason` and nothing else - notably a
-      // dormant tab, which is reported rather than woken.
       kind: z.literal("tabPreviewResult"),
       ...requestFrameFields,
-      ok: z.boolean(),
-      /** Base64 JPEG, capped host-side. */
-      screenshotBase64: z.string().nullable(),
-      url: z.string().nullable(),
-      title: z.string().nullable(),
-      reason: z.string().nullable(),
+      ...browserTabPreviewSchema.shape,
     })
     .strict(),
   z
     .object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
+      // Answers one `primaryProfileCaptured`: the host has DURABLY stored (or
+      // rejected) that jar. The desktop's quit flush waits on this rather than
+      // on a socket write completing.
+      kind: z.literal("primaryProfileCaptureAck"),
+      ...requestFrameFields,
     })
     .strict(),
   browserCdpRequestFrameSchema,
@@ -440,12 +456,6 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      kind: z.literal("ping"),
-      ...textFrameFields,
-    })
-    .strict(),
-  z
-    .object({
       kind: z.literal("cdpResult"),
       ...requestFrameFields,
       result: browserCdpResultSchema,
@@ -488,6 +498,13 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
       // optimization, and this field is the sole locality signal it is
       // gated on.
       coLocatedHostId: z.string().nullable(),
+      // The desktop window this renderer is, or null off Electron. The host
+      // hands the Electron lifecycle over only to the incumbent owner's own
+      // window: a SECOND window announcing readiness would otherwise rip the
+      // first window's live native tabs onto a renderer that has no surface
+      // for them. `.default(null)` so an older GUI's readiness frame still
+      // parses on a `.strict()` variant.
+      desktopWindowId: z.string().nullable().default(null),
     })
     .strict(),
   z
@@ -655,6 +672,14 @@ export type BrowserScreencastIceServer = z.infer<
   typeof browserScreencastIceServerSchema
 >;
 
+/**
+ * The STUN-only fallback both ends use when no TURN set was minted - a public
+ * server, so it is a literal rather than configuration. One constant because
+ * host and viewer must fall back to the SAME server or they gather against
+ * different pools.
+ */
+export const BROWSER_SCREENCAST_STUN_URL = "stun:stun.l.google.com:19302";
+
 const browserScreencastAgentCursorTypeSchema = z.enum(["move", "down", "up"]);
 export type BrowserScreencastAgentCursorType = z.infer<
   typeof browserScreencastAgentCursorTypeSchema
@@ -663,6 +688,23 @@ export type BrowserScreencastAgentCursorType = z.infer<
 const browserScreencastCaptureModeSchema = z.enum(["jpeg", "video"]);
 export type BrowserScreencastCaptureMode = z.infer<
   typeof browserScreencastCaptureModeSchema
+>;
+
+/**
+ * Why a viewer gave up on a video-plane round. Closed, because the host reads
+ * these to decide whether to turn the JPEG pump back on and traces them as a
+ * fixed vocabulary; anything variable rides `videoPlaneState.detail`.
+ */
+export const browserVideoPlaneFailureReasonSchema = z.enum([
+  "no-first-frame",
+  "frames-stopped",
+  "track-ended",
+  "connection-closed",
+  "connection-failed",
+  "answer-failed",
+]);
+export type BrowserVideoPlaneFailureReason = z.infer<
+  typeof browserVideoPlaneFailureReasonSchema
 >;
 
 export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
@@ -712,19 +754,11 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    })
-    .strict(),
-  z
-    .object({
-      // Answer to a `ping` that arrived on a video-plane DataChannel (ticket
-      // 17's input-path latency probe). Deliberately NOT the `pong` above:
-      // that kind belongs to the stream transport's heartbeat, which answers
-      // it host-side and, client-side, delivers a pong upward only when it
-      // answers an application `ping` the transport itself queued - a pong
-      // arriving for a DataChannel ping matches no queued ping and is
-      // swallowed, so it could never reach the sender. Carries no correlation
+      // Answer to every `ping` on this contract, whichever transport carried
+      // it. There is no plain `pong` arm: the stream transport answers a mux
+      // `ping` itself, before any resolver sees the frame, and client-side it
+      // delivers a pong upward only for an application `ping` it queued - so a
+      // `pong` from here could never reach the sender. Carries no correlation
       // id because the prober keeps one ping in flight at a time.
       kind: z.literal("inputPong"),
       ...textFrameFields,
@@ -1071,7 +1105,12 @@ export const browserScreencastClientFrameSchema = z.discriminatedUnion("kind", [
       negotiationId: z.number().int().nonnegative(),
       // "live" = first decoded video frame; "failed" = track death/timeout.
       state: z.enum(["live", "failed"]),
-      reason: z.string().nullable(),
+      reason: browserVideoPlaneFailureReasonSchema.nullable(),
+      // Free-form context for the one code that has any (`answer-failed`
+      // carries the SDP error's text). Never parsed - it exists so the closed
+      // vocabulary above does not cost the host its diagnostics.
+      // `.default(null)` so an older client's frame still parses.
+      detail: z.string().max(256).nullable().default(null),
     })
     .strict(),
   z

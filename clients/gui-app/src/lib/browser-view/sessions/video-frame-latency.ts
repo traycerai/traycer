@@ -28,22 +28,21 @@
 /** Deliberately small - see the module comment; this is a sample, not a history. */
 export const LATENCY_WINDOW_SIZE = 64;
 
-/** One frame's derived timings; each independently `null` when its inputs are absent. */
-export interface VideoFrameLatencySample {
-  readonly glassToGlassMs: number | null;
-  readonly networkPlusJitterMs: number | null;
-  readonly decodeCompositeMs: number | null;
-}
-
-/** What the stats cadence reports: the window's median, plus the tail of the whole trip. */
-export interface VideoFrameLatencySummary {
+/** What the stats cadence reports: the window's medians, plus the tail of the whole trip. */
+interface VideoFrameLatencySummary {
   readonly glassToGlassMs: number | null;
   readonly glassToGlassP95Ms: number | null;
   readonly networkPlusJitterMs: number | null;
   readonly decodeCompositeMs: number | null;
 }
 
-export interface VideoFrameLatencyWindow {
+/** One frame's derived timings - the same three legs, before any aggregation. */
+type VideoFrameLatencySample = Omit<
+  VideoFrameLatencySummary,
+  "glassToGlassP95Ms"
+>;
+
+interface VideoFrameLatencyWindow {
   /** One decoded frame. `null` metadata (no rVFC on this WebView) is ignored. */
   note(metadata: VideoFrameCallbackMetadata | null): void;
   summarize(): VideoFrameLatencySummary;

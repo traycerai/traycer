@@ -248,6 +248,18 @@ export function isReleasedHostNotificationEntry(
   );
 }
 
+/**
+ * Kinds that light the pending-prompt glyph (epic sidebar row / chat
+ * indicator / cloud SQL projection) while `resolvedAt` is still `null`. The
+ * GUI's `indicatorContribution` consumes this tuple directly; the host's
+ * `hostNotificationsGetIndicatorState` SQL consumes its own local mirror
+ * (`PENDING_PROMPT_HOST_NOTIFICATION_KINDS`, same pattern as
+ * `ALL_PERSISTED_HOST_NOTIFICATION_KINDS`) - keep both lists in sync when a
+ * kind is added here.
+ */
+export const HOST_NOTIFICATION_PENDING_PROMPT_KINDS: readonly HostNotificationKind[] =
+  ["approval.requested", "interview.requested", "browser.human.needed"];
+
 /** The kinds every released contract version can carry. FROZEN. */
 export const RELEASED_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] =
   [

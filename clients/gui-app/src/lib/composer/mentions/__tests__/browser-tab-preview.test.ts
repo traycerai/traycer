@@ -8,21 +8,29 @@ vi.mock("@/lib/browser-view/sessions/browser-sessions-coordinator", () => ({
   captureBrowserTabPreview,
 }));
 
+import type { BrowserTabMentionEntry } from "@/lib/composer/types";
 import {
   browserTabPreviewText,
   fetchBrowserTabPreviewImage,
-  type BrowserTabPreviewRequest,
 } from "../browser-tab-preview";
 
-function previewRequest(
-  fields: Partial<BrowserTabPreviewRequest>,
-): BrowserTabPreviewRequest {
+function previewEntry(
+  fields: Partial<BrowserTabMentionEntry>,
+): BrowserTabMentionEntry {
   return {
-    coordinatorKey: "coord-1",
+    kind: "browser-tab",
+    id: "browser-tab:tab-1",
     tabId: "tab-1",
-    hostName: "Canvas Host",
-    title: "Example",
+    sessionId: "session-1",
+    label: "Example",
     url: "https://example.com",
+    hostId: "host-1",
+    hostLabel: "Canvas Host",
+    coordinatorKey: "coord-1",
+    contextOnly: true,
+    coLocated: false,
+    lastActivityAt: 0,
+    dormant: false,
     ...fields,
   };
 }
@@ -34,9 +42,9 @@ afterEach(() => {
 describe("browserTabPreviewText", () => {
   it("names the host so a same-named tab on another host is not ambiguous", () => {
     const text = browserTabPreviewText(
-      previewRequest({
-        hostName: "Canvas Host",
-        title: "Example",
+      previewEntry({
+        hostLabel: "Canvas Host",
+        label: "Example",
         url: "https://example.com",
       }),
     );
@@ -57,7 +65,7 @@ describe("fetchBrowserTabPreviewImage", () => {
     });
 
     const image = await fetchBrowserTabPreviewImage(
-      previewRequest({ coordinatorKey: "coord-1", tabId: "tab-1" }),
+      previewEntry({ coordinatorKey: "coord-1", tabId: "tab-1" }),
     );
 
     expect(captureBrowserTabPreview).toHaveBeenCalledWith("coord-1", "tab-1");
@@ -76,7 +84,7 @@ describe("fetchBrowserTabPreviewImage", () => {
       reason: "dormant",
     });
 
-    const image = await fetchBrowserTabPreviewImage(previewRequest({}));
+    const image = await fetchBrowserTabPreviewImage(previewEntry({}));
 
     expect(image).toBeNull();
   });
@@ -86,7 +94,7 @@ describe("fetchBrowserTabPreviewImage", () => {
       new Error("Browser sessions stream is not ready."),
     );
 
-    const image = await fetchBrowserTabPreviewImage(previewRequest({}));
+    const image = await fetchBrowserTabPreviewImage(previewEntry({}));
 
     expect(image).toBeNull();
   });

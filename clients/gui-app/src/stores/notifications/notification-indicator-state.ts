@@ -1,9 +1,10 @@
-import type {
-  HostNotificationEntryV22,
-  HostNotificationsCloudFeedRowV11,
-  HostNotificationsEntityRef,
-  HostNotificationsIndicatorState,
-  HostNotificationsIndicatorStateResponse,
+import {
+  HOST_NOTIFICATION_PENDING_PROMPT_KINDS,
+  type HostNotificationEntryV22,
+  type HostNotificationsCloudFeedRowV11,
+  type HostNotificationsEntityRef,
+  type HostNotificationsIndicatorState,
+  type HostNotificationsIndicatorStateResponse,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationPayloadBelongsToEntity,
@@ -340,18 +341,25 @@ function collectCloudIndicatorEntry(
 
 /** `null` when the entry lights nothing, so an entity with only quiet rows is
  * never allocated an all-false record. */
+/**
+ * `pendingApproval` is the wire's generic "needs a person" flag: every
+ * pending-prompt kind but `interview.requested` lights it, driven off the
+ * shared `HOST_NOTIFICATION_PENDING_PROMPT_KINDS` tuple so a new kind lights
+ * this glyph (and the host SQL projection) by joining that tuple.
+ */
 function indicatorContribution(
   entry: HostNotificationEntryV22,
 ): HostNotificationsIndicatorState | null {
-  const pendingApproval =
-    entry.kind === "approval.requested" && entry.resolvedAt === null;
-  const pendingInterview =
-    entry.kind === "interview.requested" && entry.resolvedAt === null;
-  if (!pendingApproval && !pendingInterview) {
+  if (
+    !("resolvedAt" in entry) ||
+    entry.resolvedAt !== null ||
+    !HOST_NOTIFICATION_PENDING_PROMPT_KINDS.includes(entry.kind)
+  ) {
     return null;
   }
+  const pendingInterview = entry.kind === "interview.requested";
   return {
-    pendingApproval,
+    pendingApproval: !pendingInterview,
     pendingInterview,
     pendingFork: false,
     unreadFailure: false,

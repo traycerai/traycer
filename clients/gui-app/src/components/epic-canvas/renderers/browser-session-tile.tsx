@@ -3,21 +3,18 @@ import { X } from "lucide-react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { ElectronTabSurface } from "./agent-browser-tile";
-import {
-  BrowserPeekTile,
-  browserPeekFrameKey,
-  clearLastBrowserPeekFrame,
-  getLastBrowserPeekFrame,
-  type BrowserPeekNode,
-} from "./browser-peek-tile";
-import { BrowserPeekTileMobile } from "./browser-peek-tile-mobile";
+import { BrowserPeekTile, type BrowserPeekNode } from "./browser-peek-tile";
 import { useBrowserSessionsContext } from "./browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
 } from "@/lib/browser-view/sessions/electron-tabs";
-import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import {
+  browserPeekFrameKey,
+  clearLastBrowserPeekFrame,
+  useLastBrowserPeekFrame,
+} from "@/lib/browser-view/sessions/peek-frame-cache";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 
@@ -33,14 +30,6 @@ interface BrowserSessionTileBodyProps extends BrowserSessionTileProps {
   readonly tab: BrowserSessionInfo["tabs"][number] | undefined;
   readonly binding: ElectronTabBinding | null;
   readonly inventoryReady: boolean;
-  /**
-   * A touch-grade pointer is driving this window (`useCoarsePointer()`,
-   * decision #13 / ticket 12): render the touch-adapted viewer instead of
-   * the mouse-oriented one. Read once here rather than inside the headless
-   * branch below so a hybrid device's pointer-type flip mid-session is
-   * exactly as disruptive as any other tile remount.
-   */
-  readonly touch: boolean;
 }
 
 function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
@@ -68,17 +57,6 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
       tabId: props.node.tabId,
       initialUrl: props.tab.url,
     };
-    if (props.touch) {
-      return (
-        <BrowserPeekTileMobile
-          key={props.session.runtime.revision}
-          epicId={props.epicId}
-          node={peek}
-          viewTabId={props.viewTabId}
-          paneId={props.paneId}
-        />
-      );
-    }
     return (
       <BrowserPeekTile
         key={props.session.runtime.revision}
@@ -139,10 +117,10 @@ function dormantStatusLine(unavailability: HostUnavailability | null): string {
  * keeps rendering as-is/connecting through that state.
  *
  * Greys out the last known frame if the tab ever streamed one
- * (`getLastBrowserPeekFrame`), snapshotted ONCE on mount rather than read on
- * every render: the peek tile's own unmount can land in the same commit
- * that mounts this placeholder, and a live read here would race that
- * cleanup. There is deliberately no interactive chrome and no clone/"open on
+ * (`useLastBrowserPeekFrame`, which reads the cache once the placeholder is
+ * committed - the peek tile's teardown writes its dormant video snapshot in
+ * that same commit, after this render). There is deliberately no interactive
+ * chrome and no clone/"open on
  * this device" affordance - the tile re-renders live on its own once the
  * host's lease returns, through the same reactive `useHostReachability` read
  * that put it here.
@@ -152,8 +130,7 @@ function BrowserSessionDormantPlaceholder(props: {
   readonly hostLabel: string;
   readonly unavailability: HostUnavailability | null;
 }) {
-  const frameKey = browserPeekFrameKey(props.node);
-  const [lastFrame] = useState(() => getLastBrowserPeekFrame(frameKey));
+  const lastFrame = useLastBrowserPeekFrame(browserPeekFrameKey(props.node));
   return (
     <div
       className="relative flex h-full w-full flex-col items-center justify-center gap-2 overflow-hidden bg-canvas px-4 text-center"
@@ -231,9 +208,6 @@ function useRuntimeDemotionNote(
     readonly revision: number;
   } | null>(null);
   const [demotedRevision, setDemotedRevision] = useState<number | null>(null);
-  const [dismissedRevision, setDismissedRevision] = useState<number | null>(
-    null,
-  );
 
   if (
     runtimeKind !== null &&
@@ -257,14 +231,14 @@ function useRuntimeDemotionNote(
     }
   }
 
+  // Dismissing clears the demotion outright: a LATER demotion sets a new
+  // revision, so there is nothing a separate "dismissed" revision can say that
+  // this cannot.
   const dismiss = useCallback(() => {
-    setDismissedRevision(demotedRevision);
-  }, [demotedRevision]);
+    setDemotedRevision(null);
+  }, []);
 
-  return {
-    visible: demotedRevision !== null && demotedRevision !== dismissedRevision,
-    dismiss,
-  };
+  return { visible: demotedRevision !== null, dismiss };
 }
 
 /**
@@ -274,7 +248,6 @@ function useRuntimeDemotionNote(
  */
 export function BrowserSessionTile(props: BrowserSessionTileProps) {
   const sessions = useBrowserSessionsContext();
-  const touch = useCoarsePointer();
   const reachability = useHostReachability(props.node.hostId);
   const session = sessions.items.find(
     (item) => item.sessionId === props.node.sessionId,
@@ -345,7 +318,6 @@ export function BrowserSessionTile(props: BrowserSessionTileProps) {
           tab={tab}
           binding={binding}
           inventoryReady={sessions.inventoryReady}
-          touch={touch}
         />
       </div>
     </div>

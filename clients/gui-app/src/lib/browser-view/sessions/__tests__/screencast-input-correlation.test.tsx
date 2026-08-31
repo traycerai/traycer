@@ -1,28 +1,15 @@
-import { fireEvent } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
   FRAME_SIZE,
+  firePointerPress,
   mountController,
   pointerFrames,
 } from "@/lib/browser-view/sessions/__tests__/screencast-controller-harness";
 
+const CLICK_POINT = { clientX: 200, clientY: 300 } as const;
+
 function clickUnarmed(overlay: HTMLElement): void {
-  fireEvent.pointerDown(overlay, {
-    pointerId: 1,
-    clientX: 200,
-    clientY: 300,
-    button: 0,
-    buttons: 1,
-    detail: 1,
-  });
-  fireEvent.pointerUp(overlay, {
-    pointerId: 1,
-    clientX: 200,
-    clientY: 300,
-    button: 0,
-    buttons: 0,
-    detail: 1,
-  });
+  firePointerPress(overlay, CLICK_POINT);
 }
 
 describe("screencast input correlation", () => {

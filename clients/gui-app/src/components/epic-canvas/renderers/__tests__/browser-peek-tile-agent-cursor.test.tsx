@@ -8,18 +8,26 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  FakeStreamClient,
+  type FakeStreamSession,
+  epicNestedFocusNavigationModule,
+  fakeMediaPeerModule,
+  fakeMediaStream,
+  hostDirectoryEntryModule,
+  liveStream as fixtureLiveStream,
+  makeFreshPeekNode,
+  streamAuthRevalidatorModule,
+  tabHostIdModule,
+  tileBodyVisibleModule,
+} from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+import {
   BrowserPeekTile,
   type BrowserPeekNode,
 } from "@/components/epic-canvas/renderers/browser-peek-tile";
-import { AGENT_CURSOR_LINGER_MS } from "@/components/epic-canvas/renderers/agent-cursor-overlay";
-import {
-  FakeStreamClient,
-  type FakeStreamSession,
-} from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
-import type {
-  MediaPeer,
-  MediaPeerHandlers,
-} from "@/lib/browser-view/tiles/webrtc-media-registry";
+import type { MediaPeerHandlers } from "@/lib/browser-view/tiles/webrtc-media-registry";
+import { AgentCursorOverlay } from "@/components/epic-canvas/renderers/agent-cursor-overlay";
+import { containBox } from "@/components/epic-canvas/renderers/agent-cursor-contain-box";
+import type { AgentCursorPosition } from "@/lib/browser-view/sessions/screencast-input-encoding";
 
 /**
  * Ticket 10, the client half: the agent ghost cursor through the REAL hook,
@@ -30,102 +38,54 @@ const peers = vi.hoisted(
   () => [] as Array<{ readonly handlers: MediaPeerHandlers; closed: boolean }>,
 );
 
-vi.mock("@/lib/browser-view/tiles/webrtc-media-registry", async (original) => {
-  const actual =
-    await original<
-      typeof import("@/lib/browser-view/tiles/webrtc-media-registry")
-    >();
-  const createBrowserMediaPeer = (handlers: MediaPeerHandlers): MediaPeer => {
-    const peer = { handlers, closed: false };
-    peers.push(peer);
-    return {
-      answerOffer: (sdp) => {
-        // Models gathering finishing before the answer settles - the A12
-        // batching mechanics are `webrtc-media-registry.test.ts`'s to pin.
-        handlers.onIceGatheringComplete();
-        return Promise.resolve(`answer-for:${sdp}`);
-      },
-      addRemoteCandidate: () => Promise.resolve(),
-      getStats: () => Promise.resolve(new Map()),
-      close: () => {
-        peer.closed = true;
-      },
-    };
-  };
-  return { ...actual, createBrowserMediaPeer };
-});
-
-/** jsdom has no `MediaStream`; only its identity travels to `srcObject`. */
-function fakeStream(id: string): MediaStream {
-  const partial: Pick<MediaStream, "id"> = { id };
-  return partial as MediaStream;
-}
+vi.mock("@/lib/browser-view/tiles/webrtc-media-registry", (original) =>
+  fakeMediaPeerModule(peers)(original),
+);
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
   visible: true,
 }));
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-test",
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
+  tabHostIdModule(),
+);
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
-  useTileBodyVisible: () => hookState.visible,
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
+  tileBodyVisibleModule(hookState),
+);
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => ({ hostId: "host-test" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", () =>
+  hostDirectoryEntryModule(),
+);
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientFor: () => hookState.streamClient,
 }));
 
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
+vi.mock("@/lib/host/stream-auth-revalidator", () =>
+  streamAuthRevalidatorModule(),
+);
 
-vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
-  useEpicNestedFocusNavigation:
-    () =>
-    (_epicId: string, _tabId: string, prepare: () => unknown): unknown =>
-      prepare(),
-}));
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () =>
+  epicNestedFocusNavigationModule(),
+);
 
-let nodeCounter = 0;
+const freshNode = makeFreshPeekNode("headless-cursor");
 let peekNode: BrowserPeekNode = freshNode();
 
-function freshNode(): BrowserPeekNode {
-  nodeCounter += 1;
-  return {
-    id: "browser-peek-headless-1",
-    instanceId: "peek-instance-1",
-    hostId: "host-test",
-    sessionId: `headless-cursor-${nodeCounter}`,
-    tabId: "headless-tab-1",
-    initialUrl: "http://localhost:3000",
-  };
-}
-
 function liveStream(): FakeStreamSession {
-  const stream = hookState.streamClient?.sessions.at(-1);
-  if (stream === undefined) throw new Error("expected screencast stream");
-  return stream;
+  return fixtureLiveStream(hookState);
 }
 
-/** The overlay measures its own box; jsdom reports zero without this. */
-function sizeOverlay(width: number, height: number): void {
-  const overlay = screen.getByTestId("browser-agent-cursor-overlay");
-  Object.defineProperty(overlay, "clientWidth", {
-    configurable: true,
-    value: width,
-  });
-  Object.defineProperty(overlay, "clientHeight", {
-    configurable: true,
-    value: height,
-  });
-}
+/**
+ * The overlay's contain-fit is pure CSS (a size-query container clamping on
+ * whichever axis runs out first), so a cursor's position is a percentage
+ * inside the painted box and needs no measured overlay - which jsdom could not
+ * lay out anyway. Longer than any linger the overlay could reasonably use, so
+ * the fade assertions observe the fade rather than restating its constant.
+ */
+const PAST_ANY_LINGER_MS = 30_000;
 
 function renderTile(): void {
   render(
@@ -207,7 +167,7 @@ async function switchToVideoPlane(): Promise<void> {
     await Promise.resolve();
   });
   act(() => {
-    peers[0]?.handlers.onStream(fakeStream("track-0"));
+    peers[0]?.handlers.onStream(fakeMediaStream("track-0"));
   });
   const video = screen.getByTestId("browser-screencast-video");
   Object.defineProperty(video, "videoWidth", {
@@ -249,13 +209,12 @@ describe("BrowserPeekTile agent ghost cursor", () => {
 
   it("positions the labeled cursor inside the letterboxed surface", () => {
     renderTile();
-    sizeOverlay(400, 400);
 
-    // 800x600 contained in 400x400 paints 400x300 with a 50px band above it.
     emitCursor({ type: "move", epoch: 0, normalizedX: 0.5, normalizedY: 0.5 });
 
     const marker = cursorMarker();
-    expect(marker?.style.transform).toBe("translate(200px, 200px)");
+    expect(marker?.style.left).toBe("50%");
+    expect(marker?.style.top).toBe("50%");
     expect(screen.getByText("Log in")).toBeTruthy();
     expect(marker?.dataset.visible).toBe("true");
     expect(screen.queryByTestId("browser-agent-cursor-ripple")).toBeNull();
@@ -263,19 +222,18 @@ describe("BrowserPeekTile agent ghost cursor", () => {
 
   it("ripples on a press", () => {
     renderTile();
-    sizeOverlay(400, 400);
 
     emitCursor({ type: "down", epoch: 0, normalizedX: 0.25, normalizedY: 0.5 });
 
     expect(screen.getByTestId("browser-agent-cursor-ripple")).toBeTruthy();
-    expect(cursorMarker()?.style.transform).toBe("translate(100px, 200px)");
+    expect(cursorMarker()?.style.left).toBe("25%");
+    expect(cursorMarker()?.style.top).toBe("50%");
   });
 
-  it("fades out once the agent stops pointing", () => {
+  it("fades out once the agent stops pointing, and un-fades on the next point", () => {
     vi.useFakeTimers();
     try {
       renderTile();
-      sizeOverlay(400, 400);
       emitCursor({
         type: "move",
         epoch: 0,
@@ -285,11 +243,21 @@ describe("BrowserPeekTile agent ghost cursor", () => {
       expect(cursorMarker()?.dataset.visible).toBe("true");
 
       act(() => {
-        vi.advanceTimersByTime(AGENT_CURSOR_LINGER_MS);
+        vi.advanceTimersByTime(PAST_ANY_LINGER_MS);
       });
 
       expect(cursorMarker()?.dataset.visible).toBe("false");
       expect(cursorMarker()?.className).toContain("opacity-0");
+
+      // The linger restarts per cursor id (the marker is keyed by it).
+      // Mutation: dropping that `key` leaves the faded marker faded forever.
+      emitCursor({
+        type: "move",
+        epoch: 0,
+        normalizedX: 0.6,
+        normalizedY: 0.5,
+      });
+      expect(cursorMarker()?.dataset.visible).toBe("true");
     } finally {
       vi.useRealTimers();
     }
@@ -297,7 +265,6 @@ describe("BrowserPeekTile agent ghost cursor", () => {
 
   it("draws a cursor stamped with any epoch while the JPEG plane paints", () => {
     renderTile();
-    sizeOverlay(400, 400);
 
     // No viewport epoch was ever announced: a JPEG tile has none, and a
     // cursor overlay has nothing to correlate per frame.
@@ -309,12 +276,85 @@ describe("BrowserPeekTile agent ghost cursor", () => {
   it("ignores a superseded epoch once the video plane is painting", async () => {
     renderTile();
     await switchToVideoPlane();
-    sizeOverlay(400, 400);
 
     emitCursor({ type: "move", epoch: 2, normalizedX: 0.5, normalizedY: 0.5 });
     expect(cursorMarker()).toBeNull();
 
     emitCursor({ type: "move", epoch: 3, normalizedX: 0.5, normalizedY: 0.5 });
-    expect(cursorMarker()?.style.transform).toBe("translate(200px, 200px)");
+    expect(cursorMarker()?.style.left).toBe("50%");
+  });
+});
+
+/**
+ * The two properties the tile cannot reach: the contain-fit CSS text (jsdom
+ * evaluates no `cqw`/`cqh`, so the strings themselves are the pin) and the
+ * PiP-only lifecycle where ONE overlay outlives the selection whose cursor ids
+ * it saw.
+ */
+describe("AgentCursorOverlay", () => {
+  const FRAME_SIZE = { width: 800, height: 600 };
+
+  function cursorAt(input: {
+    readonly type: "move" | "down";
+    readonly id: number;
+  }): AgentCursorPosition {
+    return {
+      type: input.type,
+      normalizedX: 0.5,
+      normalizedY: 0.5,
+      label: "Log in",
+      id: input.id,
+    };
+  }
+
+  it("sizes the box to the frame's contain-fit rectangle", () => {
+    // Mutation: swapping width/height inside either `calc`, or dropping a
+    // `min()` - both silently mis-place every cursor on a letterboxed tile.
+    expect(containBox(FRAME_SIZE)).toEqual({
+      width: "min(100cqw, calc(100cqh * 800 / 600))",
+      height: "min(100cqh, calc(100cqw * 600 / 800))",
+    });
+    expect(containBox({ width: 600, height: 800 })).toEqual({
+      width: "min(100cqw, calc(100cqh * 600 / 800))",
+      height: "min(100cqh, calc(100cqw * 800 / 600))",
+    });
+  });
+
+  it("drops the press latch when the cursor clears, so ids may restart at 1", () => {
+    // LIVE BUG pin: PiP mints cursor ids per SELECTION, so they restart at 1
+    // on a tab switch while this overlay stays mounted. Mutation: dropping the
+    // `cursor === null` reset of `pressedId` - the retained 1 then matches the
+    // NEXT selection's first cursor, and a plain move draws a phantom ripple
+    // for a press that never happened.
+    const { rerender } = render(
+      <AgentCursorOverlay
+        cursor={cursorAt({ type: "down", id: 1 })}
+        frameSize={FRAME_SIZE}
+      />,
+    );
+    expect(screen.getByTestId("browser-agent-cursor-ripple")).toBeTruthy();
+
+    rerender(<AgentCursorOverlay cursor={null} frameSize={FRAME_SIZE} />);
+    rerender(
+      <AgentCursorOverlay
+        cursor={cursorAt({ type: "move", id: 1 })}
+        frameSize={FRAME_SIZE}
+      />,
+    );
+
+    expect(screen.queryByTestId("browser-agent-cursor-ripple")).toBeNull();
+
+    // And the next genuine press of that selection still ripples.
+    rerender(
+      <AgentCursorOverlay
+        cursor={cursorAt({ type: "down", id: 2 })}
+        frameSize={FRAME_SIZE}
+      />,
+    );
+    expect(screen.getByTestId("browser-agent-cursor-ripple")).toBeTruthy();
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 });

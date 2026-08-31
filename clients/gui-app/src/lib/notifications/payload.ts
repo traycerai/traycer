@@ -10,6 +10,7 @@ import {
   NOTIFICATION_EVENT_TYPES,
   type NotificationEvent,
 } from "@traycer/protocol/notifications/notification-entry";
+import { parseKnownHostNotificationPayloadForKind } from "@traycer/protocol/host/notifications/contracts";
 import {
   existingEpicTabIntentWithNestedFocus,
   navigateToTabIntent,
@@ -243,13 +244,19 @@ function parseTerminalPayload(
 function parseBrowserSessionPayload(
   value: Record<string, unknown>,
 ): BrowserSessionNotificationPayload | null {
-  const epicId = readString(value.epicId);
-  const sessionId = readString(value.sessionId);
-  const tabId = readString(value.tabId);
-  if (epicId === null || sessionId === null || tabId === null) {
+  const parsed = parseKnownHostNotificationPayloadForKind(
+    "browser.human.needed",
+    value,
+  );
+  if (parsed === null || parsed.kind !== "browser_human_needed") {
     return null;
   }
-  return { kind: "browserSession", epicId, sessionId, tabId };
+  return {
+    kind: "browserSession",
+    epicId: parsed.epicId,
+    sessionId: parsed.sessionId,
+    tabId: parsed.tabId,
+  };
 }
 
 function parseApprovalPayload(
@@ -539,13 +546,51 @@ export function routeNotificationForHost(
 }
 
 /**
+ * The tab intent shared by every "focus a specific tile, or fall back to just
+ * opening the epic" route: prepare the tile's nested focus and activate its
+ * tab when a match was found on the canvas, else fall back to the hostless
+ * epic intent. `routeTerminalNotification` and `routeBrowserSessionNotification`
+ * differ only in how they locate `match` (a terminal row names its tab
+ * directly; a browser row searches the canvas for its parked tile).
+ */
+function focusTileIntent(input: {
+  readonly epicId: string;
+  readonly receivedAt: number;
+  readonly focusArtifactId: string | undefined;
+  readonly match: {
+    readonly tabId: string;
+    readonly paneId: string;
+    readonly instanceId: string;
+  } | null;
+}) {
+  const focus = {
+    focusedAt: input.receivedAt,
+    focusArtifactId: input.focusArtifactId,
+    focusThreadId: undefined,
+    migrationSource: undefined,
+  };
+  if (input.match === null) {
+    return openOrFocusEpicIntent({ epicId: input.epicId, focus });
+  }
+  return existingEpicTabIntentWithNestedFocus({
+    epicId: input.epicId,
+    tabId: input.match.tabId,
+    focus,
+    nestedFocus: useEpicCanvasStore
+      .getState()
+      .prepareSetActiveTileTabFocusTarget(
+        input.match.tabId,
+        input.match.paneId,
+        input.match.instanceId,
+      ),
+  });
+}
+
+/**
  * Focuses the parked browser tile, or opens its epic when no such tile is on a
- * canvas.
- *
- * Reuses the terminal row's machinery exactly - locate the tile, prepare its
- * nested focus, activate its tab - because a browser tile is addressed the same
- * way. `false` when it fell through to the hostless epic intent, so the caller
- * can decline to credit an activation that never reached the parked host.
+ * canvas. `false` when it fell through to the hostless epic intent, so the
+ * caller can decline to credit an activation that never reached the parked
+ * host.
  */
 function routeBrowserSessionNotification(
   navigate: NotificationNavigate,
@@ -567,42 +612,17 @@ function routeBrowserSessionNotification(
       return [{ tabId: tab.tabId, ...found }];
     })
     .at(0);
-  if (match === undefined) {
-    navigateToTabIntent(
-      navigate,
-      openOrFocusEpicIntent({
-        epicId: payload.epicId,
-        focus: {
-          focusedAt: receivedAt,
-          focusArtifactId: tileId,
-          focusThreadId: undefined,
-          migrationSource: undefined,
-        },
-      }),
-      undefined,
-    );
-    return false;
-  }
   navigateToTabIntent(
     navigate,
-    existingEpicTabIntentWithNestedFocus({
+    focusTileIntent({
       epicId: payload.epicId,
-      tabId: match.tabId,
-      focus: {
-        focusedAt: receivedAt,
-        focusArtifactId: tileId,
-        focusThreadId: undefined,
-        migrationSource: undefined,
-      },
-      nestedFocus: state.prepareSetActiveTileTabFocusTarget(
-        match.tabId,
-        match.paneId,
-        match.instanceId,
-      ),
+      receivedAt,
+      focusArtifactId: tileId,
+      match: match === undefined ? null : match,
     }),
     undefined,
   );
-  return true;
+  return match !== undefined;
 }
 
 /**
@@ -652,49 +672,27 @@ function routeTerminalNotification(
   payload: TerminalNotificationPayload,
   receivedAt: number,
 ): void {
-  const store = useEpicCanvasStore.getState();
-  const tab = store.tabsById[payload.tabId];
-  if (tab?.epicId !== payload.epicId) {
-    navigateToTabIntent(
-      navigate,
-      openOrFocusEpicIntent({
-        epicId: payload.epicId,
-        focus: {
-          focusedAt: receivedAt,
-          focusArtifactId: undefined,
-          focusThreadId: undefined,
-          migrationSource: undefined,
-        },
-      }),
-      undefined,
-    );
-    return;
-  }
-
+  const tab = useEpicCanvasStore.getState().tabsById[payload.tabId];
   // The payload names the EXACT tab that owns the terminal. Prepare THAT tab's
   // nested focus and activate it - never resolve by epic, which would pick an
   // active/MRU same-epic sibling and land on the wrong tab. A retained,
   // currently-closed tab is reopened by the controller's legacy projection
   // (`setActiveTab` reinserts it into `openTabOrder`).
-  const nestedFocus = useEpicCanvasStore
-    .getState()
-    .prepareSetActiveTileTabFocusTarget(
-      payload.tabId,
-      payload.paneId,
-      payload.tileInstanceId,
-    );
+  const match =
+    tab?.epicId === payload.epicId
+      ? {
+          tabId: payload.tabId,
+          paneId: payload.paneId,
+          instanceId: payload.tileInstanceId,
+        }
+      : null;
   navigateToTabIntent(
     navigate,
-    existingEpicTabIntentWithNestedFocus({
+    focusTileIntent({
       epicId: payload.epicId,
-      tabId: payload.tabId,
-      focus: {
-        focusedAt: receivedAt,
-        focusArtifactId: undefined,
-        focusThreadId: undefined,
-        migrationSource: undefined,
-      },
-      nestedFocus,
+      receivedAt,
+      focusArtifactId: undefined,
+      match,
     }),
     undefined,
   );

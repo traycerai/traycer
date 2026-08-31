@@ -12,12 +12,7 @@
  * literals these constants replaced. Measurement can lengthen a window, never
  * shorten it.
  */
-import {
-  deriveDeadlineMs,
-  type ControlPlaneDeadlineSpec,
-} from "@traycer/protocol/host/browser/control-plane-rtt";
-
-export type { ControlPlaneDeadlineSpec };
+import type { ControlPlaneDeadlineSpec } from "@traycer/protocol/host-transport/rtt-deadlines";
 
 export const VIEWER_CONTROL_PLANE_DEADLINES = {
   /**
@@ -47,11 +42,3 @@ export const VIEWER_CONTROL_PLANE_DEADLINES = {
    */
   staleWithoutFrame: { floorMs: 8_000, roundTrips: 4 },
 } as const satisfies Readonly<Record<string, ControlPlaneDeadlineSpec>>;
-
-/** {@link deriveDeadlineMs} against the spec's own floor. */
-export function deriveViewerDeadlineMs(
-  spec: ControlPlaneDeadlineSpec,
-  rttMs: number | null,
-): number {
-  return deriveDeadlineMs(spec, rttMs, spec.floorMs);
-}

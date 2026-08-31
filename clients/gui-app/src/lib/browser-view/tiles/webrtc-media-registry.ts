@@ -1,10 +1,17 @@
-import type { BrowserScreencastIcePairType } from "@traycer/protocol/host/browser/contracts";
+import {
+  BROWSER_SCREENCAST_STUN_URL,
+  type BrowserScreencastIcePairType,
+  type BrowserVideoPlaneFailureReason,
+} from "@traycer/protocol/host/browser/contracts";
 import type { BrowserViewNativeTabKey } from "@traycer-clients/shared/platform/browser-view";
 import {
-  VIEWER_CONTROL_PLANE_DEADLINES,
-  deriveViewerDeadlineMs,
+  deriveSpecDeadlineMs,
   type ControlPlaneDeadlineSpec,
-} from "@/lib/browser-view/sessions/control-plane-deadlines";
+} from "@traycer/protocol/host-transport/rtt-deadlines";
+import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
+// Value import against a module that imports only TYPES back from this one, so
+// the cycle is erased at compile time.
+import { inboundVideoJitterMs } from "@/lib/browser-view/sessions/webrtc-video-stats";
 import { compositeKey } from "./browser-view-keys";
 
 /**
@@ -70,7 +77,8 @@ export interface WebrtcSignalPort {
   sendVideoPlaneState(input: {
     readonly negotiationId: number;
     readonly state: "live" | "failed";
-    readonly reason: string | null;
+    readonly reason: BrowserVideoPlaneFailureReason | null;
+    readonly detail: string | null;
   }): void;
   sendVideoStats(
     input: { readonly negotiationId: number } & WebrtcVideoStatsSample,
@@ -112,7 +120,7 @@ const INPUT_CHANNEL_LABELS: readonly BrowserInputChannelLabel[] = [
 ];
 
 function inputChannelLabel(label: string): BrowserInputChannelLabel | null {
-  return INPUT_CHANNEL_LABELS.find((known) => known === label) ?? null;
+  return INPUT_CHANNEL_LABELS.find((known): boolean => known === label) ?? null;
 }
 
 /**
@@ -142,7 +150,7 @@ export interface MediaPeerHandlers {
   /** An inbound DataChannel (ticket 15's input transport). */
   readonly onDataChannel: (channel: MediaDataChannel) => void;
   /** Track death or a terminal connection state. */
-  readonly onFailure: (reason: string) => void;
+  readonly onFailure: (reason: BrowserVideoPlaneFailureReason) => void;
 }
 
 /**
@@ -180,15 +188,13 @@ export type MediaPeerFactory = (
   iceServers: readonly MediaIceServer[],
 ) => MediaPeer;
 
-export type VideoPlanePhase = "idle" | "negotiating" | "streaming" | "failed";
-
 export interface BrowserMediaSnapshot {
-  readonly phase: VideoPlanePhase;
+  readonly phase: "idle" | "negotiating" | "streaming" | "failed";
   /** The round the snapshot describes; `null` before the first offer. */
   readonly negotiationId: number | null;
   /** Stable while a round streams - hand it straight to `video.srcObject`. */
   readonly stream: MediaStream | null;
-  readonly failureReason: string | null;
+  readonly failureReason: BrowserVideoPlaneFailureReason | null;
   /**
    * Both input channels of the CURRENT round are open, so
    * {@link BrowserMediaEntry.sendInput} can carry human input. Never true for
@@ -218,7 +224,14 @@ export interface BrowserMediaEntry {
   /** First `requestVideoFrameCallback` tick - reports `"live"`. */
   reportFirstDecodedFrame(): void;
   /** A sink-level failure the registry cannot observe (deadlines, decode). */
-  reportFailure(reason: string): void;
+  reportFailure(reason: BrowserVideoPlaneFailureReason): void;
+  /**
+   * The subscription that supplied a round's reply channel is gone. The round
+   * itself survives (the media is refcounted, and another viewer may still be
+   * holding it), but nothing is sent on that port again - the next offer
+   * brings the port that replaces it.
+   */
+  detachPort(port: WebrtcSignalPort): void;
   /**
    * Sends one already-encoded client frame on the current round's channel.
    * `false` (a no-op) when the channel is absent, not open, or refuses the
@@ -261,10 +274,17 @@ const ICE_TRICKLE_BATCH_DEADLINE: ControlPlaneDeadlineSpec = {
 };
 const ICE_TRICKLE_BATCH_CEILING_MS = 500;
 
+/**
+ * How many gathered candidates the `sdpAnswer` frame may carry. A pathological
+ * gather (many interfaces x many relays) would otherwise ship one unbounded
+ * frame; the remainder is not dropped, it trickles.
+ */
+const ICE_ANSWER_CANDIDATE_BATCH_MAX = 256;
+
 function iceTrickleBatchMs(rttMs: number | null): number {
   return Math.min(
     ICE_TRICKLE_BATCH_CEILING_MS,
-    deriveViewerDeadlineMs(ICE_TRICKLE_BATCH_DEADLINE, rttMs),
+    deriveSpecDeadlineMs(ICE_TRICKLE_BATCH_DEADLINE, rttMs),
   );
 }
 
@@ -290,8 +310,11 @@ const CONNECTION_FAILED_GRACE_MS =
  */
 interface ActiveRound {
   readonly negotiationId: number;
-  /** The reply channel; re-pointed on a same-id restart in case it changed. */
-  port: WebrtcSignalPort;
+  /**
+   * The reply channel; re-pointed on a same-id restart in case it changed, and
+   * `null` once the subscription that supplied it has gone (`detachPort`).
+   */
+  port: WebrtcSignalPort | null;
   readonly peer: MediaPeer;
   /**
    * The offer SDP this round last negotiated against - lets a same-id
@@ -370,7 +393,7 @@ export function acquireBrowserMediaEntry(input: {
   };
 }
 
-/** Live keys, for tests and the ticket-11 debug overlay. */
+/** Live keys - the registry's only observable disposal signal, read by tests. */
 export function activeBrowserMediaKeyIds(): readonly string[] {
   return [...records.keys()];
 }
@@ -399,7 +422,11 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
    * swallow it. Each state still goes out at most once - `fail()` nulls the
    * round, so a second failure cannot re-fire either.
    */
-  const report = (state: "live" | "failed", reason: string | null): void => {
+  const report = (
+    state: "live" | "failed",
+    reason: BrowserVideoPlaneFailureReason | null,
+    detail: string | null,
+  ): void => {
     if (round === null) return;
     if (state === "live") {
       // The host only accepts `live` on an ANSWERED round, and both ride one
@@ -413,10 +440,11 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
       if (round.reportedFailed) return;
       round.reportedFailed = true;
     }
-    round.port.sendVideoPlaneState({
+    round.port?.sendVideoPlaneState({
       negotiationId: round.negotiationId,
       state,
       reason,
+      detail,
     });
   };
 
@@ -445,9 +473,12 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     active.flushTimer = null;
   };
 
-  const fail = (reason: string): void => {
+  const fail = (
+    reason: BrowserVideoPlaneFailureReason,
+    detail: string | null,
+  ): void => {
     if (round === null) return;
-    report("failed", reason);
+    report("failed", reason, detail);
     closeChannels();
     clearFlushTimer(round);
     round.peer.close();
@@ -484,13 +515,28 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
         // case the flush happens immediately instead of arming the timer.
         const flush = (): void => {
           if (round !== started || started.answerSent) return;
-          started.answerSent = true;
           clearFlushTimer(started);
-          started.port.sendSdpAnswer({
+          const port = started.port;
+          // Latched only once an answer actually goes out: a detached port is
+          // not a sent answer, and marking it one would retire the round.
+          if (port === null) return;
+          started.answerSent = true;
+          port.sendSdpAnswer({
             negotiationId: started.negotiationId,
             sdp: answerSdp,
-            candidates: started.localCandidateBatch.splice(0),
+            candidates: started.localCandidateBatch.splice(
+              0,
+              ICE_ANSWER_CANDIDATE_BATCH_MAX,
+            ),
           });
+          // Whatever the cap left behind rides the trickle path the answer has
+          // just opened, rather than inflating one frame without bound.
+          for (const candidate of started.localCandidateBatch.splice(0)) {
+            port.sendIceCandidate({
+              negotiationId: started.negotiationId,
+              ...candidate,
+            });
+          }
         };
         started.flushAnswer = flush;
         if (started.gatheringComplete) {
@@ -498,13 +544,13 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
         } else {
           started.flushTimer = window.setTimeout(
             flush,
-            iceTrickleBatchMs(started.port.readControlPlaneRttMs()),
+            iceTrickleBatchMs(started.port?.readControlPlaneRttMs() ?? null),
           );
         }
       })
       .catch((error: unknown) => {
         if (round !== started) return;
-        fail(`answer-failed: ${errorText(error)}`);
+        fail("answer-failed", errorText(error));
       });
   };
 
@@ -543,7 +589,12 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
       if (
         round === null &&
         snapshot.negotiationId !== null &&
-        negotiationId <= snapshot.negotiationId
+        (negotiationId < snapshot.negotiationId ||
+          // A failed round is over, so the host re-offering under the SAME id
+          // is a genuine retry of it, not the stale resend the `<=` guard
+          // exists to drop.
+          (negotiationId === snapshot.negotiationId &&
+            snapshot.phase !== "failed"))
       ) {
         return;
       }
@@ -562,7 +613,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
             // re-points it, and this handler outlives that (the peer, and
             // its handlers, are never recreated for a restart).
             if (round.answerSent) {
-              round.port.sendIceCandidate({ negotiationId, ...candidate });
+              round.port?.sendIceCandidate({ negotiationId, ...candidate });
               return;
             }
             round.localCandidateBatch.push(candidate);
@@ -590,7 +641,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
           },
           onFailure: (reason) => {
             if (round?.negotiationId !== negotiationId) return;
-            fail(reason);
+            fail(reason, null);
           },
         },
         iceServers,
@@ -632,11 +683,15 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     },
 
     reportFirstDecodedFrame: () => {
-      report("live", null);
+      report("live", null, null);
     },
 
     reportFailure: (reason) => {
-      fail(reason);
+      fail(reason, null);
+    },
+
+    detachPort: (port) => {
+      if (round?.port === port) round.port = null;
     },
 
     getStats: () => round?.peer.getStats() ?? Promise.resolve(null),
@@ -679,26 +734,6 @@ function errorText(error: unknown): string {
 
 function noop(): void {}
 
-function isStatsRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-/**
- * The inbound video RTP stat's jitter, in milliseconds - `null` when the
- * report carries none yet (pre-first-sample). Duplicated in miniature from
- * `sessions/webrtc-video-stats.ts` rather than imported: that module already
- * imports types FROM this one, and it maps the whole wire shape where this
- * needs only one field off the raw report.
- */
-function inboundVideoJitterMs(report: RTCStatsReport): number | null {
-  for (const value of report.values()) {
-    if (!isStatsRecord(value)) continue;
-    if (value.type !== "inbound-rtp" || value.kind !== "video") continue;
-    return typeof value.jitter === "number" ? value.jitter * 1000 : null;
-  }
-  return null;
-}
-
 /**
  * A4/F6: sizes the receiver's jitter buffer off the CURRENTLY measured
  * jitter instead of trusting Chromium's constant default (30-100ms,
@@ -708,7 +743,7 @@ function inboundVideoJitterMs(report: RTCStatsReport): number | null {
  * receivers, so it is feature-detected rather than assumed from the DOM
  * typings (which declare it unconditionally).
  */
-export function applyAdaptiveJitterBufferTarget(
+function applyAdaptiveJitterBufferTarget(
   receiver: RTCRtpReceiver | null,
   report: RTCStatsReport,
 ): void {
@@ -738,7 +773,7 @@ const H264_RTPMAP_PATTERN = /a=rtpmap:\d+ h264\//i;
  * right after `setRemoteDescription`, before `createAnswer`, since the
  * answer is what carries the preference back to the offerer.
  */
-export function preferH264IfCapable(
+function preferH264IfCapable(
   connection: RTCPeerConnection,
   offerSdp: string,
 ): void {
@@ -774,7 +809,7 @@ export function createBrowserMediaPeer(
     // for an older host that sends no `sdpOffer.iceServers` at all.
     iceServers:
       iceServers.length === 0
-        ? [{ urls: "stun:stun.l.google.com:19302" }]
+        ? [{ urls: BROWSER_SCREENCAST_STUN_URL }]
         : iceServers.map((server) => ({
             urls: [...server.urls],
             ...(server.username === null ? {} : { username: server.username }),

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
@@ -6,7 +6,10 @@ import {
   createRequestContext,
   identityFromAuthenticatedUser,
 } from "@traycer/protocol/auth/request-context";
-import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserScreencastServerFrame,
+  BrowserSessionsClientFrame,
+} from "@traycer/protocol/host/browser/contracts";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import type {
@@ -25,6 +28,14 @@ import { WsStreamClient } from "../ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
+const CLOSE_TAB_FRAME: BrowserSessionsClientFrame = {
+  kind: "closeTab",
+  hasBinaryPayload: false,
+  requestId: "close-tab-1",
+  sessionId: "browser-session-1",
+  tabId: "browser-tab-1",
+};
+
 class StubStreamWebSocket implements StreamWebSocketLike {
   onopen: ((event: WebSocketOpenEvent) => void) | null = null;
   onmessage: ((event: StreamWebSocketMessageEvent) => void) | null = null;
@@ -32,10 +43,8 @@ class StubStreamWebSocket implements StreamWebSocketLike {
   onclose: ((event: WebSocketCloseEvent) => void) | null = null;
 
   readonly textSent: string[] = [];
-  failSends = false;
 
   send(data: string | Uint8Array): void {
-    if (this.failSends) throw new Error("socket refused the write");
     if (typeof data === "string") {
       this.textSent.push(data);
     }
@@ -167,110 +176,6 @@ describe("BrowserSessionsStreamClient", () => {
     stream.close();
   });
 
-  it("delivers one pong per application ping and swallows heartbeat pongs", () => {
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
-    const kinds: string[] = [];
-    const stream = new BrowserSessionsStreamClient({
-      wsStreamClient: client,
-      epicId: "epic-1",
-      callbacks: {
-        onServerFrame: (frame) => {
-          kinds.push(frame.kind);
-        },
-        onConnectionStatus: () => undefined,
-      },
-    });
-
-    completeHandshake(sockets[0]);
-    // No application ping outstanding: this answers the heartbeat and must
-    // stay inside the transport.
-    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
-    expect(kinds).toEqual([]);
-
-    // Two overlapping flushes: two pings, two pongs, two delivered frames.
-    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
-    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
-    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
-    expect(kinds).toEqual(["pong"]);
-    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
-    expect(kinds).toEqual(["pong", "pong"]);
-
-    // Both are answered; a later heartbeat pong is swallowed again.
-    sockets[0].fireText({ kind: "pong", hasBinaryPayload: false });
-    expect(kinds).toEqual(["pong", "pong"]);
-    stream.close();
-  });
-
-  it("never credits a pong on a NEW socket to a ping sent on the old one", async () => {
-    // The ping queue is per-socket. A reconnect strands whatever the old
-    // socket never answered, and if that backlog survived, the first pong of
-    // the new connection would settle it - telling a quitting shell that a
-    // capture it never delivered had reached the host.
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
-    const kinds: string[] = [];
-    const stream = new BrowserSessionsStreamClient({
-      wsStreamClient: client,
-      epicId: "epic-1",
-      callbacks: {
-        onServerFrame: (frame) => {
-          kinds.push(frame.kind);
-        },
-        onConnectionStatus: () => undefined,
-      },
-    });
-
-    completeHandshake(sockets[0]);
-    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
-    sockets[0].fireClose(1006, "dropped");
-
-    await vi.waitFor(() => {
-      expect(sockets).toHaveLength(2);
-    });
-    completeHandshake(sockets[1]);
-    sockets[1].fireText({ kind: "pong", hasBinaryPayload: false });
-    expect(kinds).toEqual([]);
-
-    // The new socket keeps its own pairing.
-    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
-    sockets[1].fireText({ kind: "pong", hasBinaryPayload: false });
-    expect(kinds).toEqual(["pong"]);
-    stream.close();
-  });
-
-  it("never credits a pong to a ping the socket refused to write", async () => {
-    // A refused write tears the socket down; the ping never reached the host,
-    // so nothing may later answer it. Both the `return` after `onSendFailure`
-    // and the per-socket reset above enforce this - the assertion is on the
-    // invariant, not on either line.
-    const { factory, sockets } = makeFactory();
-    const client = makeClient(factory);
-    const kinds: string[] = [];
-    const stream = new BrowserSessionsStreamClient({
-      wsStreamClient: client,
-      epicId: "epic-1",
-      callbacks: {
-        onServerFrame: (frame) => {
-          kinds.push(frame.kind);
-        },
-        onConnectionStatus: () => undefined,
-      },
-    });
-
-    completeHandshake(sockets[0]);
-    sockets[0].failSends = true;
-    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
-
-    await vi.waitFor(() => {
-      expect(sockets).toHaveLength(2);
-    });
-    completeHandshake(sockets[1]);
-    sockets[1].fireText({ kind: "pong", hasBinaryPayload: false });
-    expect(kinds).toEqual([]);
-    stream.close();
-  });
-
   it("stops sending client frames once closed", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);
@@ -285,11 +190,11 @@ describe("BrowserSessionsStreamClient", () => {
 
     completeHandshake(sockets[0]);
     const beforeClose = sockets[0].textSent.length;
-    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+    stream.sendClientFrame(CLOSE_TAB_FRAME);
     expect(sockets[0].textSent).toHaveLength(beforeClose + 1);
 
     stream.close();
-    stream.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
+    stream.sendClientFrame(CLOSE_TAB_FRAME);
     expect(sockets[0].textSent).toHaveLength(beforeClose + 1);
   });
 });

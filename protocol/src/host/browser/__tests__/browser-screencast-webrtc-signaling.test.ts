@@ -2,21 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   browserScreencastClientFrameSchema,
   browserScreencastServerFrameSchema,
-  browserScreencastV1,
 } from "@traycer/protocol/host/browser/contracts";
 
 function parsesClient(frame: unknown): boolean {
-  return (
-    browserScreencastClientFrameSchema.safeParse(frame).success &&
-    browserScreencastV1.clientFrameSchema.safeParse(frame).success
-  );
+  return browserScreencastClientFrameSchema.safeParse(frame).success;
 }
 
 function parsesServer(frame: unknown): boolean {
-  return (
-    browserScreencastServerFrameSchema.safeParse(frame).success &&
-    browserScreencastV1.serverFrameSchema.safeParse(frame).success
-  );
+  return browserScreencastServerFrameSchema.safeParse(frame).success;
 }
 
 describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
@@ -301,6 +294,7 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
     ).toBe(true);
     // Nonnegative, like every other timing on this frame: a negative reading
     // means the two endpoints were not on one clock, which is not a sample.
+    // (Mutation: dropping `.nonnegative()` off `networkPlusJitterMs`.)
     expect(
       parsesClient({
         kind: "videoStats",
@@ -338,6 +332,9 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
   });
 
   it("bounds the SDP and candidate wire strings", () => {
+    // Mutation: dropping any of the four `.max()` bounds - an unbounded SDP,
+    // candidate string, or candidate array is a memory amplifier on a frame
+    // either end can send.
     expect(
       parsesServer({
         kind: "sdpOffer",
@@ -379,6 +376,19 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
     ).toBe(false);
   });
 
+  it("rejects an unknown extra key on a strict video-plane frame", () => {
+    // Mutation: dropping `.strict()` off a video-plane variant.
+    expect(
+      parsesServer({
+        kind: "sdpOffer",
+        hasBinaryPayload: false,
+        negotiationId: 1,
+        sdp: "v=0\r\n",
+        someFutureField: true,
+      }),
+    ).toBe(false);
+  });
+
   it("rejects a videoStats frame sent the wrong direction (client-only stats)", () => {
     expect(
       parsesServer({
@@ -404,6 +414,7 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
         negotiationId: 1,
         state: "live",
         reason: null,
+        detail: null,
       }),
     ).toBe(true);
     expect(
@@ -412,7 +423,8 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
         hasBinaryPayload: false,
         negotiationId: 1,
         state: "failed",
-        reason: "ice-timeout",
+        reason: "connection-failed",
+        detail: null,
       }),
     ).toBe(true);
     expect(
@@ -422,6 +434,7 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
         negotiationId: 1,
         state: "connecting",
         reason: null,
+        detail: null,
       }),
     ).toBe(false);
     expect(
@@ -431,18 +444,31 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
         negotiationId: 1,
         state: "live",
         reason: null,
+        detail: null,
       }),
     ).toBe(false);
-  });
-
-  it("rejects an unknown extra key on a strict video-plane frame", () => {
+    // The reason vocabulary is CLOSED. Mutation: widening the enum back to a
+    // free string - "ice-timeout" is a plausible-looking code that is not in
+    // it, and a host that switched on it would silently get "other".
     expect(
-      parsesServer({
-        kind: "sdpOffer",
+      parsesClient({
+        kind: "videoPlaneState",
         hasBinaryPayload: false,
         negotiationId: 1,
-        sdp: "v=0\r\n",
-        someFutureField: true,
+        state: "failed",
+        reason: "ice-timeout",
+        detail: null,
+      }),
+    ).toBe(false);
+    // `detail` is free-form but bounded. Mutation: dropping `.max(256)`.
+    expect(
+      parsesClient({
+        kind: "videoPlaneState",
+        hasBinaryPayload: false,
+        negotiationId: 1,
+        state: "failed",
+        reason: "answer-failed",
+        detail: "a".repeat(257),
       }),
     ).toBe(false);
   });
@@ -473,6 +499,7 @@ describe("browser.screencast@1.0 viewport-epoch hit-testing", () => {
         epoch: 0,
       }),
     ).toBe(true);
+    // Mutation: dropping `.nonnegative()` off the announced epoch.
     expect(
       parsesServer({
         kind: "viewportEpoch",
@@ -513,6 +540,9 @@ describe("browser.screencast@1.0 viewport-epoch hit-testing", () => {
   });
 
   it("rejects a negative or non-integer viewport epoch on input", () => {
+    // Mutation: dropping `.int()` or `.nonnegative()` off the input token -
+    // a fractional epoch never equals a minted one, so every input would be
+    // silently discarded as stale.
     expect(
       parsesClient({ ...POINTER, castSequence: null, viewportEpoch: -1 }),
     ).toBe(false);

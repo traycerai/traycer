@@ -827,16 +827,25 @@ export class RunnerIpcBridge {
     }));
   }
 
+  /**
+   * Asks every mounted renderer, not only the ones holding a live native
+   * guest. What has to be flushed is the primary-profile store, and a window
+   * whose last native tab was already torn down (or whose tabs went dormant on
+   * a route change) still holds the coordinator that can report a jar. Only
+   * that coordinator knows whether it has anything to say, and it answers
+   * immediately when it does not.
+   */
   async captureFinalBrowserState(): Promise<void> {
     const windowIds = this.windowRegistry
       .records()
       .map((record) => record.windowId)
-      .filter((windowId) => this.needsFinalBrowserCaptureForWindow(windowId));
+      .filter((windowId) => this.appLifecycleReadyWindowIds.has(windowId));
     await Promise.all(
       windowIds.map((windowId) => this.requestFinalBrowserCapture(windowId)),
     );
   }
 
+  /** The native-teardown gate: this window owns guests that are about to die. */
   needsFinalBrowserCaptureForWindow(windowId: string): boolean {
     return (
       this.appLifecycleReadyWindowIds.has(windowId) &&

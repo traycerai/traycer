@@ -3,6 +3,7 @@ import type {
   BrowserSessionsClientFrame,
   BrowserSessionsServerFrame,
   BrowserTabIdentity,
+  BrowserTabPreview,
 } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionsStreamClient } from "@traycer-clients/shared/host-transport/browser-sessions-stream-client";
 import type {
@@ -43,18 +44,6 @@ export interface BrowserSessionsState {
 }
 
 /**
- * The host's verdict on one `captureTabPreview`. `ok: false` is an ordinary
- * answer (a dormant tab, a tab that went away), not a transport failure.
- */
-export interface BrowserTabPreview {
-  readonly ok: boolean;
-  readonly screenshotBase64: string | null;
-  readonly url: string | null;
-  readonly title: string | null;
-  readonly reason: string | null;
-}
-
-/**
  * One epic's browser inventory, keyed by {epic, host, authenticated owner}.
  * The registry is module-global because several React surfaces (the canvas
  * tiles, the sidebar, the PiP bridge) subscribe to the same stream and must
@@ -74,23 +63,24 @@ interface BrowserSessionsCoordinatorRuntime {
    * remote host stays a pure viewer (spec decision #3).
    */
   readonly localHostId: string | null;
+  /**
+   * This renderer's desktop window id, or null off Electron. Threaded from
+   * `<WindowsBridgeProvider>` alongside `localHostId` rather than probed off
+   * `window`: the typed bridge is the one source, and a structural read here
+   * would be a fourth private copy of the same probe.
+   */
+  readonly desktopWindowId: string | null;
   readonly openTransport: (hostId: string) => DurableStreamTransport;
 }
 
-type PendingCloseRequest = {
-  readonly resolve: () => void;
-  readonly reject: (error: Error) => void;
-};
-
-type PendingOpenRequest = {
-  readonly resolve: (result: BrowserTabIdentity) => void;
-  readonly reject: (error: Error) => void;
-};
-
-type PendingPreviewRequest = {
-  readonly resolve: (result: BrowserTabPreview) => void;
-  readonly reject: (error: Error) => void;
-};
+/** One outstanding request/response pair, keyed by its `requestId`. */
+type PendingRequests<T> = Map<
+  string,
+  {
+    readonly resolve: (result: T) => void;
+    readonly reject: (error: Error) => void;
+  }
+>;
 
 interface BrowserSessionsActionChannel {
   readonly owner: BrowserSessionsOwner;
@@ -151,6 +141,14 @@ export function hasBrowserSessionsCoordinator(key: string): boolean {
  * rather than the shell's full wait.
  */
 export const FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS = 5_000;
+
+/**
+ * Bound on one `captureTabPreview`. Its own constant rather than a borrowed
+ * flush timeout: a preview is a live screenshot of a tab that may be dormant,
+ * wedged or gone, and the mention picker awaiting it has no other way out.
+ * The two happen to be the same number today; nothing ties them together.
+ */
+const TAB_PREVIEW_TIMEOUT_MS = 5_000;
 
 /**
  * One last primary-profile capture per live `browser.sessions` stream this
@@ -244,17 +242,17 @@ function notifyBrowserSessionsCoordinator(key: string): void {
   browserSessionsRegistryListeners.forEach((listener) => listener());
 }
 
+/** One live coordinator, addressed by the registry key that reaches it. */
+export interface BrowserSessionsCoordinatorEntry {
+  readonly key: string;
+  readonly state: BrowserSessionsState;
+}
+
 /** Every live coordinator for `epicId`, in registry (insertion) order. */
 export function browserSessionsCoordinatorsForEpic(
   epicId: string,
-): ReadonlyArray<{
-  readonly key: string;
-  readonly state: BrowserSessionsState;
-}> {
-  const out: Array<{
-    readonly key: string;
-    readonly state: BrowserSessionsState;
-  }> = [];
+): readonly BrowserSessionsCoordinatorEntry[] {
+  const out: BrowserSessionsCoordinatorEntry[] = [];
   browserSessionsCoordinators.forEach((coordinator, key) => {
     if (coordinator.epicId === epicId)
       out.push({ key, state: coordinator.state });
@@ -318,9 +316,9 @@ function createBrowserSessionsCoordinator(args: {
   readonly owner: BrowserSessionsOwner;
   readonly runtime: BrowserSessionsCoordinatorRuntime;
 }): BrowserSessionsCoordinator {
-  const pendingCloses = new Map<string, PendingCloseRequest>();
-  const pendingOpens = new Map<string, PendingOpenRequest>();
-  const pendingPreviews = new Map<string, PendingPreviewRequest>();
+  const pendingCloses: PendingRequests<void> = new Map();
+  const pendingOpens: PendingRequests<BrowserTabIdentity> = new Map();
+  const pendingPreviews: PendingRequests<BrowserTabPreview> = new Map();
   const runtimes = new Map<symbol, BrowserSessionsCoordinatorRuntime>([
     [args.consumerId, args.runtime],
   ]);
@@ -359,76 +357,81 @@ function createBrowserSessionsCoordinator(args: {
       : null;
   };
 
-  const closeTab = (sessionId: string, tabId: string): Promise<void> => {
+  /**
+   * Sends one request frame and resolves on the answer that carries its
+   * `requestId`. `timeoutMs` bounds the wait for a host that never answers at
+   * all; a closed stream rejects every pending request through
+   * `rejectPendingRequests` instead.
+   */
+  const sendRequest = <T>(
+    pending: PendingRequests<T>,
+    timeoutMs: number | null,
+    frame: (requestId: string) => BrowserSessionsClientFrame,
+  ): Promise<T> => {
     const channel = activeChannel();
     if (channel === null) {
       return Promise.reject(new Error("Browser sessions stream is not ready."));
     }
     const requestId = crypto.randomUUID();
-    return new Promise<void>((resolve, reject) => {
-      pendingCloses.set(requestId, { resolve, reject });
+    return new Promise<T>((resolve, reject) => {
+      const timer =
+        timeoutMs === null
+          ? null
+          : window.setTimeout(() => {
+              pending.delete(requestId);
+              reject(new Error("Browser sessions request timed out."));
+            }, timeoutMs);
+      const settle = (): void => {
+        pending.delete(requestId);
+        if (timer !== null) window.clearTimeout(timer);
+      };
+      pending.set(requestId, {
+        resolve: (result) => {
+          settle();
+          resolve(result);
+        },
+        reject: (error) => {
+          settle();
+          reject(error);
+        },
+      });
       try {
-        channel.sendClientFrame({
-          kind: "closeTab",
-          hasBinaryPayload: false,
-          requestId,
-          sessionId,
-          tabId,
-        });
+        channel.sendClientFrame(frame(requestId));
       } catch (error) {
-        pendingCloses.delete(requestId);
+        settle();
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
   };
+
+  const closeTab = (sessionId: string, tabId: string): Promise<void> =>
+    sendRequest(pendingCloses, null, (requestId) => ({
+      kind: "closeTab",
+      hasBinaryPayload: false,
+      requestId,
+      sessionId,
+      tabId,
+    }));
 
   const openTab = (
     sessionId: string | null,
     url: string,
-  ): Promise<BrowserTabIdentity> => {
-    const channel = activeChannel();
-    if (channel === null) {
-      return Promise.reject(new Error("Browser sessions stream is not ready."));
-    }
-    const requestId = crypto.randomUUID();
-    return new Promise<BrowserTabIdentity>((resolve, reject) => {
-      pendingOpens.set(requestId, { resolve, reject });
-      try {
-        channel.sendClientFrame({
-          kind: "openTab",
-          hasBinaryPayload: false,
-          requestId,
-          sessionId,
-          url,
-        });
-      } catch (error) {
-        pendingOpens.delete(requestId);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  };
+  ): Promise<BrowserTabIdentity> =>
+    sendRequest(pendingOpens, null, (requestId) => ({
+      kind: "openTab",
+      hasBinaryPayload: false,
+      requestId,
+      sessionId,
+      url,
+    }));
 
-  const captureTabPreview = (tabId: string): Promise<BrowserTabPreview> => {
-    const channel = activeChannel();
-    if (channel === null) {
-      return Promise.reject(new Error("Browser sessions stream is not ready."));
-    }
-    const requestId = crypto.randomUUID();
-    return new Promise<BrowserTabPreview>((resolve, reject) => {
-      pendingPreviews.set(requestId, { resolve, reject });
-      try {
-        channel.sendClientFrame({
-          kind: "captureTabPreview",
-          hasBinaryPayload: false,
-          requestId,
-          tabId,
-        });
-      } catch (error) {
-        pendingPreviews.delete(requestId);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    });
-  };
+  const captureTabPreview = (tabId: string): Promise<BrowserTabPreview> =>
+    sendRequest(pendingPreviews, TAB_PREVIEW_TIMEOUT_MS, (requestId) => ({
+      kind: "captureTabPreview",
+      hasBinaryPayload: false,
+      requestId,
+      tabId,
+    }));
 
   const start = (): void => {
     patchState({
@@ -460,41 +463,36 @@ function createBrowserSessionsCoordinator(args: {
     let snapshotReadyForConnection = false;
     let connectionStatus: StreamConnectionStatus = "connecting";
     let connectionGeneration = 0;
-    // `ping` / `pong` is the only ordered round trip this stream has, so it is
-    // what "the frame reached the host" means here: the socket has no flush
-    // primitive, and `primaryProfileCaptured` is not acknowledged.
-    //
-    // The queue pairs each pong with the ping it answers BY POSITION: the
-    // transport delivers one `pong` per application `ping`, the Nth pong
-    // answers the Nth ping, so a pong shifts the queue rather than scanning
-    // it. A waiter that timed out stays queued with an inert `settle`, which
-    // is what keeps its late pong from being credited to the next waiter -
-    // removing it would resolve an overlapping capture on a pong that was
-    // already in flight before its own frame went out.
-    const streamFlushWaiters: Array<() => void> = [];
-    const resolveOldestStreamFlushWaiter = (): void => {
-      streamFlushWaiters.shift()?.();
+    // Quit-flush waiters keyed by the capture `requestId` each answers. The
+    // host acks a `primaryProfileCaptured` once it has DURABLY stored (or
+    // rejected) that jar, which is what the quit path actually needs to know.
+    // Never rejects: an unanswered flush is a timeout, and a stream going away
+    // resolves it - a quit must not stall or throw on either.
+    const captureAckWaiters = new Map<string, () => void>();
+    const resolveCaptureAckWaiter = (requestId: string): void => {
+      const settle = captureAckWaiters.get(requestId);
+      if (settle === undefined) return;
+      captureAckWaiters.delete(requestId);
+      settle();
     };
-    const resolveStreamFlushWaiters = (): void => {
-      for (const settle of streamFlushWaiters.splice(0)) settle();
+    const resolveCaptureAckWaiters = (): void => {
+      for (const settle of [...captureAckWaiters.values()]) settle();
+      captureAckWaiters.clear();
     };
-    const awaitStreamFlush = (): Promise<void> =>
+    const awaitCaptureAck = (requestId: string): Promise<void> =>
       new Promise<void>((resolve) => {
         if (actionChannel !== channel || connectionStatus !== "open") {
           resolve();
           return;
         }
-        // `resolve` is idempotent, so a queued waiter that already timed out
-        // simply absorbs its own pong.
-        const timer = window.setTimeout(
-          resolve,
-          FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
-        );
-        streamFlushWaiters.push(() => {
+        const timer = window.setTimeout(() => {
+          captureAckWaiters.delete(requestId);
+          resolve();
+        }, FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS);
+        captureAckWaiters.set(requestId, () => {
           window.clearTimeout(timer);
           resolve();
         });
-        stream?.sendClientFrame({ kind: "ping", hasBinaryPayload: false });
       });
     const sendLifecycleReadyIfReady = (): void => {
       const localHostId = runtime.localHostId;
@@ -518,6 +516,7 @@ function createBrowserSessionsCoordinator(args: {
         kind: "electronTabLifecycleReady",
         hasBinaryPayload: false,
         coLocatedHostId: localHostId,
+        desktopWindowId: runtime.desktopWindowId,
       });
     };
     retryLifecycleReady = sendLifecycleReadyIfReady;
@@ -537,7 +536,7 @@ function createBrowserSessionsCoordinator(args: {
         sendLifecycleReadyIfReady();
       } else {
         if (wasOpen) connectionGeneration += 1;
-        resolveStreamFlushWaiters();
+        resolveCaptureAckWaiters();
         electronTabs.disconnect();
         electronLifecycleReadySentForConnection = false;
         snapshotReadyForConnection = false;
@@ -563,7 +562,9 @@ function createBrowserSessionsCoordinator(args: {
 
     const onServerFrame = (frame: BrowserSessionsServerFrame): void => {
       if (actionChannel !== channel) return;
-      if (frame.kind === "pong") resolveOldestStreamFlushWaiter();
+      if (frame.kind === "primaryProfileCaptureAck") {
+        resolveCaptureAckWaiter(frame.requestId);
+      }
       const frameGeneration = connectionGeneration;
       handleBrowserSessionsFrame({
         frame,
@@ -628,21 +629,23 @@ function createBrowserSessionsCoordinator(args: {
       // that host's own, richer jar with a laptop's on every quit. The same
       // locality rule gates `electronTabLifecycleReady` above.
       if (runtime.localHostId !== args.owner.hostId) return;
+      const requestId = crypto.randomUUID();
+      const acked = awaitCaptureAck(requestId);
       await capturePrimaryProfileOnce({
-        requestId: crypto.randomUUID(),
+        requestId,
         browserView,
         sendClientFrame: (response) => {
           if (actionChannel !== channel) return;
           opened.sendClientFrame(response);
         },
       });
-      await awaitStreamFlush();
+      await acked;
     };
 
     stopCurrentStream = () => {
       if (actionChannel === channel) actionChannel = null;
       captureFinalPrimaryProfile = (): Promise<void> => Promise.resolve();
-      resolveStreamFlushWaiters();
+      resolveCaptureAckWaiters();
       electronTabs.dispose();
       opened.close();
       transport.close();
@@ -722,11 +725,10 @@ function createBrowserSessionsCoordinator(args: {
 
 function handleCloseAck(
   frame: Extract<BrowserSessionsServerFrame, { readonly kind: "actionAck" }>,
-  pendingCloses: Map<string, PendingCloseRequest>,
+  pendingCloses: PendingRequests<void>,
 ): void {
   const pending = pendingCloses.get(frame.requestId);
   if (pending === undefined) return;
-  pendingCloses.delete(frame.requestId);
   if (frame.ok) pending.resolve();
   else pending.reject(new Error(frame.reason ?? "Browser action failed."));
 }
@@ -742,9 +744,9 @@ function handleBrowserSessionsFrame(args: {
   readonly hostId: string;
   readonly currentItems: () => readonly BrowserSessionInfo[];
   readonly setItems: (items: readonly BrowserSessionInfo[]) => void;
-  readonly pendingCloses: Map<string, PendingCloseRequest>;
-  readonly pendingOpens: Map<string, PendingOpenRequest>;
-  readonly pendingPreviews: Map<string, PendingPreviewRequest>;
+  readonly pendingCloses: PendingRequests<void>;
+  readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
+  readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly browserView: BrowserViewBridge | null;
   readonly electronTabs: ElectronTabs;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
@@ -807,8 +809,8 @@ function handleBrowserSessionsSubsystemFrame(args: {
   readonly frame: BrowserSessionsSubsystemFrame;
   readonly epicId: string;
   readonly hostId: string;
-  readonly pendingOpens: Map<string, PendingOpenRequest>;
-  readonly pendingPreviews: Map<string, PendingPreviewRequest>;
+  readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
+  readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
   readonly browserView: BrowserViewBridge | null;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
 }): void {
@@ -817,7 +819,6 @@ function handleBrowserSessionsSubsystemFrame(args: {
     case "openTabResult": {
       const pending = args.pendingOpens.get(frame.requestId);
       if (pending === undefined) return;
-      args.pendingOpens.delete(frame.requestId);
       if (frame.result.ok) pending.resolve(frame.result);
       else pending.reject(new Error(frame.result.reason));
       return;
@@ -825,7 +826,6 @@ function handleBrowserSessionsSubsystemFrame(args: {
     case "tabPreviewResult": {
       const pending = args.pendingPreviews.get(frame.requestId);
       if (pending === undefined) return;
-      args.pendingPreviews.delete(frame.requestId);
       pending.resolve({
         ok: frame.ok,
         screenshotBase64: frame.screenshotBase64,
@@ -859,9 +859,11 @@ function handleBrowserSessionsSubsystemFrame(args: {
         sendClientFrame: args.sendClientFrame,
       });
       return;
+    // `primaryProfileCaptureAck` is answered in `onServerFrame`, which owns the
+    // quit-flush waiters; the burst frames are progress-only.
     case "burstStarted":
     case "burstEnded":
-    case "pong":
+    case "primaryProfileCaptureAck":
       return;
     default: {
       // Unreachable: the stream client validates every frame against

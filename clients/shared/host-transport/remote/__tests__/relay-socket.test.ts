@@ -659,7 +659,9 @@ describe("RelaySocket adaptive half-open detection", () => {
   });
 
   it("derived lengthening: slow round trips push the missed-pong deadline past the old fixed constant", () => {
-    // The keepalive's own ping/pong feeds `path.noteRoundTrip`, so a SLOW
+    // The keepalive's own ping/pong drives `path.notePingSent` /
+    // `path.notePongReceived` (the estimator times the round trip; there is no
+    // `noteRoundTrip` on its surface for a caller to feed), so a SLOW
     // but genuinely live path measures its own headroom and stops reading
     // its propagation delay as backlog (F11's false-positive teardowns).
     const handlers = makeHandlers({});

@@ -1,85 +1,53 @@
 import { describe, expect, it } from "vitest";
-import { MAX_CONTROL_PLANE_RTT_MS } from "@traycer/protocol/host/browser/control-plane-rtt";
-import {
-  deriveViewerDeadlineMs,
-  VIEWER_CONTROL_PLANE_DEADLINES,
-} from "@/lib/browser-view/sessions/control-plane-deadlines";
+import { deriveSpecDeadlineMs } from "@traycer/protocol/host-transport/rtt-deadlines";
+import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
 
-describe("deriveViewerDeadlineMs", () => {
-  it("returns each spec's floor exactly when no rtt has been measured", () => {
-    expect(
-      deriveViewerDeadlineMs(VIEWER_CONTROL_PLANE_DEADLINES.armBuffer, null),
-    ).toBe(1_000);
-    expect(
-      deriveViewerDeadlineMs(VIEWER_CONTROL_PLANE_DEADLINES.firstFrame, null),
-    ).toBe(15_000);
-    expect(
-      deriveViewerDeadlineMs(
-        VIEWER_CONTROL_PLANE_DEADLINES.staleWithoutFrame,
-        null,
-      ),
-    ).toBe(8_000);
-  });
+/**
+ * Each spec's floor and roundTrips multiplier, stated once here rather than
+ * restated per assertion below.
+ *
+ * What is pinned here is only THIS k-table: that each viewer window carries
+ * the floor and multiplier it is supposed to. The arithmetic itself (clamps,
+ * variance, rounding) belongs to `deriveRttDeadlineMs` and is pinned in
+ * `protocol/src/host-transport/__tests__/rtt-deadlines.test.ts`.
+ */
+const SPECS = [
+  {
+    name: "armBuffer",
+    spec: VIEWER_CONTROL_PLANE_DEADLINES.armBuffer,
+    floor: 1_000,
+    roundTrips: 2.5,
+  },
+  {
+    name: "firstFrame",
+    spec: VIEWER_CONTROL_PLANE_DEADLINES.firstFrame,
+    floor: 15_000,
+    roundTrips: 6,
+  },
+  {
+    name: "staleWithoutFrame",
+    spec: VIEWER_CONTROL_PLANE_DEADLINES.staleWithoutFrame,
+    floor: 8_000,
+    roundTrips: 4,
+  },
+] as const;
 
-  it("keeps the floor at a small rtt - JPEG-plane behaviour at low RTT is unchanged", () => {
-    // 2.5 * 50 = 125, 6 * 50 = 300, 4 * 50 = 200 - all well under their floors.
-    expect(
-      deriveViewerDeadlineMs(VIEWER_CONTROL_PLANE_DEADLINES.armBuffer, 50),
-    ).toBe(1_000);
-    expect(
-      deriveViewerDeadlineMs(VIEWER_CONTROL_PLANE_DEADLINES.firstFrame, 50),
-    ).toBe(15_000);
-    expect(
-      deriveViewerDeadlineMs(
-        VIEWER_CONTROL_PLANE_DEADLINES.staleWithoutFrame,
-        50,
-      ),
-    ).toBe(8_000);
-  });
+describe("deriveSpecDeadlineMs", () => {
+  it.each(SPECS)(
+    "returns $name's floor exactly when no rtt has been measured",
+    ({ spec, floor }) => {
+      expect(deriveSpecDeadlineMs(spec, null)).toBe(floor);
+    },
+  );
 
-  it("scales past the floor by the spec's own roundTrips multiplier", () => {
-    // 2.5 * 2000 = 5000 > 1000 floor.
-    expect(
-      deriveViewerDeadlineMs(VIEWER_CONTROL_PLANE_DEADLINES.armBuffer, 2_000),
-    ).toBe(5_000);
-    // 6 * 2600 = 15600 > 15000 floor.
-    expect(
-      deriveViewerDeadlineMs(VIEWER_CONTROL_PLANE_DEADLINES.firstFrame, 2_600),
-    ).toBe(15_600);
-    // 4 * 2500 = 10000 > 8000 floor.
-    expect(
-      deriveViewerDeadlineMs(
-        VIEWER_CONTROL_PLANE_DEADLINES.staleWithoutFrame,
-        2_500,
-      ),
-    ).toBe(10_000);
-  });
-
-  it("clamps at the max control-plane rtt, so a stalled sample can't blow up the deadline", () => {
-    const atClamp = deriveViewerDeadlineMs(
-      VIEWER_CONTROL_PLANE_DEADLINES.firstFrame,
-      MAX_CONTROL_PLANE_RTT_MS,
-    );
-    const wayPastClamp = deriveViewerDeadlineMs(
-      VIEWER_CONTROL_PLANE_DEADLINES.firstFrame,
-      50_000,
-    );
-    expect(atClamp).toBe(6 * MAX_CONTROL_PLANE_RTT_MS);
-    expect(wayPastClamp).toBe(atClamp);
-  });
-
-  it("treats a negative or zero rtt as safe - never below the floor", () => {
-    expect(
-      deriveViewerDeadlineMs(VIEWER_CONTROL_PLANE_DEADLINES.armBuffer, 0),
-    ).toBe(1_000);
-    expect(
-      deriveViewerDeadlineMs(VIEWER_CONTROL_PLANE_DEADLINES.armBuffer, -500),
-    ).toBe(1_000);
-    expect(
-      deriveViewerDeadlineMs(
-        VIEWER_CONTROL_PLANE_DEADLINES.firstFrame,
-        -100_000,
-      ),
-    ).toBe(15_000);
-  });
+  it.each([
+    { ...SPECS[0], rtt: 2_000 },
+    { ...SPECS[1], rtt: 2_600 },
+    { ...SPECS[2], rtt: 2_500 },
+  ])(
+    "scales $name past the floor by its own roundTrips multiplier",
+    ({ spec, roundTrips, rtt }) => {
+      expect(deriveSpecDeadlineMs(spec, rtt)).toBe(roundTrips * rtt);
+    },
+  );
 });

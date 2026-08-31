@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserVideoPlaneFailureReason } from "@traycer/protocol/host/browser/contracts";
+import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
 import {
   acquireBrowserMediaEntry,
   activeBrowserMediaKeyIds,
+  createBrowserMediaPeer,
   type MediaDataChannel,
   type MediaIceServer,
   type MediaPeer,
@@ -73,7 +76,9 @@ interface RecordingPort extends WebrtcSignalPort {
   readonly states: {
     negotiationId: number;
     state: "live" | "failed";
-    reason: string | null;
+    /** Closed enum on the wire; the free-form half rides `detail`. */
+    reason: BrowserVideoPlaneFailureReason | null;
+    detail: string | null;
   }[];
   readonly stats: { negotiationId: number }[];
 }
@@ -318,7 +323,7 @@ describe("webrtc media registry", () => {
     held.entry.reportFirstDecodedFrame();
     held.entry.reportFirstDecodedFrame();
     expect(port.states).toEqual([
-      { negotiationId: 3, state: "live", reason: null },
+      { negotiationId: 3, state: "live", reason: null, detail: null },
     ]);
 
     held.release();
@@ -348,8 +353,13 @@ describe("webrtc media registry", () => {
     // The failed report must survive the live one: it is what tells the host
     // to re-enable JPEG capture, and a per-round latch would swallow it.
     expect(port.states).toEqual([
-      { negotiationId: 4, state: "live", reason: null },
-      { negotiationId: 4, state: "failed", reason: "track-ended" },
+      { negotiationId: 4, state: "live", reason: null, detail: null },
+      {
+        negotiationId: 4,
+        state: "failed",
+        reason: "track-ended",
+        detail: null,
+      },
     ]);
     expect(held.entry.getSnapshot()).toMatchObject({
       phase: "failed",
@@ -360,7 +370,7 @@ describe("webrtc media registry", () => {
 
     // The round is gone with its peer, so a second, sink-side failure for the
     // same round is dropped rather than double-reported.
-    held.entry.reportFailure("no-frame-deadline");
+    held.entry.reportFailure("no-first-frame");
     expect(port.states).toHaveLength(2);
 
     held.release();
@@ -425,7 +435,7 @@ describe("webrtc media registry", () => {
       sdpMid: null,
       sdpMLineIndex: null,
     });
-    harness.peers[0]?.handlers.onFailure("late-death");
+    harness.peers[0]?.handlers.onFailure("track-ended");
     expect(port.candidates).toEqual([]);
     expect(port.states).toEqual([]);
 
@@ -457,7 +467,12 @@ describe("webrtc media registry", () => {
 
     expect(port.answers).toEqual([]);
     expect(port.states).toEqual([
-      { negotiationId: 9, state: "failed", reason: "answer-failed: no m-line" },
+      {
+        negotiationId: 9,
+        state: "failed",
+        reason: "answer-failed",
+        detail: "no m-line",
+      },
     ]);
 
     held.release();
@@ -489,7 +504,7 @@ describe("webrtc media registry", () => {
     expect(notifications).toBe(2);
 
     unsubscribe();
-    harness.peers[0]?.handlers.onFailure("gone");
+    harness.peers[0]?.handlers.onFailure("track-ended");
     expect(notifications).toBe(2);
 
     held.release();
@@ -522,7 +537,7 @@ describe("webrtc media registry", () => {
     harness.peers[0]?.handlers.onStream(fakeStream("s"));
     held.entry.reportFirstDecodedFrame();
     expect(deadPort.states).toEqual([
-      { negotiationId: 4, state: "live", reason: null },
+      { negotiationId: 4, state: "live", reason: null, detail: null },
     ]);
 
     // Transport death: the stream is gone, so nothing tells the registry. The
@@ -547,7 +562,7 @@ describe("webrtc media registry", () => {
     harness.peers[1]?.handlers.onStream(fakeStream("s2"));
     held.entry.reportFirstDecodedFrame();
     expect(livePort.states).toEqual([
-      { negotiationId: 9, state: "live", reason: null },
+      { negotiationId: 9, state: "live", reason: null, detail: null },
     ]);
     expect(held.entry.getSnapshot()).toMatchObject({
       phase: "streaming",
@@ -555,7 +570,7 @@ describe("webrtc media registry", () => {
     });
     // The dead round's channel is never written to again, not even by its own
     // peer falling over afterwards.
-    harness.peers[0]?.handlers.onFailure("transport-gone");
+    harness.peers[0]?.handlers.onFailure("connection-failed");
     expect(deadPort.states).toHaveLength(1);
     expect(deadPort.candidates).toEqual([]);
 
@@ -601,6 +616,49 @@ describe("webrtc media registry", () => {
     reliable.onStateChange?.();
     expect(held.entry.getSnapshot().inputReady).toBe(false);
     expect(held.entry.sendInput("input-reliable", "{}")).toBe(false);
+
+    held.release();
+    await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
+  });
+
+  it("flips inputReady false -> true when a channel opens after arriving closed", async () => {
+    const key = nextKey();
+    const harness = peerHarness();
+    const port = recordingPort();
+    const held = acquireBrowserMediaEntry({
+      key,
+      createPeer: harness.createPeer,
+    });
+
+    held.entry.acceptOffer({
+      negotiationId: 1,
+      sdp: "offer",
+      port,
+      iceServers: [],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const handlers = harness.peers[0].handlers;
+
+    const reliable = fakeChannel("input-reliable");
+    const lossy = fakeChannel("input-lossy");
+    // Both channels arrive already closed - `onDataChannel` must not assume
+    // the newly delivered channel is open.
+    reliable.open = false;
+    lossy.open = false;
+    handlers.onDataChannel(reliable);
+    handlers.onDataChannel(lossy);
+    expect(held.entry.getSnapshot().inputReady).toBe(false);
+
+    reliable.open = true;
+    reliable.onStateChange?.();
+    expect(held.entry.getSnapshot().inputReady).toBe(false);
+
+    lossy.open = true;
+    lossy.onStateChange?.();
+    expect(held.entry.getSnapshot().inputReady).toBe(true);
+    expect(held.entry.sendInput("input-reliable", '{"kind":"ping"}')).toBe(
+      true,
+    );
 
     held.release();
     await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
@@ -969,7 +1027,7 @@ describe("webrtc media registry", () => {
       held.entry.reportFirstDecodedFrame();
       held.entry.reportFirstDecodedFrame();
       expect(restartPort.states).toEqual([
-        { negotiationId: 5, state: "live", reason: null },
+        { negotiationId: 5, state: "live", reason: null, detail: null },
       ]);
 
       held.release();
@@ -1015,8 +1073,8 @@ describe("webrtc media registry", () => {
       held.entry.reportFirstDecodedFrame();
 
       expect(port.states).toEqual([
-        { negotiationId: 7, state: "live", reason: null },
-        { negotiationId: 7, state: "live", reason: null },
+        { negotiationId: 7, state: "live", reason: null, detail: null },
+        { negotiationId: 7, state: "live", reason: null, detail: null },
       ]);
 
       held.release();
@@ -1141,5 +1199,451 @@ describe("webrtc media registry", () => {
       held.release();
       await vi.advanceTimersByTimeAsync(GRACE_MS * 2);
     });
+  });
+});
+
+/**
+ * A minimal `RTCStatsReport`-shaped report: one inbound-rtp video stat. The
+ * WebRTC stats spec reports `jitter` in SECONDS - same convention
+ * `mapWebrtcVideoStats` reads - so callers pass seconds, not milliseconds.
+ */
+function jitterStatsReport(jitterSeconds: number | null): RTCStatsReport {
+  const entries: [string, Record<string, unknown>][] =
+    jitterSeconds === null
+      ? []
+      : [
+          [
+            "inbound-1",
+            { type: "inbound-rtp", kind: "video", jitter: jitterSeconds },
+          ],
+        ];
+  return new Map(entries);
+}
+
+/** jsdom has no `RTCRtpReceiver`; only the field this module reads travels. */
+function fakeReceiver(jitterBufferTargetPresent: boolean): RTCRtpReceiver {
+  const partial = jitterBufferTargetPresent ? { jitterBufferTarget: null } : {};
+  return partial as RTCRtpReceiver;
+}
+
+interface FakeTrackEvent {
+  readonly streams: readonly MediaStream[];
+  readonly track: { readonly kind: string; onended: (() => void) | null };
+  readonly receiver: RTCRtpReceiver;
+}
+
+/**
+ * jsdom has no `RTCPeerConnection`; stood in as the GLOBAL constructor
+ * (`vi.stubGlobal`) so `createBrowserMediaPeer`'s own `new RTCPeerConnection`
+ * picks it up. Only what these tests actually drive is modeled: the
+ * negotiation methods (for the minor-8 order pin) and `connectionState` +
+ * `onconnectionstatechange` (for the blocker-2 grace timer).
+ */
+class FakeConnection {
+  readonly calls: string[] = [];
+  connectionState = "new";
+  localDescription: { sdp: string } | null = null;
+  onconnectionstatechange: (() => void) | null = null;
+  /** What `getTransceivers()` answers, for the codec-preference path. */
+  transceivers: readonly RTCRtpTransceiver[] = [];
+  /** What `getStats()` resolves to, for the jitter-buffer path. */
+  statsReport: RTCStatsReport = new Map();
+  ontrack: ((event: FakeTrackEvent) => void) | null = null;
+
+  setRemoteDescription(): Promise<void> {
+    this.calls.push("setRemoteDescription");
+    return Promise.resolve();
+  }
+
+  getTransceivers(): readonly RTCRtpTransceiver[] {
+    this.calls.push("getTransceivers");
+    return this.transceivers;
+  }
+
+  /** Mimics the browser delivering an inbound track. */
+  emitTrack(kind: string, receiver: RTCRtpReceiver): void {
+    this.ontrack?.({
+      streams: [fakeStream("inbound-track")],
+      track: { kind, onended: null },
+      receiver,
+    });
+  }
+
+  createAnswer(): Promise<{ type: "answer"; sdp: string }> {
+    this.calls.push("createAnswer");
+    return Promise.resolve({ type: "answer", sdp: "answer-sdp" });
+  }
+
+  setLocalDescription(desc: { sdp: string }): Promise<void> {
+    this.calls.push("setLocalDescription");
+    this.localDescription = desc;
+    return Promise.resolve();
+  }
+
+  addIceCandidate(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  getStats(): Promise<RTCStatsReport> {
+    return Promise.resolve(this.statsReport);
+  }
+
+  close(): void {}
+
+  /** Mimics the browser dispatching the event after a state write. */
+  setConnectionState(state: string): void {
+    this.connectionState = state;
+    this.onconnectionstatechange?.();
+  }
+}
+
+const NOOP_HANDLERS: MediaPeerHandlers = {
+  onLocalIceCandidate: () => {},
+  onIceGatheringComplete: () => {},
+  onStream: () => {},
+  onDataChannel: () => {},
+  onFailure: () => {},
+};
+
+/** Stubs the global constructor and returns the instance it will produce. */
+function stubPeerConnection(): FakeConnection {
+  const instance = new FakeConnection();
+  vi.stubGlobal(
+    "RTCPeerConnection",
+    function FakeRTCPeerConnection(): FakeConnection {
+      return instance;
+    },
+  );
+  return instance;
+}
+
+describe("createBrowserMediaPeer.answerOffer codec-order pin (minor 8)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("runs setRemoteDescription -> preferH264IfCapable -> createAnswer -> setLocalDescription, in order", async () => {
+    vi.stubGlobal("RTCRtpReceiver", {
+      getCapabilities: () => ({
+        codecs: [{ clockRate: 90000, mimeType: "video/H264" }],
+        headerExtensions: [],
+      }),
+    });
+    const connection = stubPeerConnection();
+
+    const peer = createBrowserMediaPeer(NOOP_HANDLERS, []);
+    await peer.answerOffer("a=rtpmap:96 H264/90000\r\n");
+
+    // `getTransceivers` is `preferH264IfCapable`'s only observable call on
+    // this fake (it finds no video transceiver to touch and returns) - its
+    // position between `setRemoteDescription` and `createAnswer` is the
+    // order the review asked to pin.
+    expect(connection.calls).toEqual([
+      "setRemoteDescription",
+      "getTransceivers",
+      "createAnswer",
+      "setLocalDescription",
+    ]);
+  });
+});
+
+describe("createBrowserMediaPeer connectionState 'failed' grace (blocker 2)", () => {
+  const GRACE_MS = VIEWER_CONTROL_PLANE_DEADLINES.firstFrame.floorMs;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("does not report failure the instant connectionState reads 'failed'", () => {
+    const connection = stubPeerConnection();
+    const failures: string[] = [];
+    createBrowserMediaPeer(
+      { ...NOOP_HANDLERS, onFailure: (reason) => failures.push(reason) },
+      [],
+    );
+
+    connection.setConnectionState("failed");
+    expect(failures).toEqual([]);
+  });
+
+  it("reports failure only after the grace period elapses with no recovery", () => {
+    const connection = stubPeerConnection();
+    const failures: string[] = [];
+    createBrowserMediaPeer(
+      { ...NOOP_HANDLERS, onFailure: (reason) => failures.push(reason) },
+      [],
+    );
+
+    connection.setConnectionState("failed");
+    vi.advanceTimersByTime(GRACE_MS - 1);
+    expect(failures).toEqual([]);
+
+    vi.advanceTimersByTime(1);
+    expect(failures).toEqual(["connection-failed"]);
+  });
+
+  it("cancels the grace timer when the connection recovers (a same-id restart landing)", () => {
+    const connection = stubPeerConnection();
+    const failures: string[] = [];
+    createBrowserMediaPeer(
+      { ...NOOP_HANDLERS, onFailure: (reason) => failures.push(reason) },
+      [],
+    );
+
+    connection.setConnectionState("failed");
+    vi.advanceTimersByTime(GRACE_MS / 2);
+    connection.setConnectionState("connected");
+
+    vi.advanceTimersByTime(GRACE_MS * 2);
+    expect(failures).toEqual([]);
+  });
+
+  it("treats 'closed' as immediately terminal, unlike 'failed'", () => {
+    const connection = stubPeerConnection();
+    const failures: string[] = [];
+    createBrowserMediaPeer(
+      { ...NOOP_HANDLERS, onFailure: (reason) => failures.push(reason) },
+      [],
+    );
+
+    connection.setConnectionState("closed");
+    expect(failures).toEqual(["connection-closed"]);
+  });
+
+  it("closing while a failure grace timer is armed reports once, not twice", () => {
+    const connection = stubPeerConnection();
+    const failures: string[] = [];
+    createBrowserMediaPeer(
+      { ...NOOP_HANDLERS, onFailure: (reason) => failures.push(reason) },
+      [],
+    );
+
+    connection.setConnectionState("failed");
+    connection.setConnectionState("closed");
+    vi.advanceTimersByTime(GRACE_MS * 2);
+
+    expect(failures).toEqual(["connection-closed"]);
+  });
+});
+
+describe("createBrowserMediaPeer.getStats rejection ownership", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("routes a rejecting getStats through exactly one promise the caller owns", async () => {
+    const connection = stubPeerConnection();
+    const failure = new Error("connection closing");
+    connection.getStats = () => Promise.reject(failure);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    const peer = createBrowserMediaPeer(NOOP_HANDLERS, []);
+    const observed: unknown[] = [];
+    await peer.getStats().catch((error: unknown) => {
+      observed.push(error);
+    });
+    // Node reports an unhandled rejection on the check that runs after the
+    // microtask queue drains, so a detached child promise would surface here.
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    process.off("unhandledRejection", onUnhandled);
+
+    expect(observed).toEqual([failure]);
+    expect(unhandled).toEqual([]);
+  });
+});
+
+/**
+ * A4/F6 media tuning, driven through the peer the registry actually builds:
+ * the jitter-buffer target is applied inside `getStats()`, and the codec
+ * preference inside `answerOffer()`. Both were exported only so a test could
+ * call them; going through `createBrowserMediaPeer` also pins that they are
+ * still WIRED, which a direct call never could.
+ */
+describe("createBrowserMediaPeer adaptive jitter buffer (A4/F6)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function targetAfterStats(input: {
+    readonly receiver: RTCRtpReceiver;
+    readonly kind: string;
+    readonly jitterSeconds: number | null;
+  }): Promise<void> {
+    const connection = stubPeerConnection();
+    connection.statsReport = jitterStatsReport(input.jitterSeconds);
+    const peer = createBrowserMediaPeer(NOOP_HANDLERS, []);
+    connection.emitTrack(input.kind, input.receiver);
+    await peer.getStats();
+  }
+
+  it("sets the target to clamp(2 x jitterMs, 0, 200)", async () => {
+    const receiver = fakeReceiver(true);
+    await targetAfterStats({ receiver, kind: "video", jitterSeconds: 0.04 });
+    expect(receiver.jitterBufferTarget).toBe(80);
+  });
+
+  it("clamps to the 200ms ceiling on a bad tail", async () => {
+    const receiver = fakeReceiver(true);
+    await targetAfterStats({ receiver, kind: "video", jitterSeconds: 0.523 });
+    expect(receiver.jitterBufferTarget).toBe(200);
+  });
+
+  it("clamps to the 0ms floor on a negative reading", async () => {
+    const receiver = fakeReceiver(true);
+    await targetAfterStats({ receiver, kind: "video", jitterSeconds: -0.005 });
+    expect(receiver.jitterBufferTarget).toBe(0);
+  });
+
+  it("does nothing when the receiver lacks jitterBufferTarget (older engine)", async () => {
+    const receiver = fakeReceiver(false);
+    await targetAfterStats({ receiver, kind: "video", jitterSeconds: 0.04 });
+    expect("jitterBufferTarget" in receiver).toBe(false);
+  });
+
+  it("does nothing before a video track arrives, or with no inbound-rtp sample", async () => {
+    // Mutation: capturing the receiver off an AUDIO track, or dropping the
+    // `jitterMs === null` guard - the second would write NaN as the target.
+    const audioReceiver = fakeReceiver(true);
+    await targetAfterStats({
+      receiver: audioReceiver,
+      kind: "audio",
+      jitterSeconds: 0.04,
+    });
+    expect(audioReceiver.jitterBufferTarget).toBeNull();
+
+    const videoReceiver = fakeReceiver(true);
+    await targetAfterStats({
+      receiver: videoReceiver,
+      kind: "video",
+      jitterSeconds: null,
+    });
+    expect(videoReceiver.jitterBufferTarget).toBeNull();
+  });
+});
+
+describe("createBrowserMediaPeer H.264 preference (A4/F6, answerer-side only)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function fakeTransceiver(input: {
+    readonly kind: string;
+    readonly setCodecPreferences: ((codecs: RTCRtpCodec[]) => void) | null;
+  }): RTCRtpTransceiver {
+    const receiver = { track: { kind: input.kind } } as RTCRtpReceiver;
+    const partial =
+      input.setCodecPreferences === null
+        ? { receiver }
+        : { receiver, setCodecPreferences: input.setCodecPreferences };
+    return partial as RTCRtpTransceiver;
+  }
+
+  const VP8: RTCRtpCodec = { clockRate: 90000, mimeType: "video/VP8" };
+  const H264: RTCRtpCodec = { clockRate: 90000, mimeType: "video/H264" };
+
+  async function preferencesAfterAnswer(input: {
+    readonly engineCodecs: readonly RTCRtpCodec[];
+    readonly transceivers: readonly RTCRtpTransceiver[];
+    readonly offerSdp: string;
+  }): Promise<void> {
+    vi.stubGlobal("RTCRtpReceiver", {
+      getCapabilities: () => ({
+        codecs: [...input.engineCodecs],
+        headerExtensions: [],
+      }),
+    });
+    const connection = stubPeerConnection();
+    connection.transceivers = input.transceivers;
+    const peer = createBrowserMediaPeer(NOOP_HANDLERS, []);
+    await peer.answerOffer(input.offerSdp);
+  }
+
+  it("orders H.264 first when this engine and the offer both support it", async () => {
+    const preferences: RTCRtpCodec[][] = [];
+    await preferencesAfterAnswer({
+      engineCodecs: [VP8, H264],
+      transceivers: [
+        fakeTransceiver({
+          kind: "video",
+          setCodecPreferences: (codecs) => preferences.push(codecs),
+        }),
+      ],
+      offerSdp: "m=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\n",
+    });
+
+    expect(preferences).toEqual([[H264, VP8]]);
+  });
+
+  it("leaves VP8 as the floor when the offer never carried an H.264 payload", async () => {
+    // Mutation: testing the SDP with a bare `includes("h264")` - a `cname` or
+    // tool banner would then flip the codec order on a VP8-only offer.
+    const preferences: RTCRtpCodec[][] = [];
+    await preferencesAfterAnswer({
+      engineCodecs: [VP8, H264],
+      transceivers: [
+        fakeTransceiver({
+          kind: "video",
+          setCodecPreferences: (codecs) => preferences.push(codecs),
+        }),
+      ],
+      offerSdp: "a=cname:h264-observer\r\na=rtpmap:97 VP8/90000\r\n",
+    });
+
+    expect(preferences).toEqual([]);
+  });
+
+  it("leaves VP8 as the floor when this engine cannot decode H.264", async () => {
+    const preferences: RTCRtpCodec[][] = [];
+    await preferencesAfterAnswer({
+      engineCodecs: [VP8],
+      transceivers: [
+        fakeTransceiver({
+          kind: "video",
+          setCodecPreferences: (codecs) => preferences.push(codecs),
+        }),
+      ],
+      offerSdp: "a=rtpmap:96 H264/90000\r\n",
+    });
+
+    expect(preferences).toEqual([]);
+  });
+
+  it("skips a transceiver without setCodecPreferences (older engine) instead of throwing", async () => {
+    await expect(
+      preferencesAfterAnswer({
+        engineCodecs: [VP8, H264],
+        transceivers: [
+          fakeTransceiver({ kind: "video", setCodecPreferences: null }),
+        ],
+        offerSdp: "a=rtpmap:96 H264/90000\r\n",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("never touches the audio transceiver", async () => {
+    const preferences: RTCRtpCodec[][] = [];
+    await preferencesAfterAnswer({
+      engineCodecs: [VP8, H264],
+      transceivers: [
+        fakeTransceiver({
+          kind: "audio",
+          setCodecPreferences: (codecs) => preferences.push(codecs),
+        }),
+      ],
+      offerSdp: "a=rtpmap:96 H264/90000\r\n",
+    });
+
+    expect(preferences).toEqual([]);
   });
 });

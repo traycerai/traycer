@@ -1,7 +1,11 @@
 import { fireEvent } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { BrowserScreencastClientFrame } from "@traycer/protocol/host/browser/contracts";
-import { mountController } from "@/lib/browser-view/sessions/__tests__/screencast-controller-harness";
+import {
+  firePointerMove,
+  firePointerPress,
+  mountController,
+} from "@/lib/browser-view/sessions/__tests__/screencast-controller-harness";
 
 type ArmRequestFrame = Extract<
   BrowserScreencastClientFrame,
@@ -29,22 +33,7 @@ function pointerTypes(
 }
 
 function press(overlay: HTMLElement): void {
-  fireEvent.pointerDown(overlay, {
-    pointerId: 1,
-    clientX: 200,
-    clientY: 300,
-    button: 0,
-    buttons: 1,
-    detail: 1,
-  });
-  fireEvent.pointerUp(overlay, {
-    pointerId: 1,
-    clientX: 200,
-    clientY: 300,
-    button: 0,
-    buttons: 0,
-    detail: 1,
-  });
+  firePointerPress(overlay, { clientX: 200, clientY: 300 });
 }
 
 describe("screencast arm path", () => {
@@ -113,13 +102,7 @@ describe("screencast arm path", () => {
 
     fireEvent.pointerEnter(overlay);
     controller.noteArmed(1);
-    fireEvent.pointerMove(overlay, {
-      pointerId: 1,
-      clientX: 200,
-      clientY: 120,
-      button: 0,
-      buttons: 0,
-    });
+    firePointerMove(overlay, { clientX: 200, clientY: 120 });
 
     // The host claim is real - that is the whole point of pre-arm - but the
     // pointer crossing the tile must not drive the remote cursor, and nothing
@@ -129,13 +112,7 @@ describe("screencast arm path", () => {
     expect(pointerTypes(sent)).toEqual([]);
 
     press(overlay);
-    fireEvent.pointerMove(overlay, {
-      pointerId: 1,
-      clientX: 200,
-      clientY: 160,
-      button: 0,
-      buttons: 0,
-    });
+    firePointerMove(overlay, { clientX: 200, clientY: 160 });
 
     // A move is rAF-coalesced; the next discrete flushes it.
     press(overlay);

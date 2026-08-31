@@ -1,5 +1,6 @@
 import type {
   BrowserScreencastAgentCursorType,
+  BrowserScreencastCaptureMode,
   BrowserScreencastClientFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import { SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
@@ -88,25 +89,6 @@ export interface PointerClickCount {
   readonly count: number;
 }
 
-/**
- * The surface a pointer's coordinates were taken against, as the host reads
- * it back: the painted frame on the JPEG plane, the host's viewport epoch on
- * the video plane. Exactly one is set - the other plane's token is `null` -
- * and neither means the tile has nothing correlatable to click on yet, so no
- * frame is built at all.
- */
-export interface ScreencastInputCorrelation {
-  readonly castSequence: number | null;
-  readonly viewportEpoch: number | null;
-}
-
-/** The single number the host will compare against, whichever plane set it. */
-export function correlationToken(
-  correlation: ScreencastInputCorrelation,
-): number | null {
-  return correlation.viewportEpoch ?? correlation.castSequence;
-}
-
 interface ScreencastPointerFrameRequest {
   readonly event: PointerLike;
   readonly type: ScreencastPointerInput["type"];
@@ -114,7 +96,15 @@ interface ScreencastPointerFrameRequest {
   readonly deltaX: number;
   readonly deltaY: number;
   readonly clickCount: number;
-  readonly correlation: ScreencastInputCorrelation;
+  /**
+   * The surface the coordinates were taken against, as one number the host
+   * compares back: the painted frame's sequence on the JPEG plane, the host's
+   * viewport epoch on the video plane. `null` means the tile has nothing
+   * correlatable to click on yet, so no frame is built at all.
+   */
+  readonly correlationToken: number | null;
+  /** Which plane's token {@link correlationToken} is, for the wire's two fields. */
+  readonly captureMode: BrowserScreencastCaptureMode;
   /**
    * The element the plane paints into - `<img>` on the JPEG plane, `<video>`
    * on the video plane. Only its box is read, so the union stays `HTMLElement`.
@@ -133,14 +123,13 @@ export function buildScreencastPointerFrame(
     frameSize: request.frameSize,
     clampToEdge: request.clampToEdge,
   });
-  if (correlationToken(request.correlation) === null || normalized === null) {
-    return null;
-  }
+  if (request.correlationToken === null || normalized === null) return null;
+  const onVideo = request.captureMode === "video";
   return {
     kind: "pointer",
     type: request.type,
-    castSequence: request.correlation.castSequence,
-    viewportEpoch: request.correlation.viewportEpoch,
+    castSequence: onVideo ? null : request.correlationToken,
+    viewportEpoch: onVideo ? request.correlationToken : null,
     ...normalized,
     button:
       request.type === "wheel" ? "none" : pointerButton(request.event.button),
@@ -227,7 +216,7 @@ export function isScreencastModChord(
  * (below) and the agent ghost cursor back in (`agent-cursor-overlay.tsx`).
  * They must stay exact inverses, so they read the same box.
  */
-export function containFit(
+function containFit(
   box: { readonly width: number; readonly height: number },
   frameSize: ScreencastFrameSize,
 ): { readonly width: number; readonly height: number } | null {

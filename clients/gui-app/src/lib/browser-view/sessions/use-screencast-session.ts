@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type RefObject,
-  type SetStateAction,
 } from "react";
 import type {
   BrowserNavState,
@@ -41,13 +40,12 @@ import type {
 import {
   createVideoPlaneSession,
   NO_VIDEO_VIEW,
+  startPlayback,
   type VideoPlaneSession,
   type VideoPlaneView,
 } from "@/lib/browser-view/sessions/video-plane-session";
-import {
-  deriveViewerDeadlineMs,
-  VIEWER_CONTROL_PLANE_DEADLINES,
-} from "@/lib/browser-view/sessions/control-plane-deadlines";
+import { deriveSpecDeadlineMs } from "@traycer/protocol/host-transport/rtt-deadlines";
+import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/control-plane-deadlines";
 import type { WebrtcVideoStatsSample } from "@/lib/browser-view/tiles/webrtc-media-registry";
 import {
   acquireBrowserMediaEntry,
@@ -58,17 +56,20 @@ const DEFAULT_MAX_WIDTH = 1280;
 const DEFAULT_MAX_HEIGHT = 720;
 const DEFAULT_QUALITY = 70;
 const VIEWPORT_DEBOUNCE_MS = 200;
+/**
+ * Server frames that start a fresh capture, so the ack-tracking sequence resets
+ * and the ended plane's stale one cannot linger.
+ */
+const PRESENTED_SEQUENCE_RESET_KINDS: ReadonlySet<string> = new Set([
+  "started",
+  "resized",
+  "failed",
+  "complete",
+]);
 
-// Re-exported: the type now lives beside `ScreencastFrameSize`, which every
-// consumer reads it with, but the tile side knows it as this hook's output.
-export type { AgentCursorPosition };
-
-export type {
-  ScreencastDialog,
-  ScreencastImeHandlers,
-  ScreencastOverlayHandlers,
-  ScreencastSessionRefs,
-};
+// The one re-export left: `ScreencastDialog` is this hook's OUTPUT type, so
+// tiles read it off the session rather than off the controller they never see.
+export type { ScreencastDialog };
 
 export type ScreencastLifecycle =
   | "connecting"
@@ -137,8 +138,27 @@ export interface ScreencastSession {
   readonly imeHandlers: ScreencastImeHandlers;
 }
 
+type ScreencastHostClient = IHostStreamClient<HostStreamRpcRegistry>;
+
+/**
+ * A value that only means anything while the client it was produced on is
+ * still the tile's. Every interaction slice below is one, so a client swap
+ * drops them all with no per-slice reset.
+ */
+interface ClientScoped<T> {
+  readonly client: ScreencastHostClient;
+  readonly value: T;
+}
+
+function scopedToClient<T>(
+  state: ClientScoped<T> | null,
+  client: ScreencastHostClient | null,
+): T | null {
+  return state !== null && state.client === client ? state.value : null;
+}
+
 interface ScreencastRenderState {
-  readonly client: IHostStreamClient<HostStreamRpcRegistry> | null;
+  readonly client: ScreencastHostClient | null;
   readonly image: ScreencastImage | null;
   readonly lifecycle: ScreencastLifecycle;
   readonly details: string | null;
@@ -146,8 +166,13 @@ interface ScreencastRenderState {
   readonly navState: BrowserNavState;
 }
 
+/** A partial, or a function of the client-reset base state, per `patchStreamState`. */
+type ScreencastStatePatch =
+  | Partial<ScreencastRenderState>
+  | ((base: ScreencastRenderState) => Partial<ScreencastRenderState>);
+
 export interface ScreencastSessionOptions {
-  readonly client: IHostStreamClient<HostStreamRpcRegistry> | null;
+  readonly client: ScreencastHostClient | null;
   readonly epicId: string;
   /** Identity half of the video plane's media key (with session + tab). */
   readonly hostId: string;
@@ -263,19 +288,14 @@ export function useScreencastSession(
     readonly at: number;
   } | null>(null);
 
-  const [armedState, setArmedState] = useState<{
-    readonly client: IHostStreamClient<HostStreamRpcRegistry>;
-    readonly epoch: number;
-  } | null>(null);
-  const [dialogState, setDialogState] = useState<{
-    readonly client: IHostStreamClient<HostStreamRpcRegistry>;
-    readonly dialog: ScreencastDialog;
-  } | null>(null);
+  const [armedState, setArmedState] = useState<ClientScoped<number> | null>(
+    null,
+  );
+  const [dialogState, setDialogState] =
+    useState<ClientScoped<ScreencastDialog> | null>(null);
   const [composing, setComposing] = useState(false);
-  const [agentCursorState, setAgentCursorState] = useState<{
-    readonly client: IHostStreamClient<HostStreamRpcRegistry>;
-    readonly cursor: AgentCursorPosition;
-  } | null>(null);
+  const [agentCursorState, setAgentCursorState] =
+    useState<ClientScoped<AgentCursorPosition> | null>(null);
   const [videoViewState, setVideoView] =
     useState<VideoPlaneView>(NO_VIDEO_VIEW);
   const [videoStats, setVideoStats] = useState<WebrtcVideoStatsSample | null>(
@@ -325,7 +345,7 @@ export function useScreencastSession(
         onControlEngaged: (epoch) => {
           const engagedClient = clientRef.current;
           if (engagedClient === null) return;
-          setArmedState({ client: engagedClient, epoch });
+          setArmedState({ client: engagedClient, value: epoch });
         },
         onLocalArmCleared: resetLocalArmState,
         onComposingChange: setComposing,
@@ -340,72 +360,33 @@ export function useScreencastSession(
   // keep a dead `srcObject` painting and keep reporting video geometry until
   // the tile subscribes again. Derived rather than reset in the effect.
   const subscribed = client !== null && visible;
-  const {
-    videoView,
-    videoStatsForRender,
-    stateMatchesClient,
-    image,
-    videoActive,
-    lifecycle,
-    frameSize,
-    navState,
-  } = deriveScreencastPlaneView({
+  const planeView = deriveScreencastPlaneView({
     client,
     subscribed,
+    streamState,
     videoViewState,
     videoStats,
-    streamState,
     videoFrameSize,
   });
-  const { armedEpoch, dialog, agentCursor } = deriveScreencastInteractionState({
-    client,
-    visible,
-    subscribed,
-    armedState,
-    dialogState,
-    agentCursorState,
-  });
-  const details = screencastDetailsForRender(
-    stateMatchesClient,
-    streamState,
-    client,
-  );
+  const { video: videoView, frameSize } = planeView;
+  const armedEpoch = visible ? scopedToClient(armedState, client) : null;
+  const dialog = scopedToClient(dialogState, client);
+  const agentCursor = subscribed
+    ? scopedToClient(agentCursorState, client)
+    : null;
 
-  const setLifecycle = useCallback(
-    (value: SetStateAction<ScreencastLifecycle>) => {
+  /**
+   * Every write into `streamState` goes through here: it re-bases on the
+   * current client first (a stale client's values are dropped, never merged
+   * into the new one's), then applies the caller's fields.
+   */
+  const patchStreamState = useCallback(
+    (patch: ScreencastStatePatch) => {
       setStreamState((current) => {
         const base = resetScreencastStateForClient(current, client);
-        const lifecycle =
-          typeof value === "function" ? value(base.lifecycle) : value;
-        return { ...base, lifecycle };
+        const fields = typeof patch === "function" ? patch(base) : patch;
+        return { ...base, ...fields };
       });
-    },
-    [client],
-  );
-  const setDetails = useCallback(
-    (value: string | null) => {
-      setStreamState((current) => ({
-        ...resetScreencastStateForClient(current, client),
-        details: value,
-      }));
-    },
-    [client],
-  );
-  const setImage = useCallback(
-    (value: ScreencastImage | null) => {
-      setStreamState((current) => ({
-        ...resetScreencastStateForClient(current, client),
-        image: value,
-      }));
-    },
-    [client],
-  );
-  const setFrameSize = useCallback(
-    (value: ScreencastFrameSize | null) => {
-      setStreamState((current) => ({
-        ...resetScreencastStateForClient(current, client),
-        frameSize: value,
-      }));
     },
     [client],
   );
@@ -458,13 +439,14 @@ export function useScreencastSession(
             ...candidate,
           });
         },
-        sendVideoPlaneState: ({ negotiationId, state, reason }) => {
+        sendVideoPlaneState: ({ negotiationId, state, reason, detail }) => {
           send({
             kind: "videoPlaneState",
             hasBinaryPayload: false,
             negotiationId,
             state,
             reason,
+            detail,
           });
         },
         sendVideoStats: ({ negotiationId, ...stats }) => {
@@ -501,12 +483,6 @@ export function useScreencastSession(
     const unsubscribeInputTransport = media.entry.subscribe(syncInputTransport);
     syncInputTransport();
 
-    // The agent cursor's own view of the plane state, kept beside the
-    // controller's rather than read back out of it: what an `agentCursor`
-    // frame has to be judged against is the epoch this subscription is
-    // painting, and this closure's lifetime is exactly that subscription.
-    let viewportEpoch: number | null = null;
-    let captureMode: BrowserScreencastCaptureMode = "jpeg";
     let agentCursorSerial = 0;
 
     const onConnectionStatus = (
@@ -519,8 +495,6 @@ export function useScreencastSession(
         // Plane state cannot outlive the transport that established it: the
         // next subscription starts on JPEG until the host says otherwise.
         controller.noteViewportEpoch(null);
-        viewportEpoch = null;
-        captureMode = "jpeg";
         controller.setCaptureMode("jpeg");
         controller.clearLocalArm(false);
       } else {
@@ -542,7 +516,7 @@ export function useScreencastSession(
           });
         }
       }
-      handleStreamStatus(status, reason, setLifecycle, setDetails);
+      handleStreamStatus(status, reason, patchStreamState);
     };
 
     const onServerFrame = (
@@ -550,7 +524,9 @@ export function useScreencastSession(
       binaryPayload: Uint8Array | null,
     ): void => {
       if (stream !== null && !isCurrent()) return;
-      if (isPlaneResettingFrameKind(frame.kind)) {
+      // A fresh capture the client has not presented yet: the ack-tracking
+      // sequence resets so the ended plane's stale one cannot linger.
+      if (PRESENTED_SEQUENCE_RESET_KINDS.has(frame.kind)) {
         controller.notePresentedSequence(null);
       }
       // Ack at arrival, not paint - the host gates its next capture on the
@@ -559,7 +535,6 @@ export function useScreencastSession(
       if (frame.kind === "frame") {
         controller.noteFrameArrived(frame.sequence);
       } else if (frame.kind === "viewportEpoch") {
-        viewportEpoch = frame.epoch;
         controller.noteViewportEpoch(frame.epoch);
       } else if (frame.kind === "rttProbe") {
         // Answered before anything else this frame could imply: the host is
@@ -574,25 +549,31 @@ export function useScreencastSession(
       } else if (frame.kind === "inputAck") {
         controller.noteInputAck(frame.armEpoch, frame.lastSeq);
       } else if (frame.kind === "captureMode") {
-        captureMode = frame.mode;
         controller.setCaptureMode(frame.mode);
         // The JPEG cast has stopped, so the frame still on screen is the last
-        // one of a plane that is no longer producing: drop it and let the tile
-        // show its connecting loader until a plane actually paints again
-        // (ticket 26). This is the ONLY thing that retires a JPEG frame - a
-        // frame arriving is what puts one up.
-        if (frame.mode === "video") setImage(null);
+        // one of a plane that is no longer producing: drop it - and with it the
+        // geometry its hit test was measured against - and let the tile show
+        // its connecting loader until a plane actually paints again (ticket
+        // 26). This is the ONLY thing that retires a JPEG frame; a frame
+        // arriving is what puts one up.
+        if (frame.mode === "video") {
+          patchStreamState({ image: null, frameSize: null });
+        }
       } else if (frame.kind === "agentCursor") {
         // Only the video plane can be looking at a superseded viewport: a
         // JPEG tile's cursor is decoration over whatever frame it has painted,
         // and per-frame correlation is a thing input needs, not an overlay.
         if (
-          shouldAcceptAgentCursorFrame(captureMode, frame.epoch, viewportEpoch)
+          shouldAcceptAgentCursorFrame(
+            controller.captureMode(),
+            frame.epoch,
+            controller.viewportEpoch(),
+          )
         ) {
           agentCursorSerial += 1;
           setAgentCursorState({
             client,
-            cursor: {
+            value: {
               type: frame.type,
               normalizedX: frame.normalizedX,
               normalizedY: frame.normalizedY,
@@ -603,25 +584,16 @@ export function useScreencastSession(
         }
       }
       videoPlane.handleServerFrame(frame);
-      handleScreencastFrame({
-        frame,
-        binaryPayload,
-        setImage,
-        setLifecycle,
-        setDetails,
-        setFrameSize,
-      });
+      handleScreencastFrame(frame, binaryPayload, patchStreamState);
       if (frame.kind === "navState") {
-        const nextNavState: BrowserNavState = {
-          url: frame.url,
-          canGoBack: frame.canGoBack,
-          canGoForward: frame.canGoForward,
-          loading: frame.loading,
-        };
-        setStreamState((current) => ({
-          ...resetScreencastStateForClient(current, client),
-          navState: nextNavState,
-        }));
+        patchStreamState({
+          navState: {
+            url: frame.url,
+            canGoBack: frame.canGoBack,
+            canGoForward: frame.canGoForward,
+            loading: frame.loading,
+          },
+        });
       } else if (frame.kind === "unsupportedInteraction") {
         toastScreencastUnsupportedInteraction(frame.feature);
       }
@@ -629,7 +601,7 @@ export function useScreencastSession(
         frame,
         controller,
         onDialogOpened: (nextDialog) => {
-          setDialogState({ client, dialog: nextDialog });
+          setDialogState({ client, value: nextDialog });
         },
         onDialogSettled: () => {
           setDialogState(null);
@@ -662,6 +634,9 @@ export function useScreencastSession(
       controller.setInputTransport(null);
       videoPlane.close();
       if (videoPlaneRef.current === videoPlane) videoPlaneRef.current = null;
+      // H28: the view goes with the stats, or a healthy re-subscribe paints the
+      // dead round's `srcObject` until its first decoded frame lands.
+      setVideoView(NO_VIDEO_VIEW);
       setVideoStats(null);
       controller.clearLocalArm(false);
       opened.close();
@@ -671,12 +646,9 @@ export function useScreencastSession(
     controller,
     epicId,
     hostId,
+    patchStreamState,
     readControlPlaneRttMs,
     sessionId,
-    setDetails,
-    setFrameSize,
-    setImage,
-    setLifecycle,
     tabId,
     visible,
   ]);
@@ -710,9 +682,9 @@ export function useScreencastSession(
   // effect's cleanup must be synced by another PASSIVE effect, never a
   // layout effect.
   useEffect(() => {
-    videoActiveRef.current = videoActive;
+    videoActiveRef.current = videoView.active;
     clientRef.current = client;
-    presentedImageRef.current = image;
+    presentedImageRef.current = planeView.image;
     captureDormantSnapshotRef.current = options.captureDormantSnapshot;
     videoStatsRef.current = videoStats;
   });
@@ -783,7 +755,7 @@ export function useScreencastSession(
       const videoFrameAt = videoPlaneRef.current?.lastVideoFrameAt() ?? null;
       const lastFrameAt = videoFrameAt ?? controller.lastFrameAt();
       if (lastFrameAt === null) return;
-      const staleAfterMs = deriveViewerDeadlineMs(
+      const staleAfterMs = deriveSpecDeadlineMs(
         VIEWER_CONTROL_PLANE_DEADLINES.staleWithoutFrame,
         controlPlaneRttRef.current,
       );
@@ -828,16 +800,19 @@ export function useScreencastSession(
         // deadline covers (the first-frame one is disarmed by then) and the
         // registry cannot see. Reporting it is what turns the host's JPEG
         // pump back on instead of leaving a frozen tile with no plane at all.
-        videoPlaneRef.current?.fail("video frames stopped");
+        videoPlaneRef.current?.fail("frames-stopped");
       }
-      setLifecycle((current) =>
-        current === "live" || current === "waiting" ? "stale" : current,
-      );
+      patchStreamState((base) => ({
+        lifecycle:
+          base.lifecycle === "live" || base.lifecycle === "waiting"
+            ? "stale"
+            : base.lifecycle,
+      }));
     }, 1_000);
     return () => {
       window.clearInterval(timer);
     };
-  }, [controller, setLifecycle]);
+  }, [controller, patchStreamState]);
 
   useEffect(() => {
     controller.setVisible(visible);
@@ -889,10 +864,9 @@ export function useScreencastSession(
   const notePresented = useCallback(
     (sequence: number) => {
       controller.notePresentedSequence(sequence);
-      setLifecycle("live");
-      setDetails(null);
+      patchStreamState({ lifecycle: "live", details: null });
     },
-    [controller, setDetails, setLifecycle],
+    [controller, patchStreamState],
   );
 
   /**
@@ -940,13 +914,7 @@ export function useScreencastSession(
 
   return {
     refs,
-    image,
-    video: videoView,
-    videoStats: videoStatsForRender,
-    lifecycle,
-    details,
-    frameSize,
-    navState,
+    ...planeView,
     armedEpoch,
     dialog,
     composing,
@@ -992,147 +960,59 @@ export function isVideoPlaneStale(input: {
 }
 
 /**
- * `muted` + `playsInline` autoplay is allowed, but a source attached after
- * mount still needs the kick. jsdom (and any runtime without a media stack)
- * throws instead of returning a promise, which is not a plane failure.
- */
-function startPlayback(element: HTMLVideoElement): void {
-  try {
-    const started = element.play();
-    if (started instanceof Promise) void started.catch(() => {});
-  } catch {
-    // No media stack; the plane simply never reports a decoded frame.
-  }
-}
-
-/** Lifecycles a decoded video frame is allowed to upgrade to "live". */
-function isFreshLifecycle(lifecycle: ScreencastLifecycle): boolean {
-  return (
-    lifecycle === "waiting" || lifecycle === "idle" || lifecycle === "live"
-  );
-}
-
-/**
- * The plane/lifecycle/geometry half of the render-facing derived state: what
- * plane is painting and the lifecycle/frame size/nav state it reports. Pulled
- * out of `useScreencastSession` itself so the hook's own branching stays
- * readable - this is pure derivation, no hook calls. `subscribed` is a
- * parameter rather than recomputed here because `deriveScreencastInteractionState`
- * needs the same value.
+ * The render-facing view of both planes: which one is painting, and the
+ * lifecycle / geometry / nav state it reports. Pure derivation, pulled out of
+ * the hook so its own branching stays readable. `subscribed` is a parameter
+ * rather than recomputed here because the caller gates its interaction slices
+ * on the same value.
  */
 function deriveScreencastPlaneView(input: {
-  readonly client: IHostStreamClient<HostStreamRpcRegistry> | null;
+  readonly client: ScreencastHostClient | null;
   readonly subscribed: boolean;
+  readonly streamState: ScreencastRenderState;
   readonly videoViewState: VideoPlaneView;
   readonly videoStats: WebrtcVideoStatsSample | null;
-  readonly streamState: ScreencastRenderState;
   readonly videoFrameSize: ScreencastFrameSize | null;
-}): {
-  readonly videoView: VideoPlaneView;
-  readonly videoStatsForRender: WebrtcVideoStatsSample | null;
-  readonly stateMatchesClient: boolean;
-  readonly image: ScreencastImage | null;
-  readonly videoActive: boolean;
-  readonly lifecycle: ScreencastLifecycle;
-  readonly frameSize: ScreencastFrameSize | null;
-  readonly navState: BrowserNavState;
-} {
-  const {
-    client,
-    subscribed,
-    videoViewState,
-    videoStats,
-    streamState,
-    videoFrameSize,
-  } = input;
-  const videoView = subscribed ? videoViewState : NO_VIDEO_VIEW;
-  const videoStatsForRender = subscribed ? videoStats : null;
-  const stateMatchesClient = streamState.client === client;
-  const image = stateMatchesClient ? streamState.image : null;
-  const videoActive = videoView.active;
-  const baseLifecycle = stateMatchesClient
-    ? streamState.lifecycle
-    : "connecting";
+}): Pick<
+  ScreencastSession,
+  | "image"
+  | "video"
+  | "videoStats"
+  | "lifecycle"
+  | "details"
+  | "frameSize"
+  | "navState"
+> {
+  const { streamState, subscribed } = input;
+  const video = subscribed ? input.videoViewState : NO_VIDEO_VIEW;
+  const current = streamState.client === input.client;
   // A video tile paints no JPEG frame, so `notePresented` never runs and the
   // liveness the chrome reads has to come from the decoded video frames
   // instead. Degraded lifecycles still win - `stale` in particular is how a
   // frozen video track surfaces (G3).
-  const lifecycle: ScreencastLifecycle =
-    videoActive && isFreshLifecycle(baseLifecycle) ? "live" : baseLifecycle;
-  const jpegFrameSize = stateMatchesClient ? streamState.frameSize : null;
+  const lifecycle = current ? streamState.lifecycle : "connecting";
+  const upgradable =
+    lifecycle === "waiting" || lifecycle === "idle" || lifecycle === "live";
   // The video plane's own geometry wins only while it is painting, so a
   // fallback to JPEG reverts the hit-test box with no restore step (G4).
-  const frameSize = videoActive ? videoFrameSize : jpegFrameSize;
-  const navState = stateMatchesClient
-    ? streamState.navState
-    : EMPTY_SCREENCAST_NAV_STATE;
+  const jpegFrameSize = current ? streamState.frameSize : null;
+  const frameSize = video.active ? input.videoFrameSize : jpegFrameSize;
   return {
-    videoView,
-    videoStatsForRender,
-    stateMatchesClient,
-    image,
-    videoActive,
-    lifecycle,
+    image: current ? streamState.image : null,
+    video,
+    videoStats: subscribed ? input.videoStats : null,
+    lifecycle: video.active && upgradable ? "live" : lifecycle,
+    details: current
+      ? streamState.details
+      : clientlessDetails(input.client === null),
     frameSize,
-    navState,
+    navState: current ? streamState.navState : EMPTY_SCREENCAST_NAV_STATE,
   };
 }
 
-/** The arm/dialog/agent-cursor slices gated to the current client and visibility. */
-function deriveScreencastInteractionState(input: {
-  readonly client: IHostStreamClient<HostStreamRpcRegistry> | null;
-  readonly visible: boolean;
-  readonly subscribed: boolean;
-  readonly armedState: {
-    readonly client: IHostStreamClient<HostStreamRpcRegistry>;
-    readonly epoch: number;
-  } | null;
-  readonly dialogState: {
-    readonly client: IHostStreamClient<HostStreamRpcRegistry>;
-    readonly dialog: ScreencastDialog;
-  } | null;
-  readonly agentCursorState: {
-    readonly client: IHostStreamClient<HostStreamRpcRegistry>;
-    readonly cursor: AgentCursorPosition;
-  } | null;
-}): {
-  readonly armedEpoch: number | null;
-  readonly dialog: ScreencastDialog | null;
-  readonly agentCursor: AgentCursorPosition | null;
-} {
-  const {
-    client,
-    visible,
-    subscribed,
-    armedState,
-    dialogState,
-    agentCursorState,
-  } = input;
-  const armedEpochForClient =
-    armedState?.client === client ? armedState.epoch : null;
-  const armedEpoch = visible ? armedEpochForClient : null;
-  const dialog = dialogState?.client === client ? dialogState.dialog : null;
-  const agentCursor =
-    agentCursorState?.client === client && subscribed
-      ? agentCursorState.cursor
-      : null;
-  return { armedEpoch, dialog, agentCursor };
-}
-
-/**
- * Whether a server frame's kind marks a fresh capture the client has not yet
- * presented - the ack-tracking sequence has to reset for all of these so a
- * stale presented-sequence from the plane that just ended doesn't linger.
- */
-function isPlaneResettingFrameKind(
-  kind: BrowserScreencastServerFrame["kind"],
-): boolean {
-  return (
-    kind === "started" ||
-    kind === "resized" ||
-    kind === "failed" ||
-    kind === "complete"
-  );
+/** The only detail line a tile with no client of its own ever shows. */
+function clientlessDetails(clientless: boolean): string | null {
+  return clientless ? "Waiting for the host stream." : null;
 }
 
 /** Whether an `agentCursor` frame is looking at the viewport currently painting. */
@@ -1144,129 +1024,86 @@ function shouldAcceptAgentCursorFrame(
   return captureMode !== "video" || frameEpoch === viewportEpoch;
 }
 
-function handleDialogServerFrame(input: {
-  readonly frame: BrowserScreencastServerFrame;
-  readonly armEpoch: number | null;
-  readonly current: ScreencastDialog | null;
-  readonly opened: (dialog: ScreencastDialog) => void;
-  readonly settled: () => void;
-}): void {
-  if (input.frame.kind === "dialogOpened") {
-    if (
-      input.armEpoch === null ||
-      (input.current !== null &&
-        input.frame.generation <= input.current.generation)
-    ) {
-      return;
-    }
-    input.opened({ ...input.frame, armEpoch: input.armEpoch });
-  } else if (
-    input.frame.kind === "dialogSettled" &&
-    input.current?.generation === input.frame.generation
-  ) {
-    input.settled();
-  }
-}
-
 function resetScreencastStateForClient(
   current: ScreencastRenderState,
-  client: IHostStreamClient<HostStreamRpcRegistry> | null,
+  client: ScreencastHostClient | null,
 ): ScreencastRenderState {
   if (current.client === client) return current;
   return {
     client,
     image: null,
     lifecycle: "connecting",
-    details: client === null ? "Waiting for the host stream." : null,
+    details: clientlessDetails(client === null),
     frameSize: null,
     navState: EMPTY_SCREENCAST_NAV_STATE,
   };
 }
 
-function screencastDetailsForRender(
-  stateMatchesClient: boolean,
-  streamState: ScreencastRenderState,
-  client: IHostStreamClient<HostStreamRpcRegistry> | null,
-): string | null {
-  if (stateMatchesClient) return streamState.details;
-  if (client === null) return "Waiting for the host stream.";
-  return null;
-}
-
 function handleStreamStatus(
   status: StreamConnectionStatus,
   reason: StreamCloseReason | null,
-  setLifecycle: (value: ScreencastLifecycle) => void,
-  setDetails: (value: string | null) => void,
+  patch: (patch: ScreencastStatePatch) => void,
 ): void {
   if (status === "open") {
-    setLifecycle("waiting");
-    setDetails(null);
+    patch({ lifecycle: "waiting", details: null });
     return;
   }
   if (status === "connecting") {
-    setLifecycle("connecting");
-    setDetails(null);
+    patch({ lifecycle: "connecting", details: null });
     return;
   }
   if (status === "reconnecting") {
-    setLifecycle("stale");
-    setDetails("Reconnecting to the screencast stream.");
+    patch({
+      lifecycle: "stale",
+      details: "Reconnecting to the screencast stream.",
+    });
     return;
   }
   if (reason?.kind === "fatalError") {
-    setLifecycle("failed");
-    setDetails(reason.details.reason);
+    patch({ lifecycle: "failed", details: reason.details.reason });
     return;
   }
-  setLifecycle("disconnected");
-  setDetails("Screencast stream disconnected.");
+  patch({
+    lifecycle: "disconnected",
+    details: "Screencast stream disconnected.",
+  });
 }
 
-function handleScreencastFrame(args: {
-  readonly frame: BrowserScreencastServerFrame;
-  readonly binaryPayload: Uint8Array | null;
-  readonly setImage: (value: ScreencastImage) => void;
-  readonly setLifecycle: (value: ScreencastLifecycle) => void;
-  readonly setDetails: (value: string | null) => void;
-  readonly setFrameSize: (value: ScreencastFrameSize | null) => void;
-}): void {
-  if (args.frame.kind === "started") {
-    args.setLifecycle("waiting");
-    args.setFrameSize({
-      width: args.frame.frameWidth,
-      height: args.frame.frameHeight,
+function handleScreencastFrame(
+  frame: BrowserScreencastServerFrame,
+  binaryPayload: Uint8Array | null,
+  patch: (patch: ScreencastStatePatch) => void,
+): void {
+  if (frame.kind === "started" || frame.kind === "resized") {
+    patch({
+      ...(frame.kind === "started" ? { lifecycle: "waiting" } : {}),
+      frameSize: { width: frame.frameWidth, height: frame.frameHeight },
     });
     return;
   }
-  if (args.frame.kind === "frame") {
-    if (args.binaryPayload === null) return;
-    args.setImage({
-      src: `data:image/jpeg;base64,${bytesToBase64(args.binaryPayload)}`,
-      sequence: args.frame.sequence,
+  if (frame.kind === "frame") {
+    if (binaryPayload === null) return;
+    patch({
+      image: {
+        src: `data:image/jpeg;base64,${bytesToBase64(binaryPayload)}`,
+        sequence: frame.sequence,
+      },
     });
     return;
   }
-  if (args.frame.kind === "stalled") {
-    args.setLifecycle("idle");
-    args.setDetails("Page is live but idle between repaints.");
-    return;
-  }
-  if (args.frame.kind === "resized") {
-    args.setFrameSize({
-      width: args.frame.frameWidth,
-      height: args.frame.frameHeight,
+  if (frame.kind === "stalled") {
+    patch({
+      lifecycle: "idle",
+      details: "Page is live but idle between repaints.",
     });
     return;
   }
-  if (args.frame.kind === "failed") {
-    args.setLifecycle("failed");
-    args.setDetails(args.frame.reason);
+  if (frame.kind === "failed") {
+    patch({ lifecycle: "failed", details: frame.reason });
     return;
   }
-  if (args.frame.kind === "complete") {
-    args.setLifecycle("complete");
-    args.setDetails("Screencast ended.");
+  if (frame.kind === "complete") {
+    patch({ lifecycle: "complete", details: "Screencast ended." });
   }
 }
 
@@ -1329,60 +1166,51 @@ function applyScreencastArmFrame(input: {
   readonly onDialogSettled: () => void;
 }): void {
   const { frame, controller } = input;
-  const control = applyScreencastControlFrame({
-    frame,
-    desiredEpoch: controller.desiredArmEpoch(),
-    activeEpoch: controller.activeArmEpoch(),
-  });
-  if (control === "teardown") {
-    // A refused pre-arm is the one teardown that says nothing about this
-    // tile's own state - only that someone else is driving.
-    if (frame.kind === "revoked" && frame.cause === "denied") {
-      controller.notePreArmDenied();
-    }
+  if (frame.kind === "failed" || frame.kind === "complete") {
     controller.clearLocalArm(false);
     return;
   }
-  if (control === "armed" && frame.kind === "armed") {
+  if (frame.kind === "armed") {
     // `noteArmed` reports the engagement itself when this arm was a
-    // deliberate one; a pre-arm's `armed` deliberately renders nothing.
-    controller.noteArmed(frame.armEpoch);
+    // deliberate one; a pre-arm's `armed` deliberately renders nothing. An
+    // `armed` for any other epoch is a superseded request's, and is dropped.
+    if (controller.desiredArmEpoch() === frame.armEpoch) {
+      controller.noteArmed(frame.armEpoch);
+    }
     return;
   }
-  handleDialogServerFrame({
-    frame,
-    armEpoch: controller.activeArmEpoch(),
-    current: controller.activeDialog(),
-    opened: (nextDialog) => {
-      controller.setActiveDialog(nextDialog);
-      input.onDialogOpened(nextDialog);
-    },
-    settled: () => {
-      controller.setActiveDialog(null);
-      input.onDialogSettled();
-    },
-  });
-}
-
-type ScreencastControlResult = "armed" | "teardown" | "ignore";
-
-function applyScreencastControlFrame(input: {
-  readonly frame: BrowserScreencastServerFrame;
-  readonly desiredEpoch: number | null;
-  readonly activeEpoch: number | null;
-}): ScreencastControlResult {
-  if (input.frame.kind === "failed" || input.frame.kind === "complete") {
-    return "teardown";
+  if (frame.kind === "revoked") {
+    if (
+      controller.activeArmEpoch() !== frame.armEpoch &&
+      controller.desiredArmEpoch() !== frame.armEpoch
+    ) {
+      return;
+    }
+    // A refused pre-arm is the one teardown that says nothing about this
+    // tile's own state - only that someone else is driving.
+    if (frame.cause === "denied") controller.notePreArmDenied();
+    controller.clearLocalArm(false);
+    return;
   }
-  if (input.frame.kind === "armed") {
-    return input.desiredEpoch === input.frame.armEpoch ? "armed" : "ignore";
+  if (frame.kind === "dialogOpened") {
+    const armEpoch = controller.activeArmEpoch();
+    const current = controller.activeDialog();
+    if (
+      armEpoch === null ||
+      (current !== null && frame.generation <= current.generation)
+    ) {
+      return;
+    }
+    const dialog: ScreencastDialog = { ...frame, armEpoch };
+    controller.setActiveDialog(dialog);
+    input.onDialogOpened(dialog);
+    return;
   }
-  if (input.frame.kind !== "revoked") return "ignore";
   if (
-    input.activeEpoch !== input.frame.armEpoch &&
-    input.desiredEpoch !== input.frame.armEpoch
+    frame.kind === "dialogSettled" &&
+    controller.activeDialog()?.generation === frame.generation
   ) {
-    return "ignore";
+    controller.setActiveDialog(null);
+    input.onDialogSettled();
   }
-  return "teardown";
 }

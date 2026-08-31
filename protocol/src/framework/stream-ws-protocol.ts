@@ -64,18 +64,6 @@ export const STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION =
   "hostCredentialProvision";
 
 /**
- * Capability tag a host advertises in `openAck.capabilities` when its
- * `browser.screencast` capture helper can negotiate the WebRTC video plane
- * (webrtc-display-plane spec, decision 1 + 12). This replaces a handshake
- * frame: the client only attempts `sdpAnswer`/`iceCandidate` negotiation
- * after seeing this tag, so an older host - which has no capture helper and
- * would just drop the unknown frame kinds - never sees an attempt in the
- * first place. Absence means JPEG-only; the JPEG screencast pipeline stays
- * the automatic fallback either way (decision 5).
- */
-export const STREAM_CAPABILITY_BROWSER_WEBRTC = "browserWebrtc";
-
-/**
  * What the host reports about its own device credential in `openAck`.
  *
  *   - `missing`      - the host holds no credential and can accept a handoff.

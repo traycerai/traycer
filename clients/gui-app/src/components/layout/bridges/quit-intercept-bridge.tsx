@@ -47,17 +47,9 @@ interface AppLifecycleUnsyncedEditsEntry {
   readonly unsyncable?: boolean;
 }
 
-interface FreshUnsyncedSnapshotRequest {
-  readonly requestId: string;
-}
-
 interface FreshUnsyncedSnapshotResponse {
   readonly requestId: string;
   readonly snapshot: ReadonlyArray<UnsyncedEditsEntry>;
-}
-
-interface FinalBrowserCaptureRequest {
-  readonly requestId: string;
 }
 
 interface QuitRequest {
@@ -86,13 +78,13 @@ interface AppLifecycleWindowBridge {
   acknowledgeQuitRequest?: (requestId: string) => Promise<void>;
   respondToQuitRequest(decision: QuitDecisionPayload): Promise<void>;
   onGetFreshUnsyncedSnapshot?: (
-    handler: (request: FreshUnsyncedSnapshotRequest) => void,
+    handler: (request: { readonly requestId: string }) => void,
   ) => { dispose: () => void };
   respondFreshUnsyncedSnapshot?: (
     reply: FreshUnsyncedSnapshotResponse,
   ) => Promise<void>;
   onCaptureFinalBrowserState?: (
-    handler: (request: FinalBrowserCaptureRequest) => void,
+    handler: (request: { readonly requestId: string }) => void,
   ) => { dispose: () => void };
   respondFinalBrowserStateCaptured?: (reply: {
     readonly requestId: string;
@@ -212,12 +204,12 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     const respond = appLifecycle?.respondFinalBrowserStateCaptured;
     if (onCapture === undefined || respond === undefined) return;
     const subscription = onCapture((request) => {
-      // `allSettled`, not `then`: a capture that fails is still "as captured
-      // as this renderer can manage", and must be reported rather than
-      // withheld - a swallowed rejection leaves main's waiter to sit out its
+      // `captureFinalPrimaryProfiles` never rejects: a capture that fails is
+      // still "as captured as this renderer can manage", and must be reported
+      // rather than withheld - withholding leaves main's waiter to sit out its
       // full timeout, a multi-second stall on every quit and window close that
-      // reaches it. Same shape as the fresh-snapshot reply above.
-      void Promise.allSettled([captureFinalPrimaryProfiles()])
+      // reaches it.
+      void captureFinalPrimaryProfiles()
         .then(() => respond({ requestId: request.requestId }))
         .catch((error: unknown) => {
           appLogger.error(

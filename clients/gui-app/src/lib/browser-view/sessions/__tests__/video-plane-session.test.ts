@@ -1,14 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserScreencastServerFrame,
+  BrowserVideoPlaneFailureReason,
+} from "@traycer/protocol/host/browser/contracts";
 import {
   createVideoPlaneSession,
   type VideoPlaneSession,
   type VideoPlaneView,
 } from "@/lib/browser-view/sessions/video-plane-session";
+import { isVideoPlaneStale } from "@/lib/browser-view/sessions/use-screencast-session";
 import {
   acquireBrowserMediaEntry,
   activeBrowserMediaKeyIds,
   RELEASE_GRACE_MS,
+  type MediaDataChannel,
   type MediaPeer,
   type MediaPeerHandlers,
   type WebrtcIceCandidate,
@@ -28,6 +33,28 @@ interface FakePeer extends MediaPeer {
   closeCount: number;
   /** `null` reads as "no inbound-rtp yet" - `mapWebrtcVideoStats` returns null for it. */
   statsReport: RTCStatsReport | null;
+}
+
+interface FakeChannel extends MediaDataChannel {
+  readonly sent: string[];
+  open: boolean;
+}
+
+function fakeChannel(label: string): FakeChannel {
+  const channel: FakeChannel = {
+    label,
+    sent: [],
+    open: true,
+    isOpen: () => channel.open,
+    send: (payload) => {
+      channel.sent.push(payload);
+    },
+    close: () => {
+      channel.open = false;
+    },
+    onStateChange: null,
+  };
+  return channel;
 }
 
 /** A minimal `RTCStatsReport`-shaped report: inbound-rtp + a nominated candidate pair. */
@@ -83,7 +110,9 @@ interface PlaneState {
   readonly states: {
     negotiationId: number;
     state: "live" | "failed";
-    reason: string | null;
+    /** Closed enum on the wire; the free-form half rides `detail`. */
+    reason: BrowserVideoPlaneFailureReason | null;
+    detail: string | null;
   }[];
   readonly statsFrames: ({ negotiationId: number } & WebrtcVideoStatsSample)[];
   readonly statsSamples: (WebrtcVideoStatsSample | null)[];
@@ -195,10 +224,57 @@ function iceFrame(
   };
 }
 
+/**
+ * The host's answer to a DataChannel ping. NOT `pong`: that kind belongs to
+ * the stream transport's heartbeat, which swallows it client-side before this
+ * handler ever runs (ticket 18 - it is why this measurement read null in
+ * production while this test was green against the wrong frame).
+ */
+function inputPongFrame(): BrowserScreencastServerFrame {
+  return { kind: "inputPong", hasBinaryPayload: false };
+}
+
+function frameMetadata(input: {
+  readonly captureTime: number;
+  readonly receiveTime: number;
+  readonly expectedDisplayTime: number;
+}): VideoFrameCallbackMetadata {
+  const partial: Pick<
+    VideoFrameCallbackMetadata,
+    "captureTime" | "receiveTime" | "expectedDisplayTime"
+  > = input;
+  return partial as VideoFrameCallbackMetadata;
+}
+
 /** The registry answers through a promise chain; let it settle. */
 async function settle(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+/** Answers the offer, opens both input channels, and reports the first frame live. */
+async function goLive(
+  plane: PlaneState,
+  negotiationId: number,
+): Promise<{ readonly reliable: FakeChannel; readonly lossy: FakeChannel }> {
+  plane.session.handleServerFrame(offerFrame(negotiationId, "offer-sdp"));
+  await settle();
+  const peer = plane.peers[0];
+  peer.handlers.onStream(fakeStream("track"));
+  const reliable = fakeChannel("input-reliable");
+  const lossy = fakeChannel("input-lossy");
+  peer.handlers.onDataChannel(reliable);
+  peer.handlers.onDataChannel(lossy);
+  peer.statsReport = fakeStatsReport({
+    framesDecoded: 1,
+    framesDropped: 0,
+    packetsLost: 0,
+    jitter: 0,
+    roundTripTime: 0.01,
+    candidateType: "relay",
+  });
+  plane.session.noteVideoFrame(null);
+  return { reliable, lossy };
 }
 
 describe("video plane session", () => {
@@ -238,7 +314,7 @@ describe("video plane session", () => {
     plane.session.noteVideoFrame(null);
 
     expect(plane.states).toEqual([
-      { negotiationId: 3, state: "live", reason: null },
+      { negotiationId: 3, state: "live", reason: null, detail: null },
     ]);
     expect(plane.views.at(-1)).toEqual({
       media: fakeStream("track"),
@@ -249,6 +325,23 @@ describe("video plane session", () => {
     plane.session.noteVideoFrame(null);
     plane.session.noteVideoFrame(null);
     expect(plane.states).toHaveLength(1);
+  });
+
+  it("delegates duplicate and stale rounds to the registry", async () => {
+    // The session forwards every offer verbatim; the round rules live in the
+    // registry. Mutation: adding a same-id or monotonic guard HERE - the
+    // second copy would drift from the registry's and silently drop a
+    // legitimate same-id ICE-restart re-offer (the case below).
+    const plane = setup();
+    plane.session.handleServerFrame(offerFrame(4, "offer-sdp"));
+    plane.session.handleServerFrame(offerFrame(4, "offer-again"));
+    plane.session.handleServerFrame(offerFrame(2, "older-round"));
+    await settle();
+
+    expect(plane.peers).toHaveLength(1);
+    expect(plane.answers).toEqual([
+      { negotiationId: 4, sdp: "answer-for:offer-sdp", candidates: [] },
+    ]);
   });
 
   it("re-reports live after a same-id ICE-restart re-offer heals", async () => {
@@ -268,8 +361,8 @@ describe("video plane session", () => {
     plane.session.noteVideoFrame(null);
 
     expect(plane.states).toEqual([
-      { negotiationId: 3, state: "live", reason: null },
-      { negotiationId: 3, state: "live", reason: null },
+      { negotiationId: 3, state: "live", reason: null, detail: null },
+      { negotiationId: 3, state: "live", reason: null, detail: null },
     ]);
   });
 
@@ -286,6 +379,7 @@ describe("video plane session", () => {
       negotiationId: 3,
       state: "failed",
       reason: "track-ended",
+      detail: null,
     });
     expect(plane.views.at(-1)).toEqual({ media: null, active: false });
     // Liveness goes back to the JPEG pump's clock the moment video stops.
@@ -304,7 +398,8 @@ describe("video plane session", () => {
       {
         negotiationId: 1,
         state: "failed",
-        reason: "no decoded video frame before deadline",
+        reason: "no-first-frame",
+        detail: null,
       },
     ]);
     expect(plane.views.at(-1)).toEqual({ media: null, active: false });
@@ -339,21 +434,9 @@ describe("video plane session", () => {
       {
         negotiationId: 2,
         state: "failed",
-        reason: "no decoded video frame before deadline",
+        reason: "no-first-frame",
+        detail: null,
       },
-    ]);
-  });
-
-  it("leaves duplicate and stale rounds to the registry", async () => {
-    const plane = setup();
-    plane.session.handleServerFrame(offerFrame(4, "offer-sdp"));
-    plane.session.handleServerFrame(offerFrame(4, "offer-again"));
-    plane.session.handleServerFrame(offerFrame(2, "older-round"));
-    await settle();
-
-    expect(plane.peers).toHaveLength(1);
-    expect(plane.answers).toEqual([
-      { negotiationId: 4, sdp: "answer-for:offer-sdp", candidates: [] },
     ]);
   });
 
@@ -472,7 +555,8 @@ describe("video plane session", () => {
       {
         negotiationId: 1,
         state: "failed",
-        reason: "no decoded video frame before deadline",
+        reason: "no-first-frame",
+        detail: null,
       },
     ]);
   });
@@ -491,7 +575,8 @@ describe("video plane session", () => {
       {
         negotiationId: 1,
         state: "failed",
-        reason: "no decoded video frame before deadline",
+        reason: "no-first-frame",
+        detail: null,
       },
     ]);
   });
@@ -508,5 +593,198 @@ describe("video plane session", () => {
 
     expect(plane.views).toHaveLength(seen);
     expect(plane.states).toEqual([]);
+  });
+
+  /**
+   * Ticket 17's telemetry (glass-to-glass latency + DataChannel RTT), driven
+   * over the same real `createVideoPlaneSession` harness above. The
+   * stale/duplicate-round rule itself is pinned once, at the registry layer
+   * (`webrtc-media-registry.test.ts`) - nothing here re-pins it.
+   */
+  describe("telemetry (ticket 17)", () => {
+    it("carries the real glass-to-glass median/p95 once frames report timings", async () => {
+      const plane = setup();
+      await goLive(plane, 1);
+
+      plane.session.noteVideoFrame(
+        frameMetadata({
+          captureTime: 0,
+          receiveTime: 20,
+          expectedDisplayTime: 50,
+        }),
+      );
+      plane.session.noteVideoFrame(
+        frameMetadata({
+          captureTime: 0,
+          receiveTime: 20,
+          expectedDisplayTime: 50,
+        }),
+      );
+
+      await settle();
+      vi.advanceTimersByTime(5_000);
+      await settle();
+
+      const frame = plane.statsFrames.at(-1);
+      expect(frame?.glassToGlassMs).toBe(50);
+      expect(frame?.glassToGlassP95Ms).toBe(50);
+      expect(frame?.networkPlusJitterMs).toBe(20);
+      expect(frame?.decodeCompositeMs).toBe(30);
+    });
+
+    it("keeps every latency field null for metadata-less frames, never NaN", async () => {
+      const plane = setup();
+      await goLive(plane, 1);
+      plane.session.noteVideoFrame(null);
+      plane.session.noteVideoFrame(null);
+
+      await settle();
+      vi.advanceTimersByTime(5_000);
+      await settle();
+
+      const frame = plane.statsFrames.at(-1);
+      expect(frame?.glassToGlassMs).toBeNull();
+      expect(frame?.glassToGlassP95Ms).toBeNull();
+      expect(frame?.networkPlusJitterMs).toBeNull();
+      expect(frame?.decodeCompositeMs).toBeNull();
+    });
+
+    it("abandons a still-outstanding ping after one tick and sends a replacement the tick after", async () => {
+      const plane = setup();
+      const { reliable } = await goLive(plane, 1);
+
+      // `goLive`'s own `publish()` already ran the round's first sample tick,
+      // which sent the first ping (no pong ever arrives in this test).
+      await settle();
+      expect(reliable.sent).toHaveLength(1);
+      const firstPayload: unknown = JSON.parse(reliable.sent[0] ?? "");
+      expect(firstPayload).toEqual({ kind: "ping", hasBinaryPayload: false });
+
+      // Tick 2: the ping from tick 1 is still outstanding - abandoned, not
+      // replaced, since a late pong next to a fresh ping could not be told
+      // apart (no correlation id on the wire).
+      vi.advanceTimersByTime(5_000);
+      await settle();
+      expect(reliable.sent).toHaveLength(1);
+
+      // Tick 3: the abandoned slot is empty again, so a replacement goes out.
+      vi.advanceTimersByTime(5_000);
+      await settle();
+      expect(reliable.sent).toHaveLength(2);
+    });
+
+    it("reports a finite dataChannelRttMs on the sample after an inputPong lands", async () => {
+      const plane = setup();
+      await goLive(plane, 1);
+
+      // `goLive`'s own `publish()` already sent the round's first ping.
+      await settle();
+      expect(plane.statsSamples.at(-1)?.dataChannelRttMs).toBeNull();
+
+      plane.session.handleServerFrame(inputPongFrame());
+
+      vi.advanceTimersByTime(5_000);
+      await settle();
+
+      const rtt = plane.statsSamples.at(-1)?.dataChannelRttMs ?? null;
+      expect(rtt).not.toBeNull();
+      expect(Number.isFinite(rtt)).toBe(true);
+      expect(rtt).toBeGreaterThanOrEqual(0);
+    });
+
+    it("never pings, and dataChannelRttMs stays null, while inputReady is false", async () => {
+      const plane = setup();
+      plane.session.handleServerFrame(offerFrame(1, "offer-sdp"));
+      await settle();
+      const peer = plane.peers[0];
+      peer.handlers.onStream(fakeStream("track"));
+      // No `onDataChannel` calls here - channels never open, so `inputReady`
+      // stays false and `sendInput` (and thus the ping) is refused.
+      peer.statsReport = fakeStatsReport({
+        framesDecoded: 1,
+        framesDropped: 0,
+        packetsLost: 0,
+        jitter: 0,
+        roundTripTime: 0.01,
+        candidateType: "relay",
+      });
+      plane.session.noteVideoFrame(null);
+
+      await settle();
+      vi.advanceTimersByTime(5_000);
+      await settle();
+
+      expect(plane.statsSamples.at(-1)?.dataChannelRttMs).toBeNull();
+    });
+  });
+});
+
+/** `VIEWER_CONTROL_PLANE_DEADLINES.staleWithoutFrame`'s floor. */
+const STALE_AFTER_MS = 8_000;
+
+/**
+ * The post-occlusion window: the tile was hidden for minutes, came back at
+ * `visibleSince`, and the last PRESENTED frame predates the whole stretch.
+ */
+const RETURN = {
+  visibleSince: 100_000,
+  videoFrameAt: 20_000,
+  now: 100_000 + STALE_AFTER_MS,
+} as const;
+
+describe("isVideoPlaneStale", () => {
+  it("does not declare a decoding stream dead when compositing has not resumed", () => {
+    // `requestVideoFrameCallback` is exactly what is fragile across the
+    // visible edge, so decode progress - not presentation - is the evidence.
+    expect(
+      isVideoPlaneStale({
+        ...RETURN,
+        decodeAdvancedAt: RETURN.now - 1_000,
+        staleAfterMs: STALE_AFTER_MS,
+      }),
+    ).toBe(false);
+  });
+
+  it("still declares a stream dead when decoding actually stopped", () => {
+    expect(
+      isVideoPlaneStale({
+        ...RETURN,
+        decodeAdvancedAt: RETURN.visibleSince - 40_000,
+        staleAfterMs: STALE_AFTER_MS,
+      }),
+    ).toBe(true);
+    // No stats sample at all is no evidence, not evidence of life.
+    expect(
+      isVideoPlaneStale({
+        ...RETURN,
+        decodeAdvancedAt: null,
+        staleAfterMs: STALE_AFTER_MS,
+      }),
+    ).toBe(true);
+  });
+
+  it("never judges a round over the window it was hidden for", () => {
+    // Decode and presentation both predate the return, but the tile has only
+    // been observable for a moment: the clock runs from `visibleSince`.
+    expect(
+      isVideoPlaneStale({
+        ...RETURN,
+        now: RETURN.visibleSince + 1_000,
+        decodeAdvancedAt: 20_000,
+        staleAfterMs: STALE_AFTER_MS,
+      }),
+    ).toBe(false);
+  });
+
+  it("counts presentation too, once it is the fresher signal", () => {
+    expect(
+      isVideoPlaneStale({
+        visibleSince: RETURN.visibleSince,
+        videoFrameAt: RETURN.now - 500,
+        decodeAdvancedAt: 20_000,
+        now: RETURN.now,
+        staleAfterMs: STALE_AFTER_MS,
+      }),
+    ).toBe(false);
   });
 });

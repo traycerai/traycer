@@ -23,16 +23,13 @@ const registryHarness = vi.hoisted(() => ({
 vi.mock(
   "@/lib/browser-view/sessions/browser-sessions-coordinator",
   async () => {
-    const actual = await vi.importActual<
-      typeof import("@/lib/browser-view/sessions/browser-sessions-coordinator")
-    >("@/lib/browser-view/sessions/browser-sessions-coordinator");
-    return {
-      ...actual,
-      subscribeToBrowserSessionsCoordinators: () => () => undefined,
-      browserSessionAcrossCoordinators: (sessionId: string) =>
-        registryHarness.sessions.find((item) => item.sessionId === sessionId) ??
-        null,
-    };
+    // Dynamic import: the factory is hoisted above the static imports, so
+    // the fixture binding is not initialized yet when this runs.
+    const { browserSessionsCoordinatorMockFactory } =
+      await import("./browser-sessions-coordinator-mock-fixture");
+    return browserSessionsCoordinatorMockFactory(
+      () => registryHarness.sessions,
+    );
   },
 );
 
@@ -84,7 +81,12 @@ function mention(seed: {
   };
 }
 
-/** The context a remote-host chat tile sees: the TILE host's stream only. */
+/**
+ * The AMBIENT context a remote-host chat tile sees: the TILE host's stream
+ * only. It is the negative control - it knows `session-tile` and has never
+ * heard of `session-canvas`, so a chip that resolved the canvas tab from its
+ * surroundings could not render below it.
+ */
 function tileHostSessionsState(): BrowserSessionsState {
   return {
     hostId: TILE_HOST_ID,
@@ -146,8 +148,11 @@ describe("browser-tab mention chip inside a remote-host chat tile", () => {
     );
 
     expect(screen.getByText("Tile host page")).toBeTruthy();
-    // The one the ambient (tile-host) context cannot answer: it resolves only
-    // because the chip reads every coordinator, not its surroundings.
+    // The one the ambient (tile-host) context above cannot answer: it resolves
+    // only because the chip reads every coordinator, not its surroundings.
+    // Mutation: pointing the chip at `useBrowserSessionsContext()` instead of
+    // `browserSessionAcrossCoordinators` - without this provider that swap
+    // would still pass, since an empty context answers nothing either way.
     expect(screen.getByText("Canvas host page")).toBeTruthy();
     expect(screen.queryByText("captured label")).toBeNull();
   });

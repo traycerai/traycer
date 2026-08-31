@@ -49,6 +49,9 @@ function seedCanvasWithTile(tile: EpicCanvasTileRef, hostId: string): void {
     canvasByTabId: { "view-tab-1": canvas },
     openTabOrder: ["view-tab-1"],
   });
+  // The tile's own host, restated at the seed: the two cases below differ only
+  // in which host the seeded tile is on, and a helper that never asserted it
+  // would let a builder change silently make both cases the same case.
   expect(tile.hostId).toBe(hostId);
 }
 

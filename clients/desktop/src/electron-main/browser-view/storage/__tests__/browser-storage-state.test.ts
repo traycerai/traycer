@@ -7,7 +7,7 @@ import {
   seedBrowserViewCookies,
   type BrowserPrimaryProfileCaptureDependencies,
   type BrowserPrimaryProfileOriginSnapshot,
-  type BrowserStorageSession,
+  type BrowserStorageCaptureWebContents,
 } from "../browser-storage-state";
 
 vi.mock("electron", () => ({
@@ -299,35 +299,60 @@ describe("captureBrowserPrimaryProfile", () => {
   });
 });
 
-/** Mirrors `PRIMARY_PROFILE_SNAPSHOT_ORIGIN_LIMIT`, which is module-private. */
-const SNAPSHOT_ORIGIN_LIMIT = 32;
+/**
+ * The five coordinator tests below all wire the same capture callback
+ * (record what it was called with, echo it back as a "captured" result) and
+ * differ only in the origin-capture callback and the observe/seed calls that
+ * follow - so that plumbing is factored into this one local factory.
+ */
+function createTestCoordinator(
+  captureOrigin: (
+    origin: string,
+    webContents: BrowserStorageCaptureWebContents,
+  ) => Promise<BrowserPrimaryProfileOriginSnapshot | null>,
+): {
+  readonly coordinator: BrowserPrimaryProfileSnapshotCoordinator;
+  readonly captured: Array<readonly BrowserPrimaryProfileOriginSnapshot[]>;
+} {
+  const captured: Array<readonly BrowserPrimaryProfileOriginSnapshot[]> = [];
+  const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
+    (origins) => {
+      captured.push(origins);
+      return Promise.resolve({
+        status: "captured",
+        storageState: { cookies: [], origins: [...origins] },
+        reason: null,
+      });
+    },
+    captureOrigin,
+  );
+  return { coordinator, captured };
+}
 
 describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
-  it("waits for prior observations and keeps the newest eight origins", async () => {
+  it("waits for prior observations, then orders live, demoted, and seeded tiers", async () => {
+    // Maximal-break: with a pre-existing seeded origin present, this fails if
+    // LRU eviction DROPS instead of demoting (origin-0/1 vanish), if the
+    // demoted pair is appended after the seed instead of prepended ahead of
+    // it, or if the live tier is not newest-first.
     const captureResolvers: Array<
       (snapshot: BrowserPrimaryProfileOriginSnapshot) => void
     > = [];
-    const capturedOrigins: string[][] = [];
-    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
-      (origins) => {
-        capturedOrigins.push(origins.map((origin) => origin.origin));
-        return Promise.resolve({
-          status: "captured",
-          storageState: {
-            cookies: [],
-            origins: origins.map((origin) => ({
-              origin: origin.origin,
-              localStorage: [...origin.localStorage],
-            })),
-          },
-          reason: null,
-        });
-      },
-      (origin) =>
+    const { coordinator, captured } = createTestCoordinator(
+      () =>
         new Promise((resolve) => {
           captureResolvers.push((snapshot) => resolve(snapshot));
         }),
     );
+    coordinator.retainSeededOrigins({
+      cookies: [],
+      origins: [
+        {
+          origin: "https://seeded.example",
+          localStorage: [{ name: "seeded", value: "from-host" }],
+        },
+      ],
+    });
     const webContents = {
       getURL: () => "https://unused.example/",
       executeJavaScript: () => Promise.resolve([]),
@@ -338,7 +363,7 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
 
     const capture = coordinator.capture();
     await Promise.resolve();
-    expect(capturedOrigins).toEqual([]);
+    expect(captured).toEqual([]);
     captureResolvers.forEach((resolve, index) => {
       resolve({
         origin: `https://origin-${index}.example`,
@@ -347,7 +372,13 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
     });
     await capture;
 
-    expect(capturedOrigins).toEqual([
+    // Three tiers in order: the 8 live origins newest-first (the LRU `origins`
+    // map is capped at PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT), then the
+    // two DEMOTED into the seeded tier by that eviction (freshest demotion
+    // first), then the pre-existing seed the run never navigated.
+    expect(
+      captured.map((origins) => origins.map((origin) => origin.origin)),
+    ).toEqual([
       [
         "https://origin-9.example",
         "https://origin-8.example",
@@ -357,30 +388,23 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
         "https://origin-4.example",
         "https://origin-3.example",
         "https://origin-2.example",
+        "https://origin-1.example",
+        "https://origin-0.example",
+        "https://seeded.example",
       ],
     ]);
   });
 
   it("carries the seeded origins this run never navigated", async () => {
-    // The host replaces its whole jar with what a capture sends, and the map
-    // above only holds origins navigated in THIS process run. Without the
-    // seeded half, quitting after visiting one site erases the localStorage of
-    // every other origin the host was holding.
-    const captured: Array<readonly BrowserPrimaryProfileOriginSnapshot[]> = [];
-    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
-      (origins) => {
-        captured.push(origins);
-        return Promise.resolve({
-          status: "captured",
-          storageState: { cookies: [], origins: [...origins] },
-          reason: null,
-        });
-      },
-      (origin) =>
-        Promise.resolve({
-          origin,
-          localStorage: [{ name: "visited", value: "this-run" }],
-        }),
+    // The host replaces its whole jar with what a capture sends, and the
+    // coordinator's own origin map only holds origins navigated in THIS
+    // process run. Without the seeded half, quitting after visiting one site
+    // erases the localStorage of every other origin the host was holding.
+    const { coordinator, captured } = createTestCoordinator((origin) =>
+      Promise.resolve({
+        origin,
+        localStorage: [{ name: "visited", value: "this-run" }],
+      }),
     );
 
     coordinator.retainSeededOrigins({
@@ -420,21 +444,11 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
   });
 
   it("lets a freshly observed origin win over its seeded copy", async () => {
-    const captured: Array<readonly BrowserPrimaryProfileOriginSnapshot[]> = [];
-    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
-      (origins) => {
-        captured.push(origins);
-        return Promise.resolve({
-          status: "captured",
-          storageState: { cookies: [], origins: [...origins] },
-          reason: null,
-        });
-      },
-      (origin) =>
-        Promise.resolve({
-          origin,
-          localStorage: [{ name: "a", value: "fresh" }],
-        }),
+    const { coordinator, captured } = createTestCoordinator((origin) =>
+      Promise.resolve({
+        origin,
+        localStorage: [{ name: "a", value: "fresh" }],
+      }),
     );
 
     coordinator.retainSeededOrigins({
@@ -466,24 +480,17 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
     // seed, so an unbounded union would ratchet the localStorage blob upward
     // on every quit forever. Observed origins are kept first; the seed fills
     // the remainder in seed order and the oldest imports age out.
-    const captured: Array<readonly BrowserPrimaryProfileOriginSnapshot[]> = [];
-    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
-      (origins) => {
-        captured.push(origins);
-        return Promise.resolve({
-          status: "captured",
-          storageState: { cookies: [], origins: [...origins] },
-          reason: null,
-        });
-      },
-      (origin) =>
-        Promise.resolve({
-          origin,
-          localStorage: [{ name: "visited", value: "this-run" }],
-        }),
+    const { coordinator, captured } = createTestCoordinator((origin) =>
+      Promise.resolve({
+        origin,
+        localStorage: [{ name: "visited", value: "this-run" }],
+      }),
     );
 
-    const seededCount = SNAPSHOT_ORIGIN_LIMIT + 10;
+    // Mirrored, not imported: importing the production constant would make
+    // this pin agree with any value the module happens to hold.
+    const snapshotOriginLimit = 32;
+    const seededCount = snapshotOriginLimit + 10;
     coordinator.retainSeededOrigins({
       cookies: [],
       origins: Array.from({ length: seededCount }, (_unused, index) => ({
@@ -501,7 +508,7 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
     await coordinator.capture();
 
     const origins = captured[0] ?? [];
-    expect(origins).toHaveLength(SNAPSHOT_ORIGIN_LIMIT);
+    expect(origins).toHaveLength(snapshotOriginLimit);
     // Both freshly observed origins survive, ahead of every seeded one.
     expect(origins.slice(0, 2).map((entry) => entry.origin)).toEqual([
       "https://fresh-b.example",
@@ -511,7 +518,7 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
     // last-seeded origins are the ones that age out.
     expect(origins.slice(2).map((entry) => entry.origin)).toEqual(
       Array.from(
-        { length: SNAPSHOT_ORIGIN_LIMIT - 2 },
+        { length: snapshotOriginLimit - 2 },
         (_unused, index) => `https://seeded-${index}.example`,
       ),
     );
@@ -521,19 +528,10 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
     // An `[]` snapshot is indistinguishable from a genuinely empty origin, and
     // the host replaces its whole jar with what arrives - so reporting one for
     // an origin that merely could not be read ERASES it. Absent means unknown.
-    const captured: Array<readonly BrowserPrimaryProfileOriginSnapshot[]> = [];
-    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
-      (origins) => {
-        captured.push(origins);
-        return Promise.resolve({
-          status: "captured",
-          storageState: { cookies: [], origins: [...origins] },
-          reason: null,
-        });
-      },
-      // `captureBrowserOriginLocalStorage` answers null when the guest
-      // navigated away mid-read, or the origin is not http(s).
-      () => Promise.resolve(null),
+    // `captureBrowserOriginLocalStorage` answers null when the guest
+    // navigated away mid-read, or the origin is not http(s).
+    const { coordinator, captured } = createTestCoordinator(() =>
+      Promise.resolve(null),
     );
 
     coordinator.retainSeededOrigins({
@@ -558,6 +556,74 @@ describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
         localStorage: [{ name: "a", value: "kept" }],
       },
     ]);
+  });
+
+  it("reports unavailable when the captured jar holds neither a cookie nor an origin", async () => {
+    const { coordinator } = createTestCoordinator(() => Promise.resolve(null));
+
+    const result = await coordinator.capture();
+
+    expect(result).toEqual({
+      status: "unavailable",
+      storageState: null,
+      reason: "No browser storage has been seeded or observed yet.",
+    });
+  });
+
+  it("captures the cookie jar even when nothing was seeded or observed", async () => {
+    // Maximal-break: catches a pre-`captureProfile` emptiness short-circuit on
+    // the coordinator's OWN origin bookkeeping. The cookie jar lives in the
+    // Electron session, so bailing before the capture threw away every cookie
+    // on any quit that happened to navigate nothing. Wired to the real
+    // `captureBrowserPrimaryProfile` because the coordinator fixture above
+    // mocks cookies out entirely.
+    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
+      (origins) =>
+        captureBrowserPrimaryProfile(
+          origins,
+          primaryCaptureDependencies(
+            realState,
+            [],
+            [
+              {
+                name: "sid",
+                value: "signed-in",
+                domain: "example.test",
+                hostOnly: true,
+                path: "/",
+                secure: true,
+                httpOnly: true,
+                session: true,
+                sameSite: "lax",
+              },
+            ],
+          ),
+        ),
+      () => Promise.resolve(null),
+    );
+
+    const result = await coordinator.capture();
+
+    expect(result).toEqual({
+      status: "captured",
+      storageState: {
+        cookies: [
+          {
+            name: "sid",
+            value: "signed-in",
+            domain: "example.test",
+            path: "/",
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+            partitionKey: null,
+          },
+        ],
+        origins: [],
+      },
+      reason: null,
+    });
   });
 });
 

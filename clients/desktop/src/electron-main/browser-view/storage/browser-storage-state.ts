@@ -192,9 +192,14 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
         this.origins.delete(origin);
         this.origins.set(origin, { ...snapshot, sequence });
         while (this.origins.size > PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT) {
-          const oldest = this.origins.keys().next().value;
+          const oldest = this.origins.entries().next().value;
           if (oldest === undefined) break;
-          this.origins.delete(oldest);
+          this.origins.delete(oldest[0]);
+          // Demoted, not discarded: this is the freshest value anyone holds
+          // for that origin, and dropping it would let the next capture ship
+          // the STALE seeded copy - which the seed script then writes back
+          // over the newer one on the following run.
+          this.retainObservedOrigin(oldest[1]);
         }
       })
       .catch(() => undefined)
@@ -202,6 +207,15 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
         this.observations.delete(observation);
       });
     this.observations.add(observation);
+  }
+
+  private retainObservedOrigin(
+    evicted: BrowserPrimaryProfileOriginSnapshot,
+  ): void {
+    this.seededOrigins = [
+      { origin: evicted.origin, localStorage: [...evicted.localStorage] },
+      ...this.seededOrigins.filter((entry) => entry.origin !== evicted.origin),
+    ];
   }
 
   async capture(): Promise<BrowserPrimaryProfileCaptureResult> {
@@ -220,7 +234,26 @@ export class BrowserPrimaryProfileSnapshotCoordinator {
         (entry) => !observedOrigins.has(entry.origin),
       ),
     ].slice(0, PRIMARY_PROFILE_SNAPSHOT_ORIGIN_LIMIT);
-    return this.captureProfile(origins);
+    const result = await this.captureProfile(origins);
+    // A capture becomes the host's WHOLE jar, so a jar that knows nothing must
+    // report itself unavailable rather than erase what the host holds -
+    // permanently, since the erased jar is the next seed. "Knows nothing" is a
+    // property of the CAPTURED result, not of this coordinator: the cookie jar
+    // lives in the Electron session, so a run that never observed an origin can
+    // still be carrying every cookie the user has.
+    if (
+      result.status === "captured" &&
+      result.storageState !== null &&
+      result.storageState.cookies.length === 0 &&
+      result.storageState.origins.length === 0
+    ) {
+      return {
+        status: "unavailable",
+        storageState: null,
+        reason: "No browser storage has been seeded or observed yet.",
+      };
+    }
+    return result;
   }
 }
 

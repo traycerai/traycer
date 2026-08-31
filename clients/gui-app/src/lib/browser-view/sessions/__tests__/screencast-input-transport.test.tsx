@@ -6,6 +6,9 @@ import {
 } from "@traycer/protocol/host/browser/contracts";
 import {
   armViaGesture,
+  firePointerDown,
+  firePointerMove,
+  firePointerUp,
   mountController,
   type MountedController,
 } from "@/lib/browser-view/sessions/__tests__/screencast-controller-harness";
@@ -58,36 +61,18 @@ function armedOnChannels(): MountedController & {
   return { ...mounted, channels };
 }
 
+const CLICK_POINT = { clientX: 200, clientY: 300 } as const;
+
 function pointerMove(overlay: HTMLElement, clientY: number): void {
-  fireEvent.pointerMove(overlay, {
-    pointerId: 1,
-    clientX: 200,
-    clientY,
-    button: 0,
-    buttons: 0,
-  });
+  firePointerMove(overlay, { clientX: 200, clientY });
 }
 
 function pointerDown(overlay: HTMLElement): void {
-  fireEvent.pointerDown(overlay, {
-    pointerId: 1,
-    clientX: 200,
-    clientY: 300,
-    button: 0,
-    buttons: 1,
-    detail: 1,
-  });
+  firePointerDown(overlay, CLICK_POINT);
 }
 
 function pointerUp(overlay: HTMLElement): void {
-  fireEvent.pointerUp(overlay, {
-    pointerId: 1,
-    clientX: 200,
-    clientY: 300,
-    button: 0,
-    buttons: 0,
-    detail: 1,
-  });
+  firePointerUp(overlay, CLICK_POINT);
 }
 
 function kinds(
