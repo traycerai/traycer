@@ -10,6 +10,7 @@ import {
   NOTIFICATION_EVENT_TYPES,
   type NotificationEvent,
 } from "@traycer/protocol/notifications/notification-entry";
+import { parseKnownHostNotificationPayloadForKind } from "@traycer/protocol/host/notifications/contracts";
 import {
   existingEpicTabIntentWithNestedFocus,
   navigateToTabIntent,
@@ -21,6 +22,8 @@ import {
   findOpenArtifactInTab,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import { TILE_KIND_BROWSER_SESSION } from "@/stores/epics/canvas/tile-kinds";
+import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import {
   type ChatTranscriptJumpTarget,
   useChatTranscriptJumpStore,
@@ -34,6 +37,7 @@ export type NotificationPayloadKind =
   | "interview"
   | "chat"
   | "terminal"
+  | "browserSession"
   | "hostSurface";
 
 export interface SessionNotificationPayload {
@@ -95,6 +99,19 @@ export interface TerminalNotificationPayload {
 }
 
 /**
+ * A parked browser session's tile. `sessionId`/`tabId` address the tile
+ * deterministically (its canvas node id is `browser-session:<sessionId>:<tabId>`),
+ * and the session is host-local for life - so this routes only to a tile bound
+ * to the row's origin host, never to a same-id tile on another machine.
+ */
+export interface BrowserSessionNotificationPayload {
+  readonly kind: "browserSession";
+  readonly epicId: string;
+  readonly sessionId: string;
+  readonly tabId: string;
+}
+
+/**
  * A host-managed surface rather than a document inside an epic.
  *
  * One destination FAMILY, not one payload kind per operation: the notification
@@ -123,6 +140,7 @@ export type NotificationPayload =
   | InterviewNotificationPayload
   | ChatNotificationPayload
   | TerminalNotificationPayload
+  | BrowserSessionNotificationPayload
   | HostSurfaceNotificationPayload;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -223,6 +241,42 @@ function parseTerminalPayload(
   };
 }
 
+function parseBrowserSessionPayload(
+  value: Record<string, unknown>,
+): BrowserSessionNotificationPayload | null {
+  const parsed = parseKnownHostNotificationPayloadForKind(
+    "browser.human.needed",
+    value,
+  );
+  if (parsed === null || parsed.kind !== "browser_human_needed") {
+    return null;
+  }
+  return {
+    kind: "browserSession",
+    epicId: parsed.epicId,
+    sessionId: parsed.sessionId,
+    tabId: parsed.tabId,
+  };
+}
+
+/**
+ * The already-normalized shape, as it rides a native activation envelope's
+ * `route`. `parseBrowserSessionPayload` above reads the RAW host payload
+ * (`browser.human.needed`); this reads what that produced, because
+ * `parseEnvelopeV1` re-parses its own route on the way back in.
+ */
+function parseNormalizedBrowserSessionPayload(
+  value: Record<string, unknown>,
+): BrowserSessionNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const sessionId = readString(value.sessionId);
+  const tabId = readString(value.tabId);
+  if (epicId === null || sessionId === null || tabId === null) {
+    return null;
+  }
+  return { kind: "browserSession", epicId, sessionId, tabId };
+}
+
 function parseApprovalPayload(
   value: Record<string, unknown>,
 ): ApprovalNotificationPayload | null {
@@ -303,6 +357,10 @@ export function parseNotificationPayload(
       return parseChatPayload(value);
     case "terminal":
       return parseTerminalPayload(value);
+    case "browser_human_needed":
+      return parseBrowserSessionPayload(value);
+    case "browserSession":
+      return parseNormalizedBrowserSessionPayload(value);
     case "approval":
       return parseApprovalPayload(value);
     case "interview":
@@ -357,6 +415,7 @@ export function isNotificationPayloadRoutable(
     case "chat":
     case "interview":
     case "terminal":
+    case "browserSession":
     case "hostSurface":
       return true;
     case "approval":
@@ -432,6 +491,13 @@ export function routeNotificationForHost(
     case "terminal":
       routeTerminalNotification(navigate, payload, receivedAt);
       return true;
+    case "browserSession":
+      return routeBrowserSessionNotification(
+        navigate,
+        payload,
+        receivedAt,
+        originHostId,
+      );
     case "approval":
       if (payload.epicId === undefined || payload.chatId === undefined) {
         return false;
@@ -500,6 +566,86 @@ export function routeNotificationForHost(
 }
 
 /**
+ * The tab intent shared by every "focus a specific tile, or fall back to just
+ * opening the epic" route: prepare the tile's nested focus and activate its
+ * tab when a match was found on the canvas, else fall back to the hostless
+ * epic intent. `routeTerminalNotification` and `routeBrowserSessionNotification`
+ * differ only in how they locate `match` (a terminal row names its tab
+ * directly; a browser row searches the canvas for its parked tile).
+ */
+function focusTileIntent(input: {
+  readonly epicId: string;
+  readonly receivedAt: number;
+  readonly focusArtifactId: string | undefined;
+  readonly match: {
+    readonly tabId: string;
+    readonly paneId: string;
+    readonly instanceId: string;
+  } | null;
+}) {
+  const focus = {
+    focusedAt: input.receivedAt,
+    focusArtifactId: input.focusArtifactId,
+    focusThreadId: undefined,
+    migrationSource: undefined,
+  };
+  if (input.match === null) {
+    return openOrFocusEpicIntent({ epicId: input.epicId, focus });
+  }
+  return existingEpicTabIntentWithNestedFocus({
+    epicId: input.epicId,
+    tabId: input.match.tabId,
+    focus,
+    nestedFocus: useEpicCanvasStore
+      .getState()
+      .prepareSetActiveTileTabFocusTarget(
+        input.match.tabId,
+        input.match.paneId,
+        input.match.instanceId,
+      ),
+  });
+}
+
+/**
+ * Focuses the parked browser tile, or opens its epic when no such tile is on a
+ * canvas. `false` when it fell through to the hostless epic intent, so the
+ * caller can decline to credit an activation that never reached the parked
+ * host.
+ */
+function routeBrowserSessionNotification(
+  navigate: NotificationNavigate,
+  payload: BrowserSessionNotificationPayload,
+  receivedAt: number,
+  originHostId: string | null,
+): boolean {
+  const tileId = browserSessionTileId(payload);
+  const state = useEpicCanvasStore.getState();
+  const match = Object.values(state.tabsById)
+    .flatMap((tab) => {
+      if (tab === undefined || tab.epicId !== payload.epicId) return [];
+      const found = findOpenArtifactInTab(tab.tabId, tileId);
+      if (found === null) return [];
+      const tile =
+        state.canvasByTabId[tab.tabId]?.tilesByInstanceId[found.instanceId];
+      if (tile?.type !== TILE_KIND_BROWSER_SESSION) return [];
+      if (originHostId !== null && tile.hostId !== originHostId) return [];
+      return [{ tabId: tab.tabId, ...found }];
+    })
+    .at(0);
+  navigateToTabIntent(
+    navigate,
+    focusTileIntent({
+      epicId: payload.epicId,
+      receivedAt,
+      focusArtifactId: tileId,
+      match: match === undefined ? null : match,
+    }),
+    undefined,
+  );
+  return match !== undefined;
+}
+
+/**
  * Opens the host-managed surface a row points at.
  *
  * Goes through `ensureSettingsTab` rather than navigating to the route
@@ -546,49 +692,27 @@ function routeTerminalNotification(
   payload: TerminalNotificationPayload,
   receivedAt: number,
 ): void {
-  const store = useEpicCanvasStore.getState();
-  const tab = store.tabsById[payload.tabId];
-  if (tab?.epicId !== payload.epicId) {
-    navigateToTabIntent(
-      navigate,
-      openOrFocusEpicIntent({
-        epicId: payload.epicId,
-        focus: {
-          focusedAt: receivedAt,
-          focusArtifactId: undefined,
-          focusThreadId: undefined,
-          migrationSource: undefined,
-        },
-      }),
-      undefined,
-    );
-    return;
-  }
-
+  const tab = useEpicCanvasStore.getState().tabsById[payload.tabId];
   // The payload names the EXACT tab that owns the terminal. Prepare THAT tab's
   // nested focus and activate it - never resolve by epic, which would pick an
   // active/MRU same-epic sibling and land on the wrong tab. A retained,
   // currently-closed tab is reopened by the controller's legacy projection
   // (`setActiveTab` reinserts it into `openTabOrder`).
-  const nestedFocus = useEpicCanvasStore
-    .getState()
-    .prepareSetActiveTileTabFocusTarget(
-      payload.tabId,
-      payload.paneId,
-      payload.tileInstanceId,
-    );
+  const match =
+    tab?.epicId === payload.epicId
+      ? {
+          tabId: payload.tabId,
+          paneId: payload.paneId,
+          instanceId: payload.tileInstanceId,
+        }
+      : null;
   navigateToTabIntent(
     navigate,
-    existingEpicTabIntentWithNestedFocus({
+    focusTileIntent({
       epicId: payload.epicId,
-      tabId: payload.tabId,
-      focus: {
-        focusedAt: receivedAt,
-        focusArtifactId: undefined,
-        focusThreadId: undefined,
-        migrationSource: undefined,
-      },
-      nestedFocus,
+      receivedAt,
+      focusArtifactId: undefined,
+      match,
     }),
     undefined,
   );

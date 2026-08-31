@@ -180,9 +180,19 @@ function worktreeMentionAttachmentFromSuggestion(
   };
 }
 
+/**
+ * `null` for a tab on ANOTHER host. The serializer renders a tab mention's
+ * `tabId` unconditionally (`json-content-serializer.ts:514-519`), so a
+ * cross-host pick routed through here would hand the agent a `browser-tab:`
+ * token naming a tab it can never attach to. Those picks are attached as
+ * snapshot context instead (spec decision #10, see `browser-tab-preview.ts`);
+ * this null is the backstop for any other path that reaches a cross-host
+ * entry.
+ */
 function browserTabMentionAttachmentFromSuggestion(
   entry: BrowserTabMentionEntry,
-): BrowserTabMentionAttachment {
+): BrowserTabMentionAttachment | null {
+  if (entry.contextOnly) return null;
   return {
     kind: "mention",
     contextType: "browser-tab",
@@ -192,10 +202,7 @@ function browserTabMentionAttachmentFromSuggestion(
     absolutePath: null,
     workspacePath: null,
     label: entry.label,
-    // Dead field kept only because `MentionAttachment` requires it - the sent
-    // message chip renders a static Globe2 icon and no consumer reads this
-    // for browser-tab entries anymore (see FIX 3 in chat-user-message-content).
-    description: "",
+    description: entry.url,
     tabId: entry.tabId,
     sessionId: entry.sessionId,
     url: entry.url,

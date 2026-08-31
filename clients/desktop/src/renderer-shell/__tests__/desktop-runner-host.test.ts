@@ -596,7 +596,6 @@ function buildFakeBridge(
       stopPipCapture: async () => undefined,
       onPipCaptureFrame: (_handler) => ({ dispose: () => undefined }),
       onNativeTabStatusChange: (_handler) => ({ dispose: () => undefined }),
-      onElectronTabHandoff: (_handler) => ({ dispose: () => undefined }),
       reportAnnotationAttachResult: async () => undefined,
     },
     hostManagement: {

@@ -29,13 +29,22 @@ function isBrowserViewportPreset(
   );
 }
 
+/** The tile's canvas node id, derived from the session/tab it shows. Shared so
+ * a lookup by id (notification deep-links) cannot drift from what open does. */
+export function browserSessionTileId(args: {
+  readonly sessionId: string;
+  readonly tabId: string;
+}): string {
+  return `${TILE_KIND_BROWSER_SESSION}:${args.sessionId}:${args.tabId}`;
+}
+
 export function makeBrowserSessionTileRef(args: {
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
 }): BrowserSessionTileRef {
   return {
-    id: `browser-session:${args.sessionId}:${args.tabId}`,
+    id: browserSessionTileId(args),
     instanceId: uuidv4(),
     type: TILE_KIND_BROWSER_SESSION,
     name: BROWSER_TILE_NAME,

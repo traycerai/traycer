@@ -170,6 +170,19 @@ export interface BrowserTabMentionEntry {
   readonly sessionId: string;
   readonly label: string;
   readonly url: string;
+  /** The host that OWNS this tab; never assume it is the chat's host. */
+  readonly hostId: string;
+  /** That host's directory label, or null when it is not in the directory. */
+  readonly hostLabel: string | null;
+  /** The browser-sessions coordinator this tab's host is reached through. */
+  readonly coordinatorKey: string;
+  /**
+   * The tab lives on a DIFFERENT host than the chat, so it can only ever be
+   * snapshot context - url, title, screenshot - never a drive handle (spec
+   * decision #10). Picking one attaches an image plus a text line instead of
+   * emitting a `browser-tab:` token the agent could try to attach to.
+   */
+  readonly contextOnly: boolean;
   readonly coLocated: boolean;
   readonly lastActivityAt: number;
   /**

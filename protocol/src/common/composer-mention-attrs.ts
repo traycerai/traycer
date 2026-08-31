@@ -194,8 +194,8 @@ export type GithubMentionAttachment = {
  * `page.attachTab({tabId})` resolves - so `path` is DERIVED from it rather than
  * trusted verbatim, and a node carrying a stale `path` still round-trips to the
  * tab its `tabId` names. `label`/`url` are display-only (the live decorator's
- * tooltip fallback once the tab is gone); `description` is unused for this
- * variant and kept at `""` only because every member carries the field.
+ * tooltip fallback once the tab is gone); `description` carries the tab URL,
+ * which the sent-message chip renders as its tooltip.
  */
 export type BrowserTabMentionAttachment = {
   kind: "mention";
