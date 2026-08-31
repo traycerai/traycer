@@ -65,8 +65,8 @@ function readHostReadinessSnapshot<Registry extends VersionedRpcRegistry>(
     (activeHost === undefined ||
       (activeHost !== null && activeHost.websocketUrl !== null));
   return [
-    client?.getActiveHostId() ?? "",
-    client?.getRequestContextUserId() ?? "",
+    activeHostIdForCompatibility(client) ?? "",
+    requestContextUserIdForCompatibility(client) ?? "",
     hasRpcEndpoint ? "1" : "",
   ].join(SNAPSHOT_SEPARATOR);
 }
@@ -78,6 +78,24 @@ function activeHostForCompatibility<Registry extends VersionedRpcRegistry>(
     readonly getActiveHost?: () => HostDirectoryEntry | null;
   } | null = client;
   return legacyCompatibleClient?.getActiveHost?.();
+}
+
+function activeHostIdForCompatibility<Registry extends VersionedRpcRegistry>(
+  client: HostRequester<Registry> | null,
+): string | null | undefined {
+  const legacyCompatibleClient: {
+    readonly getActiveHostId?: () => string | null;
+  } | null = client;
+  return legacyCompatibleClient?.getActiveHostId?.();
+}
+
+function requestContextUserIdForCompatibility<
+  Registry extends VersionedRpcRegistry,
+>(client: HostRequester<Registry> | null): string | null | undefined {
+  const legacyCompatibleClient: {
+    readonly getRequestContextUserId?: () => string | null;
+  } | null = client;
+  return legacyCompatibleClient?.getRequestContextUserId?.();
 }
 
 function parseHostReadinessSnapshot(snapshot: string): ReactiveHostReadiness {

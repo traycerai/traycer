@@ -176,6 +176,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 }));
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useRemoteSessionPollReadiness: () => false,
   useHostReachability: (hostId: string) => {
     // `UNKNOWN_HOST_PLACEHOLDER` is the sentinel tab-kind-agnostic callers
     // pass to keep hook order stable across tab kinds - the real hook answers
