@@ -1,12 +1,15 @@
 import * as Y from "yjs";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import {
   publishAgentActivity,
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
 import { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import {
   openStoreForTest,
   type OpenedStoreForTest,
@@ -409,6 +412,107 @@ function seedEpicTitle(handle: OpenedStoreForTest, title: string): void {
   handle.doc.getMap("epic").set("title", title);
 }
 
+function encodeBase64ForTests(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+/** The exact shape `write-command-delivery.test.ts` uses to open the write gate. */
+function writeGateOpenSnapshotMeta(epicId: string): SnapshotMetaEpic {
+  return {
+    schemaVersion: "1.0",
+    epicLight: {
+      id: epicId,
+      title: "Epic test",
+      initialUserPrompt: "",
+      ticketCount: 0,
+      specCount: 0,
+      storyCount: 0,
+      reviewCount: 0,
+      status: "open",
+      createdAt: 0,
+      updatedAt: 0,
+      createdBy: "u",
+      version: "1",
+    },
+    permissionRole: "editor",
+    repos: [],
+    workspaces: [],
+    repoMapping: [],
+    workspaceFolders: [],
+    unresolvedRepos: [],
+    hostStateVectorBase64: encodeBase64ForTests(
+      Y.encodeStateVector(new Y.Doc()),
+    ),
+  };
+}
+
+function errorName(value: unknown): string {
+  return value instanceof Error ? value.name : `not-an-error:${String(value)}`;
+}
+
+/** Races a promise against a short timer, so a genuine hang reddens fast. */
+function raceAgainstHang(waiter: Promise<unknown>): Promise<unknown> {
+  return Promise.race([
+    waiter.then(
+      () => "settled" as const,
+      (cause: unknown) => cause,
+    ),
+    new Promise<"hung">((resolve) => {
+      setTimeout(() => {
+        resolve("hung");
+      }, 250);
+    }),
+  ]);
+}
+
+/**
+ * `buildRetentionHandle`-style construction (a real `openStoreForTest` store,
+ * marked clean), but with the write gate actually OPEN and a `writeCommand`
+ * that never settles - so a command enqueued against it stays genuinely in
+ * flight, for R3-1's sibling: a clean outgoing handle that `replaceMounted`
+ * disposes while it still has an outstanding write command.
+ */
+function buildRetentionHandleWithNeverSettlingWrite(epicId: string): {
+  readonly handle: OpenedStoreForTest;
+  readonly closed: () => boolean;
+  readonly artifactId: string;
+} {
+  let closeCount = 0;
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const factory: EpicStreamClientFactory = (_id, callbacks) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => {
+        closeCount += 1;
+      },
+    };
+  };
+  const handle = openStoreForTest({
+    epicId,
+    userId: null,
+    factories: { streamClientFactory: factory, laneSelection: null },
+    writeCommand: () => new Promise<{ readonly hostId: string }>(() => {}),
+  });
+  if (captured.value === null) throw new Error("factory not invoked");
+  captured.value.onConnectionStatus("open", null);
+  captured.value.onSnapshot(
+    writeGateOpenSnapshotMeta(epicId),
+    Y.encodeStateAsUpdate(new Y.Doc()),
+  );
+  const artifactId = createArtifactInDocForTests(handle.doc, "spec", null);
+  // Clean: no unsynced Y.Doc edits - matching the sibling "disposes a CLEAN
+  // outgoing handle" test this one extends. Set AFTER the snapshot/seed, for
+  // the same reason `buildRetentionHandle`'s own caller re-asserts after a doc
+  // write: a local mutation publishes and re-states every projected field.
+  handle.store.setState({ isDirty: false, unsyncedQueueSize: 0 });
+  return { handle, closed: () => closeCount > 0, artifactId };
+}
+
 describe("retained unsynced buffers across a host re-point (F10)", () => {
   const EPIC = "epic-f10";
   const IDENTITY_A = {
@@ -506,6 +610,38 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
     // by definition taken away - and nothing would ever retire it.
     expect(registry.getUnsyncedEdits()).toHaveLength(0);
     expect(registry.hasUnsyncedEdits(EPIC)).toBe(false);
+  });
+
+  it("disposes a clean outgoing handle that still has an outstanding write command, and settles its waiter", async () => {
+    const registry = new OpenEpicSessionRegistry({ maxLive: 5 });
+    const rig = buildRetentionHandleWithNeverSettlingWrite(EPIC);
+    registry.acquireMounted(EPIC, () => rig.handle);
+
+    const commandId = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "rename-artifact",
+      artifactId: rig.artifactId,
+      title: "New",
+    });
+    expect(commandId).not.toBeNull();
+    if (commandId === null) {
+      throw new Error("expected enqueueWriteCommand to mint a command id");
+    }
+    await rig.handle.flush();
+    const waiter = rig.handle.store.getState().waitForWriteCommand(commandId);
+
+    const next = buildRetentionHandle(EPIC, false, 0);
+    expect(repoint(registry, rig.handle, next.handle, IDENTITY_A)).toBe(true);
+
+    // The retention gate is DELIBERATELY unchanged: a clean outgoing handle
+    // is still not retained, even though it has a pending write command - the
+    // two are different questions (unsynced Y.Doc edits vs. an in-flight
+    // command), and this dispose sibling only extends the write-command side.
+    expect(registry.getUnsyncedEdits()).toHaveLength(0);
+
+    const outcome = await raceAgainstHang(waiter);
+    // THE REDDENING ONE - today this hangs: `replaceMounted`'s dispose of a
+    // clean outgoing handle never settles the command it just orphaned.
+    expect(errorName(outcome)).toBe("EpicSessionEndedError");
   });
 
   it("merges a second retention for the same host AND identity", () => {

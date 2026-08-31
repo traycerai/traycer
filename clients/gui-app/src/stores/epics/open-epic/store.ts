@@ -185,6 +185,31 @@ interface PersistedSlice {
 }
 
 /**
+ * Raised at every waiter this session can no longer answer.
+ *
+ * A write command is answered by the AUTHORITY, over a transport this handle
+ * owns. Both teardowns take that transport away for good - `dispose()` ends the
+ * worker, and `detachTransport()` is one-way (`epic-replica-runtime.ts`'s
+ * `transportDetached` is set and never cleared) - so a command still in flight
+ * at that moment has no route to an answer for the rest of its life.
+ *
+ * Named rather than a bare `Error` because it is an ORDINARY outcome, not a
+ * fault: a re-point mid-write is a supported gesture, and `enqueueAndWait`'s
+ * callers already toast and consume a rejection. What they could not survive
+ * was the promise never settling at all.
+ */
+export class EpicSessionEndedError extends Error {
+  /** Which teardown ended it - for logs, never for control flow. */
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(`The epic session ended before the write was answered (${reason})`);
+    this.name = "EpicSessionEndedError";
+    this.reason = reason;
+  }
+}
+
+/**
  * An artifact-body lease that also says WHEN the body became readable.
  *
  * `release` is the same idempotent closure
@@ -1026,6 +1051,31 @@ export function createOpenEpicStore(
   let unsubscribeAuthUserId: (() => void) | null = null;
 
   /**
+   * Waiters this session promised to settle and can no longer answer.
+   *
+   * Both teardowns end the route to an authority permanently, so anything still
+   * waiting on one has to be told rather than left pending. Kept MAIN-side for
+   * the same reason `disposed` is: the thread that owned the queue may already
+   * be gone, and asking it to publish a final word is asking a thread that is
+   * not there.
+   */
+  const sessionEndedSettlers = new Set<(reason: string) => void>();
+  /**
+   * Latched, so a waiter created AFTER the teardown rejects immediately instead
+   * of registering into a set nothing will drain again.
+   */
+  let sessionEndedReason: string | null = null;
+
+  function endSession(reason: string): void {
+    if (sessionEndedReason !== null) return;
+    sessionEndedReason = reason;
+    // Copied before draining: each settler removes itself from the live set.
+    const settlers = [...sessionEndedSettlers];
+    sessionEndedSettlers.clear();
+    for (const settle of settlers) settle(reason);
+  }
+
+  /**
    * Publishes that arrived before the store existed.
    *
    * Unreachable today - the runtime projects nothing until `start()`, which
@@ -1528,15 +1578,39 @@ export function createOpenEpicStore(
             if (current !== undefined && current.state !== "pending") {
               return Promise.resolve(current);
             }
-            return new Promise((resolve) => {
-              const unsubscribe = api.subscribe((state) => {
+            // TOTAL, which it was not: this used to be a `resolve`-only
+            // promise, so every teardown route leaked it forever - the
+            // re-point's `replaceMounted`, the `isDirty`-only sibling gate,
+            // `retireIfDead`, and the retention path. `enqueueAndWait` never
+            // returned, and the sidebar's bulk delete awaits an `allSettled`
+            // whose `.finally` clears `deletePending`, so ONE unanswerable
+            // command disabled bulk delete for the life of the tab.
+            if (sessionEndedReason !== null) {
+              return Promise.reject(
+                new EpicSessionEndedError(sessionEndedReason),
+              );
+            }
+            return new Promise((resolve, reject) => {
+              // Declared before the subscription so the two can refer to each
+              // other without either reading the other's binding early.
+              let unsubscribe: (() => void) | null = null;
+              // Registered rather than polled: the queue lives on the worker,
+              // and a teardown that has already terminated that thread will
+              // never publish again - so nothing else can wake this waiter.
+              const abandon = (reason: string): void => {
+                unsubscribe?.();
+                reject(new EpicSessionEndedError(reason));
+              };
+              sessionEndedSettlers.add(abandon);
+              unsubscribe = api.subscribe((state) => {
                 const command = state.writeCommands.find(
                   (candidate) => candidate.commandId === commandId,
                 );
                 if (command === undefined || command.state === "pending") {
                   return;
                 }
-                unsubscribe();
+                unsubscribe?.();
+                sessionEndedSettlers.delete(abandon);
                 resolve(command);
               });
             });
@@ -1606,6 +1680,11 @@ export function createOpenEpicStore(
           },
 
           detachTransport: () => {
+            // BEFORE the detach, and it is not merely tidy: a retained buffer
+            // keeps serving local-state actions, so this handle lives on with
+            // no socket. Its in-flight commands are the ones with nowhere to
+            // go, and nothing later in this handle's life settles them.
+            endSession("transport-detached");
             runtime.detach();
           },
           dispose: () => {
@@ -1613,6 +1692,7 @@ export function createOpenEpicStore(
             unsubscribeAuthUserId?.();
             unsubscribeAuthUserId = null;
             disposed = true;
+            endSession("disposed");
             // BEFORE dropping the docs, and before the worker goes away: a
             // linger is a bet that the user is coming back to this body, and
             // at dispose that bet is already lost. Waiting it out would hold
