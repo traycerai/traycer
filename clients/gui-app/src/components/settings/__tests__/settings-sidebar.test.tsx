@@ -139,7 +139,7 @@ describe("<SettingsSidebar /> leader hints", () => {
 
   // The panel is the DISPLAY end of a pairing whose scanner end is the mobile
   // app itself, so that build does not offer it either.
-  it("omits the Link a phone entry in the installed mobile app", async () => {
+  it("omits the Link mobile app entry in the installed mobile app", async () => {
     setMobileApp(true);
     const router = buildRouter("/settings/general");
     render(
@@ -149,13 +149,13 @@ describe("<SettingsSidebar /> leader hints", () => {
     );
 
     expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
-    expect(screen.queryByRole("link", { name: "Link a phone" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Link mobile app" })).toBeNull();
     // Its Account-group sibling stays, so what is asserted is one row's
     // absence rather than a group that failed to render.
     expect(screen.getByRole("link", { name: "Sessions" })).toBeDefined();
   });
 
-  it("renders the Link a phone entry on other builds", async () => {
+  it("renders the Link mobile app entry on other builds", async () => {
     setMobileApp(false);
     const router = buildRouter("/settings/general");
     render(
@@ -165,7 +165,7 @@ describe("<SettingsSidebar /> leader hints", () => {
     );
 
     expect(
-      await screen.findByRole("link", { name: "Link a phone" }),
+      await screen.findByRole("link", { name: "Link mobile app" }),
     ).toBeDefined();
   });
 
