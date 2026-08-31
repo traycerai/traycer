@@ -195,18 +195,20 @@ export function gitImageDiffRouting(file: GitChangedFile): GitImageDiffRouting {
  * the tile - a rename straddling both allowlists (`a.png -> b.pdf`) keeps
  * routing to the image diff, whose non-image side already explains itself.
  * Same either-path rule as images so `old.pdf -> new.bin` still offers its
- * old side; same conflicted exemption from `isBinary` (a PDF is always
- * binary to git, but the conflicted numstat gap applies identically). The
- * caller additionally gates on the host advertising
- * `git.streamFileAsset >= 1.1` - capability, not extension, so it lives at
- * the component, not here.
+ * old side.
+ *
+ * Extension-only, no `isBinary` requirement - the SVG precedent: a PDF can
+ * be authored as pure ASCII (no NUL bytes), which git's content sniff calls
+ * text, yet the cards are still the right rendering and the asset stream's
+ * `%PDF-` magic check still guards the dialog. The caller additionally
+ * gates on the host advertising `git.streamFileAsset >= 1.1` - capability,
+ * not extension, so it lives at the component, not here.
  */
 export function gitRoutesToPdfDiffCards(file: GitChangedFile): boolean {
   const isPdf = isPdfAssetPath(file.path);
   const isPreviousPdf =
     file.previousPath !== null && isPdfAssetPath(file.previousPath);
-  const isConflicted = file.stage === "conflicted";
-  return (isPdf || isPreviousPdf) && (file.isBinary || isConflicted);
+  return isPdf || isPreviousPdf;
 }
 
 export function gitDiffRepositoryContextLabel(

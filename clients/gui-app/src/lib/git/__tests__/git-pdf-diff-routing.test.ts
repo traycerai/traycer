@@ -46,8 +46,8 @@ describe("gitRoutesToPdfDiffCards", () => {
     );
   });
 
-  it("does not route a non-binary non-conflicted .pdf path (host says text)", () => {
-    expect(gitRoutesToPdfDiffCards(file({ isBinary: false }))).toBe(false);
+  it("routes a non-binary .pdf path (the SVG precedent: ASCII-authored PDFs sniff as text)", () => {
+    expect(gitRoutesToPdfDiffCards(file({ isBinary: false }))).toBe(true);
   });
 
   it("yields to image routing on a rename straddling both allowlists", () => {

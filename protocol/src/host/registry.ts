@@ -596,7 +596,11 @@ import {
   hostChatRecordsSubscribeV11,
   hostChatRecordsSubscribeV12,
 } from "@traycer/protocol/host/epic/chat-records";
-import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
+import {
+  editorOpenPathsUpgradeV10ToV11,
+  editorOpenPathsV10,
+  editorOpenPathsV11,
+} from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
   gitListChangedFilesV11,
@@ -6776,11 +6780,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "editor.openPaths": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: editorOpenPathsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: editorOpenPathsV11,
+          upgradeFromPreviousVersion: editorOpenPathsUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

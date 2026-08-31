@@ -82,6 +82,7 @@ import {
 } from "@/components/epic-canvas/image-preview/image-preview";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
 import { useEditorOpenForClient } from "@/hooks/editor/use-editor-open-mutation";
+import { usePdfOpenExternallyTarget } from "@/hooks/editor/use-pdf-open-target";
 import { useEditorOpenFeedback } from "@/hooks/editor/use-editor-open-feedback";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
@@ -370,7 +371,9 @@ function WorkspacePdfFileTile(props: {
     filePath: node.filePath,
   });
   const handleRenderFailure = assetState.reportDecodeFailure;
-  const defaultEditor = useSettingsStore((s) => s.defaultEditor);
+  // PDFs open with the OS default application when the host speaks
+  // editor.openPaths >= 1.1; older hosts keep the default-editor behavior.
+  const openTarget = usePdfOpenExternallyTarget(node.hostId);
   const editorOpen = useEditorOpenForClient(useTabHostClient(), "file");
   const {
     active: openExternallyFeedbackActive,
@@ -382,15 +385,15 @@ function WorkspacePdfFileTile(props: {
     if (openExternallyOpening) return;
     triggerOpenExternallyFeedback();
     editorOpen.mutate({
-      editorId: defaultEditor ?? "vscode",
+      editorId: openTarget,
       paths: [resolveAbsolutePath(node.workspacePath, node.filePath)],
     });
   }, [
-    defaultEditor,
     editorOpen,
     node.filePath,
     node.workspacePath,
     openExternallyOpening,
+    openTarget,
     triggerOpenExternallyFeedback,
   ]);
 
