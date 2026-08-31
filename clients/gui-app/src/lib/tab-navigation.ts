@@ -51,6 +51,7 @@ import {
   type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
+import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import { normalizeEpicFocusSearch } from "@/routes/epic-route-search";
 
 export {
@@ -671,6 +672,15 @@ export class TabNavigationController {
       // difference decides what the landing means - see the resolver's landing
       // branch.
       this.resolveExternalLocation(location, false, true, navigate);
+      return;
+    }
+
+    // Bookkeeping commits carry no activation envelope, so they must be told
+    // apart BEFORE the external split - and a bookkeeping replace of an entry
+    // that carried an envelope inherits that stale envelope through its
+    // `state` spread, so this check also has to precede envelope matching.
+    if (isRouteBookkeepingState(location.state)) {
+      this.resolveBookkeepingLocation(location, navigate);
       return;
     }
 
@@ -1474,6 +1484,48 @@ export class TabNavigationController {
       case "settings":
         this.resolveExternalSystem(location, ref.kind, navigate);
     }
+  }
+
+  /**
+   * A commit `use-epic-route-synchronization` marked as same-tab bookkeeping:
+   * a replace recording tile-focus search onto the route its tab was already
+   * showing. While that tab is still the focused one this IS the ordinary
+   * external fast path, so it is delegated verbatim. But the replace is
+   * issued fire-and-forget from an effect, so it can commit LATE - after the
+   * user activated another tab - and then it is stale by construction, never
+   * user intent. Treating it as external is what silently swallowed a draft
+   * activation (staging 2026-08-31): the external authority superseded the
+   * pending activation, the epic tab was re-activated, and the activation's
+   * own commit then read as stale and was repaired away - a dead click with
+   * nothing on screen or in diagnostics to show for it.
+   */
+  private resolveBookkeepingLocation(
+    location: TabNavigationLocation,
+    navigate: NavigateFn,
+  ): void {
+    const routed = routedTabTarget(location.pathname);
+    if (
+      routed !== null &&
+      refsEqual(focusedRefOfLayout(currentLayout()), routed.ref)
+    ) {
+      this.establishExternalAuthority();
+      this.resolveExternalLocation(location, false, false, navigate);
+      return;
+    }
+    // Stale. A pending user navigation will re-assert the URL when its own
+    // commit lands, so touching the authority here would only supersede it -
+    // the exact failure this branch exists to prevent. With nothing pending,
+    // the URL is left naming a tab the layout is not showing; repair it back
+    // toward what the strip renders, the same aim every correction takes.
+    if (this.pending.size > 0) return;
+    const backing = this.backingNavigation();
+    if (destinationMatches(backing.destination, location)) return;
+    this.issueCorrection(navigate, {
+      navigation: backing,
+      kind: "repair-replace",
+      attempt: 0,
+      correctionKey: locationIdentity(location),
+    });
   }
 
   private resolveExternalEpic(

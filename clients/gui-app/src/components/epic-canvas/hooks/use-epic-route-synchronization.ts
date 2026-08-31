@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useNavigate,
   useRouter,
@@ -32,6 +32,7 @@ import { resolveAutoOpenTarget } from "@/lib/epic-auto-open";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { getHistoryController } from "@/lib/persistent-history";
+import { applyRouteBookkeeping } from "@/lib/tab-navigation/route-bookkeeping";
 import {
   areNestedFocusTargetsEqual,
   buildNestedFocusSearchPatch,
@@ -145,6 +146,37 @@ export function useEpicRouteSynchronization(
       nestedRouteTargetApplied &&
       activeArtifactId === focusArtifactId);
 
+  // At most ONE focus-param replace in flight at a time. This effect re-runs
+  // on every canvas identity change - continuous on an epic with running
+  // agents - and each un-awaited `navigate` it fired stacked another pending
+  // replace into the router. A replace still in flight when the user
+  // activates another tab then commits LATE, which is the stale commit the
+  // controller's bookkeeping branch guards against; but stacking them also
+  // interferes with the router itself (an in-flight replace can starve an
+  // immediately following push of its state commit), so the storm is stopped
+  // at the source too. Convergence is not lost: a replace that applies
+  // changes `activeSearch`, which re-runs the effect; one that fails leaves
+  // the URL bare, and the next canvas change retries.
+  const nestedFocusReplaceInFlightRef = useRef(false);
+  const issueNestedFocusReplace = useCallback(
+    (target: NestedFocusTarget | null) => {
+      if (nestedFocusReplaceInFlightRef.current) return;
+      nestedFocusReplaceInFlightRef.current = true;
+      const clear = () => {
+        nestedFocusReplaceInFlightRef.current = false;
+      };
+      try {
+        replaceNestedFocusRoute(navigate, { epicId, tabId }, target).then(
+          clear,
+          clear,
+        );
+      } catch {
+        clear();
+      }
+    },
+    [navigate, epicId, tabId],
+  );
+
   const currentTabName = currentTab?.name ?? null;
   useEffect(() => {
     const nextTitle = liveTitle.trim();
@@ -189,14 +221,14 @@ export function useEpicRouteSynchronization(
       if (target === null) {
         return;
       }
-      replaceNestedFocusRoute(navigate, { epicId, tabId }, target);
+      issueNestedFocusReplace(target);
       return;
     }
 
     const resolved = resolveNestedFocusTarget(canvas, nestedRouteTarget);
     if (resolved === null) {
       const fallback = getCurrentNestedFocusTarget(canvas);
-      replaceNestedFocusRoute(navigate, { epicId, tabId }, fallback);
+      issueNestedFocusReplace(fallback);
       return;
     }
 
@@ -213,7 +245,7 @@ export function useEpicRouteSynchronization(
     focusThreadId,
     activeArtifactId,
     canvas,
-    navigate,
+    issueNestedFocusReplace,
     epicId,
     tabId,
     currentNestedTarget,
@@ -511,24 +543,31 @@ export function useEpicRouteSynchronization(
   ]);
 }
 
+/**
+ * Marked as route bookkeeping: this replace records view state onto the route
+ * its tab is already showing, so the navigation controller must never read a
+ * late-landing one as the user navigating back to this epic.
+ */
 function replaceNestedFocusRoute(
   navigate: NavigateFn,
   tab: { readonly epicId: string; readonly tabId: string },
   target: NestedFocusTarget | null,
-): void {
-  void navigate({
-    to: "/epics/$epicId/$tabId",
-    params: { epicId: tab.epicId, tabId: tab.tabId },
-    search: (prev) => ({
-      ...prev,
-      focusedAt: prev.focusedAt,
-      focusArtifactId: prev.focusArtifactId,
-      focusThreadId: prev.focusThreadId,
-      migrationSource: prev.migrationSource,
-      ...buildNestedFocusSearchPatch(target),
+): Promise<void> {
+  return navigate(
+    applyRouteBookkeeping({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: tab.epicId, tabId: tab.tabId },
+      search: (prev) => ({
+        ...prev,
+        focusedAt: prev.focusedAt,
+        focusArtifactId: prev.focusArtifactId,
+        focusThreadId: prev.focusThreadId,
+        migrationSource: prev.migrationSource,
+        ...buildNestedFocusSearchPatch(target),
+      }),
+      replace: true,
     }),
-    replace: true,
-  });
+  );
 }
 
 /**

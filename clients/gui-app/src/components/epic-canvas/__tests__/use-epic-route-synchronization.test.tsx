@@ -14,6 +14,7 @@ import {
   type EpicRouteFocusIntent,
   useEpicRouteSynchronization,
 } from "@/components/epic-canvas/hooks/use-epic-route-synchronization";
+import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import type {
   EpicCanvasTileRef,
   TileLayoutNode,
@@ -377,6 +378,20 @@ function isSearchUpdater(
   value: unknown,
 ): value is (prev: Readonly<Record<string, unknown>>) => unknown {
   return typeof value === "function";
+}
+
+function isStateUpdater(
+  value: unknown,
+): value is (prev: Readonly<Record<string, unknown>>) => unknown {
+  return typeof value === "function";
+}
+
+function lastNavigateOptions(): Readonly<Record<string, unknown>> {
+  const call = testState.navigate.mock.calls.at(-1);
+  if (call === undefined) throw new Error("expected navigate call");
+  const options: unknown = call[0];
+  if (!isRecord(options)) throw new Error("expected navigate options");
+  return options;
 }
 
 function lastNavigateSearchPatch(): Readonly<Record<string, unknown>> {
@@ -1613,5 +1628,128 @@ describe("useEpicRouteSynchronization", () => {
       outside.remove();
       selectedWrapperEl.remove();
     }
+  });
+
+  it("marks the bookkeeping route replace so a late commit cannot be mistaken for user intent", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-current",
+      [specTile("artifact-current", "tile-current", "Current artifact")],
+      "tile-current",
+    );
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.navigate).toHaveBeenCalled();
+    });
+    expect(testState.navigate.mock.calls.at(-1)?.[0]).toMatchObject({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: EPIC_ID, tabId: TAB_ID },
+      replace: true,
+    });
+
+    const options = lastNavigateOptions();
+    const state = options.state;
+    if (!isStateUpdater(state)) {
+      throw new Error("expected navigate state updater");
+    }
+    expect(isRouteBookkeepingState(state({}))).toBe(true);
+  });
+
+  it("does not issue a second replace while the first is still in flight", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-current",
+      [specTile("artifact-current", "tile-current", "Current artifact")],
+      "tile-current",
+    );
+
+    let resolveFirstNavigate: () => void = () => {
+      throw new Error("navigate resolver not captured");
+    };
+    testState.navigate.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirstNavigate = resolve;
+        }),
+    );
+
+    const hook = renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.navigate).toHaveBeenCalledTimes(1);
+    });
+
+    // Force the effect to re-run - a canvas mutation gives `useEpicCanvas` a
+    // new identity, the same trigger the "keeps editor focus" test above
+    // uses - while the first replace's promise is still unresolved.
+    testState.canvasTiles = {
+      "tile-current": specTile("artifact-current", "tile-current", "Renamed"),
+    };
+    hook.rerender({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    });
+
+    expect(testState.navigate).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirstNavigate();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    testState.canvasTiles = {
+      "tile-current": specTile(
+        "artifact-current",
+        "tile-current",
+        "Renamed again",
+      ),
+    };
+    hook.rerender({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      focusPaneId: undefined,
+      focusTileInstanceId: undefined,
+    });
+
+    await waitFor(() => {
+      expect(testState.navigate).toHaveBeenCalledTimes(2);
+    });
   });
 });
