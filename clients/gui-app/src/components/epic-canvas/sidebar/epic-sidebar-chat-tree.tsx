@@ -154,6 +154,7 @@ import {
   useChatPublicationTargets,
 } from "@/hooks/chats/use-chat-publication-targets";
 import {
+  chatRowLastActiveAt,
   indexOwnCloudChatsByLocalId,
   mergeChatListEntries,
   selectUnfoldedCloudChats,
@@ -836,32 +837,20 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       }),
     [cloudChats.data, localChatIds, publicationTargets.data],
   );
-  // Sharing fold, mutations, and cache keys all address the Epic session
-  // host. The v2 rendered list above stays on the app-wide client — that
-  // hook is shipped and is not this ticket. The redirect map is host-LOCAL
-  // (only the epic's host knows C1→C2), so reading it from the active host
-  // would make "Make private" mutate the wrong lineage after a fork.
-  const sharingCloudChats = useCloudChatList({
-    client: sessionHostClient,
-    taskId: epicId,
-    enabled: epicId.length > 0,
-  });
-  const sharingPublicationTargets = useChatPublicationTargets({
-    client: sessionHostClient,
-    epicId,
-    chatIds: localChatIds,
-    enabled: epicId.length > 0,
-  });
+  // The sharing/activity fold uses the same session-host reads as the rendered
+  // cloud list above. The redirect map is host-local (only the epic's host
+  // knows C1→C2), so one shared pair of observers is both sufficient and the
+  // only identity-safe source for local-row cloud facts.
   const ownCloudChatByLocalId = useMemo(
     () =>
       indexOwnCloudChatsByLocalId({
-        chats: sharingCloudChats.data?.chats ?? EMPTY_CLOUD_CHATS,
+        chats: cloudChats.data?.chats ?? EMPTY_CLOUD_CHATS,
         localChatIds,
         publicationChatIdByChatId: publicationTargetMap(
-          sharingPublicationTargets.data,
+          publicationTargets.data,
         ),
       }),
-    [localChatIds, sharingCloudChats.data, sharingPublicationTargets.data],
+    [cloudChats.data, localChatIds, publicationTargets.data],
   );
   const chatSharingValue = useMemo<SidebarChatSharingValue>(
     () => ({
@@ -1343,6 +1332,22 @@ interface ChatNodeProps {
   onToggleSelection: (id: string) => void;
 }
 
+function localTreeNodeLastActiveAt(input: {
+  readonly isChat: boolean;
+  readonly recordUpdatedAt: number;
+  readonly ownerHostId: string | null;
+  readonly sessionHostId: string | null;
+  readonly cloudChat: CloudChatSummary | null;
+}): number {
+  if (!input.isChat) return input.recordUpdatedAt;
+  return chatRowLastActiveAt({
+    recordUpdatedAt: input.recordUpdatedAt,
+    ownerHostId: input.ownerHostId,
+    sessionHostId: input.sessionHostId,
+    cloudChat: input.cloudChat,
+  });
+}
+
 const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const {
     epicId,
@@ -1400,7 +1405,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // the archive/menu controls replace on hover. Read from the PROJECTION, not
   // `node.updatedAt` - the tree node is a lagging copy (see the selector's
   // doc), and using it made this row disagree with the hover card.
-  const updatedAt = useEpicNodeUpdatedAt(nodeId);
+  const recordUpdatedAt = useEpicNodeUpdatedAt(nodeId);
+  const sharing = useContext(SidebarChatSharingContext);
+  const cloudChat = sharing.ownCloudChatByLocalId.get(nodeId) ?? null;
   const openableType: OpenableEpicNodeKind | null = isOpenableEpicNodeKind(
     artifactType,
   )
@@ -1449,6 +1456,17 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // is a different machine from the one this tree is showing.
   const ownerHostId = useEpicNodeHostId(nodeId);
   const sessionHostId = useEpicSessionHostId();
+  // Own-host rows read the chat store's real activity timestamp. A row owned
+  // elsewhere is a metadata replica, so its matching cloud publication head
+  // supplies the content clock instead. Terminal agents have no cloud content
+  // plane and keep their record timestamp.
+  const updatedAt = localTreeNodeLastActiveAt({
+    isChat: artifactType === "chat",
+    recordUpdatedAt,
+    ownerHostId,
+    sessionHostId,
+    cloudChat,
+  });
   const openHostId = ownerHostId ?? sessionHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   // The host that SERVES a published copy's read (the owner is unreachable by
   // construction there) - the session's, for the reason above.
@@ -1570,7 +1588,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       renameInputRef.current?.focus();
       renameInputRef.current?.select();
     }, 0);
-  }, [canMutate, nodeName]);
+  }, [canMutate, nodeName, setIsRenaming, setRenameValue]);
 
   const commitRename = useCallback(() => {
     const trimmed = renameValue.trim();
@@ -1655,6 +1673,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     renameChat,
     renameTerminalAgent,
     renameValue,
+    setIsRenaming,
     tabId,
   ]);
 
@@ -1668,7 +1687,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         setIsRenaming(false);
       }
     },
-    [commitRename],
+    [commitRename, setIsRenaming],
   );
 
   const performDelete = () => {
