@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { AgentSelectionGuideEditorSurface } from "@/components/agent-selection-guide-editor-surface";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import type { OnboardingActId } from "@/components/onboarding/onboarding-acts";
 import { OnboardingClaudeTui } from "@/components/onboarding/onboarding-claude-tui";
 import { OnboardingOpencodeTui } from "@/components/onboarding/onboarding-opencode-tui";
 import { ProviderList } from "@/components/providers/provider-list";
@@ -41,7 +42,7 @@ import { ORDERED_PROVIDERS } from "@/lib/provider-ordering";
 import { cn } from "@/lib/utils";
 
 interface OnboardingDioramaProps {
-  readonly stage: number;
+  readonly actId: OnboardingActId;
   readonly agentGuide: OnboardingAgentGuideState;
 }
 
@@ -326,18 +327,38 @@ const THEME_DOCK_SWATCHES = [
   ["#0b0e14", "#e6b450", "Ayu"],
 ] as const;
 
-function sceneForStage(stage: number): SceneId {
-  if (stage === 0) return "task-tabs";
-  if (stage === 1) return "navigation";
-  if (stage === 2) return "task-context";
-  if (stage === 3) return "providers";
-  if (stage === 4) return "agent-guide";
-  return "command-theme";
-}
+/**
+ * Keyed by act id, not by the act's position in the tour. Acts get inserted
+ * (session import landed between providers and delegation) and dropped (a host
+ * that cannot scan sessions never shows that act at all), so a position names
+ * a different act on different hosts while an id names one act everywhere.
+ * `null` is an act that shows no mini-app at all; the page does not render the
+ * diorama for it, and this map is where that fact is stated.
+ */
+const SCENE_BY_ACT_ID: Record<OnboardingActId, SceneId | null> = {
+  "task-tabs": "task-tabs",
+  navigation: "navigation",
+  "task-context": "task-context",
+  providers: "providers",
+  "session-import": null,
+  "agent-guide": "agent-guide",
+  "command-theme": "command-theme",
+};
 
 export function OnboardingDiorama(props: OnboardingDioramaProps) {
-  const { stage, agentGuide } = props;
-  const scene = sceneForStage(stage);
+  const scene = SCENE_BY_ACT_ID[props.actId];
+  // `null` is an act that shows no mini-app (session import). Defaulting to a
+  // scene here would mount the command-theme mini-app - animations and all -
+  // behind an act that deliberately hides the diorama.
+  if (scene === null) return null;
+  return <DioramaScene scene={scene} agentGuide={props.agentGuide} />;
+}
+
+function DioramaScene(props: {
+  readonly scene: SceneId;
+  readonly agentGuide: OnboardingAgentGuideState;
+}) {
+  const { scene, agentGuide } = props;
   const reducedMotion = useReducedMotion() === true;
   const [taskIndex, setTaskIndex] = useState(0);
   const dragLayerRef = useRef<HTMLDivElement>(null);

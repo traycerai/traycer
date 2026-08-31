@@ -1187,8 +1187,10 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaPreReasonix,
     queue: chatQueueStateSchemaPreManagedCommand,
-    // Pre-Reasonix event actor: an A2A chat event names the acting agent's
-    // harness, and `eventAppended` rides this released line.
+    // Frozen on both axes (pre-Reasonix actor, pre-`chat.imported` type):
+    // an A2A chat event names the acting agent's harness, `eventAppended`
+    // rides this released line, and a released client's strict enum accepts
+    // neither the new harness nor the new event type.
     event: chatEventSchemaPreReasonix,
     action: chatActionSchemaV15,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,

@@ -1108,6 +1108,65 @@ function frozenServerContracts(): ReadonlyArray<{
 describe("projectChatServerFrameForVersion", () => {
   const live: SchemaVersion = { major: 1, minor: 7 };
 
+  describe("chat.imported below 1.8", () => {
+    const windowed: SchemaVersion = { major: 1, minor: 8 };
+    const importedEvent = {
+      eventId: "evt-imported",
+      type: "chat.imported",
+      timestamp: 5,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { sourceProvider: "codex", importedAt: 5, sourceCwd: "/r" },
+    };
+    const forkedEvent = {
+      ...importedEvent,
+      eventId: "evt-forked",
+      type: "chat.forked",
+      metadata: { sourceChatId: "c", sourceHostId: "h" },
+    };
+
+    it("drops an eventAppended carrying chat.imported for a 1.7 peer", () => {
+      // A released 1.7 client's strict event enum predates chat.imported;
+      // an unprojected frame fails its parse, so the send must throw and the
+      // host's catch drops the frame - the peer has nothing to render anyway.
+      const frame = asProjectedServerFrame({
+        kind: "eventAppended",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        event: importedEvent,
+      });
+      expect(() => projectChatServerFrameForVersion(frame, live)).toThrow(
+        /chat\.imported/,
+      );
+      expect(projectChatServerFrameForVersion(frame, windowed)).toBe(frame);
+    });
+
+    it("filters chat.imported out of a 1.7 snapshot's event log, keeping the rest", () => {
+      const envelope = v16SnapshotEnvelope([userMessage()]);
+      const snapshot = envelope.snapshot as Record<string, unknown>;
+      const chat = snapshot.chat as Record<string, unknown>;
+      chat.events = [forkedEvent, importedEvent];
+      const frame = asProjectedServerFrame(envelope);
+
+      const projected = projectChatServerFrameForVersion(frame, live);
+      const projectedChat = asRecord(
+        asRecord(asRecord(projected, "frame").snapshot, "snapshot").chat,
+        "chat",
+      );
+      expect(projectedChat.events).toEqual([forkedEvent]);
+
+      expect(projectChatServerFrameForVersion(frame, windowed)).toBe(frame);
+    });
+  });
+
   it("is identity on {1,7}", () => {
     const text = textBlock("text-1");
     const interview = populatedInterviewBlock("iv-1");

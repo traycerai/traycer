@@ -16,6 +16,7 @@ import type {
   ChatQueuedPromptItem,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { chatImportedMetadataSchema } from "@traycer/protocol/persistence/epic/chat-events";
 import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
 // The ONE comparator. The host numbers rows with it to build the windowed
 // transcript's skeleton, and this is where those ordinals get drawn - so a
@@ -991,6 +992,11 @@ export function useRenderedMessages(
     [input.events],
   );
 
+  const importedChatMarkerMessages = useMemo(
+    () => buildImportedChatMarkerMessages(input.events),
+    [input.events],
+  );
+
   // The live row's blocks merge INTO a persisted turn only when a persisted
   // assistant message already shares its `turnId` (multi-record / post-snapshot
   // turns). The store routes streamed deltas to EITHER `messages` or
@@ -1263,7 +1269,9 @@ export function useRenderedMessages(
     );
 
     // `baseRows` = everything that sorts by `createdAt`. Assembled before the
-    // cards so the common case can early-out without the anchor machinery.
+    // cards so the common case can early-out without the anchor machinery. The
+    // imported-chat markers are deliberately NOT here - they are pinned (see
+    // `pinImportedChatMarkers`), so sorting them would only file them wrongly.
     const baseRows = [
       ...persisted,
       ...activeTurn,
@@ -1279,7 +1287,10 @@ export function useRenderedMessages(
     // `createdAt` sort. Skips the per-render anchor Set/Map/weave entirely. This
     // memo re-runs on every streamed delta, so the no-card path must stay cheap.
     if (setupCardEntries.length === 0) {
-      return baseRows.sort(compareCanonicalRowOrder);
+      return pinImportedChatMarkers(
+        importedChatMarkerMessages,
+        baseRows.sort(compareCanonicalRowOrder),
+      );
     }
 
     // Pin the chat's GENESIS setup card to the top - but ONLY when window 0 is
@@ -1338,7 +1349,10 @@ export function useRenderedMessages(
       }
       woven = interleaved;
     }
-    return pinGenesisCard ? [setupCardEntries[0].message, ...woven] : woven;
+    return pinImportedChatMarkers(
+      importedChatMarkerMessages,
+      pinGenesisCard ? [setupCardEntries[0].message, ...woven] : woven,
+    );
   }, [
     persisted,
     activeTurn,
@@ -1346,6 +1360,7 @@ export function useRenderedMessages(
     live,
     stoppedWithoutAssistantRecords,
     forkedChatLinkMessages,
+    importedChatMarkerMessages,
     notificationAnchorMessages,
     setupCardRows,
     setupCardEntries,
@@ -1459,6 +1474,73 @@ function buildForkedChatLinkMessages(
             sourceChatId,
             sourceChatTitle,
             sourceHostId,
+          },
+        ],
+        structuredContent: null,
+        attachments: [],
+        settings: null,
+        createdAt: event.timestamp,
+        completedAt: null,
+        stopped: null,
+        persistentMessageId: null,
+        senderLabel: null,
+        assistantMeta: null,
+        statusLabel: null,
+        runState: null,
+        agentSenderInfo: null,
+        agentMessage: null,
+        sessionAnchor: null,
+        steerBadge: null,
+      },
+    ];
+  });
+}
+
+/**
+ * Pin the imported-chat provenance markers above everything else.
+ *
+ * Two reasons they cannot sort by `createdAt` like ordinary rows. Their
+ * timestamp is the IMPORT time, which is later than every message they
+ * introduce, so a chronological sort files them at the very bottom - under the
+ * transcript they are meant to introduce. And what they say ("Imported from
+ * Claude Code") is about the whole chat's origin, which is why they sit above
+ * even a pinned genesis setup card: the workspace that card describes was
+ * bound to this chat after the transcript already existed elsewhere.
+ */
+function pinImportedChatMarkers(
+  markers: ReadonlyArray<ChatMessageModel>,
+  rows: ReadonlyArray<ChatMessageModel>,
+): ReadonlyArray<ChatMessageModel> {
+  return markers.length === 0 ? rows : [...markers, ...rows];
+}
+
+/**
+ * Project a `chat.imported` event into the transcript's provenance row.
+ *
+ * Parsed through the schema rather than read field by field: the metadata bag
+ * is untyped on the wire, and a half-written one should produce no row at all
+ * rather than a row that says "Imported from undefined".
+ */
+function buildImportedChatMarkerMessages(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<ChatMessageModel> {
+  return events.flatMap((event) => {
+    if (event.type !== "chat.imported") return [];
+    const parsed = chatImportedMetadataSchema.safeParse(event.metadata);
+    if (!parsed.success) return [];
+    const id = `imported-chat-marker:${event.eventId}`;
+    return [
+      {
+        id,
+        role: "system",
+        content: "",
+        segments: [
+          {
+            id: `${id}:marker`,
+            kind: "imported-chat-marker",
+            sourceProvider: parsed.data.sourceProvider,
+            importedAt: parsed.data.importedAt,
+            sourceCwd: parsed.data.sourceCwd,
           },
         ],
         structuredContent: null,
