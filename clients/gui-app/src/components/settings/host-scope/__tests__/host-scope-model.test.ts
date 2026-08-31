@@ -503,7 +503,7 @@ describe("transientClientEntry", () => {
   it("withholds the entry for a non-connectable host, URL or not", () => {
     // Panels read `scope.client` before their gate renders, so withholding an
     // unavailable or plan-restricted row here prevents them mounting a client
-    // for a target the scope has already ruled unreachable.
+    // for a target the scope has already ruled not administrable.
     const host = hostScopeOptionFixture({
       hostId: "host-a",
       connectable: false,
