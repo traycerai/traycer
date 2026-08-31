@@ -69,6 +69,20 @@ function request(name: string, bytes: Uint8Array) {
   return requestOfType(name, bytes, "image/png");
 }
 
+/**
+ * The byte bound a single path component may occupy, as `file-save.ts`
+ * enforces it. Restated here rather than exported, so a test that pushes a
+ * name to the limit is pinned to the platform's rule and not to the module's.
+ */
+const MAX_FILE_NAME_BYTES = 255;
+
+/** Everything already queued has run, microtasks and timers alike. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 /** The set of paths a stat should report as already taken. */
 function occupyDocuments(paths: readonly string[]): void {
   nativeMocks.stat.mockImplementation((options: { path: string }) =>
@@ -396,6 +410,68 @@ describe("MobileFileSave.downloadFile", () => {
     expect(path.endsWith(".png")).toBe(true);
     expect(path).not.toBe("Traycer/usage.png");
     expect(path).not.toBe("Traycer/usage (2).png");
+  });
+
+  it("keeps the collision suffix on a name already at the byte limit", async () => {
+    // The insert is the ONLY thing making an occupied name free. Composing
+    // first and bounding after truncates from the end and eats it, so every
+    // numbered candidate would come back as the occupied name and the write
+    // would replace the download it was meant to sit beside.
+    const stem = "a".repeat(MAX_FILE_NAME_BYTES - ".png".length);
+    const name = `${stem}.png`;
+    expect(new TextEncoder().encode(name).length).toBe(MAX_FILE_NAME_BYTES);
+    occupyDocuments([`Traycer/${name}`]);
+
+    await new MobileFileSave().downloadFile(request(name, new Uint8Array([1])));
+
+    const written = writtenFile(0).path;
+    const basename = written.split("/").at(-1) ?? "";
+    expect(written).not.toBe(`Traycer/${name}`);
+    expect(basename).toContain(" (2)");
+    expect(basename.endsWith(".png")).toBe(true);
+    expect(new TextEncoder().encode(basename).length).toBeLessThanOrEqual(
+      MAX_FILE_NAME_BYTES,
+    );
+  });
+
+  it("does not hand the same path to two downloads racing on it", async () => {
+    // A path is only observably taken once its bytes have landed, so two
+    // downloads started close together would both see the same candidate free.
+    let releaseFirstWrite: () => void = () => undefined;
+    nativeMocks.writeFile.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFirstWrite = () => {
+            resolve({ uri: "file:///docs/Traycer/usage.png" });
+          };
+        }),
+    );
+    const host = new MobileFileSave();
+
+    const first = host.downloadFile(request("usage.png", new Uint8Array([1])));
+    // Let the first claim its path before the second starts probing.
+    await settle();
+    const second = host.downloadFile(request("usage.png", new Uint8Array([2])));
+    await settle();
+    releaseFirstWrite();
+    await Promise.all([first, second]);
+
+    expect(writtenFile(0).path).toBe("Traycer/usage.png");
+    expect(writtenFile(1).path).toBe("Traycer/usage (2).png");
+  });
+
+  it("frees a claimed path again when its write fails", async () => {
+    // A write that never landed leaves the path genuinely free; holding the
+    // claim would push the user's retry onto a numbered name for nothing.
+    nativeMocks.writeFile.mockRejectedValueOnce(new Error("Disk full"));
+    const host = new MobileFileSave();
+
+    await expect(
+      host.downloadFile(request("usage.png", new Uint8Array([1]))),
+    ).rejects.toThrow("Disk full");
+    await host.downloadFile(request("usage.png", new Uint8Array([1])));
+
+    expect(writtenFile(1).path).toBe("Traycer/usage.png");
   });
 
   it("reads an unreadable directory as free rather than as taken", async () => {

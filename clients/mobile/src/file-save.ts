@@ -197,14 +197,30 @@ function toFileName(suggested: string, mediaType: string): string {
 }
 
 /**
- * A name with `insert` placed between its stem and its extension, re-bounded
- * afterwards - the insert is what makes an otherwise-taken name free, and a
- * name only has to fit once it is final.
+ * A name with `insert` placed between its stem and its extension, within the
+ * same byte bound as any other component.
+ *
+ * The STEM gives way, never the insert. Composing first and bounding after
+ * would truncate from the end and eat the insert itself, so a name already at
+ * the limit would come back unchanged - and since the insert is the only thing
+ * making an occupied name free, every numbered candidate and the stamped
+ * fallback would resolve to that same occupied path and the write would
+ * overwrite the download it was meant to sit beside. An extension that cannot
+ * fit alongside the insert is dropped for the same reason: uniqueness is what
+ * is load-bearing here.
  */
 function withNameInsert(name: string, insert: string): string {
   const dot = name.lastIndexOf(".");
-  if (dot <= 0) return boundFileNameBytes(`${name}${insert}`);
-  return boundFileNameBytes(`${name.slice(0, dot)}${insert}${name.slice(dot)}`);
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const insertBytes = utf8Length(insert);
+  const extension = dot > 0 ? name.slice(dot) : "";
+  const keptExtension =
+    insertBytes + utf8Length(extension) <= MAX_FILE_NAME_BYTES ? extension : "";
+  const budget = Math.max(
+    0,
+    MAX_FILE_NAME_BYTES - insertBytes - utf8Length(keptExtension),
+  );
+  return `${truncateToBytes(stem, budget)}${insert}${keptExtension}`;
 }
 
 /**
@@ -225,7 +241,27 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 /**
- * The first free path for `name` in the download directory.
+ * Paths handed out by {@link freeDownloadPath} whose write has not finished.
+ *
+ * A path is only OBSERVABLY taken once its bytes have landed, so two downloads
+ * started close together would both see the same candidate free and race for
+ * it - one replacing the other's file. Claiming the path for the length of the
+ * write closes that window; it is an in-process set because a phone runs one
+ * copy of this shell, which is the only concurrency there is to arbitrate.
+ */
+const claimedDownloadPaths = new Set<string>();
+
+/**
+ * Whether `path` is spoken for, by a file already on disk or by a download
+ * still writing one.
+ */
+async function downloadPathIsTaken(path: string): Promise<boolean> {
+  return claimedDownloadPaths.has(path) || (await fileExists(path));
+}
+
+/**
+ * Claim the first free path for `name` in the download directory. The caller
+ * MUST release it with {@link releaseDownloadPath} once the write settles.
  *
  * A download must not silently replace an earlier one - two exports of the
  * same usage window suggest the same name, and overwriting the first would
@@ -234,15 +270,25 @@ async function fileExists(path: string): Promise<boolean> {
  * {@link MAX_NUMBERED_DOWNLOAD_ATTEMPTS} the launch stamp takes over, which is
  * unique by construction and so always terminates.
  */
-async function freeDownloadPath(name: string): Promise<string> {
+async function claimDownloadPath(name: string): Promise<string> {
+  const claim = (path: string): string => {
+    claimedDownloadPaths.add(path);
+    return path;
+  };
   const candidate = `${DOWNLOAD_DIRECTORY}/${name}`;
-  if (!(await fileExists(candidate))) return candidate;
+  if (!(await downloadPathIsTaken(candidate))) return claim(candidate);
   for (let n = 2; n <= MAX_NUMBERED_DOWNLOAD_ATTEMPTS; n++) {
     const numbered = `${DOWNLOAD_DIRECTORY}/${withNameInsert(name, ` (${String(n)})`)}`;
-    if (!(await fileExists(numbered))) return numbered;
+    if (!(await downloadPathIsTaken(numbered))) return claim(numbered);
   }
   stagedRequests += 1;
-  return `${DOWNLOAD_DIRECTORY}/${withNameInsert(name, `-${stagingStamp}-${String(stagedRequests)}`)}`;
+  return claim(
+    `${DOWNLOAD_DIRECTORY}/${withNameInsert(name, `-${stagingStamp}-${String(stagedRequests)}`)}`,
+  );
+}
+
+function releaseDownloadPath(path: string): void {
+  claimedDownloadPaths.delete(path);
 }
 
 /**
@@ -331,15 +377,21 @@ export class MobileFileSave implements IFileSaveHost {
    */
   async downloadFile(request: FileSaveRequest): Promise<SavedFileLocation> {
     const name = toFileName(request.name, request.type);
-    const path = await freeDownloadPath(name);
-    const written = await Filesystem.writeFile({
-      path,
-      data: toBase64(request.bytes),
-      directory: Directory.Documents,
-      recursive: true,
-    });
-    // The name the user ends up with is the one that was free, which a
-    // collision may have numbered - the confirmation has to say that one.
-    return { name: path.split("/").at(-1) ?? name, path: written.uri };
+    const path = await claimDownloadPath(name);
+    try {
+      const written = await Filesystem.writeFile({
+        path,
+        data: toBase64(request.bytes),
+        directory: Directory.Documents,
+        recursive: true,
+      });
+      // The name the user ends up with is the one that was free, which a
+      // collision may have numbered - the confirmation has to say that one.
+      return { name: path.split("/").at(-1) ?? name, path: written.uri };
+    } finally {
+      // Released on failure too: a write that never landed leaves the path
+      // genuinely free, and holding it would push the retry onto a number.
+      releaseDownloadPath(path);
+    }
   }
 }

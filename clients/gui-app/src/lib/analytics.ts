@@ -1748,7 +1748,7 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ...eventValueEntries(
     [AnalyticsEvent.UsageImageExported],
     "action",
-    new Set(["copy", "download"]),
+    new Set(["copy", "download", "share"]),
   ),
   // Event-scoped so this `source` validates against the export surfaces, not
   // the global gesture-origin `ANALYTICS_SOURCES` fallback.
