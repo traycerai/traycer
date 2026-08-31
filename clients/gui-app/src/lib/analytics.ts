@@ -746,7 +746,7 @@ export interface AnalyticsEventProperties {
     readonly artifact_count: number;
   };
   readonly [AnalyticsEvent.UsageImageExported]: {
-    readonly action: "copy" | "download";
+    readonly action: "copy" | "download" | "share";
     readonly source: AnalyticsUsageImageExportSource;
   };
   readonly [AnalyticsEvent.CommentCreated]: { readonly has_mention: boolean };

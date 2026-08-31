@@ -3,7 +3,11 @@ import type {
   FileSaveRequest,
   SavedFileLocation,
 } from "@traycer-clients/shared/platform/runner-host";
-import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import {
+  downloadBlobToDevice,
+  hasSeparateDownloadRoute,
+  saveBlobToDisk,
+} from "@/lib/files/save-blob-to-disk";
 
 const createObjectUrlDescriptor = Object.getOwnPropertyDescriptor(
   URL,
@@ -110,6 +114,7 @@ describe("saveBlobToDisk", () => {
       saveBlobToDisk(blob, "diagram.png", {
         saveFile,
         openSavedFile: () => Promise.resolve(),
+        downloadFile: null,
       }),
     ).resolves.toEqual({
       name: "diagram.png",
@@ -123,5 +128,110 @@ describe("saveBlobToDisk", () => {
     });
     expect(window.showSaveFilePicker).not.toHaveBeenCalled();
     expect(createObjectURL).not.toHaveBeenCalled();
+  });
+});
+
+describe("downloadBlobToDevice", () => {
+  it("takes the shell's chooser-free route when it has one", async () => {
+    // The whole point of the second route: a shell whose `saveFile` reaches a
+    // share sheet must not send a "Download" through it.
+    const saveFile = vi.fn<
+      (request: FileSaveRequest) => Promise<SavedFileLocation | null>
+    >(() => Promise.resolve(null));
+    const downloadFile = vi.fn<
+      (request: FileSaveRequest) => Promise<SavedFileLocation>
+    >(() =>
+      Promise.resolve({
+        name: "usage.png",
+        path: "file:///docs/Traycer/usage.png",
+      }),
+    );
+
+    const blob = new Blob(["png"], { type: "image/png" });
+    await expect(
+      downloadBlobToDevice(blob, "usage.png", {
+        saveFile,
+        openSavedFile: null,
+        downloadFile,
+      }),
+    ).resolves.toEqual({
+      name: "usage.png",
+      path: "file:///docs/Traycer/usage.png",
+    });
+    expect(downloadFile).toHaveBeenCalledWith({
+      name: "usage.png",
+      type: "image/png",
+      bytes: await blob.arrayBuffer(),
+    });
+    expect(saveFile).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the shell's own save route where there is no separate one", async () => {
+    // A desktop save dialog IS the download - routing around it would open a
+    // second, worse one.
+    const saveFile = vi.fn<
+      (request: FileSaveRequest) => Promise<SavedFileLocation | null>
+    >(() => Promise.resolve({ name: "usage.png", path: "/tmp/usage.png" }));
+
+    await expect(
+      downloadBlobToDevice(
+        new Blob(["png"], { type: "image/png" }),
+        "usage.png",
+        { saveFile, openSavedFile: null, downloadFile: null },
+      ),
+    ).resolves.toEqual({ name: "usage.png", path: "/tmp/usage.png" });
+    expect(saveFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the browser save APIs with no shell at all", async () => {
+    const createObjectURL = vi.fn(() => "blob:usage");
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      writable: true,
+      value: createObjectURL,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      writable: true,
+      value: vi.fn(),
+    });
+
+    await expect(
+      downloadBlobToDevice(
+        new Blob(["png"], { type: "image/png" }),
+        "usage.png",
+        null,
+      ),
+    ).resolves.toEqual({ name: "usage.png", path: null });
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("hasSeparateDownloadRoute", () => {
+  it("is false for no shell and for a shell whose save route is the download", () => {
+    const saveFile = vi.fn<
+      (request: FileSaveRequest) => Promise<SavedFileLocation | null>
+    >(() => Promise.resolve(null));
+    expect(hasSeparateDownloadRoute(null)).toBe(false);
+    expect(
+      hasSeparateDownloadRoute({
+        saveFile,
+        openSavedFile: null,
+        downloadFile: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("is true exactly where the shell owns a chooser-free download", () => {
+    const saveFile = vi.fn<
+      (request: FileSaveRequest) => Promise<SavedFileLocation | null>
+    >(() => Promise.resolve(null));
+    expect(
+      hasSeparateDownloadRoute({
+        saveFile,
+        openSavedFile: null,
+        downloadFile: () => Promise.resolve({ name: "u.png", path: null }),
+      }),
+    ).toBe(true);
   });
 });

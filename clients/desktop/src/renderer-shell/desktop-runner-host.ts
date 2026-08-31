@@ -1162,6 +1162,10 @@ function buildDesktopFileSave(bridge: DesktopFileDropsBridge): IFileSaveHost {
   return {
     saveFile: (request) => bridge.saveFile(request),
     openSavedFile: (path) => bridge.openSavedFile(path),
+    // The save dialog already writes the file the user named, so there is no
+    // second, chooser-free route to offer - and nothing here for a surface to
+    // split into separate "share" and "download" affordances.
+    downloadFile: null,
   };
 }
 

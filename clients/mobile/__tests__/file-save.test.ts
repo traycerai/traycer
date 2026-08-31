@@ -8,12 +8,13 @@ import { MobileFileSave } from "../src/file-save";
 
 const nativeMocks = vi.hoisted(() => ({
   writeFile: vi.fn(),
+  stat: vi.fn(),
   share: vi.fn(),
 }));
 
 vi.mock("@capacitor/filesystem", () => ({
-  Directory: { Cache: "CACHE" },
-  Filesystem: { writeFile: nativeMocks.writeFile },
+  Directory: { Cache: "CACHE", Documents: "DOCUMENTS" },
+  Filesystem: { writeFile: nativeMocks.writeFile, stat: nativeMocks.stat },
 }));
 
 vi.mock("@capacitor/share", () => ({
@@ -68,11 +69,23 @@ function request(name: string, bytes: Uint8Array) {
   return requestOfType(name, bytes, "image/png");
 }
 
+/** The set of paths a stat should report as already taken. */
+function occupyDocuments(paths: readonly string[]): void {
+  nativeMocks.stat.mockImplementation((options: { path: string }) =>
+    paths.includes(options.path)
+      ? Promise.resolve({ uri: `file:///docs/${options.path}` })
+      : // The plugin REJECTS a stat of a missing file rather than reporting
+        // absence - "not there" only ever arrives as a failure.
+        Promise.reject(new Error("File does not exist")),
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   nativeMocks.writeFile.mockResolvedValue({
     uri: "file:///cache/traycer-exports/diagram.png",
   });
+  occupyDocuments([]);
   nativeMocks.share.mockResolvedValue({
     activityType: "com.apple.DocumentsApp",
   });
@@ -303,5 +316,121 @@ describe("MobileFileSave", () => {
 
   it("never offers a re-open route, having learned no path to re-open", () => {
     expect(new MobileFileSave().openSavedFile).toBeNull();
+  });
+});
+
+describe("MobileFileSave.downloadFile", () => {
+  it("writes into the documents directory and offers nothing to the user", async () => {
+    nativeMocks.writeFile.mockResolvedValue({
+      uri: "file:///docs/Traycer/traycer-usage-30d.png",
+    });
+
+    const saved = await new MobileFileSave().downloadFile(
+      request("traycer-usage-30d.png", new Uint8Array([1, 2, 3])),
+    );
+
+    expect(writtenFile(0)).toMatchObject({
+      path: "Traycer/traycer-usage-30d.png",
+      directory: "DOCUMENTS",
+      recursive: true,
+    });
+    // The whole difference from `saveFile`: no sheet, so nothing to dismiss
+    // and no second app deciding where the bytes end up.
+    expect(nativeMocks.share).not.toHaveBeenCalled();
+    // The write itself says where it wrote, which the share sheet never does.
+    expect(saved).toEqual({
+      name: "traycer-usage-30d.png",
+      path: "file:///docs/Traycer/traycer-usage-30d.png",
+    });
+  });
+
+  it("hands over the exact bytes it was given", async () => {
+    const bytes = new Uint8Array([0, 1, 127, 128, 200, 255]);
+
+    await new MobileFileSave().downloadFile(request("shot.png", bytes));
+
+    expect(Array.from(writtenBytes())).toEqual(Array.from(bytes));
+  });
+
+  it("numbers a name that is already taken rather than overwriting it", async () => {
+    // Two exports of the same usage window suggest the same name; replacing
+    // the first would lose a file the user believes they still have.
+    occupyDocuments(["Traycer/traycer-usage-30d.png"]);
+
+    const saved = await new MobileFileSave().downloadFile(
+      request("traycer-usage-30d.png", new Uint8Array([1])),
+    );
+
+    expect(writtenFile(0).path).toBe("Traycer/traycer-usage-30d (2).png");
+    // The confirmation names the file the user actually got, not the one that
+    // was asked for.
+    expect(saved.name).toBe("traycer-usage-30d (2).png");
+  });
+
+  it("keeps counting past the first free-looking number", async () => {
+    occupyDocuments([
+      "Traycer/usage.png",
+      "Traycer/usage (2).png",
+      "Traycer/usage (3).png",
+    ]);
+
+    await new MobileFileSave().downloadFile(
+      request("usage.png", new Uint8Array([1])),
+    );
+
+    expect(writtenFile(0).path).toBe("Traycer/usage (4).png");
+  });
+
+  it("still writes something unique when every numbered name is taken", async () => {
+    // The numbering is bounded so a pathological directory cannot turn one
+    // download into an unbounded walk of the filesystem - but the download
+    // must still land, and still not clobber anything.
+    nativeMocks.stat.mockResolvedValue({ uri: "file:///docs/taken" });
+
+    await new MobileFileSave().downloadFile(
+      request("usage.png", new Uint8Array([1])),
+    );
+
+    const path = writtenFile(0).path;
+    expect(path.startsWith("Traycer/usage")).toBe(true);
+    expect(path.endsWith(".png")).toBe(true);
+    expect(path).not.toBe("Traycer/usage.png");
+    expect(path).not.toBe("Traycer/usage (2).png");
+  });
+
+  it("reads an unreadable directory as free rather than as taken", async () => {
+    // A stat that fails for any reason other than absence must not push a
+    // perfectly good download onto a numbered name.
+    nativeMocks.stat.mockRejectedValue(new Error("Directory unreadable"));
+
+    await new MobileFileSave().downloadFile(
+      request("usage.png", new Uint8Array([1])),
+    );
+
+    expect(writtenFile(0).path).toBe("Traycer/usage.png");
+  });
+
+  it("normalises the suggested name the same way the share leg does", async () => {
+    // Same seam, same rules: a separator must not choose a directory, and the
+    // extension comes from the blob's own type when the name carries none.
+    await new MobileFileSave().downloadFile(
+      requestOfType("../../escape/a1b2c3d4", new Uint8Array([1]), "image/png"),
+    );
+
+    expect(writtenFile(0).path).toBe("Traycer/a1b2c3d4.png");
+  });
+
+  it("propagates a failed write so the caller can toast it", async () => {
+    // The API levels that still gate external storage reject the write; a
+    // download that cannot land has to say so rather than resolve.
+    nativeMocks.writeFile.mockRejectedValue(
+      new Error("File permissions denied"),
+    );
+
+    await expect(
+      new MobileFileSave().downloadFile(
+        request("usage.png", new Uint8Array([1])),
+      ),
+    ).rejects.toThrow("File permissions denied");
   });
 });

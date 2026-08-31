@@ -8,7 +8,15 @@ import {
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -71,6 +79,8 @@ const mocks = vi.hoisted(() => ({
   copyImageBlobPromiseToClipboard:
     vi.fn<(blobPromise: Promise<Blob>) => Promise<void>>(),
   saveBlobToDisk: vi.fn(),
+  downloadBlobToDevice: vi.fn(),
+  hasSeparateDownloadRoute: vi.fn<() => boolean>(),
 }));
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -97,9 +107,17 @@ vi.mock("@/lib/images/copy-image-to-clipboard", () => ({
 
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
   saveBlobToDisk: mocks.saveBlobToDisk,
+  downloadBlobToDevice: mocks.downloadBlobToDevice,
+  hasSeparateDownloadRoute: mocks.hasSeparateDownloadRoute,
   canOpenSavedFile: () => false,
   openSavedFile: vi.fn(),
 }));
+
+beforeEach(() => {
+  // The shape of every shell whose own save route IS the download - desktop
+  // and a plain browser tab. The share-sheet shape is opted into per case.
+  mocks.hasSeparateDownloadRoute.mockReturnValue(false);
+});
 
 afterEach(() => {
   cleanup();
@@ -108,6 +126,8 @@ afterEach(() => {
   mocks.copyImageBlobToClipboard.mockReset();
   mocks.copyImageBlobPromiseToClipboard.mockReset();
   mocks.saveBlobToDisk.mockReset();
+  mocks.downloadBlobToDevice.mockReset();
+  mocks.hasSeparateDownloadRoute.mockReset();
 });
 
 const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
@@ -653,7 +673,7 @@ describe("<EpicUsageDialog />", () => {
     const user = userEvent.setup();
     const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
     mocks.captureUsageExportImageBlob.mockResolvedValue(blob);
-    mocks.saveBlobToDisk.mockResolvedValue({
+    mocks.downloadBlobToDevice.mockResolvedValue({
       name: "traycer-usage-7d.png",
       path: null,
     });
@@ -664,11 +684,11 @@ describe("<EpicUsageDialog />", () => {
     await user.click(screen.getByTestId("epic-usage-download-image"));
 
     await waitFor(() => {
-      expect(mocks.saveBlobToDisk).toHaveBeenCalledWith(
+      expect(mocks.downloadBlobToDevice).toHaveBeenCalledWith(
         blob,
         "traycer-usage-7d.png",
         // This harness mounts no runner host, so there is no native save
-        // route and the save falls through to the browser APIs.
+        // route and the download falls through to the browser APIs.
         null,
       );
     });
@@ -678,5 +698,47 @@ describe("<EpicUsageDialog />", () => {
       subheading: "Cost and token usage for this task.",
     });
     expect(mocks.copyImageBlobPromiseToClipboard).not.toHaveBeenCalled();
+  });
+
+  it("swaps copy for share on a shell whose save route is an OS chooser", async () => {
+    // Same policy as the Settings surface, from the same shared hook: the
+    // two usage surfaces cannot drift into different control sets.
+    mocks.hasSeparateDownloadRoute.mockReturnValue(true);
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    expect(screen.queryByTestId("epic-usage-copy-image")).toBeNull();
+    expect(screen.getByTestId("epic-usage-share-image").textContent).toContain(
+      "Share image",
+    );
+    expect(
+      screen.getByTestId("epic-usage-download-image").textContent,
+    ).toContain("Download image");
+  });
+
+  it("sends share through the shell's own save route and download past it", async () => {
+    const user = userEvent.setup();
+    const blob = new Blob(["fake-png-bytes"], { type: "image/png" });
+    mocks.hasSeparateDownloadRoute.mockReturnValue(true);
+    mocks.captureUsageExportImageBlob.mockResolvedValue(blob);
+    mocks.saveBlobToDisk.mockResolvedValue({ name: "shared.png", path: null });
+    mocks.downloadBlobToDevice.mockResolvedValue({
+      name: "traycer-usage-7d.png",
+      path: "file:///docs/Traycer/traycer-usage-7d.png",
+    });
+    renderDialog(usageSummaryResponse);
+    await screen.findByTestId("usage-cost-figure");
+
+    await user.click(screen.getByTestId("epic-usage-share-image"));
+    await waitFor(() => {
+      expect(mocks.saveBlobToDisk).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.downloadBlobToDevice).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId("epic-usage-download-image"));
+    await waitFor(() => {
+      expect(mocks.downloadBlobToDevice).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.saveBlobToDisk).toHaveBeenCalledTimes(1);
   });
 });

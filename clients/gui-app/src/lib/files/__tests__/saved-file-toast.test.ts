@@ -46,7 +46,9 @@ function fileSaveHost(
   saveFile: SaveFileMock,
   openSavedFile: ((path: string) => Promise<void>) | null,
 ): IFileSaveHost {
-  return { saveFile, openSavedFile };
+  // No chooser-free download route: these cases are about what a COMPLETED
+  // save can offer afterwards, which is the same question either way.
+  return { saveFile, openSavedFile, downloadFile: null };
 }
 
 function resolvingSaveFile(result: SavedFileLocation | null): SaveFileMock {

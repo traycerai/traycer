@@ -14,6 +14,21 @@ import type {
 const EXPORT_DIRECTORY = "traycer-exports";
 
 /**
+ * Where a DIRECT download lands, inside the platform's documents directory: a
+ * folder of the app's own so a phone's Documents root does not accumulate
+ * loose Traycer files among everything else that writes there.
+ */
+const DOWNLOAD_DIRECTORY = "Traycer";
+
+/**
+ * How many numbered variants of a taken name are tried before falling back to
+ * the launch stamp. Two downloads of the same usage window in one session is
+ * the case worth handling; a user with twenty is better served by a name that
+ * is merely unique than by twenty more round trips to the filesystem.
+ */
+const MAX_NUMBERED_DOWNLOAD_ATTEMPTS = 20;
+
+/**
  * Each request stages into its OWN directory under that root, keeping the
  * user-facing basename intact.
  *
@@ -182,6 +197,55 @@ function toFileName(suggested: string, mediaType: string): string {
 }
 
 /**
+ * A name with `insert` placed between its stem and its extension, re-bounded
+ * afterwards - the insert is what makes an otherwise-taken name free, and a
+ * name only has to fit once it is final.
+ */
+function withNameInsert(name: string, insert: string): string {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return boundFileNameBytes(`${name}${insert}`);
+  return boundFileNameBytes(`${name.slice(0, dot)}${insert}${name.slice(dot)}`);
+}
+
+/**
+ * Whether something already occupies `path` in the documents directory. The
+ * plugin REJECTS a stat of a missing file rather than reporting absence, so a
+ * rejection is the "no" - and any other failure (an unreadable directory)
+ * reads as "no" too, which is the safe answer: the caller only uses this to
+ * pick a free name, and guessing "taken" would push a perfectly good download
+ * onto a numbered name for no reason.
+ */
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await Filesystem.stat({ path, directory: Directory.Documents });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The first free path for `name` in the download directory.
+ *
+ * A download must not silently replace an earlier one - two exports of the
+ * same usage window suggest the same name, and overwriting the first would
+ * lose a file the user believes they still have. Numbered variants mirror what
+ * a desktop browser does with the same collision; past
+ * {@link MAX_NUMBERED_DOWNLOAD_ATTEMPTS} the launch stamp takes over, which is
+ * unique by construction and so always terminates.
+ */
+async function freeDownloadPath(name: string): Promise<string> {
+  const candidate = `${DOWNLOAD_DIRECTORY}/${name}`;
+  if (!(await fileExists(candidate))) return candidate;
+  for (let n = 2; n <= MAX_NUMBERED_DOWNLOAD_ATTEMPTS; n++) {
+    const numbered = `${DOWNLOAD_DIRECTORY}/${withNameInsert(name, ` (${String(n)})`)}`;
+    if (!(await fileExists(numbered))) return numbered;
+  }
+  stagedRequests += 1;
+  return `${DOWNLOAD_DIRECTORY}/${withNameInsert(name, `-${stagingStamp}-${String(stagedRequests)}`)}`;
+}
+
+/**
  * The plugin rejects a dismissed sheet rather than resolving it, and the
  * rejection carries prose rather than a code. Matching the wording is a guess,
  * but the alternative - reporting every rejection as a failure - tells a user
@@ -198,13 +262,21 @@ function isShareDismissal(error: unknown): boolean {
  * A WKWebView honours none of the browser save routes - there is no File
  * System Access API, and `<a download>` navigates instead of saving - so
  * every export on this shell was a silent no-op until the bytes took a native
- * path. That path is two plugins: the file is written into the app's cache
- * container, then offered to the OS share sheet, which is where a phone user
- * chooses "Save to Files", a photo library, or another app entirely.
+ * path. This shell owns TWO such paths, and the difference between them is
+ * the whole reason `IFileSaveHost` names them separately:
  *
- * The consequence for the contract is `path: null`. The sheet reports which
- * ACTIVITY the user picked, never where that activity put the bytes, so this
- * shell cannot re-open what it saved and `openSavedFile` is `null`.
+ * - {@link MobileFileSave.saveFile} stages the file in the app's cache
+ *   container and offers it to the OS share sheet, where a phone user chooses
+ *   "Save to Files", a photo library, or another app entirely. Where the bytes
+ *   end up is that app's decision.
+ * - {@link MobileFileSave.downloadFile} writes them into the platform's
+ *   documents directory and stops. Nothing is offered and nothing is chosen.
+ *
+ * The sheet reports which ACTIVITY the user picked, never where that activity
+ * put the bytes, so `saveFile` reports `path: null`; the direct write knows
+ * exactly where it wrote and says so. `openSavedFile` is `null` either way -
+ * this shell carries no plugin that hands a file to the OS default app, so
+ * knowing the path is not the same as having a route back to it.
  *
  * The staged copy is deliberately left in place, and each request gets its own
  * directory (see {@link stagingPath}). The sheet resolves when it is dismissed,
@@ -215,8 +287,8 @@ function isShareDismissal(error: unknown): boolean {
  */
 export class MobileFileSave implements IFileSaveHost {
   /**
-   * `null`: no activity in the sheet reports a destination back, so there is
-   * never a path to re-open.
+   * `null`: this shell has no route that opens a file with the OS default
+   * application, whether or not it knows where the file is.
    */
   readonly openSavedFile = null;
 
@@ -237,5 +309,37 @@ export class MobileFileSave implements IFileSaveHost {
       throw error;
     }
     return { name, path: null };
+  }
+
+  /**
+   * The phone's chooser-free download: the bytes are written into the
+   * platform's documents directory and nothing else happens - no sheet, no
+   * second app, and no decision left to the user after the tap.
+   *
+   * What "documents" means is the platform's answer, not this file's. On
+   * Android it is the shared Documents folder, which every file manager lists
+   * and other apps can read; on iOS it is the app's own documents container,
+   * which the Files app shows under "On My iPhone → Traycer" because the two
+   * `Info.plist` sharing keys are set. Neither needs a plugin this shell does
+   * not already carry, and both put a real, persistent file somewhere the user
+   * can go and find it - which is the whole of what a download promises.
+   *
+   * Unlike {@link saveFile} this reports a path: the write itself says where
+   * the bytes went. `openSavedFile` is still `null`, so nothing offers to
+   * re-open it - the path is the honest record of the location, not a route
+   * back to it.
+   */
+  async downloadFile(request: FileSaveRequest): Promise<SavedFileLocation> {
+    const name = toFileName(request.name, request.type);
+    const path = await freeDownloadPath(name);
+    const written = await Filesystem.writeFile({
+      path,
+      data: toBase64(request.bytes),
+      directory: Directory.Documents,
+      recursive: true,
+    });
+    // The name the user ends up with is the one that was free, which a
+    // collision may have numbered - the confirmation has to say that one.
+    return { name: path.split("/").at(-1) ?? name, path: written.uri };
   }
 }

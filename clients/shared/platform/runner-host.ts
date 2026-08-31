@@ -717,6 +717,22 @@ export interface IFileSaveHost {
    * also every case where `saveFile` reports `path: null`.
    */
   readonly openSavedFile: ((path: string) => Promise<void>) | null;
+  /**
+   * Writes the bytes straight into the device's own file storage, with no
+   * chooser, sheet or dialog in between - what a phone user means by
+   * "download". Resolves with where the file landed, or rejects; there is no
+   * dismissal to report, because nothing was offered to dismiss.
+   *
+   * `null` on every shell whose {@link saveFile} ALREADY commits the file
+   * itself - a desktop save dialog names the file it writes, so a second
+   * direct route would be the same act under a second name. Non-null exactly
+   * where `saveFile` hands the bytes to an OS chooser and another app decides
+   * where they land, which is what makes "share" and "download" two different
+   * things worth offering separately there.
+   */
+  readonly downloadFile:
+    | ((request: FileSaveRequest) => Promise<SavedFileLocation>)
+    | null;
 }
 
 /**
