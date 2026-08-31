@@ -897,3 +897,89 @@ describe("the forward-only release", () => {
     expect(docs.dropped).toEqual([]);
   });
 });
+
+// ─── A release reply that outlived its lifecycle ────────────────────────────
+
+describe("the forward-only release — generation fencing", () => {
+  it("ignores a release reply belonging to a PREVIOUS acquire/release cycle", async () => {
+    const pair = createFakeBridgePair("sync");
+    const releases: string[] = [];
+    // Held, not answered: this is the whole stimulus. Consecutive hot-cap
+    // evictions with a slow worker round trip put two releases in flight for
+    // one doc, and the first reply lands after the second has been posted.
+    const pending: Array<() => void> = [];
+    pair.worker.subscribe((message) => {
+      if (!isMainToWorkerFrame(message) || message.frame !== "call") return;
+      const { callId, call } = message;
+      const respond = (value: unknown): void => {
+        pair.worker.post(
+          { frame: "result", callId, result: { outcome: "ok", value } },
+          [],
+        );
+      };
+      if (call.kind === "body/materialize") {
+        respond({
+          docKey: "room-1",
+          update: Uint8Array.from([1, 2, 3]),
+          docGuid: null,
+          seedMode: "full",
+          hostStateVector: null,
+          awarenessFrames: [],
+        });
+        return;
+      }
+      if (call.kind === "body/release") {
+        releases.push(call.request.docKey);
+        pending.push(() => {
+          respond({ released: true, reason: null });
+        });
+      }
+    });
+    const docs = createDocs();
+    const scheduler = createScheduler();
+    const leases = createArtifactBodyLeaseBridge({
+      bridge: createMainBridgeEndpoint(pair.main, stubMainCallHandlers({})),
+      docs,
+      budget: createBudget(),
+      scheduler,
+      lingerMs: LINGER_MS,
+      maxHotDocs: MAX_HOT,
+      reportAwaitingStalled: IGNORE_STALL_REPORT,
+    });
+
+    // Lifecycle 1: acquire, release, linger out. The release is posted and
+    // deliberately left unanswered.
+    const first = await leases.acquire("artifact-1");
+    if (first.kind !== "granted") throw new Error("expected a grant");
+    first.release();
+    scheduler.advance(LINGER_MS);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(releases).toEqual(["room-1"]);
+
+    // Lifecycle 2: the doc is live again under a NEWER generation, and its own
+    // release is posted. `demotingGeneration` is now the second cycle's.
+    const second = await leases.acquire("artifact-1");
+    if (second.kind !== "granted") throw new Error("expected a grant");
+    second.release();
+    scheduler.advance(LINGER_MS);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(releases).toEqual(["room-1", "room-1"]);
+
+    // The FIRST reply finally lands.
+    // Length, not an `=== undefined` test: `noUncheckedIndexedAccess` is off,
+    // so the element type carries no `undefined` for that comparison to narrow.
+    if (pending.length === 0) throw new Error("expected a pending release");
+    pending[0]();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // THE REDDENING ASSERTION. A non-null test on `demotingGeneration` passes
+    // here - the field is populated, by the SECOND cycle - so the stale reply
+    // deleted the entry and dropped a doc the newer release may still have
+    // refused as pinned, taking it out from under a bound editor.
+    expect(docs.dropped).toEqual([]);
+    expect(docs.has("room-1")).toBe(true);
+  });
+});

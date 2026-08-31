@@ -7,7 +7,7 @@ import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-m
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { getEpicSessionHandleHostId } from "@/lib/registries/epic-session-registry";
-import { appLogger } from "@/lib/logger";
+import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /** The renameable kinds a mobile surface can address, and how they rename. */
@@ -112,15 +112,11 @@ export function useSwitcherRename(
           // is nothing to roll back (no optimistic stamp was taken) and
           // nothing to tell the user that the doc itself will not tell them:
           // the title simply stays as it was. So this records and stops.
-          void epicHandle.store
-            .getState()
-            .renameArtifact(nodeId, trimmed)
-            .catch((error: unknown) => {
-              appLogger.warn("mobile switcher: doc-resident rename failed", {
-                artifactId: nodeId,
-                error: error instanceof Error ? error.message : String(error),
-              });
-            });
+          settleDetachedEpicMutation(
+            epicHandle.store.getState().renameArtifact(nodeId, trimmed),
+            "mobile switcher",
+            "doc-resident rename",
+          );
           return;
         }
       }
@@ -166,13 +162,21 @@ export function useSwitcherRename(
         await retire("failed");
       };
       if (kind === "chat") {
-        void renameChat
-          .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
-          .then(landed, failed);
+        settleDetachedEpicMutation(
+          renameChat
+            .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+            .then(landed, failed),
+          "mobile switcher",
+          "chat rename settlement",
+        );
       } else {
-        void renameTuiAgent
-          .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
-          .then(landed, failed);
+        settleDetachedEpicMutation(
+          renameTuiAgent
+            .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+            .then(landed, failed),
+          "mobile switcher",
+          "terminal-agent rename settlement",
+        );
       }
     },
     [
@@ -186,11 +190,18 @@ export function useSwitcherRename(
   );
 
   // The returned callback stays VOID-returning, which is what the declared
-  // type says and what a DOM handler needs. `void` makes the fire-and-forget
-  // explicit rather than leaving a promise assignable-to-void by accident.
+  // type says and what a DOM handler needs - so the fire-and-forget is made
+  // explicit here rather than left as a promise assignable-to-void by
+  // accident, and terminated rather than merely discarded: `commit` awaits the
+  // write-route resolution and the doc-resident arm, either of which can
+  // reject after the row has already been handed back to the switcher.
   return useCallback(
     (kind: SwitcherRowKind, nodeId: string, title: string): void => {
-      void commit(kind, nodeId, title);
+      settleDetachedEpicMutation(
+        commit(kind, nodeId, title),
+        "mobile switcher",
+        "rename commit",
+      );
     },
     [commit],
   );

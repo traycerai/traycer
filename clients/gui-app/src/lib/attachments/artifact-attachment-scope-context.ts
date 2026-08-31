@@ -1,10 +1,9 @@
-import { createContext, use, useMemo } from "react";
+import { createContext, use } from "react";
 
 import type {
   FetchArtifactAttachmentRequest,
   FetchArtifactAttachmentResponse,
 } from "@traycer/protocol/host/epic/artifact-attachment";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 
 /**
  * Exactly the slice of the host client an artifact attachment read needs: this
@@ -82,27 +81,4 @@ export const ArtifactAttachmentScopeContext =
 
 export function useArtifactAttachmentScope(): ArtifactAttachmentScopeValue | null {
   return use(ArtifactAttachmentScopeContext);
-}
-
-/**
- * Build the scope a tile provides, resolving the host's build alongside it.
- *
- * A hook rather than four lines in the tile because the tile is already at its
- * complexity ceiling, and because the version lookup is the half most easily
- * dropped by someone wiring a second artifact surface later - it is what makes
- * an in-place host upgrade re-probe instead of staying degraded for the
- * session.
- */
-export function useArtifactAttachmentScopeValue(
-  epicId: string,
-  artifactId: string,
-  hostId: string,
-  client: ArtifactAttachmentReadClient | null,
-): ArtifactAttachmentScopeValue {
-  const entry = useHostDirectoryEntry(hostId);
-  const hostVersion = entry?.version ?? null;
-  return useMemo(
-    () => ({ epicId, artifactId, hostId, hostVersion, client }),
-    [epicId, artifactId, hostId, hostVersion, client],
-  );
 }

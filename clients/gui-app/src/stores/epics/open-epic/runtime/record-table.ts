@@ -181,6 +181,17 @@ export interface RecordTable<TRow, TSlice> {
   /** The slice as last published. The projector reads this as an input. */
   current(): TSlice;
   /**
+   * The retained RAW row for a full record identity, or `null`.
+   *
+   * The published slice cannot answer this: it is keyed on the bare id, which
+   * is not necessarily a record identity, and it is filtered to the viewer. A
+   * plane that needs to carry a field forward across a delta has to read it by
+   * the SAME identity the rows are stored under, or it inherits a same-id row
+   * belonging to another owner - reachable during the null-viewer boot window
+   * and across an account transition.
+   */
+  retainedRow(rowKey: string): TRow | null;
+  /**
    * The ingest counter as it stands now - the value a list request captures at
    * dispatch and passes back as `issuedAtSeq`. Monotonic, per session; every
    * accepted row write advances it.
@@ -273,6 +284,7 @@ export function createRecordTable<TRow, TSlice>(
 
   return {
     current: () => slice,
+    retainedRow: (rowKey: string) => rows.get(rowKey) ?? null,
     ingestSeq: () => ingestSeq,
     isRetracted: (retractionId) => retractions.has(retractionId),
 

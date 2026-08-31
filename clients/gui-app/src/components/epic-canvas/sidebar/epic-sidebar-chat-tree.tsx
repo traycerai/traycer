@@ -8,6 +8,7 @@ import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import {
   chatOpensPublishedCopy,
@@ -1748,18 +1749,31 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       await retire("failed");
     };
     if (artifactType === "chat") {
-      void renameChat
-        .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
-        .then(landed, failed);
+      settleDetachedEpicMutation(
+        renameChat
+          .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+          .then(landed, failed),
+        "sidebar tree",
+        "chat rename settlement",
+      );
     } else if (artifactType === "terminal-agent") {
-      void renameTerminalAgent
-        .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
-        .then(landed, failed);
+      settleDetachedEpicMutation(
+        renameTerminalAgent
+          .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+          .then(landed, failed),
+        "sidebar tree",
+        "terminal-agent rename settlement",
+      );
     } else {
-      // No RPC arm for this kind — nothing can ack it, so a lingering stamp
-      // would never land; drop it outright. `void`: the retire is a round trip
-      // now and there is nothing here that waits on it.
-      void retire("failed");
+      // No RPC arm for this kind - nothing can ack it, so a lingering stamp
+      // would never land; drop it outright. Detached because the retire is a
+      // round trip now and there is nothing here that waits on it - which is
+      // also why its rejection needs a terminal handler of its own.
+      settleDetachedEpicMutation(
+        retire("failed"),
+        "sidebar tree",
+        "retire without an acking RPC",
+      );
     }
   }, [
     artifactType,
@@ -1779,9 +1793,13 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        // `void`: committing is a round trip now, and a key handler returns
-        // synchronously.
-        void commitRename();
+        // Detached: committing is a round trip now, and a key handler returns
+        // synchronously, so nothing on this stack can await the rejection.
+        settleDetachedEpicMutation(
+          commitRename(),
+          "sidebar tree",
+          "rename commit",
+        );
       } else if (event.key === "Escape") {
         event.preventDefault();
         setIsRenaming(false);
@@ -1796,9 +1814,14 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   };
 
   const confirmDelete = () => {
-    // `void`: the delete is a round trip now. The surface below reacts to the
-    // PROJECTION, not to this promise, so nothing here waits on it.
-    void epicHandle.store.getState().deleteArtifact(nodeId);
+    // Detached: the delete is a round trip now. The surface below reacts to
+    // the PROJECTION, not to this promise, so nothing here waits on it - and
+    // nothing here would otherwise hear it fail.
+    settleDetachedEpicMutation(
+      epicHandle.store.getState().deleteArtifact(nodeId),
+      "sidebar tree",
+      "local delete projection",
+    );
     markArtifactSelfDeleted(nodeId);
     const handleDeleteSuccess = () => {
       setConfirmDeleteOpen(false);
@@ -1870,10 +1893,15 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       renameValue={renameValue}
       onRenameValueChange={setRenameValue}
       // Wrapped rather than passed through: the prop is declared void-returning
-      // and `commitRename` is a round trip now. `void` states that nothing
-      // here waits on it, which is what the caller already assumed.
+      // and `commitRename` is a round trip now. Detaching states that nothing
+      // here waits on it, which is what the caller already assumed; settling it
+      // is what keeps a failure off the unhandled channel.
       onCommitRename={() => {
-        void commitRename();
+        settleDetachedEpicMutation(
+          commitRename(),
+          "sidebar tree",
+          "rename commit",
+        );
       }}
       onRenameKeyDown={handleRenameKeyDown}
       onToggle={handleToggle}

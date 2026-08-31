@@ -311,15 +311,24 @@ export function createChatRecordTable(
       // route exactly those rows' renames to a writer that cannot address them.
       //
       // So: carry forward what the last ANSWER stated for this chat, and admit
-      // ignorance when nothing has. The published slice is the held statement -
-      // reading it here rather than keeping a second map is deliberate, since
-      // two books that can disagree is the defect class this plane already
-      // documents. It is keyed by `chatId` alone and filtered to the viewer,
-      // which is exactly the population whose mutations this client routes.
-      const heldById = table.current().byId;
-      const heldHome = Object.hasOwn(heldById, delta.record.chatId)
-        ? heldById[delta.record.chatId].docResident
-        : null;
+      // ignorance when nothing has. Read from the RETAINED row rather than a
+      // second map, since two books that can disagree is the defect class this
+      // plane already documents - but by the FULL record identity, not off the
+      // published slice.
+      //
+      // The slice is keyed by `chatId` alone and filtered to the viewer, and
+      // the record table's own note says why that is not the same question:
+      // it "is keyed on the bare id, which is not necessarily a record
+      // identity". Two owners can hold the same host-minted chat id, and a
+      // delta for one arriving while the OTHER owner's row is the published
+      // one - the null-viewer boot window, an account transition - inherited
+      // that stranger's home. The consequences run both ways: a doc-resident
+      // chat gets a registry RPC enabled on it, or a valid write is disabled
+      // until some later full list answer corrects it.
+      const held = table.retainedRow(
+        recordKey(delta.record.ownerUserId, delta.record.chatId),
+      );
+      const heldHome = held === null ? null : held.docResident;
       return published(
         table.applyUpsert({
           ...delta.record,

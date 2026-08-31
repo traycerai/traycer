@@ -1,6 +1,7 @@
 import type { Editor, EditorEvents } from "@tiptap/core";
 import { useEffect } from "react";
 import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
+import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import {
   DEFAULT_EPIC_NODE_NAMES,
   isEpicArtifactKind,
@@ -190,17 +191,26 @@ export function useArtifactDocTitleFollow(params: {
       }
       const supersededTitle = lastRequestedTitle;
       lastRequestedTitle = title;
-      void persistRename({ epicId, artifactId, title }).then(
-        () => renameArtifactInTab(viewTabId, artifactId, title),
-        () => {
-          // The authority never took this title, so the tracker must not claim
-          // it did: the artifact still reads the PREVIOUS title, which the
-          // next flush would then mistake for somebody else's rename and stop
-          // following on. Only roll back if nothing newer has been requested.
-          if (lastRequestedTitle === title) {
-            lastRequestedTitle = supersededTitle;
-          }
-        },
+      // Settled, not merely detached - the same terminal handler the other
+      // three rename surfaces use. Both arms below are synchronous today, so
+      // the two-arm form does cover this chain; it stops covering it the
+      // moment either arm grows an `await`, which is precisely how the sibling
+      // surfaces acquired the defect this helper exists for.
+      settleDetachedEpicMutation(
+        persistRename({ epicId, artifactId, title }).then(
+          () => renameArtifactInTab(viewTabId, artifactId, title),
+          () => {
+            // The authority never took this title, so the tracker must not claim
+            // it did: the artifact still reads the PREVIOUS title, which the
+            // next flush would then mistake for somebody else's rename and stop
+            // following on. Only roll back if nothing newer has been requested.
+            if (lastRequestedTitle === title) {
+              lastRequestedTitle = supersededTitle;
+            }
+          },
+        ),
+        "artifact doc title follow",
+        "artifact rename settlement",
       );
     };
 

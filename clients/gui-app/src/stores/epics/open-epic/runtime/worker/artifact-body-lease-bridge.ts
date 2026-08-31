@@ -414,14 +414,25 @@ export function createArtifactBodyLeaseBridge(options: {
       // it means giving the release an answer (which makes it a call) or
       // giving main the pin state another way, and that is a contract change
       // rather than a fix to make in passing.
-      entry.demotingGeneration = entry.generation;
+      // CAPTURED, and compared for equality below - the demote path's fence,
+      // which this one only looked like it had. `demotingGeneration` is set on
+      // every release post and cleared on every ack, so a non-null test answers
+      // "some release is in flight", not "THIS release is". Release, re-acquire
+      // and release again before the first reply lands - consecutive hot-cap
+      // evictions with a slow worker round trip will do it - and the first
+      // reply finds the field repopulated by the SECOND lifecycle, passes, and
+      // deletes an entry whose newer release may still be refused as pinned.
+      // Dropping the doc there takes it out from under a bound editor, which is
+      // the exact outcome the demote fence exists to prevent.
+      const releaseGeneration = entry.generation;
+      entry.demotingGeneration = releaseGeneration;
       void options.bridge.call("body/release", { docKey }, NO_TRANSFER).then(
         (answer) => {
           const current = entries.get(docKey);
-          // A late answer for a lease since re-acquired, exactly as the demote
-          // path guards it: the doc is live again and dropping it here would
-          // take it out from under a bound editor.
-          if (current === undefined || current.demotingGeneration === null) {
+          if (
+            current === undefined ||
+            current.demotingGeneration !== releaseGeneration
+          ) {
             return;
           }
           if (!answer.released) {

@@ -20,10 +20,8 @@ import {
 } from "@/hooks/comments/use-lane-comment-threads";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import {
-  ArtifactAttachmentScopeContext,
-  useArtifactAttachmentScopeValue,
-} from "@/lib/attachments/artifact-attachment-scope-context";
+import { ArtifactAttachmentScopeContext } from "@/lib/attachments/artifact-attachment-scope-context";
+import { useArtifactAttachmentScopeValue } from "@/lib/attachments/use-artifact-attachment-scope-value";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { collabTileNotice } from "./collab-tile-availability-copy";

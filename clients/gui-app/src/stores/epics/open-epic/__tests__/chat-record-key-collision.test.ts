@@ -204,3 +204,98 @@ describe("createChatRecordTable - recordKey collision resistance", () => {
     expect(afterClear.chatRecords.allIds).toEqual([CHAT_ID_B]);
   });
 });
+
+/**
+ * The SECOND way a bare `chatId` is mistaken for a record identity, on the
+ * same table and with no separator trickery needed: a delta that carries no
+ * home reads the held home off the PUBLISHED slice, which is keyed by bare
+ * `chatId` and filtered to the viewer. Two owners holding one host-minted
+ * chat id is enough - and unlike the join collision above, this one does not
+ * need a control byte in an id, only two accounts and a boot window.
+ */
+describe("createChatRecordTable - a delta reads the home of its OWN row", () => {
+  it("does not inherit a same-id chat's home from a different owner", () => {
+    const SHARED_ID = "chat-shared";
+    const DOC_OWNER = "owner-doc";
+    const REGISTRY_OWNER = "owner-registry";
+
+    // The viewer moves during the test, which is the whole point: the window
+    // in which the slice is holding the STRANGER's row is precisely the
+    // null-viewer boot window, and the row whose home was corrupted is only
+    // observable once the viewer settles onto its owner.
+    let viewer: string | null = null;
+    const table = createChatRecordTable({
+      getCurrentUserId: () => viewer,
+      onBeforePublish: () => undefined,
+      now: () => 0,
+    });
+
+    // One `@1.1` answer stating both homes. The registry-homed row is ingested
+    // FIRST so the doc-homed one wins the bare-id slot in the published slice
+    // (`chatRecordsSlice` writes `byId[chatId]` per row, last row wins).
+    const seeded = table.applyRecords(
+      [
+        record({
+          chatId: SHARED_ID,
+          ownerUserId: REGISTRY_OWNER,
+          title: "Registry-homed",
+          docResident: false,
+          revision: 1,
+        }),
+        record({
+          chatId: SHARED_ID,
+          ownerUserId: DOC_OWNER,
+          title: "Doc-homed",
+          docResident: true,
+          revision: 1,
+        }),
+      ],
+      null,
+    );
+    if (seeded === null) {
+      throw new Error("expected a publication from the first answer");
+    }
+    // Precondition, not the assertion under test: the slice's single slot for
+    // this id is the STRANGER's row. Without this the delta below would read
+    // its own row by accident and the test would pass either way.
+    expect(seeded.chatRecords.byId[SHARED_ID].docResident).toBe(true);
+
+    // A `host.chatRecords.subscribe` delta for the REGISTRY-homed owner. It
+    // states nothing about the home, so the table must carry that owner's own
+    // last stated home forward.
+    const delta: ChatRecordDelta = {
+      kind: "upsert",
+      epicId: EPIC_ID,
+      record: record({
+        chatId: SHARED_ID,
+        ownerUserId: REGISTRY_OWNER,
+        title: "Registry-homed, renamed",
+        revision: 9,
+      }),
+    };
+    table.applyDelta(delta);
+
+    // The viewer settles. The doc-homed stranger drops out of the slice and
+    // the registry-homed row takes the slot, so its carried home is finally
+    // observable.
+    viewer = REGISTRY_OWNER;
+    const afterSignIn = table.beginPendingCreation({
+      chatId: "chat-unrelated",
+      hostId: "host-1",
+      parentChatId: null,
+      title: "",
+      ownerUserId: REGISTRY_OWNER,
+    });
+    if (afterSignIn === null) {
+      throw new Error("expected a publication once the viewer settled");
+    }
+
+    const settled = afterSignIn.chatRecords.byId[SHARED_ID];
+    expect(settled.title).toBe("Registry-homed, renamed");
+    // THE REDDENING ASSERTION. Reading the home off the published slice
+    // handed this delta the doc-homed stranger's `true`, so a registry-homed
+    // chat comes back claiming a home it does not have and its rename is
+    // routed to a writer that cannot address it.
+    expect(settled.docResident).toBe(false);
+  });
+});
