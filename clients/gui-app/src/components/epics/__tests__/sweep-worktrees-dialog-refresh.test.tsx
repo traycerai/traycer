@@ -94,6 +94,8 @@ describe("SweepWorktreesDialog refresh", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Refresh sweep"
         onOpenChange={() => {}}
       />,
@@ -119,6 +121,8 @@ describe("SweepWorktreesDialog refresh", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Refresh sweep"
         onOpenChange={() => {}}
       />,
