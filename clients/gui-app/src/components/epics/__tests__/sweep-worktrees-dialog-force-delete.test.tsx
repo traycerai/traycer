@@ -416,7 +416,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    expect(screen.queryByTestId("sweep-typed-confirm")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Stop work & sweep" }),
     ).toBeTruthy();
@@ -449,10 +449,12 @@ describe("SweepWorktreesDialog ergonomics", () => {
       screen.getByRole("button", { name: "Review consequences" }),
     );
     await waitFor(() => {
-      expect(screen.getByText("Review this sweep")).toBeTruthy();
+      expect(
+        screen.getByRole("heading", { name: "Review this sweep" }),
+      ).toBeTruthy();
     });
     const confirm = screen.getByRole("button", { name: "Sweep anyway" });
-    expect(screen.queryByTestId("sweep-typed-confirm")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(confirm.hasAttribute("disabled")).toBe(false);
   });
 
@@ -710,7 +712,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
       screen.getByRole("button", { name: "Review consequences" }),
     );
     await waitFor(() => {
-      expect(screen.getByText("Review this sweep")).toBeTruthy();
+      expect(
+        screen.getByRole("heading", { name: "Review this sweep" }),
+      ).toBeTruthy();
     });
     const individualStops =
       screen.getByTestId("sweep-review-stops").textContent;
@@ -1214,7 +1218,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
     fireEvent.keyDown(window, { key: "a" });
-    expect(screen.queryByTestId("sweep-typed-confirm")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
   it("names full shell commands in the review receipt", async () => {
