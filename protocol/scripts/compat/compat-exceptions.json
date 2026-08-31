@@ -222,6 +222,14 @@
       "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
+      "path": "**.grokPromptIndex",
+      "reason": "Grok session-anchor prompt-index field on a parsed stream (frames are live-schema-parsed, so the tolerance executes): nullable/.default(null), and null is the documented 'no prompt consumed / index unrecorded' semantic - literally true for every anchor written before index recording existed. No shipped client reads the field; only the host's own rewind-fork resolution consumes it. Follows the turnTailUuid precedent."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
       "path": "**.claudePendingWakes",
       "reason": "Parsed-stream field with .default([]): an empty wake list is exactly what a host that predates ScheduleWakeup (#196) has. No shipped client consumes the field outside tests."
     },

@@ -1103,6 +1103,12 @@ export const grokUserMessageAnchorResolvedSchema = z.object({
   // The ACP session id the `grok agent stdio` process assigned for this turn.
   // Null until `session/new` resolves; used to resume the same ACP session.
   grokSessionId: z.string().nullable(),
+  // The grok `prompt_index` this turn's `session/prompt` consumed, computed by
+  // the adapter before the turn (0 for a fresh session, the session's on-disk
+  // prompt count for a resume). Null when the turn consumed no prompt (native
+  // compaction) or the count could not be read; persisted onto the message's
+  // grok session anchor as the rewind-fork truncation point.
+  grokPromptIndex: z.number().int().nonnegative().nullable().default(null),
 });
 
 export const qwenUserMessageAnchorResolvedSchema = z.object({

@@ -316,15 +316,25 @@ export type OpenRouterChatSessionAnchor = z.infer<
   typeof openRouterChatSessionAnchorSchema
 >;
 
-// Grok (ACP) resumes at session granularity only — `session/load` reloads the
-// whole ACP session, with no per-message truncation/fork point — so the anchor
-// carries just the ACP session id (no provider-native user-message id like the
-// others). `sessionId` is that ACP session id.
+// Grok (ACP) resumes whole sessions via `session/load`, but its sessions ARE
+// fork/truncate-capable: `_x.ai/session/fork` copies a session (optionally into
+// a new cwd) and `_x.ai/rewind/execute {targetPromptIndex, mode:
+// "conversation_only", force: true}` truncates the copy to the state before a
+// given prompt (live-verified on grok CLI 1.0.4 and 1.0.13). `sessionId` is the
+// ACP session id.
 export const grokChatSessionAnchorSchema = z.object({
   harnessId: z.literal("grok"),
   hostId: z.string(),
   sessionId: z.string(),
   sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  // The grok `prompt_index` this message's turn consumed in `sessionId` — a
+  // session-lifetime monotonic counter of `session/prompt` calls that survives
+  // grok's in-place compaction, so it is the per-message truncation point a
+  // rewind-fork targets (`targetPromptIndex = grokPromptIndex + 1`). Null when
+  // the turn consumed no prompt (a native `_x.ai/compact_conversation` turn)
+  // or the anchor predates index recording; a lineage with no non-null index
+  // routes edits to the fake-context fresh path, exactly as before.
+  grokPromptIndex: z.number().int().nonnegative().nullable().default(null),
   createdAt: z.number(),
   coveredUntilMessageId: z.string().nullable().default(null),
   ...profileSnapshotFields,
