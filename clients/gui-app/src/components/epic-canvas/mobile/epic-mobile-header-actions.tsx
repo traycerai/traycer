@@ -17,9 +17,9 @@ import {
   getEpicSessionHandleHostClient,
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import { settleEpicTitleWrite } from "@/lib/epic-title-write-settlement";
 
 /**
  * Fills the mobile-header right-actions slot on the epic route with the tab
@@ -115,8 +115,8 @@ export function MobileEpicHeaderTitle(props: {
         // A promise is truthy, so this guard only means anything against the
         // awaited value - see the enqueue above.
         if (commandId === null) return;
-        void state.waitForWriteCommand(commandId).then((command) => {
-          if (command.state === "committed") {
+        settleEpicTitleWrite(state.waitForWriteCommand(commandId), {
+          onCommitted: () => {
             // This arm bypasses `useEpicUpdateTitle`, so it owns the analytics
             // and cache update that hook normally performs.
             Analytics.getInstance().track(AnalyticsEvent.TaskRenamed, {
@@ -130,18 +130,8 @@ export function MobileEpicHeaderTitle(props: {
               epicId,
               next,
             );
-            return;
-          }
-          const message =
-            command.resolution?.kind === "rejected"
-              ? command.resolution.reason
-              : "A newer authoritative title superseded this rename.";
-          reportableErrorToast("Couldn't rename epic.", undefined, {
-            title: "Could not rename Epic",
-            message,
-            code: null,
-            source: "Epic mobile header",
-          });
+          },
+          source: "Epic mobile header",
         });
         return;
       }

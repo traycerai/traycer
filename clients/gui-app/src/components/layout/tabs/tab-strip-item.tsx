@@ -51,6 +51,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import { settleEpicTitleWrite } from "@/lib/epic-title-write-settlement";
 import { useTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import {
@@ -256,8 +257,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           updatedAt: Date.now(),
         });
         if (commandId === null) return;
-        void state.waitForWriteCommand(commandId).then((command) => {
-          if (command.state === "committed") {
+        settleEpicTitleWrite(state.waitForWriteCommand(commandId), {
+          onCommitted: () => {
             if (userId === null) return;
             updateEpicTitleInCloudTaskCaches(
               queryClient,
@@ -265,18 +266,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
               epicId,
               next,
             );
-            return;
-          }
-          const message =
-            command.resolution?.kind === "rejected"
-              ? command.resolution.reason
-              : "A newer authoritative title superseded this rename.";
-          reportableErrorToast("Couldn't rename epic.", undefined, {
-            title: "Could not rename Epic",
-            message,
-            code: null,
-            source: "Epic tabs",
-          });
+          },
+          source: "Epic tabs",
         });
         return;
       }
