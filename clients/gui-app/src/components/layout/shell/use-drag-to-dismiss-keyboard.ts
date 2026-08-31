@@ -9,6 +9,7 @@ import {
   type DirectionalCommitLimits,
 } from "@/components/layout/shell/shell-gestures";
 import { isMobileApp } from "@/lib/mobile-app";
+import { appLogger } from "@/lib/logger";
 
 /**
  * Downward scroll speed, in CSS px per ms, that reads as "put the keyboard
@@ -230,27 +231,29 @@ export function useDragToDismissKeyboard(): void {
       }
       if (!commitsDirectionalGesture(gesture, DISMISS_DRAG_COMMIT)) return;
       drag = null;
-      dismiss();
+      dismiss("drag-down");
     };
 
     const releaseDismisses = (
       tapped: TapTracking | null,
       sampled: ScrollSample | null,
-    ): boolean => {
+    ): "tap-outside" | "scroll-flick" | null => {
       if (tapped !== null && !tapped.cancelled) {
         // A tap INSIDE the field being edited is a caret move, not a request
         // to put the keyboard away. Nothing else is exempt: taps on buttons and
         // links still dismiss, and their own click runs regardless, because
         // these listeners are passive and never cancel anything.
-        return !isWithinFocusedTextEntry(tapped.target);
+        return isWithinFocusedTextEntry(tapped.target) ? null : "tap-outside";
       }
-      if (sampled === null) return false;
+      if (sampled === null) return null;
       const elapsedMs = sampled.at - sampled.previousAt;
-      if (elapsedMs <= 0) return false;
+      if (elapsedMs <= 0) return null;
       // `scrollTop` FALLING is content travelling down under a finger that is
       // dragging down; the sign is inverted from the finger's own direction.
       const velocity = (sampled.previousTop - sampled.top) / elapsedMs;
-      return velocity >= DISMISS_SCROLL_VELOCITY_PX_PER_MS;
+      return velocity >= DISMISS_SCROLL_VELOCITY_PX_PER_MS
+        ? "scroll-flick"
+        : null;
     };
 
     const handleTouchEnd = (): void => {
@@ -259,7 +262,8 @@ export function useDragToDismissKeyboard(): void {
       tap = null;
       drag = null;
       scroll = null;
-      if (releaseDismisses(tapped, sampled)) dismiss();
+      const reason = releaseDismisses(tapped, sampled);
+      if (reason !== null) dismiss(reason);
       // After the arms, never before: both read the gesture's pinned focus.
       // Cleared here so the momentum scrolling that follows a flick cannot go
       // on feeding the sampler once the finger is gone.
@@ -267,7 +271,9 @@ export function useDragToDismissKeyboard(): void {
       focusedAtStart = null;
     };
 
-    const dismiss = (): void => {
+    const dismiss = (
+      reason: "tap-outside" | "scroll-flick" | "drag-down",
+    ): void => {
       // Compared, not merely re-checked. "Some text entry is still focused" is
       // satisfied by a DIFFERENT one, so a picker or route change that
       // autofocuses its own field mid-gesture would have its field blurred by a
@@ -276,7 +282,18 @@ export function useDragToDismissKeyboard(): void {
       const entry = focusedAtStart;
       if (entry === null) return;
       if (document.activeElement !== entry) return;
-      if (entry instanceof HTMLElement) entry.blur();
+      if (entry instanceof HTMLElement) {
+        // TEMPORARY instrumentation for the reported keyboard open/close flap:
+        // names which arm blurred the field, so a keyboard that vanishes right
+        // after being summoned can be attributed (or ruled out) from a device
+        // log. Remove once the flap is diagnosed.
+        appLogger.info("[kbd] dismiss", {
+          reason,
+          entryTag: entry.tagName,
+          entryTestId: entry.getAttribute("data-testid"),
+        });
+        entry.blur();
+      }
     };
 
     const handleTouchCancel = (): void => {

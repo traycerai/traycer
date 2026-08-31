@@ -5,6 +5,10 @@ export {
   setMobileAppPlatform,
 } from "@/lib/mobile-app";
 export {
+  setNativeKeyboardState,
+  type NativeKeyboardState,
+} from "@/lib/native-keyboard";
+export {
   hostRpcRegistry,
   type HostRpcRegistry,
   type MessengerFactory,

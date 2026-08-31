@@ -43,6 +43,7 @@ import {
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
+import { runWhenNativeKeyboardSettled } from "@/lib/native-keyboard";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
@@ -1098,13 +1099,23 @@ function createXtermEntry(
     fitToContainer();
   });
 
+  // While the mobile soft keyboard is animating (native-resize mode shrinks
+  // this container as part of the show/hide transition), hold the fit until
+  // the transition settles so the PTY re-grids once, at the final size,
+  // instead of repainting mid-animation. Outside the installed app the
+  // keyboard state never transitions and this runs synchronously.
+  let keyboardSettleCancel: (() => void) | null = null;
   const observer = new ResizeObserver(() => {
     if (resizeDebounce !== null) {
       clearTimeout(resizeDebounce);
     }
     resizeDebounce = window.setTimeout(() => {
       resizeDebounce = null;
-      fitToContainer();
+      keyboardSettleCancel?.();
+      keyboardSettleCancel = runWhenNativeKeyboardSettled(() => {
+        keyboardSettleCancel = null;
+        fitToContainer();
+      });
     }, RESIZE_DEBOUNCE_MS);
   });
   observer.observe(containerEl);
@@ -1115,6 +1126,10 @@ function createXtermEntry(
     if (resizeDebounce !== null) {
       clearTimeout(resizeDebounce);
       resizeDebounce = null;
+    }
+    if (keyboardSettleCancel !== null) {
+      keyboardSettleCancel();
+      keyboardSettleCancel = null;
     }
     dataDisposable.dispose();
     searchResultsDisposable.dispose();

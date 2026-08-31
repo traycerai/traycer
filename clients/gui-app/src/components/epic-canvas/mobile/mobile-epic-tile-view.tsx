@@ -8,6 +8,7 @@ import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-t
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
+import { useNativeKeyboardOpen } from "@/lib/native-keyboard";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
 import { firstPaneId } from "@/stores/epics/canvas/tile-tree";
 import type { TileLayoutNode } from "@/stores/epics/canvas/types";
@@ -44,6 +45,10 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // Must be called before the empty-pane early return (hooks are
   // unconditional); it is 0 everywhere except an overlay-keyboard browser.
   const keyboardInset = useVirtualKeyboardInset();
+  // The installed app runs the keyboard in native-resize mode, where the
+  // measured inset above is 0 even while the keyboard is up - the plugin-fed
+  // native state is the only live "keyboard open" signal there.
+  const nativeKeyboardOpen = useNativeKeyboardOpen();
 
   // Non-null root with no resolvable tile = an empty pane (e.g. the user closed
   // the last tab). Desktop renders the inline `PaneOpener` for this; do the
@@ -105,7 +110,7 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
       {isTerminalTile ? (
         <MobileTerminalKeyBar
           instanceId={selection.ref.instanceId}
-          keyboardOpen={keyboardInset > 0}
+          keyboardOpen={keyboardInset > 0 || nativeKeyboardOpen}
         />
       ) : null}
       <MobileTabSwitcherMount epicId={epicId} tabId={tabId} />
