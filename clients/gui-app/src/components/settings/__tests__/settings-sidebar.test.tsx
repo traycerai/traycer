@@ -1,4 +1,7 @@
-import { SettingsSidebar } from "@/components/settings/settings-sidebar";
+import {
+  SettingsSidebar,
+  type SettingsSidebarVariant,
+} from "@/components/settings/settings-sidebar";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { setMobileApp } from "@/lib/mobile-app";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
@@ -10,6 +13,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  Outlet,
   RouterProvider,
 } from "@tanstack/react-router";
 import {
@@ -18,6 +22,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -302,5 +307,102 @@ describe("<SettingsSidebar /> leader hints", () => {
     // test; whole-class-string equality additionally demands the two rows stay
     // byte-identical forever, so any row-specific class either gains later
     // would fail this test for a reason it does not care about.
+  });
+});
+
+// The two variants want OPPOSITE history semantics from the same Link: the
+// rail's sections are peers on one screen, so switching sections must not
+// grow the stack (back leaves settings in one step); the mobile list is a
+// drill-down, so entering a section must push (back returns to the list, not
+// to whatever preceded settings). These assert through the history itself -
+// the user-observable anchor is where back() lands - rather than through the
+// Link's props.
+describe("<SettingsSidebar /> section navigation history", () => {
+  function buildVariantRouter(
+    initialEntries: Array<string>,
+    variant: SettingsSidebarVariant,
+  ) {
+    const rootRoute = createRootRoute({
+      component: () => (
+        <>
+          <SettingsSidebar mode={{ kind: "route" }} variant={variant} />
+          <Outlet />
+        </>
+      ),
+    });
+    const taskRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/task-stub",
+      component: () => <div data-testid="task-stub" />,
+    });
+    const settingsIndexRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/settings",
+      component: () => <div data-testid="settings-list" />,
+    });
+    const settingsRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/settings/$section",
+      component: () => <div data-testid="settings-body" />,
+    });
+    const routeTree = rootRoute.addChildren([
+      taskRoute,
+      settingsIndexRoute,
+      settingsRoute,
+    ]);
+    return createRouter({
+      routeTree,
+      history: createMemoryHistory({ initialEntries }),
+    });
+  }
+
+  it("mobile list pushes a section, so back returns to the list", async () => {
+    const router = buildVariantRouter(
+      ["/task-stub", "/settings"],
+      "mobile-list",
+    );
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("link", { name: "General" }));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/settings/general");
+    });
+
+    act(() => {
+      router.history.back();
+    });
+    expect(router.state.location.pathname).toBe("/settings");
+  });
+
+  // Byte-symmetric with the mobile-list case above: same initial entries,
+  // same clicked link - the only variable is the variant, so the two tests
+  // together pin that the variant alone flips the history semantics.
+  it("rail replaces the section entry, so back leaves settings in one step", async () => {
+    const router = buildVariantRouter(["/task-stub", "/settings"], "rail");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    // Clicked through a fresh query on every poll: the rail re-renders its
+    // rows as it settles (an exiting copy can coexist with the live one for
+    // a frame), so a node captured once can be detached by the time the
+    // click lands. Clicking the LAST currently-rendered instance until the
+    // navigation commits keeps the test on the real Link.
+    await waitFor(() => {
+      const links = screen.getAllByTestId("settings-sidebar-item-general");
+      fireEvent.click(links[links.length - 1]);
+      expect(router.state.location.pathname).toBe("/settings/general");
+    });
+
+    act(() => {
+      router.history.back();
+    });
+    expect(router.state.location.pathname).toBe("/task-stub");
   });
 });
