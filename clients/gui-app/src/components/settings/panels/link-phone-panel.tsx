@@ -315,7 +315,7 @@ function ApprovedCard(props: { readonly onRestart: () => void }) {
         data-testid="link-phone-restart"
         onClick={props.onRestart}
       >
-        Link another phone
+        Link another device
       </Button>
     </div>
   );
@@ -470,7 +470,7 @@ function MintErrorCard(props: {
 }
 
 /**
- * Settings → Link a phone, confirm-gated. Shows the rotating public code
+ * Settings → Link mobile app, confirm-gated. Shows the rotating public code
  * (QR + typeable text); when a phone claims it the QR swaps for an
  * Approve/Reject confirmation carrying the claimant's server-observed
  * metadata. Approval — never the scan — is what signs the phone in, and it
@@ -620,7 +620,7 @@ export function LinkPhonePanel() {
 
   return (
     <SettingsPanelShell
-      title="Link a phone"
+      title="Link mobile app"
       description="Sign the Traycer mobile app in by scanning this code. A scan on its own signs nothing in — every phone waits here for your approval first."
     >
       <div className="flex flex-col items-center gap-6 p-6">

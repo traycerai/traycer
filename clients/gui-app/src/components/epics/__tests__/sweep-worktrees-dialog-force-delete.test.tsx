@@ -187,6 +187,8 @@ function renderDialog(): void {
     <SweepWorktreesDialog
       epicIds={["epic-1"]}
       hostClient={null}
+      hostChoice={null}
+      fleetPending={false}
       taskTitle="Task"
       onOpenChange={vi.fn()}
     />,
@@ -257,6 +259,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -293,6 +297,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -306,9 +312,6 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    fireEvent.change(screen.getByTestId("sweep-typed-confirm"), {
-      target: { value: "sweep" },
-    });
     testState.sweepingPaths = new Set(["/wt/review"]);
     fireEvent.click(screen.getByRole("button", { name: "Sweep anyway" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -317,6 +320,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={null}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -325,6 +330,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -389,7 +396,7 @@ describe("SweepWorktreesDialog ergonomics", () => {
     ).toBe(false);
   });
 
-  it("opens review for in-use, unproven, and shared selections; typing only for unproven", async () => {
+  it("opens review for elevated selections without requiring typed confirmation", async () => {
     testState.rows = [
       {
         entry: worktreeEntry({
@@ -419,13 +426,13 @@ describe("SweepWorktreesDialog ergonomics", () => {
     await waitFor(() => {
       expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
-    expect(screen.queryByTestId("sweep-typed-confirm")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Stop work & sweep" }),
     ).toBeTruthy();
   });
 
-  it("requires typing sweep only when an unproven row is selected", async () => {
+  it("allows click confirmation when an unproven row is selected", async () => {
     testState.rows = [
       {
         entry: worktreeEntry({
@@ -452,13 +459,12 @@ describe("SweepWorktreesDialog ergonomics", () => {
       screen.getByRole("button", { name: "Review consequences" }),
     );
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-typed-confirm")).toBeTruthy();
+      expect(
+        screen.getByRole("heading", { name: "Review this sweep" }),
+      ).toBeTruthy();
     });
     const confirm = screen.getByRole("button", { name: "Sweep anyway" });
-    expect(confirm.hasAttribute("disabled")).toBe(true);
-    fireEvent.change(screen.getByTestId("sweep-typed-confirm"), {
-      target: { value: "sweep" },
-    });
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(confirm.hasAttribute("disabled")).toBe(false);
   });
 
@@ -716,7 +722,9 @@ describe("SweepWorktreesDialog ergonomics", () => {
       screen.getByRole("button", { name: "Review consequences" }),
     );
     await waitFor(() => {
-      expect(screen.getByText("Review this sweep")).toBeTruthy();
+      expect(
+        screen.getByRole("heading", { name: "Review this sweep" }),
+      ).toBeTruthy();
     });
     const individualStops =
       screen.getByTestId("sweep-review-stops").textContent;
@@ -770,6 +778,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -795,6 +805,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -823,6 +835,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -835,6 +849,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -856,6 +872,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1217,15 +1235,10 @@ describe("SweepWorktreesDialog ergonomics", () => {
       screen.getByRole("button", { name: "Review consequences" }),
     );
     await waitFor(() => {
-      expect(screen.getByTestId("sweep-typed-confirm")).toBeTruthy();
+      expect(screen.getByText("Review this sweep")).toBeTruthy();
     });
     fireEvent.keyDown(window, { key: "a" });
-    fireEvent.change(screen.getByTestId("sweep-typed-confirm"), {
-      target: { value: "a" },
-    });
-    expect(
-      screen.getByTestId<HTMLInputElement>("sweep-typed-confirm").value,
-    ).toBe("a");
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
   it("names full shell commands in the review receipt", async () => {
@@ -1836,6 +1849,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1862,6 +1877,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -1990,6 +2007,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -2023,6 +2042,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -2038,6 +2059,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={vi.fn()}
       />,
@@ -2072,6 +2095,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -2085,6 +2110,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={null}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,
@@ -2094,6 +2121,8 @@ describe("SweepWorktreesDialog ergonomics", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Task"
         onOpenChange={onOpenChange}
       />,

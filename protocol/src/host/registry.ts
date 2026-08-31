@@ -525,18 +525,21 @@ import {
   hostNotificationsIndicatorState,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
   hostNotificationsIndicatorStateV10,
-  hostNotificationsListDowngradeV21ToV10,
+  hostNotificationsListDowngradeV22ToV10,
   hostNotificationsListUpgradeV10ToV20,
   hostNotificationsListUpgradeV20ToV21,
+  hostNotificationsListUpgradeV21ToV22,
   hostNotificationsListV10,
   hostNotificationsListV20,
   hostNotificationsListV21,
+  hostNotificationsListV22,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsResolve,
   hostNotificationsSetConfig,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
+  hostNotificationsFeedSubscribeV12,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedMarkRead,
@@ -567,6 +570,9 @@ import {
   migrationRunV10,
   phaseMigrateToEpicV10,
 } from "@traycer/protocol/host/migration/contracts";
+import { sessionImportScanV10 } from "@traycer/protocol/host/session-import/scan";
+import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
+import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import {
   worktreeDeleteByPathStreamV10,
@@ -4574,7 +4580,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostNotificationsListV20,
@@ -4591,9 +4597,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // post-query filter". See host-notifications-resolvers.ts.
           responseGrowthProjectionGated: true,
         },
+        // 2.2 adds `browser.human.needed` under the same projection gate. It is
+        // a new minor rather than a widening of 2.1 because 2.1 has shipped.
+        2: {
+          contract: hostNotificationsListV22,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV21ToV22,
+          responseGrowthProjectionGated: true,
+        },
       },
       downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV21ToV10,
+        1: hostNotificationsListDowngradeV22ToV10,
       },
     },
   },
@@ -6111,6 +6124,24 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) capability: the only way to ask whether a session
+  // import is in flight without subscribing to `sessionImport.run` and thereby
+  // attaching to (or starting) one. `unsupported` degrade because a host that
+  // predates session import cannot be running an import, and the surface that
+  // reads this is hidden anyway when the stream methods are missing.
+  "sessionImport.status": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: sessionImportStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
   },
   "epic.deleteChat": {
     1: {
@@ -8623,13 +8654,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
         },
         1: {
           contract: hostNotificationsFeedSubscribeV11,
+        },
+        2: {
+          contract: hostNotificationsFeedSubscribeV12,
         },
       },
     },
@@ -8949,6 +8983,31 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: migrationRunV10,
+        },
+      },
+    },
+  },
+  // Additive, post-v1.0.0 OPTIONAL stream methods: session import. A host that
+  // predates them never advertises them, so the wizard's subscription degrades
+  // to `unsupported` and the client hides the "Import sessions" entry
+  // entirely - the feature is de-emphasised by design (spec §5), so there is
+  // nothing to fall back to and nothing lost by its absence.
+  "sessionImport.scan": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: sessionImportScanV10,
+        },
+      },
+    },
+  },
+  "sessionImport.run": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: sessionImportRunV10,
         },
       },
     },

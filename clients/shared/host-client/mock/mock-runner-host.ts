@@ -169,6 +169,9 @@ export class MockRunnerHost implements IRunnerHost {
   // Desktop-flavoured like `hasLocalHost`'s default: the mock stands in
   // for a shell that owns its own tab layer unless a test says otherwise.
   readonly hasAppTabs: boolean;
+  // Browser-tab flavoured, like `fileSave` below: a tab's own clipboard takes
+  // images, so image-copy affordances render by default in tests.
+  readonly canCopyImages: boolean = true;
   readonly openedExternalLinks: string[] = [];
   readonly notificationsSent: Array<{
     readonly title: string;

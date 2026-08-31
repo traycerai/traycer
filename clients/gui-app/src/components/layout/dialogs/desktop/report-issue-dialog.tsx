@@ -119,7 +119,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/general": "Settings - General",
   "/settings/host": "Settings - Host",
   "/settings/keybindings": "Settings - Keybindings",
-  "/settings/link-phone": "Settings - Link a phone",
+  "/settings/link-phone": "Settings - Link mobile app",
   "/settings/notifications": "Settings - Notifications",
   "/settings/providers": "Settings - Providers",
   "/settings/service": "Settings - Service",

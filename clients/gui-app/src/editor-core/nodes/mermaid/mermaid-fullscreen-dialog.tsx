@@ -1,4 +1,4 @@
-import { Copy, Download, X } from "lucide-react";
+import { Copy, Download, Share2, X } from "lucide-react";
 import {
   Dialog,
   DialogClose,
@@ -19,7 +19,13 @@ export interface MermaidFullscreenDialogProps {
   readonly code: string;
   readonly title: string;
   readonly onCopyCode: () => void;
-  readonly onDownloadPng: () => void;
+  /** `null` where this device has no download destination at all. */
+  readonly onDownloadPng: (() => void) | null;
+  /**
+   * Hands the PNG to the OS share sheet, or `null` where the shell owns no
+   * chooser and Download is already the only route out.
+   */
+  readonly onSharePng: (() => void) | null;
   readonly downloadDisabled: boolean;
 }
 
@@ -37,6 +43,7 @@ export function MermaidFullscreenDialog(props: MermaidFullscreenDialogProps) {
     title,
     onCopyCode,
     onDownloadPng,
+    onSharePng,
     downloadDisabled,
   } = props;
   const ariaLabel =
@@ -68,22 +75,42 @@ export function MermaidFullscreenDialog(props: MermaidFullscreenDialogProps) {
                 <Copy className="size-4" aria-hidden="true" />
               </Button>
             </TooltipWrapper>
-            <TooltipWrapper
-              label="Download PNG"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={onDownloadPng}
-                aria-label="Download PNG"
-                disabled={downloadDisabled}
+            {onSharePng === null ? null : (
+              <TooltipWrapper
+                label="Share PNG"
+                side="top"
+                sideOffset={undefined}
+                align={undefined}
               >
-                <Download className="size-4" aria-hidden="true" />
-              </Button>
-            </TooltipWrapper>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={onSharePng}
+                  aria-label="Share PNG"
+                  disabled={downloadDisabled}
+                >
+                  <Share2 className="size-4" aria-hidden="true" />
+                </Button>
+              </TooltipWrapper>
+            )}
+            {onDownloadPng === null ? null : (
+              <TooltipWrapper
+                label="Download PNG"
+                side="top"
+                sideOffset={undefined}
+                align={undefined}
+              >
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={onDownloadPng}
+                  aria-label="Download PNG"
+                  disabled={downloadDisabled}
+                >
+                  <Download className="size-4" aria-hidden="true" />
+                </Button>
+              </TooltipWrapper>
+            )}
             <TooltipWrapper
               label={
                 <>

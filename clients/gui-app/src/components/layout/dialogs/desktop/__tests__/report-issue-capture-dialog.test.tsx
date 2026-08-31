@@ -212,6 +212,7 @@ function createBaseRunnerHost(): IRunnerHost {
     relayBaseUrl: "wss://relay.example.invalid/attach",
     hasLocalHost: true,
     hasAppTabs: true,
+    canCopyImages: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
     listRegisteredHosts: () =>

@@ -163,10 +163,11 @@ export function MermaidNodeView(props: NodeViewProps) {
     });
   }, [activeCode]);
 
-  const { downloadMermaidPng, isDownloading } = useMermaidPngDownload({
-    svg: render.svg,
-    enabled: render.status === "ready",
-  });
+  const { downloadMermaidPng, shareMermaidPng, isDownloading } =
+    useMermaidPngDownload({
+      svg: render.svg,
+      enabled: render.status === "ready",
+    });
 
   const handleToggleEdit = useCallback(() => {
     setEditing((prev) => {
@@ -211,6 +212,7 @@ export function MermaidNodeView(props: NodeViewProps) {
           onToggleEdit={handleToggleEdit}
           onCopyCode={handleCopy}
           onDownloadPng={downloadMermaidPng}
+          onSharePng={shareMermaidPng}
           downloadDisabled={render.status !== "ready" || isDownloading}
         />
 
@@ -267,6 +269,7 @@ export function MermaidNodeView(props: NodeViewProps) {
           title={ariaLabel}
           onCopyCode={handleCopy}
           onDownloadPng={downloadMermaidPng}
+          onSharePng={shareMermaidPng}
           downloadDisabled={render.status !== "ready" || isDownloading}
         />
 

@@ -153,6 +153,12 @@ export class WebRunnerHost implements IRunnerHost {
    * the one the person is already using.
    */
   readonly hasAppTabs = false;
+  /**
+   * A real browser tab is one of the surfaces that honours the write, so the
+   * image reaches the system clipboard here and "Copy image" reports a success
+   * the clipboard actually received.
+   */
+  readonly canCopyImages = true;
   readonly secureStorage: ISecureStorage;
   readonly tokenStore: ITokenStore;
   readonly notifications: INotificationHost = buildNotifications();

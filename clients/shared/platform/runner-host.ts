@@ -201,8 +201,8 @@ export interface IRunnerHost {
   ): Promise<StepUpChallengeFetchResult>;
 
   /**
-   * Mints a one-time link-login code under the user bearer — the "Link a
-   * phone" QR surface. The RESULT carries the raw code back into the renderer
+   * Mints a one-time link-login code under the user bearer — the "Link mobile
+   * app" QR surface. The RESULT carries the raw code back into the renderer
    * by necessity: the QR that must display it renders there. The code is
    * short-lived and single-use, and the surface re-mints while open, so the
    * renderer never holds a long-lived secret.
@@ -447,6 +447,24 @@ export interface IRunnerHost {
    * other capabilities instead of derived from which build is running.
    */
   readonly hasAppTabs: boolean;
+
+  /**
+   * Whether an image written through the web clipboard API on this shell
+   * actually reaches the system clipboard.
+   *
+   * `true` everywhere the write is honoured - desktop, a browser tab, and
+   * WKWebView, which is what the promise-valued `ClipboardItem` path exists
+   * for. `false` on Android's WebView, where the write RESOLVES having written
+   * nothing: Chromium reaches the Android clipboard for an image through an
+   * embedder-supplied clipboard image file provider, and that embedder installs
+   * none. Nothing rejects, so a surface cannot learn this by trying.
+   *
+   * A capability rather than a platform identity: what a surface needs to know
+   * is whether offering "Copy image" would report a success the clipboard never
+   * received, and shells answer that for themselves. Callers that copy TEXT are
+   * unaffected and must not consult this.
+   */
+  readonly canCopyImages: boolean;
 
   /**
    * Subscribes to local-host snapshot changes. The handler fires
@@ -751,6 +769,34 @@ export interface IFileSaveHost {
    * also every case where `saveFile` reports `path: null`.
    */
   readonly openSavedFile: ((path: string) => Promise<void>) | null;
+  /**
+   * Writes the bytes straight into the device's own file storage, with no
+   * chooser, sheet or dialog in between - what a phone user means by
+   * "download". Resolves with where the file landed, or rejects; there is no
+   * dismissal to report, because nothing was offered to dismiss.
+   *
+   * `null` on every shell whose {@link saveFile} ALREADY commits the file
+   * itself - a desktop save dialog names the file it writes, so a second
+   * direct route would be the same act under a second name. Non-null exactly
+   * where `saveFile` hands the bytes to an OS chooser and another app decides
+   * where they land, which is what makes "share" and "download" two different
+   * things worth offering separately there.
+   */
+  readonly downloadFile:
+    | ((request: FileSaveRequest) => Promise<SavedFileLocation>)
+    | null;
+  /**
+   * What {@link saveFile} DOES, from the user's point of view: `"download"`
+   * where it commits the file itself (a desktop save dialog), `"share"` where
+   * it hands the bytes to an OS chooser and another app decides.
+   *
+   * Independent of {@link downloadFile}, and it has to be: a shell can own a
+   * chooser and NO direct download (Android 10, where the shared-storage write
+   * has no route). Reading "is this a chooser?" off the presence of a direct
+   * download would answer `false` there and put a Download label on the share
+   * sheet - the exact defect this contract exists to prevent.
+   */
+  readonly saveRoute: "download" | "share";
 }
 
 /**

@@ -1,6 +1,9 @@
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { chatSyncAssistantMessageSchema } from "@traycer/protocol/persistence/chat-sync/entries";
-import { encodeChatHead } from "@traycer/protocol/persistence/chat-sync/head";
+import {
+  CHAT_SYNC_1_1_READER_FLOOR,
+  encodeChatHead,
+} from "@traycer/protocol/persistence/chat-sync/head";
 import {
   canonicalizeJsonValue,
   jsonValueSchema,
@@ -14,6 +17,7 @@ import {
   snapshotUserMessageSchema,
 } from "@traycer/protocol/persistence/chat-sync/open-harness";
 import { encodeChatShard } from "@traycer/protocol/persistence/chat-sync/shard";
+import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   contentBlockSchema,
@@ -157,7 +161,7 @@ const futureEvent: JsonObject = {
 };
 
 const futureHarnessShard: JsonObject = {
-  schemaVersion: { major: 1, minor: 2 },
+  schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   chatId: "chat-future",
   section: "messages",
   messages: [
@@ -194,11 +198,14 @@ const futureHarnessShard: JsonObject = {
 };
 
 const futureHarnessHead: JsonObject = {
-  schemaVersion: { major: 1, minor: 2 },
+  schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   parentHeadSha256: null,
   throughRecordSeq: 7,
   capturedAt: 1_700_000_000_000,
-  minReaderVersion: { major: 1, minor: 2 },
+  minReaderVersion: {
+    major: CHAT_SYNC_1_1_READER_FLOOR.major,
+    minor: CHAT_SYNC_1_1_READER_FLOOR.minor,
+  },
   cdc: {
     algorithm: "fastcdc-gear-v1",
     mask: 65_535,
