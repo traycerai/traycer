@@ -802,9 +802,38 @@ export async function commitSidebarReparentDrop(
     const requestId = await handle.store
       .getState()
       .beginReparentMutation(input.sourceNodeId, input.newParentId);
+    // TOTAL, and that is what makes the two `void retire(...)` calls below
+    // safe. `retirePendingMutation` is a worker round trip now rather than a
+    // local store write, so it can reject - and both call sites discard the
+    // promise, one of them from INSIDE a `.then` whose `.catch` a `void`
+    // severs. Left bare, a failed retirement was an unhandled rejection on
+    // both the success and the failure path.
+    //
+    // The residual is named rather than hidden: a retirement that fails leaves
+    // the optimistic reparent stamp installed, so the row can stay projected
+    // under the attempted parent until the projection's dead sweep or a
+    // refetch catches up. Logging is the honest floor - there is no second
+    // authority to ask, and re-trying a retirement whose worker is gone would
+    // be the same call with the same answer.
     const retire = async (outcome: "landed" | "failed"): Promise<void> => {
       if (requestId === null) return;
-      await handle.store.getState().retirePendingMutation(requestId, outcome);
+      try {
+        await handle.store.getState().retirePendingMutation(requestId, outcome);
+      } catch (error: unknown) {
+        // No teardown arm, for the same reason as the enqueue path below:
+        // `applyMutation` answers a disposed session with the shared INERT
+        // result rather than a rejection, so what lands here is a real fault.
+        appLogger.error(
+          "[epic-dnd] reparent mutation retirement failed",
+          {
+            epicId: input.epicId,
+            sourceNodeId: input.sourceNodeId,
+            newParentId: input.newParentId,
+            outcome,
+          },
+          error,
+        );
+      }
     };
     void client
       .request("epic.reparentChat", {
@@ -873,13 +902,45 @@ export async function commitSidebarReparentDrop(
     // by this file's own rule, and two reads of one tree disagreeing is an
     // internal invariant mismatch the user cannot act on.
     if (evaluation.node.family === "artifact") {
-      // `void`: the queue mints its id over the bridge now. Nothing here
-      // reads it - the surface reacts to the projected write-command list.
-      void handle.store.getState().enqueueWriteCommand({
-        kind: "reparent-artifact",
-        artifactId: input.sourceNodeId,
-        parentId: input.newParentId,
-      });
+      // The RESULT is discarded - the queue mints its id over the bridge and
+      // the surface reacts to the projected write-command list, so nothing
+      // here reads it - but the REJECTION is not. That distinction is the
+      // whole point of the `catch`: `enqueueWriteCommand` is async and rejects
+      // on a worker-handler or bridge-response fault, and a bare `void` turned
+      // every one of those into an unhandled rejection that also lost the only
+      // record that this drop recorded no command at all. Exactly what the
+      // sibling branch below already says about its own `await`.
+      void handle.store
+        .getState()
+        .enqueueWriteCommand({
+          kind: "reparent-artifact",
+          artifactId: input.sourceNodeId,
+          parentId: input.newParentId,
+        })
+        .catch((error: unknown) => {
+          // No teardown arm here, deliberately. Teardown is already absorbed
+          // UPSTREAM: `enqueueWriteCommand` runs through
+          // `callOrNullOnTeardown`, which maps `BridgeDisposedError` to a
+          // `null` answer and rethrows everything else. So a rejection that
+          // reaches this point is by construction a genuine fault - a worker
+          // handler that threw, a bridge response that did not match - and
+          // every one of them is worth the log. (`EpicSessionEndedError` is
+          // raised only by `waitForWriteCommand`, never on this path, so a
+          // cancellation branch here would be unreachable code asserting a
+          // teardown story that belongs one layer down.)
+          //
+          // Logged, never toasted - this file's own rule for a reparent that
+          // does not commit, stated in the comment above.
+          appLogger.error(
+            "[epic-dnd] artifact reparent enqueue rejected",
+            {
+              epicId: input.epicId,
+              sourceNodeId: input.sourceNodeId,
+              newParentId: input.newParentId,
+            },
+            error,
+          );
+        });
     } else {
       try {
         // AWAITED, and that is load-bearing rather than tidiness. The member

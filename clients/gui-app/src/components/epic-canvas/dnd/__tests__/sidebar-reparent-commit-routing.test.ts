@@ -24,6 +24,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { appLogger } from "@/lib/logger";
 
 const seam = vi.hoisted(() => {
   // Typed through a helper rather than an `as TreeSlice` on the literal: the
@@ -76,8 +77,16 @@ const seam = vi.hoisted(() => {
      * ARTIFACT tests in this file were failing on `enqueueWriteCommand is not a
      * function` before the chat gate existed - a stale fake, not a defect in
      * the code under test.
+     *
+     * Resolves rather than returning bare `null`: the artifact branch in
+     * `root-dnd-commits.ts` now chains `.catch(...)` directly off this call's
+     * return value (the unhandled-rejection fix), and a synchronous `null`
+     * has no `.catch` to call - another stale-fake gap, not a defect in the
+     * code under test.
      */
-    enqueueWriteCommand: vi.fn<(intent: unknown) => unknown>(() => null),
+    enqueueWriteCommand: vi.fn<(intent: unknown) => unknown>(() =>
+      Promise.resolve(null),
+    ),
   };
 });
 
@@ -513,5 +522,139 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     // cancel must not leave a phantom pending mutation behind.
     expect(seam.beginReparentMutation).not.toHaveBeenCalled();
     expect(seam.retirePendingMutation).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Rejections are asserted through Node's own `process` event rather than a
+ * DOM `unhandledrejection` listener: `vitest.config.ts` sets
+ * `dangerouslyIgnoreUnhandledErrors` and the setup file registers a
+ * process-level swallow, so an empty-array assertion taken off the DOM event
+ * reads the same whether nothing rejected or nothing fired at all. Mirrors
+ * `epic-title-write-settlement.test.ts`'s helpers of the same names.
+ */
+function captureUnhandledRejections(): {
+  readonly seen: unknown[];
+  readonly stop: () => void;
+} {
+  const seen: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    seen.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  return {
+    seen,
+    stop: () => {
+      process.off("unhandledRejection", onUnhandled);
+    },
+  };
+}
+
+/** Two macrotasks: one for the `.catch` to run, one for Node to judge it. */
+async function drainRejections(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("commitSidebarReparentDrop never lets a queue failure escape as an unhandled rejection", () => {
+  it("an artifact enqueue rejection is logged, a teardown answer is not, and neither is ever unhandled", async () => {
+    // The artifact-family branch: `enqueueWriteCommand(...)` is fire-and-
+    // forget from this file's own return value, so its `.catch` is the only
+    // thing standing between a rejection and an unhandled one.
+    seam.tree = treeOf([
+      node("spec-1", "spec", null),
+      node("spec-parent", "spec", null),
+    ]);
+    const capture = captureUnhandledRejections();
+    const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+
+    try {
+      // A generic worker/bridge fault: logged.
+      seam.enqueueWriteCommand.mockRejectedValueOnce(
+        new Error("worker bridge fault"),
+      );
+      await commitSidebarReparentDrop({
+        epicId: "epic-1",
+        sourceNodeId: "spec-1",
+        newParentId: "spec-parent",
+        panelId: "artifacts",
+        viewTabId: "tab-1",
+        queryClient,
+      });
+      await drainRejections();
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      errorSpy.mockClear();
+
+      // TEARDOWN, which is deliberately NOT a rejection on this path and so
+      // deliberately not a log. `callOrNullOnTeardown` in the store maps
+      // `BridgeDisposedError` to a `null` answer before it ever reaches here
+      // - a torn-down session refused the command, it did not fault - so the
+      // shape to pin is a resolved `null`, not a thrown cancellation. (A
+      // `EpicSessionEndedError` arm would be unreachable: only
+      // `waitForWriteCommand` raises that.)
+      seam.enqueueWriteCommand.mockResolvedValueOnce(null);
+      await commitSidebarReparentDrop({
+        epicId: "epic-1",
+        sourceNodeId: "spec-1",
+        newParentId: "spec-parent",
+        panelId: "artifacts",
+        viewTabId: "tab-1",
+        queryClient,
+      });
+      await drainRejections();
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      // Neither rejection ever escaped as an unhandled rejection - the
+      // defect this fix closes. Before it, the artifact branch's
+      // `enqueueWriteCommand(...)` call had no `.catch` at all.
+      expect(capture.seen).toEqual([]);
+    } finally {
+      capture.stop();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("a reparent-mutation retirement rejection is logged, an inert teardown answer is not, and neither is ever unhandled", async () => {
+    // The registry-rpc branch's `retire` closure: only reached for a
+    // registry-backed row (a terminal agent the host serves a record for),
+    // after `epic.reparentChat` answers.
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    const capture = captureUnhandledRejections();
+    const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+
+    try {
+      seam.request.mockResolvedValueOnce({ updated: true });
+      seam.retirePendingMutation.mockRejectedValueOnce(
+        new Error("retirement bridge fault"),
+      );
+      await drop("tui-1", "tui-parent");
+      await drainRejections();
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      errorSpy.mockClear();
+
+      // The teardown shape again, and again not a rejection: `applyMutation`
+      // answers a disposed session with the shared INERT result, which this
+      // member reads back as `false`. Nothing to log.
+      seam.request.mockResolvedValueOnce({ updated: true });
+      seam.retirePendingMutation.mockResolvedValueOnce(false);
+      await drop("tui-1", "tui-parent");
+      await drainRejections();
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      // Before the fix, `retire` awaited `retirePendingMutation` with no
+      // try/catch at all, so BOTH rejections above would have escaped as
+      // unhandled - one of them from inside a `.then` whose own `.catch`
+      // this closure sits behind.
+      expect(capture.seen).toEqual([]);
+    } finally {
+      capture.stop();
+      errorSpy.mockRestore();
+    }
   });
 });
