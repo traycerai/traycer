@@ -8,7 +8,11 @@ import {
   ArtifactBodyUnavailableError,
   holdArtifactBody,
 } from "@/lib/epic-replica-reads";
-import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
+import {
+  hasSeparateDownloadRoute,
+  saveBlobToDisk,
+  type SavedFile,
+} from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { appLogger } from "@/lib/logger";
@@ -98,7 +102,16 @@ export function useEpicExportArtifacts() {
           format: input.format,
           artifact_count: input.artifacts.length,
         });
-        toastSavedFile(saved, openSaved.mutate, fileSave);
+        // No Share/Download split on this surface, deliberately: its controls
+        // promise an "Export", which a share sheet honours as truthfully as a
+        // save dialog does, so there is no mislabelled control to correct -
+        // only a confirmation that must not claim a save the sheet never made.
+        toastSavedFile(
+          saved,
+          openSaved.mutate,
+          fileSave,
+          hasSeparateDownloadRoute(fileSave) ? "share" : "save",
+        );
       }
     },
     onError: (error, input) => {
