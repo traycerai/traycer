@@ -62,7 +62,7 @@ export function OnboardingThemePicker() {
       <div
         role="group"
         aria-label="Theme preset"
-        className="flex w-full max-w-[min(90vw,24rem)] flex-wrap gap-2"
+        className="onboarding-theme-presets flex w-full max-w-[min(90vw,24rem)] flex-wrap gap-2"
       >
         {THEME_PRESETS.map((preset) => (
           <TooltipWrapper

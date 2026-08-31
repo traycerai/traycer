@@ -310,6 +310,99 @@ const ONBOARDING_STYLE = `
     --onboarding-body-width: 100%;
     --onboarding-diorama-width: min(100%, 24rem);
   }
+}
+
+/* Installed mobile app only - the class is set off isMobileApp(), never the
+   viewport, so a narrow desktop window keeps the exact desktop pixels. The
+   tour claims the phone: the version footer goes and its grid row collapses,
+   gutters tighten, and the freed height flows to the stage card so the
+   miniature can breathe. Actions and progress drop low to hug the card's
+   bottom edge. Declared after every media tier, so these win at any size. */
+.onboarding-shell--mobile-app {
+  --onboarding-shell-rows: 3.5rem minmax(0, 1fr) 0rem;
+  --onboarding-section-x: 0.5rem;
+  --onboarding-stage-pad: clamp(1rem, 2.4vh, 1.5rem);
+  --onboarding-stage-bottom-pad: 4.25rem;
+  --onboarding-stage-gap: clamp(0.875rem, 2vh, 1.25rem);
+  --onboarding-copy-rail-top: 0.5rem;
+  --onboarding-action-inset: 1rem;
+  --onboarding-diorama-max-height: min(58vh, 36rem);
+  --onboarding-body-width: 21rem;
+}
+
+.onboarding-shell--mobile-app footer {
+  display: none;
+}
+
+/* Chrome-level polish scoped to the installed app: rounded hairline progress
+   segments and softer button corners. Same-specificity utilities lose to the
+   two-class selectors, which is the point - no component code branches. */
+.onboarding-shell--mobile-app .onboarding-progress {
+  gap: 0.25rem;
+}
+
+.onboarding-shell--mobile-app .onboarding-progress span {
+  border-radius: 9999px;
+}
+
+.onboarding-shell--mobile-app .onboarding-actions button {
+  border-radius: 0.625rem;
+}
+
+/* The theme presets relax into one snap-scrolling gallery row of larger
+   swatches instead of a dense two-row wrap. */
+.onboarding-shell--mobile-app .onboarding-theme-presets {
+  max-width: min(92vw, 24rem);
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 0.625rem;
+  overflow-x: auto;
+  padding: 0.25rem 0.125rem;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+
+.onboarding-shell--mobile-app .onboarding-theme-presets::-webkit-scrollbar {
+  display: none;
+}
+
+.onboarding-shell--mobile-app .onboarding-theme-presets button {
+  width: 2.25rem;
+  height: 2.25rem;
+  scroll-snap-align: center;
+}
+
+/* One orchestrated entrance per act: eyebrow band, then copy, then addon rise
+   in turn. The act wrapper remounts per act (key=act.id), so the beat replays
+   on every advance. */
+@keyframes onboarding-copy-rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.onboarding-shell--mobile-app .onboarding-copy > * {
+  animation: onboarding-copy-rise 0.45s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.onboarding-shell--mobile-app .onboarding-copy > :nth-child(2) {
+  animation-delay: 80ms;
+}
+
+.onboarding-shell--mobile-app .onboarding-copy > :nth-child(3) {
+  animation-delay: 160ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-shell--mobile-app .onboarding-copy > * {
+    animation: none;
+  }
 }`;
 
 /**
@@ -991,7 +1084,12 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   return (
     // h-full, not h-svh: the standalone shell owns the viewport height and
     // reserves the Windows title-bar band above this page.
-    <main className="onboarding-shell relative isolate flex h-full flex-1 overflow-hidden bg-[#0f1917] text-white">
+    <main
+      className={cn(
+        "onboarding-shell relative isolate flex h-full flex-1 overflow-hidden bg-[#0f1917] text-white",
+        mobileApp && "onboarding-shell--mobile-app",
+      )}
+    >
       <style>{ONBOARDING_STYLE}</style>
       <div
         className="pointer-events-none absolute inset-0 bg-cover bg-center opacity-40"

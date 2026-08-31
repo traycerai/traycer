@@ -69,7 +69,7 @@ const CYCLE_MS = 1900;
  * past the actions bar below its row.
  */
 const PHONE_FRAME_CLASS =
-  "relative flex aspect-[9/19] h-full max-h-[var(--onboarding-diorama-max-height)] max-w-full flex-col overflow-hidden rounded-3xl border border-white/12 bg-background text-foreground shadow-[0_2rem_4rem_-1.75rem_rgba(0,0,0,0.72),0_0.875rem_2rem_-1.25rem_rgba(0,0,0,0.55)] transition-colors duration-500";
+  "@container relative flex aspect-[9/19] h-full max-h-[var(--onboarding-diorama-max-height)] max-w-full flex-col overflow-hidden rounded-3xl border border-white/12 bg-background text-foreground shadow-[0_2rem_4rem_-1.75rem_rgba(0,0,0,0.72),0_0.875rem_2rem_-1.25rem_rgba(0,0,0,0.55)] transition-colors duration-500";
 
 /** Recency labels for the drawer's task rows, keyed so a rename breaks here. */
 const RECENT_TASK_AGES: Readonly<Record<(typeof TASKS)[number], string>> = {
@@ -192,8 +192,11 @@ function PhoneHeader(props: {
   return (
     <header className="relative flex h-9 shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/90 after:content-['']">
       <HeaderGlyph id="menu" icon={Menu} spotlit={props.spotlight === "menu"} />
+      {/* On a frame too small to fit a legible title, the glyphs carry the
+          header alone - a title truncated to two letters teaches nothing. The
+          outer span stays as the flexible spacer either way. */}
       <span className="min-w-0 flex-1 truncate text-ui-xs font-medium text-foreground">
-        {props.title}
+        <span className="hidden @min-[11rem]:inline">{props.title}</span>
       </span>
       <div className="flex shrink-0 items-center gap-0.5">
         <HeaderGlyph

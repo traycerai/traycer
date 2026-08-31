@@ -107,7 +107,7 @@ const MOBILE_ONBOARDING_ACTS: ReadonlyArray<OnboardingAct> = [
     id: "mobile-tasks",
     eyebrow: "ACT 01 - TASKS",
     title: "Your work lives\nin Tasks",
-    body: "Each Task holds one initiative: agents, artifacts, terminals, and context stay together. The menu, top left, is your map — recent Tasks, a new one, Settings.",
+    body: "Each Task holds one initiative: agents, artifacts, terminals, and context stay together. The menu, top left, holds your recent Tasks, a new one, and Settings.",
     addon: null,
   },
   {
