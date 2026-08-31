@@ -43,6 +43,7 @@ import type {
   ReplicaTransitionToken,
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
+import { authorityEpochTransition } from "@traycer-clients/shared/replica-runtime";
 import type {
   ArtifactStreamClientFactory,
   EpicStateLaneAdapter,
@@ -222,6 +223,16 @@ export interface EpicLaneArm {
    * would put a fabricated authority event into logs and the replay harness.
    */
   reset(cause: ReplicaResetCause): void;
+  /**
+   * Reopen the body lanes a whole-plane reset left owing nothing, if this cause
+   * is one that needs it.
+   *
+   * Called by the runtime AFTER the body tier has actually been emptied, which
+   * is why it is not folded into {@link reset} - see the implementation. A
+   * no-op for every cause that moves the authority epoch, since the control
+   * handler's own epoch sync rebuilds those.
+   */
+  rebuildBodiesAfterReset(cause: ReplicaResetCause): void;
 }
 
 export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
@@ -338,7 +349,41 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
     stateAdapter.attach({
       environment,
       emit: (event: EpicStateLaneEvent) => {
-        stateReplica.apply(event);
+        const outcome = stateReplica.apply(event);
+        // READ, not discarded. The replica documents this as a division of
+        // labour - "it does not decide replacement ... the RUNTIME drives the
+        // rebuild, so two lanes reporting one epoch change coalesce into a
+        // single replacement instead of racing two" - and that only holds if
+        // the runtime is actually told.
+        //
+        // The stimulus is narrower than the adapter's own two. The adapter
+        // requests a replacement off a SNAPSHOT's basis, which is the
+        // subscription reporting the change; this is a TRANSACTION arriving on
+        // a still-open subscription stamped with an epoch the replica is not
+        // serving. `applyRecordTransaction` returns without touching its rows
+        // or its cursor, so every later delta at the new epoch is dropped the
+        // same way - the projection stays on the old world for as long as no
+        // snapshot happens to arrive to say so.
+        //
+        // Keyed by the epoch the frame carries, so the token is the same string
+        // the status lane builds for the same transition and the runtime sees
+        // one occurrence reported twice rather than two rebuilds.
+        //
+        // Narrowed on the EVENT as well as the outcome, and not only to reach
+        // `cursor`: `requires-replacement` is returned from exactly one place,
+        // `applyRecordTransaction`, so the transaction arm is where the epoch
+        // that identifies the transition lives. A future second source would
+        // carry its own, and would have to say so here rather than inherit
+        // this one.
+        if (
+          event.kind === "record-transaction" &&
+          outcome.kind === "requires-replacement"
+        ) {
+          onReplacementRequested(
+            outcome.reason,
+            authorityEpochTransition(event.cursor.authorityEpoch),
+          );
+        }
         // AFTER the replica applied it, so the loaded flag never leads the rows
         // it claims are loaded. A reseed lands here too and re-publishes, which
         // is harmless and honest: the answer really was replaced.
@@ -600,6 +645,43 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
 
     reset(cause: ReplicaResetCause): void {
       stateReplica.reset(cause);
+    },
+
+    /**
+     * Reopen the body lanes a whole-plane reset left owing nothing.
+     *
+     * SEPARATE from {@link reset}, and called separately, because of where the
+     * bodies are actually destroyed. `resetAllPlanes` runs `laneArm.reset()`
+     * and only THEN `rooms.reset()`, so a rebuild issued from inside `reset`
+     * would reopen lanes and have the tier emptied underneath them a moment
+     * later. The runtime calls this after the destruction instead.
+     */
+    rebuildBodiesAfterReset(cause: ReplicaResetCause): void {
+      // ONE cause, and it is the only authority-side reason that discards
+      // bodies without moving the authority epoch.
+      //
+      // Every other reason moves it, so the control handler's
+      // `syncToAuthorityEpoch` closes each lane and reopens it under the new
+      // epoch and the seeds arrive on their own. A SECURITY-epoch replacement
+      // does not: the sync finds every lane already bound to the epoch it is
+      // syncing to, skips them all, and the still-open subscriptions owe
+      // nothing - from the host's side no transition occurred. Mounted editors
+      // are then left without documents for the rest of the session, and later
+      // updates apply against an empty tier.
+      //
+      // Same shape as the `resume-too-old` bug that produced
+      // `resetStateRecordsOnly`, opposite remedy. There the bodies were still
+      // VALID and the reset was too wide, so the fix was to stop discarding
+      // them. Here discarding is right - authorization moved, so what this
+      // client holds must be re-served under the new grant - and what is
+      // missing is the reopen.
+      //
+      // A CLIENT-origin reset is not a member: `requestFreshSnapshot` closes
+      // and reopens the sockets itself, so its lanes are rebuilt by the
+      // reconnect rather than by anything here.
+      if (cause.origin !== "authority") return;
+      if (cause.reason !== "security-epoch-changed") return;
+      bodies.rebuildDemandedBodies();
     },
   };
 }

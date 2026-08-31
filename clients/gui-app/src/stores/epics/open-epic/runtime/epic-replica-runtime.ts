@@ -1018,6 +1018,12 @@ export function createEpicReplicaRuntime(
     records.resetCoverage();
     laneArm?.reset(cause);
     rooms.reset(cause);
+    // AFTER `rooms.reset`, which is the step that actually discards the
+    // bodies. The arm decides whether this cause needs anything - only a
+    // security-epoch replacement does, because it is the one authority-side
+    // reason that empties the tier without moving the authority epoch the body
+    // subscriptions are keyed on, so nothing downstream would reopen them.
+    laneArm?.rebuildBodiesAfterReset(cause);
     records.publishFreshCycle();
   }
 

@@ -46,6 +46,16 @@ import type {
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import type {
+  EpicStateDeltaFrame,
+  EpicStateSnapshotFrame,
+  EpicStateStreamCallbacks,
+} from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import type {
+  ReplicaReplacementReason,
+  ReplicaTransitionToken,
+} from "@traycer-clients/shared/replica-runtime";
 import {
   createEpicLaneArm,
   type EpicLaneArm,
@@ -126,20 +136,100 @@ interface CountingStateFactory {
   readonly factory: EpicStateStreamClientFactory;
   openCount(): number;
   closeCount(): number;
+  /** Deliver a snapshot, the way a served subscription does. */
+  deliverSnapshot(frame: EpicStateSnapshotFrame): void;
+  /** Deliver a delta on the live subscription. */
+  deliverDelta(frame: EpicStateDeltaFrame): void;
 }
 
 function createCountingStateFactory(): CountingStateFactory {
   let opens = 0;
   let closes = 0;
-  const factory: EpicStateStreamClientFactory = () => {
+  let live: EpicStateStreamCallbacks | null = null;
+  const factory: EpicStateStreamClientFactory = (_epicId, callbacks) => {
     opens += 1;
+    live = callbacks;
     return {
       close: () => {
         closes += 1;
       },
     };
   };
-  return { factory, openCount: () => opens, closeCount: () => closes };
+  return {
+    factory,
+    openCount: () => opens,
+    closeCount: () => closes,
+    deliverSnapshot(frame): void {
+      if (live === null) throw new Error("no state client was constructed");
+      live.onSnapshot(frame);
+    },
+    deliverDelta(frame): void {
+      if (live === null) throw new Error("no state client was constructed");
+      live.onDelta(frame);
+    },
+  };
+}
+
+/**
+ * A state-lane snapshot, built through the exported schema so a contract change
+ * breaks the fixture rather than silently drifting past it.
+ */
+function stateSnapshotFrame(authorityEpoch: string): EpicStateSnapshotFrame {
+  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    basis: "cold",
+    authorityEpoch,
+    position: 0,
+    reconciledWithCloud: false,
+    epicMeta: { revision: 0, meta: { title: "Epic Title", updatedAt: 1000 } },
+    artifactRecords: [],
+    deletedArtifacts: [],
+    roleClaims: { revision: 0, claims: [] },
+    commentThreads: [],
+  });
+  if (parsed.kind !== "snapshot") throw new Error("fixture drift: snapshot");
+  return parsed;
+}
+
+/**
+ * A delta on the still-open subscription, stamped with `authorityEpoch`.
+ *
+ * It carries one real upsert because the schema refuses an empty envelope -
+ * "an empty envelope consumes a lane position for a commit that never
+ * happened" - which is also why this is the honest fixture: the pin is about a
+ * delta the replica would otherwise have applied.
+ */
+function stateDeltaFrame(
+  authorityEpoch: string,
+  seq: number,
+): EpicStateDeltaFrame {
+  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+    kind: "delta",
+    hasBinaryPayload: false,
+    authorityEpoch,
+    seq,
+    artifactUpserts: [
+      {
+        kind: "spec",
+        id: "artifact-1",
+        folderName: "artifact-1",
+        title: "A spec",
+        createdAt: 1000,
+        updatedAt: 1000,
+        createdManually: true,
+        parentId: null,
+        revision: 1,
+      },
+    ],
+    artifactTombstones: [],
+    commentThreadUpserts: [],
+    commentThreadRemovals: [],
+    epicMeta: null,
+    roleClaims: null,
+  });
+  if (parsed.kind !== "delta") throw new Error("fixture drift: delta");
+  return parsed;
 }
 
 interface UnusedArtifactFactory {
@@ -176,6 +266,11 @@ interface ArmRig {
    * tiles hit the refusal.
    */
   readonly requiredLaneUnsupportedCount: () => number;
+  /** Every `(reason, transition)` the arm has funnelled upward, in order. */
+  readonly replacements: Array<{
+    readonly reason: ReplicaReplacementReason;
+    readonly transition: ReplicaTransitionToken;
+  }>;
 }
 
 /**
@@ -189,6 +284,10 @@ function buildArmRig(): ArmRig {
   const state = createCountingStateFactory();
   const artifacts = createUnusedArtifactFactory();
   const probeOutcomes: EpicLaneProbeOutcome[] = [];
+  const replacements: Array<{
+    readonly reason: ReplicaReplacementReason;
+    readonly transition: ReplicaTransitionToken;
+  }> = [];
   let requiredLaneUnsupported = 0;
   const arm = createEpicLaneArm({
     epicId: "epic-lane-arm-test",
@@ -206,7 +305,9 @@ function buildArmRig(): ArmRig {
     getWorkspaceContext: () =>
       Promise.reject(new Error("no workspace-context transport in this rig")),
     onWorkspaceContext: () => undefined,
-    onReplacementRequested: () => undefined,
+    onReplacementRequested: (reason, transition) => {
+      replacements.push({ reason, transition });
+    },
     artifactStreamClientFactory: artifacts.factory,
     readDocSeed: () => null,
     onRoomEvent: () => undefined,
@@ -224,6 +325,7 @@ function buildArmRig(): ArmRig {
     artifacts,
     probeOutcomes,
     requiredLaneUnsupportedCount: () => requiredLaneUnsupported,
+    replacements,
   };
 }
 
@@ -363,5 +465,108 @@ describe("lifecycle is guarded per lane (the probe leaves the arm HALF attached)
 
     expect(rig.status.closeCount()).toBe(1);
     expect(rig.state.openCount()).toBe(0);
+  });
+});
+
+// ── A foreign-epoch TRANSACTION is acted on, not discarded ──────────────────
+
+describe("a record transaction stamped with a foreign authority epoch", () => {
+  it("funnels a replacement request keyed by the epoch the frame carries", () => {
+    // The replica states this as a division of labour - it answers
+    // `requires-replacement` and "the RUNTIME drives the rebuild, so two lanes
+    // reporting one epoch change coalesce into a single replacement instead of
+    // racing two" - and that only holds if the outcome is read.
+    const rig = buildArmRig();
+    rig.arm.attach();
+    // Establishes the replica's epoch. A snapshot's own basis is `cold`, which
+    // asks for nothing - so any replacement below came from the transaction.
+    rig.state.deliverSnapshot(stateSnapshotFrame("epoch-1"));
+    expect(rig.replacements).toEqual([]);
+
+    // A delta on the STILL-OPEN subscription, at an epoch the replica is not
+    // serving. `applyRecordTransaction` returns without touching its rows or
+    // its cursor, so nothing else in this arm would ever notice.
+    rig.state.deliverDelta(stateDeltaFrame("epoch-2", 2));
+
+    // THE REDDENING ASSERTION. Discarding the outcome left the old projection
+    // installed and every later delta at the new epoch dropped the same way,
+    // until some snapshot happened to arrive and say so.
+    expect(rig.replacements).toEqual([
+      {
+        reason: "authority-epoch-changed",
+        transition: "authority-epoch:epoch-2",
+      },
+    ]);
+  });
+
+  it("a delta at the replica's OWN epoch asks for nothing", () => {
+    // The control that makes the assertion above about the epoch rather than
+    // about deltas: a fabricated replacement on the ordinary path would be far
+    // worse than the bug being fixed.
+    const rig = buildArmRig();
+    rig.arm.attach();
+    rig.state.deliverSnapshot(stateSnapshotFrame("epoch-1"));
+    rig.state.deliverDelta(stateDeltaFrame("epoch-1", 2));
+    expect(rig.replacements).toEqual([]);
+  });
+});
+
+// ── A security-epoch reset reopens the body lanes it emptied ────────────────
+
+describe("rebuildBodiesAfterReset", () => {
+  function armWithOneOpenBody(): ArmRig {
+    const rig = buildArmRig();
+    rig.arm.attach();
+    // The status snapshot is what names an authority epoch; without one the
+    // body lane records demand and opens nothing.
+    rig.status.deliverSnapshot();
+    rig.arm.bodies.ensureAttached("artifact-1");
+    expect(rig.artifacts.openCount()).toBe(1);
+    return rig;
+  }
+
+  it("reopens a demanded body after a SECURITY-epoch reset, whose epoch never moved", () => {
+    const rig = armWithOneOpenBody();
+
+    // The runtime's order, not just the call: `resetAllPlanes` runs
+    // `laneArm.reset()` (and empties the tier) before it gets here. Driving the
+    // reset first is what makes this a pin on a LIVE fix rather than on a
+    // method - a reset that blinded the epoch read would make the rebuild a
+    // silent no-op, and this is the assertion that would catch it.
+    rig.arm.reset({ origin: "authority", reason: "security-epoch-changed" });
+    rig.arm.rebuildBodiesAfterReset({
+      origin: "authority",
+      reason: "security-epoch-changed",
+    });
+
+    // THE REDDENING ASSERTION. `resetAllPlanes` destroyed the body, and the
+    // control handler's `syncToAuthorityEpoch` skips every lane already bound
+    // to the epoch it is syncing to - which, with the authority epoch
+    // unchanged, is all of them. Nothing reopened, the still-open subscription
+    // owed no seed, and the mounted editor stayed empty for the session.
+    expect(rig.artifacts.openCount()).toBe(2);
+  });
+
+  it("does nothing for a reason that MOVES the authority epoch", () => {
+    // Those are already covered by `syncToAuthorityEpoch`, which closes and
+    // reopens each lane under the new epoch. Rebuilding here as well would
+    // tear down a subscription that is about to be torn down anyway.
+    const rig = armWithOneOpenBody();
+    rig.arm.rebuildBodiesAfterReset({
+      origin: "authority",
+      reason: "authority-epoch-changed",
+    });
+    expect(rig.artifacts.openCount()).toBe(1);
+  });
+
+  it("does nothing for a CLIENT-origin reset", () => {
+    // `requestFreshSnapshot` closes and reopens the sockets itself, so its
+    // lanes are rebuilt by the reconnect.
+    const rig = armWithOneOpenBody();
+    rig.arm.rebuildBodiesAfterReset({
+      origin: "client",
+      intent: "fresh-snapshot-requested",
+    });
+    expect(rig.artifacts.openCount()).toBe(1);
   });
 });

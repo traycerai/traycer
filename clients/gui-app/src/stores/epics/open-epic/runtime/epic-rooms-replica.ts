@@ -415,6 +415,14 @@ export function createEpicRoomsReplica(
       const hadRoomState = availabilityByRoom.size > 0;
       tier.clearAllPending();
       tier.destroyAll();
+      // The ROOM-KEYED state, not just the published projection. Publishing an
+      // empty slice below says what the epic looks like NOW; it does not undo
+      // what this map remembers, and `republishAvailability` derives from the
+      // map rather than from the last publication. On the `@1` arm the very
+      // next ordinary root update calls it, so every destroyed room would come
+      // back `ready` - artifacts reading as mounted while lease acquisition has
+      // no body to hand them.
+      availabilityByRoom.clear();
       if (!hadRoomState) return false;
       invalidateBindings();
       sink.publish({

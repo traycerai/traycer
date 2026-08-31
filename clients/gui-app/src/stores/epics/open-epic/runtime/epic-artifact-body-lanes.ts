@@ -117,6 +117,20 @@ export interface EpicArtifactBodyLanes {
    */
   syncToAuthorityEpoch(): void;
   /**
+   * Rebuild every demanded body lane, whatever the epoch says.
+   *
+   * For the one reset that discards bodies without moving the authority epoch:
+   * a SECURITY-epoch replacement. {@link syncToAuthorityEpoch} cannot serve it -
+   * it skips a lane already bound to the epoch it is syncing to, which is
+   * exactly every lane in that case - so the destroyed bodies would never be
+   * reseeded and mounted editors would sit empty for the rest of the session.
+   *
+   * Not a substitute for `syncToAuthorityEpoch` on the ordinary path: this one
+   * closes and reopens subscriptions the host is perfectly happy with, which is
+   * wasted work on every frame that did not discard anything.
+   */
+  rebuildDemandedBodies(): void;
+  /**
    * The control lane's transport status, for the reconnect EDGE.
    *
    * A terminal refusal is honored only for the world it was issued in, and a
@@ -378,6 +392,32 @@ export function createEpicArtifactBodyLanes(
       }
       demand.delete(artifactId);
       closeLane(artifactId, reason);
+    },
+
+    rebuildDemandedBodies(): void {
+      if (isDisposed()) return;
+      const authorityEpoch = readAuthorityEpoch();
+      // Nothing to attach under yet, and nothing open either - the first
+      // status snapshot to name an epoch runs `syncToAuthorityEpoch` and
+      // opens every demanded body from scratch.
+      if (authorityEpoch === null) return;
+      // UNCONDITIONAL, which is the entire difference from
+      // `syncToAuthorityEpoch`. That method skips a lane already bound to the
+      // epoch it is syncing to, and that skip encodes "an open lane under this
+      // epoch has had, or is owed, its seed". A whole-plane reset falsifies
+      // exactly that: the bodies are gone and the subscription that would have
+      // reseeded them owes nothing, because from its side nothing happened.
+      //
+      // A refusal is cleared too. It was issued against the authorization this
+      // reset exists because the host changed, so it says nothing about the
+      // new one - the same argument `syncToAuthorityEpoch` makes for an epoch
+      // change, applied to the one kind of new world that does not move the
+      // epoch.
+      refused.clear();
+      for (const artifactId of demand.keys()) {
+        if (open.has(artifactId)) closeLane(artifactId, "superseded");
+        openLane(artifactId, authorityEpoch);
+      }
     },
 
     syncToAuthorityEpoch(): void {

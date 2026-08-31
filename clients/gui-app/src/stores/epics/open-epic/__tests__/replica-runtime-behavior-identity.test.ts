@@ -344,6 +344,26 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
     expect(opened.store.getState().isDirty).toBe(false);
     expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+    // The published projection agrees: no artifact reads as `ready` when every
+    // room backing one has been destroyed.
+    expect(
+      opened.store.getState().artifactRooms.stateByArtifactId["art-1"],
+    ).not.toBe("ready");
+
+    // AND STAYS THAT WAY across an ordinary root update. This is the half the
+    // teardown missed: it published an empty slice but left the ROOM-KEYED
+    // availability map populated, and `republishAvailability` - which the
+    // records plane calls on every root frame - derives from that map rather
+    // than from the last publication. So the destroyed rooms came straight
+    // back as `ready`, and a mounted artifact read as available while lease
+    // acquisition had no body to hand it.
+    donor.getMap("epic").set("title", "an ordinary later edit");
+    streamHandle().callbacks.onUpdate(Y.encodeStateAsUpdate(donor));
+
+    expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+    expect(
+      opened.store.getState().artifactRooms.stateByArtifactId["art-1"],
+    ).not.toBe("ready");
   });
 
   it("requestFreshSnapshot closes the socket before coverage is cleared and reopens after, so the reattach offer is null", () => {

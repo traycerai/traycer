@@ -48,6 +48,15 @@ interface DemoteRecord {
   readonly docGuid: string;
   readonly bytes: readonly number[];
   settle(answer: { accepted: boolean; settledBytes: number }): void;
+  /**
+   * Answer with an ERROR reply rather than a verdict, on a worker that stays
+   * alive - which is what `serve()` does with a handler that threw, and what
+   * a malformed response decodes to. Distinct from `main.dispose()`, which is
+   * the worker DYING, and the two are not interchangeable: only the death
+   * brings a replacement, and only a replacement runs
+   * `resendUnacknowledgedDemotes`.
+   */
+  fail(message: string): void;
 }
 
 /**
@@ -69,6 +78,16 @@ function createWorkerSide(
     const respond = (value: unknown): void => {
       pair.worker.post(
         { frame: "result", callId, result: { outcome: "ok", value } },
+        [],
+      );
+    };
+    const respondError = (message: string): void => {
+      pair.worker.post(
+        {
+          frame: "result",
+          callId,
+          result: { outcome: "error", name: "Error", message },
+        },
         [],
       );
     };
@@ -102,6 +121,9 @@ function createWorkerSide(
             ...answer,
             reason: answer.accepted ? null : "not-held",
           });
+        },
+        fail: (message) => {
+          respondError(message);
         },
       });
     }
@@ -981,5 +1003,71 @@ describe("the forward-only release — generation fencing", () => {
     // refused as pinned, taking it out from under a bound editor.
     expect(docs.dropped).toEqual([]);
     expect(docs.has("room-1")).toBe(true);
+  });
+});
+
+describe("a demote that fails on a LIVE worker", () => {
+  it("re-arms the linger, so the entry is retried instead of pinned forever", async () => {
+    // NOT `main.dispose()`. `serve()` turns a worker-handler fault into an
+    // error REPLY and a malformed response fails parsing - both surface as a
+    // rejected call on a worker that is never replaced, so
+    // `resendUnacknowledgedDemotes` (which only runs after a respawn) never
+    // covers them.
+    const { leases, docs, worker, scheduler } = setup();
+    const grant = await leases.acquire("artifact-1");
+    if (grant.kind !== "granted") throw new Error("expected a grant");
+    grant.release();
+    scheduler.advance(LINGER_MS);
+    expect(worker.demotes).toHaveLength(1);
+
+    worker.demotes[0]?.fail("worker handler threw");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Unchanged by the fix, and asserted so the retry cannot be mistaken for a
+    // licence to drop: a rejection is never a settled ack.
+    expect(docs.dropped).toEqual([]);
+    expect(docs.has("artifact-1")).toBe(true);
+
+    // THE REDDENING ASSERTION. Without the re-arm nothing is scheduled, so the
+    // entry keeps `demotingGeneration` set forever - which `enforceHotCap`
+    // reads as already-leaving: not counted in the hot population and not
+    // eligible as a victim, so the charge is held by a doc nothing will retry.
+    scheduler.advance(LINGER_MS);
+    expect(worker.demotes).toHaveLength(2);
+    // A FRESH generation, which is what makes a late reply from the first
+    // attempt a no-op rather than a second settlement.
+    expect(worker.demotes[1]?.generation).toBeGreaterThan(
+      worker.demotes[0]?.generation ?? 0,
+    );
+
+    // And the retry can still settle it, so the doc is not pinned by the
+    // recovery either.
+    worker.demotes[1]?.settle({ accepted: true, settledBytes: 10 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(docs.dropped).toEqual(["artifact-1"]);
+  });
+
+  it("a re-acquire inside the re-armed window cancels the retry", async () => {
+    // The re-arm must not become a second way to demote a doc someone is
+    // holding. `armLinger`'s callback re-reads the entry and returns on a live
+    // lease, so this is a claim about the composition rather than about the
+    // timer.
+    const { leases, docs, worker, scheduler } = setup();
+    const first = await leases.acquire("artifact-1");
+    if (first.kind !== "granted") throw new Error("expected a grant");
+    first.release();
+    scheduler.advance(LINGER_MS);
+    worker.demotes[0]?.fail("worker handler threw");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const second = await leases.acquire("artifact-1");
+    if (second.kind !== "granted") throw new Error("expected a re-grant");
+
+    scheduler.advance(LINGER_MS);
+    expect(worker.demotes).toHaveLength(1);
+    expect(docs.dropped).toEqual([]);
   });
 });

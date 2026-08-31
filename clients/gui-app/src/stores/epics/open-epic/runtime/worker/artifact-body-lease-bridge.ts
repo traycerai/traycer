@@ -450,9 +450,27 @@ export function createArtifactBodyLeaseBridge(options: {
           options.docs.drop(docKey);
         },
         () => {
-          // The worker went away mid-release. The doc stays live and the entry
-          // stays pending, exactly as for a demote: `resendUnacknowledgedDemotes`
-          // re-posts, and `postDemote` routes it back down this same branch.
+          // The doc stays live and the entry stays pending - a rejection is
+          // never a settled ack, so dropping here would drop a body the worker
+          // may still hold.
+          //
+          // But PENDING IS NOT PROGRESS, and the comment this replaces assumed
+          // it was: "the worker went away" is only one of the ways this
+          // rejects. `serve()` turns a worker-handler fault into an error
+          // reply, and a malformed reply fails parsing - both surface as a
+          // rejected call on a worker that is still very much alive, so no
+          // respawn happens and `resendUnacknowledgedDemotes` never runs. The
+          // entry would then sit with `demotingGeneration` set forever, which
+          // `enforceHotCap` reads as "already on its way out": excluded from
+          // the hot population it counts AND skipped as an eviction victim, so
+          // the charge is held by a doc nothing will ever retry.
+          //
+          // Re-arming is the retry. It is safe for the died-mid-release case
+          // too: the two mechanisms compose rather than compete - a respawn
+          // resend re-posts the SAME generation while a linger expiry bumps to
+          // a fresh one, and the generation fence makes whichever ack arrives
+          // second a no-op.
+          armLinger(docKey);
         },
       );
       return;
@@ -510,16 +528,28 @@ export function createArtifactBodyLeaseBridge(options: {
           options.docs.drop(docKey);
         },
         () => {
-          // The worker went away mid-demote (the call rejects rather than
-          // hanging), or the post failed. Either way the doc stays live and the
-          // entry stays pending, so `resendUnacknowledgedDemotes` re-posts it
-          // to the replacement. Every rejection is treated alike, because the
-          // one thing that must never happen is dropping the doc without a
-          // settled ack - and a rejection is never a settled ack.
+          // The doc stays live and the entry stays pending. Every rejection is
+          // treated alike, because the one thing that must never happen is
+          // dropping the doc without a settled ack - and a rejection is never a
+          // settled ack.
+          //
+          // "The worker went away" is NOT the only way this rejects, which is
+          // what the previous version of this comment assumed when it left the
+          // recovery entirely to `resendUnacknowledgedDemotes`. That resend
+          // runs after a worker REPLACEMENT; a handler fault comes back as an
+          // error reply and a bad reply fails parsing, both on a live worker
+          // that is never replaced. The entry then keeps `demotingGeneration`
+          // set with nothing scheduled, and `enforceHotCap` treats that as
+          // already-leaving - it is neither counted in the hot population nor
+          // eligible as a victim - so the charge is held indefinitely.
+          //
+          // So arm the linger and let the retry come from there. See the
+          // release arm above for why the two recovery paths compose.
           //
           // A rejection handler rather than a trailing `.catch`: a `.catch`
           // would also swallow a throw from the success arm above, where
           // `docs.drop` failing silently is a real doc leak.
+          armLinger(docKey);
         },
       );
   }
