@@ -130,7 +130,10 @@ export function OnboardingPhoneDiorama(props: OnboardingPhoneDioramaProps) {
         aria-hidden="true"
         className="pointer-events-none absolute -inset-[10%] bg-[radial-gradient(closest-side,rgba(255,255,255,0.07),transparent_72%)]"
       />
+      {/* Decorative art top to bottom: one aria-hidden here keeps the fake
+          header/nav landmarks and row labels out of the accessibility tree. */}
       <div
+        aria-hidden="true"
         data-testid="onboarding-phone-diorama"
         data-scene={scene}
         className={PHONE_FRAME_CLASS}
