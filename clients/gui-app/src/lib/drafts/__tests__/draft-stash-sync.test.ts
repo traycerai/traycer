@@ -11,6 +11,7 @@ import { stashDraftWrite } from "@/lib/drafts/draft-write-codec";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import { usePromptStashStore } from "@/stores/composer/prompt-stash-store";
 import { fakeDraftStreamClient } from "@/lib/drafts/__tests__/draft-mirror-test-stream";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const HOST_ID = "host-stash";
 const EMPTY_DOC = {
@@ -97,6 +98,9 @@ describe("stash host sync", () => {
 
     await deleteStashEntryOnHost(HOST_ID, "stash-1");
     expect(deletes).toEqual(["stash-1", "stash-1"]);
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes,
+    ).toEqual({});
   });
 
   it("keeps the stash host binding when delete fails so a retry still reaches the row", async () => {

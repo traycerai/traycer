@@ -55,7 +55,10 @@ beforeEach(() => {
 });
 afterEach(() => {
   window.localStorage.clear();
-  useComposerDraftStore.setState({ drafts: {} });
+  useComposerDraftStore.setState({
+    drafts: {},
+    pendingSubmittedDraftDeletes: {},
+  });
 });
 
 const EMPTY_DOC: DraftState["content"] = {
@@ -174,6 +177,33 @@ describe("composer draft store hydration", () => {
       origin: null,
       publication: null,
     });
+  });
+
+  it("rehydrates a submitted-draft deletion fence after renderer restart", async () => {
+    useComposerDraftStore
+      .getState()
+      .setSnapshot("chat-fenced", MENTION_DRAFT.content, null);
+    const draftId =
+      useComposerDraftStore.getState().drafts["chat-fenced"]?.draftId;
+    if (draftId === null || draftId === undefined) {
+      throw new Error("draft id was not minted");
+    }
+    useComposerDraftStore
+      .getState()
+      .fenceAndDetachSubmittedDraft("chat-fenced", draftId, "host-a");
+    const persisted = window.localStorage.getItem(STORAGE_KEY);
+    expect(persisted).not.toBeNull();
+
+    useComposerDraftStore.setState({
+      drafts: {},
+      pendingSubmittedDraftDeletes: {},
+    });
+    if (persisted !== null) window.localStorage.setItem(STORAGE_KEY, persisted);
+    await useComposerDraftStore.persist.rehydrate();
+
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
+    ).toEqual({ hostId: "host-a" });
   });
 });
 

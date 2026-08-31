@@ -179,6 +179,8 @@ function createRpc(handlers: {
 function createSink(options: {
   readonly dirty: Set<string>;
   readonly writes: DraftDirtyWrite[];
+  readonly pendingDeletes?: Set<string>;
+  readonly prepareWrite?: DraftMirrorSink["prepareWrite"];
   readonly dropAbsentFromList?: DraftMirrorSink["dropAbsentFromList"];
 }): DraftMirrorSink & {
   readonly upserts: DraftDocument[];
@@ -202,6 +204,11 @@ function createSink(options: {
     scopes,
     synced,
     isDirty: (draftId) => options.dirty.has(draftId),
+    isDeletePending: (draftId) => options.pendingDeletes?.has(draftId) ?? false,
+    pendingDeleteIdsForHost: () => [...(options.pendingDeletes ?? [])],
+    completeDelete: (draftId) => {
+      options.pendingDeletes?.delete(draftId);
+    },
     applyUpsert: (document) => {
       upserts.push(document);
       return Promise.resolve();
@@ -213,7 +220,8 @@ function createSink(options: {
     rememberSynced: (draftId, hostRevision) => {
       synced.push({ draftId, hostRevision });
     },
-    prepareWrite: (_hostId, write) => Promise.resolve(write),
+    prepareWrite:
+      options.prepareWrite ?? ((_hostId, write) => Promise.resolve(write)),
     dropAbsentFromList:
       options.dropAbsentFromList ??
       ((_hostId, _listedIds) => {
@@ -568,8 +576,31 @@ describe("DraftMirrorSession", () => {
       now: () => 0,
     });
     session.start();
-    await session.deleteOnHost("d1");
+    await expect(session.deleteOnHost("d1")).resolves.toBe(true);
     expect(sink.synced).toEqual([]);
+    session.close();
+    await expect(session.deleteOnHost("d1")).resolves.toBe(false);
+  });
+
+  it("treats a missing drafts.delete capability as a completed deletion", async () => {
+    const pendingDeletes = new Set(["d1"]);
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, [])),
+        upsert: (write) =>
+          Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          }),
+        delete: () => Promise.reject(unsupportedError("drafts.delete")),
+      }),
+      streamClient: createStreamHarness().client,
+      sink: createSink({ dirty: new Set(), writes: [], pendingDeletes }),
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    await expect(session.deleteOnHost("d1")).resolves.toBe(true);
+    expect(pendingDeletes).toEqual(new Set());
   });
 
   it("does not erase a composer draft synced to host A when host B bootstraps", async () => {
@@ -606,6 +637,9 @@ describe("DraftMirrorSession", () => {
     let hostBDropped = false;
     const sink: DraftMirrorSink = {
       isDirty: (draftId) => composerDraftIsDirty(draftId),
+      isDeletePending: () => false,
+      pendingDeleteIdsForHost: () => [],
+      completeDelete: () => undefined,
       applyUpsert: (document) => {
         applyComposerHostDocument(document);
         return Promise.resolve();
@@ -743,6 +777,9 @@ describe("DraftMirrorSession", () => {
     const boundHostByChatId = new Map([["chat-x", HOST_ID]]);
     const sink: DraftMirrorSink = {
       isDirty: (draftId) => composerDraftIsDirty(draftId),
+      isDeletePending: () => false,
+      pendingDeleteIdsForHost: () => [],
+      completeDelete: () => undefined,
       applyUpsert: (document) => {
         applyComposerHostDocument(document);
         return Promise.resolve();
@@ -836,12 +873,106 @@ describe("DraftMirrorSession", () => {
     useComposerDraftStore.setState({ drafts: {} });
   });
 
+  it("orders deletion behind an already-dispatched upsert", async () => {
+    let finishUpsert: () => void = () => {
+      throw new Error("upsert did not start");
+    };
+    const order: string[] = [];
+    const write = landingWrite("ordered", 0);
+    const sink = createSink({
+      dirty: new Set([write.draftId]),
+      writes: [{ write, generation: 1 }],
+    });
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, [])),
+        upsert: async () => {
+          order.push("upsert-start");
+          await new Promise<void>((resolve) => {
+            finishUpsert = resolve;
+          });
+          order.push("upsert-end");
+          return {
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          };
+        },
+        delete: () => {
+          order.push("delete");
+          return Promise.resolve({ deleted: true });
+        },
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => expect(order).toEqual(["upsert-start"]));
+    const deleting = session.deleteOnHost(write.draftId);
+    await Promise.resolve();
+    expect(order).toEqual(["upsert-start"]);
+    finishUpsert();
+    await deleting;
+    expect(order).toEqual(["upsert-start", "upsert-end", "delete"]);
+    session.close();
+  });
+
+  it("drops a collected write when submission fences it during preparation", async () => {
+    let finishPrepare: () => void = () => {
+      throw new Error("prepare did not start");
+    };
+    let prepareStarted = false;
+    const pendingDeletes = new Set<string>();
+    const write = landingWrite("collected-before-submit", 0);
+    let upsertCount = 0;
+    const sink = createSink({
+      dirty: new Set([write.draftId]),
+      writes: [{ write, generation: 1 }],
+      pendingDeletes,
+      prepareWrite: async (_hostId, prepared) => {
+        prepareStarted = true;
+        await new Promise<void>((resolve) => {
+          finishPrepare = resolve;
+        });
+        return prepared;
+      },
+    });
+    const session = new DraftMirrorSession({
+      hostId: HOST_ID,
+      rpc: createRpc({
+        list: () => Promise.resolve(listResponse([], 1, [])),
+        upsert: () => {
+          upsertCount += 1;
+          return Promise.resolve({
+            draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+          });
+        },
+        delete: () => Promise.resolve({ deleted: true }),
+      }),
+      streamClient: createStreamHarness().client,
+      sink,
+      timing: { debounceMs: 0, maxWaitMs: 0 },
+      now: () => 0,
+    });
+    session.start();
+    await vi.waitFor(() => expect(prepareStarted).toBe(true));
+    pendingDeletes.add(write.draftId);
+    finishPrepare();
+    await vi.waitFor(() => expect(sink.synced).toEqual([]));
+    expect(upsertCount).toBe(0);
+    session.close();
+  });
+
   it("upserts a landing draft created after bootstrap by adopting on the sync path", async () => {
     resetDraftMirrorCoordinatorForTests();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     bindLandingAdoptionHost(HOST_ID);
     const upserted: string[] = [];
     const sink: DraftMirrorSink = {
+      isDeletePending: () => false,
+      pendingDeleteIdsForHost: () => [],
+      completeDelete: () => undefined,
       isDirty: (draftId) => landingDraftIsDirty(draftId),
       applyUpsert: () => Promise.resolve(),
       applyDelete: () => undefined,

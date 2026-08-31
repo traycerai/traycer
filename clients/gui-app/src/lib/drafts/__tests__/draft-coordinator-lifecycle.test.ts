@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { DraftDocument, DraftWrite } from "@traycer/protocol/host";
 import {
   acquireDraftMirrorSession,
+  applyIncomingDraftDocument,
   bindComposerDraftHost,
   bindInterviewDraftHost,
   collectDraftMirrorDirtyWrites,
+  releaseDraftMirrorSession,
   resetDraftMirrorCoordinatorForTests,
   submitComposerDraft,
   unbindInterviewDraftHost,
@@ -28,19 +30,18 @@ function typed(text: string) {
 interface HostLog {
   readonly upserts: DraftWrite[];
   readonly deletes: string[];
-  /** Resolves the NEXT `drafts.delete`; `null` answers immediately. */
-  holdDelete: (() => void) | null;
+  rows: DraftDocument[];
+  deleteFailures: number;
 }
 
-function mountSession(log: HostLog): void {
-  let listed: DraftDocument[] = [];
-  acquireDraftMirrorSession({
+function mountSession(log: HostLog) {
+  return acquireDraftMirrorSession({
     hostId: HOST_ID,
     client: {
       request: (method: string, params: unknown) => {
         if (method === "drafts.list") {
           return Promise.resolve({
-            drafts: listed,
+            drafts: log.rows,
             tombstones: [],
             snapshotSeq: 0,
             scopeId: null,
@@ -62,13 +63,17 @@ function mountSession(log: HostLog): void {
             },
             revision: 1,
           };
-          listed = [document];
+          log.rows = [document];
           return Promise.resolve({ draft: document });
         }
         if (method === "drafts.delete") {
           const draftId = (params as { draftId: string }).draftId;
           log.deletes.push(draftId);
-          listed = listed.filter((row) => row.draftId !== draftId);
+          if (log.deleteFailures > 0) {
+            log.deleteFailures -= 1;
+            return Promise.reject(new Error("offline"));
+          }
+          log.rows = log.rows.filter((row) => row.draftId !== draftId);
           return Promise.resolve({ deleted: true });
         }
         return Promise.reject(new Error(`unexpected ${String(method)}`));
@@ -81,7 +86,10 @@ function mountSession(log: HostLog): void {
 
 afterEach(() => {
   resetDraftMirrorCoordinatorForTests();
-  useComposerDraftStore.setState({ drafts: {} });
+  useComposerDraftStore.setState({
+    drafts: {},
+    pendingSubmittedDraftDeletes: {},
+  });
   useInterviewDraftStore.setState({ draftsByChat: {} });
 });
 
@@ -120,7 +128,12 @@ describe("interview host binding", () => {
 
 describe("submitComposerDraft", () => {
   it("does not tombstone a draft the user re-created during finalization", async () => {
-    const log: HostLog = { upserts: [], deletes: [], holdDelete: null };
+    const log: HostLog = {
+      upserts: [],
+      deletes: [],
+      rows: [],
+      deleteFailures: 0,
+    };
     mountSession(log);
     bindComposerDraftHost(CHAT_ID, HOST_ID);
 
@@ -152,4 +165,88 @@ describe("submitComposerDraft", () => {
       ),
     ).toEqual([nextDraftId]);
   });
+
+  it("keeps submitted text cleared across an offline delete and bootstrap replay", async () => {
+    const log: HostLog = {
+      upserts: [],
+      deletes: [],
+      rows: [],
+      deleteFailures: 1,
+    };
+    const firstSession = mountSession(log);
+    bindComposerDraftHost(CHAT_ID, HOST_ID);
+    const store = useComposerDraftStore.getState();
+    store.bindTarget(CHAT_ID, EPIC_ID);
+    store.setSnapshot(CHAT_ID, typed("accepted steer"), { from: 1, to: 14 });
+    const draftId = readDraftId();
+    await firstSession.flush([draftId]);
+
+    await submitComposerDraft(CHAT_ID);
+    const epochAfterSubmit = readDraft().resetEpoch;
+    expect(readDraft().content).not.toEqual(typed("accepted steer"));
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
+    ).toEqual({ hostId: HOST_ID });
+
+    releaseDraftMirrorSession(HOST_ID);
+    mountSession(log);
+    await expect.poll(() => log.rows.length).toBe(0);
+
+    expect(readDraft().content).not.toEqual(typed("accepted steer"));
+    expect(readDraft().resetEpoch).toBe(epochAfterSubmit);
+    expect(
+      useComposerDraftStore.getState().pendingSubmittedDraftDeletes[draftId],
+    ).toBeUndefined();
+  });
+
+  it("suppresses a late subscribe or cloud replay while deletion is fenced", async () => {
+    const store = useComposerDraftStore.getState();
+    store.bindTarget(CHAT_ID, EPIC_ID);
+    store.setSnapshot(CHAT_ID, typed("submitted"), { from: 1, to: 10 });
+    const draftId = readDraftId();
+    store.clearDraft(CHAT_ID);
+    store.fenceAndDetachSubmittedDraft(CHAT_ID, draftId, HOST_ID);
+    const epochAfterSubmit = readDraft().resetEpoch;
+
+    await applyIncomingDraftDocument({
+      draftId,
+      kind: "chat-composer",
+      target: { epicId: EPIC_ID, chatId: CHAT_ID, blockId: null },
+      revision: 3,
+      lastTouchedAt: 1,
+      workspace: null,
+      ownerHostId: HOST_ID,
+      origin: "own",
+      adoption: { state: "adopted", hostId: HOST_ID },
+      publication: {
+        status: "unpublished",
+        lastPublishedAt: null,
+        publishedRevision: null,
+        halted: null,
+      },
+      portable: {
+        content: typed("submitted"),
+        selection: { from: 1, to: 10 },
+        runSettings: null,
+        composerMode: "chat",
+        blobHashes: [],
+        closed: false,
+      },
+    });
+
+    expect(readDraft().content).not.toEqual(typed("submitted"));
+    expect(readDraft().resetEpoch).toBe(epochAfterSubmit);
+  });
 });
+
+function readDraft() {
+  const draft = useComposerDraftStore.getState().drafts[CHAT_ID];
+  if (draft === undefined) throw new Error("missing composer draft");
+  return draft;
+}
+
+function readDraftId(): string {
+  const draftId = readDraft().draftId;
+  if (draftId === null) throw new Error("missing composer draft id");
+  return draftId;
+}
