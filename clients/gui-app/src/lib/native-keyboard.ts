@@ -49,9 +49,7 @@ export function getNativeKeyboardState(): NativeKeyboardState {
   return state;
 }
 
-export function subscribeNativeKeyboardState(
-  listener: () => void,
-): () => void {
+export function subscribeNativeKeyboardState(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
