@@ -8,9 +8,11 @@ import {
   FileText,
   Files,
   GitBranch,
+  LogOut,
   Menu,
   MessagesSquare,
   Settings,
+  SquareArrowOutUpRight,
   SquareStack,
   Terminal,
   TriangleAlert,
@@ -161,22 +163,20 @@ function PhoneScene(props: {
   }
   return (
     <>
-      {/* The panels live in the body layer BELOW the header, unlike the real
-          app where they cover it: the spotlit glyph IS the lesson, so it stays
-          lit while everything behind the panel dims - and the drawer's own top
-          rows never collide with the header band. */}
+      {/* The panels cover the header exactly as the real overlays do. The
+          lesson still has its cause: the control sits spotlit through the
+          opening beat and a touch cue lands on it right before the panel
+          arrives, so what opened it is shown, not guessed. */}
       <PhoneHeader
         title={TASKS[0]}
         spotlight={scene === "drawer" ? "menu" : "switcher"}
       />
-      <div className="relative flex min-h-0 flex-1 flex-col">
-        <PhoneTaskScreen className="min-h-0 flex-1" />
-        {scene === "drawer" ? (
-          <NavDrawerScene reducedMotion={reducedMotion} />
-        ) : (
-          <SwitcherSheetScene reducedMotion={reducedMotion} />
-        )}
-      </div>
+      <PhoneTaskScreen className="min-h-0 flex-1" />
+      {scene === "drawer" ? (
+        <NavDrawerScene reducedMotion={reducedMotion} />
+      ) : (
+        <SwitcherSheetScene reducedMotion={reducedMotion} />
+      )}
     </>
   );
 }
@@ -266,12 +266,38 @@ function PhoneTaskScreen(props: { readonly className: string }) {
   );
 }
 
+/**
+ * The finger that summons a panel: a touch cue lands on the spotlit control
+ * just before the panel opens, so the panel reads as an effect with a shown
+ * cause. Plays once on mount and ends invisible, under the arriving panel.
+ */
+function PanelTapCue(props: { readonly control: HeaderGlyphId }) {
+  return (
+    <m.span
+      aria-hidden="true"
+      initial={{ opacity: 0, scale: 0.5 }}
+      animate={{ opacity: [0, 1, 1, 0], scale: [0.5, 1, 0.85, 1.35] }}
+      transition={{
+        duration: 0.6,
+        ease: EASE,
+        times: [0, 0.3, 0.7, 1],
+        delay: 0.08,
+      }}
+      className={cn(
+        "pointer-events-none absolute top-[0.5rem] z-10 size-5 rounded-full bg-primary/25 ring-2 ring-primary/60",
+        props.control === "menu" ? "left-[0.65rem]" : "right-[2.25rem]",
+      )}
+    />
+  );
+}
+
 function NavDrawerScene(props: { readonly reducedMotion: boolean }) {
   const { reducedMotion } = props;
   const revealed = useRevealed(reducedMotion);
   const activeIndex = useCyclingIndex(TASKS.length, reducedMotion);
   return (
     <>
+      {reducedMotion ? null : <PanelTapCue control="menu" />}
       <PhoneScrim revealed={revealed} reducedMotion={reducedMotion} />
       <m.aside
         data-testid="onboarding-phone-drawer"
@@ -279,7 +305,7 @@ function NavDrawerScene(props: { readonly reducedMotion: boolean }) {
         initial={reducedMotion ? false : { opacity: 0, x: "-100%" }}
         animate={{ opacity: revealed ? 1 : 0, x: revealed ? "0%" : "-100%" }}
         transition={{ duration: 0.42, ease: EASE }}
-        className="absolute inset-y-0 left-0 z-20 flex w-[84%] flex-col overflow-hidden rounded-r-2xl border-r border-border bg-popover text-popover-foreground shadow-2xl"
+        className="absolute inset-y-0 left-0 z-30 flex w-[80%] flex-col overflow-hidden border-r border-border bg-popover text-popover-foreground shadow-2xl"
       >
         <div className="flex shrink-0 items-center gap-2 px-3 pt-3 pb-1.5">
           <UserCircle className="size-6 shrink-0 text-muted-foreground" />
@@ -291,6 +317,8 @@ function NavDrawerScene(props: { readonly reducedMotion: boolean }) {
               Subscription
             </span>
           </div>
+          <SquareArrowOutUpRight className="size-3.5 shrink-0 text-muted-foreground/70" />
+          <LogOut className="size-3.5 shrink-0 text-muted-foreground/70" />
         </div>
         <nav className="flex min-h-0 flex-1 flex-col gap-1 p-2">
           {/* The drawer's one filled element, matching `MobileNavDrawer`: the
@@ -366,6 +394,7 @@ function SwitcherSheetScene(props: { readonly reducedMotion: boolean }) {
   const RowIcon = category.icon;
   return (
     <>
+      {reducedMotion ? null : <PanelTapCue control="switcher" />}
       <PhoneScrim revealed={revealed} reducedMotion={reducedMotion} />
       <m.div
         data-testid="onboarding-phone-sheet"
@@ -373,7 +402,7 @@ function SwitcherSheetScene(props: { readonly reducedMotion: boolean }) {
         initial={reducedMotion ? false : { opacity: 0, y: "100%" }}
         animate={{ opacity: revealed ? 1 : 0, y: revealed ? "0%" : "100%" }}
         transition={{ duration: 0.42, ease: EASE }}
-        className="absolute inset-x-0 bottom-0 z-20 flex h-[62%] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-popover text-popover-foreground shadow-2xl"
+        className="absolute inset-x-0 bottom-0 z-30 flex h-[64%] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-popover text-popover-foreground shadow-2xl"
       >
         <span
           aria-hidden="true"
@@ -435,7 +464,7 @@ function SwitcherTab(props: {
   );
 }
 
-/** Dims the task screen under a raised panel, the way the real overlays do. */
+/** Dims the whole screen, header included, the way the real overlays do. */
 function PhoneScrim(props: {
   readonly revealed: boolean;
   readonly reducedMotion: boolean;
@@ -446,7 +475,7 @@ function PhoneScrim(props: {
       initial={props.reducedMotion ? false : { opacity: 0 }}
       animate={{ opacity: props.revealed ? 1 : 0 }}
       transition={{ duration: 0.32, ease: EASE }}
-      className="absolute inset-0 z-10 bg-black/45 supports-backdrop-filter:backdrop-blur-xs"
+      className="absolute inset-0 z-20 bg-black/45 supports-backdrop-filter:backdrop-blur-xs"
     />
   );
 }
