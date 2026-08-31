@@ -27,24 +27,70 @@ import { createMonotonicSequence } from "./runtime-environment";
 /**
  * A registry key built from its parts.
  *
- * Always construct it with {@link sessionKeyOf}. The parts are opaque
- * user/host-minted ids, so a printable separator lets one part contain the
- * separator and collide two distinct tuples onto a single entry - which for the
- * chat registry meant one tile's `acquire` disposing another's live websocket.
+ * Always construct it with {@link sessionKeyOf} and read it back with
+ * {@link sessionKeyPartsOf}. The parts are opaque user/host-minted ids, so ANY
+ * separator lets a part contain that separator and collide two distinct tuples
+ * onto a single entry - which for the chat registry meant one tile's `acquire`
+ * disposing another's live websocket. The encoding is length-prefixed for that
+ * reason: it reserves no character, so there is no "but nothing can contain
+ * THIS one" left to be wrong about.
  */
 export type SessionKey = string;
 
 /**
- * NUL-joined, because no id can contain a NUL. A `:`-joined key is forgeable by
- * any part that may contain a `:`, and "may contain" is not a property anyone
- * can hold true across a schema change.
+ * LENGTH-PREFIXED, not joined on a separator: each part is written as its
+ * length in UTF-16 code units, a `:`, then the part itself.
+ *
+ * This replaced a NUL join whose doc argued "no id can contain a NUL" - which
+ * is the same unenforced claim that doc rejects, one paragraph earlier, for a
+ * printable `:`. Nothing excludes U+0000 anywhere on the path: the protocol
+ * fields are bare `z.string()`, JSON carries a NUL fine, and a `hostId` is
+ * adopted VERBATIM from `~/.traycer/host-id` with only a `trim()`, which does
+ * not strip NUL because NUL is not whitespace. So `["a\u0000b","c"]` and
+ * `["a","b\u0000c"]` folded onto one key, and per this file's own incident
+ * that means one tile's `acquire` disposing another tile's live websocket.
+ *
+ * A length prefix is injective for EVERY part, with no character reserved and
+ * so no next character to be argued about: the decoder never has to search for
+ * a delimiter, it is told how far to read. `.length` and `.slice()` both count
+ * UTF-16 code units, so a part holding a surrogate pair round-trips too.
  */
-const SESSION_KEY_SEPARATOR = "\u0000";
+const SESSION_KEY_LENGTH_SEPARATOR = ":";
 
 export function sessionKeyOf(parts: readonly string[]): SessionKey {
-  return parts.join(SESSION_KEY_SEPARATOR);
+  return parts
+    .map((part) => `${part.length}${SESSION_KEY_LENGTH_SEPARATOR}${part}`)
+    .join("");
 }
 
+/**
+ * The parts a key was built from, in order.
+ *
+ * Exported beside the encoder because a key's readers must not re-derive its
+ * format: the chat registry kept its own copy of the separator and split on
+ * it, so re-encoding here would have left that parser reading a shape nobody
+ * writes - a silent mismatch rather than a type error.
+ *
+ * Answers `[]` for a malformed key rather than throwing: the callers use the
+ * parts to FILTER (which sessions belong to this host), and a filter that
+ * throws would take down a sweep over unrelated entries.
+ */
+export function sessionKeyPartsOf(key: SessionKey): readonly string[] {
+  const parts: string[] = [];
+  let cursor = 0;
+  while (cursor < key.length) {
+    const separator = key.indexOf(SESSION_KEY_LENGTH_SEPARATOR, cursor);
+    if (separator === -1) return [];
+    const length = Number(key.slice(cursor, separator));
+    if (!Number.isSafeInteger(length) || length < 0) return [];
+    const start = separator + 1;
+    const end = start + length;
+    if (end > key.length) return [];
+    parts.push(key.slice(start, end));
+    cursor = end;
+  }
+  return parts;
+}
 /**
  * Why a session is about to be torn down.
  *

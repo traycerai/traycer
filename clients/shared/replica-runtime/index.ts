@@ -122,7 +122,11 @@ export type {
   SessionRegistryPolicy,
   WarmCapScope,
 } from "./session-registry";
-export { createSessionRegistry, sessionKeyOf } from "./session-registry";
+export {
+  createSessionRegistry,
+  sessionKeyOf,
+  sessionKeyPartsOf,
+} from "./session-registry";
 
 export type {
   AccountantSnapshot,

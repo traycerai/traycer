@@ -1,6 +1,7 @@
 import {
   createSessionRegistry,
   sessionKeyOf,
+  sessionKeyPartsOf,
   type SessionKey,
   type SessionRegistry,
 } from "@traycer-clients/shared/replica-runtime";
@@ -235,14 +236,6 @@ export class ChatSessionRegistry {
   }
 }
 
-/**
- * NUL-joined rather than colon-joined so no component can forge another
- * key: epic, chat and host ids are opaque strings, and a printable
- * separator would let one of them contain the separator and collide two
- * distinct triples onto a single entry.
- */
-const CHAT_SESSION_KEY_SEPARATOR = "\u0000";
-
 function chatSessionKey(
   epicId: string,
   chatId: string,
@@ -256,16 +249,18 @@ function chatSessionKey(
  *
  * Reading the identity back out of the key rather than mirroring it on the
  * entry, so there is one record of which host a session belongs to and it
- * cannot disagree with the key the session is filed under. The parse is total
- * because {@link CHAT_SESSION_KEY_SEPARATOR} is a NUL and no id can contain
- * one - the same property that makes the key unforgeable is what makes it
- * decodable.
+ * cannot disagree with the key the session is filed under.
+ *
+ * Decoded with the ENCODER's own reader. This used to keep a private copy of
+ * the separator and `split` on it - a duplication that survives only until the
+ * encoding changes. When `sessionKeyOf` moved to a length-prefixed form (a NUL
+ * is no more excluded from an id than a `:` is), a local split would have gone
+ * on parsing a shape nobody writes, and answered a confidently wrong host id
+ * rather than failing to compile.
  */
 function chatSessionKeyHostId(key: SessionKey): string {
-  const parts = key.split(CHAT_SESSION_KEY_SEPARATOR);
-  return parts[2] ?? "";
+  return sessionKeyPartsOf(key)[2] ?? "";
 }
-
 function hasActiveChatWork(handle: ChatSessionStoreHandle): boolean {
   const state = handle.store.getState();
   // A chat parked on a human gate (interview / command approval / file-edit

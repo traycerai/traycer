@@ -28,6 +28,7 @@ import { unknownFreshness } from "../freshness";
 import { createGenerationGuard, guardHandler } from "../generation-guard";
 import {
   sessionKeyOf,
+  sessionKeyPartsOf,
   createSessionRegistry,
   type SessionRegistryPolicy,
   type SessionDisposeCause,
@@ -283,11 +284,33 @@ describe("sessionKeyOf", () => {
   });
 
   it("does not collide when a part itself contains the printable ':' separator", () => {
-    // The reason for the NUL separator: a `:`-joined key would fold these
-    // two distinct tuples onto the same string ("a:b:c").
+    // The original reason to abandon a `:`-joined key: it would fold these two
+    // distinct tuples onto the same string ("a:b:c"). Kept as a control - the
+    // length-prefixed encoding must still satisfy the property that motivated
+    // the NUL one it replaced.
     const left = sessionKeyOf(["a:b", "c"]);
     const right = sessionKeyOf(["a", "b:c"]);
     expect(left).not.toBe(right);
+  });
+
+  it("does not collide when a part contains a NUL either", () => {
+    // THE REDDENING ONE. A NUL-joined key folds these two exactly as a
+    // `:`-joined key folds the pair above, and the argument its doc made for
+    // NUL ("no id can contain a NUL") is the same unenforced claim that doc
+    // rejects for `:` one line earlier. Nothing excludes U+0000: the protocol
+    // fields are bare `z.string()`, JSON carries it, and a `hostId` is adopted
+    // verbatim from `~/.traycer/host-id` with only a `trim()`, which does not
+    // strip NUL because NUL is not whitespace.
+    const left = sessionKeyOf(["a\u0000b", "c"]);
+    const right = sessionKeyOf(["a", "b\u0000c"]);
+    expect(left).not.toBe(right);
+  });
+
+  it("round-trips every part back out, NUL and separators included", () => {
+    // The decode half has to survive the same inputs: `chatSessionKeyHostId`
+    // reads the host back OUT of the key rather than mirroring it on the entry.
+    const parts = ["epic\u0000one", "chat:two", "", "host\u0000:three"];
+    expect(sessionKeyPartsOf(sessionKeyOf(parts))).toEqual(parts);
   });
 });
 
