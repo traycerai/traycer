@@ -76,11 +76,13 @@ function request(name: string, bytes: Uint8Array) {
  */
 const MAX_FILE_NAME_BYTES = 255;
 
-/** Everything already queued has run, microtasks and timers alike. */
-function settle(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+/**
+ * A rejection shaped like the plugin's own "there is no file there": the code
+ * both native shells reject with, which is the signal absence is read from.
+ */
+function fileNotFoundRejection(): Error {
+  const error = new Error("'stat' failed because file does not exist.");
+  return Object.assign(error, { code: "OS-PLUG-FILE-0008" });
 }
 
 /** The set of paths a stat should report as already taken. */
@@ -90,7 +92,7 @@ function occupyDocuments(paths: readonly string[]): void {
       ? Promise.resolve({ uri: `file:///docs/${options.path}` })
       : // The plugin REJECTS a stat of a missing file rather than reporting
         // absence - "not there" only ever arrives as a failure.
-        Promise.reject(new Error("File does not exist")),
+        Promise.reject(fileNotFoundRejection()),
   );
 }
 
@@ -434,30 +436,39 @@ describe("MobileFileSave.downloadFile", () => {
     );
   });
 
-  it("does not hand the same path to two downloads racing on it", async () => {
-    // A path is only observably taken once its bytes have landed, so two
-    // downloads started close together would both see the same candidate free.
-    let releaseFirstWrite: () => void = () => undefined;
-    nativeMocks.writeFile.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseFirstWrite = () => {
-            resolve({ uri: "file:///docs/Traycer/usage.png" });
-          };
-        }),
-    );
+  it("does not hand the same path to two downloads started in one tick", async () => {
+    // The hard case: neither has claimed anything yet while both are awaiting
+    // their stat, so the claim set alone closes no window - only serialising
+    // the search does. Separate export surfaces have independent mutations, so
+    // two overlapping downloads are reachable.
     const host = new MobileFileSave();
 
-    const first = host.downloadFile(request("usage.png", new Uint8Array([1])));
-    // Let the first claim its path before the second starts probing.
-    await settle();
-    const second = host.downloadFile(request("usage.png", new Uint8Array([2])));
-    await settle();
-    releaseFirstWrite();
-    await Promise.all([first, second]);
+    await Promise.all([
+      host.downloadFile(request("usage.png", new Uint8Array([1]))),
+      host.downloadFile(request("usage.png", new Uint8Array([2]))),
+    ]);
 
-    expect(writtenFile(0).path).toBe("Traycer/usage.png");
-    expect(writtenFile(1).path).toBe("Traycer/usage (2).png");
+    const paths = [writtenFile(0).path, writtenFile(1).path];
+    expect(new Set(paths).size).toBe(2);
+    expect(paths).toContain("Traycer/usage.png");
+    expect(paths).toContain("Traycer/usage (2).png");
+  });
+
+  it("keeps serving later downloads after a stat throws outright", async () => {
+    // Serialising the search puts every download behind its predecessor, so a
+    // predecessor that blew up must not leave the rest waiting forever.
+    nativeMocks.stat.mockImplementationOnce(() => {
+      throw new Error("bridge unavailable");
+    });
+    const host = new MobileFileSave();
+
+    await expect(
+      host.downloadFile(request("usage.png", new Uint8Array([1]))),
+    ).resolves.toBeTruthy();
+    await expect(
+      host.downloadFile(request("later.png", new Uint8Array([1]))),
+    ).resolves.toBeTruthy();
+    expect(writtenFile(1).path).toBe("Traycer/later.png");
   });
 
   it("frees a claimed path again when its write fails", async () => {
@@ -474,16 +485,29 @@ describe("MobileFileSave.downloadFile", () => {
     expect(writtenFile(1).path).toBe("Traycer/usage.png");
   });
 
-  it("reads an unreadable directory as free rather than as taken", async () => {
-    // A stat that fails for any reason other than absence must not push a
-    // perfectly good download onto a numbered name.
-    nativeMocks.stat.mockRejectedValue(new Error("Directory unreadable"));
-
+  it("takes a confirmed not-found as the name being free", async () => {
+    // The ordinary case, and the one the whole probe rests on: nothing is
+    // there, so the download keeps the name it asked for.
     await new MobileFileSave().downloadFile(
       request("usage.png", new Uint8Array([1])),
     );
 
     expect(writtenFile(0).path).toBe("Traycer/usage.png");
+  });
+
+  it("treats a stat that failed for any other reason as occupied", async () => {
+    // The two mistakes are not equal. Reading an unknown failure as "free"
+    // lets the write replace a file that was there all along - the exact loss
+    // this collision handling exists to prevent - while reading it as "taken"
+    // costs the download nothing but a numbered name.
+    nativeMocks.stat.mockRejectedValue(new Error("I/O error"));
+
+    await new MobileFileSave().downloadFile(
+      request("usage.png", new Uint8Array([1])),
+    );
+
+    expect(writtenFile(0).path).not.toBe("Traycer/usage.png");
+    expect(writtenFile(0).path.startsWith("Traycer/usage")).toBe(true);
   });
 
   it("normalises the suggested name the same way the share leg does", async () => {

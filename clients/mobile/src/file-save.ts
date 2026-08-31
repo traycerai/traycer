@@ -224,19 +224,40 @@ function withNameInsert(name: string, insert: string): string {
 }
 
 /**
- * Whether something already occupies `path` in the documents directory. The
- * plugin REJECTS a stat of a missing file rather than reporting absence, so a
- * rejection is the "no" - and any other failure (an unreadable directory)
- * reads as "no" too, which is the safe answer: the caller only uses this to
- * pick a free name, and guessing "taken" would push a perfectly good download
- * onto a numbered name for no reason.
+ * The plugin's own code for "there is no file there", identical on both native
+ * shells (`FilesystemErrors.doesNotExist` / `FilesystemError.fileNotFound`).
+ * It arrives on the JS error because the plugin rejects with a code beside its
+ * message.
+ */
+const FILE_NOT_FOUND_CODE = "OS-PLUG-FILE-0008";
+
+function isFileNotFound(error: unknown): boolean {
+  if (!(typeof error === "object" && error !== null)) return false;
+  const code: unknown = Reflect.get(error, "code");
+  if (code === FILE_NOT_FOUND_CODE) return true;
+  // Both shells spell absence the same way in prose. Read as a fallback only,
+  // for a rejection that reaches here without the plugin's code on it.
+  const message: unknown = Reflect.get(error, "message");
+  return typeof message === "string" && message.includes("does not exist");
+}
+
+/**
+ * Whether something already occupies `path` in the documents directory.
+ *
+ * The plugin REJECTS a stat of a missing file rather than reporting absence,
+ * so only a CONFIRMED not-found answers "free". Every other failure - a
+ * transient I/O error, an unreadable directory, a denied permission - answers
+ * "taken", because the two mistakes are not equal: guessing "taken" costs a
+ * download a numbered name, while guessing "free" lets the write replace a
+ * file that was there all along, which is the exact loss this collision
+ * handling exists to prevent.
  */
 async function fileExists(path: string): Promise<boolean> {
   try {
     await Filesystem.stat({ path, directory: Directory.Documents });
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return !isFileNotFound(error);
   }
 }
 
@@ -252,6 +273,32 @@ async function fileExists(path: string): Promise<boolean> {
 const claimedDownloadPaths = new Set<string>();
 
 /**
+ * Serialises {@link claimDownloadPath}, so a search and the claim that ends it
+ * are one indivisible step.
+ *
+ * The search AWAITS a stat per candidate. Without this, two downloads of the
+ * same name started in one tick would both begin probing before either had
+ * claimed anything, both would see the candidate free, and both would claim
+ * and write it - the set alone closes no window, because nothing is in it yet
+ * while the stats are in flight. Running the searches one after another is
+ * what makes a claim visible to the next.
+ */
+let downloadClaimQueue: Promise<unknown> = Promise.resolve();
+
+function claimDownloadPath(name: string): Promise<string> {
+  // Settled either way: a rejected predecessor must not wedge the queue.
+  const next = downloadClaimQueue.then(
+    () => searchForFreeDownloadPath(name),
+    () => searchForFreeDownloadPath(name),
+  );
+  downloadClaimQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+/**
  * Whether `path` is spoken for, by a file already on disk or by a download
  * still writing one.
  */
@@ -262,6 +309,8 @@ async function downloadPathIsTaken(path: string): Promise<boolean> {
 /**
  * Claim the first free path for `name` in the download directory. The caller
  * MUST release it with {@link releaseDownloadPath} once the write settles.
+ * Only ever entered through {@link claimDownloadPath}, which is what makes the
+ * check and the claim atomic.
  *
  * A download must not silently replace an earlier one - two exports of the
  * same usage window suggest the same name, and overwriting the first would
@@ -270,7 +319,7 @@ async function downloadPathIsTaken(path: string): Promise<boolean> {
  * {@link MAX_NUMBERED_DOWNLOAD_ATTEMPTS} the launch stamp takes over, which is
  * unique by construction and so always terminates.
  */
-async function claimDownloadPath(name: string): Promise<string> {
+async function searchForFreeDownloadPath(name: string): Promise<string> {
   const claim = (path: string): string => {
     claimedDownloadPaths.add(path);
     return path;
