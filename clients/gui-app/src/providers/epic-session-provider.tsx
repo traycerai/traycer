@@ -345,12 +345,44 @@ export function EpicSessionProvider(
   const resolvedSessionHostClient = useHostClientForHostId(
     session?.hostId ?? targetHostId,
   );
+  // The client for the host this provider is currently POINTING at, which is
+  // NOT the one above while a re-point is establishing: `session` still names
+  // the outgoing host then, so that read answers for it and nothing else in
+  // the render path resolves the incoming one at all.
+  const resolvedTargetHostClient = useHostClientForHostId(targetHostId);
   // Read through an effect event so it is not a dependency of the session
-  // effect: `commandRequester` is consulted once, at handle creation, and
-  // this client legitimately rotates (reconnect, identity re-point) without
-  // that being a reason to tear down and reacquire the session.
-  const getCommandRequester = useEffectEvent(
-    (): HostClient<HostRpcRegistry> | null => resolvedSessionHostClient,
+  // effect: a handle's requester is consulted per call, and these clients
+  // legitimately rotate (reconnect, identity re-point) without that being a
+  // reason to tear down and reacquire the session.
+  //
+  // Resolved BY HOST ID rather than from one "the session's client" read,
+  // because TWO handles are live at once during a re-point. The previous
+  // handle stays registered and RENDERED while its successor establishes, and
+  // the successor's `attach()` starts the tab-open workspace-context read
+  // (`epic-lane-arm.ts`) BEFORE `commitReplacement` can run - which is gated
+  // on that candidate's own `snapshotLoaded`. So the single read sent the
+  // candidate's `epic.getWorkspaceContext` to A while its streams, its
+  // accounting stamp and its worker bootstrap all said B, with no post-commit
+  // refetch to correct it. `bridge-protocol.ts`'s "a worker never serves two
+  // hosts" is the invariant that broke.
+  //
+  // NOT `targetHostId` unconditionally either. The outgoing handle is still
+  // mounted and still issuing writes on behalf of the rows it projected, and
+  // re-aiming it at the incoming host is the same cross-host send pointed the
+  // other way.
+  const getRequesterForHostId = useEffectEvent(
+    (hostId: string): HostClient<HostRpcRegistry> | null => {
+      if (hostId === targetHostId) return resolvedTargetHostClient;
+      if (session !== null && hostId === session.hostId) {
+        return resolvedSessionHostClient;
+      }
+      // A handle whose construction host is neither the host this provider is
+      // pointing at nor the one it is currently serving has been superseded.
+      // REFUSING is the point rather than a gap: both dispatchers answer a
+      // `null` requester with a refusal the caller can see, where falling back
+      // to "whatever is live" would BE the cross-host send.
+      return null;
+    },
   );
   // Owner-identity discriminator (R-1), read off THE SESSION'S host - the same
   // client the stream runs on, not the app-wide one.
@@ -503,6 +535,14 @@ export function EpicSessionProvider(
       onAuthError();
     };
     const createHandle = (): OpenEpicStoreHandle => {
+      // The host THIS handle is constructed against: an alias for the run's
+      // `targetHostId`, which is already the value the transport below is
+      // opened with, the accounting port is built with, and the construction
+      // stamp is written from. Named separately because the requester it feeds
+      // has to keep meaning THE HANDLE'S host after the provider has re-pointed
+      // away from it - a bare `targetHostId` there reads as the provider's
+      // current target and is the same defect one re-point later.
+      const handleHostId = targetHostId;
       // Before the store exists, because `persist` reads its key at creation:
       // the bucket used to be named by the email, and re-keying without this
       // would silently reset every install's focus state on upgrade.
@@ -696,7 +736,7 @@ export function EpicSessionProvider(
           }
           try {
             const sent = await dispatchEpicWriteCommand(
-              { epicId, requester: () => getCommandRequester() },
+              { epicId, requester: () => getRequesterForHostId(handleHostId) },
               commandId,
               narrowed,
             );
@@ -712,7 +752,7 @@ export function EpicSessionProvider(
         // `Error` does not survive structured clone.
         laneUnary: (request) =>
           dispatchEpicLaneUnary(
-            { epicId, requester: () => getCommandRequester() },
+            { epicId, requester: () => getRequesterForHostId(handleHostId) },
             request,
           ),
         streams: wsStreamClient,

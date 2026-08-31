@@ -153,6 +153,41 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
 }));
 
+/**
+ * A pass-through spy on `spawnEpicRuntimeWorker`, so a pin can reach the exact
+ * `laneUnary` closure the provider hands each worker it spawns. The real spawn
+ * still runs underneath - this only records the option object on the way
+ * through. Order matches spawn order: index 0 is the first handle this
+ * provider acquires, index 1 a re-point's candidate, and so on.
+ */
+const spawnedRuntimeOptions = vi.hoisted(
+  (): {
+    laneUnaries: Array<
+      (request: { readonly kind: "workspace-context" }) => Promise<unknown>
+    >;
+  } => ({
+    laneUnaries: [],
+  }),
+);
+vi.mock(
+  "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker")
+      >();
+    return {
+      ...actual,
+      spawnEpicRuntimeWorker: (
+        options: Parameters<typeof actual.spawnEpicRuntimeWorker>[0],
+      ) => {
+        spawnedRuntimeOptions.laneUnaries.push(options.laneUnary);
+        return actual.spawnEpicRuntimeWorker(options);
+      },
+    };
+  },
+);
+
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import {
   clearSessionCreatedEpics,
@@ -682,6 +717,7 @@ describe("<EpicSessionProvider />", () => {
     setDesktopEpicOwnershipBridge(null);
     clearSessionCreatedEpics();
     resetAuth("signed-in", "alice@example.com");
+    spawnedRuntimeOptions.laneUnaries.length = 0;
   });
 
   afterEach(() => {
@@ -1071,6 +1107,115 @@ describe("<EpicSessionProvider />", () => {
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
     expect(await readRootEdit(seenHandles.at(-1), "local-repoint-edit")).toBe(
       "pending",
+    );
+  });
+
+  it("addresses a re-point candidate's lane unary to the host it was CONSTRUCTED against, not the still-mounted session's host", async () => {
+    const streams: ControlledEpicStream[] = [];
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    installStreamFactory((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const view = render(
+      <EpicSessionProvider epicId="epic-session-test" tabId="epic-session-test">
+        <HandleProbe
+          onHandle={(handle) => {
+            seenHandles.push(handle);
+          }}
+        />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    act(() => {
+      deliverSnapshot(streams[0], "room-a");
+    });
+
+    const hostAClient = sessionHostClients.byHostId.get("host-a");
+    if (hostAClient === undefined) {
+      throw new Error("expected a resolved host-a client");
+    }
+    hostAClient.request.mockResolvedValue({ context: null });
+
+    act(() => {
+      hostState.id = "host-b";
+      view.rerender(
+        <EpicSessionProvider
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe
+            onHandle={(handle) => {
+              seenHandles.push(handle);
+            }}
+          />
+        </EpicSessionProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(streams).toHaveLength(2);
+    });
+    // The candidate must still be ESTABLISHING - its snapshot is deliberately
+    // never delivered, because that is the window the defect lives in: once
+    // the replacement commits, `session.hostId` becomes B and the bug is
+    // unobservable.
+    expect(streams[1].closeCount).toBe(0);
+    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+    if (spawnedRuntimeOptions.laneUnaries.length !== 2) {
+      throw new Error(
+        `expected exactly 2 spawned workers (the mounted handle and the re-point candidate), got ${spawnedRuntimeOptions.laneUnaries.length}`,
+      );
+    }
+
+    // `useHostClientForHostId` is only ever called with `session?.hostId ??
+    // targetHostId` in this window - which stays "host-a" while the candidate
+    // is establishing - so nothing in the render path has resolved a "host-b"
+    // client yet. Resolve it directly through the same cache the mocked hook
+    // reads from, so a stub exists to assert against regardless of what the
+    // fix's own resolution path turns out to be.
+    resolveSessionHostClient("host-b");
+    const hostBClient = sessionHostClients.byHostId.get("host-b");
+    if (hostBClient === undefined) {
+      throw new Error("expected a resolved host-b client");
+    }
+    hostBClient.request.mockResolvedValue({ context: null });
+
+    // THE REDDENING ONE - the candidate's unary must go to B.
+    await spawnedRuntimeOptions.laneUnaries[1]({ kind: "workspace-context" });
+    expect(hostBClient.request).toHaveBeenCalledWith(
+      "epic.getWorkspaceContext",
+      { epicId: "epic-session-test" },
+    );
+    // ...and not to A - today it goes to A instead, since `getCommandRequester`
+    // resolves from `session?.hostId ?? targetHostId`, and `session` is still
+    // A while the candidate is establishing.
+    expect(hostAClient.request).not.toHaveBeenCalledWith(
+      "epic.getWorkspaceContext",
+      { epicId: "epic-session-test" },
+    );
+
+    // CONTROL - must be green both before and after the fix. The naive fix
+    // ("bind every handle to `targetHostId`") would make the still-mounted A
+    // handle's own unary address B too, which this catches.
+    await spawnedRuntimeOptions.laneUnaries[0]({ kind: "workspace-context" });
+    expect(hostAClient.request).toHaveBeenCalledWith(
+      "epic.getWorkspaceContext",
+      { epicId: "epic-session-test" },
     );
   });
 
