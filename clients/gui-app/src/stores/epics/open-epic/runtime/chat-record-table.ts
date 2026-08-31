@@ -15,6 +15,7 @@ import type {
   ChatRecordSummaryV11,
 } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
+import { sessionKeyOf } from "@traycer-clients/shared/replica-runtime";
 import type { ChatsSlice, HeldChatRecordRow } from "../types";
 import { EMPTY_CHATS_SLICE } from "../types";
 import {
@@ -101,7 +102,22 @@ export interface ChatRecordTable {
  * viewer's chat vanishing from their own sidebar.
  */
 function recordKey(ownerUserId: string, chatId: string): string {
-  return `${ownerUserId}\u001f${chatId}`;
+  // `sessionKeyOf`, not a separator join. This is the same non-injective
+  // composite key this PR already fixed once in `session-registry.ts`, and the
+  // reasoning there applies verbatim: the wire schemas are bare `z.string()`,
+  // so "no id can contain U+001F" is a property nobody can hold true across a
+  // schema change, and `("a", "b<US>c")` and `("a<US>b", "c")` collide.
+  //
+  // It matters more here than in a memo fingerprint, which is why this key is
+  // encoded and the signature builders elsewhere in the app are not: this one
+  // indexes the retained rows AND `pendingCreations`, so a collision does not
+  // cost a re-render — it evicts one owner's row or retires the wrong pending
+  // stand-in, which is the viewer's chat disappearing from their own sidebar.
+  // Exactly the failure the owner-scoping above exists to prevent.
+  //
+  // Length-prefixed, so it reserves no character at all and there is no next
+  // "but nothing can contain THIS one" left to be wrong about.
+  return sessionKeyOf([ownerUserId, chatId]);
 }
 
 export function createChatRecordTable(

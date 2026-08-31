@@ -713,6 +713,20 @@ export function createArtifactBodyLeaseBridge(options: {
       if (entry === undefined) return;
       cancelLinger(entry);
       entries.delete(docKey);
+      // The hot charge is LOCAL and still has to come back. The doc-comment
+      // argument for this method - "there is nothing on the far side to settle
+      // bytes back INTO" - is about the WORKER: it justifies not posting a
+      // demote that would be answered `not-held`. `budget` is main-side
+      // accounting, so nothing about the worker's replicas being gone releases
+      // the charge `chargeHot` took at installation. Skipping it left a
+      // phantom holder for a body that no longer exists anywhere, which keeps
+      // the plane over limit and evicts unrelated LIVE documents.
+      //
+      // Zero settled bytes, for the reason the acknowledged path states one
+      // screen up: "No bytes came back, so nothing to record cold - only the
+      // hot charge is released." That is exactly this situation, and the tier
+      // is the one reporter of cold bytes either way.
+      options.budget.settleCold(docKey, 0);
     },
     flushLingering(): void {
       // Snapshot first: `postLifecycleEnd` mutates `entries` for the
@@ -835,43 +849,72 @@ export function createArtifactBodyLeaseBridge(options: {
     held.retryRequested = false;
     void options.bridge
       .call("body/materialize", { artifactId: held.artifactId }, NO_TRANSFER)
-      .then((answer) => {
-        const stillAwaiting = awaiting.get(docKey);
-        // Every holder released while this was in flight. The release already
-        // posted `body/release`, so there is nothing to install INTO and
-        // nothing to keep waiting for.
-        if (stillAwaiting === undefined) return;
-        stillAwaiting.retrying = false;
-        if (answer.docKey === null || answer.update === null) {
+      .then(
+        (answer) => {
+          const stillAwaiting = awaiting.get(docKey);
+          // Every holder released while this was in flight. The release already
+          // posted `body/release`, so there is nothing to install INTO and
+          // nothing to keep waiting for.
+          if (stillAwaiting === undefined) return;
+          stillAwaiting.retrying = false;
+          if (answer.docKey === null || answer.update === null) {
+            if (stillAwaiting.retryRequested) {
+              // A newer projection landed mid-flight, so this answer is already
+              // stale - which is the ordinary seed sequence, not a fault. Ask
+              // again on the state that push described, and say nothing.
+              stillAwaiting.retryRequested = false;
+              startAwaitingRetry(docKey, stillAwaiting);
+              return;
+            }
+            // STILL byteless, with the room reading ready and nothing newer to
+            // go on. Stay awaiting - a later push tries again - but say so: this
+            // is a disagreement between the availability map and the tier, and
+            // the symptom it produces is a tile that never fills in.
+            options.reportAwaitingStalled(docKey, held.artifactId);
+            return;
+          }
+          awaiting.delete(docKey);
+          // The awaiting count carries across whole. Every one of those holders
+          // is still mounted and still owes a release; restarting at one would
+          // let the first unmount demote a doc the others hold.
+          installGranted({
+            docKey,
+            update: answer.update,
+            docGuid: answer.docGuid,
+            seedMode: answer.seedMode,
+            hostStateVector: answer.hostStateVector,
+            awarenessFrames: answer.awarenessFrames,
+            leases: stillAwaiting.leases,
+          });
+        },
+        // The rejection arm, which this call was the only one in this module
+        // without. The other three detached bridge calls here already take the
+        // two-argument form; this one took a fulfillment-only `.then`, so a
+        // worker-handler fault or a disposed bridge left `retrying` latched
+        // TRUE forever. Every later ready/seed push then took the
+        // `held.retrying` branch and set `retryRequested` for an in-flight call
+        // that no longer existed, and the mounted artifact awaited for the life
+        // of the session — a permanently blank tile from one transient failure.
+        () => {
+          const stillAwaiting = awaiting.get(docKey);
+          if (stillAwaiting === undefined) return;
+          // Unlatch FIRST, so the entry is retryable again whatever follows.
+          stillAwaiting.retrying = false;
           if (stillAwaiting.retryRequested) {
-            // A newer projection landed mid-flight, so this answer is already
-            // stale - which is the ordinary seed sequence, not a fault. Ask
-            // again on the state that push described, and say nothing.
+            // A push landed mid-flight and is owed an attempt. Honouring it here
+            // mirrors the fulfillment path, and it cannot spin: the re-drive
+            // clears `retryRequested` on the way in, so a bridge that rejects
+            // every time costs one extra call per push rather than a loop.
             stillAwaiting.retryRequested = false;
             startAwaitingRetry(docKey, stillAwaiting);
             return;
           }
-          // STILL byteless, with the room reading ready and nothing newer to
-          // go on. Stay awaiting - a later push tries again - but say so: this
-          // is a disagreement between the availability map and the tier, and
-          // the symptom it produces is a tile that never fills in.
+          // No push is owed, so nothing here will ask again. Report it for the
+          // same reason the byteless-answer branch above does: the symptom is a
+          // tile that never fills in, and silence is what made that unexplainable.
           options.reportAwaitingStalled(docKey, held.artifactId);
-          return;
-        }
-        awaiting.delete(docKey);
-        // The awaiting count carries across whole. Every one of those holders
-        // is still mounted and still owes a release; restarting at one would
-        // let the first unmount demote a doc the others hold.
-        installGranted({
-          docKey,
-          update: answer.update,
-          docGuid: answer.docGuid,
-          seedMode: answer.seedMode,
-          hostStateVector: answer.hostStateVector,
-          awarenessFrames: answer.awarenessFrames,
-          leases: stillAwaiting.leases,
-        });
-      });
+        },
+      );
   }
 
   /**

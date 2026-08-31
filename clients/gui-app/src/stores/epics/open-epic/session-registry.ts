@@ -379,6 +379,29 @@ export class OpenEpicSessionRegistry {
   private retainedCount: number = 0;
   private retainedSoftCapLogged: boolean = false;
   private nextRetentionSeq: number = 0;
+  /**
+   * Bumped by `disposeAll` — the sign-out / user-switch boundary.
+   *
+   * A merge in flight (see {@link mergeRetainedThenDispose}) holds its source
+   * in NEITHER collection: it has left `sessions`, and it is not in `retained`
+   * because the whole point of the merge is that its edits went into the
+   * target. So neither teardown walk can see it, and a merge that fails after
+   * the walk would re-append a previous identity's handle into the registry
+   * that walk just cleared. These two counters are how the async tail learns
+   * that the world it was retaining into is gone.
+   */
+  private disposalGeneration: number = 0;
+  /**
+   * The per-epic twin, bumped by `disposeRetainedForEpic` — tab close and the
+   * user's explicit discard.
+   *
+   * Separate from the global counter rather than folded into it, because the
+   * two have different blast radii and collapsing them would make a discard on
+   * one epic destroy an unrelated epic's in-flight edits. `disposeAll` is a
+   * security boundary and fences everything; a discard is one decision about
+   * one task and fences only that task.
+   */
+  private readonly epicDisposalGeneration = new Map<string, number>();
 
   constructor(options: OpenEpicSessionRegistryOptions) {
     this.sessions = createSessionRegistry<EpicRegistrySession>({
@@ -665,6 +688,18 @@ export class OpenEpicSessionRegistry {
    * source is merged exactly once, structurally. A guard was written here and
    * removed: it read as protection while its condition was excluded, which is
    * the same defect as the `reparentArtifact` catch this ticket deleted.
+   *
+   * ## The disposal fence is NOT that guard
+   *
+   * `keepSourceAsItsOwnBuffer` does check two generation counters, and the
+   * paragraph above is not an argument against it - the excluded condition
+   * there is "the same source merges twice", which is still excluded. This one
+   * is "the registry was torn down while I was awaiting", which is not
+   * excluded by anything, and is reachable precisely BECAUSE of the property
+   * the paragraph above relies on: the source has left `sessions` and is not
+   * in `retained`, so it is invisible to both teardown walks. Being unreachable
+   * by a second merge and being unreachable by `disposeAll` are different
+   * claims, and only the first one was true.
    */
   private mergeRetainedThenDispose(
     source: EpicRegistrySession,
@@ -672,7 +707,31 @@ export class OpenEpicSessionRegistry {
     target: RetainedUnsyncedBuffer,
     creditedQueueSize: number,
   ): void {
+    // Captured BEFORE the first await, so the comparison below is against the
+    // world this merge was started in.
+    const startedAtDisposal = this.disposalGeneration;
+    const startedAtEpicDisposal =
+      this.epicDisposalGeneration.get(source.epicId) ?? 0;
     const keepSourceAsItsOwnBuffer = (): void => {
+      if (
+        this.disposalGeneration !== startedAtDisposal ||
+        (this.epicDisposalGeneration.get(source.epicId) ?? 0) !==
+          startedAtEpicDisposal
+      ) {
+        // The registry we would retain into has been torn down since. Both
+        // teardown walks missed this source (it was in neither collection), so
+        // re-appending it now is how a previous identity's Y.Doc and its
+        // unsynced row get back in AFTER a sign-out — the one thing
+        // `disposeAll` exists to make impossible. Dispose instead.
+        //
+        // The edits are lost, and that is the policy already applied on both
+        // teardown paths: `disposeAll` discards a dirty live session's edits
+        // for the same reason, and a discard is the user having said so. The
+        // target keeps its optimistic credit rather than having it reverted —
+        // the credit is bookkeeping for a `target` that no longer exists.
+        source.handle.dispose();
+        return;
+      }
       // The credit named a transfer that did not happen.
       target.queueSize -= creditedQueueSize;
       this.appendRetainedBuffer(source, identity, creditedQueueSize);
@@ -771,6 +830,14 @@ export class OpenEpicSessionRegistry {
   }
 
   private disposeRetainedForEpic(epicId: string): void {
+    // Bumped BEFORE the early return: a merge can be in flight for an epic
+    // whose bucket is momentarily absent, and that source is exactly the one
+    // this fence is for. Returning without bumping would let it re-append
+    // after the discard.
+    this.epicDisposalGeneration.set(
+      epicId,
+      (this.epicDisposalGeneration.get(epicId) ?? 0) + 1,
+    );
     const bucket = this.retained.get(epicId);
     if (bucket === undefined) return;
     this.retained.delete(epicId);
@@ -949,6 +1016,11 @@ export class OpenEpicSessionRegistry {
       this.retained.clear();
       this.retainedCount = 0;
       this.retainedSoftCapLogged = false;
+      // Fences every merge currently in flight. Those sources are in neither
+      // collection above, so the two loops cannot reach them; without this a
+      // late refusal or rejection re-appends a PREVIOUS identity's handle into
+      // the registry this method just emptied.
+      this.disposalGeneration += 1;
       this.sessions.notify();
     });
   }

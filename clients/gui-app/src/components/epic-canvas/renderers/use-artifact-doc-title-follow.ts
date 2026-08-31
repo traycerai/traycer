@@ -8,6 +8,24 @@ import {
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type {
+  ArtifactsSlice,
+  ArtifactProjection,
+} from "@/stores/epics/open-epic/types";
+
+/**
+ * The artifact row, or `null` once it has been deleted. Both readers below go
+ * through this so the enqueue-time follow check and the flush-time re-check
+ * observe the record the same way.
+ */
+function readArtifact(
+  artifacts: ArtifactsSlice,
+  artifactId: string,
+): ArtifactProjection | null {
+  return Object.hasOwn(artifacts.byId, artifactId)
+    ? artifacts.byId[artifactId]
+    : null;
+}
 
 /**
  * Trailing debounce for the authoritative `epic.renameArtifact` persist. The
@@ -130,23 +148,68 @@ export function useArtifactDocTitleFollow(params: {
     let pendingPersistTitle: string | null = null;
     let persistTimer: number | null = null;
 
+    /**
+     * The last title this hook actually asked the authority for.
+     *
+     * The re-check below needs to tell "the title is where I last put it" from
+     * "somebody else renamed this", and after the optimistic local write was
+     * removed those two are no longer distinguishable from `artifact.title`
+     * alone. Re-running `nextTitleFollow`'s own `titleFollowsDoc` at flush time
+     * does not work either: `lastDocTitle` has already advanced to the newest
+     * heading, so typing "A" then "B" leaves the artifact reading "A" against a
+     * tracked "B" and the check would discard a perfectly ordinary rename.
+     */
+    let lastRequestedTitle: string | null = null;
+
     const flushPersist = (): void => {
       persistTimer = null;
       const title = pendingPersistTitle;
       pendingPersistTitle = null;
       if (title === null) return;
+      // RE-READ before sending. A sidebar or remote rename can land inside the
+      // 800 ms debounce window, and write commands carry no expected entity
+      // version — so a delayed request executes after the newer explicit rename
+      // and silently overwrites it. This is the guard the optimistic-write
+      // removal took with it: the old `artifact.title !== title` test relied on
+      // this hook having already written the title locally, so keeping it as-is
+      // would now discard EVERY rename rather than only superseded ones.
+      const artifact = readArtifact(
+        handle.store.getState().artifacts,
+        artifactId,
+      );
+      const currentTitle = artifact?.title ?? "";
+      const stillFollowing =
+        currentTitle.length === 0 ||
+        currentTitle === defaultTitle ||
+        currentTitle === lastRequestedTitle;
+      if (!stillFollowing) {
+        // Following is broken, which is the documented meaning of an explicit
+        // rename. Abandon the pending value rather than racing it — the
+        // deliberate title wins, exactly as it does at enqueue time.
+        return;
+      }
+      const supersededTitle = lastRequestedTitle;
+      lastRequestedTitle = title;
       void persistRename({ epicId, artifactId, title }).then(
         () => renameArtifactInTab(viewTabId, artifactId, title),
-        () => {},
+        () => {
+          // The authority never took this title, so the tracker must not claim
+          // it did: the artifact still reads the PREVIOUS title, which the
+          // next flush would then mistake for somebody else's rename and stop
+          // following on. Only roll back if nothing newer has been requested.
+          if (lastRequestedTitle === title) {
+            lastRequestedTitle = supersededTitle;
+          }
+        },
       );
     };
 
     const onUpdate = ({ transaction }: EditorEvents["update"]): void => {
       if (!transaction.docChanged) return;
-      const state = handle.store.getState();
-      const artifact = Object.hasOwn(state.artifacts.byId, artifactId)
-        ? state.artifacts.byId[artifactId]
-        : null;
+      const artifact = readArtifact(
+        handle.store.getState().artifacts,
+        artifactId,
+      );
       const result = nextTitleFollow({
         nextDocTitle: leadingDocTitle(editor),
         lastDocTitle,
