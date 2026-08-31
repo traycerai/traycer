@@ -259,7 +259,7 @@ function SweepHostPickerOption(props: {
   //
   // `connectable` is a fact about the DIRECTORY - a dialable endpoint - and it
   // stays true when the client cannot be built for a reason that has nothing to
-  // do with the route: `buildTransientHostClient` also answers `null` with no
+  // do with the route: `buildDialableHostClient` also answers `null` with no
   // request context or no bound user, which is the whole fleet at once, not one
   // machine. Judging the row on `connectable` alone therefore left an enabled
   // row whose every click re-entered the same unresolved pick, silently and

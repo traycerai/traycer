@@ -501,7 +501,7 @@ describe("resolveScopedHost", () => {
 
 describe("transientClientEntry", () => {
   it("withholds the entry for a non-connectable host, URL or not", () => {
-    // The leak this closes: `buildTransientHostClient` checks only that a
+    // The leak this closes: `buildDialableHostClient` checks only that a
     // websocketUrl exists, so handing it the entry of an unavailable or
     // plan-restricted row produced a live-looking client the status machine
     // had already ruled unreachable — and panels that read `scope.client`

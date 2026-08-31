@@ -1,8 +1,13 @@
 import { useMemo } from "react";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostRuntimeClient } from "@/lib/host/runtime";
+import {
+  dialableHostEndpoint,
+  dialableHostEndpointFor,
+} from "@/lib/host/transport-key";
+import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
 
 /**
  * Builds a stateless `HostRequester` facade that issues RPCs against `target`
@@ -16,18 +21,19 @@ import { useHostRuntimeClient } from "@/lib/host/runtime";
  * which revalidates the target against the directory and captures the shared
  * binding/request authority plus its provider-lifetime coordinator.
  *
- * Returns `null` when `target` has no websocket URL, or there is no
- * authenticated request context / bound user on `globalClient`. Plain
+ * Returns `null` when the canonical transport predicate says `target` cannot
+ * be dialed, or there is no authenticated request context / bound user on
+ * `globalClient`. Plain
  * function (no hooks) so imperative call sites - a callback or `mutationFn`
  * invoked once per differing `hostId` - can resolve a routed client without
  * violating the rules of hooks; `useHostClientFor` below is the memoized
  * wrapper for render-time single-target consumers.
  */
-export function buildTransientHostClient(
+export function buildDialableHostClient(
   globalClient: HostClient<HostRpcRegistry>,
   target: HostDirectoryEntry,
 ): HostClient<HostRpcRegistry> | null {
-  if (target.websocketUrl === null) return null;
+  if (dialableHostEndpoint(target) === null) return null;
   const requestContext = globalClient.getRequestContext();
   // `null` when signed out or the credential lease was released - the
   // "no bound user" gate.
@@ -37,8 +43,21 @@ export function buildTransientHostClient(
   return globalClient.createRequester(target);
 }
 
+function buildDialableHostClientFor(
+  globalClient: HostClient<HostRpcRegistry>,
+  target: HostDirectoryEntry,
+  hasReadySession: boolean,
+): HostClient<HostRpcRegistry> | null {
+  if (dialableHostEndpointFor(target, hasReadySession) === null) return null;
+  const requestContext = globalClient.getRequestContext();
+  const userId = globalClient.getRequestContextUserId();
+  if (requestContext === null || userId === null) return null;
+
+  return globalClient.createRequester(target);
+}
+
 /**
- * Memoized render-time wrapper over `buildTransientHostClient` for a single,
+ * Memoized render-time wrapper over `buildDialableHostClient` for a single,
  * referentially-stable `target`. Settings ▸ Worktrees uses it to list /
  * delete worktrees on whichever host the user selects.
  *
@@ -56,6 +75,10 @@ export function useHostClientFor(
   const globalClient = useHostRuntimeClient();
   const requestContext = globalClient.getRequestContext();
   const userId = globalClient.getRequestContextUserId();
+  // Remote-session readiness changes independently of directory rows. Thread
+  // the subscribed answer into the canonical predicate instead of reading its
+  // pull-only cache inside this memo.
+  const hasReadySession = useRemoteSessionPollReadiness(target?.hostId ?? "");
 
   return useMemo(() => {
     // Same gates the builder re-checks internally; read here so the memo
@@ -64,6 +87,6 @@ export function useHostClientFor(
     if (target === null || requestContext === null || userId === null) {
       return null;
     }
-    return buildTransientHostClient(globalClient, target);
-  }, [target, globalClient, requestContext, userId]);
+    return buildDialableHostClientFor(globalClient, target, hasReadySession);
+  }, [target, globalClient, hasReadySession, requestContext, userId]);
 }

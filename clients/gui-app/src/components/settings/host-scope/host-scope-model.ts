@@ -174,7 +174,7 @@ export function buildHostScopeOptions(
  * Can this row be administered over the host's own RPC right now?
  *
  * A directory entry with no websocket URL is a listing, not a route:
- * `buildTransientHostClient` returns null for it, so offering it as an
+ * `buildDialableHostClient` returns null for it, so offering it as an
  * administrable target would produce a picker row that can never load.
  *
  * Dialability is half of that question, not a detail — so this now CALLS the
@@ -186,7 +186,7 @@ export function buildHostScopeOptions(
  * transport was taught that a failed liveness read still dials, and a
  * hand-copied predicate cannot be told that.
  *
- * The URL check matters on its own: `buildTransientHostClient` does not
+ * The URL check matters on its own: `buildDialableHostClient` does not
  * re-check it, so a URL-only test handed back a live-looking client whose every
  * call hangs — the scope read `ready`, panels mounted, and the Add-host dialog
  * announced a machine as connected and ready to run agents.
@@ -366,7 +366,7 @@ export function resolveScopedHost(input: {
 
 /**
  * The one rule for which directory entry a transient client may be built
- * from. `buildTransientHostClient` checks only that a `websocketUrl` exists —
+ * from. `buildDialableHostClient` checks only that a `websocketUrl` exists —
  * not `status`, not the plan gate — so any caller that hands it an entry from
  * a non-`connectable` row gets back a live-looking client for a route the
  * transport refuses. Panels read `scope.client` before their gate renders

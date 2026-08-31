@@ -7,6 +7,10 @@ export interface ReactiveHostReadiness {
   readonly hostId: string | null;
   readonly requestContextUserId: string | null;
   readonly isReady: boolean;
+  /** Whether the live directory row currently supplies an RPC address. */
+  readonly hasRpcEndpoint: boolean;
+  /** Identity + authority + the minimum transport input required to dial. */
+  readonly canExecute: boolean;
 }
 
 const SNAPSHOT_SEPARATOR = "\u0000";
@@ -54,19 +58,32 @@ function readHostReadinessSnapshot<Registry extends VersionedRpcRegistry>(
   return [
     client?.getActiveHostId() ?? "",
     client?.getRequestContextUserId() ?? "",
+    (client?.getActiveHost()?.websocketUrl ?? null) === null ? "" : "1",
   ].join(SNAPSHOT_SEPARATOR);
 }
 
 function parseHostReadinessSnapshot(snapshot: string): ReactiveHostReadiness {
-  const separatorIndex = snapshot.indexOf(SNAPSHOT_SEPARATOR);
-  const hostId = normalizeSnapshotPart(snapshot.slice(0, separatorIndex));
-  const requestContextUserId = normalizeSnapshotPart(
-    snapshot.slice(separatorIndex + SNAPSHOT_SEPARATOR.length),
+  const firstSeparatorIndex = snapshot.indexOf(SNAPSHOT_SEPARATOR);
+  const secondSeparatorIndex = snapshot.indexOf(
+    SNAPSHOT_SEPARATOR,
+    firstSeparatorIndex + SNAPSHOT_SEPARATOR.length,
   );
+  const hostId = normalizeSnapshotPart(snapshot.slice(0, firstSeparatorIndex));
+  const requestContextUserId = normalizeSnapshotPart(
+    snapshot.slice(
+      firstSeparatorIndex + SNAPSHOT_SEPARATOR.length,
+      secondSeparatorIndex,
+    ),
+  );
+  const hasRpcEndpoint =
+    snapshot.slice(secondSeparatorIndex + SNAPSHOT_SEPARATOR.length) === "1";
+  const isReady = hostId !== null && requestContextUserId !== null;
   return {
     hostId,
     requestContextUserId,
-    isReady: hostId !== null && requestContextUserId !== null,
+    isReady,
+    hasRpcEndpoint,
+    canExecute: isReady && hasRpcEndpoint,
   };
 }
 

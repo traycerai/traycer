@@ -79,6 +79,12 @@ import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import {
+  useHostReachability,
+  type HostReachability,
+} from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -501,6 +507,22 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     [catalog.harnesses, tuiOnly],
   );
   const refreshCatalog = useRefreshHarnessCatalogForClient(runTargetClient);
+  const runTargetReadiness = useReactiveHostReadiness(runTargetClient);
+  const runTargetReachability = useHostReachability(
+    runTargetHostId ?? UNKNOWN_HOST_PLACEHOLDER,
+  );
+  const hostUnavailableLabel = modelPickerHostUnavailableLabel(
+    runTargetHostId,
+    runTargetReadiness.hasRpcEndpoint,
+    runTargetReachability,
+    hasModelPickerCatalogFailure(
+      catalog.harnessesError,
+      selectedModelsQuery.isError,
+    ),
+  );
+  const handleRefreshCatalog = useCallback(async () => {
+    await refreshCatalog();
+  }, [refreshCatalog]);
   const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
   // "Pending" has to mean a fetch is actually coming. A disabled query with no
   // cached data reports `isPending` forever, so reading it raw would leave an
@@ -975,7 +997,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         catalogHarnessesLoading={catalog.harnessesLoading}
         onEntryChange={handleRailEntryChange}
         onProfileChange={handleProfileChange}
-        onRefreshCatalog={refreshCatalog}
+        onRefreshCatalog={handleRefreshCatalog}
+        hostUnavailableLabel={hostUnavailableLabel}
         onOpenProviderSettings={openProviderSettings}
         onClosePicker={closeOnly}
         listRef={listRef}
@@ -1376,4 +1399,34 @@ function modelRowsListKey(input: ModelRowsListKeyInput): string {
     ? `search:${activeProviderId}:${query}`
     : `browse:${activeProviderId}`;
   return `${openVersion}:${modeKey}`;
+}
+
+function hasModelPickerCatalogFailure(
+  harnessesError: Error | null,
+  selectedModelsQueryErrored: boolean,
+): boolean {
+  return harnessesError !== null || selectedModelsQueryErrored;
+}
+
+function modelPickerHostUnavailableLabel(
+  hostId: string | null,
+  hasRpcEndpoint: boolean,
+  reachability: HostReachability,
+  hasCatalogFailure: boolean,
+): string | null {
+  if (
+    hasRpcEndpoint &&
+    (!hasCatalogFailure || reachability.status !== "unreachable")
+  ) {
+    return null;
+  }
+  if (hostId === null) return "No device available";
+  if (reachability.status === "checking") return "Checking device";
+  if (reachability.status === "unreachable") {
+    if (reachability.unavailability === "plan-restricted") {
+      return `${reachability.hostLabel} isn't available on your plan`;
+    }
+    return `${reachability.hostLabel} is offline`;
+  }
+  return `${reachability.hostLabel} is starting`;
 }
