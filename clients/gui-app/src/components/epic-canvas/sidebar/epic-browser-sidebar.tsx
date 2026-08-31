@@ -1,5 +1,5 @@
 import { Globe2, Plus, RotateCcw, Search, TriangleAlert } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import type {
   BrowserSessionInfo,
   BrowserTabDriver,
@@ -19,6 +19,11 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-browser-sidebar-header";
 import { BrowserTabRow } from "@/components/epic-canvas/sidebar/epic-browser-sidebar-row";
 import { useAddBrowserAction } from "@/components/epic-canvas/sidebar/use-browser-add-action";
+import {
+  filterBrowserTabRows,
+  useBrowserSidebarTabRows,
+  useBrowserTabRowLabels,
+} from "@/components/epic-canvas/sidebar/use-browser-tab-rows";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { BrowserSessionsHostBoundary } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -26,12 +31,6 @@ import {
   useSurfaceHostPin,
   useTabSurfaceKey,
 } from "@/hooks/host/use-surface-host-pin";
-import {
-  disambiguateSecondaryLabels,
-  nextSettledTabIdentity,
-  type SettledTabIdentity,
-} from "@/lib/browser-view/browser-tab-display";
-import { compositeKey } from "@/lib/browser-view/tiles/browser-view-keys";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import {
@@ -73,55 +72,6 @@ function BrowsersPanelBodyFrame(props: LeftPanelSlotProps) {
   );
 }
 
-type BrowserSidebarTabRow = {
-  readonly key: string;
-  readonly session: BrowserSessionInfo;
-  readonly tab: BrowserTabInfo;
-  readonly identity: SettledTabIdentity;
-};
-
-function nextBrowserSidebarTabRows(
-  previous: readonly BrowserSidebarTabRow[],
-  sessions: readonly BrowserSessionInfo[],
-): readonly BrowserSidebarTabRow[] {
-  const previousByKey = new Map(previous.map((row) => [row.key, row]));
-  const next = sessions.flatMap((session) =>
-    session.tabs.map((tab) => {
-      const key = compositeKey(session.hostId, session.sessionId, tab.tabId);
-      return {
-        key,
-        session,
-        tab,
-        identity: nextSettledTabIdentity(
-          previousByKey.get(key)?.identity ?? null,
-          tab,
-        ),
-      };
-    }),
-  );
-  const nextByKey = new Map(next.map((row) => [row.key, row]));
-  return [
-    ...previous.flatMap((row) => {
-      const current = nextByKey.get(row.key);
-      return current === undefined ? [] : [current];
-    }),
-    ...next.filter((row) => !previousByKey.has(row.key)),
-  ];
-}
-
-function useBrowserSidebarTabRows(
-  sessions: readonly BrowserSessionInfo[],
-): readonly BrowserSidebarTabRow[] {
-  const [state, setState] = useState(() => ({
-    sessions,
-    rows: nextBrowserSidebarTabRows([], sessions),
-  }));
-  if (state.sessions === sessions) return state.rows;
-  const rows = nextBrowserSidebarTabRows(state.rows, sessions);
-  setState({ sessions, rows });
-  return rows;
-}
-
 function BrowsersPanelBodyLive(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -134,36 +84,11 @@ function BrowsersPanelBodyLive(props: {
     [chats],
   );
   const tabs = useBrowserSidebarTabRows(sessions.items);
-  const secondaryByKey = useMemo(
-    () =>
-      disambiguateSecondaryLabels(
-        tabs.map((row) => ({
-          key: row.key,
-          tabId: row.tab.tabId,
-          title: row.identity.title,
-          url: row.identity.url,
-        })),
-      ),
-    [tabs],
+  const { secondaryByKey, duplicateTitles } = useBrowserTabRowLabels(tabs);
+  const filteredTabs = useMemo(
+    () => filterBrowserTabRows(tabs, searchQuery),
+    [searchQuery, tabs],
   );
-  const duplicateTitles = useMemo(() => {
-    const counts = new Map<string, number>();
-    tabs.forEach((row) => {
-      counts.set(row.identity.title, (counts.get(row.identity.title) ?? 0) + 1);
-    });
-    const duplicates = new Set<string>();
-    counts.forEach((count, title) => {
-      if (count > 1) duplicates.add(title);
-    });
-    return duplicates;
-  }, [tabs]);
-  const filteredTabs = useMemo(() => {
-    const query = searchQuery.trim().toLocaleLowerCase();
-    if (query.length === 0) return tabs;
-    return tabs.filter(({ identity }) =>
-      `${identity.title} ${identity.url}`.toLocaleLowerCase().includes(query),
-    );
-  }, [searchQuery, tabs]);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpen = useEpicCanvasStore(
     (state) => state.prepareOpenTileInTabFocusTarget,
@@ -171,7 +96,11 @@ function BrowsersPanelBodyLive(props: {
   const prepareFocus = useEpicCanvasStore(
     (state) => state.prepareSetActiveTileTabFocusTarget,
   );
-  const addBrowser = useAddBrowserAction(props.epicId, props.tabId);
+  const { add: addBrowser, isAdding } = useAddBrowserAction(
+    props.epicId,
+    props.tabId,
+    null,
+  );
 
   const openTab = useCallback(
     (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
@@ -244,7 +173,12 @@ function BrowsersPanelBodyLive(props: {
           onRetry={sessions.retry}
         />
       ) : null}
-      {isEmpty ? <BrowsersPanelEmptyState onAddBrowser={addBrowser} /> : null}
+      {isEmpty ? (
+        <BrowsersPanelEmptyState
+          onAddBrowser={addBrowser}
+          isAdding={isAdding}
+        />
+      ) : null}
       {hasNoResults ? <BrowsersPanelNoResultsState /> : null}
       {hasResults ? (
         <ul
@@ -274,7 +208,7 @@ function BrowsersPanelBodyLive(props: {
   );
 }
 
-function BrowsersPanelLoadingState() {
+export function BrowsersPanelLoadingState() {
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 text-ui-sm text-muted-foreground">
       <AgentSpinningDots
@@ -287,7 +221,7 @@ function BrowsersPanelLoadingState() {
   );
 }
 
-function BrowsersPanelNoResultsState() {
+export function BrowsersPanelNoResultsState() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-muted-foreground">
       <Search className="size-6 text-muted-foreground/45" aria-hidden />
@@ -298,7 +232,7 @@ function BrowsersPanelNoResultsState() {
   );
 }
 
-function BrowsersPanelUnavailableState(props: {
+export function BrowsersPanelUnavailableState(props: {
   readonly message: string | null;
   readonly onRetry: () => void;
 }) {
@@ -319,7 +253,10 @@ function BrowsersPanelUnavailableState(props: {
   );
 }
 
-function BrowsersPanelEmptyState(props: { readonly onAddBrowser: () => void }) {
+export function BrowsersPanelEmptyState(props: {
+  readonly onAddBrowser: () => void;
+  readonly isAdding: boolean;
+}) {
   return (
     <div
       className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-8 text-center text-muted-foreground"
@@ -336,6 +273,7 @@ function BrowsersPanelEmptyState(props: { readonly onAddBrowser: () => void }) {
         type="button"
         variant="outline"
         size="sm"
+        disabled={props.isAdding}
         onClick={props.onAddBrowser}
       >
         <Plus className="size-3.5" aria-hidden />

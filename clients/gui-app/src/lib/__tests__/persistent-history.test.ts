@@ -64,6 +64,16 @@ function seedStack(
   return history;
 }
 
+function readEntryKeyOf(state: unknown): string {
+  if (typeof state !== "object" || state === null) {
+    throw new Error("expected a location state object");
+  }
+  if (!("__TSR_key" in state) || typeof state.__TSR_key !== "string") {
+    throw new Error("expected a stamped __TSR_key");
+  }
+  return state.__TSR_key;
+}
+
 beforeEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -417,6 +427,27 @@ describe("PersistentHistoryController", () => {
     history.back();
     expect(controller.canGoBack()).toBe(false);
     expect(controller.canGoForward()).toBe(true);
+  });
+
+  it("keeps the current entry's identity when a prune collapses it into an earlier duplicate", () => {
+    const history = seedStack("window-a", [
+      "/epics/epic-a/tab-a",
+      "/draft/dead-draft",
+      "/epics/epic-a/tab-a",
+    ]);
+    const controller = controllerOf(history);
+    const currentKey = readEntryKeyOf(history.location.state);
+
+    const changed = controller.prune((href) => href === "/draft/dead-draft");
+
+    expect(changed).toBe(true);
+    expect(controller.getEntries()).toEqual(["/epics/epic-a/tab-a"]);
+    expect(controller.getIndex()).toBe(0);
+    // The prune is load-free, so the router's cached location keeps carrying
+    // the CURRENT entry's key. The collapsed survivor must carry the same one
+    // - a survivor wearing the earlier duplicate's key would strand everything
+    // filed against the cached identity.
+    expect(controller.getEntryKeys()).toEqual([currentKey]);
   });
 
   it("prunes dead non-current entries and remaps the cursor", () => {

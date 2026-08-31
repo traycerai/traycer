@@ -8,6 +8,7 @@ import type {
   OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { ServerClockSkewSignal } from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import { RemoteSession, type IRemoteSession } from "./remote-session";
@@ -55,6 +56,17 @@ export interface CreateRemoteTransportOptions<
    * the app revalidator - a cache hit reuses whatever the creator wired.
    */
   readonly auth: StreamAuthRevalidator | null;
+  /**
+   * Clock-skew verdict for the session's `UNAUTHORIZED` park (see
+   * `RemoteSessionOptions.clock`).
+   *
+   * Deliberately NOT part of the cache identity above, for the same reason
+   * `clientIdentity` is not: unlike `auth`, this cannot vary between
+   * consumers. The wall clock is a property of the machine, so every consumer
+   * in the process passes the one app-wide tracker - a cache hit inheriting it
+   * is inheriting the only value any consumer could have passed.
+   */
+  readonly clock: ServerClockSkewSignal | null;
   readonly rpcRegistry: RpcRegistry;
   readonly streamRegistry: StreamRegistry;
   readonly webSocketFactory: IStreamWebSocketFactory;
@@ -173,6 +185,7 @@ export function createRemoteHostTransport<
         grantProvider,
         bearer: options.bearer,
         auth: options.auth,
+        clock: options.clock,
         rpcRegistry: options.rpcRegistry,
         streamRegistry: options.streamRegistry,
         webSocketFactory: options.webSocketFactory,

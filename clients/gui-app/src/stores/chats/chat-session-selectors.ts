@@ -1,9 +1,12 @@
-import type { ChatEvent } from "@traycer/protocol/persistence/epic/schemas";
 import {
-  readMetadataNumber,
-  readMetadataString,
-} from "@/lib/chat/event-metadata";
-import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+  foldRestorableSetupInterruption,
+  selectRestorableSetupInterruption as protocolSelectRestorableSetupInterruption,
+  type RestorableSetupInterruption,
+} from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
+import {
+  isWindowedTranscript,
+  type ChatSessionState,
+} from "@/stores/chats/chat-session-store";
 
 /**
  * Composer-facing projections of the worktree-aware chat event stream.
@@ -16,14 +19,7 @@ import type { ChatSessionState } from "@/stores/chats/chat-session-store";
  * remain for the composer-restore and missing-worktree flows only.
  */
 
-export interface RestorableSetupInterruptionSelection {
-  readonly event: ChatEvent;
-  readonly workspacePath: string | null;
-  readonly terminalSessionId: string | null;
-  readonly setupExitCode: number | null;
-  readonly clientActionId: string | null;
-  readonly messageId: string | null;
-}
+export type { RestorableSetupInterruption };
 
 /**
  * Most recent setup interruption carrying a `messageId` (the gating-path
@@ -31,90 +27,54 @@ export interface RestorableSetupInterruptionSelection {
  * Drives composer restore for setup failures and stop-during-setup
  * cancellations.
  *
- * The orchestrator's binding-change observer also emits a transition-only
- * setup event for the same lifecycle transition with
- * `messageId: null`. That event is fine for banners but is not
- * restorable: it has no triggering send to put back. Selecting strictly
- * the latest setup event would let a transition-only emission hide
- * the restorable one. This selector skips `messageId === null` entries
- * so the gating event remains discoverable regardless of arrival order.
- * A duplicate setup event does not clear restorable state, since it
- * represents the same interruption the gating event already owns.
+ * A STORE-SHAPED adapter over the shared derivation, not a second copy of it.
+ * The rule itself lives in
+ * `@traycer/protocol/persistence/chat-transcript/setup-interruption`, because
+ * on the windowed `chat.subscribe` line the HOST computes this answer and ships
+ * it on the snapshot: the event it comes from occupies no ordinal, so a
+ * windowed client can never fetch it and could not run this scan even if it
+ * wanted to. Two implementations of one rule is what that module's doc exists
+ * to prevent - see the empty-string disagreement it cites.
+ *
+ * This wrapper keeps the call sites' `(state)` shape so the store's own tests
+ * and `useChatSetupFailureRestoreDriver` read the same way they always have.
  */
 export function selectRestorableSetupInterruption(
-  state: Pick<ChatSessionState, "events">,
-): RestorableSetupInterruptionSelection | null {
-  const events = state.events;
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (!RESTORABLE_SETUP_INTERRUPTION_EVENT_TYPES.has(event.type)) continue;
-    if (event.messageId === null) continue;
-    const workspacePath = readMetadataString(event, "workspacePath");
-    if (
-      hasSubsequentRestoreClearingEvent(
-        events,
-        index,
-        workspacePath,
-        event.type,
-      )
-    ) {
-      continue;
-    }
-    return {
-      event,
-      workspacePath,
-      terminalSessionId: readMetadataString(event, "terminalSessionId"),
-      setupExitCode: readMetadataNumber(event, "setupExitCode"),
-      clientActionId: event.clientActionId,
-      messageId: event.messageId,
-    };
+  state: Pick<
+    ChatSessionState,
+    "events" | "transcriptDerived" | "transcriptWindow"
+  >,
+): RestorableSetupInterruption | null {
+  // On the windowed line the host has ALREADY answered this over the whole
+  // event log, and the scan below could not: a path-less interruption occupies
+  // no ordinal, so it is in no row's record set, and `loadRange` - addressed by
+  // ordinal - can never ask for it. Anything the client has not been PUSHED it
+  // will never obtain.
+  //
+  // But the host's answer is a snapshot, not a subscription. The event does
+  // reach `state.events` when it is appended live - `onEventAppended` ->
+  // `takeLiveRecords` -> `appendLiveRecords` seats a record with no ordinal in
+  // `window.liveEvents`, and `hydratedRecords` publishes it - so a failure that
+  // happens mid-session is visible to this client and simply absent from a
+  // derived value computed before it existed. Hence a FOLD: the host's answer
+  // is the baseline, and the live appends since are applied over it.
+  //
+  // Folded over `window.liveEvents` and deliberately NOT over `state.events`.
+  // On this line that array also holds HYDRATED events, whose clearing
+  // successors may never have been fetched - so scanning it would resurrect an
+  // interruption the host already knows a retry cleared, and restore a draft
+  // the user never lost. The live-append list is post-snapshot by construction.
+  //
+  // Not a `??` chain either: `restorableSetupInterruption: null` INSIDE a
+  // derived payload is a real answer - "nothing to restore", the ordinary case
+  // - not a missing one. Falling through to the whole-array scan on it would
+  // re-run, on every ordinary chat, precisely the scan that cannot see the
+  // event.
+  if (isWindowedTranscript(state)) {
+    return foldRestorableSetupInterruption({
+      baseline: state.transcriptDerived.restorableSetupInterruption,
+      laterEvents: state.transcriptWindow.liveEvents,
+    });
   }
-  return null;
+  return protocolSelectRestorableSetupInterruption(state.events);
 }
-
-const RESTORABLE_SETUP_INTERRUPTION_EVENT_TYPES: ReadonlySet<
-  ChatEvent["type"]
-> = new Set(["setup.failed", "setup.cancelled"]);
-
-const RESTORE_CLEARING_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
-  "setup.running",
-  "setup.succeeded",
-  "setup.cancelled",
-]);
-
-const RESTORE_CLEARING_EVENT_TYPES_WITHOUT_CANCELLED: ReadonlySet<
-  ChatEvent["type"]
-> = new Set(["setup.running", "setup.succeeded"]);
-
-function hasSubsequentEvent(
-  events: ReadonlyArray<ChatEvent>,
-  fromIndex: number,
-  workspacePath: string | null,
-  matchTypes: ReadonlySet<ChatEvent["type"]>,
-): boolean {
-  for (let index = fromIndex + 1; index < events.length; index += 1) {
-    const event = events[index];
-    if (
-      matchTypes.has(event.type) &&
-      readMetadataString(event, "workspacePath") === workspacePath
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-const hasSubsequentRestoreClearingEvent = (
-  events: ReadonlyArray<ChatEvent>,
-  fromIndex: number,
-  workspacePath: string | null,
-  candidateType: ChatEvent["type"],
-): boolean =>
-  hasSubsequentEvent(
-    events,
-    fromIndex,
-    workspacePath,
-    candidateType === "setup.cancelled"
-      ? RESTORE_CLEARING_EVENT_TYPES_WITHOUT_CANCELLED
-      : RESTORE_CLEARING_EVENT_TYPES,
-  );

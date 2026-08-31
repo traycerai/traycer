@@ -137,6 +137,8 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
+import { importedChatSettingsSeed } from "@/lib/composer/chat-run-settings";
+import type { ProviderId } from "@/components/home/data/landing-options";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -198,6 +200,35 @@ function seedDefault(
   });
 }
 
+function runSettings(harnessId: ProviderId, model: string): ChatRunSettings {
+  return {
+    harnessId,
+    model,
+    permissionMode: "supervised",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular",
+    profileId: null,
+  };
+}
+
+function modelOption(harnessId: string, slug: string) {
+  return {
+    harnessId,
+    slug,
+    label: slug,
+    description: null,
+    isDefault: true,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    defaultServiceTier: null,
+    supportedServiceTiers: [],
+    metadata: {},
+  };
+}
+
 function inactiveWrapper(props: { children: ReactNode }) {
   return (
     <SurfaceActivityProvider active={false}>
@@ -257,6 +288,79 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         modelSlug: "",
         profileId: null,
       }),
+    );
+  });
+
+  it("seeds an imported chat's source provider rather than the user's default", async () => {
+    // The chat's own `ChatRunSettings` never resolved, so the composer is
+    // seeded from the fallback the chat tile builds - and for an imported chat
+    // that fallback is the provider it was imported FROM, not the Claude pair
+    // this user last ran.
+    seedDefault("claude");
+    harnessesData.value = {
+      harnesses: [
+        { id: "claude", available: true },
+        { id: "codex", available: true },
+      ],
+    };
+    modelsData.value = { models: [modelOption("codex", "codex-default")] };
+
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        fallbackSeedSource(
+          importedChatSettingsSeed(
+            runSettings("claude", "claude-remembered"),
+            runSettings("claude", "claude-default"),
+            "codex",
+          ),
+          null,
+        ),
+        null,
+        catalogScope(false),
+      ),
+    );
+
+    // The model is the source provider's own catalog default: the seed carries
+    // none, so the store resolves one the way it does for any picker seed.
+    await waitFor(() =>
+      expect(result.current.getState().selection).toEqual({
+        harnessId: "codex",
+        modelSlug: "codex-default",
+        profileId: null,
+      }),
+    );
+  });
+
+  it("reroutes an imported chat whose source provider is unavailable on this host", async () => {
+    seedDefault("claude");
+    harnessesData.value = {
+      harnesses: [
+        { id: "claude", available: true },
+        { id: "codex", available: false },
+      ],
+    };
+
+    const { result } = renderHook(() =>
+      useComposerToolbarStore(
+        null,
+        fallbackSeedSource(
+          importedChatSettingsSeed(
+            null,
+            runSettings("claude", "claude-default"),
+            "codex",
+          ),
+          null,
+        ),
+        null,
+        catalogScope(false),
+      ),
+    );
+
+    // Nothing special happens for an import here: the same availability pass
+    // that rescues an unavailable default rescues this one.
+    await waitFor(() =>
+      expect(result.current.getState().selection.harnessId).toBe("claude"),
     );
   });
 

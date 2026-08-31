@@ -25,6 +25,10 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
+import {
+  clockSkewStreamReason,
+  type ServerClockSkewSignal,
+} from "@traycer-clients/shared/clock/server-time-offset-tracker";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IStreamWebSocketFactory } from "../ws-stream-factory";
 import type {
@@ -286,6 +290,19 @@ export interface RemoteSessionOptions<
    * cannot recover an auth rejection by retrying the same bearer.
    */
   readonly auth: StreamAuthRevalidator | null;
+  /**
+   * Verdict on whether this machine's WALL CLOCK is trustworthy, from the
+   * shared server-time offset tracker. The twin of
+   * `WsStreamClientOptions.clock`, and it is here for the reason a remote
+   * session most needs it: the clock is a property of the MACHINE, so a user
+   * whose clock is hours off wedges identically whether their host is local or
+   * across a relay - and a remote user is the one least able to guess why.
+   *
+   * Read at exactly one site here (the no-progress `UNAUTHORIZED` bound),
+   * because unlike the local transport this session has no pre-dial expiry
+   * gate to read it at. `null` restores the pre-existing behaviour exactly.
+   */
+  readonly clock: ServerClockSkewSignal | null;
   readonly rpcRegistry: RpcRegistry;
   readonly streamRegistry: StreamRegistry;
   readonly webSocketFactory: IStreamWebSocketFactory;
@@ -736,6 +753,18 @@ export class RemoteSession<
    * transport's no-progress bound).
    */
   private noProgressUnauthorizedReconnects = 0;
+  /**
+   * Live subscription to the clock tracker's `skewed → ok` edge while this
+   * session is PARKED, or `null` when it is not. Doubles as the parked flag.
+   *
+   * It is also the only thing that can wake a parked session, and that is
+   * load-bearing here in a way it is not in the local transport: parking means
+   * no armed backoff, and every other resume path in this file is gated on one
+   * (`collapseBackoff` and `pullRedialToNow` both return early on a null
+   * `backoffTimer`, and `handleConnectionLost` on a null `connection`). Losing
+   * this handle strands the session for the life of the page.
+   */
+  private clockParkUnsubscribe: (() => void) | null = null;
 
   private phaseTimer: TimerHandle | null = null;
   private backoffTimer: TimerHandle | null = null;
@@ -1432,6 +1461,10 @@ export class RemoteSession<
     this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
     this.stallReopenedStreamIds.clear();
+    // A parked session's tracker subscription is the one handle that is NOT a
+    // timer, so `clearAllTimers` cannot reach it. Left attached it would redial
+    // a closed session the next time somebody's clock came right.
+    this.clearClockPark();
     this.clearAllTimers();
     this.teardownConnection("closed-by-caller");
     for (const stream of this.subscriptions.values()) {
@@ -1571,6 +1604,10 @@ export class RemoteSession<
     if (this.phase === "closed") {
       return;
     }
+    // A dial is happening, so nothing is parked any more - whether we got here
+    // from the recovery edge or from any path that armed a backoff straight
+    // through a park. Idempotent.
+    this.clearClockPark();
     const generation = ++this.connectGeneration;
     // Any intent recorded against an earlier generation is stale by
     // construction: that dial ended (its failure spent the intent, or a path
@@ -3015,6 +3052,21 @@ export class RemoteSession<
     // clock skew / config mismatch). Bound that loop; otherwise reset and
     // redial with the fresh token.
     if (rejectedBearer !== null && this.readBearerOrNull() === rejectedBearer) {
+      // The clock, not the credential. The revalidation that just resolved is
+      // itself an authn round trip, so its `Date` header has already reached
+      // the tracker - if our clock is running FAST, this streak is measuring a
+      // wrong wall clock and must not walk the session to `goTerminalFatal`.
+      // Parked BEFORE the counter moves, so skew can never contribute to the
+      // bound.
+      //
+      // Keyed on the CLOCK and never on the rejection shape: a host config
+      // mismatch produces an identical no-progress streak from an identical
+      // frame, and that one SHOULD still reach the bound. And keyed on the
+      // direction that can cause this, not on `skewed`: a SLOW clock leaves
+      // this rejection just as unexplained as no skew at all.
+      if (this.parkIfClockSkewed()) {
+        return;
+      }
       this.noProgressUnauthorizedReconnects += 1;
       if (
         this.noProgressUnauthorizedReconnects >=
@@ -3036,6 +3088,130 @@ export class RemoteSession<
     // Same reasoning as the network-error arm: an UNAUTHORIZED redial is a
     // credential rotation, not a statement about host liveness.
     this.reportEvidenceOutcome(this.credentialAttemptId(), "indeterminate");
+  }
+
+  /**
+   * Parks this session if - and only if - the shared tracker reads the local
+   * clock as wrong IN THE DIRECTION THAT CAN CAUSE THIS FAILURE: running
+   * AHEAD, where a valid bearer reads as expired locally. Returns whether it
+   * parked, so the call site reads as a guard.
+   *
+   * Not merely `skewed`. A clock running BEHIND is equally wrong and equally
+   * banner-worthy, but it cannot make a bearer look expired and cannot make
+   * the relay reject one - it validates against its own clock - so an
+   * UNAUTHORIZED alongside it has some other cause, and parking would strand a
+   * session the bound would have diagnosed honestly. See
+   * `clockCanMakeValidBearersLookExpired`.
+   *
+   * The caller has already dropped the connection and left the phase at
+   * `reconnecting`, so parking is mostly a matter of NOT arming the backoff
+   * that every other arm of `revalidateThenReconnect` arms. A parked session
+   * therefore holds no connection and no timer, and comes back only on the
+   * tracker's `skewed → ok` edge. It is not terminal:
+   * `goTerminalFatal`'s "the loop is OVER" contract stays reserved for
+   * genuinely broken sessions, and a wrong clock is a condition the user fixes
+   * in seconds.
+   *
+   * Two deliberate omissions relative to the sibling arms:
+   *
+   *  - No `dialFailures.recordFailure`. Its `retryInMs` is a promise to the
+   *    reader that the loop will try again at a time, and there is no such
+   *    time here; the park's own line below is the honest replacement. The
+   *    consecutive-failure streak is deliberately left INTACT so that when the
+   *    clock is fixed, `recordSuccess` still prints the true
+   *    "recovered after N failures over M seconds".
+   *  - The evidence outcome IS still reported, as `indeterminate`, exactly
+   *    like both sibling arms: the host is answering (it rejected a bearer,
+   *    which a dead host cannot do) and what failed is our own clock. Anything
+   *    else would let a wrong clock feed the authority's death streak and fail
+   *    the window away from a perfectly healthy host.
+   */
+  private parkIfClockSkewed(): boolean {
+    if (this.phase === "closed") {
+      return false;
+    }
+    const clock = this.options.clock ?? null;
+    if (clock === null || !clock.canMakeValidBearersLookExpired()) {
+      return false;
+    }
+    if (this.clockParkUnsubscribe !== null) {
+      return true;
+    }
+    console.warn(
+      `[remote-session] remote session (host ${this.options.hostId}) parked on ` +
+        `system-clock skew: ${clockSkewStreamReason(clock.currentState())} - ` +
+        `it will reconnect on its own once the clock is corrected`,
+    );
+    // Defensive: a competing path is not supposed to have armed one while the
+    // revalidation was in flight (the caller re-checked `phase`/`connection`
+    // after its await), but "a parked session runs no retry timer" has to be
+    // literally true or the park silently becomes a slow retry loop.
+    if (this.backoffTimer !== null) {
+      clearTimeout(this.backoffTimer);
+      this.backoffTimer = null;
+    }
+    // SUBSCRIBE BEFORE THE EXTERNAL CALLBACK, and re-check after it. The twin
+    // of the local transport's status-emit hazard: `reportEvidenceOutcome`
+    // hands control to the selection authority synchronously, and that is a
+    // component whose whole job is to react to transport evidence - a verdict
+    // that retires this host can close this very session before the call
+    // returns. Assigning the handle first means a re-entrant `close()` finds
+    // something to release instead of nulling nothing and leaving the tracker
+    // holding a dead session for the life of the page.
+    this.clockParkUnsubscribe = clock.subscribeToRecovery(() => {
+      this.resumeFromClockPark();
+    });
+    this.reportEvidenceOutcome(this.credentialAttemptId(), "indeterminate");
+    // Through `isClosed()`, not a bare `this.phase === "closed"`. The early
+    // return at the top of this method narrows `phase` to exclude `"closed"`,
+    // and the checker does not know the call above can re-enter and change it -
+    // so the direct comparison type-errors as impossible. That narrowing IS the
+    // hazard this check exists for; reading the phase through the accessor is
+    // what keeps the check honest.
+    if (this.isClosed()) {
+      this.clearClockPark();
+    }
+    return true;
+  }
+
+  /**
+   * The `skewed → ok` edge: the clock was corrected, so redial now.
+   *
+   * `scheduleReconnect` then `pullRedialToNow` is the file's existing forced-
+   * resume idiom (it is what `consumePendingForce` does), and it is right here
+   * for the same reason: the rung is armed so attempt accounting stays honest,
+   * then that one wait is pulled to zero. `reconnectAttempt` is deliberately
+   * NOT reset - a host that is genuinely gone must keep climbing the ladder
+   * once the clock stops being the explanation.
+   *
+   * The no-progress streak IS reset, because it was counting a condition that
+   * no longer exists; carrying it forward would let a couple of pre-fix cycles
+   * push the first honest post-fix attempt into the terminal bound.
+   */
+  private resumeFromClockPark(): void {
+    if (this.clockParkUnsubscribe === null) {
+      return;
+    }
+    this.clearClockPark();
+    if (this.phase === "closed") {
+      return;
+    }
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) resuming: ` +
+        `the system clock was corrected`,
+    );
+    this.noProgressUnauthorizedReconnects = 0;
+    this.scheduleReconnect();
+    this.pullRedialToNow("system-clock-corrected");
+  }
+
+  private clearClockPark(): void {
+    const unsubscribe = this.clockParkUnsubscribe;
+    if (unsubscribe === null) {
+      return;
+    }
+    this.clockParkUnsubscribe = null;
+    unsubscribe();
   }
 
   /**
@@ -3090,6 +3266,8 @@ export class RemoteSession<
     // (caller `close()` and this fatal) must honor that, not just one.
     this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
+    // See `close()`: not a timer, so not reachable by `clearAllTimers`.
+    this.clearClockPark();
     this.clearAllTimers();
     this.teardownConnection("session-fatal");
     for (const stream of this.subscriptions.values()) {

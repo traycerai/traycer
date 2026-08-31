@@ -19,7 +19,10 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type {
+  TuiAgentRecordSummaryV11,
+  TuiAgentRecordSummaryV12,
+} from "@traycer/protocol/host/epic/tui-agent-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -63,22 +66,21 @@ function makeMeta(): SnapshotMetaEpic {
 }
 
 /**
- * A registry row. Every scenario in this file is about the MERGE (revision
- * guards, omission fencing) rather than about doc residency, so the default
- * is `false` - an ordinary registry row.
+ * A local row (registry- or doc-resident). Every scenario in this file is
+ * about the MERGE (revision guards, omission fencing) rather than about doc
+ * residency, so the default is `false` - an ordinary registry row.
  *
- * Typed as the WIRE `@1.1` row so it satisfies `applyTuiAgentRecords`'s
- * `TuiAgentRecordSummaryV11[]` directly. It is also assignable to a delta's
- * `record: TuiAgentRecordSummary` field (the delta plane's wire type, which
- * carries no `docResident` of its own - see `applyTuiAgentRecordDelta`'s
- * stamp): `TuiAgentRecordSummaryV11` is a strict superset, and this is a
- * function return value rather than an object literal, so no excess-property
- * check applies.
+ * Built as the `@1.1` shape (both local arms are field-for-field identical
+ * bar `origin`) and then given the `origin` its own `docResident` implies,
+ * exactly as `epicListTuiAgentsUpgradeV11ToV12` derives it - so this factory
+ * can never produce the one combination the wire itself cannot
+ * (`docResident: true` paired with `origin: "registry"`, or the reverse).
+ * Only the two local arms: this file never exercises a `cloud` row.
  */
 function row(
   overrides: Partial<TuiAgentRecordSummaryV11>,
-): TuiAgentRecordSummaryV11 {
-  return {
+): Extract<TuiAgentRecordSummaryV12, { origin: "registry" | "doc" }> {
+  const base: TuiAgentRecordSummaryV11 = {
     tuiAgentId: "tui-1",
     ownerUserId: USER,
     hostId: "host-A",
@@ -104,6 +106,9 @@ function row(
     docResident: false,
     ...overrides,
   };
+  return base.docResident
+    ? { ...base, origin: "doc" as const }
+    : { ...base, origin: "registry" as const };
 }
 
 /**
@@ -435,28 +440,130 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
   });
 });
 
-describe("applyTuiAgentRecordDelta always reports registry provenance", () => {
-  it("stamps docResident: false on every delta-applied row", () => {
-    // The delta plane is REGISTRY-ONLY by construction - a `tuiUpsert` frame
-    // (`TuiAgentRecordDelta` in `chat-records-stream-client.ts`) carries a
-    // `TuiAgentRecordSummary`, which has no `docResident` of its own. So
-    // `false` here is a fact about the SOURCE the store stamps unconditionally,
-    // not a filled-in default.
+describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
+  it("preserves what the frame stated, rather than re-deriving it", () => {
+    // THIS USED TO STAMP `docResident: false` unconditionally, and that was
+    // right while the frame could not answer: at `@1.1` a `tuiUpsert` carried
+    // the `@1.0` row, which has no `docResident` at all, and the delta plane
+    // was registry-only - so `false` was a fact about the SOURCE.
+    //
+    // `@1.2` gave the row an `origin` and a second producer. Re-deriving now
+    // would overwrite a stated answer with a guess, and there is no guess that
+    // is right for both arms.
     signedInAs(USER);
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
       epicId: "epic-test",
-      // Deliberately `true` on the way in: the fixture's default is `false`,
-      // so an implementation that PASSED the field THROUGH instead of
-      // stamping the delta plane's own `false` would also pass a
-      // default-valued row. It must not survive this one.
-      record: row({ tuiAgentId: "tui-1", docResident: true }),
+      record: row({ tuiAgentId: "tui-1" }),
+    });
+
+    const applied = handle.store.getState().tuiAgentRecords.byId["tui-1"];
+    expect(applied.origin).toBe("registry");
+    expect(applied.docResident).toBe(false);
+  });
+
+  it("LISTS a replica whose cloud row never named a harness", () => {
+    // The protocol arm makes `harnessId` nullable on purpose - a cloud row
+    // written before `runSettingsSummary` carried the harness has none - and
+    // says such a row renders without a harness mark. Dropping it here made
+    // the agent vanish from the roster on every other machine, which is the
+    // one outcome the contract rules out: the host stores and serves it
+    // correctly, and only the projection was losing it.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: {
+        origin: "cloud",
+        tuiAgentId: "tui-legacy",
+        ownerUserId: USER,
+        hostId: "host-elsewhere",
+        harnessId: null,
+        parentId: null,
+        title: "A legacy remote agent",
+        isTitleEditedByUser: false,
+        createdAt: 1,
+        updatedAt: 2,
+        archived: false,
+        revision: 1,
+      },
+    });
+
+    const applied = handle.store.getState().tuiAgentRecords.byId["tui-legacy"];
+    expect(applied).toBeDefined();
+    expect(applied.harnessId).toBeNull();
+  });
+
+  it("still DROPS a replica naming a harness this build cannot dispatch", () => {
+    // A different case, and it keeps its old answer: the row named something
+    // (a newer host's vendor), so a tile for it would promise a session this
+    // build cannot open. Absent beats a row that errors on click.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: {
+        origin: "cloud",
+        tuiAgentId: "tui-future",
+        ownerUserId: USER,
+        hostId: "host-elsewhere",
+        harnessId: "some-future-vendor",
+        parentId: null,
+        title: "An agent this build cannot run",
+        isTitleEditedByUser: false,
+        createdAt: 1,
+        updatedAt: 2,
+        archived: false,
+        revision: 1,
+      },
     });
 
     expect(
-      handle.store.getState().tuiAgentRecords.byId["tui-1"].docResident,
-    ).toBe(false);
+      handle.store.getState().tuiAgentRecords.byId["tui-future"],
+    ).toBeUndefined();
+  });
+
+  it("applies a CROSS-HOST replica, which has no docResident to stamp", () => {
+    // The second producer: the serving host's record inbox, replicating an
+    // agent bound to another of the user's machines. The narrow arm carries no
+    // `docResident` key, so the old unconditional stamp had nothing to write
+    // it onto - and the projection derives `false` from the arm rather than
+    // from a field that is not there.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: {
+        origin: "cloud",
+        tuiAgentId: "tui-remote",
+        ownerUserId: USER,
+        hostId: "host-elsewhere",
+        harnessId: "claude",
+        parentId: null,
+        title: "An agent on my other machine",
+        isTitleEditedByUser: false,
+        createdAt: 1,
+        updatedAt: 2,
+        archived: false,
+        revision: 1,
+      },
+    });
+
+    const applied = handle.store.getState().tuiAgentRecords.byId["tui-remote"];
+    expect(applied.origin).toBe("cloud");
+    // NOT doc-resident: a replica is not the doc map's frozen copy, and it IS
+    // addressable through the registry affordances - on its own host, which is
+    // where every mutation aimed at it has to go anyway.
+    expect(applied.docResident).toBe(false);
+    // The placeholders the narrow arm cannot fill. `origin` is what keeps a
+    // consumer from reading them as facts about the remote machine - above all
+    // `harnessSessionId`, whose absence is why a replica can never be cloned.
+    expect(applied.harnessSessionId).toBeNull();
+    expect(applied.workspaceFolders).toEqual([]);
   });
 
   it("converges a frozen doc-resident row through the same revision guard the poll's merge uses", () => {
@@ -515,5 +622,108 @@ describe("applyTuiAgentRecordDelta always reports registry provenance", () => {
     const after = handle.store.getState().tuiAgentRecords.byId["tui-1"];
     expect(after.docResident).toBe(false);
     expect(after.title).toBe("Adopted (registry)");
+  });
+});
+
+/** The narrow cross-host arm, as a delta or a snapshot row. */
+function cloudRow(
+  overrides: Partial<Extract<TuiAgentRecordSummaryV12, { origin: "cloud" }>>,
+): TuiAgentRecordSummaryV12 {
+  return {
+    origin: "cloud",
+    tuiAgentId: "tui-1",
+    ownerUserId: USER,
+    hostId: "host-elsewhere",
+    harnessId: "claude",
+    parentId: null,
+    title: "An agent on my other machine",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    revision: 1,
+    ...overrides,
+  };
+}
+
+describe("terminal-agent merge puts AUTHORITY before revision", () => {
+  it("TRIPWIRE: a registry snapshot row replaces a held cloud row at a LOWER revision", () => {
+    // THE STRANDING THIS PREVENTS. The host may legitimately answer with the
+    // authoritative local row at or below a stale replica's revision - it
+    // drops a replica sitting under a live local row SILENTLY, then serves the
+    // local row from its next list. A revision-first rule rejects that as "not
+    // newer" and keeps the cloud copy, which is unlaunchable and unforkable -
+    // and because the id WAS in the snapshot, the omission fence cannot remove
+    // it either. Nothing dislodges it until some later local mutation happens
+    // to bump the revision.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([cloudRow({ revision: 999 })], null);
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1", revision: 1 })], null);
+
+    expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].origin).toBe(
+      "registry",
+    );
+  });
+
+  it("TRIPWIRE: a registry DELTA replaces a held cloud row at a lower revision", () => {
+    // The push half of the same rule. Poll and push share one predicate so
+    // they cannot disagree about which of two rows wins.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: cloudRow({ revision: 999 }),
+    });
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: row({ tuiAgentId: "tui-1", revision: 1 }),
+    });
+
+    expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].origin).toBe(
+      "registry",
+    );
+  });
+
+  it("never lets a cloud row displace a local one, however new it is", () => {
+    // The other direction, and the one that keeps a live local agent usable: a
+    // replica arriving at a far higher revision must not turn an authoritative
+    // row into an unlaunchable copy.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1", revision: 1 })], null);
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([cloudRow({ revision: 999 })], null);
+
+    expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].origin).toBe(
+      "registry",
+    );
+  });
+
+  it("still orders by revision BETWEEN two rows of the same authority", () => {
+    // Authority is a tie-breaker between planes, not a licence to ignore
+    // ordering. Two replicas still compare by revision, so a replayed or
+    // reordered delta stays a no-op.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([cloudRow({ revision: 5, title: "newer" })], null);
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([cloudRow({ revision: 4, title: "older" })], null);
+
+    expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].title).toBe(
+      "newer",
+    );
   });
 });

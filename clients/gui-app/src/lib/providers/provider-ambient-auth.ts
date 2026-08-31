@@ -131,7 +131,7 @@ export function isDefinitiveProviderAuthStatus(
  *
  * Both surfaces that turn an `awaitLogin` completion into a decision read this
  * one predicate - Settings' login flow (which drives its own state machine off
- * it) and onboarding's "Sign in to enable" button (which decides whether to
+ * it) and onboarding's "Sign in & enable" button (which decides whether to
  * write the enablement). A second copy of the rule would be a silent
  * divergence in exactly the case neither surface can reproduce on demand.
  */
@@ -150,7 +150,7 @@ export function isAmbientAuthVerdictPending(
  * the unsettled case.
  *
  * Beside the predicate rather than in either flow because BOTH flows spend it
- * - Settings' login state machine and onboarding's "Sign in to enable" button
+ * - Settings' login state machine and onboarding's "Sign in & enable" button
  * - and two budgets would mean the same sign-in gets a different amount of
  * patience depending on which screen the user is standing on.
  */
@@ -170,7 +170,7 @@ export const AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS = 2_000;
  * (returns false) so a half-converged reconnect never phantom-clears while the
  * account is still signed out.
  *
- * Onboarding's "Sign in to enable" spends this on an `awaitLogin` completion
+ * Onboarding's "Sign in & enable" spends this on an `awaitLogin` completion
  * for the same reason, and gets both halves of that rule: an ambient row that
  * lands first no longer burns the re-poll budget waiting for the summary, and
  * a stale top-level `authenticated` can no longer enable a provider whose

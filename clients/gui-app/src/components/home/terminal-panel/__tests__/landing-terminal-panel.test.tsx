@@ -14,7 +14,11 @@ import {
   landingTerminalLayoutFor,
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
-import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
+import {
+  landingTerminalRightActionsKey,
+  useMobileHeaderStore,
+} from "@/stores/layout/mobile-header-store";
+import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right-actions";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
   handlePrimaryFocusIn,
@@ -533,10 +537,13 @@ function testRect(width: number, height: number, left: number): DOMRect {
   };
 }
 
-/** Stands in for MobileAppHeader: renders whatever the slot currently holds. */
+/**
+ * Stands in for MobileAppHeader: renders what the header would resolve for the
+ * presented surface, so these cases exercise the same read path the real
+ * header uses - registration alone puts nothing on screen.
+ */
 function MobileHeaderSlotProbe() {
-  const rightActions = useMobileHeaderStore((state) => state.rightActions);
-  return <>{rightActions}</>;
+  return <>{useMobileHeaderRightActions()}</>;
 }
 
 // The panel outlives its start page's activation, so several behaviors now
@@ -623,10 +630,7 @@ describe("<LandingTerminalPanel />", () => {
 
   afterEach(() => {
     cleanup();
-    useMobileHeaderStore.setState({
-      rightActions: null,
-      rightActionsOwner: null,
-    });
+    useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     focusCleanups.forEach((unregister) => unregister());
     focusCleanups.length = 0;
     resetTerminalFocusRegistryForTests();
@@ -641,13 +645,23 @@ describe("<LandingTerminalPanel />", () => {
       mocks.isMobile = true;
       mocks.activeHostId = "host-a";
       mocks.clientActiveHostId = "host-a";
+      // The hosting start page is FOCUSED by default - resolution keys the
+      // landing entry by the presented draft, so the probe (standing in for
+      // the header) only renders the toggle while that page is on screen.
+      seedTabsLayout([PANEL_DRAFT_TAB], PANEL_DRAFT_TAB.id);
       mocks.probeData = emptyList("/Users/dev");
     });
 
-    it("publishes the reveal toggle into the mobile header instead of floating it", async () => {
+    it("registers the reveal toggle for the mobile header instead of floating it", async () => {
       render(panelUi());
       await waitFor(() => {
-        expect(useMobileHeaderStore.getState().rightActions).not.toBeNull();
+        expect(
+          useMobileHeaderStore
+            .getState()
+            .rightActionEntries.get(
+              landingTerminalRightActionsKey(TEST_LANDING_PAGE_ID),
+            ),
+        ).not.toBeUndefined();
       });
 
       // Nothing floating in the content area: the header slot owns it now.
@@ -703,23 +717,29 @@ describe("<LandingTerminalPanel />", () => {
       ).toBeNull();
     });
 
-    it("clears the slot on unmount so it cannot leak to another surface", async () => {
+    it("unregisters its entry on unmount", async () => {
       const view = render(panelUi());
       await waitFor(() => {
-        expect(useMobileHeaderStore.getState().rightActions).not.toBeNull();
+        expect(
+          useMobileHeaderStore
+            .getState()
+            .rightActionEntries.get(
+              landingTerminalRightActionsKey(TEST_LANDING_PAGE_ID),
+            ),
+        ).not.toBeUndefined();
       });
 
       view.unmount();
 
-      expect(useMobileHeaderStore.getState().rightActions).toBeNull();
+      expect(useMobileHeaderStore.getState().rightActionEntries.size).toBe(0);
     });
 
-    // The panel outlives its page's activation to keep its PTYs warm - it stays
-    // mounted behind an epic tab, History or Settings so its PTYs survive - so
-    // being mounted is not a claim on the header. The header belongs to the
-    // surface on screen: a toggle published from behind another surface would
-    // act on a terminal panel the user cannot see.
-    it("publishes no toggle while another surface is presented", async () => {
+    // The panel outlives its page's activation to keep its PTYs warm - it
+    // stays mounted behind an epic tab, History or Settings - so being
+    // mounted is not a claim on the header. The header belongs to the surface
+    // on screen: the entry stays registered, and resolution keeps it off a
+    // surface it does not act on.
+    it("shows no toggle while another surface is presented", async () => {
       seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
       render(
         <>
@@ -728,36 +748,79 @@ describe("<LandingTerminalPanel />", () => {
         </>,
       );
       await screen.findByTestId("landing-terminal-panel");
+      await waitFor(() => {
+        expect(
+          useMobileHeaderStore
+            .getState()
+            .rightActionEntries.get(
+              landingTerminalRightActionsKey(TEST_LANDING_PAGE_ID),
+            ),
+        ).not.toBeUndefined();
+      });
 
-      expect(useMobileHeaderStore.getState().rightActions).toBeNull();
-      expect(useMobileHeaderStore.getState().rightActionsOwner).toBeNull();
-      expect(screen.queryByTestId("landing-terminal-toggle")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Open terminal panel" }),
+      ).toBeNull();
+    });
+
+    // The return leg of a launch round-trip: leaving for a task and coming
+    // back re-presents a panel that never unmounted. Its long-lived
+    // registration resolves again with no re-publish - the toggle must be
+    // back on the start page.
+    it("shows the toggle again when the landing surface is presented again", async () => {
+      seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_DRAFT_TAB.id);
+      render(
+        <>
+          {panelUi()}
+          <MobileHeaderSlotProbe />
+        </>,
+      );
+      await screen.findByRole("button", { name: "Open terminal panel" });
+
+      act(() => {
+        seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_EPIC_TAB.id);
+      });
+      expect(
+        screen.queryByRole("button", { name: "Open terminal panel" }),
+      ).toBeNull();
+
+      act(() => {
+        seedTabsLayout([PANEL_DRAFT_TAB, PANEL_EPIC_TAB], PANEL_DRAFT_TAB.id);
+      });
+      expect(
+        await screen.findByRole("button", { name: "Open terminal panel" }),
+      ).not.toBeNull();
     });
 
     // Launching a task from this page replaces it with the epic it created,
-    // and the epic's surface claims the header slot while this panel is still
-    // mounted: its existence follows the pane ANCHOR, which unregisters a
-    // commit later. The teardown therefore arrives AFTER the new owner's
-    // write, and must leave that owner's controls alone - otherwise the task
-    // that just opened has no tab-switcher trigger until something remounts
-    // it.
-    it("leaves a slot another surface has since claimed", async () => {
+    // and this panel is torn down a commit later than the epic's surface
+    // registers: its existence follows the pane ANCHOR. A late teardown can
+    // only remove the panel's OWN entry - the epic's stays for the header to
+    // resolve.
+    it("leaves another surface's entry alone when torn down afterwards", async () => {
       const view = render(panelUi());
       await waitFor(() => {
-        expect(useMobileHeaderStore.getState().rightActions).not.toBeNull();
+        expect(
+          useMobileHeaderStore
+            .getState()
+            .rightActionEntries.get(
+              landingTerminalRightActionsKey(TEST_LANDING_PAGE_ID),
+            ),
+        ).not.toBeUndefined();
       });
 
       const epicTrigger = <button type="button" data-testid="epic-claim" />;
       useMobileHeaderStore
         .getState()
-        .setRightActions("epic-tab:t1", epicTrigger);
+        .registerRightActions("epic-tab:t1", epicTrigger);
 
       view.unmount();
 
-      expect(useMobileHeaderStore.getState().rightActions).toBe(epicTrigger);
-      expect(useMobileHeaderStore.getState().rightActionsOwner).toBe(
-        "epic-tab:t1",
-      );
+      const entries = useMobileHeaderStore.getState().rightActionEntries;
+      expect(entries.get("epic-tab:t1")).toBe(epicTrigger);
+      expect(
+        entries.has(landingTerminalRightActionsKey(TEST_LANDING_PAGE_ID)),
+      ).toBe(false);
     });
   });
 

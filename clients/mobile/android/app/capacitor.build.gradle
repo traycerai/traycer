@@ -13,9 +13,11 @@ dependencies {
     implementation project(':capacitor-app-launcher')
     implementation project(':capacitor-barcode-scanner')
     implementation project(':capacitor-device')
+    implementation project(':capacitor-filesystem')
     implementation project(':capacitor-keyboard')
     implementation project(':capacitor-network')
     implementation project(':capacitor-push-notifications')
+    implementation project(':capacitor-share')
     implementation project(':capacitor-native-settings')
     implementation project(':capacitor-secure-storage-plugin')
 

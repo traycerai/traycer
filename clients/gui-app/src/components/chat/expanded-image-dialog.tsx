@@ -7,6 +7,7 @@ import { DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
 
 import {
   type ImageAction,
@@ -118,6 +119,7 @@ function ExpandedImageActionBar(props: {
   readonly alt: string;
   readonly suggestedName: string | null;
 }): ReactNode {
+  const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
   const imageAction = useMutation<void, Error, ImageAction>({
     mutationKey: imageMutationKeys.perform(),
@@ -130,6 +132,7 @@ function ExpandedImageActionBar(props: {
           props.suggestedName ??
           imageFileName(props.alt, props.src, props.mediaType),
         openSaved: openSaved.mutate,
+        fileSave,
       }),
     onError: (error, action) =>
       toastFromRunnerError(error, `Failed to ${action} image`),

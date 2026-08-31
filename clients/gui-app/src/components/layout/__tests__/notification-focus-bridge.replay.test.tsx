@@ -291,6 +291,7 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
     return buildNotificationActivationEnvelope({
       route: { kind: "epic", epicId },
       feed: { source: "host", id: feedId },
+      chimeEventType: "done",
       originHostId: mockLocalHostEntry.hostId,
     });
   }

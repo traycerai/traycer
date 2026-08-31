@@ -1,13 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-  type ReactElement,
-  type RefObject,
-} from "react";
+import { useLayoutEffect, useMemo, useState, type ReactElement } from "react";
 import { AlertTriangle, Pause, Radio, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
@@ -17,7 +8,6 @@ import {
   type BrowserPictureInPictureControl,
 } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserStartPage } from "@/components/epic-canvas/renderers/browser-start-page";
-import { SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import { ScreencastSurface } from "@/components/epic-canvas/renderers/screencast-surface";
@@ -44,7 +34,6 @@ import {
   snapshotVideoFrameIntoPeekCache,
   useRetainLastBrowserPeekFrame,
 } from "@/lib/browser-view/sessions/peek-frame-cache";
-import type { ScreencastOverlayHandlers } from "@/lib/browser-view/sessions/screencast-controller";
 import {
   useScreencastSession,
   type ScreencastDialog,
@@ -81,10 +70,10 @@ interface BrowserPeekTileProps {
  * The streamed browser viewer, for both pointer grades (decision #13).
  *
  * The transport, arm/epoch protocol, viewport bridge and nav-state derivation
- * are device-agnostic, so `useCoarsePointer()` only picks between two things:
- * the input handler bag (a touch drag scrolls the remote page instead of
- * dragging a selection - see {@link useTouchScreencastOverlayHandlers}) and the
- * chrome/dialog containers a finger can actually reach.
+ * are device-agnostic, and so is the input path: the controller translates a
+ * finger into scroll and tap frames itself, keyed off `pointerType`. What
+ * `useCoarsePointer()` picks is the chrome and the dialog containers a finger
+ * can actually reach.
  */
 export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const { epicId, node } = props;
@@ -156,12 +145,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     },
   });
 
-  const touchOverlayHandlers = useTouchScreencastOverlayHandlers({
-    overlayHandlers: session.overlayHandlers,
-    overlayButtonRef,
-    armed: armedEpoch !== null,
-  });
-
   // Focus in the address field must also drop any page keys still forwarded to
   // the screencast, so typing a URL does not reach the remote page.
   const controller: TileController = {
@@ -226,12 +209,13 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           ref={overlayButtonRef}
           type="button"
           hidden={showStartPage}
-          className={cn(
-            "absolute inset-0 h-full w-full cursor-default overflow-hidden bg-background p-0 text-left outline-none",
-            coarsePointer && "touch-none",
-          )}
+          // `touch-none`: the controller translates a finger drag into wheel
+          // frames itself, and it can only see the moves the browser does not
+          // consume for its own panning and pinch-zoom. Touch-action governs
+          // touch and pen alone, so a mouse is unaffected.
+          className="absolute inset-0 h-full w-full cursor-default touch-none overflow-hidden bg-background p-0 text-left outline-none"
           aria-label="Browser screencast controls"
-          {...(coarsePointer ? touchOverlayHandlers : session.overlayHandlers)}
+          {...session.overlayHandlers}
         >
           <ScreencastSurface session={session} />
           {status.overlay === null ? null : (
@@ -271,150 +255,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
         )}
       </div>
     </div>
-  );
-}
-
-interface BufferedTouchGesture {
-  readonly pointerId: number;
-  readonly downEvent: ReactPointerEvent<HTMLButtonElement>;
-  readonly origin: { readonly clientX: number; readonly clientY: number };
-  last: { readonly clientX: number; readonly clientY: number };
-  exceededSlop: boolean;
-}
-
-/**
- * Reuses `session.overlayHandlers` verbatim for every mouse/pen pointer and
- * for the touch handshake that establishes the arm (the arm buffer's own
- * click-slop drop already disambiguates a tap from the first drag there -
- * see `screencast-arm-buffer.ts`).
- *
- * Once the tile is already armed, a touch gesture is buffered locally instead
- * of being forwarded immediately: forwarding `down` at touch-start would
- * bracket every scroll with a down/up pair, and Chrome synthesizes a `click`
- * from that pair - scrolling past a link would navigate. So the down is held
- * back and resolved only at `pointerup`, mirroring the arm buffer's click-slop
- * rule: never exceeded the slop -> forward `down` then `up` (a tap); exceeded
- * it -> drop both and let the wheel deltas already sent during the move stand
- * as the whole gesture (a scroll, no click).
- *
- * Move deltas past the slop become synthetic `wheel` events dispatched at the
- * overlay button - which the session already listens for and routes through
- * `controller.handleWheel` unchanged. They are inverted like native touch
- * scrolling: dragging a finger UP moves the content up under it, which reads
- * as scrolling DOWN.
- */
-function useTouchScreencastOverlayHandlers(args: {
-  readonly overlayHandlers: ScreencastOverlayHandlers;
-  readonly overlayButtonRef: RefObject<HTMLButtonElement | null>;
-  readonly armed: boolean;
-}): ScreencastOverlayHandlers {
-  const { overlayHandlers, overlayButtonRef, armed } = args;
-  const buffered = useRef<BufferedTouchGesture | null>(null);
-
-  // A disarm mid-gesture (e.g. `Release`) must drop whatever is buffered -
-  // otherwise the next pointermove for that pointerId would still read as a
-  // live drag against a gesture the arm epoch underneath it already ended.
-  useEffect(() => {
-    if (!armed) buffered.current = null;
-  }, [armed]);
-
-  return useMemo<ScreencastOverlayHandlers>(
-    () => ({
-      ...overlayHandlers,
-      // Touch has no hover: `pointerenter` fires as part of the tap itself, so
-      // pre-arming here would only put a speculative claim on the wire a
-      // millisecond before the tap's own arm supersedes it.
-      onPointerEnter: () => {},
-      onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
-        if (event.pointerType === "touch" && armed) {
-          const point = { clientX: event.clientX, clientY: event.clientY };
-          buffered.current = {
-            pointerId: event.pointerId,
-            downEvent: event,
-            origin: point,
-            last: point,
-            exceededSlop: false,
-          };
-          return;
-        }
-        overlayHandlers.onPointerDown(event);
-      },
-      onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => {
-        const gesture = buffered.current;
-        if (
-          event.pointerType === "touch" &&
-          gesture !== null &&
-          gesture.pointerId === event.pointerId
-        ) {
-          if (!gesture.exceededSlop) {
-            const dx = event.clientX - gesture.origin.clientX;
-            const dy = event.clientY - gesture.origin.clientY;
-            gesture.exceededSlop =
-              Math.abs(dx) > SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX ||
-              Math.abs(dy) > SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX;
-          }
-          if (gesture.exceededSlop) {
-            const deltaX = gesture.last.clientX - event.clientX;
-            const deltaY = gesture.last.clientY - event.clientY;
-            if (deltaX !== 0 || deltaY !== 0) {
-              dispatchSyntheticWheel(overlayButtonRef.current, {
-                clientX: event.clientX,
-                clientY: event.clientY,
-                deltaX,
-                deltaY,
-              });
-            }
-          }
-          gesture.last = { clientX: event.clientX, clientY: event.clientY };
-          return;
-        }
-        overlayHandlers.onPointerMove(event);
-      },
-      onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
-        const gesture = buffered.current;
-        if (
-          event.pointerType === "touch" &&
-          gesture !== null &&
-          gesture.pointerId === event.pointerId
-        ) {
-          buffered.current = null;
-          if (!gesture.exceededSlop) {
-            overlayHandlers.onPointerDown(gesture.downEvent);
-            overlayHandlers.onPointerUp(event);
-          }
-          return;
-        }
-        overlayHandlers.onPointerUp(event);
-      },
-      onPointerCancel: () => {
-        buffered.current = null;
-        overlayHandlers.onPointerCancel();
-      },
-    }),
-    [armed, overlayButtonRef, overlayHandlers],
-  );
-}
-
-function dispatchSyntheticWheel(
-  button: HTMLButtonElement | null,
-  input: {
-    readonly clientX: number;
-    readonly clientY: number;
-    readonly deltaX: number;
-    readonly deltaY: number;
-  },
-): void {
-  if (button === null) return;
-  button.dispatchEvent(
-    new WheelEvent("wheel", {
-      deltaX: input.deltaX,
-      deltaY: input.deltaY,
-      deltaMode: 0,
-      clientX: input.clientX,
-      clientY: input.clientY,
-      bubbles: true,
-      cancelable: true,
-    }),
   );
 }
 

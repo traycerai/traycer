@@ -43,6 +43,12 @@ export const worktreeBusyHolderSchema = z.object({
   holdKind: worktreeBusyHoldKindSchema,
   activity: worktreeBusyHolderActivitySchema,
   label: z.string(),
+  /**
+   * Stable identity of this holder for the lifetime of the actor. Opaque
+   * to clients; unique within a host. Optional so a pre-holderId host's
+   * inventory still parses; a current host always emits it.
+   */
+  holderId: z.string().optional(),
 });
 export type WorktreeBusyHolder = z.infer<typeof worktreeBusyHolderSchema>;
 
@@ -59,15 +65,59 @@ export const worktreeBusyHoldersWireFieldSchema = worktreeBusyHoldersSchema
   .catch(undefined);
 
 /**
+ * Host-computed SHA-256 hex digest of a holder inventory. Shared by
+ * consent (`expectedHoldersRevision`), listHolders, and failure-frame
+ * wire fields so a value that parses on read can be echoed as consent.
+ */
+export const HOLDERS_REVISION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+
+/**
+ * Host-computed digest of the actor-grouped inventory. Optional so a
+ * pre-revision host still parses; a current host always emits it next
+ * to `holders`. Non-digest and malformed values sanitize to absent
+ * rather than rejecting the envelope — leniency on the failure path,
+ * never a string that would fail consent echo.
+ */
+export const holdersRevisionWireFieldSchema = z
+  .string()
+  .regex(HOLDERS_REVISION_DIGEST_PATTERN)
+  .optional()
+  .catch(undefined);
+
+/**
  * `WORKTREE_BUSY` envelope a current client parses when it wants the typed
  * inventory. `holders` omitted = old host; the prose `message` still names
- * the refusal.
+ * the refusal. `holdersRevision` is the digest of that inventory — a
+ * non-digest sanitizes to absent so a GUI that echoes it as
+ * `expectedHoldersRevision` cannot be handed a value the request schema
+ * rejects.
  */
 export const worktreeBusyErrorDetailsSchema = z.object({
   code: z.literal("WORKTREE_BUSY"),
   message: z.string(),
   holders: worktreeBusyHoldersSchema.optional(),
+  holdersRevision: holdersRevisionWireFieldSchema,
 });
 export type WorktreeBusyErrorDetails = z.infer<
   typeof worktreeBusyErrorDetailsSchema
+>;
+
+/**
+ * Pre-teardown expected-revision mismatch. Same envelope shape as
+ * `WORKTREE_BUSY` (`message` + optional `holders` + optional
+ * `holdersRevision`); a distinguishable `code` so a current GUI can
+ * refresh consent instead of treating it as a generic busy. Old clients
+ * see an unknown code and keep the 4xx busy-class refusal. The HOLDERS_CHANGED
+ * envelope is the echo path: the GUI reads this revision for re-review
+ * and later sends it as `expectedHoldersRevision`, so it uses the same
+ * sanitize-to-absent digest field as the failure-frame wire.
+ */
+export const worktreeHoldersChangedErrorDetailsSchema = z.object({
+  code: z.literal("WORKTREE_HOLDERS_CHANGED"),
+  message: z.string(),
+  holders: worktreeBusyHoldersSchema.optional(),
+  holdersRevision: holdersRevisionWireFieldSchema,
+});
+export type WorktreeHoldersChangedErrorDetails = z.infer<
+  typeof worktreeHoldersChangedErrorDetailsSchema
 >;

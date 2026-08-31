@@ -257,6 +257,7 @@ function assistantMessage(
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
+    envCredentialVar: null,
     imageResolutions: [],
   };
 }
@@ -401,10 +402,12 @@ const displayContext: RenderedMessagesDisplayContext = {
 const CANONICAL_RENDERED_MESSAGES_INPUT: RenderedMessagesInput = {
   messages: [],
   events: [],
+  rowContext: {},
   pendingUserMessages: [],
   liveAssistantMessage: null,
   activeTurn: null,
   runStatus: "idle",
+  setupCardWindows: [],
   ...BINDING,
 };
 
@@ -891,6 +894,9 @@ describe("useRenderedMessages", () => {
       reasoningEffort: "high",
       reasoningEffortLabel: "Resolved high",
       serviceTier: "priority",
+      // Null, not absent: this fixture's record carries no env credential, and
+      // that IS the claim "the profile sign-in ran the turn".
+      envCredentialVar: null,
       costUsd: null,
     });
   });
@@ -916,6 +922,66 @@ describe("useRenderedMessages", () => {
     expect(
       assistantRows.map((message) => message.assistantMeta?.profileLabel),
     ).toEqual(["Work", "Work"]);
+  });
+
+  it("takes the session anchor from the projection when the anchoring user row is cold", () => {
+    // The running `currentAnchor` walk is exactly the "look at the rows around
+    // this one" derivation a bounded window cannot make: hydrate the assistant
+    // turn alone and the walk starts with nothing, so the saved profile label
+    // disappears from a turn that had one. The host carries the anchor it used.
+    const withoutContext = renderRenderedMessages({
+      messages: [assistantMessage("turn-cold-anchor", 2000)],
+    });
+    expect(
+      withoutContext.result.current.find(
+        (message) => message.role === "assistant",
+      )?.assistantMeta?.profileLabel,
+    ).toBeNull();
+
+    const { result } = renderRenderedMessages({
+      messages: [assistantMessage("turn-cold-anchor-2", 2000)],
+      rowContext: {
+        "assistant:turn-cold-anchor-2": {
+          sessionAnchor: claudeSessionAnchor("work-profile", "Work"),
+        },
+      },
+    });
+    expect(
+      result.current.find((message) => message.role === "assistant")
+        ?.assistantMeta?.profileLabel,
+    ).toBe("Work");
+  });
+
+  it("anchors a legacy turn's elapsed counter on the projection's own anchor", () => {
+    // A turn persisted before `startedAt` existed takes its anchor from the
+    // preceding user record. A span that does not reach that record leaves the
+    // walk's `lastUserTimestamp` null, and the anchor collapses onto the
+    // assistant record's COMPLETION stamp - a row whose elapsed time reads
+    // zero. The projection carries the anchor it actually used.
+    const legacy: Extract<Message, { role: "assistant" }> = {
+      ...assistantMessage("turn-legacy-anchor", 9000),
+      startedAt: null,
+    };
+    const withoutContext = renderRenderedMessages({ messages: [legacy] });
+    expect(
+      withoutContext.result.current.find(
+        (message) => message.role === "assistant",
+      )?.createdAt,
+    ).toBe(9000);
+
+    const legacyTwo: Extract<Message, { role: "assistant" }> = {
+      ...assistantMessage("turn-legacy-anchor-2", 9000),
+      startedAt: null,
+    };
+    const { result } = renderRenderedMessages({
+      messages: [legacyTwo],
+      rowContext: {
+        "assistant:turn-legacy-anchor-2": { legacyRowAnchorAt: 4000 },
+      },
+    });
+    expect(
+      result.current.find((message) => message.role === "assistant")?.createdAt,
+    ).toBe(4000);
   });
 
   it("shows the initiating profile on the active turn before output starts", () => {
@@ -3460,6 +3526,237 @@ describe("useRenderedMessages fork link integration", () => {
     });
 
     expect(result.current.map((message) => message.id)).toEqual(["m1"]);
+  });
+});
+
+function importedEvent(input: {
+  readonly eventId: string;
+  readonly timestamp: number;
+  readonly metadata: Record<string, unknown> | null;
+}): ChatEvent {
+  return {
+    eventId: input.eventId,
+    type: "chat.imported",
+    timestamp: input.timestamp,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: input.metadata,
+  };
+}
+
+describe("useRenderedMessages imported chat marker integration", () => {
+  it("projects a well-formed chat.imported event into a single provenance row", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        importedEvent({
+          eventId: "import-1",
+          timestamp: 500,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 1234,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    const importedRows = result.current.filter(
+      (message) => message.segments[0]?.kind === "imported-chat-marker",
+    );
+    expect(importedRows).toHaveLength(1);
+    const row = importedRows[0];
+    expect(row.id).toBe("imported-chat-marker:import-1");
+    expect(row.role).toBe("system");
+    expect(row.createdAt).toBe(500);
+    expect(row.segments).toHaveLength(1);
+    const segment = row.segments[0];
+    expect(segment.kind).toBe("imported-chat-marker");
+    if (segment.kind !== "imported-chat-marker") {
+      throw new Error("expected imported-chat-marker");
+    }
+    expect(segment.sourceProvider).toBe("claude");
+    expect(segment.importedAt).toBe(1234);
+    expect(segment.sourceCwd).toBe("/repo/work");
+  });
+
+  it("pins the provenance row at the top, above the transcript it introduces", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), userMessage("m2")],
+      events: [
+        importedEvent({
+          eventId: "import-1",
+          // The import necessarily happened AFTER every message it carries in,
+          // which is what a plain `createdAt` sort files at the very bottom.
+          timestamp: 9_000,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 9_000,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual([
+      "imported-chat-marker:import-1",
+      "m1",
+      "m2",
+    ]);
+  });
+
+  it("sits above even a pinned genesis setup card", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        setupEvent({
+          eventId: "s-running",
+          type: "setup.running",
+          timestamp: 1500,
+          metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
+        }),
+        importedEvent({
+          eventId: "import-1",
+          timestamp: 9_000,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 9_000,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    // Provenance first: the workspace the card describes was bound to this
+    // chat after the transcript already existed somewhere else.
+    expect(result.current.map((message) => message.id)).toEqual([
+      "imported-chat-marker:import-1",
+      "setup-card:owner-1:0:1500",
+      "m1",
+    ]);
+  });
+
+  it("derives distinct row ids from the event id so two imports never collide", () => {
+    const { result } = renderRenderedMessages({
+      messages: [],
+      events: [
+        importedEvent({
+          eventId: "import-1",
+          timestamp: 500,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 1234,
+            sourceCwd: "/repo/one",
+          },
+        }),
+        importedEvent({
+          eventId: "import-2",
+          timestamp: 600,
+          metadata: {
+            sourceProvider: "codex",
+            nativeSessionId: "native-session-2",
+            importedAt: 5678,
+            sourceCwd: "/repo/two",
+          },
+        }),
+      ],
+    });
+
+    const ids = result.current.map((message) => message.id);
+    expect(ids).toEqual([
+      "imported-chat-marker:import-1",
+      "imported-chat-marker:import-2",
+    ]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("renders no row when metadata is null", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        importedEvent({
+          eventId: "import-null",
+          timestamp: 500,
+          metadata: null,
+        }),
+      ],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual(["m1"]);
+  });
+
+  it("renders no row when a required field is missing", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        importedEvent({
+          eventId: "import-missing",
+          timestamp: 500,
+          metadata: {
+            sourceProvider: "claude",
+            // nativeSessionId is required and missing here.
+            importedAt: 1234,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual(["m1"]);
+  });
+
+  it("renders no row when a field has the wrong type", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        importedEvent({
+          eventId: "import-wrong-type",
+          timestamp: 500,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: "not-a-number",
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual(["m1"]);
+  });
+
+  it("ignores events of other types", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        forkEvent({
+          eventId: "fork-1",
+          timestamp: 500,
+          metadata: {
+            sourceChatId: "source-chat-1",
+            sourceChatTitle: "Original chat",
+            sourceHostId: "source-host-1",
+          },
+        }),
+      ],
+    });
+
+    expect(
+      result.current.some(
+        (message) => message.segments[0]?.kind === "imported-chat-marker",
+      ),
+    ).toBe(false);
   });
 });
 

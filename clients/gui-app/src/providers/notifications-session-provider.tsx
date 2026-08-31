@@ -85,6 +85,7 @@ import {
 import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
+import { installNotificationChimeAudioWarmup } from "@/lib/notifications/notification-chime";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -120,6 +121,7 @@ interface FocusedNotificationScope {
 export function NotificationsSessionProvider(
   props: NotificationsSessionProviderProps,
 ): ReactNode {
+  useEffect(() => installNotificationChimeAudioWarmup(), []);
   const queryClient = useQueryClient();
   const authService = useAuthService();
   const hostClient = useHostClient();

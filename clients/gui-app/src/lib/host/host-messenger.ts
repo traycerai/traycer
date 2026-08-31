@@ -24,6 +24,7 @@ import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-ws-factory";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { appServerClock } from "@/lib/clock/app-server-clock";
 import { getGuiClientIdentity } from "@/lib/host/client-identity";
 import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
@@ -117,6 +118,13 @@ export function buildRawHostMessengerForTarget<
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
       auth: params.auth,
+      // MUST match what `buildHostStreamClient` passes, and this is not a
+      // stylistic point: `clock` is deliberately not part of the session cache
+      // identity, so whichever consumer builds the `(hostId, userId)` session
+      // FIRST is the one whose value every later consumer inherits. A `null`
+      // here would silently disable the clock-skew park for a session a stream
+      // consumer later joins.
+      clock: appServerClock,
       rpcRegistry: params.registry,
       streamRegistry: hostStreamRpcRegistry,
       webSocketFactory: browserStreamWebSocketFactory,

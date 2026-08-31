@@ -30,8 +30,10 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-// The one fork this file exercises: a coarse pointer picks the touch handler
-// bag and the compact chrome inside the single tile.
+// The one fork this file exercises: a coarse pointer picks the compact chrome
+// and the sheet-shaped dialog inside the single tile. Touch INPUT is not a
+// fork - the controller translates a finger on any pointer grade, and
+// `browser-peek-tile-touch.test.tsx` covers it.
 vi.mock("@/hooks/ui/use-coarse-pointer", () => ({
   useCoarsePointer: () => true,
 }));
@@ -143,33 +145,6 @@ function armPeekTile(stream: FakeStreamSession): void {
   });
 }
 
-function installAnimationFrameQueue(): {
-  readonly runNextFrame: () => void;
-} {
-  let nextHandle = 1;
-  const callbacks = new Map<number, FrameRequestCallback>();
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-    const handle = nextHandle;
-    nextHandle += 1;
-    callbacks.set(handle, callback);
-    return handle;
-  });
-  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((handle) => {
-    callbacks.delete(handle);
-  });
-  return {
-    runNextFrame: () => {
-      const entry = Array.from(callbacks.entries()).at(0);
-      if (entry === undefined) {
-        throw new Error("Expected a pending animation frame.");
-      }
-      const [handle, callback] = entry;
-      callbacks.delete(handle);
-      callback(0);
-    },
-  };
-}
-
 describe("BrowserPeekTile on a coarse pointer", () => {
   beforeEach(() => {
     hookState.visible = true;
@@ -179,155 +154,6 @@ describe("BrowserPeekTile on a coarse pointer", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
-  });
-
-  it("a tap sends pointer down/up frames with normalized coords", () => {
-    render(
-      <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
-        node={PEEK_NODE}
-      />,
-    );
-    const stream = liveStream();
-    presentLiveFrame(stream, 7, new Uint8Array([1, 2, 3]));
-
-    armPeekTile(stream);
-
-    // Once armed, a tap sends discrete down/up frames immediately.
-    fireEvent.pointerDown(overlayButton(), {
-      pointerId: 2,
-      pointerType: "touch",
-      clientX: 200,
-      clientY: 300,
-      button: 0,
-      buttons: 1,
-    });
-    fireEvent.pointerUp(overlayButton(), {
-      pointerId: 2,
-      pointerType: "touch",
-      clientX: 200,
-      clientY: 300,
-      button: 0,
-      buttons: 0,
-    });
-
-    const pointerFrames = framesOfKind(stream, "pointer");
-    const downs = pointerFrames.filter((frame) => frame.type === "down");
-    const ups = pointerFrames.filter((frame) => frame.type === "up");
-    expect(downs.length).toBeGreaterThanOrEqual(1);
-    expect(ups.length).toBeGreaterThanOrEqual(1);
-    const secondDown = downs.at(-1);
-    expect(secondDown).toMatchObject({ normalizedX: 0.25, normalizedY: 0.5 });
-  });
-
-  it("a drag while armed sends wheel deltas instead of pointer moves", () => {
-    render(
-      <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
-        node={PEEK_NODE}
-      />,
-    );
-    const stream = liveStream();
-    presentLiveFrame(stream, 7, new Uint8Array([1, 2, 3]));
-    armPeekTile(stream);
-
-    const rafQueue = installAnimationFrameQueue();
-    fireEvent.pointerDown(overlayButton(), {
-      pointerId: 3,
-      pointerType: "touch",
-      clientX: 100,
-      clientY: 300,
-      button: 0,
-      buttons: 1,
-    });
-    fireEvent.pointerMove(overlayButton(), {
-      pointerId: 3,
-      pointerType: "touch",
-      clientX: 100,
-      clientY: 260,
-      button: 0,
-      buttons: 1,
-    });
-    act(() => {
-      rafQueue.runNextFrame();
-    });
-    fireEvent.pointerUp(overlayButton(), {
-      pointerId: 3,
-      pointerType: "touch",
-      clientX: 100,
-      clientY: 260,
-      button: 0,
-      buttons: 0,
-    });
-
-    const pointerFrames = framesOfKind(stream, "pointer");
-    const wheelFrames = pointerFrames.filter((frame) => frame.type === "wheel");
-    const moveFrames = pointerFrames.filter((frame) => frame.type === "move");
-    const downFrames = pointerFrames.filter((frame) => frame.type === "down");
-    const upFrames = pointerFrames.filter((frame) => frame.type === "up");
-    expect(moveFrames).toHaveLength(0);
-    // A scroll must never bracket itself with down/up - Chrome would
-    // synthesize a click from that pair and scrolling past a link would
-    // navigate.
-    expect(downFrames).toHaveLength(0);
-    expect(upFrames).toHaveLength(0);
-    expect(wheelFrames).toHaveLength(1);
-    expect(wheelFrames[0]).toMatchObject({ deltaX: 0, deltaY: 40 });
-  });
-
-  it("a disarm mid-gesture drops the buffered touch instead of leaking a drag", () => {
-    render(
-      <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
-        node={PEEK_NODE}
-      />,
-    );
-    const stream = liveStream();
-    presentLiveFrame(stream, 7, new Uint8Array([1, 2, 3]));
-    armPeekTile(stream);
-
-    fireEvent.pointerDown(overlayButton(), {
-      pointerId: 4,
-      pointerType: "touch",
-      clientX: 100,
-      clientY: 300,
-      button: 0,
-      buttons: 1,
-    });
-
-    // Host revokes the arm mid-gesture (e.g. another surface took control).
-    act(() => {
-      stream.emit(
-        { kind: "revoked", hasBinaryPayload: false, armEpoch: 1 },
-        null,
-      );
-    });
-
-    fireEvent.pointerMove(overlayButton(), {
-      pointerId: 4,
-      pointerType: "touch",
-      clientX: 100,
-      clientY: 200,
-      button: 0,
-      buttons: 1,
-    });
-    fireEvent.pointerUp(overlayButton(), {
-      pointerId: 4,
-      pointerType: "touch",
-      clientX: 100,
-      clientY: 200,
-      button: 0,
-      buttons: 0,
-    });
-
-    const pointerFrames = framesOfKind(stream, "pointer");
-    expect(pointerFrames).toHaveLength(0);
   });
 
   it("nav bar reflects navState", () => {

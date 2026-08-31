@@ -4,9 +4,13 @@ import type {
   JsonObject,
   JsonValue,
 } from "@traycer/protocol/persistence/chat-sync/json";
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
+import type { Message } from "@traycer/protocol/persistence/epic/messages";
 import {
   convertPublishedChat,
   convertReplicaChat,
+  publishedChatSessionState,
+  type PublishedChatSessionInput,
 } from "@/lib/chats/published-chat-session";
 
 /**
@@ -295,5 +299,90 @@ describe("convertReplicaChat", () => {
     );
     expect(placeholders).toHaveLength(2);
     expect(converted.unreadableCount).toBe(2);
+  });
+});
+
+function publishedUserMessage(
+  messageId: string,
+): Extract<Message, { role: "user" }> {
+  return {
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: "user-1" },
+    message: {
+      kind: "user",
+      content: { type: "doc", content: [] },
+      browserAnnotations: [],
+    },
+    timestamp: 4,
+    sessionAnchor: null,
+  };
+}
+
+function publishedChatEvent(eventId: string): ChatEvent {
+  return {
+    eventId,
+    type: "turn.completed",
+    timestamp: 1,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: null,
+  };
+}
+
+function publishedInputWith(
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): PublishedChatSessionInput {
+  return {
+    epicId: "epic-1",
+    chatId: "chat-1",
+    ownerUserId: "user-1",
+    title: "Published Chat",
+    createdAt: 1,
+    updatedAt: 2,
+    conversion: { messages, events, unreadableCount: 0 },
+  };
+}
+
+/**
+ * The same duplicate-retention regression `chat-session-store.test.ts` guards
+ * against the live store: `publishedChatSessionState` builds `chat` as a
+ * `ChatSessionRecord`, and the published copy is the case that made the
+ * duplicate most expensive - the whole transcript arrives materialized, so a
+ * second copy doubles the peak of an already-large read.
+ */
+describe("publishedChatSessionState", () => {
+  it("carries the transcript once: `chat` has no messages/events, and state.messages/state.events keep the full copy", () => {
+    const messages = [publishedUserMessage("m1"), publishedUserMessage("m2")];
+    const events = [publishedChatEvent("e1")];
+    const state = publishedChatSessionState(
+      publishedInputWith(messages, events),
+    );
+
+    // The regression guard: a future `{...chat, messages: [...]}` spread
+    // would silently reintroduce the duplicate.
+    expect(Object.keys(state.chat ?? {})).not.toContain("messages");
+    expect(Object.keys(state.chat ?? {})).not.toContain("events");
+
+    expect(state.messages).toEqual(messages);
+    expect(state.events).toEqual(events);
+  });
+
+  it("keeps the four scalar reads the record exists to serve", () => {
+    const state = publishedChatSessionState(publishedInputWith([], []));
+
+    if (state.chat === null) throw new Error("Expected chat");
+    expect(state.chat.title).toBe("Published Chat");
+    expect(state.chat.isTitleEditedByUser).toBe(false);
+    expect(state.chat.settings).toBeNull();
+    expect(state.chat.parentId).toBeNull();
   });
 });

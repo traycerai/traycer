@@ -62,6 +62,12 @@ function singlePane(canvas: EpicCanvasState) {
   return pane;
 }
 
+function paneCount(): number {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+  if (canvas === undefined) return 0;
+  return collectPanes(canvas.root).length;
+}
+
 function browserSessionTiles(): ReadonlyArray<BrowserSessionTileRef> {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
   if (canvas === undefined) return [];
@@ -138,7 +144,7 @@ describe("browser link routing", () => {
         source,
         kind: "markdown",
         url: "https://example.test/markdown-alt",
-        event: { altKey: true },
+        event: { altKey: true, ctrlKey: false, metaKey: false },
         openInApp,
       }),
     ).toBe("in-app");
@@ -148,7 +154,7 @@ describe("browser link routing", () => {
         source,
         kind: "terminal",
         url: "https://example.test/terminal-alt",
-        event: { altKey: true },
+        event: { altKey: true, ctrlKey: false, metaKey: false },
         openInApp,
       }),
     ).toBe("external");
@@ -158,6 +164,30 @@ describe("browser link routing", () => {
       source,
       "https://example.test/markdown-alt",
     );
+  });
+
+  it.each([
+    ["Command", { metaKey: true, ctrlKey: false, altKey: false }],
+    ["Control", { metaKey: false, ctrlKey: true, altKey: false }],
+  ])("opens %s-clicked web links externally", (_modifier, event) => {
+    const source = seedCanvas(SOURCE_TILE);
+    const runnerHost = mockRunnerHost();
+    const openInApp = vi.fn(() => true);
+
+    const result = routeBrowserLink({
+      runnerHost,
+      source,
+      kind: "markdown",
+      url: "https://example.test/docs",
+      event,
+      openInApp,
+    });
+
+    expect(result).toBe("external");
+    expect(runnerHost.openExternalLink).toHaveBeenCalledWith(
+      "https://example.test/docs",
+    );
+    expect(openInApp).not.toHaveBeenCalled();
   });
 
   it("records terminal dev-server origins from URL output only", () => {
@@ -192,6 +222,7 @@ describe("browser link routing", () => {
       sessionId: "session-popup",
       tabId: "tab-popup",
       url: "https://popup.example/oauth",
+      placement: "split-right",
     });
 
     expect(opened).toBe(true);
@@ -204,6 +235,25 @@ describe("browser link routing", () => {
         viewportPreset: "responsive",
       },
     ]);
+    expect(paneCount()).toBe(2);
+  });
+
+  it("takes over the pane rather than splitting it on a one-tile viewport", () => {
+    const source = seedCanvas(SOURCE_TILE);
+
+    const opened = openBrowserSessionTileFromPage({
+      ...source,
+      sessionId: "session-popup",
+      tabId: "tab-popup",
+      url: "https://popup.example/oauth",
+      placement: "same-pane",
+    });
+
+    expect(opened).toBe(true);
+    expect(browserSessionTiles()).toHaveLength(1);
+    // A second pane on a viewport that shows one tile is a tile the user can
+    // neither see nor close.
+    expect(paneCount()).toBe(1);
   });
 });
 

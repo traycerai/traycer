@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import { buildArtifactExtensions, deriveCollabUser } from "@/editor-core";
@@ -23,6 +24,32 @@ function createArtifactEditor(): Editor {
       titlePlaceholderText: "Untitled",
     }),
   });
+}
+
+interface CodeBlockRange {
+  readonly contentFrom: number;
+  readonly contentTo: number;
+  readonly nodeFrom: number;
+  readonly nodeTo: number;
+}
+
+function findCodeBlockRange(doc: ProseMirrorNode): CodeBlockRange {
+  const ranges: CodeBlockRange[] = [];
+  doc.descendants((node, pos) => {
+    if (node.type.name !== "codeBlock") return true;
+    ranges.push({
+      contentFrom: pos + 1,
+      contentTo: pos + 1 + node.content.size,
+      nodeFrom: pos,
+      nodeTo: pos + node.nodeSize,
+    });
+    return false;
+  });
+  const range = ranges.at(0);
+  if (range === undefined) {
+    throw new Error("Expected a code block in the document");
+  }
+  return range;
 }
 
 describe("buildArtifactExtensions", () => {
@@ -162,6 +189,86 @@ describe("buildArtifactExtensions", () => {
     expect(text).toContain("1. first");
     expect(text).toContain("2. second");
     expect(text).not.toContain("- one\n\n- two");
+    editor.destroy();
+  });
+
+  it("copies a text selection inside a code block without markdown fences", () => {
+    const editor = createArtifactEditor();
+    const command = "bun run compile";
+    editor.commands.setContent(["```sh", command, "```", ""].join("\n"), {
+      contentType: "markdown",
+    });
+
+    const { doc } = editor.state;
+    const { text } = editor.view.serializeForClipboard(
+      doc.slice(1, command.length + 1),
+    );
+
+    expect(text).toBe(command);
+    editor.destroy();
+  });
+
+  it.each([
+    {
+      container: "blockquote",
+      markdown: ["> ```sh", "> bun run compile", "> ```", ""].join("\n"),
+    },
+    {
+      container: "list item",
+      markdown: ["- ```sh", "  bun run compile", "  ```", ""].join("\n"),
+    },
+  ])(
+    "copies code nested in a $container without markdown markers",
+    ({ markdown }) => {
+      const editor = createArtifactEditor();
+      editor.commands.setContent(markdown, {
+        contentType: "markdown",
+        parseOptions: { preserveWhitespace: false },
+      });
+
+      const { doc } = editor.state;
+      const { contentFrom, contentTo } = findCodeBlockRange(doc);
+      const { text } = editor.view.serializeForClipboard(
+        doc.slice(contentFrom, contentTo),
+      );
+
+      expect(text).toBe("bun run compile");
+      editor.destroy();
+    },
+  );
+
+  it("keeps markdown fences when a whole nested code block is copied", () => {
+    const editor = createArtifactEditor();
+    editor.commands.setContent(
+      ["> ```sh", "> bun run compile", "> ```", ""].join("\n"),
+      { contentType: "markdown", parseOptions: { preserveWhitespace: false } },
+    );
+
+    const { doc } = editor.state;
+    const { nodeFrom, nodeTo } = findCodeBlockRange(doc);
+    const { text } = editor.view.serializeForClipboard(
+      doc.slice(nodeFrom, nodeTo),
+    );
+
+    expect(text).toContain("```sh");
+    expect(text).toContain("bun run compile");
+    editor.destroy();
+  });
+
+  it("keeps markdown fences when a whole code block is copied", () => {
+    const editor = createArtifactEditor();
+    const command = "bun run compile";
+    editor.commands.setContent(["```sh", command, "```", ""].join("\n"), {
+      contentType: "markdown",
+    });
+
+    const { doc } = editor.state;
+    const { text } = editor.view.serializeForClipboard(
+      doc.slice(0, doc.content.size),
+    );
+
+    expect(text).toContain("```sh");
+    expect(text).toContain(command);
     editor.destroy();
   });
 

@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -66,7 +67,12 @@ import {
 } from "./use-profile-eligibility-gate";
 import { ChatComposerBannerPortal } from "./chat-composer-banner-portal";
 import { useChatComposerDraft } from "./use-chat-composer-draft";
-import { useChatComposerSubmit } from "./use-chat-composer-submit";
+import {
+  useChatComposerSubmit,
+  type ChatComposerSideChatInput,
+} from "./use-chat-composer-submit";
+import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
+import { sideChatSlashCommands } from "@/lib/chats/side-chat-command";
 import {
   useProviderReauthGate,
   type ProviderReauthGate,
@@ -94,6 +100,10 @@ import {
 import { PromptStashControl } from "./prompt-stash-control";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
+
+// Re-exported beside `ChatComposerSubmitInput` so a caller wiring both
+// handlers imports them from one place.
+export type { ChatComposerSideChatInput };
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -131,6 +141,14 @@ interface ChatComposerProps {
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
+  /**
+   * Handles a prompt that leads with `/btw` / `/side`
+   * (`lib/chats/side-chat-command.ts`): fork this chat and ask the remainder
+   * there. Also what makes the two names appear in this composer's `/` picker.
+   * `null` where no chat exists to fork - the command is then not offered, and
+   * a typed one is sent like any other text.
+   */
+  readonly onSideChat: ((input: ChatComposerSideChatInput) => boolean) | null;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   /**
@@ -251,6 +269,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     settingsSeed,
     fallbackSettingsSeed,
     onSubmitMessage,
+    onSideChat,
     onSettingsChange,
     activeTurnStatus,
     steerCapable,
@@ -431,6 +450,15 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const unsupportedImagesMessage = imageAttachmentWarning(imagesUnsupported);
 
+  // The side-chat command is offered exactly where it can be honored: stamped
+  // with the current harness so its chip matches a provider command's.
+  const localSlashCommands = useMemo(
+    () =>
+      onSideChat === null
+        ? NO_LOCAL_SLASH_COMMANDS
+        : sideChatSlashCommands(harnessId),
+    [harnessId, onSideChat],
+  );
   useComposerPickerItems({
     pickerStore,
     hostClient,
@@ -438,6 +466,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     mentionRoots: resolvedMentionRoots,
     currentEpicId,
     isActive: focused,
+    localSlashCommands,
   });
 
   const {
@@ -498,6 +527,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       imagesUnsupported,
       attachmentPreparationPending: pastePending,
       onSubmitMessage,
+      onSideChat,
     });
   const attachmentPending = composerAttachmentPending(
     pastePending,

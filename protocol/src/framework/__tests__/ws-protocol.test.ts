@@ -381,6 +381,58 @@ describe("ws-protocol canonical Zod schemas", () => {
       expect(parsed.error?.holders?.[0]?.holdKind).toBe("terminal-agent-pty");
     });
 
+    it("keeps holdersRevision on a `response` error envelope", () => {
+      const parsed = hostResponseFrameSchema.parse({
+        kind: "response",
+        requestId: "req-1",
+        method: "worktree.delete",
+        schemaVersion: { major: 1, minor: 2 },
+        result: null,
+        error: {
+          code: "WORKTREE_HOLDERS_CHANGED",
+          message: "holders changed",
+          holdersRevision: "a".repeat(64),
+        },
+      });
+      expect(parsed.error?.holdersRevision).toBe("a".repeat(64));
+    });
+
+    it("sanitizes a non-digest holdersRevision to absent rather than passing it through", () => {
+      const parsed = hostResponseFrameSchema.parse({
+        kind: "response",
+        requestId: "req-1",
+        method: "worktree.delete",
+        schemaVersion: { major: 1, minor: 2 },
+        result: null,
+        error: {
+          code: "WORKTREE_HOLDERS_CHANGED",
+          message: "holders changed",
+          holdersRevision: "rev-abc",
+        },
+      });
+      expect(parsed.error?.holdersRevision).toBeUndefined();
+    });
+
+    it("sanitizes a malformed holdersRevision instead of rejecting the envelope", () => {
+      const parsed = hostResponseFrameSchema.safeParse({
+        kind: "response",
+        requestId: "req-1",
+        method: "worktree.delete",
+        schemaVersion: { major: 1, minor: 2 },
+        result: null,
+        error: {
+          code: "WORKTREE_BUSY",
+          message: "in use",
+          holdersRevision: 12,
+        },
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.error?.code).toBe("WORKTREE_BUSY");
+        expect(parsed.data.error?.holdersRevision).toBeUndefined();
+      }
+    });
+
     it("sanitizes malformed holders instead of rejecting the error envelope", () => {
       const busy = hostResponseFrameSchema.safeParse({
         kind: "response",

@@ -112,6 +112,7 @@ function makeClient(
     endpoint: () => mockLocalHostEntry,
     bearer: () => context.credentials,
     auth: null,
+    clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
     evidence: NO_TRANSPORT_EVIDENCE,

@@ -90,6 +90,7 @@ function makeTuiAgentProjection(
   return {
     id,
     docResident: false,
+    origin: "registry",
     harnessId: "codex",
     title,
     parentId,

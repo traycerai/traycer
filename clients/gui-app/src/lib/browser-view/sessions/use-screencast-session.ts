@@ -38,6 +38,11 @@ import type {
   ScreencastFrameSize,
 } from "@/lib/browser-view/sessions/screencast-input-encoding";
 import {
+  clampScreencastDpr,
+  screencastProfile,
+  type ScreencastProfile,
+} from "@/lib/browser-view/sessions/screencast-profile";
+import {
   createVideoPlaneSession,
   NO_VIDEO_VIEW,
   startPlayback,
@@ -52,9 +57,6 @@ import {
   createBrowserMediaPeer,
 } from "@/lib/browser-view/tiles/webrtc-media-registry";
 
-const DEFAULT_MAX_WIDTH = 1280;
-const DEFAULT_MAX_HEIGHT = 720;
-const DEFAULT_QUALITY = 70;
 const VIEWPORT_DEBOUNCE_MS = 200;
 /**
  * Server frames that start a fresh capture, so the ack-tracking sequence resets
@@ -207,6 +209,9 @@ export function useScreencastSession(
   options: ScreencastSessionOptions,
 ): ScreencastSession {
   const { client, epicId, hostId, sessionId, tabId, visible } = options;
+  // A module constant chosen by the shell this bundle booted into, so the
+  // reference is stable across renders and safe to depend on below.
+  const profile = screencastProfile();
   const streamRef = useRef<BrowserScreencastStreamClient | null>(null);
   const videoPlaneRef = useRef<VideoPlaneSession | null>(null);
   /**
@@ -614,9 +619,9 @@ export function useScreencastSession(
       epicId,
       sessionId,
       tabId,
-      maxWidth: DEFAULT_MAX_WIDTH,
-      maxHeight: DEFAULT_MAX_HEIGHT,
-      quality: DEFAULT_QUALITY,
+      maxWidth: profile.maxWidth,
+      maxHeight: profile.maxHeight,
+      quality: profile.quality,
       format: "jpeg",
       role: "tile",
       callbacks: { onServerFrame, onConnectionStatus },
@@ -647,6 +652,7 @@ export function useScreencastSession(
     epicId,
     hostId,
     patchStreamState,
+    profile,
     readControlPlaneRttMs,
     sessionId,
     tabId,
@@ -661,7 +667,7 @@ export function useScreencastSession(
       ...viewport,
     });
   }, []);
-  useScreencastViewportBridge(viewportRef, visible, sendViewport);
+  useScreencastViewportBridge(viewportRef, visible, profile, sendViewport);
 
   // Keeps the two dormant-snapshot latest-value refs current after every
   // commit - a plain PASSIVE effect (not a render-time write, which
@@ -1110,6 +1116,7 @@ function handleScreencastFrame(
 function useScreencastViewportBridge(
   ref: RefObject<HTMLElement | null>,
   visible: boolean,
+  profile: ScreencastProfile,
   sendViewport: (viewport: ScreencastViewportInput) => void,
 ): void {
   useEffect(() => {
@@ -1120,7 +1127,7 @@ function useScreencastViewportBridge(
       sendViewport({
         width: Math.max(1, Math.round(width)),
         height: Math.max(1, Math.round(height)),
-        dpr: window.devicePixelRatio,
+        dpr: clampScreencastDpr(profile, window.devicePixelRatio),
       });
     };
     const emit = (width: number, height: number): void => {
@@ -1150,7 +1157,7 @@ function useScreencastViewportBridge(
       observer.disconnect();
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [ref, sendViewport, visible]);
+  }, [profile, ref, sendViewport, visible]);
 }
 
 /**
