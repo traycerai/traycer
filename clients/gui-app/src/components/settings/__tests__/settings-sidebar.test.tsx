@@ -396,10 +396,7 @@ describe("<SettingsSidebar /> section navigation history", () => {
     // navigation commits keeps the test on the real Link.
     await waitFor(() => {
       const links = screen.getAllByTestId("settings-sidebar-item-general");
-      const current = links[links.length - 1];
-      if (current !== undefined) {
-        fireEvent.click(current);
-      }
+      fireEvent.click(links[links.length - 1]);
       expect(router.state.location.pathname).toBe("/settings/general");
     });
 
