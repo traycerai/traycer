@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { SortableNode } from "@/lib/epic-sort";
 import {
+  chatRowLastActiveAt,
+  cloudChatLastActiveAt,
   cloudChatRowKey,
   indexOwnCloudChatsByLocalId,
   localChatRowKey,
@@ -76,6 +78,62 @@ const LOCAL_BACKUP_ROW = cloudChat({
 
 const FORK_REDIRECT = new Map([[WALKTHROUGH, CLONE_ROW]]);
 const NO_REDIRECTS = new Map<string, string>();
+
+describe("cloudChatLastActiveAt", () => {
+  it("uses the published content time instead of a later metadata edit", () => {
+    expect(
+      cloudChatLastActiveAt(
+        cloudChat({
+          chatId: WALKTHROUGH,
+          ownerHostId: LOCAL_HOST,
+          title: "Renamed",
+          publishedAt: 300,
+          metadataUpdatedAt: 900,
+          createdAt: 100,
+        }),
+      ),
+    ).toBe(300);
+  });
+
+  it("falls back to metadata time before the first publication", () => {
+    expect(
+      cloudChatLastActiveAt(
+        cloudChat({
+          chatId: WALKTHROUGH,
+          ownerHostId: LOCAL_HOST,
+          title: "New chat",
+          publishedAt: null,
+          metadataUpdatedAt: 200,
+          createdAt: 100,
+        }),
+      ),
+    ).toBe(200);
+  });
+});
+
+describe("chatRowLastActiveAt", () => {
+  it("keeps the serving host's fresher record activity time", () => {
+    expect(
+      chatRowLastActiveAt({
+        recordUpdatedAt: 900,
+        ownerHostId: LOCAL_HOST,
+        sessionHostId: LOCAL_HOST,
+        cloudChat: LOCAL_BACKUP_ROW,
+      }),
+    ).toBe(900);
+  });
+
+  it("uses publication time for a record replicated from another host", () => {
+    expect(
+      chatRowLastActiveAt({
+        recordUpdatedAt: 900,
+        ownerHostId: OTHER_HOST,
+        sessionHostId: LOCAL_HOST,
+        cloudChat: INCUMBENT_ROW,
+      }),
+    ).toBe(300);
+  });
+});
 
 function node(
   id: string,
