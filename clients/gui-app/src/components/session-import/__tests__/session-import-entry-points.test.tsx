@@ -41,6 +41,31 @@ vi.mock("@/components/session-import/session-import-dialog", () => ({
   ),
 }));
 
+/**
+ * Two of the panel's other rows key on what the shell can do - voice reads
+ * `hasLocalHost`, prevent-sleep feature-detects the power bridge - so drawing
+ * the panel at all needs a runner host. Desktop-flavoured, matching the shape
+ * the panel's own suite uses: those rows render, which is the realistic
+ * neighbourhood for the row under test.
+ */
+const runnerHostMock = vi.hoisted(
+  (): {
+    current: {
+      readonly hasLocalHost: boolean;
+      readonly power: { setSleepBlocked: () => Promise<void> };
+    };
+  } => ({
+    current: {
+      hasLocalHost: true,
+      power: { setSleepBlocked: () => Promise.resolve() },
+    },
+  }),
+);
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => runnerHostMock.current,
+}));
+
 const navigateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
