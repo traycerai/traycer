@@ -7,6 +7,10 @@ import {
   BrowserSessionsProvider,
 } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import {
+  captureFinalPrimaryProfiles,
+  FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
+} from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -41,6 +45,19 @@ const hookState = vi.hoisted(() => ({
   transportKey: "authenticated-host-test",
   ownerIdentityKey: "local\u0000host-test\u0000user-test",
   browserViewBridge: null as FakeBridge | null,
+  localHostId: "host-test" as string | null,
+  desktopWindowId: "window-1" as string | null,
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => hookState.localHostId,
+}));
+
+vi.mock("@/providers/windows-bridge-context", () => ({
+  useWindowsBridge: () =>
+    hookState.desktopWindowId === null
+      ? null
+      : { windowId: hookState.desktopWindowId },
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
@@ -333,9 +350,6 @@ class FakeBridge {
   readonly onNativeTabStatusChange = vi.fn<
     BrowserViewBridge["onNativeTabStatusChange"]
   >(() => ({ dispose: () => {} }));
-  readonly onElectronTabHandoff = vi.fn<
-    BrowserViewBridge["onElectronTabHandoff"]
-  >(() => ({ dispose: () => {} }));
   readonly onPrimaryProfileDelta = vi.fn<
     BrowserViewBridge["onPrimaryProfileDelta"]
   >(() => ({ dispose: () => {} }));
@@ -361,6 +375,7 @@ class FakeBridge {
             httpOnly: true,
             secure: true,
             sameSite: "Lax",
+            partitionKey: null,
           },
         ],
         origins: [],
@@ -436,10 +451,41 @@ function electronLifecycleReadinessFrames(
   return frames.filter((frame) => frame.kind === "electronTabLifecycleReady");
 }
 
+function framesOfKind(
+  frames: ReadonlyArray<Record<string, unknown>>,
+  kind: string,
+): ReadonlyArray<Record<string, unknown>> {
+  return frames.filter((frame) => frame.kind === kind);
+}
+
 function electronProvisionedFrames(
   frames: ReadonlyArray<Record<string, unknown>>,
 ): ReadonlyArray<Record<string, unknown>> {
   return frames.filter((frame) => frame.kind === "electronTabProvisioned");
+}
+
+/**
+ * Acks the Nth `primaryProfileCaptured` this stream sent, the way the host
+ * does once it has DURABLY stored that jar. Keyed by the capture's own
+ * requestId, which is what makes an ack answer ONE flush waiter.
+ */
+function ackCapture(stream: FakeStreamSession, index: number): void {
+  const captured = framesOfKind(stream.sentFrames, "primaryProfileCaptured").at(
+    index,
+  );
+  if (captured === undefined) {
+    throw new Error(`expected a primaryProfileCaptured frame at ${index}`);
+  }
+  act(() => {
+    stream.emit(
+      {
+        kind: "primaryProfileCaptureAck",
+        hasBinaryPayload: false,
+        requestId: String(captured.requestId),
+      },
+      null,
+    );
+  });
 }
 
 function installNativeBridge(bridge: FakeBridge): void {
@@ -541,11 +587,13 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
     installTransport(false);
     hookState.browserViewBridge = null;
+    hookState.localHostId = "host-test";
   });
 
   afterEach(() => {
     cleanup();
     hookState.browserViewBridge = null;
+    hookState.localHostId = "host-test";
   });
 
   it("opens exactly one epic-scoped browser.sessions subscription", () => {
@@ -791,6 +839,83 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       );
     });
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
+  });
+
+  it("declares this machine's host id as the readiness locality signal", () => {
+    hookState.localHostId = "local-machine";
+    installNativeBridge(new FakeBridge());
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toEqual([
+      {
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+        coLocatedHostId: "local-machine",
+        // Carried from the typed windows bridge, not probed off `window`.
+        // Mutation: dropping the field, or reading a structural
+        // `window.runnerHost.windows.windowId` that no test shell defines -
+        // either way the host would see `null` and hand the Electron
+        // lifecycle to whichever window announced last.
+        desktopWindowId: "window-1",
+      },
+    ]);
+  });
+
+  it("waits for the local host id, then declares it once it resolves", () => {
+    hookState.localHostId = null;
+    installNativeBridge(new FakeBridge());
+    const { rerender } = render(
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>,
+    );
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+
+    // A null locality could never be elected, so readiness holds rather than
+    // burning this connection's one-shot frame on it.
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
+
+    hookState.localHostId = "local-machine";
+    act(() => {
+      rerender(
+        <BrowserSessionsProvider epicId="epic-1">
+          <Probe />
+        </BrowserSessionsProvider>,
+      );
+    });
+
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toEqual([
+      {
+        kind: "electronTabLifecycleReady",
+        hasBinaryPayload: false,
+        coLocatedHostId: "local-machine",
+        // Carried from the typed windows bridge, not probed off `window`.
+        // Mutation: dropping the field, or reading a structural
+        // `window.runnerHost.windows.windowId` that no test shell defines -
+        // either way the host would see `null` and hand the Electron
+        // lifecycle to whichever window announced last.
+        desktopWindowId: "window-1",
+      },
+    ]);
   });
 
   it("accepts a snapshot that arrives before the live status", () => {
@@ -1414,5 +1539,246 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
       stream.emitStatus("open");
     });
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(2);
+  });
+});
+
+/**
+ * The host no longer accepts a live Electron -> headless handoff. Everything
+ * that has to survive the desktop route going away (quit, window close) rides
+ * on the durable primary-profile store, so the quit path refreshes it once per
+ * live stream and destroys the native views WITHOUT reporting the durable tabs
+ * as closed.
+ */
+describe("BrowserSessionsProvider final capture before route loss", () => {
+  beforeEach(() => {
+    hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
+    hookState.localHostId = "host-a";
+    installTransport(false);
+    hookState.browserViewBridge = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+    hookState.localHostId = "host-test";
+    hookState.browserViewBridge = null;
+  });
+
+  it("captures only on the co-located host, and never closes a durable tab", async () => {
+    const bridge = new FakeBridge();
+    installNativeBridge(bridge);
+    const hostATransport = installTransportForHost(
+      "host-a",
+      "ws://host-a/stream",
+    );
+    const hostBTransport = installTransportForHost(
+      "host-b",
+      "ws://host-b/stream",
+    );
+    const hostClientA = createTestHostClient("user-a");
+    const hostClientB = createTestHostClient("user-b");
+    hookState.ownerIdentityKeysByClient.set(
+      hostClientA,
+      "shared-owner-identity",
+    );
+    hookState.ownerIdentityKeysByClient.set(
+      hostClientB,
+      "shared-owner-identity",
+    );
+
+    render(
+      <>
+        <BrowserSessionsHostProvider
+          hostId="host-a"
+          hostClient={hostClientA}
+          epicId="epic-1"
+        >
+          <SharedProbe id="host-a" />
+        </BrowserSessionsHostProvider>
+        <BrowserSessionsHostProvider
+          hostId="host-b"
+          hostClient={hostClientB}
+          epicId="epic-1"
+        >
+          <SharedProbe id="host-b" />
+        </BrowserSessionsHostProvider>
+      </>,
+    );
+    await waitFor(() => {
+      expect(hostATransport.wsStreamClient.subscribes).toHaveLength(1);
+      expect(hostBTransport.wsStreamClient.subscribes).toHaveLength(1);
+    });
+    const hostAStream = hostATransport.wsStreamClient.sessions[0];
+    const hostBStream = hostBTransport.wsStreamClient.sessions[0];
+    act(() => {
+      hostAStream.emitStatus("open");
+      hostBStream.emitStatus("open");
+    });
+
+    let drained = false;
+    const drain = captureFinalPrimaryProfiles().then(() => {
+      drained = true;
+    });
+
+    await waitFor(() => {
+      expect(
+        framesOfKind(hostAStream.sentFrames, "primaryProfileCaptured"),
+      ).toHaveLength(1);
+    });
+    expect(
+      framesOfKind(hostAStream.sentFrames, "primaryProfileCaptured")[0],
+    ).toMatchObject({ status: "captured", reason: null });
+    // `capturePrimaryProfile` reads THIS machine's Electron partition and the
+    // host stores what arrives as its whole jar, so host-b - which this GUI is
+    // only a viewer of - must receive nothing. Fanning out would overwrite a
+    // desktop-backed host's richer jar with a laptop's on every quit.
+    expect(bridge.capturePrimaryProfile).toHaveBeenCalledTimes(1);
+    expect(
+      framesOfKind(hostBStream.sentFrames, "primaryProfileCaptured"),
+    ).toEqual([]);
+    // The quit holds until the host acks that jar as DURABLY stored. Nothing
+    // is sent to the remote stream to wait on.
+    expect(drained).toBe(false);
+
+    // The durable tabs are NOT closed: the host suspends the session to
+    // dormant on route loss and re-materializes the same tab ids later.
+    expect(framesOfKind(hostAStream.sentFrames, "closeTab")).toEqual([]);
+    expect(framesOfKind(hostBStream.sentFrames, "closeTab")).toEqual([]);
+
+    ackCapture(hostAStream, 0);
+    await drain;
+    expect(drained).toBe(true);
+    expect(framesOfKind(hostAStream.sentFrames, "closeTab")).toEqual([]);
+    expect(framesOfKind(hostBStream.sentFrames, "closeTab")).toEqual([]);
+  });
+
+  it("resolves the flush waiter whose requestId the host acked", async () => {
+    const bridge = new FakeBridge();
+    installNativeBridge(bridge);
+    const hostTransport = installTransportForHost(
+      "host-a",
+      "ws://host-a/stream",
+    );
+    const hostClient = createTestHostClient("user-a");
+
+    render(
+      <BrowserSessionsHostProvider
+        hostId="host-a"
+        hostClient={hostClient}
+        epicId="epic-1"
+      >
+        <SharedProbe id="host-a" />
+      </BrowserSessionsHostProvider>,
+    );
+    await waitFor(() => {
+      expect(hostTransport.wsStreamClient.subscribes).toHaveLength(1);
+    });
+    const stream = hostTransport.wsStreamClient.sessions[0];
+    act(() => {
+      stream.emitStatus("open");
+    });
+
+    // Quit and window-close can both run a final capture. Maximal-break: the
+    // acks arrive in REVERSE order here, so a FIFO waiter queue (or resolving
+    // every waiter on any ack) passes the "both eventually settle" shape while
+    // crediting the wrong capture - only requestId keying gets this right.
+    let firstDrained = false;
+    let secondDrained = false;
+    const first = captureFinalPrimaryProfiles().then(() => {
+      firstDrained = true;
+    });
+    const second = captureFinalPrimaryProfiles().then(() => {
+      secondDrained = true;
+    });
+
+    await waitFor(() => {
+      expect(
+        framesOfKind(stream.sentFrames, "primaryProfileCaptured"),
+      ).toHaveLength(2);
+    });
+    expect(firstDrained).toBe(false);
+    expect(secondDrained).toBe(false);
+
+    ackCapture(stream, 1);
+    await second;
+    expect(secondDrained).toBe(true);
+    expect(firstDrained).toBe(false);
+
+    ackCapture(stream, 0);
+    await first;
+    expect(firstDrained).toBe(true);
+  });
+
+  it("settles a flush waiter the host never acked on its own timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      installNativeBridge(new FakeBridge());
+      const hostTransport = installTransportForHost(
+        "host-a",
+        "ws://host-a/stream",
+      );
+      const hostClient = createTestHostClient("user-a");
+
+      render(
+        <BrowserSessionsHostProvider
+          hostId="host-a"
+          hostClient={hostClient}
+          epicId="epic-1"
+        >
+          <SharedProbe id="host-a" />
+        </BrowserSessionsHostProvider>,
+      );
+      await vi.waitFor(() => {
+        expect(hostTransport.wsStreamClient.subscribes).toHaveLength(1);
+      });
+      const stream = hostTransport.wsStreamClient.sessions[0];
+      act(() => {
+        stream.emitStatus("open");
+      });
+
+      let firstDrained = false;
+      let secondDrained = false;
+      const first = captureFinalPrimaryProfiles().then(() => {
+        firstDrained = true;
+      });
+      await vi.waitFor(() => {
+        expect(
+          framesOfKind(stream.sentFrames, "primaryProfileCaptured"),
+        ).toHaveLength(1);
+      });
+
+      // An older host sends no ack at all. Maximal-break: dropping the
+      // timeout leg would hang the quit here forever.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(
+          FINAL_PRIMARY_PROFILE_FLUSH_TIMEOUT_MS,
+        );
+      });
+      await first;
+      expect(firstDrained).toBe(true);
+
+      const second = captureFinalPrimaryProfiles().then(() => {
+        secondDrained = true;
+      });
+      await vi.waitFor(() => {
+        expect(
+          framesOfKind(stream.sentFrames, "primaryProfileCaptured"),
+        ).toHaveLength(2);
+      });
+      expect(secondDrained).toBe(false);
+
+      // The timed-out capture's ack finally lands. It names a requestId no
+      // waiter holds any more, so it must not settle the live one.
+      ackCapture(stream, 0);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(secondDrained).toBe(false);
+
+      ackCapture(stream, 1);
+      await second;
+      expect(secondDrained).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

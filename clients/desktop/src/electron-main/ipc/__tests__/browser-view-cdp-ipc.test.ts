@@ -179,16 +179,6 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
       reason: null,
     }),
   ),
-  captureBrowserViewStorageState: vi.fn(() =>
-    Promise.resolve({
-      storageState: { cookies: [], origins: [] },
-      cookieCount: 0,
-      cookieDomains: [],
-      localStorageCount: 0,
-      localStorageAvailable: true,
-      localStorageReason: null,
-    }),
-  ),
   seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
   browserStorageStateFromCookies: vi.fn(() => ({ cookies: [], origins: [] })),
 }));

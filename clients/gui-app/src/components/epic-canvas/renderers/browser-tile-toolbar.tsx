@@ -18,6 +18,7 @@ import {
   VenetianMask,
 } from "lucide-react";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { Button } from "@/components/ui/button";
 import {
@@ -134,6 +135,38 @@ export function BrowserTileToolbar(props: {
           controller={controller}
           pictureInPicture={props.pictureInPicture}
         />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The touch-grade chrome: the same nav buttons, a read-only address line, and
+ * the page-loading spinner. No address field, no PiP and no more-menu - a
+ * coarse pointer has no hover to reveal them and the tile has no room.
+ */
+export function BrowserTileToolbarCompact(props: {
+  readonly controller: TileController;
+  readonly loading: boolean;
+}) {
+  const url = props.controller.url;
+  return (
+    <div
+      className="flex min-h-11 w-full shrink-0 items-center gap-1 border-b border-border px-2"
+      data-testid="browser-tile-toolbar-compact"
+    >
+      <BrowserTileToolbarNav controller={props.controller} />
+      <div className="min-w-0 flex-1 truncate px-1 text-ui-sm text-muted-foreground">
+        {url === "" ? "New tab" : url}
+      </div>
+      {props.loading ? (
+        <span role="status" aria-label="Page loading" className="shrink-0">
+          <AgentSpinningDots
+            className="text-muted-foreground"
+            testId="browser-tile-toolbar-compact-loading"
+            variant={undefined}
+          />
+        </span>
       ) : null}
     </div>
   );

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { BrowserWindowConstructorOptions } from "electron";
 import type {
   BrowserCdpResult,
-  BrowserStorageOrigin,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
@@ -19,13 +18,11 @@ import type {
   BrowserViewStatus,
   BrowserViewElectronTabControl,
   BrowserViewNativeTabCapability,
-  BrowserViewHandoffReason,
   BrowserViewTileKey,
   BrowserViewViewportPresetId,
   PipCaptureStartInput,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
-import type { BrowserStorageStateCaptureResult } from "./storage/browser-storage-state";
 import { registrableDomainForUrl } from "@traycer-clients/shared/platform/registrable-domain";
 import { describeLogError, log } from "../app/logger";
 import type {
@@ -71,7 +68,6 @@ import {
   BrowserViewGeometry,
   normalizeBounds,
 } from "./manager/browser-view-geometry";
-import { BrowserViewHandoff } from "./manager/browser-view-handoff";
 import { BrowserViewOverlay } from "./manager/browser-view-overlay";
 import { BrowserViewPipCapture } from "./manager/browser-view-pip-capture";
 import { BrowserViewPopups } from "./manager/browser-view-popups";
@@ -122,10 +118,6 @@ interface BrowserViewManagerOptions {
     storageState: BrowserStorageState | null,
     webContents: ManagedBrowserView["webContents"],
   ) => Promise<void>;
-  readonly captureStorageState: (
-    input: { readonly origin: string },
-    webContents: ManagedBrowserView["webContents"],
-  ) => Promise<BrowserStorageStateCaptureResult>;
   readonly observePrimaryProfileOrigin: (
     url: string,
     webContents: ManagedBrowserView["webContents"],
@@ -139,8 +131,6 @@ interface BrowserViewManagerOptions {
   readonly releaseSessionStorage: (
     request: BrowserSessionProfileRequest,
   ) => void;
-  /** Remembered localStorage origins, carried by a persistence migration. */
-  readonly readMigrationOrigins: () => readonly BrowserStorageOrigin[];
   /** Flush window for the aggregate `bounds_stream` perf log. */
   readonly boundsStreamLogIntervalMs: number;
   /** Platform used to resolve reserved chords (BT-301). */
@@ -181,7 +171,6 @@ export class BrowserViewManager {
   readonly find: BrowserViewFind;
   readonly chords: BrowserViewChords;
   readonly pip: BrowserViewPipCapture;
-  readonly handoff: BrowserViewHandoff;
 
   constructor(options: BrowserViewManagerOptions) {
     this.getWindow = options.getWindow;
@@ -222,7 +211,7 @@ export class BrowserViewManager {
       annotations: this.annotations,
       notifyHostWindowRendererReset: options.notifyHostWindowRendererReset,
       closeEntry: (entry) => {
-        void this.closeEntry(entry, null);
+        void this.closeEntry(entry);
       },
     });
     this.pip = new BrowserViewPipCapture({
@@ -235,12 +224,6 @@ export class BrowserViewManager {
       createPopupWindowOptions: options.createPopupWindowOptions,
       registerPopupWebContents: options.registerPopupWebContents,
       send: options.send,
-    });
-    this.handoff = new BrowserViewHandoff({
-      entries: this.entries,
-      send: options.send,
-      captureStorageState: options.captureStorageState,
-      readMigrationOrigins: options.readMigrationOrigins,
     });
     this.entryFactory = new BrowserViewEntryFactory({
       createView: options.createView,
@@ -259,8 +242,8 @@ export class BrowserViewManager {
       emitStatus: (entry) => {
         this.emitStatus(entry);
       },
-      closeEntry: (entry, handoffReason) => {
-        void this.closeEntry(entry, handoffReason);
+      closeEntry: (entry) => {
+        void this.closeEntry(entry);
       },
     });
     this.provisioning = new BrowserViewProvisioning({
@@ -270,7 +253,7 @@ export class BrowserViewManager {
       createEntry: (requestedUrl, identity, profile) =>
         this.entryFactory.create(requestedUrl, identity, profile),
       seedStorageState: options.seedStorageState,
-      closeEntry: (entry) => this.closeEntry(entry, null),
+      closeEntry: (entry) => this.closeEntry(entry),
       navigate: (entry, url) => this.navigate(entry, url),
       emitStatus: (entry) => {
         this.emitStatus(entry);
@@ -372,7 +355,7 @@ export class BrowserViewManager {
     ) {
       return false;
     }
-    await this.closeEntry(entry, null);
+    await this.closeEntry(entry);
     return true;
   }
 
@@ -546,7 +529,7 @@ export class BrowserViewManager {
     this.offCertificateError();
     this.geometry.dispose();
     for (const entry of Array.from(this.entries.guestValues())) {
-      void this.closeEntry(entry, "gui-quit");
+      void this.closeEntry(entry);
     }
     this.popups.dispose();
     this.overlay.dispose();
@@ -554,12 +537,14 @@ export class BrowserViewManager {
   }
 
   /**
-   * Tears every live `primary` guest down through the handoff path so the host
-   * revives it and re-places it - on whichever jar the saved-logins pref names
-   * now, since it has already flipped before this runs. Guests that cannot hand
-   * off (still provisioning, or already handed off) are left alone: a teardown
-   * without a handoff would strand the host's route, and the next tile they
-   * open picks the current partition anyway.
+   * Destroys every live `primary` guest so the host revives it on whichever
+   * jar the saved-logins pref names now (it has already flipped before this
+   * runs). Destroying a native guest is the re-placement mechanism: the host
+   * suspends the session to dormant when its Electron route goes away and
+   * re-materializes the same durable tab ids, seeding them from its own
+   * primary-profile store. Guests the host has not accepted yet are left
+   * alone - there is no durable route to revive them with, and the next tile
+   * they open picks the current partition anyway.
    */
   async recreateNativeTabsOnCurrentPartition(): Promise<readonly string[]> {
     const migrating = Array.from(this.entries.guestValues()).filter(
@@ -569,19 +554,17 @@ export class BrowserViewManager {
         // destroy the private session the user is sitting in.
         entry.profile === "primary" &&
         entry.closePromise === null &&
-        entry.identity.lifecycle.canHandoff,
+        entry.identity.lifecycle.accepted,
     );
     const migratedKeys = migrating.map((entry) => entry.guestKey);
     await Promise.all(
       migrating.map((entry) =>
-        this.closeEntry(entry, "persistence-migration").catch(
-          (error: unknown) => {
-            log.warn("[browser-view] browser tile recreate failed", {
-              error: describeLogError(error),
-              guestKey: entry.guestKey,
-            });
-          },
-        ),
+        this.closeEntry(entry).catch((error: unknown) => {
+          log.warn("[browser-view] browser tile recreate failed", {
+            error: describeLogError(error),
+            guestKey: entry.guestKey,
+          });
+        }),
       ),
     );
     return migratedKeys;
@@ -608,7 +591,7 @@ export class BrowserViewManager {
         .filter((entry) =>
           sessionKeys.has(nativeSessionKey(entry.identity.key)),
         )
-        .map((entry) => this.closeEntry(entry, null)),
+        .map((entry) => this.closeEntry(entry)),
     );
   }
 
@@ -912,26 +895,34 @@ export class BrowserViewManager {
     return webContents.navigationHistory ?? null;
   }
 
-  private async closeEntry(
-    entry: BrowserViewEntry,
-    handoffReason: BrowserViewHandoffReason | null,
-  ): Promise<void> {
+  /**
+   * Destroys one native guest and nothing else. Closing a native tab is a
+   * RUNTIME event, never a durable one: the host suspends the session to
+   * dormant when its Electron route goes away and re-materializes the same
+   * durable tab ids later, so this path must not report the tab as closed.
+   * Only an explicit user close sends `closeTab` on `browser.sessions`.
+   */
+  private closeEntry(entry: BrowserViewEntry): Promise<void> {
     if (entry.closePromise !== null) return entry.closePromise;
-    const closePromise = this.destroyEntry(entry, handoffReason);
-    entry.closePromise = closePromise;
-    return closePromise;
+    // INVARIANT: `closePromise` is set before any teardown runs. `destroyEntry`
+    // is synchronous through to its first await, so assigning afterwards would
+    // leave `closePromise` null for the whole close - and it is exactly what
+    // `closeEntry`'s idempotence guard, `findExactNativeEntry`'s "skip a
+    // closing entry" check, and provisioning's "chain an ensure behind the
+    // in-flight close" branch all read. None of them may depend on a teardown
+    // step happening to await.
+    const settled = Promise.withResolvers<void>();
+    entry.closePromise = settled.promise;
+    this.destroyEntry(entry).then(settled.resolve, settled.reject);
+    return settled.promise;
   }
 
-  private async destroyEntry(
-    entry: BrowserViewEntry,
-    handoffReason: BrowserViewHandoffReason | null,
-  ): Promise<void> {
+  private async destroyEntry(entry: BrowserViewEntry): Promise<void> {
     const surface = entry.surface;
     const keyId = surface === null ? null : entryKeyId(surface);
     if (keyId !== null) this.geometry.detachFrames(keyId);
     log.info("[browser-view] view destroy started", {
       keyId,
-      handoffReason,
       status: entry.status,
     });
     this.destroyDevToolsWindow(entry);
@@ -939,28 +930,6 @@ export class BrowserViewManager {
     this.entries.detachSurface(entry);
     if (surface !== null) {
       this.windows.detachResetListenerIfUnused(surface.windowId);
-    }
-    // Capture while webContents is alive; a crashed renderer cannot be read.
-    if (handoffReason !== null && entry.identity.lifecycle.accepted) {
-      try {
-        await this.handoff.push(
-          entry,
-          entry.status === "dead" ? "crash-no-capture" : handoffReason,
-        );
-      } catch (error) {
-        log.warn("[browser-view] electron tab handoff failed during close", {
-          error: describeLogError(error),
-          guestKey: entry.guestKey,
-          handoffReason,
-        });
-      }
-    }
-    // A quit drain or a sibling's aggregate handoff can already be reading
-    // this guest. Keep the identity reserved until that capture settles.
-    const pendingHandoffCapture =
-      entry.identity.lifecycle.pendingHandoffCapture;
-    if (pendingHandoffCapture !== null) {
-      await pendingHandoffCapture;
     }
     this.windows.detachFromParentWindow(entry);
     const webContents = entry.view.webContents;

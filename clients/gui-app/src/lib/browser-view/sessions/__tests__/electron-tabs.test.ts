@@ -6,14 +6,12 @@ import type {
 } from "@traycer/protocol/host/browser/contracts";
 import {
   createElectronTabs,
-  drainElectronTabHandoffs,
   type ElectronTabBinding,
   type ElectronTabs,
   useElectronTabBindingOnHost,
 } from "../electron-tabs";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 import type {
-  BrowserViewElectronTabHandoffChange,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
   BrowserViewBridge,
@@ -133,7 +131,6 @@ function nativeWith(
       () => Promise.resolve({ kind: "cdpGetFrameTree", ok: true, frames: [] }),
     ),
     onNativeTabStatusChange: onStatusChange ?? (() => ({ dispose: () => {} })),
-    onElectronTabHandoff: () => ({ dispose: () => {} }),
   };
   return Object.assign(createFakeRunnerHost({}), {
     browserView: candidate,
@@ -1172,214 +1169,5 @@ describe("ElectronTabs", () => {
         viewed: true,
       },
     ]);
-  });
-
-  it("settles an exact native handoff drain from its action ack result", async () => {
-    const handoffHandler = {
-      emit: null as
-        | ((change: BrowserViewElectronTabHandoffChange) => void)
-        | null,
-    };
-    const base = nativeWith(() => provisionedTab("registration-1"), null);
-    const native = {
-      ...base,
-      onElectronTabHandoff: (
-        handler: (change: BrowserViewElectronTabHandoffChange) => void,
-      ) => {
-        handoffHandler.emit = handler;
-        return { dispose: () => {} };
-      },
-    };
-    const sent: BrowserSessionsClientFrame[] = [];
-    let failHandoffSend = false;
-    const failedSendDrain = { current: null as Promise<void> | null };
-    const tabs = trackElectronTabs(
-      createElectronTabs({
-        hostId: "host-1",
-        native: native,
-        sendFrame: (frame) => {
-          if (failHandoffSend && frame.kind === "electronTabHandoff") {
-            failedSendDrain.current = drainElectronTabHandoffs();
-            throw new Error("handoff stream send failed");
-          }
-          sent.push(frame);
-        },
-      }),
-    );
-    await receiveCreate(tabs, CREATE);
-    tabs.handleFrame({
-      kind: "electronTabAccepted",
-      hasBinaryPayload: false,
-      requestId: "request-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-    });
-    sent.length = 0;
-    const emitHandoff = handoffHandler.emit;
-    if (emitHandoff === null) throw new Error("handoff subscription missing");
-
-    emitHandoff({
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-      capturedUrl: "https://example.com/final",
-      capturedStorageState: { cookies: [], origins: [] },
-      siblingTabs: [
-        {
-          tabId: "tab-2",
-          registrationId: "registration-2",
-          url: "https://example.com/two",
-          capturedStorageState: null,
-        },
-      ],
-      reason: "gui-quit",
-    });
-
-    const handoff = sent.find((frame) => frame.kind === "electronTabHandoff");
-    expect(handoff).toMatchObject({
-      kind: "electronTabHandoff",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-      capturedUrl: "https://example.com/final",
-      siblingTabs: [
-        {
-          tabId: "tab-2",
-          registrationId: "registration-2",
-          url: "https://example.com/two",
-          capturedStorageState: null,
-        },
-      ],
-    });
-    if (handoff === undefined) throw new Error("handoff frame missing");
-    let drained = false;
-    const drain = drainElectronTabHandoffs().then(() => {
-      drained = true;
-    });
-    await Promise.resolve();
-    expect(drained).toBe(false);
-
-    expect(
-      tabs.handleFrame({
-        kind: "actionAck",
-        hasBinaryPayload: false,
-        requestId: handoff.requestId,
-        ok: true,
-        reason: null,
-      }),
-    ).toBe(true);
-    await drain;
-    expect(drained).toBe(true);
-
-    emitHandoff({
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-      capturedUrl: "https://example.com/final",
-      capturedStorageState: null,
-      siblingTabs: [],
-      reason: "gui-quit",
-    });
-    const failedHandoff = sent.at(-1);
-    if (failedHandoff?.kind !== "electronTabHandoff") {
-      throw new Error("handoff frame missing");
-    }
-    const failedDrain = drainElectronTabHandoffs();
-
-    expect(
-      tabs.handleFrame({
-        kind: "actionAck",
-        hasBinaryPayload: false,
-        requestId: failedHandoff.requestId,
-        ok: false,
-        reason: "handoff persistence failed",
-      }),
-    ).toBe(true);
-    await expect(failedDrain).rejects.toThrow("handoff persistence failed");
-
-    emitHandoff({
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-      capturedUrl: "https://example.com/final",
-      capturedStorageState: null,
-      siblingTabs: [],
-      reason: "gui-quit",
-    });
-    const unobservedHandoff = sent.at(-1);
-    if (unobservedHandoff?.kind !== "electronTabHandoff") {
-      throw new Error("handoff frame missing");
-    }
-    expect(
-      tabs.handleFrame({
-        kind: "actionAck",
-        hasBinaryPayload: false,
-        requestId: unobservedHandoff.requestId,
-        ok: false,
-        reason: "handoff rejected without an active drain",
-      }),
-    ).toBe(true);
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-
-    failHandoffSend = true;
-    expect(() =>
-      emitHandoff({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-        capturedUrl: "https://example.com/final",
-        capturedStorageState: null,
-        siblingTabs: [],
-        reason: "gui-quit",
-      }),
-    ).toThrow("handoff stream send failed");
-    failHandoffSend = false;
-    if (failedSendDrain.current === null) {
-      throw new Error("failed send drain missing");
-    }
-    await expect(failedSendDrain.current).rejects.toThrow(
-      "handoff stream send failed",
-    );
-    await expect(drainElectronTabHandoffs()).resolves.toBeUndefined();
-
-    emitHandoff({
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-      capturedUrl: "https://example.com/final",
-      capturedStorageState: null,
-      siblingTabs: [],
-      reason: "gui-quit",
-    });
-    const interruptedDrain = drainElectronTabHandoffs();
-    tabs.disconnect();
-    await expect(interruptedDrain).rejects.toThrow(
-      "stream disconnected before acknowledgement",
-    );
-
-    tabs.connect();
-    emitHandoff({
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-      capturedUrl: "https://example.com/final",
-      capturedStorageState: null,
-      siblingTabs: [],
-      reason: "gui-quit",
-    });
-    const closingDrain = drainElectronTabHandoffs();
-    tabs.dispose();
-    await expect(closingDrain).rejects.toThrow(
-      "transport closed before acknowledgement",
-    );
   });
 });

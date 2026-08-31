@@ -54,7 +54,6 @@ import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserOriginLocalStorage,
   captureBrowserPrimaryProfile,
-  captureBrowserViewStorageState,
   clearBrowserSite,
   seedBrowserViewCookies,
 } from "../browser-view/storage/browser-storage-state";
@@ -128,8 +127,15 @@ export function registerBrowserViewIpc(
     },
     send: (windowId, channel, payload) =>
       bridge.safeSendToWindow(windowId, channel, payload),
-    seedStorageState: seedBrowserViewCookies,
-    captureStorageState: captureBrowserViewStorageState,
+    seedStorageState: async (storageState, webContents) => {
+      // Retain BEFORE seeding: the jar the host just handed down is the only
+      // record of the origins this run may never navigate, and a quit capture
+      // replaces the host's whole jar with what it sends. Isolated guests are
+      // never seeded (the host forces `seedStorageState` to null at the
+      // placement seam), so nothing throwaway can enter this memory.
+      primaryProfileSnapshots.retainSeededOrigins(storageState);
+      await seedBrowserViewCookies(storageState, webContents);
+    },
     observePrimaryProfileOrigin: (url, webContents, profile) => {
       // The primary capture reads the shared jar only. An isolated partition's
       // origins must never enter it - ticket 06's cookie-change observer takes
@@ -147,7 +153,6 @@ export function registerBrowserViewIpc(
         });
       });
     },
-    readMigrationOrigins: () => primaryProfileSnapshots.rememberedOrigins(),
     boundsStreamLogIntervalMs: BOUNDS_STREAM_LOG_INTERVAL_MS,
     hostPlatform: hostPlatformFromProcessPlatform(process.platform),
   });

@@ -326,10 +326,6 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return { dispose: () => undefined };
   }
 
-  onElectronTabHandoff() {
-    return { dispose: () => undefined };
-  }
-
   emitSnapshotInvalidated(change: BrowserViewSnapshotInvalidatedChange): void {
     this.snapshotInvalidationHandlers.forEach((handler) => {
       handler(change);

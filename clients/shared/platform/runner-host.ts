@@ -201,8 +201,8 @@ export interface IRunnerHost {
   ): Promise<StepUpChallengeFetchResult>;
 
   /**
-   * Mints a one-time link-login code under the user bearer — the "Link a
-   * phone" QR surface. The RESULT carries the raw code back into the renderer
+   * Mints a one-time link-login code under the user bearer — the "Link mobile
+   * app" QR surface. The RESULT carries the raw code back into the renderer
    * by necessity: the QR that must display it renders there. The code is
    * short-lived and single-use, and the surface re-mints while open, so the
    * renderer never holds a long-lived secret.

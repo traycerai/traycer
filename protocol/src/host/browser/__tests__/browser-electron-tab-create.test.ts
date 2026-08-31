@@ -65,19 +65,6 @@ const ACCEPTED = {
   registrationId: "native-1",
 } as const;
 
-const HANDOFF = {
-  kind: "electronTabHandoff",
-  hasBinaryPayload: false,
-  requestId: "req-handoff-1",
-  sessionId: "session-1",
-  tabId: "tab-minted-9",
-  registrationId: "native-1",
-  capturedUrl: "https://example.com/agent",
-  capturedStorageState: null,
-  siblingTabs: [],
-  reason: "gui-quit",
-} as const;
-
 describe("browser.sessions Electron tab birth", () => {
   it("requires the complete host-owned birth identity", () => {
     const parsed = browserSessionsServerFrameSchema.safeParse(CREATE_REQUEST);
@@ -144,27 +131,29 @@ describe("browser.sessions Electron tab birth", () => {
     ).toBe(false);
   });
 
-  it("rejects every superseded birth frame", () => {
+  it("carries no arm for any superseded birth frame", () => {
+    // Asserted on the DISCRIMINATOR, not on a hand-built payload: a
+    // `safeParse` of one made-up body fails for whatever reason comes first,
+    // so it would keep passing even if the arm came back with different
+    // fields. The absent `kind` literal is the actual claim.
     for (const kind of [
       "electronTabRegistered",
       "electronTabRegistrationFailed",
       "registerElectronTab",
       "electronTabCreated",
       "electronTabReady",
+      "electronTabHandoff",
     ]) {
-      const schema = kind.startsWith("electronTabR")
-        ? browserSessionsServerFrameSchema
-        : browserSessionsClientFrameSchema;
       expect(
-        schema.safeParse({
-          kind,
-          hasBinaryPayload: false,
-          requestId: "legacy-1",
-          registrationId: "native-1",
-          sessionId: "session-1",
-          tabId: "tab-1",
-        }).success,
-      ).toBe(false);
+        browserSessionsServerFrameSchema.options.every(
+          (option) => option.shape.kind.value !== kind,
+        ),
+      ).toBe(true);
+      expect(
+        browserSessionsClientFrameSchema.options.every(
+          (option) => option.shape.kind.value !== kind,
+        ),
+      ).toBe(true);
     }
   });
 
@@ -172,57 +161,5 @@ describe("browser.sessions Electron tab birth", () => {
     expect(browserSessionsServerFrameSchema.safeParse(ACCEPTED).success).toBe(
       true,
     );
-  });
-
-  it("hands off the exact durable tab incarnation, never a presentation tile", () => {
-    const parsed = browserSessionsClientFrameSchema.safeParse(HANDOFF);
-    expect(parsed.success).toBe(true);
-    if (parsed.success) expect(parsed.data).toEqual(HANDOFF);
-
-    for (const key of ["sessionId", "tabId", "registrationId"] as const) {
-      const incomplete: Record<string, unknown> = { ...HANDOFF };
-      delete incomplete[key];
-      expect(
-        browserSessionsClientFrameSchema.safeParse(incomplete).success,
-      ).toBe(false);
-    }
-
-    const {
-      sessionId: _sessionId,
-      tabId: _tabId,
-      registrationId: _registrationId,
-      ...withoutIdentity
-    } = HANDOFF;
-    expect(
-      browserSessionsClientFrameSchema.safeParse({
-        ...withoutIdentity,
-        tileInstanceId: "tile-legacy",
-      }).success,
-    ).toBe(false);
-
-    const withSibling = {
-      ...HANDOFF,
-      siblingTabs: [
-        {
-          tabId: "tab-minted-10",
-          registrationId: "native-2",
-          url: "https://example.com/sibling",
-          capturedStorageState: null,
-        },
-      ],
-    } as const;
-    expect(
-      browserSessionsClientFrameSchema.safeParse(withSibling).success,
-    ).toBe(true);
-    const siblingWithoutIncarnation = {
-      ...withSibling,
-      siblingTabs: withSibling.siblingTabs.map(
-        ({ registrationId: _registrationId, ...sibling }) => sibling,
-      ),
-    };
-    expect(
-      browserSessionsClientFrameSchema.safeParse(siblingWithoutIncarnation)
-        .success,
-    ).toBe(false);
   });
 });

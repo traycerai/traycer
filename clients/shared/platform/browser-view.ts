@@ -2,11 +2,9 @@ import type {
   BrowserCdpCommand,
   BrowserCdpResult,
   BrowserCdpTarget,
-  BrowserElectronTabHandoffSibling,
   BrowserPrimaryProfileDelta,
   BrowserScreencastServerFrame,
   BrowserSessionProfileKind,
-  BrowserSessionsClientFrame,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -244,24 +242,6 @@ export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabC
 }
 
 /**
- * The handoff reasons the wire contract carries to the host, including
- * `persistence-migration`: the tab is torn down so it can come back on the jar
- * the saved-logins toggle now names. The host treats it like any other release
- * - what matters is its "revived; re-snapshot" notice.
- */
-export type BrowserViewHandoffReason = Extract<
-  BrowserSessionsClientFrame,
-  { readonly kind: "electronTabHandoff" }
->["reason"];
-
-export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTabCapability {
-  readonly capturedUrl: string;
-  readonly capturedStorageState: BrowserStorageState | null;
-  readonly siblingTabs: readonly BrowserElectronTabHandoffSibling[];
-  readonly reason: BrowserViewHandoffReason;
-}
-
-/**
  * Answer to one store-key wrap. `ok: false` is an expected outcome, not a bug:
  * the keystore may be unavailable on this machine, and the host then simply
  * stays sealed.
@@ -474,8 +454,5 @@ export interface BrowserViewBridge {
   ): { dispose: () => void };
   onNativeTabStatusChange(
     handler: (change: BrowserViewNativeTabStatusChange) => void,
-  ): { dispose: () => void };
-  onElectronTabHandoff(
-    handler: (change: BrowserViewElectronTabHandoffChange) => void,
   ): { dispose: () => void };
 }

@@ -18,7 +18,6 @@ import type {
   BrowserViewOverlayOcclusionResult,
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
-  BrowserViewElectronTabHandoffChange,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -243,11 +242,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       onNativeTabStatusChange: (handler) =>
         subscribe<BrowserViewNativeTabStatusChange>(
           RunnerHostEvent.browserViewNativeTabStatusChange,
-          handler,
-        ),
-      onElectronTabHandoff: (handler) =>
-        subscribe<BrowserViewElectronTabHandoffChange>(
-          RunnerHostEvent.browserViewElectronTabHandoff,
           handler,
         ),
     },
