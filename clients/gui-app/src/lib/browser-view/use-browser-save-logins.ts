@@ -37,7 +37,7 @@ function saveLoginsQueryOptions(browserView: BrowserViewBridge | null) {
       if (browserView === null) {
         throw new Error("This machine has no browser bridge.");
       }
-      return await browserView.getSaveLogins();
+      return browserView.getSaveLogins();
     },
     enabled: browserView !== null,
     staleTime: 0,
@@ -66,7 +66,7 @@ export function useBrowserSaveLogins(
       if (browserView === null) {
         throw new Error("This machine has no browser bridge.");
       }
-      return await browserView.setSaveLogins(next);
+      return browserView.setSaveLogins(next);
     },
     // The SETTLED value, not the requested one: a desktop that kept a different
     // answer is the authority on what this machine now does.
