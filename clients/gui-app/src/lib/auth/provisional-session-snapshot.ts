@@ -97,6 +97,18 @@ export async function readProvisionalSessionSnapshot(
     });
     return null;
   }
+  // THE ONLY SILENT RETURN in this function - every other refusal below logs.
+  // So if a boot is taking the awaited path with no line in the console, this
+  // is where it went, and the question is whether the slot is genuinely empty
+  // or whether the storage adapter LOST a value it holds.
+  //
+  // It has happened: the desktop adapter's encrypt-storage back-end parses
+  // JSON on read by default, so this envelope came back as an object and was
+  // reported as `null` for every launch. Nothing in this package could catch
+  // it - `MockRunnerHost.secureStorageEntries` is a `Map`, which honours the
+  // string contract by construction. `clients/desktop/src/renderer-shell/
+  // __tests__/secure-local-storage.test.ts` is what guards it now, against
+  // the real module.
   if (raw === null || raw.length === 0) return null;
 
   let decoded: unknown;
