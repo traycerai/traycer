@@ -967,6 +967,21 @@ export const browserSavedLoginSiteSchema = z
     domain: z.string(),
     /** Newest observation of any live cookie under that domain, host clock. */
     lastSeen: z.number(),
+    /**
+     * Which host contributed this login, when it was a HEADLESS session on the
+     * answering host rather than the user's own desktop jar (universal-sign-in
+     * decision 9). `null` means "nothing to attribute": the desktop's own
+     * browsing put it here, so there is no other machine to name.
+     *
+     * It is a `hostId` - the canonical host identity, which the GUI resolves to
+     * a display name through the host directory - and the answering host stamps
+     * its OWN id from its persisted identity. Nothing a client sends can name a
+     * host here.
+     *
+     * `.default(null)` so a host that predates this field still parses, exactly
+     * as the pre-epic slices it reads do.
+     */
+    contributedByHostId: z.string().nullable().default(null),
   })
   .strict();
 export type BrowserSavedLoginSite = z.infer<typeof browserSavedLoginSiteSchema>;

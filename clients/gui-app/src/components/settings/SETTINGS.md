@@ -554,7 +554,27 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       that never answered renders no list rather than an empty one. `sealed`
       is NOT "no sites": it says the logins exist but this host cannot open
       them until the desktop that wrapped its key connects, and it renders its
-      own hint. Per-row **Clear** sends the `clearSite { domain }` frame
+      own hint. A row whose `contributedByHostId` names a host OTHER than this
+      machine's carries one muted "Includes a sign-in from <host>" line
+      (universal-sign-in decision 9) - weak copy on purpose, because the marker
+      behind it is sticky and survives the user signing into that site here.
+      The display name resolves through the host directory
+      (`useHostDirectoryEntry`), falling back to the raw hostId when this client
+      cannot currently list that host - the same last resort `resolveHostName`
+      takes, and better than inventing "another machine". The local comparison
+      goes through `useReactiveLocalHostId` (not the local directory ENTRY,
+      which goes null while the local host restarts), and a login this desktop
+      itself contributed says nothing at all - naming the user's own machine on
+      every row would bury the lines that mean "this came from somewhere else".
+      Two things about the id are worth knowing before reading a row: it is
+      always the ANSWERING host's own, so a third machine is never named and a
+      remote contribution that already reached this desktop's jar shows nothing
+      in the local host's list (it arrives there as a desktop-origin echo); and
+      the render guard is `typeof === "string"`, not `!== null`, because the
+      same-minor RPC path returns the payload UNPARSED - a host predating the
+      field sends no key at all, and the schema's `.default(null)` only runs on
+      the version-gap decode. Per-row **Clear** sends
+      the `clearSite { domain }` frame
       (`clearSavedLoginSite()`) and refetches; the row is hidden optimistically
       because the host merges asynchronously and the refetch behind the click
       can still read the pre-clear slice. That optimism RELEASES itself: a

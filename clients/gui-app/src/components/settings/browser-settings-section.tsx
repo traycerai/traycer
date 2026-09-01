@@ -20,6 +20,8 @@ import {
   forgetAllBrowserLogins,
 } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useHostBinding } from "@/lib/host";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
@@ -482,35 +484,97 @@ function SavedLoginSiteList(props: {
   // The shared 60s clock, not `Date.now()`: reading the wall clock during a
   // render is impure, and the sampled one repaints these labels on its tick.
   const now = useSampledNow();
+  // THIS machine's host id, read once for the whole list: every row compares
+  // its contributor against the same answer. `useReactiveLocalHostId` rather
+  // than the local directory entry, because the entry goes null while the
+  // local host restarts and a row must not start claiming a remote capture
+  // for the length of that gap.
+  const localHostId = useReactiveLocalHostId();
   if (props.sites.length === 0) {
     return <p className="text-muted-foreground">No saved logins yet.</p>;
   }
   return (
     <ul className="flex w-full min-w-0 flex-col gap-1">
       {props.sites.map((site) => (
-        <li
+        <SavedLoginSiteRow
           key={site.domain}
-          className="flex min-w-0 items-center gap-2 text-ui-sm"
-        >
-          <span className="min-w-0 flex-1 truncate font-mono text-foreground">
-            {site.domain}
-          </span>
-          <span className="shrink-0 text-muted-foreground">
-            {formatRelativeTimestamp(site.lastSeen, now)}
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            aria-label={`Clear saved logins for ${site.domain}`}
-            onClick={() => {
-              props.onClear(site.domain);
-            }}
-          >
-            Clear
-          </Button>
-        </li>
+          site={site}
+          localHostId={localHostId}
+          now={now}
+          onClear={props.onClear}
+        />
       ))}
     </ul>
+  );
+}
+
+/**
+ * One site, plus the provenance line when another machine is what signed in
+ * (universal-sign-in decision 9).
+ *
+ * Its own component because resolving a host's display name is a hook, and a
+ * row is where the host id lives. Attribution is deliberately silent for the
+ * local machine: a login this desktop's own host captured is one the user made
+ * here, and naming their own machine on every row would be noise around the
+ * lines that actually say "this came from somewhere else".
+ *
+ * The copy says "includes a sign-in from", not "captured on", because the
+ * marker behind it is STICKY: it records that a headless context on that host
+ * once contributed new cookie information for the domain, and it survives the
+ * user signing into the same site here afterwards. Anything tighter (a "where
+ * this login came from", a "captured at") would be a claim about recency and
+ * origin that the store does not make.
+ */
+function SavedLoginSiteRow(props: {
+  readonly site: BrowserSavedLoginSite;
+  readonly localHostId: string | null;
+  readonly now: number;
+  readonly onClear: (domain: string) => void;
+}): ReactNode {
+  const contributedByHostId = props.site.contributedByHostId;
+  // `typeof`, not `!== null`, and the difference is load-bearing. The
+  // same-minor RPC path returns the host's payload UNPARSED - the schema's
+  // `.default(null)` only runs when a version gap forces a decode - so against
+  // a host that predates the field this is `undefined` at runtime however the
+  // type reads. A null check would let that through and render a dangling
+  // "Includes a sign-in from " on every row of every older host's list.
+  const remoteHostId =
+    typeof contributedByHostId === "string" &&
+    contributedByHostId !== props.localHostId
+      ? contributedByHostId
+      : null;
+  // The directory is the app's host-naming machinery: its `label` is the
+  // account registry's display name for a remote host and the machine's own
+  // for this one. `null` (a host this client cannot currently list) falls back
+  // to the canonical id rather than inventing a name for it.
+  const entry = useHostDirectoryEntry(remoteHostId);
+  const hostName = entry === null ? remoteHostId : entry.label;
+  return (
+    <li className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex min-w-0 items-center gap-2 text-ui-sm">
+        <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+          {props.site.domain}
+        </span>
+        <span className="shrink-0 text-muted-foreground">
+          {formatRelativeTimestamp(props.site.lastSeen, props.now)}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          aria-label={`Clear saved logins for ${props.site.domain}`}
+          onClick={() => {
+            props.onClear(props.site.domain);
+          }}
+        >
+          Clear
+        </Button>
+      </div>
+      {hostName === null ? null : (
+        <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+          Includes a sign-in from {hostName}
+        </span>
+      )}
+    </li>
   );
 }

@@ -1,9 +1,12 @@
 import "../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
 import type { BrowserSaveLoginsController } from "@/lib/browser-view/use-browser-save-logins";
-import type { BrowserSavedLoginSitesResponse } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserSavedLoginSite,
+  BrowserSavedLoginSitesResponse,
+} from "@traycer/protocol/host/browser/contracts";
 
 /**
  * Settings > Browser's saved-logins group. Saving is silent and on by
@@ -16,16 +19,63 @@ import type { BrowserSavedLoginSitesResponse } from "@traycer/protocol/host/brow
 const saveLogins = vi.hoisted((): { current: BrowserSaveLoginsController } => ({
   current: { enabled: true, pending: false, setEnabled: () => undefined },
 }));
-const sites = vi.hoisted(
-  (): { current: BrowserSavedLoginSitesResponse | null } => ({ current: null }),
-);
+/**
+ * A row exactly as a host that PREDATES `contributedByHostId` delivers it: the
+ * field is absent, not null. The same-minor RPC path hands the payload back
+ * unparsed, so the schema's `.default(null)` never runs on it - which is why
+ * the surface has to survive the field being `undefined` at runtime.
+ */
+type PreFieldSavedLoginSite = Omit<
+  BrowserSavedLoginSite,
+  "contributedByHostId"
+>;
+
+/** What the query hands the section, older hosts included. */
+type SavedLoginSitesAnswer =
+  | Extract<BrowserSavedLoginSitesResponse, { kind: "sealed" }>
+  | {
+      readonly kind: "sites";
+      readonly sites: readonly (
+        | BrowserSavedLoginSite
+        | PreFieldSavedLoginSite
+      )[];
+    };
+
+const sites = vi.hoisted((): { current: SavedLoginSitesAnswer | null } => ({
+  current: null,
+}));
 const refetch = vi.hoisted(() => vi.fn());
+/**
+ * The host directory the provenance line (ticket 06) resolves names through.
+ * Only the SOURCE is faked here: `useHostDirectoryEntry` and
+ * `useReactiveLocalHostId` are the real hooks, so a row renders exactly what
+ * the app's own host-naming would give it.
+ */
+const hostDirectory = vi.hoisted(
+  (): {
+    localHostId: string | null;
+    /** A host with no entry is one this client cannot currently list. */
+    labels: Record<string, string | undefined>;
+  } => ({
+    localHostId: null,
+    labels: {},
+  }),
+);
 /** Whatever a host runtime IS here - the group only asks whether one exists. */
 const hostBinding = vi.hoisted((): { current: object | null } => ({
-  current: {},
+  current: null,
 }));
 const forgetAllBrowserLogins = vi.hoisted(() => vi.fn(() => 1));
 const clearSavedLoginSite = vi.hoisted(() => vi.fn(() => true));
+
+function boundHostRuntime(): object {
+  return {
+    directory: {
+      getLocalHostId: () => hostDirectory.localHostId,
+      onChange: () => ({ dispose: () => undefined }),
+    },
+  };
+}
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => ({ browserView: {} }),
@@ -33,6 +83,22 @@ vi.mock("@/providers/use-runner-host", () => ({
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => hostBinding.current,
+  useHostDirectory: () => ({
+    findById: (hostId: string) => {
+      const label = hostDirectory.labels[hostId];
+      return label === undefined
+        ? null
+        : {
+            hostId,
+            label,
+            kind: "remote",
+            websocketUrl: null,
+            version: null,
+            transportDialability: "dialable",
+          };
+    },
+    onChange: () => ({ dispose: () => undefined }),
+  }),
 }));
 
 vi.mock("@/lib/browser-view/use-browser-save-logins", () => ({
@@ -59,9 +125,14 @@ function controller(
   };
 }
 
+/** A row nobody but this desktop contributed - the ordinary case. */
+function savedSite(domain: string): BrowserSavedLoginSite {
+  return { domain, lastSeen: Date.now(), contributedByHostId: null };
+}
+
 function renderSection(
   current: BrowserSaveLoginsController,
-  data: BrowserSavedLoginSitesResponse | null,
+  data: SavedLoginSitesAnswer | null,
 ): void {
   saveLogins.current = current;
   sites.current = data;
@@ -73,12 +144,17 @@ function toggle(): HTMLElement {
 }
 
 describe("<BrowserSettingsSection /> saved logins", () => {
+  beforeEach(() => {
+    hostBinding.current = boundHostRuntime();
+    hostDirectory.localHostId = null;
+    hostDirectory.labels = {};
+  });
+
   afterEach(() => {
     cleanup();
     forgetAllBrowserLogins.mockClear();
     clearSavedLoginSite.mockClear();
     refetch.mockClear();
-    hostBinding.current = {};
   });
 
   it("reflects the machine's decision", () => {
@@ -163,7 +239,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     hostBinding.current = null;
     renderSection(controller({ enabled: true }), {
       kind: "sites",
-      sites: [{ domain: "example.com", lastSeen: Date.now() }],
+      sites: [savedSite("example.com")],
     });
 
     // The whole group goes, not just the list: with no host to answer, both
@@ -180,17 +256,14 @@ describe("<BrowserSettingsSection /> saved logins", () => {
   it("lists site names and last-seen times, and never a value", () => {
     renderSection(controller({}), {
       kind: "sites",
-      sites: [
-        { domain: "example.com", lastSeen: Date.now() },
-        { domain: "example.org", lastSeen: Date.now() },
-      ],
+      sites: [savedSite("example.com"), savedSite("example.org")],
     });
 
     expect(screen.getByText("example.com")).not.toBeNull();
     expect(screen.getByText("example.org")).not.toBeNull();
     expect(screen.getAllByText("Just now")).toHaveLength(2);
-    // A row is a site and a time; the wire shape it renders has no third
-    // field, so there is nothing here a value could arrive in.
+    // A row is a site, a time, and (ticket 06) which machine contributed it.
+    // Nothing on that wire shape can carry a cookie value.
   });
 
   it("says a sealed host is locked, not empty", () => {
@@ -209,12 +282,9 @@ describe("<BrowserSettingsSection /> saved logins", () => {
   });
 
   it("holds the cleared row through the pre-merge window, then releases it", () => {
-    const bothSites: BrowserSavedLoginSitesResponse = {
+    const bothSites: SavedLoginSitesAnswer = {
       kind: "sites",
-      sites: [
-        { domain: "example.com", lastSeen: Date.now() },
-        { domain: "example.org", lastSeen: Date.now() },
-      ],
+      sites: [savedSite("example.com"), savedSite("example.org")],
     };
     saveLogins.current = controller({});
     sites.current = bothSites;
@@ -235,7 +305,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     // The merge lands and the host drops it.
     sites.current = {
       kind: "sites",
-      sites: [{ domain: "example.org", lastSeen: Date.now() }],
+      sites: [savedSite("example.org")],
     };
     view.rerender(<BrowserSettingsSection />);
     expect(screen.queryByText("example.com")).toBeNull();
@@ -250,10 +320,7 @@ describe("<BrowserSettingsSection /> saved logins", () => {
   it("sends clearSite for one row and refetches the list", () => {
     renderSection(controller({}), {
       kind: "sites",
-      sites: [
-        { domain: "example.com", lastSeen: Date.now() },
-        { domain: "example.org", lastSeen: Date.now() },
-      ],
+      sites: [savedSite("example.com"), savedSite("example.org")],
     });
 
     fireEvent.click(
@@ -268,5 +335,105 @@ describe("<BrowserSettingsSection /> saved logins", () => {
     // behind this click can still read the pre-clear slice.
     expect(screen.queryByText("example.com")).toBeNull();
     expect(screen.queryByText("example.org")).not.toBeNull();
+  });
+
+  /**
+   * Provenance (universal-sign-in decision 9). One muted line, and only where
+   * it tells the person something they could not already assume: a login some
+   * OTHER machine of theirs signed into.
+   */
+  describe("attribution", () => {
+    /** Any line the provenance copy could produce. */
+    const ATTRIBUTION_LINE = /^Includes a sign-in from/;
+
+    function contributed(
+      domain: string,
+      hostId: string | null,
+    ): BrowserSavedLoginSite {
+      return { domain, lastSeen: Date.now(), contributedByHostId: hostId };
+    }
+
+    it("names the machine a remote host contributed a sign-in from", () => {
+      hostDirectory.localHostId = "host-here";
+      hostDirectory.labels = { "host-there": "Studio Mac" };
+      renderSection(controller({}), {
+        kind: "sites",
+        sites: [contributed("example.com", "host-there")],
+      });
+
+      expect(
+        screen.getByText("Includes a sign-in from Studio Mac"),
+      ).not.toBeNull();
+    });
+
+    it("says nothing about a login this machine's own host contributed", () => {
+      hostDirectory.localHostId = "host-here";
+      hostDirectory.labels = { "host-here": "This Mac" };
+      renderSection(controller({}), {
+        kind: "sites",
+        sites: [contributed("example.com", "host-here")],
+      });
+
+      // The user signed in here. Naming their own machine on the row would be
+      // noise around the lines that mean "this came from somewhere else".
+      expect(screen.getByText("example.com")).not.toBeNull();
+      expect(screen.queryByText(ATTRIBUTION_LINE)).toBeNull();
+    });
+
+    it("says nothing when the answer attributes nobody", () => {
+      hostDirectory.localHostId = "host-here";
+      renderSection(controller({}), {
+        kind: "sites",
+        sites: [savedSite("example.com")],
+      });
+
+      expect(screen.queryByText(ATTRIBUTION_LINE)).toBeNull();
+    });
+
+    it("says nothing for a field an older host never sent", () => {
+      hostDirectory.localHostId = "host-here";
+      const preField: PreFieldSavedLoginSite = {
+        domain: "example.com",
+        lastSeen: Date.now(),
+      };
+      renderSection(controller({}), { kind: "sites", sites: [preField] });
+
+      // `undefined`, not `null`: the same-minor RPC path returns the host's
+      // payload unparsed, so the schema default never runs. A `!== null` guard
+      // passes it straight through and renders a dangling line naming nobody.
+      expect(screen.getByText("example.com")).not.toBeNull();
+      expect(screen.queryByText(ATTRIBUTION_LINE)).toBeNull();
+    });
+
+    it("attributes every marked row where there is no local machine at all", () => {
+      // Web and mobile shells: `useReactiveLocalHostId` answers null because
+      // there is genuinely no local host here, so nothing a host contributed
+      // is "mine" and every marked row keeps its line.
+      hostDirectory.localHostId = null;
+      hostDirectory.labels = { "host-there": "Studio Mac" };
+      renderSection(controller({}), {
+        kind: "sites",
+        sites: [contributed("example.com", "host-there")],
+      });
+
+      expect(
+        screen.getByText("Includes a sign-in from Studio Mac"),
+      ).not.toBeNull();
+    });
+
+    it("falls back to the canonical id for a host it cannot name", () => {
+      hostDirectory.localHostId = "host-here";
+      renderSection(controller({}), {
+        kind: "sites",
+        sites: [contributed("example.com", "host-there")],
+      });
+
+      // No directory row for it, so there is no display name to resolve. The
+      // id is what the app's own naming falls back to; inventing "another
+      // machine" would claim more than is known.
+      expect(
+        screen.getByText("Includes a sign-in from host-there"),
+      ).not.toBeNull();
+    });
   });
 });
