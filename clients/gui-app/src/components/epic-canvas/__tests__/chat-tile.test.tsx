@@ -53,6 +53,7 @@ const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
   hostId: HOST_ID,
   lifecycle: "live",
   inventoryReady: true,
+  canMaterializeElectron: false,
   items: [],
   errorMessage: null,
   retry: () => undefined,

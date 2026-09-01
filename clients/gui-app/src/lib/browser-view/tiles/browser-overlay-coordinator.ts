@@ -10,7 +10,8 @@ const BROWSER_OVERLAY_ATTRIBUTE = "data-browser-overlay";
 const BROWSER_OVERLAY_ID_ATTRIBUTE = "data-browser-overlay-id";
 const BROWSER_OVERLAY_IGNORE_ATTRIBUTE = "data-browser-overlay-ignore";
 
-interface BrowserOverlayRect {
+/** A CSS-pixel rect in viewport coordinates, as `DOMRect` reports them. */
+export interface BrowserOverlayRect {
   readonly left: number;
   readonly top: number;
   readonly right: number;

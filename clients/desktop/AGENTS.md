@@ -76,6 +76,23 @@ failures.
   is unaffected. Everything else still crosses as plain wire types through
   `src/ipc-contracts/`; do not read this as licence to move feature logic into
   preload.
+- **Keyboard input while a native browser tile has focus is ONE declarative
+  policy, not a pile of accidents.** With a `WebContentsView` guest focused,
+  keys go guest `before-input-event` → macOS app-menu accelerator → the page;
+  the app renderer's keybinding registry is never in the chain. So a menu item
+  with a custom `click` is focus-BLIND (Cmd+W once closed the app's task tab
+  over a focused browser), and a renderer-only chord is silently swallowed.
+  Every chord that must still mean something in that state lives in
+  `clients/gui-app/src/lib/browser-view/reserved-chords-registration.ts` and
+  nowhere else; the renderer pushes that table to main, which decides in the
+  guest seam (`browser-view-entry-factory.ts` → `browser-view-chords.ts`) and
+  always `preventDefault`s so the menu equivalent cannot double-fire. Two
+  dispositions: browser-scoped (main names a tile command back to the focused
+  tile - Cmd+W/T/L) and app-forwarded (main replays the keystroke into the host
+  renderer - Cmd+K, ⇧⌘W, ⌘/⇧⌘ brackets). Adding a chord means adding a row
+  there; do not add a focus check to a menu item instead. Electron ROLE items
+  (reload, cut/copy/paste, select-all) already act on the focused web contents
+  and are correct as they are - leave them alone.
 - Never build `Tray` from `nativeImage.createEmpty()` (invisible tray).
 - No Electron-native SQLite / `better-sqlite3` rebuilds in this shell — host owns
   app-assets DB.

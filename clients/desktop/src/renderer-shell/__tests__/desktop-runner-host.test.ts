@@ -571,7 +571,11 @@ function buildFakeBridge(
       startAnnotation: async () => ({ ok: true as const }),
       cancelAnnotation: async () => undefined,
       setAnnotationTargetChatLabel: async () => undefined,
-      occludeForOverlay: async () => ({ snapshots: [], restoredTiles: [] }),
+      occludeForOverlay: async (input) => ({
+        snapshots: [],
+        restoredTiles: [],
+        matchedCount: input.tiles.length,
+      }),
       releaseOverlay: async () => ({ restoredTiles: [] }),
       capturePrimaryProfile: async () => ({
         status: "captured" as const,
@@ -598,6 +602,7 @@ function buildFakeBridge(
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),
       onCertificateError: (_handler) => ({ dispose: () => undefined }),
       onOpenTileRequest: (_handler) => ({ dispose: () => undefined }),
+      onTileCommand: (_handler) => ({ dispose: () => undefined }),
       onSnapshotInvalidated: (_handler) => ({ dispose: () => undefined }),
       onAnnotationEvent: (_handler) => ({ dispose: () => undefined }),
       onAnnotationAttached: (_handler) => ({ dispose: () => undefined }),
