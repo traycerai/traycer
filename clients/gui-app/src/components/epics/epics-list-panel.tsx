@@ -343,8 +343,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     [setPinned],
   );
 
-  const { candidates: worktreeCandidates } =
-    useTaskDeleteWorktreeCandidates(pendingDeleteIds);
+  const {
+    candidates: worktreeCandidates,
+    isFetching: worktreeCandidatesFetching,
+  } = useTaskDeleteWorktreeCandidates(pendingDeleteIds);
   const defaultCheckedByPath = useMemo(
     () =>
       new Map(
@@ -483,7 +485,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   }, []);
 
   const handleConfirmDelete = () => {
-    if (pendingDeleteIds === null) return;
+    // The host-wide census is asynchronous. Confirming before it settles lets
+    // the Task deletion start with zero approved worktrees; its rows can then
+    // arrive during the mutation and flash briefly before success closes the
+    // dialog. Hold confirmation until the choices the person is approving are
+    // stable. A disabled query (host unavailable) is not fetching, so cleanup
+    // remains additive and never blocks Task deletion indefinitely.
+    if (pendingDeleteIds === null || worktreeCandidatesFetching) return;
     const ids = pendingDeleteIds;
     const approvedWorktrees = worktreeCandidates
       .filter((candidate) => isWorktreePathChecked(candidate.worktreePath))
@@ -663,6 +671,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         title={describeDeleteTitle(pendingDeleteIds, items)}
         description="This action cannot be undone."
         isPending={deleteMutation.isPending}
+        isCheckingWorktrees={worktreeCandidatesFetching}
         onConfirm={handleConfirmDelete}
         candidates={worktreeCandidates}
         isPathChecked={isWorktreePathChecked}

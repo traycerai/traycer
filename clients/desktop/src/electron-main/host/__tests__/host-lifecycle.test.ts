@@ -321,6 +321,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "production" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -380,6 +384,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "production" as const,
     };
     const reachabilityProbe = vi.fn(async () => true);
@@ -431,6 +439,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "production" as const,
     };
     const lifecycle = new HostLifecycle({
@@ -493,6 +505,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "production" as const,
     };
     const websocketUrl = "ws://127.0.0.1:54322/rpc";
@@ -582,6 +598,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "production" as const,
     };
     const readyTimeoutMs = 300;
@@ -661,6 +681,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "dev" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -724,6 +748,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "production" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -779,6 +807,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "dev" as const,
     };
     const { server, port } = await listenOnEphemeralPort();
@@ -836,6 +868,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "production" as const,
     };
     await writeFile(
@@ -890,6 +926,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "production" as const,
     };
     await writeFile(
@@ -943,6 +983,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       ),
       substrateFile: join(dir, "substrate.json"),
       transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
       environment: "production" as const,
     };
     const websocketUrl = "ws://127.0.0.1:54321/rpc";

@@ -753,7 +753,16 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.browserViewAnnotationAttachResult,
         RunnerHostInvoke.browserViewGetDebugSnapshot,
         RunnerHostInvoke.browserViewPrimaryProfileCapture,
-        RunnerHostInvoke.browserViewCookieCryptoStateGet,
+        // Keychain refactor tickets 07 and 08: the tile-menu clear-site, the
+        // host-driven eviction of the same site on this machine, and the
+        // host-driven whole-jar forget.
+        RunnerHostInvoke.browserViewClearSite,
+        RunnerHostInvoke.browserViewEvictSite,
+        RunnerHostInvoke.browserViewForgetLogins,
+        RunnerHostInvoke.browserViewSaveLoginsGet,
+        RunnerHostInvoke.browserViewSaveLoginsSet,
+        RunnerHostInvoke.browserViewStoreKeyWrap,
+        RunnerHostInvoke.browserViewStoreKeyUnwrap,
         RunnerHostInvoke.pipCaptureStart,
         RunnerHostInvoke.pipCaptureStop,
         // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.

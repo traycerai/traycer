@@ -92,6 +92,10 @@ interface BrowserSessionsCoordinator {
   readonly owner: BrowserSessionsOwner;
   readonly epicId: string;
   state: BrowserSessionsState;
+  /** Sends `forgetLogins` if this coordinator's stream is live. */
+  forgetLogins: () => boolean;
+  /** Sends `clearSite` for one domain if this coordinator's stream is live. */
+  clearSite: (domain: string) => boolean;
   /**
    * Snapshot-only capture of one tab on this coordinator's host, for a chat
    * pinned to ANOTHER host (spec decision #10). It hangs off the coordinator
@@ -159,11 +163,13 @@ const TAB_PREVIEW_TIMEOUT_MS = 5_000;
  * store, so that store is the only thing carrying login state across the gap.
  * It must therefore be refreshed while the native tabs are still alive.
  *
- * Only co-located coordinators capture: a stream whose host is not this
- * machine has no Electron partition here to read.
+ * EVERY open stream is flushed, remote hosts included: the partition this
+ * renderer reads is the user's own jar, and it is that jar the remote host has
+ * to be holding when it re-materializes their session (cross-host decision #6).
  *
- * Never rejects: a stream that cannot answer is reported by not having
- * refreshed the store, not by stalling the quit.
+ * Never rejects, and the streams run in parallel under one flush timeout: a
+ * stream that cannot answer is reported by not having refreshed the store, not
+ * by stalling the quit.
  */
 export async function captureFinalPrimaryProfiles(): Promise<void> {
   await Promise.allSettled(
@@ -233,6 +239,52 @@ export function subscribeToBrowserSessionsCoordinator(
     current.delete(listener);
     if (current.size === 0) browserSessionsCoordinatorListeners.delete(key);
   };
+}
+
+/**
+ * Sends once per host, not once per coordinator: coordinators are keyed by
+ * {epic, host, identity}, and these frames speak for the user's whole slice on
+ * that host, so a second one for another epic of the same host would only ask
+ * for the same work twice. Every host the user has a live browser stream to is
+ * addressed - each host keeps its own key and its own slice. Answers whether
+ * any live stream took it.
+ */
+function sendOncePerHost(
+  send: (coordinator: BrowserSessionsCoordinator) => boolean,
+): boolean {
+  const addressedHostIds = new Set<string>();
+  let sent = false;
+  for (const coordinator of browserSessionsCoordinators.values()) {
+    const hostId = coordinator.owner.hostId;
+    if (addressedHostIds.has(hostId)) continue;
+    if (!send(coordinator)) continue;
+    addressedHostIds.add(hostId);
+    sent = true;
+  }
+  return sent;
+}
+
+/**
+ * "Forget all browser logins" (spec §6.5, ticket 08). Answers whether any live
+ * stream took it.
+ *
+ * Module-level, not a tile-scoped action: the trigger lives in Settings ›
+ * Browser, which has no tile to hang it off.
+ */
+export function forgetAllBrowserLogins(): boolean {
+  return sendOncePerHost((coordinator) => coordinator.forgetLogins());
+}
+
+/**
+ * "Clear" on one row of Settings > Browser (spec section 7.3, ticket 10).
+ * Answers whether any live stream took it.
+ *
+ * The frame carries the domain rather than a tile key - unlike the tile menu's
+ * clear-site, there is no tile here whose URL could name the site, and the
+ * domain came from the host's own list in the first place.
+ */
+export function clearSavedLoginSite(domain: string): boolean {
+  return sendOncePerHost((coordinator) => coordinator.clearSite(domain));
 }
 
 function notifyBrowserSessionsCoordinator(key: string): void {
@@ -463,6 +515,25 @@ function createBrowserSessionsCoordinator(args: {
     let snapshotReadyForConnection = false;
     let connectionStatus: StreamConnectionStatus = "connecting";
     let connectionGeneration = 0;
+    // Unsolicited cookie deltas from the durable `primary` jar (spec §6.3).
+    // Gated on this connection having sent `electronTabLifecycleReady`: that
+    // readiness is exactly what makes the stream jar-authorized on the host, so
+    // a connection that has not sent it would be dropped there anyway.
+    const primaryProfileDeltas =
+      browserView?.onPrimaryProfileDelta((delta) => {
+        if (
+          actionChannel !== channel ||
+          connectionStatus !== "open" ||
+          !electronLifecycleReadySentForConnection
+        ) {
+          return;
+        }
+        stream?.sendClientFrame({
+          kind: "primaryProfileDelta",
+          hasBinaryPayload: false,
+          ...delta,
+        });
+      }) ?? null;
     // Quit-flush waiters keyed by the capture `requestId` each answers. The
     // host acks a `primaryProfileCaptured` once it has DURABLY stored (or
     // rejected) that jar, which is what the quit path actually needs to know.
@@ -517,6 +588,16 @@ function createBrowserSessionsCoordinator(args: {
         hasBinaryPayload: false,
         coLocatedHostId: localHostId,
         desktopWindowId: runtime.desktopWindowId,
+      });
+      // This machine can hold the host's store key. The host answers with a
+      // wrap or an unwrap request (handled below); it ignores the offer when
+      // it already has the key in memory. It rides with the readiness frame
+      // because readiness is what makes this stream jar-authorized - and the
+      // host now also starts the handshake off that frame, so the offer is
+      // usually the second of the two and simply ignored.
+      stream?.sendClientFrame({
+        kind: "storeKeyOffer",
+        hasBinaryPayload: false,
       });
     };
     retryLifecycleReady = sendLifecycleReadyIfReady;
@@ -615,6 +696,7 @@ function createBrowserSessionsCoordinator(args: {
         callbacks: { onServerFrame, onConnectionStatus },
       });
     } catch (cause) {
+      primaryProfileDeltas?.dispose();
       electronTabs.dispose();
       transport.close();
       throw cause;
@@ -623,12 +705,6 @@ function createBrowserSessionsCoordinator(args: {
 
     captureFinalPrimaryProfile = async (): Promise<void> => {
       if (actionChannel !== channel || connectionStatus !== "open") return;
-      // Only the host this GUI is CO-LOCATED with. `capturePrimaryProfile`
-      // reads THIS machine's Electron partition, and the host stores what
-      // arrives as the whole jar - fanning it to a remote host would overwrite
-      // that host's own, richer jar with a laptop's on every quit. The same
-      // locality rule gates `electronTabLifecycleReady` above.
-      if (runtime.localHostId !== args.owner.hostId) return;
       const requestId = crypto.randomUUID();
       const acked = awaitCaptureAck(requestId);
       await capturePrimaryProfileOnce({
@@ -644,6 +720,7 @@ function createBrowserSessionsCoordinator(args: {
 
     stopCurrentStream = () => {
       if (actionChannel === channel) actionChannel = null;
+      primaryProfileDeltas?.dispose();
       captureFinalPrimaryProfile = (): Promise<void> => Promise.resolve();
       resolveCaptureAckWaiters();
       electronTabs.dispose();
@@ -684,6 +761,25 @@ function createBrowserSessionsCoordinator(args: {
       retry: restart,
       openTab,
       closeTab,
+    },
+    forgetLogins: () => {
+      const channel = activeChannel();
+      if (channel === null) return false;
+      channel.sendClientFrame({
+        kind: "forgetLogins",
+        hasBinaryPayload: false,
+      });
+      return true;
+    },
+    clearSite: (domain) => {
+      const channel = activeChannel();
+      if (channel === null) return false;
+      channel.sendClientFrame({
+        kind: "clearSite",
+        hasBinaryPayload: false,
+        domain,
+      });
+      return true;
     },
     upsertConsumer: (consumerId, nextRuntime) => {
       runtimes.set(consumerId, nextRuntime);
@@ -805,6 +901,22 @@ type BrowserSessionsSubsystemFrame = Exclude<
   }
 >;
 
+/**
+ * The host has already shredded its slice for this user; this is the desktop's
+ * turn. Fire-and-forget: there is no frame to answer with, and a machine with
+ * no bridge (a browser tab) has no jar to clear.
+ *
+ * Kept extracted rather than inlined into the frame switch: folding it back in
+ * puts {@link handleBrowserSessionsSubsystemFrame} over the complexity budget.
+ */
+function forgetLocalLogins(browserView: BrowserViewBridge | null): void {
+  void browserView?.forgetLogins().catch((cause: unknown) => {
+    appLogger.warn("[browser] clearing the browser partition failed", {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+  });
+}
+
 function handleBrowserSessionsSubsystemFrame(args: {
   readonly frame: BrowserSessionsSubsystemFrame;
   readonly epicId: string;
@@ -859,6 +971,23 @@ function handleBrowserSessionsSubsystemFrame(args: {
         sendClientFrame: args.sendClientFrame,
       });
       return;
+    case "primaryProfileForgotten":
+      forgetLocalLogins(args.browserView);
+      return;
+    case "primaryProfileEvict":
+      handlePrimaryProfileEvictFrame({
+        frame,
+        browserView: args.browserView,
+      });
+      return;
+    case "storeKeyWrapRequest":
+    case "storeKeyUnwrapRequest":
+      handleStoreKeyRequestFrame({
+        frame,
+        browserView: args.browserView,
+        sendClientFrame: args.sendClientFrame,
+      });
+      return;
     // `primaryProfileCaptureAck` is answered in `onServerFrame`, which owns the
     // quit-flush waiters; the burst frames are progress-only.
     case "burstStarted":
@@ -876,6 +1005,32 @@ function handleBrowserSessionsSubsystemFrame(args: {
       });
     }
   }
+}
+
+/**
+ * One site's logins were cleared for this user somewhere else (spec §6.5) - on
+ * another desktop, or as a tombstone the host's store recorded. This partition
+ * drops the same site.
+ *
+ * Nothing is sent back: the frame is a fan-out, not a request, and the desktop
+ * deliberately emits no delta for the removal - the store decided these
+ * tombstones before it sent the frame, so an echo would only re-assert them. A
+ * window with no desktop bridge has no jar to evict from.
+ */
+function handlePrimaryProfileEvictFrame(args: {
+  readonly frame: Extract<
+    BrowserSessionsServerFrame,
+    { readonly kind: "primaryProfileEvict" }
+  >;
+  readonly browserView: BrowserViewBridge | null;
+}): void {
+  const browserView = args.browserView;
+  if (browserView === null) return;
+  void browserView.evictSite(args.frame.domain).catch((cause: unknown) => {
+    appLogger.warn("[browser] could not evict a cleared site", {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+  });
 }
 
 /**
@@ -949,6 +1104,83 @@ function handlePrimaryProfileCaptureFrame(args: {
     browserView: args.browserView,
     sendClientFrame: args.sendClientFrame,
   });
+}
+
+/**
+ * The desktop half of the store-key handshake (spec §6.2). The key never
+ * touches this renderer's storage: it is handed to the main process, sealed
+ * with (or opened by) the OS keystore, and handed straight back to the host.
+ *
+ * A failed *unwrap* is answered (`rawKey: null`) so the host knows to stay
+ * sealed. A failed *wrap* has no negative frame by design: nothing durable was
+ * created, and the host simply re-asks on the next connect.
+ */
+function handleStoreKeyRequestFrame(args: {
+  readonly frame: Extract<
+    BrowserSessionsServerFrame,
+    { readonly kind: "storeKeyWrapRequest" | "storeKeyUnwrapRequest" }
+  >;
+  readonly browserView: BrowserViewBridge | null;
+  readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
+}): void {
+  const frame = args.frame;
+  const browserView = args.browserView;
+  const requestId = frame.requestId;
+  if (browserView === null) {
+    if (frame.kind === "storeKeyUnwrapRequest") {
+      args.sendClientFrame({
+        kind: "storeKeyUnwrapped",
+        hasBinaryPayload: false,
+        requestId,
+        rawKey: null,
+      });
+    }
+    return;
+  }
+  const warn = (cause: unknown): void => {
+    appLogger.warn("[browser] the store-key handshake failed", {
+      frameKind: frame.kind,
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+  };
+  if (frame.kind === "storeKeyWrapRequest") {
+    void browserView
+      .wrapStoreKey(frame.rawKey)
+      .then((result) => {
+        if (!result.ok) {
+          warn(result.reason);
+          return;
+        }
+        args.sendClientFrame({
+          kind: "storeKeyWrapped",
+          hasBinaryPayload: false,
+          requestId,
+          wrappedKey: result.wrappedKey,
+        });
+      })
+      .catch(warn);
+    return;
+  }
+  void browserView
+    .unwrapStoreKey(frame.wrappedKey)
+    .then((result) => {
+      if (!result.ok) warn(result.reason);
+      args.sendClientFrame({
+        kind: "storeKeyUnwrapped",
+        hasBinaryPayload: false,
+        requestId,
+        rawKey: result.ok ? result.rawKey : null,
+      });
+    })
+    .catch((cause: unknown) => {
+      warn(cause);
+      args.sendClientFrame({
+        kind: "storeKeyUnwrapped",
+        hasBinaryPayload: false,
+        requestId,
+        rawKey: null,
+      });
+    });
 }
 
 function browserSessionsError(

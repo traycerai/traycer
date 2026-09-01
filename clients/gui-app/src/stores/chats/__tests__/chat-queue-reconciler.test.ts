@@ -56,6 +56,7 @@ function createPendingAction(
   return {
     clientActionId,
     action,
+    queueItemId: null,
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId,
@@ -78,6 +79,7 @@ function createAcceptedAction(
   return {
     clientActionId,
     action: interviewBlockId === null ? "send" : "interviewAnswer",
+    queueItemId: null,
     interviewBlockId,
     interviewDeliveryRetry: null,
     messageId: null,
@@ -203,6 +205,7 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        queueItemId: null,
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-2",
@@ -270,6 +273,7 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        queueItemId: null,
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-2",
@@ -620,6 +624,7 @@ describe("chat-queue-reconciler", () => {
       const action2: PendingChatAction = {
         clientActionId: "action-2",
         action: "send",
+        queueItemId: null,
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-2",
@@ -724,6 +729,7 @@ describe("chat-queue-reconciler", () => {
       const pendingAction: PendingChatAction = {
         clientActionId: "action-1",
         action: "send",
+        queueItemId: null,
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-1",

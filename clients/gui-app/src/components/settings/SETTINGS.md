@@ -517,6 +517,50 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     row that carried one was deleted along with the toggle, and the
     `SettingsRow` `risk` prop it was the sole consumer of was deleted with
     it.
+  - **Saved logins** (`browser-settings-section.tsx`'s second group,
+    `data-testid="settings-saved-logins"`): where website logins in the in-app
+    browser are kept, and the only place they can be turned off, forgotten, or
+    inspected per site. Keychain-refactor spec §7.3; the group renders NOTHING
+    without a `browserView` bridge (the web build), because every row is about
+    a machine's jar - nor without a host runtime (`useHostBinding()`, the
+    non-throwing accessor), since the list is a host's answer and both
+    destructive rows travel to hosts. That gate is on what RENDERS: the rows
+    live in their own component so the site-list query, which reaches
+    `useHostClient()` and would THROW with no provider, is never mounted
+    above it.
+    Saving is silent and on by default, Chrome-style - there is no consent
+    step, no status row and nothing to retry - so this group is passive: a
+    toggle, a destructive action, and a list.
+    - **Save website logins on this machine** is the desktop-local pref
+      (`useBrowserSaveLogins()`), not a settings-store field and not a host
+      value: it is a statement about THIS machine (decision #18), so it neither
+      syncs nor follows the scoped host. Off switches new and live `primary`
+      tiles onto a throwaway partition (they reload signed out) and leaves the
+      `persist:` jar on disk untouched - that is what Forget is for - so a
+      confirm stands in front of it and turning it back on returns to the same
+      logins. Nothing is copied in either direction.
+    - **Forget all browser logins** (destructive confirm) moved here from the
+      tile shield popover, which was ticket 08's temporary home. It calls the
+      module-level `forgetAllBrowserLogins()` on the sessions coordinator and
+      so speaks for EVERY host the user has a live browser stream to; that is
+      what "all" means, and it is why the action is not tile-scoped.
+      It answers whether any stream took the frame, and the confirm closes only
+      then - the same refusal the per-row Clear makes, so a click that reached
+      no host never reads as a completed forget.
+    - **Sites with saved logins** reads `browser.savedLoginSites` from the
+      surface's host (`useBrowserSavedLoginSitesQuery`) - registrable domains
+      and a relative last-seen, never values. The method is optional
+      (non-floor), so the query is gated on `useHostSupportsMethod` and a host
+      that never answered renders no list rather than an empty one. `sealed`
+      is NOT "no sites": it says the logins exist but this host cannot open
+      them until the desktop that wrapped its key connects, and it renders its
+      own hint. Per-row **Clear** sends the `clearSite { domain }` frame
+      (`clearSavedLoginSite()`) and refetches; the row is hidden optimistically
+      because the host merges asynchronously and the refetch behind the click
+      can still read the pre-clear slice. That optimism RELEASES itself: a
+      domain is hidden only while the latest response still names it (retired
+      from state during render), so signing back into a cleared site shows it
+      again instead of hiding it for the session.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions"), Show global resources button, Show
