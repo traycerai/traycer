@@ -777,6 +777,8 @@ import {
   providersUsePackVersionResponseSchema,
   providersSetPackPolicyRequestSchema,
   providersSetPackPolicyResponseSchema,
+  providersRefreshPackDiscoveryRequestSchema,
+  providersRefreshPackDiscoveryResponseSchema,
   upgradeProviderCliStateV10ToV20,
   upgradeProviderCliStateListToV70Preimage,
   upgradeProviderCliStateV10ToMutationV20,
@@ -3079,6 +3081,20 @@ export const providersSetPackPolicyV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersSetPackPolicyRequestSchema,
   responseSchema: providersSetPackPolicyResponseSchema,
+});
+
+/**
+ * Run the pack-discovery poll for one pack now, instead of waiting out the
+ * jittered ticker period. Another new name at `@1.0` on the same
+ * optional-capability channel as the four above, and registered below the same
+ * way - it reads a head rather than mutating the store, which is why it is not
+ * one of them.
+ */
+export const providersRefreshPackDiscoveryV10 = defineRpcContract({
+  method: "providers.refreshPackDiscovery",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersRefreshPackDiscoveryRequestSchema,
+  responseSchema: providersRefreshPackDiscoveryResponseSchema,
 });
 
 /**
@@ -8305,6 +8321,22 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersSetPackPolicyV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The on-demand discovery poll the version popover's check button drives.
+  // Not one of the four above - it reads a head instead of writing the store -
+  // but a new name outside the floor all the same, so it degrades identically.
+  "providers.refreshPackDiscovery": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersRefreshPackDiscoveryV10,
           upgradeFromPreviousVersion: null,
         },
       },
