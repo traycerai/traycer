@@ -1505,6 +1505,69 @@ describe("<EpicSessionProvider />", () => {
     });
   });
 
+  it("patches a stale history response inserted after a generated epic title lands", async () => {
+    const queryClient = new QueryClient();
+    const sessionUserId = "alice@example.com";
+    const cloudTasksUserId = "cloud-user-1";
+    useAuthStore.setState({
+      contextMetadata: { userId: cloudTasksUserId, username: sessionUserId },
+    });
+    const queryKey = cloudEpicTasksQueryKey(
+      "host-a",
+      cloudTasksUserId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    __setEpicStreamClientFactoryForTests((_epicId, _callbacks) => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionProvider
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe
+            onHandle={(handle) => {
+              seenHandles.push(handle);
+            }}
+          />
+        </EpicSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(queryKey),
+    ).toBeUndefined();
+
+    act(() => {
+      seenHandles[0].store.getState().setEpicTitle("Generated history title");
+    });
+
+    act(() => {
+      queryClient.setQueryData<ListTasksResponse>(queryKey, {
+        tasks: [makeHistoryTask("epic-session-test", "", cloudTasksUserId)],
+        hasMore: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
+          ?.light?.title,
+      ).toBe("Generated history title");
+    });
+  });
+
   it("claims desktop epic ownership before acquiring a renderer session", async () => {
     const streams: ControlledStream[] = [];
     const calls = {
