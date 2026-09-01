@@ -5,12 +5,7 @@ import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
-import {
-  defineConfig,
-  type Connect,
-  type Plugin,
-  type UserConfig,
-} from "vite";
+import { defineConfig, type Connect, type Plugin, type UserConfig } from "vite";
 import { sanitizeDevDesktopSlot } from "../shared/platform/dev-desktop-slot";
 import { devRelayBaseUrlFromEnv } from "../shared/platform/dev-backend-urls";
 
