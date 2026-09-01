@@ -145,10 +145,14 @@ function BrowserOverlayCoordinator(props: {
           })
           .then((result) => {
             if (disposed) return;
-            if (result.matchedCount === 0) {
-              forgetSignature();
-              return;
-            }
+            // A PARTIAL match is a miss too: the tiles that did match are
+            // occluded and keep their frames, but the ones that did not stay
+            // live under the overlay. Dropping the signature is what lets the
+            // next layout notification (tile registration, rebind) retry them
+            // - keeping it latched would compute the same signature and
+            // return early until the overlay closed.
+            if (result.matchedCount < target.tiles.length) forgetSignature();
+            if (result.matchedCount === 0) return;
             result.snapshots.forEach((snapshot) => {
               setBrowserViewSnapshot(snapshot);
             });

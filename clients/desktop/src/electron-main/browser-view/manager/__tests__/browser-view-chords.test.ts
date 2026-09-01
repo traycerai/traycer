@@ -182,10 +182,15 @@ describe("guest-focused dispositions", () => {
       send,
     });
     chords.setReservedChords(policy);
-    /** Deliver a keystroke exactly as the guest seam would. */
+    /**
+     * Deliver a keystroke exactly as the guest seam would: a match is what
+     * `preventDefault`s, and only a first press also dispatches.
+     */
     const press = (input: BrowserViewKeyInput): void => {
       const matched = chords.match(input);
-      if (matched !== null) chords.dispatch(SURFACE, matched);
+      if (matched !== null && !input.isAutoRepeat) {
+        chords.dispatch(SURFACE, matched);
+      }
     };
     const fire = (input: BrowserViewKeyInput): void => {
       expect(chords.match(input)).not.toBeNull();
@@ -244,10 +249,23 @@ describe("guest-focused dispositions", () => {
     expect(send).toHaveBeenCalledOnce();
   });
 
-  it("does not claim a held app-forwarded chord either", () => {
-    const { press, sendInputEvent } = dispatchHarness([
+  it("still CLAIMS a held chord, so a repeat never reaches the menu", () => {
+    // The seam `preventDefault`s on a match. Letting a repeat fall through
+    // would hand Cmd+W back to the focus-blind application accelerator while
+    // the first press's asynchronous browser-tab close is still pending.
+    const { chords } = dispatchHarness([{ token: "mod+w", command: "closeTab" }]);
+    expect(
+      chords.match(heldKeyDown("w", { ...NO_MODS, meta: true })),
+    ).not.toBeNull();
+  });
+
+  it("claims a held app-forwarded chord but never replays it", () => {
+    const { press, chords, sendInputEvent } = dispatchHarness([
       { token: "mod+k", command: null },
     ]);
+    expect(
+      chords.match(heldKeyDown("k", { ...NO_MODS, meta: true })),
+    ).not.toBeNull();
     press(heldKeyDown("k", { ...NO_MODS, meta: true }));
     expect(sendInputEvent).not.toHaveBeenCalled();
   });

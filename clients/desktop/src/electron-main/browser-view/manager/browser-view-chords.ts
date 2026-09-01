@@ -206,12 +206,17 @@ export class BrowserViewChords {
     });
   }
 
+  /**
+   * Matching deliberately ignores `isAutoRepeat`: a repeat of a reserved chord
+   * still has to be CLAIMED, or it reaches the focus-blind menu accelerator
+   * this policy exists to displace (holding Cmd+W would close the app tab
+   * while the browser tab's asynchronous close is still pending). Whether a
+   * repeat also DISPATCHES is the seam's call - see
+   * `handleBeforeInputEvent`, which suppresses it because every reserved
+   * chord is one-shot.
+   */
   match(input: BrowserViewKeyInput): MatchedReservedChord | null {
     if (this.chords.length === 0) return null;
-    // Every reserved chord is a one-shot command - holding Cmd+T at ~25 Hz
-    // would open (and split for) a tab per repeat. Repeats are left to the
-    // page, which is also what keeps the guest's own zoom chords repeating.
-    if (input.isAutoRepeat) return null;
     const event = chordFromKeyEvent(input, this.hostPlatform);
     if (event === null) return null;
     return this.chords.find((chord) => chordsEqual(chord, event)) ?? null;

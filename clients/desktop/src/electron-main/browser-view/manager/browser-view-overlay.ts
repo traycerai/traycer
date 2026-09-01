@@ -26,6 +26,15 @@ interface BrowserViewOverlayOptions {
   readonly send: BrowserViewSend;
 }
 
+/** What one tile's occlusion actually did: see `occludeEntry`. */
+interface OccludeEntryResult {
+  readonly occluded: boolean;
+  readonly snapshot: BrowserViewOverlaySnapshot | null;
+}
+
+const MISSED: OccludeEntryResult = { occluded: false, snapshot: null };
+const ALREADY_OCCLUDED: OccludeEntryResult = { occluded: true, snapshot: null };
+
 /**
  * BT-202 overlay occlusion: hands the renderer a frozen frame for every tile
  * an overlay covers, then parks the native view offscreen once that frame is
@@ -57,15 +66,20 @@ export class BrowserViewOverlay {
     const restoredTiles = this.releaseEntries(input.overlayId, released);
     this.entryKeysByOwnerId.set(input.overlayId, nextKeyIds);
 
-    const snapshots = await Promise.all(
+    const results = await Promise.all(
       nextKeyIds.map((keyId) => this.occludeEntry(input.overlayId, keyId)),
     );
 
+    // Counted from what each occlusion actually DID, never from the registry's
+    // later state: a tile that attaches after `occludeEntry` missed it is
+    // present by the time a post-await `hasSurfaceKey` runs, so counting there
+    // reports a tile as occluded that this call never touched - and the
+    // renderer, reading a full match, would never retry it.
+    //
     // An overlay scan can race tile teardown. Log the all-missing case once
     // per scan rather than once per tile.
-    const matchedCount = nextKeyIds.filter((keyId) =>
-      this.entries.hasSurfaceKey(keyId),
-    ).length;
+    const snapshots = results.map((result) => result.snapshot);
+    const matchedCount = results.filter((result) => result.occluded).length;
     if (nextKeyIds.length > 0 && matchedCount === 0) {
       log.info("[browser-view] occlude for overlay: no matching entries", {
         overlayId: input.overlayId,
@@ -159,19 +173,24 @@ export class BrowserViewOverlay {
     this.entryKeysByOwnerId.clear();
   }
 
+  /**
+   * Occludes one tile, reporting whether this overlay now owns it. `occluded`
+   * is the retry signal the renderer reads: a tile already parked under
+   * another overlay counts, a tile that was not there to park does not.
+   */
   private async occludeEntry(
     overlayId: string,
     keyId: string,
-  ): Promise<BrowserViewOverlaySnapshot | null> {
+  ): Promise<OccludeEntryResult> {
     const entry = this.entries.getSurfaceByKey(keyId);
-    if (entry === undefined) return null;
-    if (entry.overlayOwnerIds.includes(overlayId)) return null;
+    if (entry === undefined) return MISSED;
+    if (entry.overlayOwnerIds.includes(overlayId)) return ALREADY_OCCLUDED;
 
     if (entry.overlayOwnerIds.length > 0) {
       // Already parked for another overlay; the view stays offscreen-visible
       // and no new pixels are needed.
       entry.overlayOwnerIds.push(overlayId);
-      return null;
+      return ALREADY_OCCLUDED;
     }
 
     // BT-202: paint from the rolling frame cache when it has a slot. This is
@@ -196,9 +215,9 @@ export class BrowserViewOverlay {
     }
 
     const activeKeyIds = this.entryKeysByOwnerId.get(overlayId) ?? [];
-    if (!activeKeyIds.includes(keyId)) return null;
+    if (!activeKeyIds.includes(keyId)) return MISSED;
     const currentEntry = this.entries.getSurfaceByKey(keyId);
-    if (currentEntry === undefined) return null;
+    if (currentEntry === undefined) return MISSED;
 
     currentEntry.overlayOwnerIds.push(overlayId);
     currentEntry.overlaySnapshotStale = false;
@@ -210,9 +229,12 @@ export class BrowserViewOverlay {
     // once img.decode() settles; only then do we move the view offscreen.
     currentEntry.overlayAwaitingPaintAck = true;
     return {
-      ...toTileKey(requireSurface(currentEntry)),
-      dataUrl,
-      stale,
+      occluded: true,
+      snapshot: {
+        ...toTileKey(requireSurface(currentEntry)),
+        dataUrl,
+        stale,
+      },
     };
   }
 

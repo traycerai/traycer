@@ -224,6 +224,7 @@ function BrowserTileToolbarAddress(props: {
   readonly controller: TileController;
 }) {
   const {
+    disabled,
     setAddressInput,
     addressValue,
     url,
@@ -238,6 +239,10 @@ function BrowserTileToolbarAddress(props: {
       <InputGroup className="group/address h-7 border-transparent bg-transparent shadow-none transition-[background-color,border-color,box-shadow] hover:border-input hover:bg-input/20 focus-within:bg-input/20 motion-reduce:transition-none dark:bg-transparent">
         <InputGroupInput
           ref={setAddressInput}
+          // The compact toolbar is shown on peek tiles too, where a missing
+          // host client disables the whole controller - an editable field
+          // there would submit a navigation nothing can carry.
+          disabled={disabled}
           aria-label="Browser address"
           value={addressValue}
           onChange={(event) => {

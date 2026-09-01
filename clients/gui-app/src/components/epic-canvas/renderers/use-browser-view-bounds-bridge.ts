@@ -31,6 +31,16 @@ interface UseBrowserViewBoundsBridgeArgs {
  * conversion is the main process's (`BrowserViewGeometry`); this side stays
  * in the space `getBoundingClientRect` speaks.
  *
+ * Known ceiling of reporting the visible rect: `setBounds` is placement, not
+ * a crop - a WebContentsView has no clip - so a PARTIALLY clipped tile does
+ * not show a cropped page, it shows a page laid out for the smaller viewport
+ * (and, when the cut is on the left or top, one whose origin moved to the
+ * clip edge). The alternative is the unclipped rect, which composites the
+ * native view straight over whatever the container's edge was meant to cut
+ * off; that spill is the worse of the two, so partial clipping reflows on
+ * purpose. Cropping properly needs a real clip primitive, or hiding a tile
+ * that is not fully visible.
+ *
  * Measurement is one rAF loop while the tile is visible, and it is not a
  * poll for want of a better trigger: a tile moves without resizing and
  * without scrolling (a pane transform animation, a re-parent between
@@ -79,12 +89,15 @@ export function useBrowserViewBoundsBridge(
         width: rect.width,
         height: rect.height,
       };
-      // Compared rounded: main rounds into whole DIPs anyway, so sub-pixel
-      // jitter would otherwise re-send an identical native rect every frame.
-      if (
-        lastSentBounds !== null &&
-        roundedBoundsAreEqual(lastSentBounds, bounds)
-      ) {
+      // Compared EXACTLY, never rounded. Rounding here would be rounding in
+      // the wrong space: main converts CSS px to window DIPs by the window's
+      // zoom factor before it rounds, so at 125% an x of 8.1 and 8.4 land on
+      // different DIPs while agreeing on 8 here - and the suppressed send
+      // would leave the native tile permanently short of its final position.
+      // Sub-pixel jitter is cheap to forward: main coalesces identical DIP
+      // rects itself (`BrowserViewGeometry.applyBounds`), and an idle tile
+      // reports byte-identical rects, so it still produces zero IPC.
+      if (lastSentBounds !== null && boundsAreEqual(lastSentBounds, bounds)) {
         return;
       }
       lastSentBounds = bounds;
@@ -218,14 +231,14 @@ function intersectRects(
   };
 }
 
-function roundedBoundsAreEqual(
+function boundsAreEqual(
   first: BrowserViewBounds,
   second: BrowserViewBounds,
 ): boolean {
   return (
-    Math.round(first.x) === Math.round(second.x) &&
-    Math.round(first.y) === Math.round(second.y) &&
-    Math.round(first.width) === Math.round(second.width) &&
-    Math.round(first.height) === Math.round(second.height)
+    first.x === second.x &&
+    first.y === second.y &&
+    first.width === second.width &&
+    first.height === second.height
   );
 }

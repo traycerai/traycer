@@ -292,7 +292,11 @@ export class BrowserViewEntryFactory {
     const reserved = this.chords.match(input);
     if (reserved !== null) {
       event.preventDefault();
-      this.chords.dispatch(entry.surface, reserved);
+      // Every reserved chord is one-shot - holding Cmd+T at ~25 Hz would open
+      // (and split for) a tab per repeat - but the repeat is still CLAIMED
+      // above, or it walks straight into the menu equivalent while the first
+      // press's asynchronous close is still in flight.
+      if (!input.isAutoRepeat) this.chords.dispatch(entry.surface, reserved);
       return;
     }
     if (!(input.control || input.meta || input.shift || input.alt)) return;

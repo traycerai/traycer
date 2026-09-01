@@ -204,7 +204,11 @@ describe("useBrowserViewBoundsBridge", () => {
     expect(harness.sentBounds).toEqual([]);
   });
 
-  it("sends nothing for sub-pixel jitter that rounds to the same native rect", () => {
+  it("forwards sub-pixel movement, which main rounds in DIP space", () => {
+    // Rounding here would round in CSS space, before main has multiplied by
+    // the window zoom factor - at 125% an x of 8.1 and 8.4 are different DIPs
+    // while agreeing on 8 in CSS px, so suppressing the send would strand the
+    // native tile. Main coalesces identical DIP rects itself.
     const harness = renderBridge(true);
     harness.sentBounds.length = 0;
 
@@ -213,7 +217,11 @@ describe("useBrowserViewBoundsBridge", () => {
       flushFrames();
     });
 
-    expect(harness.sentBounds).toEqual([]);
+    expect(harness.sentBounds).toHaveLength(1);
+    expect(harness.sentBounds[0]?.bounds.x).toBe(8.1);
+    expect(harness.sentBounds[0]?.bounds.y).toBe(12.2);
+    expect(harness.sentBounds[0]?.bounds.width).toBeCloseTo(399.9, 6);
+    expect(harness.sentBounds[0]?.bounds.height).toBeCloseTo(300.1, 6);
   });
 
   it("reports only the part a clipping ancestor leaves visible", () => {

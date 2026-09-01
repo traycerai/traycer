@@ -561,6 +561,39 @@ describe("<BrowserOverlayCoordinator />", () => {
     overlay.remove();
   });
 
+  it("retries an overlay whose occlusion matched only SOME of its tiles", async () => {
+    // A partial match leaves the unmatched tile live under the overlay. The
+    // signature stayed latched on any nonzero count, so the next layout
+    // notification computed the same signature and returned early.
+    const bridge = new FakeBrowserViewBridge();
+    bridge.matchedCountOverride = 1;
+    registerTestBrowserOverlayTile({
+      key: BASE_KEY,
+      rect: rect(0, 0, 100, 100),
+    });
+    registerTestBrowserOverlayTile({
+      key: { ...BASE_KEY, tileInstanceId: "tile-2" },
+      rect: rect(0, 0, 100, 100),
+    });
+    const overlay = appendOverlay("command-palette", rect(20, 20, 20, 20));
+
+    renderBrowserOverlayCoordinator(bridge);
+    await waitFor(() => {
+      expect(bridge.occludeCalls).toHaveLength(1);
+    });
+    expect(bridge.occludeCalls[0]?.tiles).toHaveLength(2);
+
+    bridge.matchedCountOverride = null;
+    act(() => {
+      overlay.setAttribute("data-state", "open");
+    });
+
+    await waitFor(() => {
+      expect(bridge.occludeCalls).toHaveLength(2);
+    });
+    overlay.remove();
+  });
+
   it("occludes through the native browser bridge", async () => {
     const bridge = new FakeBrowserViewBridge();
     registerTestBrowserOverlayTile({
