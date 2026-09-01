@@ -738,6 +738,37 @@ export const HOST_METHOD_POLL_TABLE = {
   "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
   "host.directory.list": { ...LATEST_SCHEDULING, poll: null },
+  "host.fileCopy.start": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileCopy.status": { ...LATEST_SCHEDULING, poll: null },
+  "host.fileCopy.cancel": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.enumerate": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.open": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.readChunk": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.close": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "host.oneOffShell.run": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

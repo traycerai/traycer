@@ -4,6 +4,13 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
 import {
   hostDirectoryListV10,
+  hostFileCopyCancelV10,
+  hostFileCopyStartV10,
+  hostFileCopyStatusV10,
+  hostFileTransferCloseV10,
+  hostFileTransferEnumerateV10,
+  hostFileTransferOpenV10,
+  hostFileTransferReadChunkV10,
   hostOneOffShellRunV10,
   hostResolveRepoPathsV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
@@ -25,6 +32,13 @@ const NEW_METHODS = [
   hostResolveRepoPathsV10.method,
   hostOneOffShellRunV10.method,
   hostDirectoryListV10.method,
+  hostFileCopyStartV10.method,
+  hostFileCopyStatusV10.method,
+  hostFileCopyCancelV10.method,
+  hostFileTransferEnumerateV10.method,
+  hostFileTransferOpenV10.method,
+  hostFileTransferReadChunkV10.method,
+  hostFileTransferCloseV10.method,
 ] as const;
 
 describe("host-agent capability contracts", () => {
@@ -84,5 +98,73 @@ describe("host-agent capability contracts", () => {
         identity: { kind: "workspace" },
       }).success,
     ).toBe(false);
+  });
+
+  it("represents same-host copy without a sentinel and defaults overwrite mode", () => {
+    expect(
+      hostFileCopyStartV10.requestSchema.parse({
+        sourceHostId: null,
+        sourcePath: "/source",
+        destinationPath: "/destination",
+        exclude: [],
+      }),
+    ).toEqual({
+      sourceHostId: null,
+      sourcePath: "/source",
+      destinationPath: "/destination",
+      exclude: [],
+      overwrite: "overwrite",
+    });
+  });
+
+  it("strips byte-carrying fields from enumeration entries", () => {
+    const parsed = hostFileTransferEnumerateV10.responseSchema.parse({
+      entries: [
+        {
+          kind: "file",
+          relativePath: "src/index.ts",
+          mode: 0o644,
+          mtimeMs: 1_700_000_000_000,
+          sizeBytes: 3,
+          bytesBase64: "YWJj",
+        },
+      ],
+      nextCursor: null,
+      content: "MUST-NOT-SURVIVE",
+    });
+
+    expect(parsed.entries[0]).not.toHaveProperty("bytesBase64");
+    expect(parsed).not.toHaveProperty("content");
+  });
+
+  it("strips byte-carrying fields from the terminal manifest", () => {
+    const parsed = hostFileCopyStatusV10.responseSchema.parse({
+      state: "completed",
+      progress: { filesCompleted: 1, bytesTransferred: 3 },
+      manifest: {
+        summary: {
+          filesCopied: 1,
+          directoriesCreated: 0,
+          symlinksCreated: 0,
+          bytesCopied: 3,
+          replacements: 0,
+          skippedExisting: 0,
+        },
+        failureCount: 0,
+        failures: [],
+        failuresOmitted: 0,
+        skippedUnsafeSymlinkCount: 0,
+        skippedUnsafeSymlinks: [],
+        skippedUnsafeSymlinksOmitted: 0,
+        bytesBase64: "YWJj",
+        content: "MUST-NOT-SURVIVE",
+      },
+    });
+
+    if (parsed.state !== "completed") {
+      throw new Error("expected completed copy status");
+    }
+    expect(parsed.manifest).not.toHaveProperty("bytesBase64");
+    expect(parsed.manifest).not.toHaveProperty("content");
   });
 });

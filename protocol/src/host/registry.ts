@@ -317,6 +317,13 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import {
   hostDirectoryListV10,
+  hostFileCopyCancelV10,
+  hostFileCopyStartV10,
+  hostFileCopyStatusV10,
+  hostFileTransferCloseV10,
+  hostFileTransferEnumerateV10,
+  hostFileTransferOpenV10,
+  hostFileTransferReadChunkV10,
   hostOneOffShellRunV10,
   hostResolveRepoPathsV10,
 } from "@traycer/protocol/host/host-agent-capabilities";
@@ -7299,6 +7306,97 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: hostDirectoryListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileCopy.start": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileCopyStartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileCopy.status": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileCopyStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileCopy.cancel": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileCopyCancelV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileTransfer.enumerate": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileTransferEnumerateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileTransfer.open": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileTransferOpenV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileTransfer.readChunk": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileTransferReadChunkV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.fileTransfer.close": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostFileTransferCloseV10,
           upgradeFromPreviousVersion: null,
         },
       },

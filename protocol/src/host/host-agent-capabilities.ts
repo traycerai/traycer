@@ -136,3 +136,345 @@ export const hostDirectoryListV10 = defineRpcContract({
   requestSchema: hostDirectoryListRequestSchema,
   responseSchema: hostDirectoryListResponseSchema,
 });
+
+/**
+ * Cross-host copies are destination-pull jobs: the destination accepts this
+ * request, then moves bytes directly from the source without ever returning
+ * file content to the invoking agent. `sourceHostId: null` is the degenerate
+ * same-host case; it means "this destination host" rather than an invented
+ * sentinel id.
+ */
+export const hostFileCopyOverwriteSchema = z.enum([
+  "overwrite",
+  "skip-existing",
+]);
+export type HostFileCopyOverwrite = z.infer<typeof hostFileCopyOverwriteSchema>;
+
+export const hostFileCopyStartRequestSchema = z.object({
+  sourceHostId: z.string().min(1).nullable(),
+  sourcePath: z.string().min(1),
+  destinationPath: z.string().min(1),
+  exclude: z.array(z.string().min(1)),
+  overwrite: hostFileCopyOverwriteSchema.default("overwrite"),
+});
+export type HostFileCopyStartRequest = z.infer<
+  typeof hostFileCopyStartRequestSchema
+>;
+
+export const hostFileCopyStartResponseSchema = z.object({
+  jobId: z.string().min(1),
+});
+export type HostFileCopyStartResponse = z.infer<
+  typeof hostFileCopyStartResponseSchema
+>;
+
+export const hostFileCopyStartV10 = defineRpcContract({
+  method: "host.fileCopy.start",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostFileCopyStartRequestSchema,
+  responseSchema: hostFileCopyStartResponseSchema,
+});
+
+export const hostFileCopyProgressSchema = z.object({
+  filesCompleted: z.number().int().nonnegative(),
+  bytesTransferred: z.number().int().nonnegative(),
+});
+export type HostFileCopyProgress = z.infer<typeof hostFileCopyProgressSchema>;
+
+export const hostFileCopyFailureOperationSchema = z.enum([
+  "enumerate",
+  "open",
+  "read",
+  "create-directory",
+  "write",
+  "create-symlink",
+  "preserve-metadata",
+]);
+export type HostFileCopyFailureOperation = z.infer<
+  typeof hostFileCopyFailureOperationSchema
+>;
+
+export const hostFileCopyFailureSchema = z.object({
+  relativePath: z.string(),
+  operation: hostFileCopyFailureOperationSchema,
+  message: z.string(),
+});
+export type HostFileCopyFailure = z.infer<typeof hostFileCopyFailureSchema>;
+
+export const hostFileCopySkippedUnsafeSymlinkSchema = z.object({
+  relativePath: z.string(),
+  target: z.string(),
+});
+export type HostFileCopySkippedUnsafeSymlink = z.infer<
+  typeof hostFileCopySkippedUnsafeSymlinkSchema
+>;
+
+/**
+ * A terminal manifest keeps successful work aggregate-only and samples at
+ * most this many failures or unsafe symlinks. A wholesale tree failure must
+ * still produce a usable status response instead of recreating the unbounded
+ * agent-context payload this copy surface replaces.
+ */
+export const HOST_FILE_COPY_MANIFEST_ITEM_LIMIT = 200;
+
+export const hostFileCopyManifestSummarySchema = z.object({
+  filesCopied: z.number().int().nonnegative(),
+  directoriesCreated: z.number().int().nonnegative(),
+  symlinksCreated: z.number().int().nonnegative(),
+  bytesCopied: z.number().int().nonnegative(),
+  replacements: z.number().int().nonnegative(),
+  skippedExisting: z.number().int().nonnegative(),
+});
+export type HostFileCopyManifestSummary = z.infer<
+  typeof hostFileCopyManifestSummarySchema
+>;
+
+/**
+ * `failureCount` and `skippedUnsafeSymlinkCount` are exact. Their item arrays
+ * are separately capped samples, with the omitted counts explicit, because
+ * deriving totals from an unbounded item list would make large failures
+ * impossible to report through one unary status response.
+ */
+export const hostFileCopyManifestSchema = z.object({
+  summary: hostFileCopyManifestSummarySchema,
+  failureCount: z.number().int().nonnegative(),
+  failures: z
+    .array(hostFileCopyFailureSchema)
+    .max(HOST_FILE_COPY_MANIFEST_ITEM_LIMIT),
+  failuresOmitted: z.number().int().nonnegative(),
+  skippedUnsafeSymlinkCount: z.number().int().nonnegative(),
+  skippedUnsafeSymlinks: z
+    .array(hostFileCopySkippedUnsafeSymlinkSchema)
+    .max(HOST_FILE_COPY_MANIFEST_ITEM_LIMIT),
+  skippedUnsafeSymlinksOmitted: z.number().int().nonnegative(),
+});
+export type HostFileCopyManifest = z.infer<typeof hostFileCopyManifestSchema>;
+
+const hostFileCopyActiveStatusFields = {
+  progress: hostFileCopyProgressSchema,
+} as const;
+
+const hostFileCopyTerminalStatusFields = {
+  ...hostFileCopyActiveStatusFields,
+  manifest: hostFileCopyManifestSchema,
+} as const;
+
+/**
+ * `unknown-job` is the honest post-restart answer: jobs and their registry
+ * are intentionally in-memory, so the host cannot distinguish a job that
+ * died in flight from an expired or invalid id. Callers interpret it as
+ * died-or-expired and may retry. A durable `died-in-flight` tombstone was
+ * rejected because it would introduce exactly the restart persistence this
+ * v1 design keeps out of scope. Unlike a known terminal state, there is no
+ * progress or manifest left to return for an unknown id.
+ */
+export const hostFileCopyStatusResponseSchema = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("queued"),
+    ...hostFileCopyActiveStatusFields,
+  }),
+  z.object({
+    state: z.literal("running"),
+    ...hostFileCopyActiveStatusFields,
+  }),
+  z.object({
+    state: z.literal("completed"),
+    ...hostFileCopyTerminalStatusFields,
+  }),
+  z.object({
+    state: z.literal("failed"),
+    ...hostFileCopyTerminalStatusFields,
+  }),
+  z.object({
+    state: z.literal("cancelled"),
+    ...hostFileCopyTerminalStatusFields,
+  }),
+  z.object({
+    state: z.literal("unknown-job"),
+  }),
+]);
+export type HostFileCopyStatusResponse = z.infer<
+  typeof hostFileCopyStatusResponseSchema
+>;
+
+export const hostFileCopyStatusRequestSchema = z.object({
+  jobId: z.string().min(1),
+});
+export type HostFileCopyStatusRequest = z.infer<
+  typeof hostFileCopyStatusRequestSchema
+>;
+
+export const hostFileCopyStatusV10 = defineRpcContract({
+  method: "host.fileCopy.status",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostFileCopyStatusRequestSchema,
+  responseSchema: hostFileCopyStatusResponseSchema,
+});
+
+export const hostFileCopyCancelRequestSchema = z.object({
+  jobId: z.string().min(1),
+});
+export type HostFileCopyCancelRequest = z.infer<
+  typeof hostFileCopyCancelRequestSchema
+>;
+
+export const hostFileCopyCancelResponseSchema = z.object({
+  accepted: z.boolean(),
+});
+export type HostFileCopyCancelResponse = z.infer<
+  typeof hostFileCopyCancelResponseSchema
+>;
+
+export const hostFileCopyCancelV10 = defineRpcContract({
+  method: "host.fileCopy.cancel",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostFileCopyCancelRequestSchema,
+  responseSchema: hostFileCopyCancelResponseSchema,
+});
+
+/** Fixed source-walk page size: entry lists are bulk data too. */
+export const HOST_FILE_TRANSFER_ENUMERATE_PAGE_SIZE = 256;
+
+const hostFileTransferEntryMetadataFields = {
+  /** Empty string denotes the source root itself. */
+  relativePath: z.string(),
+  /** Permission and special mode bits; file-type bits are excluded. */
+  mode: z.number().int().nonnegative().max(0o7777),
+  mtimeMs: z.number().finite(),
+} as const;
+
+/**
+ * The source walk computes symlink safety against the transferred tree's
+ * boundary. `safety` is therefore an authoritative fact carried to the
+ * destination, not a hint for the destination to re-derive. Unsafe means an
+ * absolute target or `..` resolution escaping the transferred tree (rsync
+ * `--safe-links` semantics).
+ */
+export const hostFileTransferEntrySchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("file"),
+    ...hostFileTransferEntryMetadataFields,
+    sizeBytes: z.number().int().nonnegative(),
+  }),
+  z.object({
+    kind: z.literal("directory"),
+    ...hostFileTransferEntryMetadataFields,
+  }),
+  z.object({
+    kind: z.literal("symlink"),
+    ...hostFileTransferEntryMetadataFields,
+    target: z.string(),
+    safety: z.enum(["safe", "unsafe"]),
+  }),
+]);
+export type HostFileTransferEntry = z.infer<typeof hostFileTransferEntrySchema>;
+
+export const hostFileTransferEnumerateRequestSchema = z.object({
+  sourcePath: z.string().min(1),
+  exclude: z.array(z.string().min(1)),
+  cursor: z.string().min(1).nullable(),
+});
+export type HostFileTransferEnumerateRequest = z.infer<
+  typeof hostFileTransferEnumerateRequestSchema
+>;
+
+export const hostFileTransferEnumerateResponseSchema = z.object({
+  entries: z
+    .array(hostFileTransferEntrySchema)
+    .max(HOST_FILE_TRANSFER_ENUMERATE_PAGE_SIZE),
+  nextCursor: z.string().min(1).nullable(),
+});
+export type HostFileTransferEnumerateResponse = z.infer<
+  typeof hostFileTransferEnumerateResponseSchema
+>;
+
+export const hostFileTransferEnumerateV10 = defineRpcContract({
+  method: "host.fileTransfer.enumerate",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostFileTransferEnumerateRequestSchema,
+  responseSchema: hostFileTransferEnumerateResponseSchema,
+});
+
+export const hostFileTransferOpenRequestSchema = z.object({
+  sourcePath: z.string().min(1),
+  relativePath: z.string(),
+});
+export type HostFileTransferOpenRequest = z.infer<
+  typeof hostFileTransferOpenRequestSchema
+>;
+
+export const hostFileTransferOpenResponseSchema = z.object({
+  handleId: z.string().min(1),
+  sizeBytes: z.number().int().nonnegative(),
+});
+export type HostFileTransferOpenResponse = z.infer<
+  typeof hostFileTransferOpenResponseSchema
+>;
+
+export const hostFileTransferOpenV10 = defineRpcContract({
+  method: "host.fileTransfer.open",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostFileTransferOpenRequestSchema,
+  responseSchema: hostFileTransferOpenResponseSchema,
+});
+
+/**
+ * Maximum RAW bytes returned by one ranged read. The JSON unary envelope
+ * carries canonical base64, so 512 KiB raw expands to 699,052 characters
+ * (about 683 KiB) before JSON framing. Raise this only against the encoded
+ * size and transport budgets, never by reasoning from raw bytes alone.
+ */
+export const HOST_FILE_TRANSFER_MAX_CHUNK_BYTES = 512 * 1024;
+
+export const hostFileTransferReadChunkRequestSchema = z.object({
+  handleId: z.string().min(1),
+  offset: z.number().int().nonnegative(),
+  length: z.number().int().positive().max(HOST_FILE_TRANSFER_MAX_CHUNK_BYTES),
+});
+export type HostFileTransferReadChunkRequest = z.infer<
+  typeof hostFileTransferReadChunkRequestSchema
+>;
+
+/**
+ * This is deliberately not a reintroduction of `host.file.read`: the base64
+ * payload is available only on the host-to-host pull leg, after opening a
+ * bounded transfer handle, and is consumed by the destination copy engine.
+ * It is never projected into the agent-facing start/status/cancel surface or
+ * accepted as a tool argument, so the agent never holds or re-emits bytes.
+ */
+export const hostFileTransferReadChunkResponseSchema = z.object({
+  bytesBase64: z.base64(),
+  bytesRead: z.number().int().nonnegative(),
+  eof: z.boolean(),
+});
+export type HostFileTransferReadChunkResponse = z.infer<
+  typeof hostFileTransferReadChunkResponseSchema
+>;
+
+export const hostFileTransferReadChunkV10 = defineRpcContract({
+  method: "host.fileTransfer.readChunk",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostFileTransferReadChunkRequestSchema,
+  responseSchema: hostFileTransferReadChunkResponseSchema,
+});
+
+export const hostFileTransferCloseRequestSchema = z.object({
+  handleId: z.string().min(1),
+});
+export type HostFileTransferCloseRequest = z.infer<
+  typeof hostFileTransferCloseRequestSchema
+>;
+
+export const hostFileTransferCloseResponseSchema = z.object({
+  closed: z.boolean(),
+});
+export type HostFileTransferCloseResponse = z.infer<
+  typeof hostFileTransferCloseResponseSchema
+>;
+
+export const hostFileTransferCloseV10 = defineRpcContract({
+  method: "host.fileTransfer.close",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostFileTransferCloseRequestSchema,
+  responseSchema: hostFileTransferCloseResponseSchema,
+});
