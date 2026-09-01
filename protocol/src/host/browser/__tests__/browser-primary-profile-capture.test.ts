@@ -13,6 +13,7 @@ const CAPTURE_REQUEST = {
 const ELECTRON_LIFECYCLE_READY = {
   kind: "electronTabLifecycleReady",
   hasBinaryPayload: false,
+  coLocatedHostId: "host-1",
 } as const;
 
 const CAPTURED_RESPONSE = {
@@ -30,6 +31,7 @@ const CAPTURED_RESPONSE = {
         httpOnly: true,
         secure: true,
         sameSite: "Lax",
+        partitionKey: null,
       },
     ],
     origins: [
@@ -93,6 +95,93 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
     ).toBe(false);
   });
 
+  it("strips Chromium's unmodelled cookie fields instead of rejecting them", () => {
+    const parsed = browserSessionsClientFrameSchema.safeParse({
+      ...CAPTURED_RESPONSE,
+      storageState: {
+        ...CAPTURED_RESPONSE.storageState,
+        cookies: [
+          {
+            ...CAPTURED_RESPONSE.storageState.cookies[0],
+            _crHasCrossSiteAncestor: false,
+          },
+        ],
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    if (parsed.data.kind !== "primaryProfileCaptured") {
+      throw new Error("expected a primaryProfileCaptured frame");
+    }
+    expect(parsed.data.storageState?.cookies[0]).toEqual(
+      CAPTURED_RESPONSE.storageState.cookies[0],
+    );
+  });
+
+  it("carries a partitioned cookie's key rather than silently unpartitioning it", () => {
+    const parsed = browserSessionsClientFrameSchema.safeParse({
+      ...CAPTURED_RESPONSE,
+      storageState: {
+        ...CAPTURED_RESPONSE.storageState,
+        cookies: [
+          {
+            ...CAPTURED_RESPONSE.storageState.cookies[0],
+            partitionKey: "https://example.com",
+          },
+        ],
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    if (parsed.data.kind !== "primaryProfileCaptured") {
+      throw new Error("expected a primaryProfileCaptured frame");
+    }
+    expect(parsed.data.storageState?.cookies[0]?.partitionKey).toBe(
+      "https://example.com",
+    );
+  });
+
+  it("reads a cookie from a peer built before partitionKey as unpartitioned", () => {
+    // A required field here silently dropped every frame a pre-CHIPS peer sent
+    // - and every frame this side sent back to one - which read as an inert
+    // "+ Add browser" button rather than as a version skew.
+    const { partitionKey: _partitionKey, ...withoutPartitionKey } =
+      CAPTURED_RESPONSE.storageState.cookies[0];
+    const parsed = browserSessionsClientFrameSchema.safeParse({
+      ...CAPTURED_RESPONSE,
+      storageState: {
+        ...CAPTURED_RESPONSE.storageState,
+        cookies: [withoutPartitionKey],
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    if (parsed.data.kind !== "primaryProfileCaptured") {
+      throw new Error("expected a primaryProfileCaptured frame");
+    }
+    expect(parsed.data.storageState?.cookies[0]?.partitionKey).toBe(null);
+  });
+
+  it("rejects CDP's object partitionKey, which a producer must flatten first", () => {
+    // Modelled fields are validated, not stripped: an unflattened
+    // `{topLevelSite, hasCrossSiteAncestor}` fails the whole capture rather
+    // than quietly dropping the partition. Producers flatten to the string.
+    expect(
+      browserSessionsClientFrameSchema.safeParse({
+        ...CAPTURED_RESPONSE,
+        storageState: {
+          ...CAPTURED_RESPONSE.storageState,
+          cookies: [
+            {
+              ...CAPTURED_RESPONSE.storageState.cookies[0],
+              partitionKey: { topLevelSite: "https://example.com" },
+            },
+          ],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects primaryProfileCaptured without status", () => {
     const { status: _status, ...withoutStatus } = CAPTURED_RESPONSE;
     expect(
@@ -113,6 +202,30 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
     expect(
       browserSessionsClientFrameSchema.safeParse(withoutStorage).success,
     ).toBe(false);
+  });
+
+  it("round-trips primaryProfileCaptureAck back to the capture's requestId", () => {
+    // The desktop's quit flush waits on this ack, keyed by requestId. Mutation:
+    // dropping `requestId` from the variant, or sending it the client -> host
+    // direction (the ack is the HOST's durability answer, so an ack arriving
+    // from a client must not settle anyone's flush).
+    const ack = {
+      kind: "primaryProfileCaptureAck",
+      hasBinaryPayload: false,
+      requestId: CAPTURE_REQUEST.requestId,
+    } as const;
+    const parsed = browserSessionsServerFrameSchema.safeParse(ack);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    if (parsed.data.kind !== "primaryProfileCaptureAck") {
+      throw new Error("expected a primaryProfileCaptureAck frame");
+    }
+    expect(parsed.data.requestId).toBe(CAPTURE_REQUEST.requestId);
+    expect(browserSessionsClientFrameSchema.safeParse(ack).success).toBe(false);
+    const { requestId: _requestId, ...withoutId } = ack;
+    expect(browserSessionsServerFrameSchema.safeParse(withoutId).success).toBe(
+      false,
+    );
   });
 
   it("advertises the new frame kinds on the browser.sessions schemas", () => {

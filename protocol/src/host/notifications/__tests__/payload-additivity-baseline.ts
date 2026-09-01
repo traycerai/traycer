@@ -163,6 +163,18 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
       "interviewBlockId",
     ],
   },
+  browser_human_needed: {
+    type: "object",
+    properties: {
+      kind: { type: "string", const: "browser_human_needed" },
+      epicId: { type: "string", minLength: 1 },
+      chatId: { type: "string", minLength: 1 },
+      sessionId: { type: "string", minLength: 1 },
+      tabId: { type: "string", minLength: 1 },
+      reason: { type: "string", minLength: 1 },
+    },
+    required: ["kind", "epicId", "chatId", "sessionId", "tabId", "reason"],
+  },
   worktree_deletion: {
     type: "object",
     properties: {

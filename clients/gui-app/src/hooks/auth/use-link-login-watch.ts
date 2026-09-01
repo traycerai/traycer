@@ -156,7 +156,7 @@ function deadKindFromStatus(
 }
 
 /**
- * Owns the Link-a-phone panel's code lifecycle: rotates the public code
+ * Owns the Link mobile app panel's code lifecycle: rotates the public code
  * while nothing is claimed, watches THE displayed code (the server's
  * one-live-code policy makes it the only claimable one), pauses rotation the
  * moment its claim appears, and reports external death of the displayed

@@ -89,13 +89,13 @@ keyboard, and is still the end of a pairing that shows the code.
 - **The Keybindings SECTION** - chord capture is `window` `keydown` only
   (`chord-capture-core.tsx`): a tap arms the chip to "Press chord…" and nothing
   can commit it, and a binding clears only with Backspace.
-- **The Link a phone SECTION** - the one entry here that is a PRODUCT call
+- **The Link mobile app SECTION** - the one entry here that is a PRODUCT call
   rather than a capability limit, and the distinction is worth keeping. The
   panel DISPLAYS a QR and a one-time code for another device to read, and in
   the mobile app that device is the one holding the panel: the phone is the
   SCANNER (`layout/header/sign-in/link-code-sign-in.tsx` redeems a code this
-  panel mints, and its own copy says "On your desktop, open Settings → Link a
-  phone"). A phone _could_ show the code to a second phone; linking that way is
+  panel mints, and its own copy says "On your desktop, open Settings → Link
+  mobile app"). A phone _could_ show the code to a second phone; linking that way is
   given up knowingly, because a pairing surface that names the wrong end of
   itself costs more than the case it serves.
 
@@ -117,7 +117,7 @@ omitted section's own `beforeLoad` redirects to `/settings/general` with
 section is persisted across launches), and the palette's `help:keybindings`
 row, which is dropped rather than left as the one entry point that routes
 around the rest. Only Keybindings needs that last one; nothing navigates
-directly to Link a phone, so it gets no machinery it does not need.
+directly to Link mobile app, so it gets no machinery it does not need.
 
 The gate is by SHELL, not by attached hardware: an iPad running the mobile app
 with a keyboard paired loses the section, which is the accepted cost of

@@ -1,8 +1,5 @@
 import type { Event, Input, RenderProcessGoneDetails, Result } from "electron";
-import type {
-  BrowserViewElectronTabHandoffChange,
-  BrowserViewStatus,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
 import type {
   BrowserViewPopupWindow,
@@ -44,10 +41,7 @@ interface BrowserViewEntryFactoryOptions {
     reason: string | null,
   ) => void;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
-  readonly closeEntry: (
-    entry: BrowserViewEntry,
-    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
-  ) => void;
+  readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
 
 /**
@@ -76,10 +70,7 @@ export class BrowserViewEntryFactory {
     reason: string | null,
   ) => void;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
-  private readonly closeEntry: (
-    entry: BrowserViewEntry,
-    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
-  ) => void;
+  private readonly closeEntry: (entry: BrowserViewEntry) => void;
 
   constructor(options: BrowserViewEntryFactoryOptions) {
     this.createView = options.createView;
@@ -255,9 +246,12 @@ export class BrowserViewEntryFactory {
   ): void {
     this.annotations.end(entry, "crash");
     this.overlay.invalidateSnapshot(entry, "render-process-gone");
+    // A crashed guest is reported as a plain `dead` tab status and its native
+    // view is destroyed. There is nothing to capture from a gone renderer and
+    // nothing to hand off - the host re-materializes the durable tab later.
     this.setStatus(entry, "dead", detail);
     this.geometry.applyVisibility(entry);
-    this.closeEntry(entry, "crash-no-capture");
+    this.closeEntry(entry);
   }
 
   private handleBeforeInputEvent(

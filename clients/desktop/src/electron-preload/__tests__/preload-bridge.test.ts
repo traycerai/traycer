@@ -4,6 +4,7 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
+import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browser/contracts";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
@@ -1026,9 +1027,9 @@ describe("preload new-capability wiring", () => {
       maxHeight: 360,
       quality: 70,
     };
-    const frames: string[] = [];
+    const frames: BrowserScreencastServerFrame[] = [];
     const subscription = bridge.browserView.onPipCaptureFrame((frame) => {
-      frames.push(frame.kind);
+      frames.push(frame);
     });
 
     await bridge.browserView.startPipCapture(input);
@@ -1036,6 +1037,21 @@ describe("preload new-capability wiring", () => {
       frame: {
         kind: "stalled",
         hasBinaryPayload: false,
+      },
+      jpegBytes: null,
+    });
+    // The video plane's frame kinds ride this bridge unfiltered (webrtc
+    // ticket 12, G5): the payload is the whole server-frame union, so a kind
+    // the bridge never heard of must still reach the renderer intact.
+    fakeElectron.emit(RunnerHostEvent.pipCaptureFrame, {
+      frame: {
+        kind: "agentCursor",
+        hasBinaryPayload: false,
+        type: "move",
+        epoch: 3,
+        normalizedX: 0.25,
+        normalizedY: 0.75,
+        label: "Agent",
       },
       jpegBytes: null,
     });
@@ -1054,7 +1070,19 @@ describe("preload new-capability wiring", () => {
       input,
     );
     expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.pipCaptureStop);
-    expect(frames).toEqual(["stalled"]);
+    expect(frames.map((frame) => frame.kind)).toEqual([
+      "stalled",
+      "agentCursor",
+    ]);
+    expect(frames.at(1)).toEqual({
+      kind: "agentCursor",
+      hasBinaryPayload: false,
+      type: "move",
+      epoch: 3,
+      normalizedX: 0.25,
+      normalizedY: 0.75,
+      label: "Agent",
+    });
   });
 });
 

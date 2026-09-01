@@ -256,6 +256,9 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     // The native save leg has its own suite (`file-save.test.ts`); `null` is
     // the dev-web answer, and keeps the plugin pair out of these tests.
     fileSave: null,
+    // Dev-web flavoured, matching `fileSave` above: a browser tab honours an
+    // image clipboard write.
+    canCopyImages: true,
   });
 }
 
@@ -324,6 +327,7 @@ function phoneRunner(input: {
     deviceDescriber: null,
     linkLoginDeepLinks: null,
     fileSave: null,
+    canCopyImages: true,
   });
 }
 
