@@ -2049,7 +2049,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   // the chat session keeps its captured copy visible until the existing
   // pending/accepted action lifecycle retires it. This overlay is deliberately
   // render-only: dispatch and commit capture continue reading `stagedIntent`.
-  const visibleIntent = stagedIntent ?? surface.inFlightWorktreeIntent;
+  const visibleIntent = stagedIntent ?? surface.inFlightWorktreeIntent ?? null;
   const setSuspendedWorkspacePaths = useWorktreeIntentStagingStore(
     (state) => state.setSuspendedWorkspacePaths,
   );

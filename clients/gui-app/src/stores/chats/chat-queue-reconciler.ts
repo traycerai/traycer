@@ -992,12 +992,16 @@ export function confirmAcceptedSendByMessageId(
     (candidate) =>
       candidate.action === "send" &&
       candidate.messageId === messageId &&
-      !candidate.confirmedByHost,
+      (!candidate.confirmedByHost || candidate.displayWorktreeIntent !== null),
   );
   if (accepted === undefined) return acceptedActions;
   return {
     ...acceptedActions,
-    [accepted.clientActionId]: { ...accepted, confirmedByHost: true },
+    [accepted.clientActionId]: {
+      ...accepted,
+      confirmedByHost: true,
+      displayWorktreeIntent: null,
+    },
   };
 }
 
@@ -1239,7 +1243,13 @@ function reconcileAcceptedSends(
         acceptedMessageIds.has(accepted.messageId) ||
         queueContainsPendingSend(input.queue, accepted.messageId, undefined)
       ) {
-        if (accepted.confirmedByHost) return next;
+        if (
+          accepted.confirmedByHost &&
+          (!acceptedMessageIds.has(accepted.messageId) ||
+            accepted.displayWorktreeIntent === null)
+        ) {
+          return next;
+        }
         return {
           ...next,
           confirmedAcceptedActions: {
@@ -1247,6 +1257,9 @@ function reconcileAcceptedSends(
             [accepted.clientActionId]: {
               ...accepted,
               confirmedByHost: true,
+              displayWorktreeIntent: acceptedMessageIds.has(accepted.messageId)
+                ? null
+                : accepted.displayWorktreeIntent,
             },
           },
         };
@@ -1767,6 +1780,14 @@ export function addAcceptedAction(
         accountContext: pending.accountContext,
         deliveryPolicy: pending.deliveryPolicy,
         restoreWorktreeIntent: pending.restoreWorktreeIntent,
+        // Queue confirmation deliberately keeps this display copy: queued
+        // sends are accepted before their deferred worktree setup begins.
+        // Transcript confirmation (or an edit ack, which follows setup)
+        // retires it while leaving the recovery tuple intact.
+        displayWorktreeIntent:
+          pending.action === "editUserMessage" || confirmedByHost
+            ? null
+            : pending.displayWorktreeIntent,
         connectionEpoch: pending.connectionEpoch,
         confirmedByHost,
       },

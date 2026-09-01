@@ -2712,7 +2712,6 @@ describe("createChatSessionStore", () => {
       return dispatchedWorktreeIntentForDisplay(
         state.pendingActions,
         state.acceptedActions,
-        state.messages,
         consumedClientActionId,
       );
     };
@@ -2755,6 +2754,12 @@ describe("createChatSessionStore", () => {
     // Host ordering guarantees the replacement binding was published before
     // the message entered the transcript, so retained action bookkeeping must
     // no longer override it.
+    expect(displayIntent()).toBeNull();
+    // Windowed transcript eviction must not resurrect the overlay. Accepted
+    // action records intentionally outlive hydrated rows for recovery, so the
+    // display lifetime is recorded on the action rather than re-derived from
+    // the current transcript window.
+    harness.handle.store.setState({ messages: [] });
     expect(displayIntent()).toBeNull();
   });
 

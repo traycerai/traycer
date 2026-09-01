@@ -350,6 +350,12 @@ export interface PendingChatAction {
    */
   readonly restoreWorktreeIntent: WorktreeIntent | null;
   /**
+   * Render-only copy of the consumed worktree choice. Unlike the restore copy,
+   * this is retired once the host records the message, so retained action
+   * bookkeeping cannot mask a newer binding after transcript-window eviction.
+   */
+  readonly displayWorktreeIntent: WorktreeIntent | null;
+  /**
    * Staging revision immediately after the send consumes its selection. A
    * rejection restores only when the user has made no newer picker choice.
    */
@@ -495,6 +501,8 @@ export interface AcceptedChatAction {
   readonly accountContext: AccountContext | null;
   readonly deliveryPolicy: ChatQueueDeliveryPolicy | null;
   readonly restoreWorktreeIntent: WorktreeIntent | null;
+  /** See {@link PendingChatAction.displayWorktreeIntent}. */
+  readonly displayWorktreeIntent: WorktreeIntent | null;
   /**
    * The connection this send was DISPATCHED on, carried across the accepted
    * ack. Absence from a snapshot is only evidence against an earlier
@@ -4435,6 +4443,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.acceptedActions,
             frame.message.messageId,
           );
+          const pendingActions = releasePendingWorktreeIntentDisplayByMessageId(
+            state.pendingActions,
+            frame.message.messageId,
+          );
           // On the windowed line the record goes into the WINDOW instead (see
           // `takeLiveRecords`), and `messages` is republished from there - so
           // the existence check moves with it, because `state.messages` here
@@ -4446,6 +4458,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           ) {
             return {
               acceptedActions,
+              pendingActions,
               pendingUserMessages,
               queue: removeOptimisticQueuedItemByMessageId(
                 state.queue,
@@ -4455,6 +4468,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           }
           return {
             acceptedActions,
+            pendingActions,
             messages: [...state.messages, frame.message],
             pendingUserMessages,
             queue: removeOptimisticQueuedItemByMessageId(
@@ -5462,6 +5476,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             settings: input.settings,
             accountContext: frame.accountContext,
             restoreWorktreeIntent: worktreeIntent,
+            displayWorktreeIntent: worktreeIntent,
             deliveryPolicy: frame.deliveryPolicy,
             createdAt: Date.now(),
           },
@@ -5584,6 +5599,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
+            displayWorktreeIntent: null,
             // The DISPATCHED context, not a default. A Team-billed first
             // message that strands would otherwise report that it was going
             // to bill personal - a drift statement lying about the very thing
@@ -5690,6 +5706,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: null,
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
+            displayWorktreeIntent: worktreeIntent,
             accountContext: null,
             deliveryPolicy: null,
             createdAt: Date.now(),
@@ -5763,6 +5780,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
+            displayWorktreeIntent: null,
             accountContext: null,
             deliveryPolicy: null,
             createdAt: Date.now(),
@@ -6514,6 +6532,7 @@ function basicPending(
     sender: null,
     settings: null,
     restoreWorktreeIntent: null,
+    displayWorktreeIntent: null,
     accountContext: null,
     deliveryPolicy: null,
     createdAt: Date.now(),
@@ -6565,7 +6584,6 @@ export function projectQueueWithPendingCancellations(
 export function dispatchedWorktreeIntentForDisplay(
   pendingActions: Readonly<Record<string, PendingChatAction>>,
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
-  messages: ReadonlyArray<Message>,
   clientActionId: string | null,
 ): WorktreeIntent | null {
   if (clientActionId === null) return null;
@@ -6575,11 +6593,24 @@ export function dispatchedWorktreeIntentForDisplay(
   } else if (Object.hasOwn(acceptedActions, clientActionId)) {
     action = acceptedActions[clientActionId];
   }
-  if (action === null || action.restoreWorktreeIntent === null) return null;
-  if (action.messageId !== null && messageExists(messages, action.messageId)) {
-    return null;
-  }
-  return action.restoreWorktreeIntent;
+  return action?.displayWorktreeIntent ?? null;
+}
+
+function releasePendingWorktreeIntentDisplayByMessageId(
+  pendingActions: Readonly<Record<string, PendingChatAction>>,
+  messageId: string,
+): Readonly<Record<string, PendingChatAction>> {
+  const pending = Object.values(pendingActions).find(
+    (candidate) =>
+      candidate.action === "send" &&
+      candidate.messageId === messageId &&
+      candidate.displayWorktreeIntent !== null,
+  );
+  if (pending === undefined) return pendingActions;
+  return {
+    ...pendingActions,
+    [pending.clientActionId]: { ...pending, displayWorktreeIntent: null },
+  };
 }
 
 // The client action id of an in-flight (pending) or accepted-but-unresolved

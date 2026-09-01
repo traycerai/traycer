@@ -1527,7 +1527,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const inFlightChatWorktreeIntent = dispatchedWorktreeIntentForDisplay(
     state.pendingActions,
     state.acceptedActions,
-    state.messages,
     consumedWorktreeIntentClientActionId,
   );
   const stagedChatWorkspacePaths = useMemo<ReadonlySet<string>>(() => {
