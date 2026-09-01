@@ -1046,6 +1046,32 @@ export function createOpenEpicStore(
 
   let storeApi: StoreApi<OpenEpicState> | null = null;
   /**
+   * The worker's own dirty verdict, before main-only body refusals are folded
+   * into it.
+   *
+   * A rejected/dropped `body/update` leaves the live main-thread doc as the
+   * only proven holder of that edit. The worker cannot publish dirtiness for
+   * bytes it never accepted, so main latches the doc key below and ORs that
+   * fact into every later projection until the doc is retired after a full
+   * demote/replacement. Keeping the worker verdict separately is what lets
+   * that retirement restore the honest projected value instead of guessing
+   * that the rest of the replica is clean.
+   */
+  let workerReplicaIsDirty = false;
+  const refusedBodyUpdateDocKeys = new Set<string>();
+
+  function markBodyUpdateRefused(docKey: string): void {
+    if (refusedBodyUpdateDocKeys.has(docKey)) return;
+    refusedBodyUpdateDocKeys.add(docKey);
+    storeApi?.setState({ isDirty: true });
+  }
+
+  function retireRefusedBodyUpdate(docKey: string): void {
+    if (!refusedBodyUpdateDocKeys.delete(docKey)) return;
+    if (refusedBodyUpdateDocKeys.size > 0) return;
+    storeApi?.setState({ isDirty: workerReplicaIsDirty });
+  }
+  /**
    * Ids for pending attachment WAITS, unique per store.
    *
    * The worker keys its pending waits on this, and `attachment/cancel` names
@@ -1365,7 +1391,14 @@ export function createOpenEpicStore(
         "[open-epic] projection applied before the store attached",
       );
     }
-    const { bindingEpoch, ...projected } = patch;
+    const { bindingEpoch, ...workerProjected } = patch;
+    let projected = workerProjected;
+    if (projected.isDirty !== undefined) {
+      workerReplicaIsDirty = projected.isDirty;
+      if (refusedBodyUpdateDocKeys.size > 0) {
+        projected = { ...projected, isDirty: true };
+      }
+    }
     // ── Re-stabilise nested identity, at the grain the projector owns it ──
     //
     // The worker's projector re-allocates ONLY what changed - a rename mints a
@@ -1537,20 +1570,45 @@ export function createOpenEpicStore(
         bodyResidencyVersion: state.bodyResidencyVersion + 1,
       }));
     },
+    onDocRetired: (docKey) => {
+      // A lane body retires only after its full main-side state was accepted
+      // by the worker's demote, or after an authoritative replacement/drop.
+      // Either way main is no longer the sole holder of the refused edit, so
+      // this doc-local latch has reached its proof-based clearing point.
+      retireRefusedBodyUpdate(docKey);
+    },
     onLocalDocUpdate: (docKey, update) => {
-      // The lane's verdict is deliberately DISCARDED here. A refused body
-      // update is not a failed user action: the edit is already in main's
-      // live doc, and the bytes reach the host on the next materialize or
-      // demote cycle regardless. Surfacing it would put an error in front of
-      // someone whose typing worked.
+      // A lane-level transport refusal does NOT reach this caller as loss.
+      // The worker first applies the update to its tier; that tier marks the
+      // room dirty and either sends or queues the bytes, then answers `sent`
+      // because it accepted ownership. That is the lane-arm proof the old
+      // "next cycle regardless" comment was missing.
+      //
+      // `dropped` is different: the worker held no replica, so main's live doc
+      // is the only proven holder. A non-teardown handler rejection is the
+      // same ownership fact with no parsed outcome. Both latch this doc into
+      // `isDirty` until its full state crosses on demote or an authoritative
+      // replacement retires it. The edit remains visually successful; state
+      // and the log make the recovery obligation observable without turning
+      // typing into a rejected user action.
       void runtime.port
         .call("body/update", { docKey, update }, NO_TRANSFER)
+        .then((answer) => {
+          if (answer.outcome.kind !== "dropped") return;
+          markBodyUpdateRefused(docKey);
+          appLogger.error(
+            "[open-epic] body update refused by the runtime worker",
+            { docKey },
+            new Error(answer.outcome.reason),
+          );
+        })
         .catch((cause: unknown) => {
           // Teardown, not a failure: the session is going away and this edit
           // is already in main's live doc. Narrowed on the error type so a
           // real fault is still reported rather than being swallowed as "the
           // session closed".
           if (cause instanceof BridgeDisposedError) return;
+          markBodyUpdateRefused(docKey);
           // LOGGED, not rethrown. Rethrowing from inside a `.catch` returns a
           // freshly rejected promise, and this chain is `void`ed - so the
           // rethrow did not reach the console the comment above promised, it

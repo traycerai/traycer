@@ -3,15 +3,15 @@
  * `createMainThreadBodyDocStore({ onLocalDocUpdate: ... })`).
  *
  * That callback fires on every LOCAL Yjs edit to a resident artifact body and
- * posts it as `void runtime.port.call("body/update", ...).catch(...)`. The
- * verdict is deliberately discarded - a refused body update is not a failed
- * user action - but a `.catch` on a `void`ed chain that RETHROWS mints a new,
- * unhandled rejection instead of reaching a logger: nobody awaits the outer
- * chain, so the rethrow has no catcher. It fires once per keystroke, so one
- * broken worker handler used to produce one unhandled rejection per edit for
- * as long as the person kept typing. The fix logs via `appLogger.error`
- * instead of rethrowing, and leaves the `BridgeDisposedError` early-return
- * (teardown, not a fault) unchanged.
+ * posts it as `void runtime.port.call("body/update", ...)`. A rejected answer
+ * is not a failed user action, but it is observable state: the main-thread doc
+ * is still the only proven holder and must keep `isDirty` latched until that
+ * doc retires. The test also keeps the original unhandled-rejection pin: a
+ * `.catch` on a `void`ed chain that RETHROWS mints a new rejection nobody
+ * awaits. It fires once per keystroke, so one broken worker handler used to
+ * produce one unhandled rejection per edit for as long as the person kept
+ * typing. The fix logs via `appLogger.error` instead of rethrowing, and leaves
+ * the `BridgeDisposedError` early-return (teardown, not a fault) unchanged.
  *
  * Reached through the REAL `createOpenEpicStore`, over a REAL
  * `createMainBridgeEndpoint`/`createFakeBridgePair` pair - not a hand-typed
@@ -87,11 +87,12 @@ async function drainRejections(): Promise<void> {
 /**
  * A hand-written worker side over the fake pair: answers `body/materialize`
  * immediately (granted, empty doc), and hands `body/update` calls to the test
- * so it can choose per-call how the worker answers - the two arms this file
- * pins.
+ * so it can choose per-call how the worker answers - the dropped, rejected,
+ * and bridge-disposed arms this file pins.
  */
 function createWorkerSide(pair: FakeBridgePair): {
   readonly pendingBodyUpdateCallIds: number[];
+  respondBodyUpdateDropped(reason: string): void;
   respondBodyUpdateError(name: string, message: string): void;
   unsubscribe(): void;
 } {
@@ -131,6 +132,20 @@ function createWorkerSide(pair: FakeBridgePair): {
   });
   return {
     pendingBodyUpdateCallIds,
+    respondBodyUpdateDropped(reason): void {
+      const callId = pendingBodyUpdateCallIds.shift();
+      if (callId === undefined) {
+        throw new Error("no outstanding body/update call to answer");
+      }
+      pair.worker.post(
+        {
+          frame: "result",
+          callId,
+          result: { outcome: { kind: "dropped", reason } },
+        },
+        [],
+      );
+    },
     respondBodyUpdateError(name, message): void {
       const callId = pendingBodyUpdateCallIds.shift();
       if (callId === undefined) {
@@ -198,9 +213,9 @@ describe("the local body/update refusal's .catch (open-epic store.ts)", () => {
         throw new Error("artifact body did not become resident");
       }
 
-      // ── Arm 1: a genuine worker-side fault ─────────────────────────────
+      // ── Arm 1: a worker-side dropped answer ────────────────────────────
       typeInto(fragment, "typed");
-      worker.respondBodyUpdateError("Error", "worker handler blew up");
+      worker.respondBodyUpdateDropped("worker holds no replica");
       await drainRejections();
 
       expect(errorSpy).toHaveBeenCalledTimes(1);
@@ -209,10 +224,38 @@ describe("the local body/update refusal's .catch (open-epic store.ts)", () => {
         { docKey: ARTIFACT_ID },
         expect.any(Error),
       );
+      typeInto(fragment, "fault");
+      worker.respondBodyUpdateError("Error", "worker handler blew up");
+      await drainRejections();
+
+      // ── Arm 2: a rejected worker-side answer ───────────────────────────
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[open-epic] body update refused by the runtime worker",
+        { docKey: ARTIFACT_ID },
+        expect.any(Error),
+      );
+      // The edit remains visible in main's live doc, but the refusal is now
+      // observable as a recovery obligation rather than only as a log.
+      expect(handle.store.getState().isDirty).toBe(true);
+
+      // A later worker projection cannot erase the main-only refusal while the
+      // doc still exists. This is the class pin: projected `false` is only the
+      // worker's verdict, not proof that main's bytes crossed the bridge.
+      handle.projection.apply(
+        {
+          artifactRooms: {
+            stateByArtifactId: { [ARTIFACT_ID]: "ready" },
+          },
+          isDirty: false,
+        },
+        2,
+      );
+      expect(handle.store.getState().isDirty).toBe(true);
 
       errorSpy.mockClear();
 
-      // ── Arm 2 (CONTROL): the bridge disposed underneath the call ───────
+      // ── Arm 3 (CONTROL): the bridge disposed underneath the call ───────
       // Teardown, not a failure - the edit is already in main's live doc, so
       // this must NOT log. Without this half, an unconditional "always log"
       // would pass arm 1 and read identically to the fix.
@@ -232,6 +275,12 @@ describe("the local body/update refusal's .catch (open-epic store.ts)", () => {
       // `void`ed chain mints a fresh, unhandled rejection instead of
       // reaching the logger this test just pinned).
       expect(capture.seen).toEqual([]);
+
+      // Retirement is the proof-based clearing point. `handle.dispose()` drops
+      // the main body docs and invokes the sink's `onDocRetired`; because the
+      // worker verdict above was false, the latch can now restore false.
+      handle.dispose();
+      expect(handle.store.getState().isDirty).toBe(false);
     } finally {
       capture.stop();
       errorSpy.mockRestore();

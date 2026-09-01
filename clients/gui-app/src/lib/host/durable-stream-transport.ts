@@ -22,6 +22,21 @@ export interface DurableStreamTransport {
   readonly close: () => void;
 }
 
+/** A durable session transport whose owner can attribute its final close. */
+export interface AttributableDurableStreamTransport
+  extends DurableStreamTransport {
+  /**
+   * Same teardown, with a caller-authored diagnostic reason.
+   *
+   * Kept on the transport rather than achieved by closing `wsStreamClient`
+   * directly: wake, endpoint-change and availability wiring must be disposed
+   * BEFORE the socket closes, or a close notification can race live reconnect
+   * wiring. `close()` is the historical default for owners with no narrower
+   * attribution.
+   */
+  readonly closeWithReason: (reason: string) => void;
+}
+
 /**
  * Builds a LONG-LIVED host stream transport for a SESSION STORE to own across
  * its warm lifetime (not a React tile). This is the ONE place "durable stream =
@@ -85,7 +100,7 @@ export function openDurableStreamTransport(params: {
    * see {@link NamedHostRecoveryTarget}.
    */
   readonly notifyRecoveredForNamedHost: () => void;
-}): DurableStreamTransport {
+}): AttributableDurableStreamTransport {
   const wsStreamClient = buildHostStreamClient({
     target: params.target,
     endpoint: params.endpoint,
@@ -145,14 +160,18 @@ export function openDurableStreamTransport(params: {
     wsStreamClient.close("durable-transport-wiring-failed");
     throw cause;
   }
-  return {
-    wsStreamClient,
+  const closeWithReason = (reason: string): void => {
     // Dispose wake + endpoint-change wiring BEFORE the socket, so neither can
     // fire `reconnectAll` on a socket that is being torn down.
+    disposers.forEach((dispose) => dispose());
+    wsStreamClient.close(reason);
+  };
+  return {
+    wsStreamClient,
     close: () => {
-      disposers.forEach((dispose) => dispose());
-      wsStreamClient.close("durable-transport-closed");
+      closeWithReason("durable-transport-closed");
     },
+    closeWithReason,
   };
 }
 
