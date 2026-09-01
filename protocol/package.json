@@ -150,7 +150,7 @@
     "tldts": "7.4.10",
     "y-utility": "^0.1.4",
     "yjs": "^13.6.32",
-    "zod": "^4.4.3"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "catalog:",

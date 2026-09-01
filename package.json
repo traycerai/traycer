@@ -224,7 +224,7 @@
     "y-protocols": "^1.0.7",
     "yaml": "^2.9.0",
     "yjs": "^13.6.32",
-    "zod": "^4.5.4",
+    "zod": "4.4.3",
     "zustand": "^5.0.15"
   },
   "patchedDependencies": {
