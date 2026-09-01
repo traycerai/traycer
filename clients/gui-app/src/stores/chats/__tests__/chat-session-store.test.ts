@@ -53,6 +53,7 @@ import {
   MAX_ACCEPTED_CHAT_ACTION_RECORDS,
   MAX_ERROR_NOTICE_RECORDS,
   createChatSessionStore,
+  dispatchedWorktreeIntentForDisplay,
   projectQueueWithPendingCancellations,
   type ChatSessionStoreHandle,
   type SentChatMessageAction,
@@ -2635,7 +2636,8 @@ describe("createChatSessionStore", () => {
 
   it("attaches a staged worktree intent to the send frame and consumes it", () => {
     const harness = createHarness();
-    emitSnapshot(harness.callbacks(), "owner");
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
     const key: WorktreeStagingKey = {
       surface: "owner",
       hostId: "host-a",
@@ -2698,6 +2700,62 @@ describe("createChatSessionStore", () => {
     const pendingEchoes = harness.handle.store.getState().pendingUserMessages;
     expect(pendingEchoes).toHaveLength(1);
     expect(pendingEchoes[0]?.messageId).toBe(frame.messageId);
+
+    const stagingKeyId = worktreeStagingKeyString(key);
+    const consumedClientActionId =
+      useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[
+        stagingKeyId
+      ]?.clientActionId ?? null;
+    expect(consumedClientActionId).toBe(frame.clientActionId);
+    const displayIntent = (): WorktreeIntent | null => {
+      const state = harness.handle.store.getState();
+      return dispatchedWorktreeIntentForDisplay(
+        state.pendingActions,
+        state.acceptedActions,
+        state.messages,
+        consumedClientActionId,
+      );
+    };
+    expect(displayIntent()).toEqual(intent);
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: frame.clientActionId,
+      action: "send",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    // An ack does not end the bridge: queued sends can be accepted long before
+    // their deferred worktree creation begins.
+    expect(displayIntent()).toEqual(intent);
+
+    callbacks.onMessageAccepted({
+      kind: "messageAccepted",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      message: {
+        role: "user",
+        messageId: frame.messageId,
+        sender: { type: "user", userId: OWNER_ID },
+        message: {
+          kind: "user",
+          content: CONTENT,
+          browserAnnotations: [],
+        },
+        timestamp: 2,
+        sessionAnchor: null,
+      },
+    });
+    // Host ordering guarantees the replacement binding was published before
+    // the message entered the transcript, so retained action bookkeeping must
+    // no longer override it.
+    expect(displayIntent()).toBeNull();
   });
 
   it("restores a staged worktree intent when the send is rejected", () => {

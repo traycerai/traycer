@@ -6549,6 +6549,39 @@ export function projectQueueWithPendingCancellations(
   return items.length === queue.items.length ? queue : { ...queue, items };
 }
 
+/**
+ * The worktree choice owned by the dispatch that most recently consumed this
+ * chat's staging slot. This is a render-only bridge across the interval where
+ * the picker choice has left staging but the host has not yet published the
+ * replacement binding.
+ *
+ * The transcript message is the authoritative end of that interval: on an
+ * ordered connection the host publishes the replacement binding before
+ * `messageAccepted`, while queued sends do not enter the transcript until
+ * their deferred worktree setup has completed. Accepted action records may be
+ * retained after that point for recovery bookkeeping, so message presence is
+ * also what prevents a retained record from masking later binding changes.
+ */
+export function dispatchedWorktreeIntentForDisplay(
+  pendingActions: Readonly<Record<string, PendingChatAction>>,
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  messages: ReadonlyArray<Message>,
+  clientActionId: string | null,
+): WorktreeIntent | null {
+  if (clientActionId === null) return null;
+  let action: PendingChatAction | AcceptedChatAction | null = null;
+  if (Object.hasOwn(pendingActions, clientActionId)) {
+    action = pendingActions[clientActionId];
+  } else if (Object.hasOwn(acceptedActions, clientActionId)) {
+    action = acceptedActions[clientActionId];
+  }
+  if (action === null || action.restoreWorktreeIntent === null) return null;
+  if (action.messageId !== null && messageExists(messages, action.messageId)) {
+    return null;
+  }
+  return action.restoreWorktreeIntent;
+}
+
 // The client action id of an in-flight (pending) or accepted-but-unresolved
 // interview action for `blockId`, or null. Used both to refuse a duplicate
 // dispatch and to derive the UI busy gate for that block's card.

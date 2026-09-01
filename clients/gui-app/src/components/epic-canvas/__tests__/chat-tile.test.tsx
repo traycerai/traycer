@@ -31,6 +31,11 @@ interface ForkCreateRequest {
 const loadingSurfaceTestState = vi.hoisted(() => ({
   unresolvedWorkspaceRenderCount: 0,
 }));
+const workspaceSelectorTestState = vi.hoisted<{
+  inFlightWorktreeIntent: WorktreeIntent | null;
+}>(() => ({
+  inFlightWorktreeIntent: null,
+}));
 const forkCreateTestState = vi.hoisted(() => ({
   mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
   reset: vi.fn<() => void>(),
@@ -59,8 +64,13 @@ vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
   () => ({
     HostWorkspaceSelector: (props: {
-      readonly surface: { readonly bindingResolved: boolean };
+      readonly surface: {
+        readonly bindingResolved: boolean;
+        readonly inFlightWorktreeIntent: WorktreeIntent | null;
+      };
     }) => {
+      workspaceSelectorTestState.inFlightWorktreeIntent =
+        props.surface.inFlightWorktreeIntent;
       if (!props.surface.bindingResolved) {
         loadingSurfaceTestState.unresolvedWorkspaceRenderCount += 1;
       }
@@ -343,6 +353,7 @@ import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unar
 import type {
   WorktreeBinding,
   WorktreeFolderIntent,
+  WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   readStagedWorktreeIntent,
@@ -1215,6 +1226,7 @@ describe("<ChatTile />", () => {
     useComposerRunSettingsStore.getState().resetForTests();
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
+    workspaceSelectorTestState.inFlightWorktreeIntent = null;
     forkCreateTestState.mutate.mockReset();
     forkCreateTestState.reset.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
@@ -3711,6 +3723,11 @@ describe("<ChatTile />", () => {
     expect(frame.worktreeIntent?.entries[0]).toMatchObject({
       kind: "import",
       worktreePath: "/wt/a",
+    });
+    await waitFor(() => {
+      expect(workspaceSelectorTestState.inFlightWorktreeIntent).toEqual(
+        frame.worktreeIntent,
+      );
     });
   });
 

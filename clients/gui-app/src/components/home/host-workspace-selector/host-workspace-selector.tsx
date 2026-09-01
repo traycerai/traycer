@@ -190,6 +190,12 @@ type BoundOwnerSurface = {
   readonly hasActiveTurn: boolean;
   /** Display name used in teardown copy (agent title, chat title). */
   readonly ownerLabel: string;
+  /**
+   * Chat-only display overlay for a worktree intent already consumed by an
+   * outstanding send. It must never feed dispatch or commit capture; the chat
+   * session remains the owner of this intent's lifecycle.
+   */
+  readonly inFlightWorktreeIntent: WorktreeIntent | null;
   // The `workspacePath`s whose bound directory is gone on disk (host-computed,
   // delivered on the chat snapshot / `worktreeStateChanged` for chat and on
   // `worktree.getBinding` for terminal-agents). Drives the per-folder "missing"
@@ -2039,6 +2045,11 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const stagedIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[worktreeStagingKeyString(stagedKey)],
   );
+  // A live picker choice is authoritative. Once send consumes that choice,
+  // the chat session keeps its captured copy visible until the existing
+  // pending/accepted action lifecycle retires it. This overlay is deliberately
+  // render-only: dispatch and commit capture continue reading `stagedIntent`.
+  const visibleIntent = stagedIntent ?? surface.inFlightWorktreeIntent;
   const setSuspendedWorkspacePaths = useWorktreeIntentStagingStore(
     (state) => state.setSuspendedWorkspacePaths,
   );
@@ -2061,16 +2072,24 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     }
     return map;
   }, [stagedIntent]);
+  const visibleEntryByPath = useMemo(() => {
+    const map = new Map<string, WorktreeFolderIntent>();
+    if (visibleIntent === null) return map;
+    for (const entry of visibleIntent.entries) {
+      map.set(entry.workspacePath, entry);
+    }
+    return map;
+  }, [visibleIntent]);
   const pendingBranchByPath = useMemo(() => {
     const map = new Map<string, string>();
-    if (stagedIntent === undefined) return map;
-    for (const entry of stagedIntent.entries) {
+    if (visibleIntent === null) return map;
+    for (const entry of visibleIntent.entries) {
       if (entry.kind === "worktree" && entry.branch.name.length > 0) {
         map.set(entry.workspacePath, entry.branch.name);
       }
     }
     return map;
-  }, [stagedIntent]);
+  }, [visibleIntent]);
   const gitWorkspaces = useMemo(
     () => workspaces.filter((ws) => ws.resolvedAt !== null && ws.isGitRepo),
     [workspaces],
@@ -2799,8 +2818,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       const removePending = pendingRemovePaths.has(ws.workspacePath);
       const isPrimary = entry?.isPrimary ?? true;
       const stagedEntry = stagedEntryByPath.get(ws.workspacePath) ?? null;
+      const visibleEntry = visibleEntryByPath.get(ws.workspacePath) ?? null;
       const currentIntent =
-        stagedEntry ??
+        visibleEntry ??
         bindingEntryToFolderIntent(entry, ws.repoIdentifier, isPrimary);
       const branchDefault =
         defaultBranchByPath[ws.workspacePath] ?? EMPTY_DEFAULT_BRANCH;
@@ -2846,6 +2866,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       stagedEntryByPath,
       summariesByPath,
       surface.binding,
+      visibleEntryByPath,
     ],
   );
 

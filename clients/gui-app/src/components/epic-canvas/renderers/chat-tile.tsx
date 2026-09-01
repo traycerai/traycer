@@ -119,6 +119,7 @@ import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
+  dispatchedWorktreeIntentForDisplay,
   isWindowedTranscript,
   projectQueueWithPendingCancellations,
   type ChatSessionState,
@@ -1518,6 +1519,17 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const stagedChatWorktreeIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[chatWorktreeStagingKeyId],
   );
+  const consumedWorktreeIntentClientActionId = useWorktreeIntentStagingStore(
+    (s) =>
+      s.consumedForDispatchByKey[chatWorktreeStagingKeyId]?.clientActionId ??
+      null,
+  );
+  const inFlightChatWorktreeIntent = dispatchedWorktreeIntentForDisplay(
+    state.pendingActions,
+    state.acceptedActions,
+    state.messages,
+    consumedWorktreeIntentClientActionId,
+  );
   const stagedChatWorkspacePaths = useMemo<ReadonlySet<string>>(() => {
     if (stagedChatWorktreeIntent === undefined) {
       return EMPTY_WORKSPACE_PATH_SET;
@@ -2723,6 +2735,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           // would make sense for.
           hasActiveTurn: composerActiveTurnStatus !== null,
           ownerLabel: node.name,
+          inFlightWorktreeIntent: inFlightChatWorktreeIntent,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
@@ -2736,6 +2749,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       node.id,
       node.name,
       state.worktreeBinding,
+      inFlightChatWorktreeIntent,
       effectiveMissingPaths,
       state.snapshotLoaded,
       activeTurnStatus,
