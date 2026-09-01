@@ -33,6 +33,13 @@ export interface BrowserSessionsState {
   readonly lifecycle: BrowserSessionsLifecycle;
   /** True only after the current stream incarnation supplied its full snapshot. */
   readonly inventoryReady: boolean;
+  /**
+   * Can THIS client put a native Electron tab on this coordinator's host?
+   * See {@link canMaterializeElectronTab} - surfaces read it to decide whether
+   * a native branch is reachable for them at all, rather than inferring one
+   * from host-side facts that describe some other client's window.
+   */
+  readonly canMaterializeElectron: boolean;
   readonly items: readonly BrowserSessionInfo[];
   readonly errorMessage: string | null;
   readonly retry: () => void;
@@ -71,6 +78,29 @@ interface BrowserSessionsCoordinatorRuntime {
    */
   readonly desktopWindowId: string | null;
   readonly openTransport: (hostId: string) => DurableStreamTransport;
+}
+
+/**
+ * Can this client materialize an Electron tab on `hostId`?
+ *
+ * The client half of the host's `isCoLocatedLifecycleCandidate`: a native
+ * `browserView` bridge to place the tab in, and a host that is THIS machine's
+ * own - the host refuses the lifecycle election otherwise, and the transport
+ * vantage it actually decides on (`local-ws`) is exactly the one a client in
+ * that position reaches it over. A GUI attached to a remote host is a pure
+ * viewer, however capable its own shell is.
+ *
+ * Deliberately NOT gated on the stream handshake having completed:
+ * `electronTabLifecycleReady` is per connection, and a surface asking whether
+ * a native branch exists for it at all is asking a durable question. The
+ * per-connection half it would add is `inventoryReady`, which every such
+ * surface already reads.
+ */
+function canMaterializeElectronTab(
+  runtime: BrowserSessionsCoordinatorRuntime,
+  hostId: string,
+): boolean {
+  return runtime.browserView !== null && runtime.localHostId === hostId;
 }
 
 /** One outstanding request/response pair, keyed by its `requestId`. */
@@ -393,11 +423,27 @@ function createBrowserSessionsCoordinator(args: {
     patch: Partial<
       Pick<
         BrowserSessionsState,
-        "errorMessage" | "inventoryReady" | "items" | "lifecycle"
+        | "canMaterializeElectron"
+        | "errorMessage"
+        | "inventoryReady"
+        | "items"
+        | "lifecycle"
       >
     >,
   ): void => {
     publish({ ...coordinator.state, ...patch });
+  };
+
+  /**
+   * Republishes the Electron capability after `runtime` was swapped. A
+   * `browserView` swap restarts the stream and republishes it anyway, but a
+   * `localHostId` that only resolves later does not - and that is the ordinary
+   * case on a cold desktop start.
+   */
+  const publishElectronCapability = (): void => {
+    const capable = canMaterializeElectronTab(runtime, args.owner.hostId);
+    if (capable === coordinator.state.canMaterializeElectron) return;
+    patchState({ canMaterializeElectron: capable });
   };
 
   const activeChannel = (): BrowserSessionsActionChannel | null => {
@@ -490,6 +536,10 @@ function createBrowserSessionsCoordinator(args: {
       items: [],
       lifecycle: "connecting",
       inventoryReady: false,
+      canMaterializeElectron: canMaterializeElectronTab(
+        runtime,
+        args.owner.hostId,
+      ),
       errorMessage: null,
     });
     const transport = runtime.openTransport(args.owner.hostId);
@@ -756,6 +806,10 @@ function createBrowserSessionsCoordinator(args: {
       hostId: args.owner.hostId,
       lifecycle: "connecting",
       inventoryReady: false,
+      canMaterializeElectron: canMaterializeElectronTab(
+        args.runtime,
+        args.owner.hostId,
+      ),
       items: [],
       errorMessage: null,
       retry: restart,
@@ -787,6 +841,7 @@ function createBrowserSessionsCoordinator(args: {
       const browserViewChanged =
         runtime.browserView !== nextRuntime.browserView;
       runtime = nextRuntime;
+      publishElectronCapability();
       if (browserViewChanged) restart();
       else retryLifecycleReady();
     },
@@ -804,6 +859,7 @@ function createBrowserSessionsCoordinator(args: {
       const browserViewChanged =
         runtime.browserView !== nextRuntime.browserView;
       runtime = nextRuntime;
+      publishElectronCapability();
       if (browserViewChanged) restart();
       else retryLifecycleReady();
       return runtimes.size;

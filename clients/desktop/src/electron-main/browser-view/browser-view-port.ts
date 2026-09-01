@@ -153,6 +153,12 @@ export type BrowserViewInputModifier = "meta" | "control" | "shift" | "alt";
 export interface BrowserViewHostWebContents {
   on: NodeJS.EventEmitter["on"];
   off: NodeJS.EventEmitter["off"];
+  /**
+   * Move OS keyboard focus off a focused guest and onto the host renderer.
+   * Focusing a host DOM element is not enough by itself - the caret would
+   * render while keystrokes still went to the `WebContentsView`.
+   */
+  focus(): void;
   sendInputEvent(event: {
     readonly type: "keyDown";
     readonly keyCode: string;
