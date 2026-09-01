@@ -23,6 +23,7 @@ import type {
   BrowserViewFindRequest,
   BrowserViewFindStop,
   BrowserViewOpenTileRequest,
+  BrowserViewTileCommandEvent,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileKey,
   BrowserViewBridge,
@@ -50,6 +51,8 @@ function registerTestBrowserOverlayTile(input: {
 
 class FakeBrowserViewBridge implements BrowserViewBridge {
   readonly occludeCalls: BrowserViewOverlayOcclusion[] = [];
+  /** Forces the `matchedCount` main reports, so a miss can be simulated. */
+  matchedCountOverride: number | null = null;
   readonly releaseCalls: BrowserViewOverlayRelease[] = [];
   readonly paintAckCalls: string[] = [];
   private readonly snapshotInvalidationHandlers = new Set<
@@ -165,6 +168,7 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
         stale: false,
       })),
       restoredTiles: [],
+      matchedCount: this.matchedCountOverride ?? input.tiles.length,
     });
   }
 
@@ -227,6 +231,12 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
   }
 
   onOpenTileRequest(_handler: (change: BrowserViewOpenTileRequest) => void): {
+    dispose: () => void;
+  } {
+    return { dispose: () => undefined };
+  }
+
+  onTileCommand(_handler: (event: BrowserViewTileCommandEvent) => void): {
     dispose: () => void;
   } {
     return { dispose: () => undefined };
@@ -516,6 +526,37 @@ describe("<BrowserOverlayCoordinator />", () => {
     expect(getBrowserViewSnapshot(BASE_KEY)).toEqual({
       dataUrl: "data:image/png;base64,hover-card",
       stale: true,
+    });
+    overlay.remove();
+  });
+
+  it("retries an overlay whose occlusion matched no tile in main", async () => {
+    // The signature used to be recorded before the occlude resolved, so a
+    // scan that raced tile teardown ("no matching entries") was never retried
+    // and the tile stayed live under the overlay until it closed.
+    const bridge = new FakeBrowserViewBridge();
+    bridge.matchedCountOverride = 0;
+    registerTestBrowserOverlayTile({
+      key: BASE_KEY,
+      rect: rect(0, 0, 100, 100),
+    });
+    const overlay = appendOverlay("command-palette", rect(20, 20, 20, 20));
+
+    renderBrowserOverlayCoordinator(bridge);
+    await waitFor(() => {
+      expect(bridge.occludeCalls).toHaveLength(1);
+    });
+
+    bridge.matchedCountOverride = null;
+    act(() => {
+      overlay.setAttribute("data-state", "open");
+    });
+
+    await waitFor(() => {
+      expect(bridge.occludeCalls).toHaveLength(2);
+    });
+    expect(bridge.occludeCalls[1]).toMatchObject({
+      overlayId: "command-palette",
     });
     overlay.remove();
   });

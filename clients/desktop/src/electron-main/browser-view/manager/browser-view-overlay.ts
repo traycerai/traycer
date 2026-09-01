@@ -79,6 +79,7 @@ export class BrowserViewOverlay {
         (snapshot): snapshot is BrowserViewOverlaySnapshot => snapshot !== null,
       ),
       restoredTiles,
+      matchedCount,
     };
   }
 

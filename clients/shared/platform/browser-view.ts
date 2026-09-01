@@ -173,6 +173,29 @@ export interface BrowserViewOpenTileRequest extends BrowserViewTileKey {
   readonly url: string;
 }
 
+/**
+ * What a reserved chord does to the tile that owns keyboard focus, when the
+ * chord is BROWSER-scoped rather than app-scoped. Main claims the keystroke
+ * from the guest page and names one of these back to the renderer, which runs
+ * it against the focused tile's own session tab.
+ */
+export type BrowserViewTileCommand = "closeTab" | "newTab" | "focusAddressBar";
+
+/**
+ * One row of the guest-focused input policy: which chord, and what it means
+ * while a native browser tile has focus. `command: null` is the app-forwarded
+ * case - main replays the keystroke into the host renderer so the app's own
+ * keybinding runs, exactly as if the guest never had focus.
+ */
+export interface BrowserViewReservedChord {
+  readonly token: string;
+  readonly command: BrowserViewTileCommand | null;
+}
+
+export interface BrowserViewTileCommandEvent extends BrowserViewTileKey {
+  readonly command: BrowserViewTileCommand;
+}
+
 export interface BrowserViewOverlayOcclusion {
   readonly overlayId: string;
   readonly tiles: readonly BrowserViewTileKey[];
@@ -190,6 +213,13 @@ export interface BrowserViewOverlaySnapshot extends BrowserViewTileKey {
 export interface BrowserViewOverlayOcclusionResult {
   readonly snapshots: readonly BrowserViewOverlaySnapshot[];
   readonly restoredTiles: readonly BrowserViewTileKey[];
+  /**
+   * How many of the requested tiles the main process actually knows. Zero
+   * means the occlusion did not take at all (the scan raced tile teardown or
+   * a surface rebind), so the caller must be able to try that overlay again
+   * instead of remembering it as done.
+   */
+  readonly matchedCount: number;
 }
 
 export interface BrowserViewOverlayReleaseResult {
@@ -302,7 +332,7 @@ export type {
 
 export interface BrowserViewBridge {
   updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
-  setReservedChords(tokens: readonly string[]): Promise<void>;
+  setReservedChords(chords: readonly BrowserViewReservedChord[]): Promise<void>;
   findInPage(input: BrowserViewFindRequest): Promise<void>;
   stopFindInPage(input: BrowserViewFindStop): Promise<void>;
   cancelDownload(input: BrowserViewDownloadCancel): Promise<void>;
@@ -403,6 +433,10 @@ export interface BrowserViewBridge {
     dispose: () => void;
   };
   onOpenTileRequest(handler: (change: BrowserViewOpenTileRequest) => void): {
+    dispose: () => void;
+  };
+  /** A browser-scoped reserved chord fired inside a focused guest page. */
+  onTileCommand(handler: (event: BrowserViewTileCommandEvent) => void): {
     dispose: () => void;
   };
   onSnapshotInvalidated(

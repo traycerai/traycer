@@ -123,7 +123,21 @@ function BrowserOverlayCoordinator(props: {
         ) {
           return;
         }
+        // Latched up front so the in-flight call is not repeated by the next
+        // scan, and dropped again whenever the occlusion did not take: a
+        // rejected call, or one that matched no tile in main (a scan racing
+        // tile teardown or rebind). Keeping the signature there would make
+        // that miss permanent - the tile would stay live under the overlay
+        // until the overlay closed.
         activeSignaturesByOverlayId.set(target.overlayId, target.signature);
+        const forgetSignature = (): void => {
+          if (
+            activeSignaturesByOverlayId.get(target.overlayId) ===
+            target.signature
+          ) {
+            activeSignaturesByOverlayId.delete(target.overlayId);
+          }
+        };
         void browserView
           .occludeForOverlay({
             overlayId: target.overlayId,
@@ -131,13 +145,20 @@ function BrowserOverlayCoordinator(props: {
           })
           .then((result) => {
             if (disposed) return;
+            if (result.matchedCount === 0) {
+              forgetSignature();
+              return;
+            }
             result.snapshots.forEach((snapshot) => {
               setBrowserViewSnapshot(snapshot);
             });
             applyRestoredTiles(result.restoredTiles);
+            void ackWhenPainted(target.overlayId);
           })
-          .then(() => ackWhenPainted(target.overlayId))
-          .catch(ignoreError);
+          .catch((error: unknown) => {
+            forgetSignature();
+            ignoreError(error);
+          });
       });
     };
 
