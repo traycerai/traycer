@@ -274,6 +274,31 @@ export type BrowserPrimaryProfileDelta = z.infer<
 export const BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_COOKIES = 512;
 
 /**
+ * `primaryProfileObserved` frames one host may deliver in a single burst - the
+ * attach replay, which is the only place a host has a whole SET of domains to
+ * offer at once rather than the one domain a capture just changed.
+ *
+ * It is ONE number because it is a two-sided contract whose ends fail in
+ * opposite directions when they disagree. The host paces its replay to stay at
+ * or under it; the desktop's rate limiter (universal-sign-in ticket 03) must
+ * admit a burst of exactly this size before it begins refusing. A limiter set
+ * lower silently truncates a legitimate reconnect - the user stays signed out
+ * on the very machine that asked for the replay, with nothing on either end
+ * saying why - and a host pacing higher reaches the same outcome from the
+ * other side.
+ *
+ * A host holding more marked domains than this sends the first burst and
+ * leaves the rest for the next attach. That is safe precisely because the
+ * replay is stateless and idempotent (decision 5): a domain that did not fit
+ * is not lost, only later.
+ *
+ * 64 is far above a realistic replay - a user's agents sign into a handful of
+ * sites, not dozens - and far below what would read as a flood to a desktop
+ * applying each frame through Chromium's own `cookies.set`.
+ */
+export const BROWSER_PRIMARY_PROFILE_OBSERVED_MAX_BURST = 64;
+
+/**
  * Per-domain entries one `primaryProfileForgetLedger` digest may carry. The
  * digest is a whole-ledger replacement rather than a delta, so the desktop
  * trims to this bound by first dropping the entries `forgetAllAt` already
