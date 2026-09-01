@@ -3,7 +3,6 @@ import {
   DEFAULT_HISTORY_SEARCH,
   clearHistorySearchParams,
   historySearchToParams,
-  isHistoryDraftsFacetOn,
   normalizePersistedHistorySearch,
   parseHistorySearch,
   patchHistorySearch,
@@ -32,25 +31,12 @@ describe("history search params", () => {
       chatHosts: [],
       chatHostMode: "any",
       ownershipScopes: ["shared"],
-      drafts: [],
       sort: "relevance",
       sortExplicit: false,
     });
   });
 
-  it("round-trips the drafts facet through URL params", () => {
-    const search = parseHistorySearch({ historyDrafts: "landing" });
-
-    expect(search.drafts).toEqual(["landing"]);
-    expect(historySearchToParams(search)).toMatchObject({
-      historyDrafts: ["landing"],
-    });
-    expect(
-      historySearchToParams(parseHistorySearch({})).historyDrafts,
-    ).toBeUndefined();
-  });
-
-  it("fills a missing drafts field from pre-facet persisted search state", () => {
+  it("fills missing fields from older persisted search state", () => {
     expect(
       normalizePersistedHistorySearch({
         query: "api",
@@ -62,7 +48,7 @@ describe("history search params", () => {
         sort: "recent",
         sortExplicit: false,
       }),
-    ).toMatchObject({ query: "api", drafts: [] });
+    ).toMatchObject({ query: "api", chatHosts: [] });
   });
 
   it("preserves an explicit recent sort while a query is active", () => {
@@ -101,13 +87,6 @@ describe("history search params", () => {
         historySort: "relevance",
       }),
     ).toEqual({ focusedAt: 1 });
-  });
-
-  it("treats an empty drafts facet as off", () => {
-    expect(isHistoryDraftsFacetOn(parseHistorySearch({}))).toBe(false);
-    expect(
-      isHistoryDraftsFacetOn(parseHistorySearch({ historyDrafts: "landing" })),
-    ).toBe(true);
   });
 
   it("round-trips chat-host selections through the URL, dropping a default mode", () => {

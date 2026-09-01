@@ -114,7 +114,6 @@ import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
-  isHistoryDraftsFacetOn,
   type HistorySearchPatch,
   type HistorySearchState,
 } from "@/lib/history-search";
@@ -257,26 +256,6 @@ function AmbientEpicsListPanel(props: AmbientEpicsListPanelProps): ReactNode {
       autoFocusSearch={props.autoFocusSearch}
     />
   );
-}
-
-/**
- * `allowSelection` only hides the idle "Select" button. The ACTIVE cluster
- * (Select all / Cancel / Sweep / Delete) renders off `selectionMode`, which
- * nothing else clears - so turning the drafts facet on mid-selection left
- * Delete live over epic rows the body had stopped rendering.
- *
- * A render-phase adjustment (React's derived-state pattern) rather than an
- * effect: an effect would commit one frame with that cluster still armed.
- */
-function useSelectionDroppedOnDraftsFacet(
-  showDrafts: boolean,
-  selectionMode: boolean,
-  cancelSelection: () => void,
-): void {
-  const [shown, setShown] = useState(showDrafts);
-  if (shown === showDrafts) return;
-  setShown(showDrafts);
-  if (showDrafts && selectionMode) cancelSelection();
 }
 
 function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
@@ -557,12 +536,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
   };
 
-  const { showDraftsFacet, showDrafts } = historyDraftsChrome(variant, search);
   const hasActiveFilters = hasActiveHistoryFilters(search);
-  const searchCopy = historySearchFieldCopy(showDrafts);
-  const allowSelection = selectionEnabled ? !showDrafts : false;
-
-  useSelectionDroppedOnDraftsFacet(showDrafts, selectionMode, cancelSelection);
 
   const handleClear = () => {
     clearSearch();
@@ -603,8 +577,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             isFetching={isFetching}
             focusOnMount={props.autoFocusSearch}
             placement="page"
-            placeholder={searchCopy.placeholder}
-            ariaLabel={searchCopy.ariaLabel}
+            placeholder="Search by title, repo, branch, or PR"
+            ariaLabel="Search tasks"
           />
         ) : null}
         <PanelChromeBar
@@ -620,14 +594,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                 isFetching={isFetching}
                 focusOnMount={props.autoFocusSearch}
                 placement="toolbar"
-                placeholder={searchCopy.placeholder}
-                ariaLabel={searchCopy.ariaLabel}
+                placeholder="Search by title, repo, branch, or PR"
+                ariaLabel="Search tasks"
               />
             ) : null
           }
           filters={{ active: hasActiveFilters, onClear: handleClear }}
-          showSelection={allowSelection}
-          showSort={!showDrafts}
+          showSelection={selectionEnabled}
           selection={
             selectionMode
               ? {
@@ -668,45 +641,46 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           search={search}
           onSearchChange={updateSearch}
           facets={facets}
-          showDraftsFacet={showDraftsFacet}
-          hostId={hostId}
           chatHostFilterSupported={chatHostFilterSupported}
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
-          <HistoryListBody
-            variant={variant}
-            showDrafts={showDrafts}
-            query={search.query}
-            error={error}
-            isPending={isPending}
-            isFetching={isFetching}
-            hasActiveFilters={hasActiveFilters}
-            chatHostFilterUnsupported={chatHostFilterUnsupported}
-            items={items}
-            onRetry={handleRetry}
-            selectionMode={selectionMode}
-            selectionEnabled={selectionEnabled}
-            selectedIds={selectedIds}
-            onToggleSelection={toggleSelection}
-            onRequestDelete={requestDelete}
-            onRequestSweep={requestSweep}
-            onSetPinned={handleSetPinned}
-            pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-            hasNextPage={hasNextPage}
-            isFetchingNextPage={isFetchingNextPage}
-            onLoadMore={fetchNextPage}
-            onSelectEpic={onSelectEpic}
-            onOpenItem={onOpenItem}
-            onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-            openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
-            worktreesByEpicId={worktreesByEpicId}
-            surfaceHostId={hostId}
-            openEpicIds={openEpicIdSet}
-            listRef={listRef}
-            onRowKeyDown={keyboardNav.onRowKeyDown}
-            onRefresh={refreshHistory}
-          />
+          <>
+            {variant === "picker" ? null : (
+              <HistoryDraftsList hostId={hostId} onBeforeOpen={onSelectEpic} />
+            )}
+            <HistoryListBody
+              variant={variant}
+              error={error}
+              isPending={isPending}
+              isFetching={isFetching}
+              hasActiveFilters={hasActiveFilters}
+              chatHostFilterUnsupported={chatHostFilterUnsupported}
+              items={items}
+              onRetry={handleRetry}
+              selectionMode={selectionMode}
+              selectionEnabled={selectionEnabled}
+              selectedIds={selectedIds}
+              onToggleSelection={toggleSelection}
+              onRequestDelete={requestDelete}
+              onRequestSweep={requestSweep}
+              onSetPinned={handleSetPinned}
+              pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+              hasNextPage={hasNextPage}
+              isFetchingNextPage={isFetchingNextPage}
+              onLoadMore={fetchNextPage}
+              onSelectEpic={onSelectEpic}
+              onOpenItem={onOpenItem}
+              onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+              openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
+              worktreesByEpicId={worktreesByEpicId}
+              surfaceHostId={hostId}
+              openEpicIds={openEpicIdSet}
+              listRef={listRef}
+              onRowKeyDown={keyboardNav.onRowKeyDown}
+              onRefresh={refreshHistory}
+            />
+          </>
         </NotificationIndicatorsProvider>
       </section>
       <DeleteTasksDialog
@@ -748,33 +722,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   );
 }
 
-function historyDraftsChrome(
-  variant: EpicsListPanelVariant,
-  search: HistorySearchState,
-): {
-  readonly showDraftsFacet: boolean;
-  readonly showDrafts: boolean;
-} {
-  const showDraftsFacet = variant !== "picker";
-  return {
-    showDraftsFacet,
-    showDrafts: showDraftsFacet && isHistoryDraftsFacetOn(search),
-  };
-}
-
-function historySearchFieldCopy(showDrafts: boolean): {
-  readonly placeholder: string;
-  readonly ariaLabel: string;
-} {
-  if (showDrafts) {
-    return { placeholder: "Search drafts", ariaLabel: "Search drafts" };
-  }
-  return {
-    placeholder: "Search by title, repo, branch, or PR",
-    ariaLabel: "Search tasks",
-  };
-}
-
 /**
  * The two chat-host gate answers the panel needs, kept together because they
  * are two faces of one decision: whether to OFFER the filter, and whether the
@@ -803,7 +750,6 @@ function hasActiveHistoryFilters(search: HistorySearchState): boolean {
     search.workspaces.length > 0 ||
     search.chatHosts.length > 0 ||
     search.ownershipScopes.length > 0 ||
-    (Array.isArray(search.drafts) && search.drafts.length > 0) ||
     (search.sortExplicit && search.sort !== DEFAULT_SORT) ||
     search.query.trim().length > 0
   );
@@ -924,7 +870,6 @@ interface PanelChromeBarProps {
   /** False for the read-only `variant="picker"` embed: hides the entry point
    * into bulk select/sweep/delete rather than merely disabling it. */
   readonly showSelection: boolean;
-  readonly showSort: boolean;
   readonly selection: PanelSelectionControls;
   readonly sort: HistorySortOption;
   readonly onSortChange: (next: HistorySortOption) => void;
@@ -933,8 +878,6 @@ interface PanelChromeBarProps {
   readonly search: HistorySearchState;
   readonly onSearchChange: (patch: HistorySearchPatch) => void;
   readonly facets: HistoryFacets | undefined;
-  readonly showDraftsFacet: boolean;
-  readonly hostId: string | null;
   readonly chatHostFilterSupported: boolean;
   readonly refresh: PanelRefreshControls;
 }
@@ -1044,20 +987,13 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
           // gaps are both gap-1, so the one-line rendering is unchanged.
           <>
             <div className="flex shrink-0 items-center gap-1">
-              {props.showSort ? (
-                <EpicsSortMenu
-                  value={props.sort}
-                  onChange={props.onSortChange}
-                />
-              ) : null}
+              <EpicsSortMenu value={props.sort} onChange={props.onSortChange} />
               <EpicsFilterPopover
                 availableRepos={props.availableRepos}
                 availableWorkspaces={props.availableWorkspaces}
                 search={props.search}
                 onSearchChange={props.onSearchChange}
                 facets={props.facets}
-                showDraftsFacet={props.showDraftsFacet}
-                hostId={props.hostId}
                 chatHostFilterSupported={props.chatHostFilterSupported}
               />
             </div>
@@ -1118,18 +1054,11 @@ function describeDeleteTitle(
 
 interface HistoryListBodyProps extends EpicsListBodyProps {
   readonly variant: EpicsListPanelVariant;
-  /** The drafts facet is on: the body is the drafts list, not the epic list. */
-  readonly showDrafts: boolean;
-  readonly query: string;
   readonly onRefresh: () => Promise<unknown>;
 }
 
 /**
  * Picks the list body the form factor calls for, and owns nothing else.
- *
- * The drafts facet wins first: a start-task draft has no epic, so the drafts
- * list is a sibling view rather than a filtered mode of either epic list, and
- * it is the same list at every width.
  *
  * FORM FACTOR, not product: the phone list is a layout, and a desktop window
  * narrowed past the breakpoint gets it for the same reason it gets the
@@ -1147,19 +1076,6 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
     onSelectEpic: props.onSelectEpic,
     onOpenItem: props.onOpenItem,
   });
-  if (props.showDrafts) {
-    return (
-      <div className="min-h-0 flex-1 overflow-y-auto pb-10">
-        <HistoryDraftsList
-          query={props.query}
-          hostId={props.surfaceHostId}
-          onBeforeOpen={props.onSelectEpic}
-          listRef={props.listRef}
-          onRowKeyDown={props.onRowKeyDown}
-        />
-      </div>
-    );
-  }
   if (isMobileViewport && props.variant !== "picker") {
     return (
       <MobileHistoryList

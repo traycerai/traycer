@@ -1559,39 +1559,45 @@ describe("<EpicsListPanel />", () => {
     expect(document.activeElement).toBe(input);
   });
 
-  it("keeps the epic list when the drafts facet is off", async () => {
+  it("shows retained drafts above the task list without selecting a filter", async () => {
     seedRetainedLandingDraft("abandoned prompt");
     renderPanel("embedded", "/");
 
+    const drafts = await screen.findByTestId("history-drafts-block");
+    const tasks = await screen.findByTestId("epics-list-rows");
+    expect(screen.getByText("abandoned prompt")).not.toBeNull();
     expect(await screen.findByText("Open from landing")).not.toBeNull();
-    expect(screen.queryByTestId("history-drafts-list")).toBeNull();
+    expect(
+      drafts.compareDocumentPosition(tasks) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
   });
 
-  it("exposes start-task drafts in the filter popover and lists retained drafts when selected", async () => {
+  it("does not show a block for an empty start-task composer", async () => {
+    useLandingDraftStore.getState().createDraft(null);
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
+  });
+
+  it("does not expose drafts as a task filter", async () => {
     seedRetainedLandingDraft("abandoned prompt");
     renderPanel("embedded", "/");
 
     fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
-    fireEvent.click(await screen.findByRole("checkbox", { name: /drafts/i }));
-
-    await waitFor(() => {
-      expect(useHistorySearchStore.getState().search.drafts).toEqual([
-        "landing",
-      ]);
-    });
-    expect(await screen.findByTestId("history-drafts-list")).not.toBeNull();
-    expect(screen.getByText("abandoned prompt")).not.toBeNull();
-    expect(screen.queryByText("Open from landing")).toBeNull();
+    expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /drafts/i })).toBeNull();
   });
 
   it("opens a retained draft through openLandingDraftFromHistory", async () => {
     const draftId = seedRetainedLandingDraft("abandoned prompt");
-    useHistorySearchStore.setState({
-      search: { ...DEFAULT_HISTORY_SEARCH, drafts: ["landing"] },
-    });
     renderPanel("embedded", "/");
 
-    fireEvent.click(await screen.findByTestId("history-drafts-row-open"));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Open draft abandoned prompt",
+      }),
+    );
 
     expect(testState.openLandingDraftFromHistory).toHaveBeenCalledTimes(1);
     expect(testState.openLandingDraftFromHistory.mock.calls[0][1]).toBe(
@@ -1601,9 +1607,6 @@ describe("<EpicsListPanel />", () => {
 
   it("asks for confirmation before deleting a retained draft", async () => {
     const draftId = seedRetainedLandingDraft("abandoned prompt");
-    useHistorySearchStore.setState({
-      search: { ...DEFAULT_HISTORY_SEARCH, drafts: ["landing"] },
-    });
     renderPanel("embedded", "/");
 
     expect(await screen.findByText("abandoned prompt")).not.toBeNull();
@@ -1648,9 +1651,6 @@ describe("<EpicsListPanel />", () => {
   it("warns that an open draft will be deleted on every device", async () => {
     const draftId = seedRetainedLandingDraft("live tab");
     useLandingDraftStore.getState().openDraft(draftId);
-    useHistorySearchStore.setState({
-      search: { ...DEFAULT_HISTORY_SEARCH, drafts: ["landing"] },
-    });
     renderPanel("embedded", "/");
 
     fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
@@ -1660,63 +1660,25 @@ describe("<EpicsListPanel />", () => {
     expect(screen.getByText(/every device/i)).not.toBeNull();
   });
 
-  it("cycles draft rows with the arrow keys and returns to the query", async () => {
-    const alphaId = seedRetainedLandingDraft("alpha draft");
-    const betaId = seedRetainedLandingDraft("beta draft");
-    // Both seeds land in the same millisecond, and the comparator's tiebreak
-    // for equal `lastTouchedAt` is the uuid - which is random, so the row
-    // order this case is about was a coin flip. Stamp it.
-    const stampedAt = new Map([
-      [alphaId, 1],
-      [betaId, 2],
-    ]);
-    useLandingDraftStore.setState((state) => ({
-      drafts: state.drafts.map((draft) => {
-        const lastTouchedAt = stampedAt.get(draft.id);
-        return lastTouchedAt === undefined
-          ? draft
-          : { ...draft, lastTouchedAt };
-      }),
-    }));
-    useHistorySearchStore.setState({
-      search: { ...DEFAULT_HISTORY_SEARCH, drafts: ["landing"] },
-    });
+  it("caps the draft block and expands it on request", async () => {
+    for (let index = 0; index < 6; index += 1) {
+      seedRetainedLandingDraft(`draft ${index}`);
+    }
 
     renderPanel("page", "/");
-    const input = await screen.findByRole("searchbox", {
-      name: "Search drafts",
-    });
-    // Most-recent first: beta was seeded after alpha.
-    const first = screen.getByRole("button", {
-      name: "Open draft beta draft",
-    });
-    const second = screen.getByRole("button", {
-      name: "Open draft alpha draft",
-    });
-    input.focus();
 
-    fireEvent.keyDown(input, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(first);
-
-    fireEvent.keyDown(first, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(second);
-
-    fireEvent.keyDown(second, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(second);
-
-    fireEvent.keyDown(second, { key: "ArrowUp" });
-    expect(document.activeElement).toBe(first);
-
-    fireEvent.keyDown(first, { key: "ArrowUp" });
-    expect(document.activeElement).toBe(input);
+    expect(await screen.findAllByTestId("history-drafts-row")).toHaveLength(5);
+    fireEvent.click(screen.getByRole("button", { name: "View all 6" }));
+    expect(screen.getAllByTestId("history-drafts-row")).toHaveLength(6);
+    expect(screen.getByRole("button", { name: "Show less" })).not.toBeNull();
   });
 
-  it("hides the drafts facet in the destination picker", async () => {
+  it("hides the drafts block in the destination picker", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
     renderPanel("picker", "/");
 
-    fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
-    expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
-    expect(screen.queryByRole("checkbox", { name: /drafts/i })).toBeNull();
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
   });
 });
 
