@@ -17,6 +17,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   createRemoteHostTransport,
+  PLAN_RESTRICTED_FATAL_CODE,
   planRestrictedReprobeAtForHost,
   type IRemoteSession,
   type RemoteHostTransport,
@@ -264,7 +265,9 @@ class RuntimeHostMessenger<
    * with it, `rejectIfTerminalVerdict`) makes the invalidation fired at close
    * time land on an honest non-retryable error instead of a redial. Entries
    * expire after {@link TERMINAL_VERDICT_TTL_MS} - terminal describes the
-   * SESSION, not the host, which may be updated/re-entitled any moment - and
+   * SESSION, not the host, which may be updated/re-entitled any moment. The
+   * one exception is PLAN_RESTRICTED, whose cache-controlled reprobe deadline
+   * keeps the query layer aligned with the transport's negative cache. They
    * are dropped early when a later session for the host reaches ready, or
    * when the host's transport identity moves off the recorded `key`: the key
    * folds in version/publicKey/relay URL, so e.g. the host update that
@@ -588,7 +591,10 @@ class RuntimeHostMessenger<
         // other consumers hold a working session under the new identity -
         // bounded, and cleared early by the next ready boundary heard.)
         const at = Date.now();
-        const planRestrictedUntil = planRestrictedReprobeAtForHost(hostId);
+        const planRestrictedUntil =
+          fatal.code === PLAN_RESTRICTED_FATAL_CODE
+            ? planRestrictedReprobeAtForHost(hostId)
+            : null;
         this.terminalVerdictByHost.set(hostId, {
           fatal,
           expiresAt: planRestrictedUntil ?? at + TERMINAL_VERDICT_TTL_MS,
