@@ -24,6 +24,7 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 const refreshSpy = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const ownerPrSendRefreshSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("@/hooks/worktree/use-worktree-owner-metadata-query", () => ({
   useWorktreeOwnerMetadata: () => ({
@@ -35,6 +36,18 @@ vi.mock("@/hooks/worktree/use-worktree-owner-metadata-query", () => ({
     checkedAt: 1_700_000_000_000,
     isRefreshing: false,
     refresh: refreshSpy,
+  }),
+}));
+// The card now derives its PR pills from `pr.subscribeListForEpic` via this
+// hook, not from `useWorktreeOwnerMetadata`'s worktree walk - unmocked, it
+// reaches for a real stream client and `useQueryClient()`, neither of which
+// this file provides a provider for.
+vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
+  useOwnerPrReferences: () => ({
+    references: [],
+    isPending: false,
+    error: false,
+    sendRefresh: ownerPrSendRefreshSpy,
   }),
 }));
 
@@ -228,8 +241,10 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
 
     expect(cardIsOpen()).toBe(false);
     refreshSpy.mockClear();
+    ownerPrSendRefreshSpy.mockClear();
     fireEvent.keyDown(window, { key: "r" });
     expect(refreshSpy).not.toHaveBeenCalled();
+    expect(ownerPrSendRefreshSpy).not.toHaveBeenCalled();
   });
 
   it("keeps the row's own click handler working", () => {

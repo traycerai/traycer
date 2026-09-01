@@ -83,8 +83,27 @@ export function usePrListSubscription(args: {
   readonly mode: PrSubscribeListForEpicMode;
   readonly enabled: boolean;
 }): PrListSubscriptionResult {
-  const queryClient = useQueryClient();
   const wsStreamClient = useWsStreamClient();
+  return usePrListSubscriptionForClient({
+    ...args,
+    client: wsStreamClient,
+  });
+}
+
+/**
+ * Host-explicit counterpart used by surfaces whose owner may live on a host
+ * other than the app-wide effective host. The client is intentionally an
+ * argument: `hostId` authorizes and keys the PR projection, but it cannot
+ * select which websocket carries the subscription.
+ */
+export function usePrListSubscriptionForClient(args: {
+  readonly hostId: string | null;
+  readonly epicId: string;
+  readonly mode: PrSubscribeListForEpicMode;
+  readonly enabled: boolean;
+  readonly client: IHostStreamClient<HostStreamRpcRegistry> | null;
+}): PrListSubscriptionResult {
+  const queryClient = useQueryClient();
 
   const stableArgs: typeof args = useMemo(
     () => ({
@@ -92,8 +111,9 @@ export function usePrListSubscription(args: {
       epicId: args.epicId,
       mode: args.mode,
       enabled: args.enabled,
+      client: args.client,
     }),
-    [args.hostId, args.epicId, args.mode, args.enabled],
+    [args.hostId, args.epicId, args.mode, args.enabled, args.client],
   );
 
   // `null` while the key is unknowable. Note this does NOT fold in `enabled`:
@@ -110,16 +130,16 @@ export function usePrListSubscription(args: {
     [stableArgs.hostId, stableArgs.epicId, stableArgs.mode],
   );
   const sessionKey =
-    wsStreamClient === null || activeArgs === null
+    stableArgs.client === null || activeArgs === null
       ? null
-      : subscriptionKeyFor(wsStreamClient, activeArgs);
+      : subscriptionKeyFor(stableArgs.client, activeArgs);
 
   const createSession = useCallback((): SharedSubscription => {
-    if (wsStreamClient === null || activeArgs === null) {
+    if (stableArgs.client === null || activeArgs === null) {
       throw new Error("A PR list session needs a client and a host.");
     }
-    return createSharedSubscription(wsStreamClient, queryClient, activeArgs);
-  }, [wsStreamClient, queryClient, activeArgs]);
+    return createSharedSubscription(stableArgs.client, queryClient, activeArgs);
+  }, [stableArgs.client, queryClient, activeArgs]);
 
   const onConsumerJoined = useCallback(
     (shared: SharedSubscription): void => {
