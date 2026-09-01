@@ -253,8 +253,13 @@ vi.mock("@/providers/windows-bridge-context", () => ({
   useWindowsBridge: () => windowsBridgeMock.current,
 }));
 
+// Both accessors, because replacing the module removes whichever one is left
+// out: rows in this panel read the throwing one for capabilities they cannot
+// render without, and the non-throwing one where absence is a legitimate
+// answer. Same host either way - the difference is only what each promises.
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => runnerHostMock.current,
+  useRunnerHostOrNull: () => runnerHostMock.current,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {

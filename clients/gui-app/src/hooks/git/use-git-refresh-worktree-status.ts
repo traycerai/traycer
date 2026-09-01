@@ -11,7 +11,7 @@ import {
   useHostDirectory,
   type HostRpcRegistry,
 } from "@/lib/host";
-import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
+import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { gitMutationKeys } from "@/lib/query-keys";
 import { writeGitListChangedFilesResponse } from "@/lib/git/write-list-changed-files-response";
@@ -79,7 +79,7 @@ export function useGitRefreshWorktreeStatus(): UseMutationResult<
           const client =
             entry === null
               ? null
-              : buildTransientHostClient(globalClient, entry);
+              : buildDialableHostClient(globalClient, entry);
           if (client === null) {
             return Promise.reject<GitListChangedFilesResponse>(
               hostClientUnavailableError("git.listChangedFiles"),

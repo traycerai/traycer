@@ -30,6 +30,7 @@ const CREATE: CreateFrame = {
   tabId: "tab-1",
   requestedUrl: "https://example.com/",
   reason: "agent-open",
+  profile: "primary",
   seedStorageState: null,
 };
 
@@ -173,6 +174,7 @@ describe("ElectronTabs", () => {
       sessionId: "session-1",
       tabId: "tab-1",
       requestedUrl: "https://example.com/",
+      profile: "primary",
       seedStorageState: null,
     });
     expect(sent).toEqual([]);

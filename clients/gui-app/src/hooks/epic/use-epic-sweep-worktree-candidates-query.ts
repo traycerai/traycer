@@ -98,6 +98,13 @@ export interface EpicSweepWorktreeCandidatesResult {
    * resolves with the freshly classified rows (not a stale render closure).
    */
   readonly refresh: () => Promise<ReadonlyArray<EpicSweepWorktreeRow>>;
+  /**
+   * The proof a Remove click runs before anything destructive. Same fetch as
+   * `refresh`, but through the query CACHE rather than this hook's observer,
+   * so it joins a refresh already in flight and keeps running after the
+   * dialog unmounts - the flow never holds the user in a modal for it.
+   */
+  readonly prove: () => Promise<ReadonlyArray<EpicSweepWorktreeRow>>;
 }
 
 const EMPTY_ROWS: ReadonlyArray<EpicSweepWorktreeRow> = [];
@@ -160,66 +167,13 @@ export function useEpicSweepWorktreeCandidatesForClient(
     () => (epicIds === null ? null : [...new Set(epicIds)].sort()),
     [epicIds],
   );
-  const selectedEpicKey =
-    selectedEpicIds === null ? "" : selectedEpicIds.join(",");
-  const fetchFreshTaskWorktrees = async (): Promise<SweepCandidatesPayload> => {
-    if (client === null) {
-      throw hostClientUnavailableError("worktree.listAllForHost");
-    }
-    const base: WorktreeListAllForHostResponseV14 = await client.request(
-      "worktree.listAllForHost",
-      {
-        includeActivity: false,
-        activityPaths: null,
-        cursor: null,
-        limit: null,
-        forceRefresh: false,
-      },
-    );
-    const selected = new Set(selectedEpicIds ?? []);
-    const ownedPaths = base.worktrees.flatMap((entry) =>
-      entry.owners.some((owner) => selected.has(owner.epicId))
-        ? [entry.worktreePath]
-        : [],
-    );
-    if (ownedPaths.length === 0) {
-      return {
-        listing: { worktrees: [], nextCursor: null },
-        holdersByPath: new Map(),
-      };
-    }
-    const listing = await client.request("worktree.listAllForHost", {
-      includeActivity: true,
-      activityPaths: ownedPaths,
-      cursor: null,
-      limit: null,
-      forceRefresh: true,
-    });
-    const holdersByPath = await loadHoldersForInUseRows(
-      client,
-      listing.worktrees,
-    );
-    return { listing, holdersByPath };
-  };
-  const fetchFreshTaskWorktreesNormalized =
-    (): Promise<SweepCandidatesPayload> =>
-      withHostQueryErrorBoundary(
-        "worktree.listAllForHost",
-        fetchFreshTaskWorktrees,
-      );
   const { data, isFetching, isError, refetch } = useQuery(
     queryOptions<SweepCandidatesPayload, HostRpcError>({
-      queryKey: hostQueryKeys.sweepWorktreeCandidates(
-        readiness.hostId,
-        selectedEpicKey,
-      ),
-      queryFn: fetchFreshTaskWorktreesNormalized,
+      ...sweepCandidatesQueryOptions(client, readiness.hostId, selectedEpicIds),
       enabled:
         selectedEpicIds !== null &&
         selectedEpicIds.length > 0 &&
         readiness.isReady,
-      staleTime: 0,
-      retry: false,
       initialData: () => {
         if (selectedEpicIds === null || readiness.hostId === null) {
           return undefined;
@@ -249,6 +203,13 @@ export function useEpicSweepWorktreeCandidatesForClient(
       result.data.holdersByPath,
     );
   };
+  const prove = (): Promise<ReadonlyArray<EpicSweepWorktreeRow>> =>
+    proveSweepCandidates({
+      queryClient,
+      client,
+      hostId: readiness.hostId,
+      selectedEpicIds,
+    });
 
   const isPending =
     selectedEpicIds !== null && selectedEpicIds.length > 0 && isFetching;
@@ -270,6 +231,7 @@ export function useEpicSweepWorktreeCandidatesForClient(
       checkedAt: null,
       canRefresh,
       refresh,
+      prove,
     };
   }
   const rows = classifyOwnedSweepRows(
@@ -285,7 +247,118 @@ export function useEpicSweepWorktreeCandidatesForClient(
     checkedAt: oldestResolvedAt(rows.map((row) => row.entry.resolvedAt)),
     canRefresh,
     refresh,
+    prove,
   };
+}
+
+/**
+ * The ONE place the candidates query's identity and fetch are written, so the
+ * hook's observer and the click-time proof (`proveSweepCandidates`) can never
+ * drift onto different keys - which is what lets the proof join a refresh
+ * already in flight instead of racing it.
+ */
+function sweepCandidatesQueryOptions(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  selectedEpicIds: ReadonlyArray<string> | null,
+) {
+  // The key names the HOST (`hostId`) rather than the client object: a client
+  // is the requester for exactly one host, so the identity is already in the
+  // key, and the object itself is not a cache identity.
+  const queryFn = (): Promise<SweepCandidatesPayload> =>
+    withHostQueryErrorBoundary("worktree.listAllForHost", () =>
+      fetchSweepCandidatesPayload(client, selectedEpicIds),
+    );
+  return queryOptions<SweepCandidatesPayload, HostRpcError>({
+    queryKey: hostQueryKeys.sweepWorktreeCandidates(
+      hostId,
+      selectedEpicIds === null ? "" : selectedEpicIds.join(","),
+    ),
+    queryFn,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+async function fetchSweepCandidatesPayload(
+  client: HostClient<HostRpcRegistry> | null,
+  selectedEpicIds: ReadonlyArray<string> | null,
+): Promise<SweepCandidatesPayload> {
+  if (client === null) {
+    throw hostClientUnavailableError("worktree.listAllForHost");
+  }
+  const base: WorktreeListAllForHostResponseV14 = await client.request(
+    "worktree.listAllForHost",
+    {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    },
+  );
+  const selected = new Set(selectedEpicIds ?? []);
+  const ownedPaths = base.worktrees.flatMap((entry) =>
+    entry.owners.some((owner) => selected.has(owner.epicId))
+      ? [entry.worktreePath]
+      : [],
+  );
+  if (ownedPaths.length === 0) {
+    return {
+      listing: { worktrees: [], nextCursor: null },
+      holdersByPath: new Map(),
+    };
+  }
+  const listing = await client.request("worktree.listAllForHost", {
+    includeActivity: true,
+    activityPaths: ownedPaths,
+    cursor: null,
+    limit: null,
+    forceRefresh: true,
+  });
+  const holdersByPath = await loadHoldersForInUseRows(
+    client,
+    listing.worktrees,
+  );
+  return { listing, holdersByPath };
+}
+
+/**
+ * The forced proof a Remove click runs, against the query CACHE.
+ *
+ * `fetchQuery` at `staleTime: 0` always fetches, and de-duplicates onto a
+ * fetch already in flight for the same key - so a click during a refresh
+ * waits for that refresh rather than starting a second walk. It also runs
+ * with no observer at all, which is what lets the dialog be closed, or the
+ * surface it sits on be left, while the proof is still answering. Failures
+ * are toasted here (the caller's chain has no component to toast from) and
+ * rethrown so the chain stops.
+ */
+async function proveSweepCandidates(input: {
+  readonly queryClient: QueryClient;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
+  readonly selectedEpicIds: ReadonlyArray<string> | null;
+}): Promise<ReadonlyArray<EpicSweepWorktreeRow>> {
+  const { selectedEpicIds } = input;
+  if (selectedEpicIds === null || input.client === null) {
+    throw hostClientUnavailableError("worktree.listAllForHost");
+  }
+  try {
+    const payload = await input.queryClient.fetchQuery(
+      sweepCandidatesQueryOptions(input.client, input.hostId, selectedEpicIds),
+    );
+    return classifyOwnedSweepRows(
+      selectedEpicIds,
+      payload.listing.worktrees,
+      payload.holdersByPath,
+    );
+  } catch (error) {
+    if (error instanceof HostRpcError) {
+      toastFromHostError(error, "Couldn't check worktree details.");
+    }
+    throw error;
+  }
 }
 
 function classifyOwnedSweepRows(

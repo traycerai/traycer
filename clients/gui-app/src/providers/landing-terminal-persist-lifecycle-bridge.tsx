@@ -6,7 +6,7 @@ import {
 } from "@/hooks/auth/use-auth-identity-transition";
 import { landingTerminalsKey } from "@/lib/persist";
 import { useHostClient, useHostDirectory } from "@/lib/host";
-import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
+import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import {
   clearAndResetPersistedStore,
   retargetPersistedStore,
@@ -35,7 +35,7 @@ export function LandingTerminalPersistLifecycleBridge(
     for (const pending of useLandingTerminalStore.getState().pendingKills) {
       const entry = directory.findById(pending.hostId);
       const client =
-        entry === null ? null : buildTransientHostClient(defaultClient, entry);
+        entry === null ? null : buildDialableHostClient(defaultClient, entry);
       if (client === null) continue;
       // Sign-out is a teardown boundary, not a UI request surface: retain no
       // promise and clear the identity bucket immediately afterwards. An
