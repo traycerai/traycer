@@ -9,6 +9,7 @@
     "build:web": "vite build --config vite.config.ts",
     "build:web:staging": "TRAYCER_MOBILE_ENV=staging vite build --config vite.config.ts",
     "dev:web": "vite --config vite.config.ts",
+    "dev:web:bundled": "bun scripts/dev-web-bundled.ts",
     "dev:ios": "bun scripts/dev-ios.ts",
     "dev:ios:device": "bun scripts/dev-ios-device.ts",
     "sync:ios": "bun run build:web && bun x cap sync ios",

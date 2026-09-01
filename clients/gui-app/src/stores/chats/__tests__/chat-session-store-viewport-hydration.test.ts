@@ -21,6 +21,7 @@ import {
   spanTouchStamp,
   TRANSCRIPT_WINDOW_MAX_BYTES,
 } from "@/stores/chats/transcript-window";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const EPIC_ID = "epic-viewport";
 const CHAT_ID = "chat-viewport";
@@ -66,6 +67,7 @@ function createViewportHarness(): ViewportHarness {
   let resnapshots = 0;
   let callbacks: ChatStreamCallbacks | null = null;
   const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-viewport",
     epicId: EPIC_ID,
     chatId: CHAT_ID,

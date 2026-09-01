@@ -609,8 +609,22 @@ export function acquireRemoteSession<
     isClosed: () => session.isClosed(),
     isReady: () => session.isReady(),
     terminalFatal: () => session.terminalFatal(),
-    sendUnary: (method, params, abortSignal, responseTimeoutMs) =>
-      session.sendUnary(method, params, abortSignal, responseTimeoutMs),
+    sendUnary: (
+      method,
+      params,
+      idempotencyKey,
+      abortSignal,
+      responseTimeoutMs,
+      replayMustBeKeyed,
+    ) =>
+      session.sendUnary(
+        method,
+        params,
+        idempotencyKey,
+        abortSignal,
+        responseTimeoutMs,
+        replayMustBeKeyed,
+      ),
     subscribe: (method, params) => session.subscribe(method, params),
     subscribeWithParamsProvider: (method, paramsProvider) =>
       session.subscribeWithParamsProvider(method, paramsProvider),
@@ -1030,7 +1044,16 @@ export function tryAcquireReadyRemoteSession<
       // poll, so a refused read renders `unknown`, never failure and never a
       // retired value shown as live.
       return session
-        .sendUnary(method, params, abortSignal, responseTimeoutMs)
+        .sendUnary(
+          method,
+          params,
+          null,
+          abortSignal,
+          responseTimeoutMs,
+          // A borrowed status poll carries no key and is never a replay: the
+          // caller re-polls on the next tick rather than retrying this one.
+          false,
+        )
         .then((result) => {
           if (entry.superseded) {
             throw new Error("borrowed remote session identity was superseded");

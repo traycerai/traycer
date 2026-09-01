@@ -33,6 +33,7 @@ import {
   BROWSER_STREAM_FLUSH_TIMERS,
   createStreamFlushCoordinator,
 } from "@/stores/chats/stream-flush-coordinator";
+import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 
 const registry = new ChatSessionRegistry({
   idleTtlMs: DEFAULT_CHAT_IDLE_TTL_MS,
@@ -237,6 +238,7 @@ export function useChatSessionHandle(
           epicId: factoryEpicId,
           chatId: factoryChatId,
           userId,
+          environment: createRendererRuntimeEnvironment(),
           streamClientFactory: factory,
           streamFlushCoordinator: STREAM_FLUSH_COORDINATOR,
           onAuthError,

@@ -11,6 +11,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
   type HostRequestAuthority,
+  type HostRequestOptions,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -306,8 +307,9 @@ class RuntimeHostMessenger<
   request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
+    const { authority } = options;
     const disposedRejection = this.rejectIfDisposed(method);
     if (disposedRejection !== null) {
       return disposedRejection;
@@ -324,7 +326,7 @@ class RuntimeHostMessenger<
     const target = this.resolveTarget(authority.endpoint.hostId);
     if (target === null || target.kind !== "remote") {
       this.closeRemoteTransport();
-      return this.localMessenger.request(method, params, authority);
+      return this.localMessenger.request(method, params, options);
     }
 
     const verdictRejection = this.rejectIfTerminalVerdict(
@@ -347,15 +349,16 @@ class RuntimeHostMessenger<
         }),
       );
     }
-    return remoteMessenger.request(method, params, authority);
+    return remoteMessenger.request(method, params, options);
   }
 
   requestWithResponseTimeout<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
+    const { authority } = options;
     const disposedRejection = this.rejectIfDisposed(method);
     if (disposedRejection !== null) {
       return disposedRejection;
@@ -374,7 +377,7 @@ class RuntimeHostMessenger<
         method,
         params,
         responseTimeoutMs,
-        authority,
+        options,
       );
     }
 
@@ -402,7 +405,7 @@ class RuntimeHostMessenger<
       method,
       params,
       responseTimeoutMs,
-      authority,
+      options,
     );
   }
 

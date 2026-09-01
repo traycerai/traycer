@@ -9,6 +9,7 @@ import type {
 
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
 import { BrowserAnnotationCard } from "@/components/chat/composer/browser-annotation-card";
+import type { ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import {
   STUB_ANNOTATION_ELEMENT,
@@ -133,16 +134,18 @@ function session(
   };
 }
 
-async function landingFetcher(hash: string): Promise<{
-  readonly bytes: Uint8Array<ArrayBuffer>;
-  readonly mediaType: string | null;
-}> {
-  const bytes = await getImageBytes(hash);
-  if (bytes === undefined) {
-    throw new Error(`Landing image ${hash} unavailable`);
-  }
-  return { bytes, mediaType: null };
-}
+const landingFetcher: ScopedImageBytesFetcher = {
+  // Mirrors `useLandingImageFetcher`'s own subject, so a card rendered here
+  // keys into the cache exactly as the real landing composer does.
+  scopeKey: JSON.stringify(["landing-image"]),
+  fetch: async (hash: string) => {
+    const bytes = await getImageBytes(hash);
+    if (bytes === undefined) {
+      throw new Error(`Landing image ${hash} unavailable`);
+    }
+    return { bytes, mediaType: null };
+  },
+};
 
 function renderCard(
   record: BrowserAnnotationRecord,
@@ -437,7 +440,10 @@ describe("BrowserAnnotationCard attachments", () => {
           ],
         }}
         onRemoveImage={() => undefined}
-        fetcher={() => Promise.reject(new Error("unused"))}
+        fetcher={{
+          scopeKey: "test-scope",
+          fetch: () => Promise.reject(new Error("unused")),
+        }}
         sessionObjectUrl={() => null}
         leadingAttachments={
           <BrowserAnnotationCard

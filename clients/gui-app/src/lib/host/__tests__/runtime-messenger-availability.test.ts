@@ -254,7 +254,14 @@ function harness(): {
         .request(
           "host.status",
           {},
-          authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+          {
+            replayMustBeKeyed: false,
+            idempotencyKey: null,
+            authority: authorityFor(
+              REMOTE_HOST_ID,
+              remoteEntry.websocketUrl ?? "",
+            ),
+          },
         )
         .catch(() => undefined);
     },
@@ -262,29 +269,48 @@ function harness(): {
       binding.messenger.request(
         "host.status",
         {},
-        authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+        {
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: authorityFor(
+            REMOTE_HOST_ID,
+            remoteEntry.websocketUrl ?? "",
+          ),
+        },
       ),
     requestRemoteWithSignal: (abortSignal: AbortSignal) =>
       binding.messenger.request(
         "host.status",
         {},
         {
-          ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
-          abortSignal,
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: {
+            ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+            abortSignal,
+          },
         },
       ),
     requestRemoteWithTimeoutAndSignal: (abortSignal: AbortSignal) =>
       binding.messenger.requestWithResponseTimeout("host.status", {}, 5_000, {
-        ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
-        abortSignal,
+        replayMustBeKeyed: false,
+        idempotencyKey: null,
+        authority: {
+          ...authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+          abortSignal,
+        },
       }),
     requestLocalWithSignal: (abortSignal: AbortSignal) =>
       binding.messenger.request(
         "host.status",
         {},
         {
-          ...authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
-          abortSignal,
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: {
+            ...authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
+            abortSignal,
+          },
         },
       ),
     reset: () => {
@@ -300,7 +326,11 @@ function harness(): {
         .request(
           "host.status",
           {},
-          authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
+          {
+            replayMustBeKeyed: false,
+            idempotencyKey: null,
+            authority: authorityFor(LOCAL_HOST_ID, "ws://127.0.0.1:1/"),
+          },
         )
         .catch(() => undefined);
     },
@@ -810,7 +840,14 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       binding.messenger.request(
         "host.status",
         {},
-        authorityFor(REMOTE_HOST_ID, remoteEntry.websocketUrl ?? ""),
+        {
+          replayMustBeKeyed: false,
+          idempotencyKey: null,
+          authority: authorityFor(
+            REMOTE_HOST_ID,
+            remoteEntry.websocketUrl ?? "",
+          ),
+        },
       );
 
     await requestRemote().catch(() => undefined);
