@@ -16,7 +16,7 @@ import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-commen
 import {
   resolveArtifactCommentThreads,
   useEpicLaneCommentThreads,
-  useEpicLaneCommentThreadsLive,
+  useEpicLaneCommentThreadsDroppedAt,
 } from "@/hooks/comments/use-lane-comment-threads";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -368,16 +368,18 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   // whose anchor the decoration layer strips as an orphan, leaving nothing to
   // hover.
   const laneThreads = useEpicLaneCommentThreads(node.id);
-  const laneLive = useEpicLaneCommentThreadsLive();
+  const laneDroppedAt = useEpicLaneCommentThreadsDroppedAt();
   const commentThreads = useMemo(
     () =>
       resolveArtifactCommentThreads({
         laneThreads,
-        laneLive,
+        laneDroppedAt,
         pollThreads:
           threadsQuery.data === undefined ? null : threadsQuery.data.threads,
+        pollUpdatedAt:
+          threadsQuery.dataUpdatedAt === 0 ? null : threadsQuery.dataUpdatedAt,
       }),
-    [laneLive, laneThreads, threadsQuery.data],
+    [laneDroppedAt, laneThreads, threadsQuery.data, threadsQuery.dataUpdatedAt],
   );
   const resolvedThreadIds = useMemo(
     () =>
@@ -695,7 +697,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
               artifactType={commentArtifactKind}
               artifactId={node.id}
               laneThreads={laneThreads}
-              laneLive={laneLive}
+              laneDroppedAt={laneDroppedAt}
               editor={editor}
               resolvedThreadIds={resolvedThreadIds}
               onActivateThread={onActivateThread}

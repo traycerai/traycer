@@ -1,7 +1,7 @@
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   useEpicLaneCommentThreads,
-  useEpicLaneCommentThreadsLive,
+  useEpicLaneCommentThreadsDroppedAt,
 } from "@/hooks/comments/use-lane-comment-threads";
 import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
 import { useEpicArtifact } from "@/lib/epic-selectors";
@@ -36,7 +36,7 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
   // Resolved beside the rows, not inside `CommentSidebar`: the ambient reads
   // belong to this wiring layer, which is what keeps the panel mountable on
   // the mobile switcher, outside any epic session.
-  const laneLive = useEpicLaneCommentThreadsLive();
+  const laneDroppedAt = useEpicLaneCommentThreadsDroppedAt();
   const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
   const anchorPositions = useArtifactAnchorPositions(epicId, activeArtifactId);
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
@@ -57,7 +57,7 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
       artifactType={artifactKind}
       artifactId={activeArtifactId}
       laneThreads={laneThreads}
-      laneLive={laneLive}
+      laneDroppedAt={laneDroppedAt}
       anchorPositions={anchorPositions}
       currentUserId={currentUserId}
       canModerate={false}

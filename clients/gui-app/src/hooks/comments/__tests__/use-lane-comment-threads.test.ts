@@ -42,12 +42,19 @@ describe("selectLaneCommentThreads", () => {
 });
 
 describe("resolveArtifactCommentThreads", () => {
+  // The lane stopped at this instant; a poll `dataUpdatedAt` below it is a
+  // cache the lane has already superseded, above it a genuinely newer view.
+  const DROPPED_AT = 1_000;
+  const BEFORE_DROP = 900;
+  const AFTER_DROP = 1_100;
+
   it("prefers lane rows when present", () => {
     const laneThreads = [threadFixture("lane-thread")];
     const result = resolveArtifactCommentThreads({
       laneThreads,
       pollThreads: [threadFixture("poll-thread")],
-      laneLive: true,
+      laneDroppedAt: null,
+      pollUpdatedAt: BEFORE_DROP,
     });
     expect(result).toEqual({ threads: laneThreads, source: "state-lane" });
   });
@@ -56,7 +63,8 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads: [],
       pollThreads: [threadFixture("poll-thread")],
-      laneLive: true,
+      laneDroppedAt: null,
+      pollUpdatedAt: BEFORE_DROP,
     });
     expect(result).toEqual({ threads: [], source: "state-lane" });
   });
@@ -66,7 +74,8 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads: null,
       pollThreads,
-      laneLive: true,
+      laneDroppedAt: null,
+      pollUpdatedAt: BEFORE_DROP,
     });
     expect(result).toEqual({ threads: pollThreads, source: "poll" });
   });
@@ -75,7 +84,8 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads: null,
       pollThreads: [],
-      laneLive: true,
+      laneDroppedAt: null,
+      pollUpdatedAt: BEFORE_DROP,
     });
     expect(result).toEqual({ threads: [], source: "poll" });
   });
@@ -84,7 +94,8 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads: null,
       pollThreads: null,
-      laneLive: true,
+      laneDroppedAt: null,
+      pollUpdatedAt: null,
     });
     expect(result).toEqual({ threads: null, source: null });
   });
@@ -96,17 +107,74 @@ describe("resolveArtifactCommentThreads", () => {
    * prefer lane rows whenever the key was present, with no regard for
    * whether the transport backing them was still connected.
    */
-  it("falls back to poll rows once the lane is no longer live, even though lane rows are present", () => {
+  it("falls back to poll rows once the lane has dropped and the poll has since answered", () => {
     const laneThreads = [threadFixture("stale-lane-thread")];
     const pollThreads = [threadFixture("fresh-poll-thread")];
     const result = resolveArtifactCommentThreads({
       laneThreads,
       pollThreads,
-      laneLive: false,
+      laneDroppedAt: DROPPED_AT,
+      pollUpdatedAt: AFTER_DROP,
     });
-    // THE REDDENING ONE - today this still returns `source: "state-lane"`
-    // with the stale lane rows, because presence alone decides.
     expect(result).toEqual({ threads: pollThreads, source: "poll" });
+  });
+
+  /**
+   * THE REDDENING ONE for the ordering fix, and the whole reason the resolver
+   * takes instants rather than a boolean.
+   *
+   * The stimulus is a REMOTE delete: another client removes a thread, the
+   * removal reaches this surface over the lane, and nothing invalidates this
+   * surface's poll cache because this surface did not mutate. So the cache
+   * still holds the thread, timed BEFORE the lane's last word. While the lane
+   * was up that was invisible. Under the old rule, the instant it dropped the
+   * poll arm fired on non-null alone and the deleted thread came back.
+   *
+   * The two arrays differ by exactly that one thread, so the assertion can
+   * only pass by picking the right SOURCE - a resolver that returned either
+   * array's contents by some other route would still fail the membership
+   * check below.
+   */
+  it("does not resurrect a remotely deleted thread from a poll cache that predates the lane drop", () => {
+    const kept = threadFixture("kept-thread");
+    const deletedRemotely = threadFixture("deleted-remotely");
+    const laneThreads = [kept];
+    const pollThreads = [kept, deletedRemotely];
+    const result = resolveArtifactCommentThreads({
+      laneThreads,
+      pollThreads,
+      laneDroppedAt: DROPPED_AT,
+      pollUpdatedAt: BEFORE_DROP,
+    });
+    expect(result).toEqual({ threads: laneThreads, source: "state-lane" });
+    expect(
+      (result.threads ?? []).map((thread) => thread.threadId),
+    ).not.toContain("deleted-remotely");
+  });
+
+  it("treats a poll that answered in the same millisecond as the drop as NOT newer", () => {
+    const laneThreads = [threadFixture("retained-lane-thread")];
+    const result = resolveArtifactCommentThreads({
+      laneThreads,
+      pollThreads: [threadFixture("poll-thread")],
+      laneDroppedAt: DROPPED_AT,
+      pollUpdatedAt: DROPPED_AT,
+    });
+    expect(result).toEqual({ threads: laneThreads, source: "state-lane" });
+  });
+
+  it("keeps retained lane rows over a poll that has never answered at all", () => {
+    const laneThreads = [threadFixture("retained-lane-thread")];
+    const result = resolveArtifactCommentThreads({
+      laneThreads,
+      // A cold cache still carries rows in the real world only via `null`;
+      // this pins the `pollUpdatedAt: null` branch specifically, which is what
+      // TanStack's `dataUpdatedAt === 0` sentinel maps to at the call sites.
+      pollThreads: [threadFixture("poll-thread")],
+      laneDroppedAt: DROPPED_AT,
+      pollUpdatedAt: null,
+    });
+    expect(result).toEqual({ threads: laneThreads, source: "state-lane" });
   });
 
   it("keeps the RETAINED lane rows (never null) when the lane drops and the poll has nothing either", () => {
@@ -114,7 +182,8 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads,
       pollThreads: null,
-      laneLive: false,
+      laneDroppedAt: DROPPED_AT,
+      pollUpdatedAt: null,
     });
     expect(result).toEqual({ threads: laneThreads, source: "state-lane" });
     // Explicitly not null: retention across a flaky connection is a
@@ -132,7 +201,8 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads: [],
       pollThreads: null,
-      laneLive: false,
+      laneDroppedAt: DROPPED_AT,
+      pollUpdatedAt: null,
     });
     expect(result.threads).toEqual([]);
     expect(result.threads).not.toBeNull();
@@ -145,17 +215,23 @@ describe("resolveArtifactCommentThreads", () => {
     const result = resolveArtifactCommentThreads({
       laneThreads,
       pollThreads,
-      laneLive: true,
+      laneDroppedAt: null,
+      pollUpdatedAt: AFTER_DROP,
     });
     expect(result).toEqual({ threads: laneThreads, source: "state-lane" });
   });
 
-  it("falls back to poll rows when the lane has said nothing, regardless of liveness - unchanged fallback", () => {
+  it("falls back to poll rows when the lane has said nothing, regardless of liveness or poll age - unchanged fallback", () => {
     const pollThreads = [threadFixture("poll-thread")];
     const result = resolveArtifactCommentThreads({
       laneThreads: null,
       pollThreads,
-      laneLive: false,
+      laneDroppedAt: DROPPED_AT,
+      // Deliberately PRE-drop: with no lane rows there is nothing to outrank,
+      // so an ancient poll is still the only answer and must win. A poll arm
+      // gated on freshness alone would return unknown here and blank the
+      // sidebar on every legacy connection.
+      pollUpdatedAt: BEFORE_DROP,
     });
     expect(result).toEqual({ threads: pollThreads, source: "poll" });
   });

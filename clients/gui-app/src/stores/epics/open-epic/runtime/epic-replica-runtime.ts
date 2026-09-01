@@ -1124,16 +1124,38 @@ export function createEpicReplicaRuntime(
    * safe to call from a support-change listener that also fires on every
    * reconnect's support reset.
    *
-   * ## Undecided with nothing installed is the PROBE case, not a hold
+   * ## Undecided without the LANES installed is the PROBE case, not a hold
    *
    * The hold rule ("an undecided verdict never displaces an installed arm")
    * describes a reconnect, where support was wiped but an arm is already
-   * serving. With NO arm installed there is nothing to hold and, worse,
-   * nothing that would ever make the verdict decide: the client learns a
-   * method's support from a subscribe completing, so a runtime that installs
-   * nothing while it waits opens no subscribe, receives no answer, and stalls
-   * on that connection permanently. So this case probes rather than waits -
-   * see {@link EpicLaneArm.probe}.
+   * serving. It is a rule about not TEARING DOWN a working arm, and the probe
+   * respects it: probing leaves whatever is installed serving, and only a
+   * probe that succeeds moves anything.
+   *
+   * With no arm installed there is nothing to hold and, worse, nothing that
+   * would ever make the verdict decide: the client learns a method's support
+   * from a subscribe completing, so a runtime that installs nothing while it
+   * waits opens no subscribe, receives no answer, and stalls on that
+   * connection permanently. So that case probes rather than waits - see
+   * {@link EpicLaneArm.probe}.
+   *
+   * An installed LEGACY arm is the same stall one step later, and it is the
+   * one a relay reaches every time. `RemoteStreamClient.getMethodSupport` is
+   * `"unknown"` forever and its support subscription is a no-op, so on a
+   * remote host the verdict is `"undecided"` for the life of the runtime: the
+   * first probe fails against an old host, legacy installs, and the tab is
+   * then pinned to `@1` no matter what the host becomes. Nothing short of
+   * recreating the runtime moved it - not the reconnect, not the re-handshake
+   * that a host upgraded in place performs, because neither produces a
+   * manifest verdict on that transport. Re-probing on the same edge is what
+   * makes "a host that upgrades under this tab moves onto the lanes" true on
+   * the transport where the manifest cannot say so.
+   *
+   * The cost on a host that is genuinely legacy is one refused subscribe per
+   * reconnect - the same one the first open already pays. A LOCAL legacy host
+   * mostly avoids even that: its client learns `"unsupported"` from the failed
+   * subscribe, so its verdict is `"legacy"` rather than `"undecided"` until a
+   * reconnect wipes it.
    */
   /**
    * The key the body tier holds one artifact's live doc under, per arm.
@@ -1186,9 +1208,16 @@ export function createEpicReplicaRuntime(
       laneSelection === null
         ? "legacy"
         : readEpicAdapterVerdict(laneSelection.support);
-    if (installedArm === null && verdict === "undecided") {
+    if (installedArm !== "lanes" && verdict === "undecided") {
       // Idempotent: the arm opens one status stream however often this is
       // called, and every reconnect's support reset lands here again.
+      //
+      // RETURNS without transitioning, which for an installed legacy arm is
+      // the same no-op `executeTransition("undecided")` would have run - it
+      // plans no steps against a held arm - minus a re-publish of an
+      // `installedArm` that did not move. The legacy adapter goes on serving
+      // while the probe is outstanding; only a probe that SUCCEEDS displaces
+      // it, through the ordinary transition.
       laneArm?.probe();
       return;
     }
@@ -1205,8 +1234,19 @@ export function createEpicReplicaRuntime(
    * never as a queryable pre-check. The subscribe's own outcome is the only
    * evidence both transports produce, so it is the only thing that can decide.
    *
-   * Ignored once an arm is installed: a manifest that resolved first has
+   * Ignored once the LANES are installed: a manifest that resolved first has
    * already settled this, and the probe's stream was adopted by that install.
+   * The lane arm answers `"succeeded"` off any control frame, and an installed
+   * lane arm produces those continuously, so this gate is also what keeps the
+   * steady state from re-deciding itself on every status snapshot.
+   *
+   * An installed LEGACY arm is deliberately NOT ignored, and that is the half
+   * that makes a re-probe mean anything. `"unsupported"` there is the answer
+   * legacy is already the response to - `executeTransition` plans no steps and
+   * nothing moves - while `"succeeded"` is a host that has been upgraded under
+   * this tab, and taking it runs the same legacy-to-lanes transition the
+   * manifest path runs. Reached only through `applySelection`'s re-probe, so
+   * on any transport where the manifest CAN decide, it already has.
    */
   /**
    * A lane the installed arm requires is not served. Fall back to legacy.
@@ -1231,8 +1271,24 @@ export function createEpicReplicaRuntime(
 
   function applyProbeOutcome(outcome: EpicLaneProbeOutcome): void {
     if (disposed) return;
-    if (installedArm !== null) return;
-    executeTransition(outcome === "succeeded" ? "lanes" : "legacy");
+    if (installedArm === "lanes") return;
+    if (outcome === "succeeded") {
+      executeTransition("lanes");
+      return;
+    }
+    if (installedArm === "legacy") {
+      // A REFUSED re-probe, and it has to retire its own stream. The
+      // transition would plan no steps against an arm already legacy, so it
+      // never reaches `attachArm` - which is the only other caller of this
+      // `detach` and the reason the FIRST refusal cleans up after itself. Left
+      // out, the probe's status stream stays open on a question already
+      // answered and the arm's single answer stays spent, so the next
+      // reconnect's `probe()` finds the lane attached, emits no subscribe, and
+      // every re-probe after the first is silently inert.
+      laneArm?.detach("superseded");
+      return;
+    }
+    executeTransition("legacy");
   }
 
   function routeEvent(runtimeEvent: EpicRuntimeEvent): void {

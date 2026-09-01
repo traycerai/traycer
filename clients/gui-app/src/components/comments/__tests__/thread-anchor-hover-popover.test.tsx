@@ -107,7 +107,7 @@ function renderPopover(
       artifactType="spec"
       artifactId={ARTIFACT_ID}
       laneThreads={laneThreads}
-      laneLive
+      laneDroppedAt={null}
       editor={editor}
       resolvedThreadIds={new Set<string>()}
       onActivateThread={onActivateThread}

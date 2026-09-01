@@ -28,6 +28,11 @@ import {
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { StreamMethodSupportSource } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { ConnectionManifest } from "@traycer/protocol/framework/ws-protocol";
 
 /**
  * Projection handlers that accept nothing, for tests that are not about
@@ -454,6 +459,17 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
  * "an event was posted" would have passed against a payload no reader could
  * use.
  */
+/**
+ * A host that serves BOTH record-list methods, at the minor that carries the
+ * doc remainder. `epic.listTuiAgents` needs `@1.1` specifically - at `@1.0`
+ * the host withholds doc-only entries, so the doc arm stays on - which is why
+ * this names a version rather than just a method.
+ */
+const RECORD_SERVING_MANIFEST: ConnectionManifest = {
+  "epic.listChatRecords": { major: 1, minor: 1 },
+  "epic.listTuiAgents": { major: 1, minor: 1 },
+};
+
 describe("the negotiated manifest crossing to the worker", () => {
   function supportController(): {
     readonly source: StreamMethodSupportSource<HostStreamRpcRegistry>;
@@ -520,6 +536,85 @@ describe("the negotiated manifest crossing to the worker", () => {
 
     handle.dispose();
     host.shutdown();
+  });
+
+  /**
+   * The `docArm` half, which has a DIFFERENT source from the other two fields
+   * and therefore a different edge.
+   *
+   * `methodSupport` is the stream client's learned support; `docArm` comes off
+   * the negotiated-UNARY registry. Subscribing only to the first was right for
+   * a reconnect - one re-handshake rewrites both - and wrong for the ordinary
+   * case of the first unary handshake completing after this worker spawned,
+   * which is the usual order on a warm tab. The worker then held the
+   * fail-closed doc arm against a host that serves the record-list methods, so
+   * it went on unioning a live root row with a poll row and a newer rename
+   * stayed hidden behind the older poll value.
+   *
+   * The stimulus is deliberately a registry write with NO support movement -
+   * `methodSupport` here is the default frozen `"unknown"` source with a no-op
+   * listener, which is also literally what a relay gives - so the only thing
+   * that can carry the new arm across is the registry subscription.
+   */
+  it("re-emits the manifest when the negotiated UNARY registry moves, with no stream-support edge at all", () => {
+    resetNegotiatedManifests();
+    const fixture = createFixture(true);
+    const host = fixture.host;
+    if (host === null) throw new Error("the fixture built no worker host");
+
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        {},
+      ),
+    );
+
+    // Fail-closed before any handshake: the doc is still a record source for
+    // both planes, which is what `readEpicDocRecordArms(null-ish)` answers.
+    expect(host.streams.manifest()?.docArm).toEqual({
+      chats: true,
+      tuiAgents: true,
+    });
+
+    // The first unary handshake with `host-1` completes. Nothing about STREAM
+    // support changed, and nothing here could tell the worker if this were not
+    // subscribed - the spawn fixture's `subscribeMethodSupport` is `() => () =>
+    // {}`.
+    recordNegotiatedHostManifest("host-1", RECORD_SERVING_MANIFEST);
+
+    expect(host.streams.manifest()?.docArm).toEqual({
+      chats: false,
+      tuiAgents: false,
+    });
+
+    handle.dispose();
+    host.shutdown();
+    resetNegotiatedManifests();
+  });
+
+  it("stops listening to the negotiated registry once the handle is disposed", () => {
+    resetNegotiatedManifests();
+    const fixture = createFixture(true);
+    const host = fixture.host;
+    if (host === null) throw new Error("the fixture built no worker host");
+
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        {},
+      ),
+    );
+    handle.dispose();
+
+    // The registry is module-scoped and PROCESS-wide, so a listener leaked
+    // there outlives not just this transport but every session on it - and it
+    // would emit onto a disposed bridge on every later host's handshake.
+    const before = host.streams.manifest()?.docArm;
+    recordNegotiatedHostManifest("host-1", RECORD_SERVING_MANIFEST);
+    expect(host.streams.manifest()?.docArm).toEqual(before);
+
+    host.shutdown();
+    resetNegotiatedManifests();
   });
 
   it("stops pushing once the handle is disposed", () => {

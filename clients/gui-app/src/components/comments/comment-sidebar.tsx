@@ -42,10 +42,11 @@ export interface CommentSidebarProps {
    *  is not "no threads" - it hands the question to the poll below. */
   readonly laneThreads: readonly CommentThreadWire[] | null;
   /**
-   * Whether the lane pushing {@link laneThreads} is up. A prop for the same
-   * reason the rows are: this component reads no ambient context.
+   * When the lane pushing {@link laneThreads} stopped, or `null` while it is
+   * up. A prop for the same reason the rows are: this component reads no
+   * ambient context.
    */
-  readonly laneLive: boolean;
+  readonly laneDroppedAt: number | null;
   /** Threads-anchored-in-document positions, derived from the active tile's
    *  Tiptap editor by the parent. Used both for sort order and orphan
    *  detection (no entry → orphan). */
@@ -74,7 +75,7 @@ export function CommentSidebar(props: CommentSidebarProps) {
     artifactType,
     artifactId,
     laneThreads,
-    laneLive,
+    laneDroppedAt,
     anchorPositions,
     currentUserId,
     canModerate,
@@ -101,10 +102,14 @@ export function CommentSidebar(props: CommentSidebarProps) {
     () =>
       resolveArtifactCommentThreads({
         laneThreads,
-        laneLive,
+        laneDroppedAt,
         pollThreads: query.data === undefined ? null : query.data.threads,
+        // `0` is TanStack's "never resolved" sentinel, and it is also a real
+        // epoch instant - so it has to become `null` here or a cold cache
+        // would read as an answer from 1970 and lose every comparison.
+        pollUpdatedAt: query.dataUpdatedAt === 0 ? null : query.dataUpdatedAt,
       }),
-    [laneLive, laneThreads, query.data],
+    [laneDroppedAt, laneThreads, query.data, query.dataUpdatedAt],
   );
 
   const sorted = useMemo(() => {

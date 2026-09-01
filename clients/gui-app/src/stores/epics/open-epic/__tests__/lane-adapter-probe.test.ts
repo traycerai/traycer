@@ -337,11 +337,18 @@ function createCountingStateFactory(): CountingStateFactory {
 interface CountingLegacyFactory {
   readonly factory: EpicStreamClientFactory;
   openCount(): number;
+  /**
+   * How many `@1` clients have been closed. The mirror of the status lane's
+   * own `closeCount`, and what makes "legacy was RETIRED, not left running
+   * beside the lanes" observable on the re-probe upgrade path.
+   */
+  closeCount(): number;
 }
 
 /** The `epic.subscribe@1` factory - the "speculative fat stream" this pin forbids. */
 function createCountingLegacyFactory(): CountingLegacyFactory {
   let opens = 0;
+  let closes = 0;
   const factory: EpicStreamClientFactory = (
     _epicId,
     _callbacks,
@@ -354,10 +361,12 @@ function createCountingLegacyFactory(): CountingLegacyFactory {
       applyArtifactRoomUpdate: () => undefined,
       artifactRoomAwareness: () => undefined,
       retryMigration: () => undefined,
-      close: () => undefined,
+      close: () => {
+        closes += 1;
+      },
     };
   };
-  return { factory, openCount: () => opens };
+  return { factory, openCount: () => opens, closeCount: () => closes };
 }
 
 // ── Runtime construction ─────────────────────────────────────────────────────
@@ -389,7 +398,54 @@ let nextEpicSequence = 0;
  * on it physically cannot resolve support by hand - which is the mistake the
  * first version of this suite made.
  */
-type SupportMode = "forever-unknown" | "controllable";
+type SupportMode =
+  | "forever-unknown"
+  | "forever-unknown-notifiable"
+  | "controllable";
+
+/**
+ * The relay case AFTER the worker's manifest-registry subscription exists.
+ *
+ * Support is still `"unknown"` for every method and forever - this is a relay,
+ * and `RemoteStreamClient` has nothing to report - but the listener CAN fire.
+ * That pairing is not a contrivance: `spawn-epic-runtime-worker` re-emits its
+ * manifest on `subscribeNegotiatedManifests`, and the negotiated registry is
+ * rewritten on every session re-attach, so a relay reconnect now reaches
+ * `applySelection` while every support answer it reads stays `"unknown"`.
+ *
+ * `FOREVER_UNKNOWN_SUPPORT` deliberately cannot do this - its listener is a
+ * no-op - which is why the re-probe pins need their own source rather than a
+ * flag on that one.
+ */
+function createForeverUnknownNotifiableSupport(): SupportController {
+  const listeners = new Set<() => void>();
+  return {
+    support: () => "unknown",
+    subscribeSupport: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    set() {
+      throw new Error(
+        "this source is forever-unknown by construction; resolving support by hand is the mistake it exists to prevent",
+      );
+    },
+    notify() {
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+/** `null` for `"forever-unknown"`, which has no controller by design. */
+function buildSupportSource(mode: SupportMode): SupportController | null {
+  if (mode === "controllable") return createSupportController();
+  if (mode === "forever-unknown-notifiable") {
+    return createForeverUnknownNotifiableSupport();
+  }
+  return null;
+}
 
 function buildRuntimeRig(mode: SupportMode): RuntimeRig {
   nextEpicSequence += 1;
@@ -397,7 +453,7 @@ function buildRuntimeRig(mode: SupportMode): RuntimeRig {
   const status = createCountingStatusFactory();
   const state = createCountingStateFactory();
   const artifacts = createCountingArtifactFactory();
-  const support = mode === "controllable" ? createSupportController() : null;
+  const support = buildSupportSource(mode);
   const laneSelection: EpicLaneSelectionSources = {
     support: support?.support ?? FOREVER_UNKNOWN_SUPPORT.support,
     subscribeSupport:
@@ -510,6 +566,125 @@ describe("lane adapter probe - forever-unknown support must still reach the lane
     expect(rig.status.closeCount()).toBe(1);
     // The records lane was never attached on this connection.
     expect(rig.state.openCount()).toBe(0);
+  });
+
+  /**
+   * (b2) The RE-PROBE, and the reason the arm's single answer is per
+   * ATTACHMENT rather than per runtime.
+   *
+   * Over a relay the verdict is `"undecided"` for the life of the runtime, so
+   * the manifest can never move an arm. Once (b) installs legacy, the whole
+   * "a host that upgrades under this tab moves onto the lanes" contract used
+   * to be dead on exactly the transport that needs it most: the tab stayed on
+   * `@1` until something recreated the runtime.
+   *
+   * The stimulus is a support NOTIFY with support still unknown - which is
+   * what a relay re-attach now delivers, since the negotiated-manifest
+   * registry is rewritten on every re-handshake and the worker re-emits on it.
+   */
+  it("(b2) a relay host upgraded in place re-probes on the reconnect edge and moves the legacy tab onto the lanes", () => {
+    const rig = buildRuntimeRig("forever-unknown-notifiable");
+    runtimes.push(rig.runtime);
+    const support = requireSupport(rig);
+
+    rig.runtime.start();
+    rig.status.deliverMethodUnsupported();
+    expect(rig.legacy.openCount()).toBe(1);
+    expect(rig.status.openCount()).toBe(1);
+    expect(rig.status.closeCount()).toBe(1);
+
+    // The re-handshake. Support has NOT moved and cannot - this source has no
+    // `set` - so nothing here resolves a manifest verdict. The only thing that
+    // can decide is another subscribe.
+    support.notify();
+
+    // THE REDDENING ASSERTION: a second status stream was opened. Under the
+    // old `installedArm === null` guard this stayed at 1 forever.
+    expect(rig.status.openCount()).toBe(2);
+    // The legacy arm is still serving while the question is outstanding - a
+    // probe must not blank the epic it is asking about.
+    expect(rig.legacy.closeCount()).toBe(0);
+    expect(rig.state.openCount()).toBe(0);
+
+    // The upgraded host serves it.
+    rig.status.deliverSnapshot();
+
+    expect(rig.state.openCount()).toBe(1);
+    // The re-probe's own stream was adopted, exactly as the first probe's is
+    // on the (a) path - not replaced by a third.
+    expect(rig.status.openCount()).toBe(2);
+    // And legacy was retired rather than left running beside the lanes.
+    expect(rig.legacy.closeCount()).toBe(1);
+  });
+
+  /**
+   * (b3) A refused RE-probe has to clean up after itself, or there is exactly
+   * ONE re-probe ever.
+   *
+   * The first refusal is tidied by `attachArm("legacy")`, which detaches the
+   * arm on its way to installing `@1`. A refusal that finds legacy ALREADY
+   * installed plans no transition steps, so it never reaches that code - which
+   * left the probe's stream open and the arm's single answer spent. The next
+   * reconnect's `probe()` then found the status lane attached, emitted no
+   * subscribe, and every re-probe after the first was silently inert.
+   *
+   * This is the pin that distinguishes "re-probes once" from "re-probes".
+   */
+  it("(b3) a refused re-probe retires its own stream, so the NEXT reconnect probes again", () => {
+    const rig = buildRuntimeRig("forever-unknown-notifiable");
+    runtimes.push(rig.runtime);
+    const support = requireSupport(rig);
+
+    rig.runtime.start();
+    rig.status.deliverMethodUnsupported();
+    support.notify();
+    expect(rig.status.openCount()).toBe(2);
+
+    // Still an old host: the re-probe is refused the same typed way.
+    rig.status.deliverMethodUnsupported();
+    expect(rig.legacy.openCount()).toBe(1);
+    // The refused re-probe closed its own socket - 2 opens, 2 closes.
+    expect(rig.status.closeCount()).toBe(2);
+
+    // A THIRD reconnect. This is the one that was inert.
+    support.notify();
+    expect(rig.status.openCount()).toBe(3);
+
+    // And it can still succeed, so the inertness was the only thing fixed -
+    // the arm did not burn its answer on the refusal.
+    rig.status.deliverSnapshot();
+    expect(rig.state.openCount()).toBe(1);
+    expect(rig.legacy.closeCount()).toBe(1);
+  });
+
+  /**
+   * (b4) CONTROL, green both sides. A host whose support genuinely RESOLVED to
+   * unsupported answers `"legacy"`, not `"undecided"`, so it must not re-probe
+   * on every support change - that would be a refused subscribe per edge on a
+   * population that has already told us the answer.
+   *
+   * Without this, the (b2)/(b3) pins would also pass on a re-probe keyed on
+   * "legacy is installed" alone, which is a different and wrong rule.
+   */
+  it("(b4) a host whose support RESOLVED to unsupported does not re-probe on a support change", () => {
+    const rig = buildRuntimeRig("controllable");
+    runtimes.push(rig.runtime);
+    const support = requireSupport(rig);
+
+    for (const method of EPIC_LANE_METHODS) support.set(method, "unsupported");
+    rig.runtime.start();
+
+    // A decided `"legacy"` verdict installs `@1` with no probe at all.
+    expect(rig.legacy.openCount()).toBe(1);
+    expect(rig.status.openCount()).toBe(0);
+
+    support.notify();
+    support.notify();
+
+    // Still zero. The verdict is decided, so the manifest is the authority and
+    // there is nothing for a subscribe to add.
+    expect(rig.status.openCount()).toBe(0);
+    expect(rig.legacy.openCount()).toBe(1);
   });
 
   it("(e) one epoch change reported TWICE rebuilds the replica exactly once", () => {

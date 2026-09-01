@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
@@ -95,8 +95,16 @@ export function useEpicLaneCommentThreads(
 }
 
 /**
- * Whether this surface's state lane is CURRENTLY pushing, for
- * {@link resolveArtifactCommentThreads}'s `laneLive`.
+ * WHEN this surface's state lane stopped pushing, for
+ * {@link resolveArtifactCommentThreads}'s `laneDroppedAt`. `null` means it is
+ * pushing right now.
+ *
+ * An INSTANT rather than the boolean this used to return, and the two are not
+ * different information: the lane is live exactly when there is no drop
+ * instant, so `laneDroppedAt === null` is the old `laneLive`. What the instant
+ * adds is the ability to ORDER the two sources once the lane is down - see the
+ * resolver, where a poll answer that predates the drop must not outrank the
+ * rows the lane pushed after it.
  *
  * `recordsTransportStatus === "open"` - the RECORDS lane's own liveness, not
  * the blended `hostTransportStatus`.
@@ -111,18 +119,36 @@ export function useEpicLaneCommentThreads(
  * so a records lane reconnecting under a live status lane still reported
  * `open` here and kept stale rows ahead of a refreshed poll.
  *
- * `false` outside an epic session, matching {@link useEpicLaneCommentThreads}'s
- * `null`: no session means no lane, and the poll answers for every host.
+ * Outside an epic session there is no lane, so this stamps a drop at mount and
+ * never clears it - matching {@link useEpicLaneCommentThreads}'s `null` and
+ * letting the poll, which answers for every host, win unconditionally.
  */
-export function useEpicLaneCommentThreadsLive(): boolean {
+export function useEpicLaneCommentThreadsDroppedAt(): number | null {
   const handle = useMaybeOpenEpicHandle();
   const subscribe = useCallback(
     (onStoreChange: () => void): (() => void) =>
       handle === null ? () => {} : handle.store.subscribe(onStoreChange),
     [handle],
   );
-  // A boolean, so `useSyncExternalStore` compares snapshots by value and never
-  // sees a fresh object.
+  // The store holds a STATUS, not its history, so the instant is derived here.
+  // It lives in a ref rather than in state because `useSyncExternalStore`'s
+  // contract is the one that wants it: `getSnapshot` must return the SAME
+  // value while nothing has changed, and a fresh `Date.now()` per call would
+  // loop the render forever. Caching into the ref is what makes it stable, and
+  // it is the same shape React's own docs use to keep a derived snapshot's
+  // identity - not a way to sneak a write into render, since every call
+  // computes the same answer from the store's own state.
+  //
+  // The alternative, a transition effect, is what this replaced: the lint
+  // forbids a synchronous `setState` in an effect body, and it is right to -
+  // that shape also renders twice per drop for a value the snapshot already
+  // knows.
+  //
+  // Stamped on the FIRST snapshot when the lane is not already pushing, not
+  // only on a transition observed while mounted. A remount over a session
+  // whose lane closed earlier finds a `closed` status beside a lane slice that
+  // still holds rows; treating that as "never dropped" would put those rows
+  // back in front of every poll, which is the same bug one layer up.
   //
   // `recordsTransportStatus`, NOT the blended `hostTransportStatus`. The
   // blended slot is written by every lane that reports a transition - correct
@@ -131,12 +157,19 @@ export function useEpicLaneCommentThreadsLive(): boolean {
   // went on outranking a poll that had already refreshed. The rows this
   // predicate orders come from the records lane, so its liveness is the one
   // that decides.
-  const getSnapshot = useCallback(
-    (): boolean =>
+  const droppedAtRef = useRef<number | null>(null);
+  const getSnapshot = useCallback((): number | null => {
+    const live =
       handle !== null &&
-      handle.store.getState().recordsTransportStatus === "open",
-    [handle],
-  );
+      handle.store.getState().recordsTransportStatus === "open";
+    if (live) droppedAtRef.current = null;
+    else droppedAtRef.current ??= Date.now();
+    return droppedAtRef.current;
+  }, [handle]);
+  // A handle swap keeps the previous session's instant, since the ref outlives
+  // the `useCallback`. Harmless: the new store's lane slice has said nothing
+  // about the artifact yet, so the resolver takes the poll on its
+  // "nothing to outrank" arm regardless of how the instant compares.
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
@@ -150,7 +183,7 @@ export function useEpicLaneCommentThreadsLive(): boolean {
  * answer - a lane silence beside a loaded poll is not unknown, and a poll
  * error beside lane rows is not unknown either.
  *
- * `laneLive` is an ORDERING input, not a clearing one, and the distinction is
+ * The drop is an ORDERING input, not a clearing one, and the distinction is
  * the whole point. Retaining lane rows across a flaky connection is a
  * documented goal (`state-subscribe.ts`), so a dropped lane still answers when
  * it is the only source with rows - the third arm below. What changes is that
@@ -159,6 +192,24 @@ export function useEpicLaneCommentThreadsLive(): boolean {
  * mutations invalidate only the poll cache, so the window where the poll is
  * ahead is reachable rather than theoretical.
  *
+ * NEWER MEANS TIMED, NOT MERELY PRESENT. The poll's arm used to fire on
+ * `pollThreads !== null` alone, which reads a cache of ANY age as fresher than
+ * the lane simply because it exists - and the writer that makes those two
+ * disagree is a REMOTE one. Another client deleting a thread reaches this
+ * surface over the lane and invalidates nothing here, because this surface did
+ * not mutate; the poll cache keeps its pre-deletion snapshot for as long as
+ * TanStack's stale window and focus rule allow. While the lane was up the
+ * ordering hid that. The moment it dropped, the old cache was selected and the
+ * deleted thread came back - a resurrection produced by a transport event, on
+ * a surface where nothing had changed.
+ *
+ * So a retained lane keeps precedence until the poll has answered SINCE the
+ * drop. There is deliberately no lane-triggered refetch to hurry that along:
+ * the rows on screen are the last thing the lane said, which is exactly what
+ * retention promises, and the query already refetches on window focus and
+ * after its stale window. A permanently dead lane on a never-blurred window is
+ * the one case that waits, and it waits showing the newer of the two views.
+ *
  * Pure, and shared by every comment surface, so the sidebar, the hover preview
  * and the tile's decoration layer can never disagree about which threads exist
  * for the artifact they are all rendering.
@@ -166,17 +217,34 @@ export function useEpicLaneCommentThreadsLive(): boolean {
 export function resolveArtifactCommentThreads(args: {
   readonly laneThreads: readonly CommentThreadWire[] | null;
   readonly pollThreads: readonly CommentThreadWire[] | null;
-  /** Whether the state lane's transport is up right now. */
-  readonly laneLive: boolean;
+  /**
+   * When the state lane's transport stopped pushing, or `null` while it is up.
+   * See {@link useEpicLaneCommentThreadsDroppedAt}.
+   */
+  readonly laneDroppedAt: number | null;
+  /**
+   * When the poll last answered - TanStack's `dataUpdatedAt` - or `null` when
+   * it never has. Compared against {@link laneDroppedAt}, so both must come
+   * from the same clock; both are `Date.now()` in this renderer.
+   */
+  readonly pollUpdatedAt: number | null;
 }): ArtifactCommentThreads {
-  if (args.laneThreads !== null && args.laneLive) {
-    return { threads: args.laneThreads, source: "state-lane" };
+  const { laneThreads, pollThreads, laneDroppedAt, pollUpdatedAt } = args;
+  if (laneThreads !== null && laneDroppedAt === null) {
+    return { threads: laneThreads, source: "state-lane" };
   }
-  if (args.pollThreads !== null) {
-    return { threads: args.pollThreads, source: "poll" };
+  // Strictly after, so a poll that answered in the same millisecond as the
+  // drop does not count: the lane's last frame is the later fact at that tie,
+  // and the retention default is the safe side of it.
+  const pollAnsweredAfterDrop =
+    pollUpdatedAt !== null &&
+    laneDroppedAt !== null &&
+    pollUpdatedAt > laneDroppedAt;
+  if (pollThreads !== null && (laneThreads === null || pollAnsweredAfterDrop)) {
+    return { threads: pollThreads, source: "poll" };
   }
-  if (args.laneThreads !== null) {
-    return { threads: args.laneThreads, source: "state-lane" };
+  if (laneThreads !== null) {
+    return { threads: laneThreads, source: "state-lane" };
   }
   return { threads: null, source: null };
 }

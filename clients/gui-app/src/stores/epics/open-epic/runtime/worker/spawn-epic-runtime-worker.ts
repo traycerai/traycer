@@ -53,6 +53,7 @@ import {
   isStreamProxyEvent,
 } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import type { StreamMethodSupportSource } from "@traycer-clients/shared/host-transport/host-stream-client";
+import { subscribeNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { EPIC_LANE_METHODS } from "@traycer-clients/shared/epic-lanes";
 import { readEpicDocRecordArms } from "@/stores/epics/open-epic/doc-record-arms";
 import {
@@ -442,11 +443,37 @@ export function spawnEpicRuntimeWorker<TProjection>(
    *
    * `docArm` is read here rather than pushed by a caller because it is a MAIN
    * fact - `readEpicDocRecordArms` consults the ambient negotiated-manifest
-   * registry - and the same edge that moves method support is the one that
-   * moves it: a reconnect reaching a new host incarnation re-handshakes and
-   * rewrites both. Bundling the three into one event is the protocol's own
-   * rule, so that a worker can never read a support verdict from one
-   * negotiation beside a doc arm from another.
+   * registry. Bundling the three into one event is the protocol's own rule, so
+   * that a worker can never read a support verdict from one negotiation beside
+   * a doc arm from another.
+   *
+   * ## TWO subscriptions, because the three fields have two sources
+   *
+   * `methodSupport` is the STREAM client's learned support; `docArm` comes off
+   * the negotiated-UNARY manifest registry. This used to subscribe only to the
+   * first, on the reasoning that one edge moves both - true of a reconnect that
+   * re-handshakes, and false of the first unary handshake completing after this
+   * worker was spawned. That is not a rare interleaving: it is the ordinary
+   * order on a warm tab, and it left the worker holding the fail-closed
+   * `docArm` against a host that serves the record-list methods. The GUI then
+   * asks for the doc remainder with `hasDocReplica: false` while the worker
+   * still unions a live root row with a poll row, and because the record side
+   * wins, a newer rename or reparent stays hidden behind the older poll value
+   * until some later list response dislodges it.
+   *
+   * The registry subscription earns its keep a second time, on the arm
+   * selection. `RemoteStreamClient.subscribeMethodSupport` is a no-op and its
+   * `getMethodSupport` is `"unknown"` forever, so over a relay the first
+   * subscription produces NO edge at all - not a late one. The registry is
+   * written on every session re-attach (`remote-session.ts`), which makes this
+   * the only signal that reaches a worker-hosted runtime when a remote host is
+   * upgraded underneath an open tab. See `applySelection`'s re-probe.
+   *
+   * It fires for any host's change, not just this one's, and re-emitting an
+   * unchanged manifest is deliberately not filtered: the worker's own
+   * `applySelection` is documented idempotent and cheap, and an equality check
+   * here would be a second place that can decide two manifests are the same -
+   * the failure of getting THAT wrong is a verdict that never arrives.
    */
   let disposed = false;
 
@@ -478,6 +505,8 @@ export function spawnEpicRuntimeWorker<TProjection>(
   emitManifest();
   const unsubscribeMethodSupport =
     options.methodSupport.subscribeMethodSupport(emitManifest);
+  const unsubscribeNegotiatedManifests =
+    subscribeNegotiatedManifests(emitManifest);
 
   function detach(): void {
     // The WORKER first, before main's proxy goes away.
@@ -553,8 +582,11 @@ export function spawnEpicRuntimeWorker<TProjection>(
       unsubscribeEvents();
       // The transport outlives this worker on the retained-buffer path, so a
       // manifest listener left behind would emit onto a disposed bridge every
-      // time that connection re-handshakes.
+      // time that connection re-handshakes. BOTH of them: the registry is
+      // module-scoped and process-wide, so a listener leaked there outlives not
+      // just the transport but every session on it.
       unsubscribeMethodSupport();
+      unsubscribeNegotiatedManifests();
       // The worker will not get to say `accounting/books registered: false` -
       // it is about to be terminated - so main releases the holders itself.
       accounting.dispose();

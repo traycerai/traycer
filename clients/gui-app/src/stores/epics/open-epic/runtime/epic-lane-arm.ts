@@ -625,6 +625,15 @@ export function createEpicLaneArm(sources: EpicLaneArmSources): EpicLaneArm {
       // single answer - see the latch's own doc for why session-scoped was a
       // defect rather than a simplification.
       requiredLaneUnsupportedReported = false;
+      // The PROBE latch is the same rule, and it was the one member of the
+      // pair not being reset here. Leaving it set made "one answer per arm"
+      // read as one answer per RUNTIME, because this arm object is a `const`
+      // built once and only ever detached - so a legacy install (which detaches
+      // the probe's stream through this very function) permanently spent the
+      // arm's only answer. Nothing could then move a tab whose host upgraded
+      // underneath it, which is exactly the case the latch's doc says a new
+      // attachment gets a fresh answer for.
+      probeAnswered = false;
       // Sockets down, DEMAND kept: a transport-only detach and a replacement
       // are both followed by a reopen that must restore the same bodies.
       bodies.detachAll(reason);
