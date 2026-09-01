@@ -65,6 +65,12 @@ Traycer connects to the subscriptions you already pay for instead of locking you
     <td align="center" width="150"><a href="https://openrouter.ai"><img src="https://www.google.com/s2/favicons?domain=openrouter.ai&sz=32" width="24" alt="OpenRouter" /><br /><b>OpenRouter</b></a></td>
     <td align="center" width="150"><a href="https://github.com/earendil-works/pi"><img src="https://www.google.com/s2/favicons?domain=github.com&sz=32" width="24" alt="Pi" /><br /><b>Pi</b></a></td>
   </tr>
+  <tr>
+    <td align="center" width="150"><a href="https://hermes-agent.nousresearch.com"><img src="https://www.google.com/s2/favicons?domain=nousresearch.com&sz=32" width="24" alt="Hermes Agent" /><br /><b>Hermes Agent</b></a></td>
+    <td align="center" width="150"><a href="https://huggingface.co"><img src="https://www.google.com/s2/favicons?domain=huggingface.co&sz=32" width="24" alt="Hugging Face" /><br /><b>Hugging Face</b></a></td>
+    <td align="center" width="150"><a href="https://github.com/can1357/oh-my-pi"><img src="https://www.google.com/s2/favicons?domain=github.com&sz=32" width="24" alt="Oh My Pi" /><br /><b>Oh My Pi</b></a></td>
+    <td align="center" width="150"><a href="https://reasonix.io"><img src="https://www.google.com/s2/favicons?domain=reasonix.io&sz=32" width="24" alt="Reasonix" /><br /><b>Reasonix</b></a></td>
+  </tr>
 </table>
 </div>
 
