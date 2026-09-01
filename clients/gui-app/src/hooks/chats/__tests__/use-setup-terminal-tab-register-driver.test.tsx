@@ -14,6 +14,7 @@ import {
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const EPIC_ID = "epic-setup-title";
 const CHAT_ID = "chat-setup-title";
@@ -38,6 +39,7 @@ const WORKTREE_ENTRY: WorktreeBindingEntry = {
 
 function createHandle() {
   return createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "host-a",
     epicId: EPIC_ID,
     chatId: CHAT_ID,

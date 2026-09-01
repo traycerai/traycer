@@ -6,15 +6,18 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
-import { projectFullState } from "@/stores/epics/open-epic/projection-helpers";
+import {
+  DOC_IS_THE_ONLY_RECORD_SOURCE,
+  projectFullState,
+} from "@/stores/epics/open-epic/projection-helpers";
 import { EMPTY_PENDING_OVERLAY } from "@/stores/epics/open-epic/pending-metadata-overlay";
 import {
   EMPTY_CHATS_SLICE,
@@ -54,7 +57,7 @@ function makeMeta(): SnapshotMetaEpic {
 }
 
 function newSession(): {
-  handle: OpenEpicStoreHandle;
+  handle: OpenedStoreForTest;
   callbacks: EpicStreamCallbacks;
 } {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
@@ -69,11 +72,18 @@ function newSession(): {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  // The blessed harness: real host, real core, real composition, real bridge.
+  // `handle.doc` still works because this builds the runtime in THIS thread.
+  const handle = openStoreForTest({
     epicId: "epic-test",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
+    factories: {
+      streamClientFactory: factory,
+      // No lane stream clients in this suite - the legacy @1 arm, which is
+      // what these tests drive.
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   // Send an empty snapshot with editor role so mutation actions run.
@@ -209,14 +219,14 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
-  it("rename only re-allocates the renamed slot; siblings keep ===", () => {
+  it("rename only re-allocates the renamed slot; siblings keep ===", async () => {
     const { handle } = newSession();
     const a = createArtifactInDocForTests(handle.doc, "spec", null);
     const b = createArtifactInDocForTests(handle.doc, "ticket", null);
     const beforeA = handle.store.getState().artifacts.byId[a];
     const beforeB = handle.store.getState().artifacts.byId[b];
 
-    handle.store.getState().renameArtifact(a, "Renamed A");
+    await handle.store.getState().renameArtifact(a, "Renamed A");
 
     const afterA = handle.store.getState().artifacts.byId[a];
     const afterB = handle.store.getState().artifacts.byId[b];
@@ -226,12 +236,12 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
-  it("title edit does not invalidate tree rootIds when set is unchanged", () => {
+  it("title edit does not invalidate tree rootIds when set is unchanged", async () => {
     const { handle } = newSession();
     const a = createArtifactInDocForTests(handle.doc, "spec", null);
     const treeBefore = handle.store.getState().tree;
 
-    handle.store.getState().renameArtifact(a, "Renamed");
+    await handle.store.getState().renameArtifact(a, "Renamed");
 
     const treeAfter = handle.store.getState().tree;
     // rootIds membership unchanged → reference preserved
@@ -239,12 +249,12 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
-  it("structural change (parent move) updates childrenByParent buckets", () => {
+  it("structural change (parent move) updates childrenByParent buckets", async () => {
     const { handle } = newSession();
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
     const child = createArtifactInDocForTests(handle.doc, "ticket", null);
 
-    handle.store.getState().reparentArtifact(child, parent);
+    await handle.store.getState().reparentArtifact(child, parent);
 
     const tree = handle.store.getState().tree;
     expect(tree.rootIds).toContain(parent);
@@ -253,14 +263,14 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
-  it("delete preserves artifact child parent links for host cascade", () => {
+  it("delete preserves artifact child parent links for host cascade", async () => {
     const { handle } = newSession();
     const root = createArtifactInDocForTests(handle.doc, "spec", null);
     const mid = createArtifactInDocForTests(handle.doc, "spec", root);
     const leaf = createArtifactInDocForTests(handle.doc, "ticket", mid);
     const chat = createArtifactInDocForTests(handle.doc, "chat", mid);
 
-    handle.store.getState().deleteArtifact(mid);
+    await handle.store.getState().deleteArtifact(mid);
 
     const state = handle.store.getState();
     expect(Object.hasOwn(state.artifacts.byId, mid)).toBe(false);
@@ -281,12 +291,12 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
-  it("setEpicTitle updates epic.title slice only", () => {
+  it("an epic-title mutation updates the epic.title slice only", async () => {
     const { handle } = newSession();
     const before = handle.store.getState();
     const beforeArtifacts = before.artifacts;
 
-    handle.store.getState().setEpicTitle("New Title");
+    await handle.store.getState().beginEpicTitleMutation("New Title");
 
     const after = handle.store.getState();
     expect(after.epic.title).toBe("New Title");
@@ -295,13 +305,19 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
-  it("projected slices match a fresh full projection of the live Y.Doc", () => {
+  it("projected slices match a fresh full projection of the live Y.Doc", async () => {
     const { handle } = newSession();
     const a = createArtifactInDocForTests(handle.doc, "spec", null);
     const b = createArtifactInDocForTests(handle.doc, "ticket", a);
     const c = createArtifactInDocForTests(handle.doc, "chat", null);
-    handle.store.getState().setEpicTitle("Parity Check");
-    handle.store.getState().renameArtifact(b, "Ticket B");
+    // Written to the DOC, not stamped as an overlay. This test asserts PARITY
+    // between the store's projection and a fresh full projection of the doc,
+    // and an optimistic overlay breaks that by construction - it is precisely
+    // a value the store shows and the doc does not yet have. `setEpicTitle`
+    // (which this replaced) was a doc write, so writing the doc is what keeps
+    // the test asserting what it always asserted.
+    handle.doc.getMap("epic").set("title", "Parity Check");
+    await handle.store.getState().renameArtifact(b, "Ticket B");
     void a;
     void c;
 
@@ -310,6 +326,7 @@ describe("epic-projector", () => {
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
       reportDeadMutations: null,
+      docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
     const state = handle.store.getState();
 
@@ -344,6 +361,7 @@ describe("epic-projector", () => {
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
       reportDeadMutations: null,
+      docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
     expect(mine.chats.allIds.slice().sort()).toEqual(["mine", "orphan"]);
     expect(Object.keys(mine.chats.byId).sort()).toEqual(["mine", "orphan"]);
@@ -355,6 +373,7 @@ describe("epic-projector", () => {
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
       reportDeadMutations: null,
+      docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
     expect(anon.chats.allIds.slice().sort()).toEqual([
       "mine",
@@ -382,6 +401,7 @@ describe("epic-projector", () => {
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
       reportDeadMutations: null,
+      docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
     expect(mine.tuiAgents.allIds.slice().sort()).toEqual(["legacy", "mine"]);
     expect(Object.keys(mine.tuiAgents.byId).sort()).toEqual(["legacy", "mine"]);
@@ -393,6 +413,7 @@ describe("epic-projector", () => {
       tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
       pendingOverlay: EMPTY_PENDING_OVERLAY,
       reportDeadMutations: null,
+      docArm: DOC_IS_THE_ONLY_RECORD_SOURCE,
     });
     expect(anon.tuiAgents.allIds.slice().sort()).toEqual([
       "legacy",
@@ -790,7 +811,7 @@ describe("epic-projector", () => {
     handle.dispose();
   });
 
-  it("preserves live artifact rename identity semantics when tombstones exist", () => {
+  it("preserves live artifact rename identity semantics when tombstones exist", async () => {
     const { handle } = newSession();
     const a = createArtifactInDocForTests(handle.doc, "spec", null);
     const b = createArtifactInDocForTests(handle.doc, "ticket", null);
@@ -814,7 +835,7 @@ describe("epic-projector", () => {
     const beforeB = handle.store.getState().artifacts.byId[b];
     const deletedBefore = handle.store.getState().deletedArtifacts;
 
-    handle.store.getState().renameArtifact(a, "Renamed A");
+    await handle.store.getState().renameArtifact(a, "Renamed A");
 
     const after = handle.store.getState();
     // Rename still re-allocates only A's slot; B stays ===.

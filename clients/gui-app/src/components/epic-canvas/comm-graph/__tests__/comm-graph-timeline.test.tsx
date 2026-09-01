@@ -38,12 +38,17 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
 }));
 
-const openTransportStub = vi.hoisted(() => () => {
-  throw new Error("openTransport must not be called in this test");
+// Threw until `EpicSessionProvider` started opening its transport
+// unconditionally - see the fuller note in the sibling `comm-graph-tile`
+// suite for what the throw was pinning and what still pins it.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
 });
-vi.mock("@/lib/host/use-durable-stream-transport", () => ({
-  useDurableStreamTransportFactory: () => openTransportStub,
-}));
 
 vi.mock("@/providers/use-resolved-theme", () => ({
   useResolvedTheme: () => ({

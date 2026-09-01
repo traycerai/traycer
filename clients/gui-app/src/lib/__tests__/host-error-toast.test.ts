@@ -447,6 +447,7 @@ describe("transport-class causes never reach a reportable toast", () => {
     method: string,
   ): HostTransportFailureError {
     return new RetryableTransportError({
+      replaySafetyFromKey: false,
       code: "RPC_ERROR",
       message: "Dial failed before the request was sent",
       requestId: `req-${method}`,
@@ -504,6 +505,7 @@ describe("transport-class causes never reach a reportable toast", () => {
     // answered is "I never dispatched your request", which is precisely the
     // no-dispatch guarantee that makes retrying a non-idempotent method safe.
     return new RetryableTransportError({
+      replaySafetyFromKey: false,
       code: "RPC_ERROR",
       message: "Host timed out awaiting the request frame",
       requestId: `req-${method}`,

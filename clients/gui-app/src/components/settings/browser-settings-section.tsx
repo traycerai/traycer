@@ -351,6 +351,7 @@ function SavedLoginsToggleRow(props: {
         cascadeSummary={null}
         actionLabel="Stop saving"
         isPending={props.saveLogins.pending}
+        blockedReason={null}
         onConfirm={() => {
           props.saveLogins.setEnabled(false);
           setConfirming(false);
@@ -400,6 +401,7 @@ function ForgetAllLoginsRow(): ReactNode {
         cascadeSummary={null}
         actionLabel="Forget logins"
         isPending={false}
+        blockedReason={null}
         onConfirm={() => {
           // Closed unconditionally: the local half runs whatever the streams
           // do, so the work the dialog describes has begun even with no host

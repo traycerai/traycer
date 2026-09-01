@@ -19,6 +19,7 @@ import type {
   EpicCanvasState,
   EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 // The header rate-limit surfaces read per-harness profile memory scoped to
 // the window's EFFECTIVE host (`useEffectiveHostId()`), which is separate
@@ -113,6 +114,7 @@ function registerChatSession(): ChatSessionStoreHandle {
     },
     (epicId, chatId) =>
       createChatSessionStore({
+        environment: CHAT_STORE_TEST_ENVIRONMENT,
         hostId: "host-a",
         epicId,
         chatId,

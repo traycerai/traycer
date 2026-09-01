@@ -939,6 +939,18 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Updating the epic title persists user intent.
   "epic.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Re-running an interrupted major migration. `fifo`, not `latest`, because it
+  // is an ACTION with host-side effects and not a read: `latest` would let a
+  // second press supersede an in-flight retry, dropping a user-initiated
+  // recovery attempt. Never polled - the modal's Retry button is the only
+  // caller. Replaces the client frame the monolith carried; no GUI caller
+  // exists yet (the read cutover wires it), and this entry is here because the
+  // table must exactly match the registry.
+  "epic.retryMigration": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Granting access changes the epic's collaborator set.
   "epic.grantAccess": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Updating roles changes collaborator permissions.
@@ -985,9 +997,36 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  "epic.listCommentThreads": { ...LATEST_SCHEDULING, poll: null },
+  // A FIXED cadence the caller gates, not an always-on one. Comment threads
+  // normally arrive pushed on the records lane, and while that lane is up this
+  // poll must stay quiet - the lane is fresher by construction and a cadence
+  // beside it would be pure waste. But the lane's rows are RETAINED when it
+  // drops, and `resolveArtifactCommentThreads` only hands precedence back once
+  // the poll has answered SINCE that drop - so with no cadence at all, a
+  // permanently dead lane on a focused window froze the surface on retained
+  // rows indefinitely, hiding remote additions, deletions and status changes.
+  // `useEpicCommentThreadsForClient` therefore passes `poll` = "the lane is
+  // down" (`commentThreadsShouldPoll`).
+  //
+  // A condition policy would be the wrong shape: `classify` reads the
+  // RESPONSE, and the lane's liveness is not in it.
+  //
+  // 15s matches that hook's `staleTime`, deliberately - inside the stale
+  // window a read is served from cache anyway, so a tighter interval would
+  // spend requests to learn nothing.
+  "epic.listCommentThreads": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * SECOND_MS },
+  },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
   "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
+  // The workspace context the decomposed lanes fetch at tab open. A read, so
+  // `latest`; `poll: null` because it is refetched on EVENTS - a reconnect, or
+  // a control-lane migration/permission signal - never on a cadence. No GUI
+  // caller exists yet (the read cutover wires it); this entry is here because
+  // the table must exactly match the registry, and the method landed there with
+  // the protocol lane contracts.
+  "epic.getWorkspaceContext": { ...LATEST_SCHEDULING, poll: null },
   // The cloud-chat READ surface. All five are reads, so `latest` - and the two
   // properties that follow from the coordinator keying on PARAMS are exactly
   // what this fan-out wants: a read of part A never supersedes a concurrent

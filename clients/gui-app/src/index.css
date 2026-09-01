@@ -1114,6 +1114,18 @@
   --safe-area-inset-left: env(safe-area-inset-left, 0px);
 
   /*
+   * Soft-keyboard inset, in the same spirit as the env() reads above: named
+   * once, 0 everywhere except the one shell that drives it. The installed
+   * mobile app runs the iOS keyboard in overlay mode (`resize: none`) and its
+   * native bridge writes the height here from `keyboardWillShow` - which
+   * fires BEFORE the keyboard animates, so the safe-height tokens below can
+   * glide in sync with it instead of jumping after it. Android and every
+   * browser resize their own viewport for the keyboard, so `100dvh` already
+   * shrinks and this stays 0.
+   */
+  --keyboard-inset: 0px;
+
+  /*
    * The safe region's width, declared here rather than read back off the
    * theme token below. Hand-written CSS composes it - a cap has to be the
    * smaller of a call site's own width and this, `max-w-[min(…,
@@ -1126,6 +1138,22 @@
   --safe-area-width: calc(
     100dvw - var(--safe-area-inset-left) - var(--safe-area-inset-right)
   );
+}
+
+/*
+ * The keyboard glide. `traycer-native-keyboard` is set on <html> only by the
+ * installed app's native keyboard bridge (iOS overlay mode), so this rule is
+ * inert everywhere else - a desktop window resize must never animate.
+ * Selecting the safe-height utilities by name is deliberate: every
+ * window-filling surface sizes through them, so all of them track the
+ * keyboard with one rule instead of each opting in. 250ms against iOS's
+ * keyboard curve; the reduced-motion block above still flattens it.
+ */
+.traycer-native-keyboard
+  :is(.h-safe-dvh, .min-h-safe-dvh, .h-safe-svh, .min-h-safe-svh) {
+  transition:
+    height 250ms cubic-bezier(0.38, 0.7, 0.125, 1),
+    min-height 250ms cubic-bezier(0.38, 0.7, 0.125, 1);
 }
 
 @theme inline {
@@ -1178,8 +1206,12 @@
    * has already spent the top inset on padding, so a full `100dvh` child would
    * overhang the bottom of the screen by exactly that much.
    */
-  --spacing-safe-dvh: calc(100dvh - var(--safe-area-inset-top));
-  --spacing-safe-svh: calc(100svh - var(--safe-area-inset-top));
+  --spacing-safe-dvh: calc(
+    100dvh - var(--safe-area-inset-top) - var(--keyboard-inset)
+  );
+  --spacing-safe-svh: calc(
+    100svh - var(--safe-area-inset-top) - var(--keyboard-inset)
+  );
 
   /*
    * The width counterpart, for the same reason. Both horizontal insets come

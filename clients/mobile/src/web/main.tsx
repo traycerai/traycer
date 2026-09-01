@@ -23,6 +23,7 @@ import {
   removeDevicePushTokenViaHttp,
 } from "@traycer-clients/shared/auth/push-token-fetcher";
 import "./index.css";
+import { startNativeKeyboardBridge } from "./native-keyboard-bridge";
 import { MobileRunnerHost } from "../mobile-runner-host";
 import { MobileDeviceDescriber } from "../device-describer";
 import { MobileFileSave, supportsDirectDownload } from "../file-save";
@@ -171,6 +172,13 @@ function bootstrap(): void {
       ? nativePlatform
       : null,
   );
+  // Native-only: the Keyboard plugin has no web implementation, and the dev
+  // browser tab's overlay keyboard is already covered by gui-app's
+  // visualViewport fallback. Started before render so the first keyboard
+  // event after mount is never missed.
+  if (Capacitor.isNativePlatform()) {
+    startNativeKeyboardBridge();
+  }
   // APNs addressing follows code signing, not the backend set: staging and
   // production both ship distribution-signed (TestFlight / App Store rewrite
   // `aps-environment` to "production" at export), so only `dev` - the one
