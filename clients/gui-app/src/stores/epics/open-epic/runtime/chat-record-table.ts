@@ -113,6 +113,66 @@ function recordKey(ownerUserId: string, chatId: string): string {
   return ownerScopedRowKey(ownerUserId, chatId);
 }
 
+/**
+ * Whether an incoming chat row should REPLACE the one held, on the SNAPSHOT
+ * path - the monotonic-`revision` test plus the two pairs it cannot judge.
+ *
+ * ## 1. A held row whose HOME is unknown
+ *
+ * The chat plane's own carve-out, narrower than the terminal twin's and for
+ * the opposite reason. A delta seeds `docResident: null` for a chat it has
+ * never held (see `applyDelta`), and the `@1.1` answer that states the home is
+ * a fresher read of the SAME registry row, so it routinely carries the same
+ * revision. `n > n` is false, so without this the row would keep its unknown
+ * home for the life of the session and every write affordance on it would stay
+ * closed - a chat the user can see and cannot rename.
+ *
+ * One direction only, and only where nothing anyone stated is overwritten: the
+ * waiver applies when the HELD row's home is unknown, so a stated home is never
+ * replaced by a stale answer.
+ *
+ * ## 2. Doc over doc
+ *
+ * The twin's clause, which this plane needed just as much and did not have.
+ * `chatRecordSummaryOfDocEntry` reports `revision: 0` on every answer, because
+ * `revision` is the registry head seq and a doc entry has no seq - so "strictly
+ * exceeds" rejects each refresh and freezes the row at whatever the session's
+ * FIRST answer said. Under `@1.1` that answer is a no-doc-replica client's only
+ * source for those chats, so the freeze hides a rename, an archive and a
+ * reparent alike, until the chat is adopted into the store.
+ *
+ * Two doc reads are the same authority, and the later one is newer by
+ * construction: `readDocResidentSummaries` re-reads the live map on every call.
+ *
+ * Keyed on `docResident`, and the twin's header argues against exactly that -
+ * "a boolean a REGISTRY row may also carry". True THERE, where `docResident`
+ * means "the doc map has a copy of me" and `origin` is the store discriminant.
+ * Here it is the store discriminant: `epic-list-chat-records-resolver` stamps
+ * it from `entry.home === "doc"` and its own comment calls it "provenance, not
+ * path", while chat `origin` is `own`/`foreign` and answers about WRITE
+ * AUTHORITY instead. So the twin's `origin === "doc"` and this plane's
+ * `docResident === true` are the same question asked of two different fills,
+ * and reaching for `origin` here would waive nothing while silently comparing
+ * write authority.
+ *
+ * The stale-replica trap that motivated the twin's key cannot be reached
+ * through this one: every inbox replica is stamped `docResident: false` by that
+ * resolver, so both sides being `true` already means both are local rows.
+ *
+ * SNAPSHOT-ONLY, like the twin's, and load-bearing for both clauses. The
+ * revision test is what stops an answer already in flight from clobbering a row
+ * a later delta advanced (`record-table.ts` says so at the fence), and a delta
+ * arriving out of order is not a fresher read of anything.
+ */
+function chatRowSupersedesOnSnapshot(
+  candidate: HeldChatRecordRow,
+  held: HeldChatRecordRow,
+): boolean {
+  if (held.docResident === null) return true;
+  if (held.docResident && candidate.docResident === true) return true;
+  return candidate.revision > held.revision;
+}
+
 export function createChatRecordTable(
   sources: ChatRecordTableSources,
 ): ChatRecordTable {
@@ -202,27 +262,14 @@ export function createChatRecordTable(
       retractionIdOf: (row) => row.chatId,
       isVisibleToUser: (row, currentUserId) =>
         isChatVisibleToUser(row.ownerUserId, currentUserId),
+      supersedesOnSnapshot: chatRowSupersedesOnSnapshot,
       /**
-       * The monotonic-`revision` test, EXCEPT over a row whose HOME is unknown,
-       * which it cannot judge - the chat plane's own carve-out, narrower than
-       * the terminal twin's and for the opposite reason.
-       *
-       * A delta seeds `docResident: null` for a chat it has never held (see
-       * `applyDelta`), and the `@1.1` answer that states the home is a fresher
-       * read of the SAME registry row, so it routinely carries the SAME
-       * revision. `n > n` is false, so without this the row would keep its
-       * unknown home for the life of the session and every write affordance on
-       * it would stay closed - a chat the user can see and cannot rename.
-       *
-       * One direction only, and only where nothing is being overwritten that
-       * anyone stated: the waiver applies when the HELD row's home is unknown,
-       * so a stated home is never replaced by a stale answer, and the ordinary
-       * guard still governs every other pair. Snapshot-only, like the twin's:
-       * a later ANSWER is a fresher read of the same map, while a delta
-       * arriving out of order is not.
+       * The bare guard, and deliberately NOT the snapshot rule - the twin
+       * shares one function across both paths and this plane must not. Neither
+       * waiver above survives here: both rest on "a later ANSWER is a fresher
+       * read of the same map", and a delta is not a read of that map at all.
+       * See {@link chatRowSupersedesOnSnapshot}'s closing section.
        */
-      supersedesOnSnapshot: (candidate, held) =>
-        held.docResident === null || candidate.revision > held.revision,
       supersedesOnUpsert: (candidate, held) =>
         candidate.revision > held.revision,
       /**
