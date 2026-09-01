@@ -161,6 +161,7 @@ const testState = vi.hoisted(() => ({
   isFetching: false,
   bridge: null as DesktopWindowsBridge | null,
   worktreeCandidates: [] as WorktreeCleanupCandidateStub[],
+  worktreeCandidatesFetching: false,
   worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
   mutate:
     vi.fn<
@@ -208,6 +209,7 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   useTaskDeleteWorktreeCandidates: () => ({
     candidates: testState.worktreeCandidates,
     isError: false,
+    isFetching: testState.worktreeCandidatesFetching,
   }),
 }));
 
@@ -362,6 +364,7 @@ describe("<EpicsListPanel />", () => {
     testState.isFetching = false;
     testState.bridge = null;
     testState.worktreeCandidates = [];
+    testState.worktreeCandidatesFetching = false;
     testState.worktreesByEpicId = new Map();
     setDesktopEpicOwnershipBridge(null);
     testState.mutate.mockReset();
@@ -1169,6 +1172,18 @@ describe("<EpicsListPanel />", () => {
         ],
       },
     });
+  });
+
+  it("does not delete the task while its worktree cleanup choices are still loading", async () => {
+    testState.worktreeCandidatesFetching = true;
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
+    const confirm = await screen.findByTestId("delete-tasks-confirm");
+
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(confirm);
+    expect(testState.mutate).not.toHaveBeenCalled();
   });
 
   it("names local-only commits and leaves a clean-ahead candidate unchecked by default", async () => {
