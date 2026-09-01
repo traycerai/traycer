@@ -55,6 +55,29 @@
  * which is two lines and keeps the grammars where the protocol put them.
  */
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
+import { sessionKeyOf } from "@traycer-clients/shared/replica-runtime";
+
+/**
+ * A retained-row key that scopes a host-minted id to the account it was minted
+ * for.
+ *
+ * Every plane built on this table RETAINS rows across an account switch, and
+ * re-selects for the current viewer at recompute time. So "the host serves one
+ * viewer's rows and its ids are unambiguous within an answer" - true of both
+ * planes here - does not make the ids unambiguous in the MAP, which spans
+ * answers to different viewers. A collision there is not a re-render: the
+ * revision guard rejects the legitimate row against a stranger's held one,
+ * `isVisibleToUser` hides the stranger, and the row is gone for the session.
+ *
+ * `sessionKeyOf`, not a separator join. The wire ids are bare `z.string()`, so
+ * "no id can contain U+001F" is a property nobody can hold true across a schema
+ * change, and `("a", "b<US>c")` and `("a<US>b", "c")` collide. Length-prefixed,
+ * so it reserves no character at all and there is no next "but nothing can
+ * contain THIS one" left to be wrong about.
+ */
+export function ownerScopedRowKey(ownerUserId: string, rowId: string): string {
+  return sessionKeyOf([ownerUserId, rowId]);
+}
 
 /**
  * A recomputed table, ready to publish. `null` from any apply means the change

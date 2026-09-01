@@ -4,11 +4,14 @@
  * planes are configurations of {@link createRecordTable}, which owns the fence,
  * the per-row revision guard, the absorbing retractions and the change gate.
  *
- * The three differences that kept the two implementations apart through the
+ * The differences that kept the two implementations apart through the
  * extraction survive as declarations rather than as a second copy of the
- * algorithm: this plane keys rows by id alone, waives the revision guard for
- * doc-resident-over-doc-resident on the SNAPSHOT path only, and has no
+ * algorithm: this plane waives the revision guard for doc-over-doc, and has no
  * pending-creation registry. Each is argued below, at the point that holds it.
+ *
+ * Keying is no longer one of them. This plane keyed rows by id alone until the
+ * chat table's owner-collision fix showed the argument for it did not survive
+ * an account switch - see the `rowKey` declaration below.
  */
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
@@ -20,7 +23,11 @@ import {
   terminalAgentSlicesEq,
   tuiAgentRecordsSlice,
 } from "../projection-helpers";
-import { createRecordTable, type RecordTable } from "./record-table";
+import {
+  createRecordTable,
+  ownerScopedRowKey,
+  type RecordTable,
+} from "./record-table";
 
 export interface TuiAgentRecordTableSources {
   readonly getCurrentUserId: () => string | null;
@@ -111,20 +118,38 @@ export function createTuiAgentRecordTable(
     createRecordTable(
       {
         /**
-         * Keyed by `tuiAgentId` ALONE, unlike the chat table's: the host serves
-         * the CALLER'S OWN rows only (terminal agents are structurally
-         * owner-private, per the `epic.listTuiAgents` contract), so within one
-         * viewer's answer the id is unambiguous. Rows are still retained
-         * regardless of owner - a delta could in principle carry another
-         * identity's row after an account switch - and the recompute
-         * re-selects for the current user, so the keying only has to be safe
-         * for what the host actually serves.
+         * Keyed by `(ownerUserId, tuiAgentId)`, exactly as the chat table is,
+         * and for the reason that table's own key comment gives.
+         *
+         * This previously keyed by `tuiAgentId` alone, on the argument that
+         * the host serves the CALLER'S OWN rows only (terminal agents are
+         * owner-private per the `epic.listTuiAgents` contract), so within one
+         * viewer's answer the id is unambiguous. That argument is true and
+         * insufficient, and the old comment named the gap without closing it:
+         * rows are RETAINED across an account switch, so the map spans answers
+         * to two different viewers even though each answer was unambiguous on
+         * its own.
+         *
+         * What that costs, once the ids collide: `tuiAgentRowSupersedes` falls
+         * through to `candidate.revision > held.revision` for two local rows,
+         * and the two accounts' revision streams are independent - so a
+         * legitimate row whose revision is not greater than the retained
+         * stranger's is REJECTED, while `isVisibleToUser` hides the retained
+         * one from the new viewer. The agent is simply absent for the rest of
+         * the session, with no frame able to correct it.
+         *
+         * Reachable because the ids are host-minted per account, not globally
+         * unique by construction - the same shape of collision the chat table
+         * was keyed against in this PR, on the plane its own header calls "the
+         * terminal twin".
          */
-        rowKey: (row) => row.tuiAgentId,
+        rowKey: (row) => ownerScopedRowKey(row.ownerUserId, row.tuiAgentId),
         /**
-         * The same id the row is keyed by, so a `tuiRemove` names exactly one
-         * row and the removal sweep's coarser addressing has nothing to hit
-         * here.
+         * The BARE id, deliberately not the composite `rowKey` above: a
+         * `tuiRemove` frame carries `(epicId, tuiAgentId)` and no owner at all,
+         * so the retraction map has to be addressed at the coarseness the wire
+         * actually speaks. The chat table draws the same line for the same
+         * reason - retained rows are owner-scoped, removals are not.
          */
         retractionIdOf: (row) => row.tuiAgentId,
         isVisibleToUser: (row, currentUserId) =>

@@ -191,8 +191,21 @@ export interface EpicControlReplica extends Replica<
   beginFreshCycle(): void;
   /** Reset this cycle's snapshot freshness without touching anything else. */
   clearRootSnapshotFreshness(): void;
-  /** Optimistically show a retry as running. See the runtime's `retryMigration`. */
-  markMigrationRetrying(): void;
+  /**
+   * Optimistically show a retry as running, and return the token that says
+   * "the host has reported nothing since". See the runtime's `retryMigration`.
+   */
+  markMigrationRetrying(): number;
+  /**
+   * The retry never reached the host. Restore the error state - unless the
+   * host has reported a migration event since `retryToken` was issued, in
+   * which case the status lane owns the slice and this is a no-op.
+   *
+   * Needed because a REFUSED retry produces no migration frame at all: the
+   * optimistic flip to `running` would otherwise be terminal, leaving the
+   * modal on a running body with the Retry button gone for good.
+   */
+  markMigrationRetryRefused(retryToken: number): void;
   migrationStatus(): EpicMigrationStatus;
   /** The transport leg, published so `isClean()` can read it after a detach. */
   noteTransportDetached(): void;
@@ -213,6 +226,8 @@ export function createEpicControlReplica(
   // `hasFreshCloudSyncStatus`, which is the per-cycle acknowledgement proof.
   let cloudSyncStatus: EpicCloudSyncStatus = "connected";
   let hasFreshCloudSyncStatus = false;
+  /** Counts publishes that touch the migration slice; see {@link publish}. */
+  let migrationEventSeq = 0;
   let currentStatus: StreamConnectionStatus = "connecting";
   // Flips true on the first successful connect so a later drop reads as
   // "reconnecting" rather than the bootstrap-only "connecting".
@@ -282,6 +297,15 @@ export function createEpicControlReplica(
   }
 
   function publish(patch: Partial<EpicControlProjection>): void {
+    // Every publish that TOUCHES the migration slice advances the token,
+    // wherever it comes from - a host frame, a fresh cycle's reset to idle, a
+    // fatal close converted to the modal's error state, the optimistic retry
+    // flip itself. Counting here rather than at the handful of call sites is
+    // what makes `markMigrationRetryRefused` safe against the ones nobody
+    // thought of: a rejection arriving after a reconnect had reset the slice
+    // to idle would otherwise resurrect the migration modal on a session that
+    // has already reopened.
+    if (patch.migration !== undefined) migrationEventSeq += 1;
     sink.publish({ ...sink.read(), ...patch });
   }
 
@@ -700,7 +724,7 @@ export function createEpicControlReplica(
       hasFreshRootSnapshotForOpenCycle = false;
     },
 
-    markMigrationRetrying(): void {
+    markMigrationRetrying(): number {
       publish({
         migration: {
           status: "running",
@@ -709,6 +733,24 @@ export function createEpicControlReplica(
           chunksTotal: 1,
         },
       });
+      // AFTER the publish, which advanced the counter itself. The token means
+      // "nothing has touched the migration slice since this flip", so it has
+      // to include the flip.
+      return migrationEventSeq;
+    },
+
+    markMigrationRetryRefused(retryToken: number): void {
+      // The host has spoken since the optimistic flip - it accepted the retry
+      // and is reporting on it, or it failed the migration outright. Either
+      // way the status lane owns the slice now, and restoring an error over a
+      // running migration would be this method inventing a failure.
+      //
+      // A token rather than a value comparison, because the two states are
+      // INDISTINGUISHABLE by value: `markMigrationRetrying` publishes exactly
+      // the shape a genuine `migrationStarted` publishes, deliberately, so the
+      // modal does not flicker between them.
+      if (migrationEventSeq !== retryToken) return;
+      publish({ migration: ERROR_MIGRATION_SLICE });
     },
 
     migrationStatus: () => sink.read().migration.status,

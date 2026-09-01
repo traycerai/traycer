@@ -32,6 +32,7 @@ import type {
   LeaseHandle,
   RuntimeEnvironment,
   RuntimeTimer,
+  SendOutcome,
 } from "@traycer-clients/shared/replica-runtime";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -42,6 +43,7 @@ import {
   type ArtifactRoomTier,
 } from "../artifact-room-tier";
 import { HOT_DOCS_MAX_MATERIALIZED } from "@/stores/replica-memory/budget-limits";
+import type { HotDocBudgetSink } from "@/stores/replica-memory/hot-doc-budget";
 import type { EpicSessionFacts } from "../session-facts";
 import { encodeDocStateVectorBase64 } from "../dirty-watermark";
 import type { EpicOutboundRequest } from "../epic-runtime-events";
@@ -143,6 +145,22 @@ interface TestHarness {
   };
   readonly session: EpicSessionFacts & { readonly state: FakeSessionState };
   readonly sent: EpicOutboundRequest[];
+  /**
+   * The frames the transport ACCEPTED, which is a different set from `sent`
+   * the moment a test installs a refusing answer - and the difference is the
+   * whole subject of the outbound-queue pins. Asserting on `sent` would count
+   * a refused frame as delivered, which is precisely the bug.
+   */
+  readonly delivered: EpicOutboundRequest[];
+  /**
+   * What the transport answers. Mutable because a body LANE refuses
+   * independently of every epic-level fact `session` carries - no adapter yet,
+   * or no `docGuid` because no snapshot has seeded it - and that refusal is
+   * only observable through the outcome.
+   */
+  readonly transport: {
+    answer: (request: EpicOutboundRequest) => SendOutcome;
+  };
 }
 
 // No override parameter. It was an unused `overrides?: Partial<...>` - both an
@@ -154,15 +172,27 @@ function createHarness(): TestHarness {
   const environment = createFakeEnvironment();
   const session = createFakeSession();
   const sent: EpicOutboundRequest[] = [];
+  const delivered: EpicOutboundRequest[] = [];
+  const transport: {
+    answer: (request: EpicOutboundRequest) => SendOutcome;
+  } = { answer: () => ({ kind: "sent" }) };
   const tier = createArtifactRoomTier({
     environment,
     session,
-    send: (request) => sent.push(request),
+    send: (request) => {
+      // Recorded even when refused: "the transport was asked and said no" is a
+      // different fact from "nothing was attempted", and a pin for the queue
+      // has to be able to tell them apart.
+      sent.push(request);
+      const outcome = transport.answer(request);
+      if (outcome.kind === "sent") delivered.push(request);
+      return outcome;
+    },
     onDivergenceChanged: () => undefined,
     isDisposed: () => false,
     budget: null,
   });
-  return { tier, environment, session, sent };
+  return { tier, environment, session, sent, delivered, transport };
 }
 
 /** Encodes a fresh `Y.Doc` containing `text` as a full snapshot, plus its base64 state vector. */
@@ -1124,5 +1154,241 @@ describe("settleColdState refuses a pinned room", () => {
         GUID,
       ).accepted,
     ).toBe(true);
+  });
+});
+
+describe("outbound body updates — the transport's ANSWER decides whether bytes are retained", () => {
+  /** A seeded, leased room, ready to take a local edit. */
+  function readyRoom(
+    harness: TestHarness,
+    artifactRoomId: string,
+  ): ArtifactRoomReplicaEntry {
+    const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
+    harness.tier.applySnapshot({
+      artifactRoomId,
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+    harness.tier.acquireSync(artifactRoomId);
+    return requireHotEntry(harness.tier, artifactRoomId);
+  }
+
+  /** Every `room-update` payload the transport was handed, in order. */
+  function shippedUpdates(harness: TestHarness): readonly Uint8Array[] {
+    return harness.delivered
+      .filter((request) => request.kind === "room-update")
+      .map((request) => request.update);
+  }
+
+  /**
+   * The keys a fresh doc ends up with after applying `updates` over the same
+   * snapshot the room was seeded from.
+   *
+   * Asserting on CONVERGENCE rather than on frame counts, because that is the
+   * property the queue exists to hold: an edit dropped in the middle of a
+   * partial flush is not a reordering Yjs absorbs, it is a key that never
+   * arrives.
+   */
+  function keysAfterApplying(updates: readonly Uint8Array[]): string[] {
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, makeSnapshotBytes("hello").bytes);
+    for (const update of updates) Y.applyUpdate(doc, update);
+    const keys = Array.from(doc.getMap("body").keys()).sort();
+    doc.destroy();
+    return keys;
+  }
+
+  it("QUEUES an update the transport refused, even though the SESSION may write", () => {
+    // The gap the lane arm opened. Every epic-level fact says "you may write",
+    // and the body's own lane refuses anyway - it has no adapter yet, or no
+    // `docGuid` because no snapshot has seeded it. `canSendBodyWrites()` cannot
+    // see either, so the outcome is the only thing that can.
+    const harness = createHarness();
+    trackTierDisposal(harness.tier);
+    const entry = readyRoom(harness, "room-refused");
+
+    harness.transport.answer = () => ({
+      kind: "queued",
+      reason: "body-not-seeded",
+    });
+    entry.doc.getMap("body").set("local-edit", "1");
+
+    // It was ATTEMPTED and REFUSED - this is a transport saying no, not an
+    // epic-level gate that held before the call. The two are indistinguishable
+    // from the queue's side unless the outcome is read, which is the finding.
+    expect(harness.sent).toHaveLength(1);
+    expect(shippedUpdates(harness)).toHaveLength(0);
+
+    // THE REDDENING ASSERTION. A `queued` outcome is a statement to the caller
+    // that IT must retain the bytes; before this the caller treated the
+    // attempt as delivery and kept nothing, so the edit reached the host on no
+    // path at all and the next flush had nothing to ship.
+    harness.delivered.length = 0;
+    harness.transport.answer = () => ({ kind: "sent" });
+    harness.tier.flushPending("room-refused");
+    expect(keysAfterApplying(shippedUpdates(harness))).toEqual(["local-edit"]);
+  });
+
+  it("still treats an ACCEPTED update as sent, so the queue is not a second copy", () => {
+    // The control. A tier that queued unconditionally would re-ship every edit
+    // on the next flush - worse than the bug, and invisible to the pin above.
+    const harness = createHarness();
+    trackTierDisposal(harness.tier);
+    const entry = readyRoom(harness, "room-accepted");
+
+    entry.doc.getMap("body").set("local-edit", "1");
+    expect(shippedUpdates(harness)).toHaveLength(1);
+
+    harness.delivered.length = 0;
+    harness.tier.flushPending("room-accepted");
+    expect(shippedUpdates(harness)).toHaveLength(0);
+  });
+
+  it("re-queues a PARTIALLY refused flush, losing no edit from the middle", () => {
+    const harness = createHarness();
+    trackTierDisposal(harness.tier);
+    const entry = readyRoom(harness, "room-partial");
+
+    // Three edits made while the lane is refusing, so all three are queued.
+    harness.transport.answer = () => ({
+      kind: "dropped",
+      reason: "no-transport",
+    });
+    entry.doc.getMap("body").set("edit-1", "1");
+    entry.doc.getMap("body").set("edit-2", "2");
+    entry.doc.getMap("body").set("edit-3", "3");
+
+    // The flush gets exactly one frame through and is refused on the next.
+    let accepted = 0;
+    harness.transport.answer = () => {
+      accepted += 1;
+      return accepted <= 1
+        ? { kind: "sent" }
+        : { kind: "queued", reason: "body-not-seeded" };
+    };
+    harness.delivered.length = 0;
+    harness.tier.flushPending("room-partial");
+    const firstPass = shippedUpdates(harness);
+
+    // The lane recovers and the remainder ships.
+    harness.transport.answer = () => ({ kind: "sent" });
+    harness.delivered.length = 0;
+    harness.tier.flushPending("room-partial");
+    const secondPass = shippedUpdates(harness);
+
+    // THE REDDENING ASSERTION: all three edits arrive across the two passes.
+    // Under a flush that dropped what it could not send, the two refused
+    // frames are gone and this reads `["edit-1"]`.
+    expect(keysAfterApplying([...firstPass, ...secondPass])).toEqual([
+      "edit-1",
+      "edit-2",
+      "edit-3",
+    ]);
+  });
+
+  it("stashes a snapshot reconcile the transport refused instead of clearing the queue", () => {
+    // The third member of the class, and the one nobody flagged: the merge arm
+    // clears `pendingUpdates` on the strength of "the reconcile subsumes it",
+    // which is only true once the reconcile has actually gone out.
+    const harness = createHarness();
+    trackTierDisposal(harness.tier);
+    const entry = readyRoom(harness, "room-reconcile");
+
+    harness.transport.answer = () => ({
+      kind: "queued",
+      reason: "body-not-seeded",
+    });
+    entry.doc.getMap("body").set("offline-edit", "1");
+
+    // A fresh snapshot lands while the lane is still refusing. The merge arm
+    // computes a reconcile that subsumes the queued edit and tries to ship it.
+    const merged = makeSnapshotBytes("hello there");
+    harness.tier.applySnapshot({
+      artifactRoomId: "room-reconcile",
+      snapshotBytes: merged.bytes,
+      hostStateVectorBase64: merged.hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+
+    harness.transport.answer = () => ({ kind: "sent" });
+    harness.delivered.length = 0;
+    harness.tier.flushPending("room-reconcile");
+    expect(keysAfterApplying(shippedUpdates(harness))).toContain(
+      "offline-edit",
+    );
+  });
+});
+
+describe("hot-growth accounting survives a transport that TRANSFERS the update", () => {
+  it("measures the update before handing it over, not after", () => {
+    // The runtime can live in a worker, and the outbound frame then crosses the
+    // bridge by `postMessage` with a transfer list. `takeBytesForTransfer`
+    // MOVES the backing `ArrayBuffer` rather than copying it whenever the view
+    // owns all of it - which a Yjs update does - so the sender's view detaches
+    // synchronously and reads `byteLength === 0` rather than throwing.
+    //
+    // Reproduced here with a real `structuredClone` transfer rather than a
+    // stub that returns zero, so the pin fails for the reason production would.
+    const charges: number[] = [];
+    const budget: HotDocBudgetSink = {
+      settle: () => undefined,
+      settleCold: () => undefined,
+      release: () => undefined,
+      chargeProvisional: (_artifactRoomId, bytes) => {
+        charges.push(bytes);
+      },
+    };
+    let ownedItsWholeBuffer = false;
+    const tier = createArtifactRoomTier({
+      environment: createFakeEnvironment(),
+      session: createFakeSession(),
+      send: (request) => {
+        if (request.kind === "room-update") {
+          const { update } = request;
+          const buffer = update.buffer;
+          // The precondition the transfer path turns on. Recorded rather than
+          // assumed: if a future Yjs hands back a VIEW into a larger buffer,
+          // `takeBytesForTransfer` copies instead and this pin would go
+          // vacuously green - so the assertion below fails loudly instead.
+          ownedItsWholeBuffer =
+            buffer instanceof ArrayBuffer &&
+            update.byteOffset === 0 &&
+            update.byteLength === buffer.byteLength;
+          if (ownedItsWholeBuffer && buffer instanceof ArrayBuffer) {
+            structuredClone(update, { transfer: [buffer] });
+          }
+        }
+        return { kind: "sent" };
+      },
+      onDivergenceChanged: () => undefined,
+      isDisposed: () => false,
+      budget,
+    });
+    trackTierDisposal(tier);
+
+    const { bytes, hostStateVectorBase64 } = makeSnapshotBytes("hello");
+    tier.applySnapshot({
+      artifactRoomId: "room-transfer",
+      snapshotBytes: bytes,
+      hostStateVectorBase64,
+      seed: "full",
+      docGuid: null,
+    });
+    tier.acquireSync("room-transfer");
+    charges.length = 0;
+
+    requireHotEntry(tier, "room-transfer")
+      .doc.getMap("body")
+      .set("local-edit", "1");
+
+    expect(ownedItsWholeBuffer).toBe(true);
+    // THE REDDENING ASSERTION. Measured after the send, this is 0: the room
+    // records no growth at all, so an actively edited body can grow past the
+    // hot budget without ever becoming an eviction candidate.
+    expect(charges).toHaveLength(1);
+    expect(charges[0]).toBeGreaterThan(0);
   });
 });

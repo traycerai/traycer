@@ -56,6 +56,7 @@ import type {
   MonotonicSequence,
   RuntimeEnvironment,
   RuntimeTimer,
+  SendOutcome,
 } from "@traycer-clients/shared/replica-runtime";
 import type { HotDocBudgetSink } from "@/stores/replica-memory/hot-doc-budget";
 import { HOT_DOCS_MAX_MATERIALIZED } from "@/stores/replica-memory/budget-limits";
@@ -368,11 +369,19 @@ export interface ArtifactRoomTierSources {
   readonly environment: RuntimeEnvironment;
   readonly session: EpicSessionFacts;
   /**
-   * The outbound half. Returns what the transport did with the frame; the tier
-   * has already decided the frame may go, so the outcome is diagnostic here and
-   * the queueing decision stays above it.
+   * The outbound half. Returns what the transport did with the frame.
+   *
+   * The outcome is READ, not diagnostic - this signature said `void` while its
+   * own comment claimed otherwise, and the gap was load-bearing. `@1` made the
+   * claim true: one epic stream, so `canSendBodyWrites()` fully determined
+   * whether a body frame would be accepted and the queueing decision could sit
+   * entirely above this call. The lane arm broke that. A body lane refuses
+   * independently of any epic-level fact - no adapter, or no `docGuid` because
+   * no snapshot has seeded it yet - and `SendOutcome`'s own docstring says what
+   * discarding that costs: "treating that as `sent` is how a reconnect silently
+   * discards user edits".
    */
-  readonly send: (request: EpicOutboundRequest) => void;
+  readonly send: (request: EpicOutboundRequest) => SendOutcome;
   /**
    * A room's local divergence moved. The records plane folds room dirtiness
    * into the renderer-local `isDirty` it publishes, so it has to be told.
@@ -734,6 +743,76 @@ export function createArtifactRoomTier(
     entry.pendingBytesSinceCollapse = 0;
   }
 
+  /**
+   * Ship the local replica's divergence from a just-applied host snapshot, or
+   * retain it for a later flush.
+   *
+   * A sibling of `applySnapshot` rather than an inline block: it is one
+   * decision with one exit condition (the queue and the pending reconcile end
+   * consistent on every arm), and reading it beside the doc-identity and
+   * watermark steps it sits between obscured that. Extracting it also keeps
+   * `applySnapshot` under the complexity ceiling, which reading the outcome of
+   * the send below pushed it over.
+   */
+  function reconcileAfterSnapshot(
+    entry: ArtifactRoomReplicaEntry,
+    artifactRoomId: string,
+    hostStateVectorBase64: string | null,
+  ): void {
+    // If the local replica is ahead of the host's snapshot, ship a reconcile
+    // update so offline edits round-trip.
+    //
+    // With no watermark there is no diff to take, so the reconcile is the
+    // WHOLE replica. That is the fail-closed direction: re-sending state the
+    // host already has is idempotent in Yjs and costs bytes, while sending a
+    // diff against a vector we do not have would mean sending nothing and
+    // silently stranding local edits.
+    const reconcileUpdate =
+      hostStateVectorBase64 === null
+        ? Y.encodeStateAsUpdate(entry.doc)
+        : Y.encodeStateAsUpdate(entry.doc, decodeBase64(hostStateVectorBase64));
+    const reconcileNeeded = isNonTrivialYUpdate(reconcileUpdate);
+    const canSendNow = session.canSendBodyWrites();
+    // The OUTCOME, not the attempt. The branch below clears the queue on the
+    // strength of "the reconcile subsumes it", and that is only true once the
+    // reconcile has actually gone out. Epic-level `canSendBodyWrites()` says
+    // the session may write; on the lane arm this body's own lane can refuse
+    // anyway, and clearing the queue against a refused send is the exact
+    // silent loss the stash branch below exists to prevent - reached from the
+    // arm that looks like it succeeded.
+    const reconcileSent =
+      reconcileNeeded &&
+      canSendNow &&
+      send({ kind: "room-update", artifactRoomId, update: reconcileUpdate })
+        .kind === "sent";
+    if (reconcileSent) {
+      // Reconcile shipped: every local update is already represented in the
+      // merged replica, so the single reconcile subsumes both the queue and
+      // any prior pending reconcile. Convergence is proven by the next
+      // coverage check, not by replaying each queued frame.
+      clearPendingRoomUpdates(entry);
+      entry.pendingReconcileUpdate = null;
+      return;
+    }
+    if (reconcileNeeded && isWritablePermissionRole(session.permissionRole())) {
+      // Stream is reconnecting/closed, raw-open before the fresh root
+      // snapshot, or - since the outcome is read above - the body's own lane
+      // refused. Stash the reconcile so the root snapshot permission gate can
+      // flush it later. Without this, clearing `pendingUpdates` here would
+      // silently drop the only outbound propagation path for local edits made
+      // during the reconnect window. The merged-replica reconcile subsumes
+      // those queued frames.
+      entry.pendingReconcileUpdate = reconcileUpdate;
+      clearPendingRoomUpdates(entry);
+      return;
+    }
+    // Either no divergence (reconcile is trivial) or the role is viewer/null
+    // (fail-closed). In both cases there is nothing safe to send and nothing
+    // to retain.
+    clearPendingRoomUpdates(entry);
+    entry.pendingReconcileUpdate = null;
+  }
+
   function takePendingRoomUpdates(
     entry: ArtifactRoomReplicaEntry,
   ): Uint8Array[] {
@@ -892,10 +971,35 @@ export function createArtifactRoomTier(
         );
       }
       onDivergenceChanged();
+      // MEASURED BEFORE THE SEND, and this is not defensive style. The runtime
+      // can live in a worker, where the outbound frame crosses the bridge by
+      // `postMessage` with a transfer list - `takeBytesForTransfer` moves the
+      // backing `ArrayBuffer` rather than copying it, and a Yjs update owns its
+      // whole buffer, so it takes the transfer path and DETACHES synchronously.
+      // A detached view reads `byteLength === 0` rather than throwing, so the
+      // read below recorded no growth at all: an actively edited body could
+      // grow past the hot budget without ever becoming an eviction candidate,
+      // until some later settle or demote happened to re-measure the doc.
+      //
+      // `transferable-bytes.ts` states this as a contract - "after the post,
+      // treat the value you passed in as CONSUMED on both paths" - so the read
+      // was wrong even where the copy path happens to preserve it.
+      const updateBytes = update.byteLength;
       if (session.canSendBodyWrites()) {
-        send({ kind: "room-update", artifactRoomId, update });
-        noteHotGrowth(artifactRoomId, update.byteLength);
-        return;
+        const outcome = send({ kind: "room-update", artifactRoomId, update });
+        if (outcome.kind === "sent") {
+          noteHotGrowth(artifactRoomId, updateBytes);
+          return;
+        }
+        // The session may write and this BODY still could not. Fall through to
+        // the queue rather than treating the refusal as delivery - the bytes
+        // are a user's edit and nothing else is holding them.
+        //
+        // Safe to retain the same view: every refusal returns before the
+        // payload reaches the transport (`lane-terminal`, `no-transport`,
+        // `no-body-lane-for-artifact`, `body-not-seeded` all short-circuit),
+        // so a refused update was never handed to a transfer and cannot have
+        // been detached.
       }
       // Queue while reconnecting/closed, or while a raw-open stream is still
       // waiting on its fresh root snapshot/permission role. Snapshots collapse
@@ -904,7 +1008,7 @@ export function createArtifactRoomTier(
       // preserving an outbound propagation path.
       if (replica !== undefined) {
         pushPendingRoomUpdate(replica, update);
-        noteHotGrowth(artifactRoomId, update.byteLength);
+        noteHotGrowth(artifactRoomId, updateBytes);
       }
     };
     const awarenessUpdateHandler = (
@@ -1299,7 +1403,21 @@ export function createArtifactRoomTier(
     const reconcile = entry.pendingReconcileUpdate;
     if (reconcile !== null) {
       entry.pendingReconcileUpdate = null;
-      send({ kind: "room-update", artifactRoomId, update: reconcile });
+      const outcome = send({
+        kind: "room-update",
+        artifactRoomId,
+        update: reconcile,
+      });
+      // Put it back. The gates above are EPIC-level - transport open, fresh
+      // root snapshot, writable role - and on the lane arm they can all hold
+      // while this body's own lane is still unseeded. Dropping the reconcile
+      // on that refusal discards a merge that subsumes every edit made before
+      // the snapshot, which is the largest thing this queue ever carries.
+      if (outcome.kind !== "sent") {
+        entry.pendingReconcileUpdate = reconcile;
+        scheduleCooldown(artifactRoomId);
+        return;
+      }
     }
     if (entry.pendingUpdates.length === 0) {
       // The reconcile above may have been the last pin.
@@ -1307,8 +1425,19 @@ export function createArtifactRoomTier(
       return;
     }
     const pending = takePendingRoomUpdates(entry);
-    for (const update of pending) {
-      send({ kind: "room-update", artifactRoomId, update });
+    for (let index = 0; index < pending.length; index += 1) {
+      const update = pending[index];
+      const outcome = send({ kind: "room-update", artifactRoomId, update });
+      if (outcome.kind === "sent") continue;
+      // Re-queue this one AND everything after it, in order, then stop. A
+      // per-update skip would reorder a user's edits past a refusal, and Yjs
+      // updates are only order-insensitive once they have all ARRIVED - a
+      // partial flush that drops the middle is not a reordering, it is a loss.
+      for (let rest = index; rest < pending.length; rest += 1) {
+        pushPendingRoomUpdate(entry, pending[rest]);
+      }
+      scheduleCooldown(artifactRoomId);
+      return;
     }
     // Everything queued is now in flight; if no lease holds this room it is
     // free to cool again.
@@ -1517,54 +1646,7 @@ export function createArtifactRoomTier(
       if (hostStateVectorBase64 !== null) {
         entry.latestHostStateVectorBase64 = hostStateVectorBase64;
       }
-      // If the local replica is ahead of the host's snapshot, ship a reconcile
-      // update so offline edits round-trip.
-      //
-      // With no watermark there is no diff to take, so the reconcile is the
-      // WHOLE replica. That is the fail-closed direction: re-sending state the
-      // host already has is idempotent in Yjs and costs bytes, while sending a
-      // diff against a vector we do not have would mean sending nothing and
-      // silently stranding local edits.
-      const reconcileUpdate =
-        hostStateVectorBase64 === null
-          ? Y.encodeStateAsUpdate(entry.doc)
-          : Y.encodeStateAsUpdate(
-              entry.doc,
-              decodeBase64(hostStateVectorBase64),
-            );
-      const reconcileNeeded = isNonTrivialYUpdate(reconcileUpdate);
-      const canSendNow = session.canSendBodyWrites();
-      if (reconcileNeeded && canSendNow) {
-        send({
-          kind: "room-update",
-          artifactRoomId,
-          update: reconcileUpdate,
-        });
-        // Reconcile shipped: every local update is already represented in the
-        // merged replica, so the single reconcile subsumes both the queue and
-        // any prior pending reconcile. Convergence is proven by the next
-        // coverage check, not by replaying each queued frame.
-        clearPendingRoomUpdates(entry);
-        entry.pendingReconcileUpdate = null;
-      } else if (
-        reconcileNeeded &&
-        isWritablePermissionRole(session.permissionRole())
-      ) {
-        // Stream is reconnecting/closed, or raw-open before the fresh root
-        // snapshot. Stash the reconcile so the root snapshot permission gate can
-        // flush it later. Without this, clearing `pendingUpdates` here would
-        // silently drop the only outbound propagation path for local edits made
-        // during the reconnect window. The merged-replica reconcile subsumes
-        // those queued frames.
-        entry.pendingReconcileUpdate = reconcileUpdate;
-        clearPendingRoomUpdates(entry);
-      } else {
-        // Either no divergence (reconcile is trivial) or the role is
-        // viewer/null (fail-closed). In both cases there is nothing safe to
-        // send and nothing to retain.
-        clearPendingRoomUpdates(entry);
-        entry.pendingReconcileUpdate = null;
-      }
+      reconcileAfterSnapshot(entry, artifactRoomId, hostStateVectorBase64);
       // A snapshot with no watermark proves nothing about what the host has
       // durably seen, so it cannot clear the dirty mark: the room stays dirty
       // until one carrying a vector covers it. Clearing here would report a

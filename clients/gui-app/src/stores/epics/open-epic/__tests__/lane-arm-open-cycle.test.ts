@@ -89,6 +89,17 @@ interface LaneRig {
    * status lane. Mirrors `reconnectControlLane` on the other lane.
    */
   readonly reconnectStateLane: () => void;
+  /**
+   * A `migrationProgress` transition on the status lane - the host reporting
+   * on a migration it has actually taken up. Needed to tell "the retry was
+   * refused and nothing happened" from "the retry landed and the host is
+   * mid-migration", which is the whole distinction the retry token draws.
+   */
+  readonly emitMigrationProgress: (progress: {
+    readonly phase: "prepare" | "upload" | "finalize";
+    readonly chunksDone: number;
+    readonly chunksTotal: number;
+  }) => void;
 }
 
 function statusSnapshot(
@@ -219,12 +230,36 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     stateCallbacks.onConnectionStatus("open", null);
   }
 
+  function emitMigrationProgress(progress: {
+    readonly phase: "prepare" | "upload" | "finalize";
+    readonly chunksDone: number;
+    readonly chunksTotal: number;
+  }): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+      kind: "migrationProgress",
+      hasBinaryPayload: false,
+      authorityEpoch: EPOCH,
+      securityEpoch: 1,
+      ...progress,
+    });
+    // Narrowed POSITIVELY. Excluding `snapshot` still leaves `ping`/`pong`,
+    // which the parsed union carries and `onTransition` does not accept.
+    if (parsed.kind !== "migrationProgress") {
+      throw new Error(`expected a migrationProgress frame, got ${parsed.kind}`);
+    }
+    statusCallbacks.onTransition(parsed);
+  }
+
   return {
     handle,
     received,
     openLanes,
     reconnectControlLane,
     reconnectStateLane,
+    emitMigrationProgress,
   };
 }
 
@@ -495,6 +530,83 @@ describe("a lane-selected session retries a failed migration", () => {
     // it is detached on this arm, so its `send` answered `dropped` and the
     // Retry button did nothing at all.
     expect(retries).toBe(1);
+
+    rig.handle.dispose();
+  });
+
+  it("restores the error state when the retry is REFUSED, so Retry comes back", async () => {
+    // A refused retry - an absent requester, a host that declines, a bridge
+    // failure - produces no migration frame at all. The optimistic flip to
+    // `running` would then be terminal: the modal sits on a running body with
+    // its Retry button gone, for the rest of the session.
+    const rig = openLaneRig({
+      unaries: {
+        getWorkspaceContext: () => Promise.resolve(WORKSPACE_CONTEXT),
+        retryMigration: () => Promise.reject(new Error("host refused")),
+      },
+      migration: { state: "failed", reason: "chunk upload rejected" },
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().migration.status).toBe("error");
+
+    rig.handle.store.getState().retryMigration();
+    await settle(rig.handle);
+
+    // THE REDDENING ASSERTION. Before this the rejection was swallowed on the
+    // grounds that "the modal's recovery is the same path it has always had" -
+    // but that path is a status-lane migration frame, and a refused retry
+    // never produces one, so the state stayed `running` forever.
+    expect(rig.handle.store.getState().migration.status).toBe("error");
+
+    rig.handle.dispose();
+  });
+
+  it("does NOT overwrite host progress with an error when the rejection arrives late", async () => {
+    // The control, and the reason the restore is token-guarded rather than
+    // unconditional: a host can accept the retry and start reporting while the
+    // unary's own answer is still in flight (or fails for an unrelated reason).
+    // Publishing an error over a running migration would be this runtime
+    // inventing a failure the host never reported.
+    // Built eagerly so the rejector exists before anything can await it; the
+    // initializer below is unreachable, and throws rather than no-ops so a
+    // future refactor that defers construction fails loudly.
+    let rejectRetry: () => void = () => {
+      throw new Error("the retry never published its rejector");
+    };
+    const retryAnswer = new Promise<void>((_resolve, reject) => {
+      rejectRetry = () => {
+        reject(new Error("late failure"));
+      };
+    });
+    const rig = openLaneRig({
+      unaries: {
+        getWorkspaceContext: () => Promise.resolve(WORKSPACE_CONTEXT),
+        retryMigration: () => retryAnswer,
+      },
+      migration: { state: "failed", reason: "chunk upload rejected" },
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    rig.handle.store.getState().retryMigration();
+    await settle(rig.handle);
+
+    // The host accepts and starts reporting BEFORE the unary settles.
+    rig.emitMigrationProgress({
+      phase: "upload",
+      chunksDone: 3,
+      chunksTotal: 10,
+    });
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().migration.phase).toBe("upload");
+
+    rejectRetry();
+    await settle(rig.handle);
+
+    // Still the host's reading, not a fabricated error.
+    expect(rig.handle.store.getState().migration.status).toBe("running");
+    expect(rig.handle.store.getState().migration.chunksDone).toBe(3);
 
     rig.handle.dispose();
   });

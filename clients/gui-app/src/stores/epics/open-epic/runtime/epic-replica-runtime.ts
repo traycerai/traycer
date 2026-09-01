@@ -604,24 +604,32 @@ export function createEpicReplicaRuntime(
    * through the command queue. If a root frame were ever produced there it
    * would reach a detached adapter and be dropped rather than misrouted, which
    * is the safe direction but not a guarantee this function makes.
+   *
+   * Returns the OUTCOME rather than discarding it, because on the lane arm a
+   * caller's `canSend*` predicate is no longer sufficient to know a frame went
+   * out. Epic-level facts say the SESSION may write; a body lane refuses
+   * independently of them - it has no adapter yet, or no `docGuid` because no
+   * snapshot has seeded it - and only the outcome carries that.
    */
-  function sendOutbound(request: EpicOutboundRequest): void {
+  function sendOutbound(request: EpicOutboundRequest): SendOutcome {
     if (installedArm !== "lanes" || laneArm === null) {
-      adapter.send(request);
-      return;
+      return adapter.send(request);
     }
     switch (request.kind) {
       case "room-update":
-        laneArm.bodies.sendUpdate(request.artifactRoomId, request.update);
-        return;
+        return laneArm.bodies.sendUpdate(
+          request.artifactRoomId,
+          request.update,
+        );
       case "room-awareness":
-        laneArm.bodies.sendAwareness(request.artifactRoomId, request.frame);
-        return;
+        return laneArm.bodies.sendAwareness(
+          request.artifactRoomId,
+          request.frame,
+        );
       case "root-update":
       case "root-awareness":
       case "retry-migration":
-        adapter.send(request);
-        return;
+        return adapter.send(request);
     }
   }
 
@@ -632,9 +640,7 @@ export function createEpicReplicaRuntime(
     // one epic stream; on the lane arm each body has its own subscription and
     // its own `docGuid` write guard, so sending them down the legacy adapter
     // would post them to a socket that arm never opened.
-    send: (request) => {
-      sendOutbound(request);
-    },
+    send: (request) => sendOutbound(request),
     // The GATED form: these fire on every keystroke-level room edit and every
     // inbound room frame, and the closure gated them for that reason.
     onDivergenceChanged: () => records.refreshDivergence(),
@@ -1376,7 +1382,7 @@ export function createEpicReplicaRuntime(
       // would unmount it) before the host's first progress frame.
       const reopen = control.facts.transportStatus() !== "open";
       if (reopen) requestFreshSnapshot();
-      control.markMigrationRetrying();
+      const retryToken = control.markMigrationRetrying();
       if (reopen) return;
       // WHICH ARM, because the two speak different transports for this one
       // gesture and the legacy spelling is not merely suboptimal on the lane
@@ -1388,18 +1394,32 @@ export function createEpicReplicaRuntime(
       // Deliberately still fire-and-forget from here. The unary's ANSWER is a
       // statement that the host accepted the retry, and progress arrives on the
       // status lane either way - so awaiting it would only let this method
-      // decide something the control replica already owns. A rejection is
-      // logged by the dispatcher; the modal's recovery from a refused retry is
-      // the same path it has always had.
+      // decide something the control replica already owns.
+      //
+      // A REJECTION is the exception, and it is the one case the control
+      // replica cannot own: a refused retry - an absent requester, a host that
+      // declines, a bridge failure - produces no migration frame at all, so
+      // nothing ever moves the slice off the optimistic `running` flip above.
+      // The modal would sit on a running body with its Retry button gone, for
+      // the rest of the session. The token makes the restore conditional, so a
+      // rejection that arrives after the host has started reporting cannot
+      // overwrite real progress with a fabricated error.
       if (installedArm === "lanes" && laneSelection !== null) {
         void laneSelection.unaries.retryMigration().catch(() => {
-          // Reported at the dispatcher, which holds the cause. Swallowed here
-          // because this is a detached continuation: rethrowing would surface
-          // as an unhandled rejection with no stack back to the gesture.
+          control.markMigrationRetryRefused(retryToken);
+          // The CAUSE is still swallowed here, and only the cause: it is
+          // reported at the dispatcher, which holds it, and rethrowing from a
+          // detached continuation would surface as an unhandled rejection with
+          // no stack back to the gesture.
         });
         return;
       }
-      adapter.send({ kind: "retry-migration" });
+      // The `@1` arm answers synchronously, and its refusals are the same
+      // class: a detached or reconnecting adapter answers `queued`/`dropped`,
+      // and neither produces a migration frame either.
+      const outcome = adapter.send({ kind: "retry-migration" });
+      if (outcome.kind !== "sent")
+        control.markMigrationRetryRefused(retryToken);
     },
 
     enqueueWriteCommand: (intent) =>
@@ -1537,27 +1557,37 @@ export function createEpicReplicaRuntime(
     },
     settleArtifactBodyColdState: (docKey, update, expectedDocGuid) =>
       tier.settleColdState(docKey, update, expectedDocGuid),
-    sendArtifactBodyUpdate: (docKey, update) => {
-      // The lane arm is the only one that serves bodies per-doc; on `@1` the
-      // body rides the room and there is no lane to send to. `dropped` rather
-      // than a silent no-op, because the caller's edit went nowhere and the
-      // reason is what makes that legible.
-      if (installedArm !== "lanes" || laneArm === null) {
-        // On `@1` the body rides the ROOM. There is no lane, but there IS an
-        // outbound path: the room's own update handler emits
-        // `room-apply-update` for a locally-originated edit, which before the
-        // relocation is exactly how this arm's edits reached the host - the
-        // tier held the live doc and the editor wrote to it directly.
-        //
-        // Returning `dropped` here (which this did) was that path going
-        // missing: every `@1` body edit compiled, applied to main's doc, and
-        // never left the tab.
-        return tier.relayLocalUpdate(docKey, update)
-          ? { kind: "sent" }
-          : { kind: "dropped", reason: "artifact room is not materialized" };
-      }
-      return laneArm.bodies.sendUpdate(docKey, update);
-    },
+    sendArtifactBodyUpdate: (docKey, update) =>
+      // THROUGH THE TIER ON BOTH ARMS. The tier holds the worker-side replica
+      // of every body on every arm - only the TRANSPORT differs - and its own
+      // update handler is what owns "send now versus queue for reconnect",
+      // moves the dirty watermark, and puts the edit in the next seed offer.
+      //
+      // The lane arm used to call `laneArm.bodies.sendUpdate` directly, and
+      // skipped all three. A body edited while its stream was reconnecting was
+      // answered `queued` by a lane that queues nothing - the outcome is a
+      // statement to the CALLER that it must retain the bytes, and no caller
+      // does - so the main-thread document became the only copy of that edit,
+      // the session could still report clean, and closing the tab before a
+      // demotion lost it. The lane adapter says as much where it refuses:
+      // "the plane that handed this over has already decided whether the bytes
+      // are retained (a body edit) or may be lost".
+      //
+      // Routing here does not bypass the lane: the tier's handler sends
+      // through `send` -> `sendOutbound`, which is exactly where the lane arm
+      // reaches `bodies.sendUpdate`. One path, two transports, and the queue
+      // in front of both.
+      //
+      // `sent` therefore means ACCEPTED FOR DELIVERY - on the wire or in the
+      // tier's queue - rather than acknowledged, which is the question this
+      // caller is actually asking: it is deciding whether it still owns the
+      // bytes. `dropped` is the only answer that says it does, and it names
+      // the one case where nothing took them: a cold room with no live doc to
+      // apply to, where buffering would replay the edit on the next
+      // materialize as though it had arrived from the host.
+      tier.relayLocalUpdate(docKey, update)
+        ? { kind: "sent" }
+        : { kind: "dropped", reason: "artifact room is not materialized" },
 
     acquireArtifactBodyLease(artifactId): () => void {
       const docKey = artifactBodyDocKey(artifactId);

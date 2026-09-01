@@ -224,7 +224,10 @@ function createBudgetedHarness(softLimitBytes: number): BudgetedHarness {
   const tier = createArtifactRoomTier({
     environment,
     session,
-    send: (request) => sent.push(request),
+    send: (request) => {
+      sent.push(request);
+      return { kind: "sent" };
+    },
     onDivergenceChanged: () => undefined,
     isDisposed: () => false,
     budget: sink,
