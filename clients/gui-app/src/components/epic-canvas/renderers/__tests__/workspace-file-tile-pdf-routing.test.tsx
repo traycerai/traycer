@@ -204,9 +204,17 @@ vi.mock("@/components/epic-canvas/image-preview/image-preview", () => ({
 // The real module imports pdf.js (worker URL, viewer CSS) - none of which
 // belongs in this routing test's jsdom. The routing contract is only "the
 // ready state mounts the lazy viewer with the blob URL".
+// Mirrors the real `PdfPreview`'s own accessible landmark (`role="toolbar"`,
+// `aria-label="PDF preview controls"` - pdf-preview.tsx) rather than a bare
+// test id, so "the viewer mounted" is asserted through the same accessible
+// contract a screen reader (or Testing Library's role queries) would see.
 vi.mock("@/components/epic-canvas/pdf-preview/pdf-preview-lazy", () => ({
   PdfPreviewLazy: (props: { readonly url: string }) => (
-    <div data-testid="workspace-pdf-preview" data-url={props.url} />
+    <div
+      role="toolbar"
+      aria-label="PDF preview controls"
+      data-url={props.url}
+    />
   ),
 }));
 
@@ -252,7 +260,9 @@ describe("workspace file tile PDF routing", () => {
   it("routes a .pdf to the viewer on a 1.1 host, streaming instead of reading text", () => {
     renderTile(nodeFor("docs/report.pdf"));
 
-    const preview = screen.getByTestId("workspace-pdf-preview");
+    const preview = screen.getByRole("toolbar", {
+      name: "PDF preview controls",
+    });
     expect(preview.getAttribute("data-url")).toBe("blob:pdf");
     expect(state.readFileCalls).toBe(0);
     expect(state.assetRequests).toEqual([
@@ -271,7 +281,9 @@ describe("workspace file tile PDF routing", () => {
     state.assetStreamVersion = null;
     renderTile(nodeFor("docs/report.pdf"));
 
-    expect(screen.getByTestId("workspace-pdf-preview")).toBeTruthy();
+    expect(
+      screen.getByRole("toolbar", { name: "PDF preview controls" }),
+    ).toBeTruthy();
     expect(state.readFileCalls).toBe(0);
     expect(state.assetRequests).toEqual([
       {
@@ -286,7 +298,9 @@ describe("workspace file tile PDF routing", () => {
     state.assetStreamVersion = { major: 1, minor: 0 };
     renderTile(nodeFor("docs/report.pdf"));
 
-    expect(screen.queryByTestId("workspace-pdf-preview")).toBeNull();
+    expect(
+      screen.queryByRole("toolbar", { name: "PDF preview controls" }),
+    ).toBeNull();
     // The text path IS the pre-PDF behavior - the router must not invent
     // a new degraded state for old hosts.
     expect(state.readFileCalls).toBeGreaterThan(0);
@@ -307,7 +321,9 @@ describe("workspace file tile PDF routing", () => {
     expect(
       screen.getByText("This PDF is too large to preview (20 MiB limit)."),
     ).toBeTruthy();
-    expect(screen.queryByTestId("workspace-pdf-preview")).toBeNull();
+    expect(
+      screen.queryByRole("toolbar", { name: "PDF preview controls" }),
+    ).toBeNull();
     // No viewer toolbar without a viewer - the fallback keeps the shared
     // path bar so Open Externally stays reachable.
     expect(screen.getByTestId("workspace-file-toolbar")).toBeTruthy();
@@ -317,6 +333,8 @@ describe("workspace file tile PDF routing", () => {
     renderTile(nodeFor("images/logo.png"));
 
     expect(screen.getByTestId("workspace-image-preview")).toBeTruthy();
-    expect(screen.queryByTestId("workspace-pdf-preview")).toBeNull();
+    expect(
+      screen.queryByRole("toolbar", { name: "PDF preview controls" }),
+    ).toBeNull();
   });
 });

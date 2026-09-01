@@ -20,6 +20,7 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 
 import { imageBlobCache } from "@/lib/attachments/image-blob-cache";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PaneSurfaceActivityContext,
   PaneVisibilityContext,
@@ -1103,6 +1104,41 @@ describe("useFileAsset", () => {
     expect(result.current.status).toBe("fallback");
     expect(result.current.reason).toBe("This PDF is too large to preview.");
     unmount();
+  });
+
+  // Over-cap telemetry is recorded in the SHARED entry's single failure path
+  // (`acquireSharedAssetSubscription`), not in each mounted consumer's own
+  // `onFailure` listener - two coalesced consumers of the same too-large PDF
+  // stream must therefore record exactly one `PdfPreviewTooLarge` event, not
+  // one per consumer.
+  it("tracks exactly one PdfPreviewTooLarge event for two coalesced consumers", async () => {
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const pdfRequest: FileAssetRequest = {
+      method: "workspace",
+      workspacePath: "/repo",
+      filePath: "docs/report.pdf",
+    };
+    const first = renderHook(() => useFileAsset(pdfRequest));
+    const second = renderHook(() => useFileAsset(pdfRequest));
+
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    act(() => {
+      emitFailure(session, "too-large");
+    });
+    await flushPromises();
+
+    expect(first.result.current.status).toBe("fallback");
+    expect(second.result.current.status).toBe("fallback");
+    const pdfTooLargeCalls = track.mock.calls.filter(
+      ([event]) => event === AnalyticsEvent.PdfPreviewTooLarge,
+    );
+    expect(pdfTooLargeCalls).toHaveLength(1);
+    expect(pdfTooLargeCalls[0]?.[1]).toEqual({ surface: "workspace" });
+
+    first.unmount();
+    second.unmount();
   });
 
   it.each(FALLBACK_CASES)(

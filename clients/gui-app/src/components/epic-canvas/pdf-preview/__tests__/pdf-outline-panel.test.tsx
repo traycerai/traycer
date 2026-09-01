@@ -40,11 +40,17 @@ describe("PdfOutlinePanel", () => {
   it("expands the top level by default and collapses deeper levels", () => {
     render(<PdfOutlinePanel items={OUTLINE} onNavigate={vi.fn()} />);
 
-    expect(screen.getByText("Chapter 1")).toBeTruthy();
+    // Each row's title renders as a `<button>` (pdf-outline-panel.tsx) whose
+    // accessible name IS its text content - querying by role/name here
+    // asserts the same contract a screen reader's rotor would see, not just
+    // that the text happens to be somewhere in the DOM.
+    expect(screen.getByRole("button", { name: "Chapter 1" })).toBeTruthy();
     // Depth 1 is visible because its PARENT (depth 0) defaults to expanded.
-    expect(screen.getByText("Reliability")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reliability" })).toBeTruthy();
     // Depth 2 stays hidden until "Reliability" is expanded.
-    expect(screen.queryByText("Hardware faults")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Hardware faults" }),
+    ).toBeNull();
   });
 
   it("expands a collapsed section on demand", () => {
@@ -53,14 +59,16 @@ describe("PdfOutlinePanel", () => {
     fireEvent.click(
       screen.getAllByRole("button", { name: "Expand section" })[0],
     );
-    expect(screen.getByText("Hardware faults")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Hardware faults" }),
+    ).toBeTruthy();
   });
 
   it("hands the clicked entry to onNavigate", () => {
     const onNavigate = vi.fn();
     render(<PdfOutlinePanel items={OUTLINE} onNavigate={onNavigate} />);
 
-    fireEvent.click(screen.getByText("Reliability"));
+    fireEvent.click(screen.getByRole("button", { name: "Reliability" }));
     expect(onNavigate).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Reliability",
@@ -68,7 +76,7 @@ describe("PdfOutlinePanel", () => {
       }),
     );
 
-    fireEvent.click(screen.getByText("External resource"));
+    fireEvent.click(screen.getByRole("button", { name: "External resource" }));
     expect(onNavigate).toHaveBeenCalledWith(
       expect.objectContaining({ dest: null, url: "https://example.com" }),
     );

@@ -323,13 +323,21 @@ function SnapshotDiffTileResolved(props: {
     });
   }, [node.diff, node.id, settledCapture, updatePayload, viewTabId]);
 
+  // A hash-backed tile aimed at a PDF is decided by PATH, not by content: a
+  // binary PDF's blobs were never captured (`SnapshotStore.capture` rejects
+  // non-text), so its query would come back `reason: "binary"` and fall into
+  // the generic source-unavailable banner instead of the PDF copy - and an
+  // ASCII one would download blobs the tile never renders.
+  const segmentIsPdf =
+    segmentHashes !== null && isPdfAssetPath(segmentHashes.filePath);
+
   const segmentQuery = useSnapshotDiffQuery({
     // The snapshot blobs were written by the host this TILE is bound to - the
     // same host its `useChatSessionHandle` above is keyed by (D15).
     client: tabHostClient,
     beforeHash: segmentHashes?.beforeHash ?? null,
     afterHash: segmentHashes?.afterHash ?? null,
-    enabled: segmentHashes !== null,
+    enabled: segmentHashes !== null && !segmentIsPdf,
   });
 
   const cumulative = useSnapshotResolveCumulativeDiffs({
@@ -408,6 +416,16 @@ function SnapshotDiffTileResolved(props: {
     );
   }
 
+  if (segmentIsPdf) {
+    return (
+      <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
+        <div className="p-4 text-ui-sm text-muted-foreground">
+          {PDF_FILE_DIFF_COPY}
+        </div>
+      </SnapshotDiffTileShell>
+    );
+  }
+
   if (resolved.length === 0) {
     return (
       <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
@@ -437,16 +455,6 @@ function SnapshotDiffTileResolved(props: {
   }
 
   if (patch === null) return null;
-
-  if (resolved.every((entry) => isPdfAssetPath(entry.filePath))) {
-    return (
-      <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
-        <div className="p-4 text-ui-sm text-muted-foreground">
-          {PDF_FILE_DIFF_COPY}
-        </div>
-      </SnapshotDiffTileShell>
-    );
-  }
 
   return (
     <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>

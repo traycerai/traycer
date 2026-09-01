@@ -461,6 +461,20 @@ function acquireSharedAssetSubscription(
       onFailure: (failure) => {
         sharedAssetSubscriptions.delete(sharedKey);
         unpin();
+        // Over-cap telemetry (PDF product decision, Q6): the 20 MiB cap is
+        // accepted for v1 on the strength of "Open Externally covers it" -
+        // this event is the evidence stream for revisiting that (range
+        // streaming / a per-type cap) if real users hit the wall. Recorded
+        // HERE, the stream's single failure path, so N coalesced consumers
+        // of one shared stream record one event, not one each.
+        if (
+          isPdfAssetPath(renderPathFor(request)) &&
+          failure.reason === "too-large"
+        ) {
+          Analytics.getInstance().track(AnalyticsEvent.PdfPreviewTooLarge, {
+            surface: assetSourceFor(request),
+          });
+        }
         for (const listener of failureListeners) listener(failure);
       },
     });
@@ -826,15 +840,9 @@ export function useFileAsset(
         settleFetch?.(new Uint8Array(bytes));
       },
       onFailure: (failure: AssetStreamFailure) => {
-        // Over-cap telemetry (PDF product decision, Q6): the 20 MiB cap is
-        // accepted for v1 on the strength of "Open Externally covers it" -
-        // this event is the evidence stream for revisiting that (range
-        // streaming / a per-type cap) if real users hit the wall.
-        if (streamRenderKind === "document" && failure.reason === "too-large") {
-          Analytics.getInstance().track(AnalyticsEvent.PdfPreviewTooLarge, {
-            surface: assetSourceFor(normalizedRequest),
-          });
-        }
+        // Over-cap telemetry lives in the shared entry's single failure path
+        // (`acquireSharedAssetSubscription`), not here - this listener runs
+        // once per mounted consumer of the same stream.
         if (rejectFetch !== null) {
           rejectFetch(new Error(describeFailure(failure, streamRenderKind)));
           return;

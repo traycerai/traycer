@@ -1,10 +1,13 @@
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { create } from "zustand";
 import type { StoreApi, UseBoundStore } from "zustand";
 import type { ChatAccumulatedFileChange } from "@traycer/protocol/host/agent/gui/subscribe";
-import { makeSnapshotCumulativeDiffTile } from "@/lib/chat/snapshot-diff-tile";
+import {
+  makeSnapshotCumulativeDiffTile,
+  makeSnapshotHashDiffTile,
+} from "@/lib/chat/snapshot-diff-tile";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import {
   DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -18,6 +21,7 @@ import type { SnapshotDiffTileRef } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TabHostProvider } from "../../tab-host-provider";
+import { PDF_FILE_DIFF_COPY } from "@/lib/chat/file-edit-reason-copy";
 
 interface SnapshotTestStore {
   readonly snapshotLoaded: boolean;
@@ -39,6 +43,26 @@ interface DiffPrimitiveCall {
   readonly indicatorStyle: DiffViewerPreferences["indicatorStyle"];
 }
 
+interface SnapshotDiffQueryCall {
+  readonly beforeHash: string | null;
+  readonly afterHash: string | null;
+  readonly enabled: boolean;
+}
+
+// Only the fields the tile body reads off the query - the vi.mock factory
+// replaces the module wholesale, so the full UseQueryResult surface is not
+// required, but the mock's RETURN must be typed for the lint gate.
+interface SnapshotDiffQueryResult {
+  readonly data:
+    | {
+        readonly reason: "snapshot" | "binary";
+        readonly beforeContent: string | null;
+        readonly afterContent: string | null;
+      }
+    | undefined;
+  readonly isLoading: boolean;
+}
+
 const state = vi.hoisted(() => ({
   handle: null as {
     readonly store: UseBoundStore<StoreApi<SnapshotTestStore>>;
@@ -49,6 +73,11 @@ const state = vi.hoisted(() => ({
   } | null,
   buildPatch: vi.fn(),
   diffPrimitiveCalls: [] as DiffPrimitiveCall[],
+  // Tracked (not a static return) so a PDF short-circuit test can assert the
+  // query was called with `enabled: false` - i.e. never actually issued -
+  // rather than merely asserting on what it rendered.
+  snapshotDiffQuery:
+    vi.fn<(args: SnapshotDiffQueryCall) => SnapshotDiffQueryResult>(),
 }));
 
 const SNAPSHOT_PATCH = [
@@ -74,10 +103,8 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 
 vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
-  useSnapshotDiffQuery: () => ({
-    data: undefined,
-    isLoading: false,
-  }),
+  useSnapshotDiffQuery: (args: SnapshotDiffQueryCall) =>
+    state.snapshotDiffQuery(args),
 }));
 
 vi.mock("@/lib/diff/snapshot-diff-patch", () => ({
@@ -144,6 +171,11 @@ describe("<SnapshotDiffTileBody />", () => {
       (args: { readonly ignoreWhitespace: boolean }) =>
         args.ignoreWhitespace ? "patch:ignore" : "patch:include",
     );
+    state.snapshotDiffQuery.mockReset();
+    state.snapshotDiffQuery.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+    });
     state.handle = {
       epicId: "epic-1",
       chatId: "chat-1",
@@ -293,6 +325,59 @@ describe("<SnapshotDiffTileBody />", () => {
         coverageMessage: null,
       });
     });
+  });
+
+  // A hash-backed tile aimed at a PDF short-circuits by PATH (the filePath
+  // carried on the payload / resolved hash endpoints), not by the query's
+  // resolved content - a binary PDF's blobs were never captured, so asking
+  // the host would only waste a round trip for a reason the client already
+  // knows from the extension alone.
+  it("renders the PDF copy and never issues the snapshot content query for a PDF filePath", () => {
+    const node = makeSnapshotHashDiffTile({
+      hostId: "host-1",
+      chatId: "chat-1",
+      filePath: "docs/report.pdf",
+      beforeHash: "before-hash",
+      afterHash: "after-hash",
+      title: null,
+    });
+
+    renderSnapshotTile(node);
+
+    expect(screen.getByText(PDF_FILE_DIFF_COPY)).toBeTruthy();
+    expect(
+      screen.queryByTestId(`snapshot-diff-unavailable-${node.id}`),
+    ).toBeNull();
+    expect(state.snapshotDiffQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: false }),
+    );
+  });
+
+  // Same PDF short-circuit as above, but the query mock answers as though it
+  // HAD run and come back `reason: "binary"` (the exact response a PDF's
+  // never-captured blobs would actually produce). The PDF copy must still be
+  // what renders - proving the branch is decided before `resolved` (and thus
+  // the query's data) is ever consulted, not merely coincide with it here.
+  it("renders the PDF copy over the resolved-content branch even when the query would answer binary", () => {
+    state.snapshotDiffQuery.mockReturnValue({
+      data: { reason: "binary", beforeContent: null, afterContent: null },
+      isLoading: false,
+    });
+    const node = makeSnapshotHashDiffTile({
+      hostId: "host-1",
+      chatId: "chat-1",
+      filePath: "docs/report.pdf",
+      beforeHash: "before-hash",
+      afterHash: "after-hash",
+      title: null,
+    });
+
+    renderSnapshotTile(node);
+
+    expect(screen.getByText(PDF_FILE_DIFF_COPY)).toBeTruthy();
+    expect(
+      screen.queryByTestId(`snapshot-diff-unavailable-${node.id}`),
+    ).toBeNull();
   });
 });
 
