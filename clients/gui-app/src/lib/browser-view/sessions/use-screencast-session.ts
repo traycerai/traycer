@@ -12,6 +12,7 @@ import type {
   BrowserScreencastCaptureMode,
   BrowserScreencastClientFrame,
   BrowserScreencastServerFrame,
+  BrowserScreencastViewerRole,
 } from "@traycer/protocol/host/browser/contracts";
 import { BrowserScreencastStreamClient } from "@traycer-clients/shared/host-transport/browser-screencast-stream-client";
 import type {
@@ -20,11 +21,13 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   EMPTY_SCREENCAST_NAV_STATE,
   toastScreencastUnsupportedInteraction,
 } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   createScreencastController,
   type ScreencastController,
@@ -207,6 +210,25 @@ export interface ScreencastSessionOptions {
  * `createScreencastController`, which is plain TypeScript and testable without
  * React.
  */
+/**
+ * The control tier a shell may subscribe at. `"tile"` only where the shell
+ * owns a native browser of its own - which is exactly the desktop, since
+ * `browserView` is the shell's own "I have a real BrowserView" capability and
+ * both the web bundle (no runner host at all) and the mobile shell
+ * (`MobileRunnerHost.browserView = null`) answer `null`.
+ *
+ * Everything else is a `"viewer"`: it watches the tab, and the host refuses
+ * its `arm` and its input frames outright (security review root cause G). The
+ * declaration is what the host acts on, so a modified client can still claim
+ * `"tile"` - the tier bounds a cooperating viewer, it does not authorize one.
+ */
+export function screencastRoleForShell(
+  runnerHost: Pick<IRunnerHost, "browserView"> | null,
+): BrowserScreencastViewerRole {
+  if (runnerHost === null || runnerHost.browserView === null) return "viewer";
+  return "tile";
+}
+
 export function useScreencastSession(
   options: ScreencastSessionOptions,
 ): ScreencastSession {
@@ -214,6 +236,7 @@ export function useScreencastSession(
   // A module constant chosen by the shell this bundle booted into, so the
   // reference is stable across renders and safe to depend on below.
   const profile = screencastProfile();
+  const role = screencastRoleForShell(useRunnerHostOrNull());
   const streamRef = useRef<BrowserScreencastStreamClient | null>(null);
   const videoPlaneRef = useRef<VideoPlaneSession | null>(null);
   /**
@@ -625,7 +648,7 @@ export function useScreencastSession(
       maxHeight: profile.maxHeight,
       quality: profile.quality,
       format: "jpeg",
-      role: "tile",
+      role,
       callbacks: { onServerFrame, onConnectionStatus },
     });
     streamRef.current = stream;
@@ -656,6 +679,7 @@ export function useScreencastSession(
     patchStreamState,
     profile,
     readControlPlaneRttMs,
+    role,
     sessionId,
     tabId,
     visible,

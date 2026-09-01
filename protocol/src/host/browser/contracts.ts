@@ -1030,7 +1030,27 @@ export type BrowserScreencastFormat = z.infer<
   typeof browserScreencastFormatSchema
 >;
 
-const browserScreencastViewerRoleSchema = z.enum(["tile", "pip"]);
+/**
+ * The subscription's control tier.
+ *
+ * A tile drives the tab; `"pip"` and `"viewer"` are read-only, routed to the
+ * host's restricted client-frame handler, so an `arm` or an input frame from
+ * either is refused and traced rather than dispatched. They differ only in
+ * what else they cost the host - a `"pip"` mirrors a tile that is already
+ * streaming and is never offered its own video round, while a `"viewer"` is a
+ * first-class watcher of the tab (viewed state, its own WebRTC round) that
+ * simply has no input rights.
+ *
+ * NOT AN AUTHORIZATION. The tier is declared by the client and the host
+ * applies it verbatim: a modified client sends `"tile"` and drives. Nothing
+ * here can be made unforgeable - `transportVantage` is a placement fact (a
+ * desktop GUI on a remote host is relay too) and `clientKind` is client text.
+ * Input by tier was never the boundary: a client authenticated as this user
+ * already drives the tab through the browser MCP and agent RPCs. User
+ * authentication is the boundary; this field bounds a cooperating client and
+ * denies nothing.
+ */
+const browserScreencastViewerRoleSchema = z.enum(["tile", "pip", "viewer"]);
 export type BrowserScreencastViewerRole = z.infer<
   typeof browserScreencastViewerRoleSchema
 >;
