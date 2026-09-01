@@ -102,17 +102,38 @@ interface SpawnFixture {
   readonly worker: RuntimeWorkerLike;
   readonly terminate: () => void;
   readonly host: EpicRuntimeWorkerHost | null;
+  /**
+   * Fires the DOM-level fault a real `Worker` reports when its module fails to
+   * load - the one failure the bridge cannot carry, because no code of ours
+   * ever runs to send a `fatal`.
+   *
+   * A recorded listener rather than a no-op, so this fixture can drive the
+   * path instead of merely satisfying its type.
+   */
+  readonly faultWorker: (message: string) => void;
 }
 
 function createFixture(withHost: boolean): SpawnFixture {
   const pair = createFakeBridgePair("sync");
   const terminate = vi.fn();
+  const faultListeners: Array<(message: string) => void> = [];
   const worker: RuntimeWorkerLike = {
     ...createFakeWorkerTarget(pair),
     terminate,
+    onWorkerFault: (listener) => {
+      faultListeners.push(listener);
+    },
   };
   const host = withHost ? startEpicRuntimeWorkerHost(pair.worker) : null;
-  return { pair, worker, terminate, host };
+  return {
+    pair,
+    worker,
+    terminate,
+    host,
+    faultWorker: (message) => {
+      for (const listener of [...faultListeners]) listener(message);
+    },
+  };
 }
 
 function mainEvents(pair: FakeBridgePair): MainToWorkerEvent[] {
@@ -183,6 +204,40 @@ describe("spawnEpicRuntimeWorker", () => {
     expect(relay.log).toHaveBeenCalledWith(logEntry);
     expect(relay.fatal).toHaveBeenCalledWith("worker failed", "stack");
     await expect(handle.ready).rejects.toThrow("worker failed");
+    handle.dispose();
+  });
+
+  it("surfaces a worker fault as a fatal, with no bridge traffic at all", async () => {
+    // THE FAILURE THE BRIDGE CANNOT CARRY. `new Worker(url, {type:"module"})`
+    // returns synchronously, so a module that then fails to fetch, parse or
+    // evaluate leaves a live handle attached to a thread that never ran a line
+    // of our code: no `ready`, no `fatal`, nothing to time out on. Production
+    // does not await `handle.ready`, so the session is already presented as
+    // ready and the epic spins on a snapshot that cannot arrive, with no Retry
+    // offered.
+    //
+    // Driven with ZERO prior posts, deliberately - the whole point is that
+    // this arrives on a bridge that has never carried a frame, so a pin that
+    // handshook first would be testing a different failure.
+    const fixture = createFixture(false);
+    const relay = { log: vi.fn(), fatal: vi.fn() };
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { relay },
+      ),
+    );
+
+    fixture.faultWorker("the epic runtime worker module failed to load");
+
+    // Routed through the SAME path the bridge `fatal` takes: the relay is told
+    // (which is what presents `failed` and its Retry), and the handshake
+    // promise is rejected rather than left pending forever.
+    expect(relay.fatal).toHaveBeenCalledWith(
+      "the epic runtime worker module failed to load",
+      null,
+    );
+    await expect(handle.ready).rejects.toThrow("module failed to load");
     handle.dispose();
   });
 
@@ -355,6 +410,10 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
     const worker: RuntimeWorkerLike = {
       ...createFakeWorkerTarget(pair),
       terminate: () => {},
+      // Not driven by these pins - the projection path is bridge traffic, and
+      // a faulted worker sends none. `createFixture` above is the one that
+      // records the listener.
+      onWorkerFault: () => {},
     };
 
     const applied: Array<{ readonly value: Slice; readonly revision: number }> =

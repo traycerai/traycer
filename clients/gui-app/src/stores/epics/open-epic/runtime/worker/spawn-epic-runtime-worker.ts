@@ -66,6 +66,38 @@ import type { EpicRuntimeAccountingPort } from "../epic-runtime-accounting-port"
 /** The part of `Worker` this module uses. */
 export interface RuntimeWorkerLike extends BridgeMessageTargetLike {
   terminate(): void;
+  /**
+   * Subscribes to the faults a worker reports as EVENTS rather than as bridge
+   * messages.
+   *
+   * A separate member, and REQUIRED, because the bridge cannot carry this
+   * class of failure by construction. `new Worker(url, {type:"module"})`
+   * returns synchronously; if that module then fails to fetch, parse or
+   * evaluate, the thread never runs a line of our code - so it emits no
+   * `ready` and no `fatal`, and a handle that listens only for bridge
+   * messages waits forever. Production does not await {@link
+   * EpicRuntimeWorkerHandle.ready}, so the session is already presented as
+   * ready by then and the epic spins on a snapshot that can never arrive,
+   * with no Retry offered.
+   *
+   * Not folded into `addEventListener`: {@link BridgeMessageTargetLike} pins
+   * that member's type parameter to `"message"`, and an overload cannot be
+   * added by an extending interface. Not a probed capability either - every
+   * implementor HAS an `addEventListener`, so no structural guard can tell
+   * one that handles `"error"` from one that does not, and a silent `false`
+   * is the failure this member exists to end.
+   *
+   * A no-op subscription is the right answer for an in-thread fake, whose
+   * module cannot fail to load. Stating that per fake is the point: it is
+   * the difference between a harness that CANNOT reach this path and one
+   * that merely does not.
+   *
+   * No unsubscribe, unlike the `message` pair above, because there is no
+   * point in this handle's life at which it would stop caring: the
+   * subscription lasts as long as the handle, and `terminate()` ends the
+   * event source itself.
+   */
+  onWorkerFault(listener: (message: string) => void): void;
 }
 
 /**
@@ -350,6 +382,41 @@ export function spawnEpicRuntimeWorker<TProjection>(
     },
   });
 
+  /**
+   * The ONE way a dead runtime is surfaced, reached from both entries: the
+   * worker's own `fatal` bridge event, and a fault the worker reports as a DOM
+   * event because no code of ours is running to send one.
+   *
+   * Shared rather than duplicated because the three steps are not
+   * independent, and a second copy would drift on whichever one a later
+   * reader thought was the incidental part.
+   */
+  const surfaceFatal = (message: string, stack: string | null): void => {
+    // The runtime behind the bridge is gone, so its books must not stay
+    // attached to the process planes. Without this the accountant keeps a
+    // dead runtime's cached numbers and dispatches demote requests into a
+    // bridge nothing is listening on - a plane that never reclaims and never
+    // explains why. Idempotent, so the `dispose()` that follows a surfaced
+    // fatal is not a second deregistration.
+    accounting.dispose();
+    options.relay.fatal(message, stack);
+    // A fatal before the handshake is the handshake's answer. After it, the
+    // promise has already settled and this is a no-op - the relay is what
+    // surfaces a mid-life fatal.
+    failReady?.(new Error(message));
+  };
+
+  // The failure the bridge cannot carry. Subscribed BEFORE the bootstrap is
+  // emitted below, because a module that fails to evaluate can have already
+  // faulted by the time this handle finishes constructing.
+  worker.onWorkerFault((message) => {
+    // No stack: this arrives as a DOM `ErrorEvent`, whose `error` is `null`
+    // for a module that never evaluated, and the worker had no chance to
+    // build one of its own. `null` is the honest answer, and the same one the
+    // relay already accepts from a stackless bridge fatal.
+    surfaceFatal(message, null);
+  });
+
   const unsubscribeEvents = bridge.onEvent((event: WorkerToMainEvent) => {
     // The stream-proxy family, recognised as ONE thing, and peeled here rather
     // than given five labels in the switch below: `complexity` counts case
@@ -393,18 +460,7 @@ export function spawnEpicRuntimeWorker<TProjection>(
         accounting.handle(event);
         return;
       case "fatal":
-        // The runtime behind the bridge is gone, so its books must not stay
-        // attached to the process planes. Without this the accountant keeps a
-        // dead runtime's cached numbers and dispatches demote requests into a
-        // bridge nothing is listening on - a plane that never reclaims and
-        // never explains why. Idempotent, so the `dispose()` that follows a
-        // surfaced fatal is not a second deregistration.
-        accounting.dispose();
-        options.relay.fatal(event.message, event.stack);
-        // A fatal before the handshake is the handshake's answer. After it,
-        // the promise has already settled and this is a no-op - the relay is
-        // what surfaces a mid-life fatal.
-        failReady?.(new Error(event.message));
+        surfaceFatal(event.message, event.stack);
         return;
       default:
         assertNever(event);
@@ -630,13 +686,51 @@ export function spawnEpicRuntimeWorker<TProjection>(
  * line, and this is deliberately not it.
  */
 export function createEpicRuntimeWorker(): RuntimeWorkerLike {
-  return new Worker(
+  const worker = new Worker(
     new URL("./epic-runtime-worker-entry.ts", import.meta.url),
     {
       type: "module",
       name: "traycer-epic-runtime",
     },
   );
+  // Forwarded rather than returned directly, and this is the ONE place the
+  // DOM-event shape of a worker fault is known. Both events land on the same
+  // listener because both mean the same thing to the spawner - no further
+  // bridge traffic is coming:
+  //
+  //   `error`        - the module failed to fetch, parse or evaluate, or a
+  //                    top-level throw escaped it. `event.message` is empty
+  //                    for a cross-origin script, hence the fallback.
+  //   `messageerror` - the worker sent something this thread cannot
+  //                    deserialize. It carries no message at all, and a bridge
+  //                    that has started dropping frames is not a bridge a
+  //                    session can wait on.
+  return {
+    postMessage: (message, transfer) => {
+      worker.postMessage(message, transfer);
+    },
+    addEventListener: (type, listener) => {
+      worker.addEventListener(type, listener);
+    },
+    removeEventListener: (type, listener) => {
+      worker.removeEventListener(type, listener);
+    },
+    terminate: () => {
+      worker.terminate();
+    },
+    onWorkerFault: (listener) => {
+      worker.addEventListener("error", (event) => {
+        listener(
+          event.message === ""
+            ? "the epic runtime worker module failed to load"
+            : event.message,
+        );
+      });
+      worker.addEventListener("messageerror", () => {
+        listener("the epic runtime worker sent an undeserializable message");
+      });
+    },
+  };
 }
 
 function assertNever(value: never): never {

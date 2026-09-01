@@ -310,6 +310,11 @@ function installWorkerWithFatalOnFirstSpawn(
         listeners.delete(listener);
       },
       terminate: (): void => {},
+      // This rig's whole subject is a worker that ANSWERS and then dies, so
+      // the fault path - a worker whose module never ran at all - is not the
+      // failure under test here. Its own pin lives in
+      // `spawn-epic-runtime-worker.test.ts`.
+      onWorkerFault: (): void => {},
     };
   });
   return {

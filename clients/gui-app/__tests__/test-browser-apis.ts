@@ -49,6 +49,11 @@ __setEpicRuntimeWorkerFactoryForTests(() => {
     terminate: () => {
       host.shutdown();
     },
+    // Unreachable here, and stated rather than left to a default: this host
+    // runs in THIS thread, so there is no module fetch to fail and no DOM
+    // event to report one. The real `Worker` is the only implementor that can
+    // ever call this listener.
+    onWorkerFault: () => {},
   };
 });
 
