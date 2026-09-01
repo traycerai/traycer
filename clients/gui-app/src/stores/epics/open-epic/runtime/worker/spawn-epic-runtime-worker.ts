@@ -396,14 +396,39 @@ export function spawnEpicRuntimeWorker<TProjection>(
     // attached to the process planes. Without this the accountant keeps a
     // dead runtime's cached numbers and dispatches demote requests into a
     // bridge nothing is listening on - a plane that never reclaims and never
-    // explains why. Idempotent, so the `dispose()` that follows a surfaced
-    // fatal is not a second deregistration.
+    // explains why. Idempotent, so the `dispose()` below is not a second
+    // deregistration.
     accounting.dispose();
     options.relay.fatal(message, stack);
     // A fatal before the handshake is the handshake's answer. After it, the
     // promise has already settled and this is a no-op - the relay is what
     // surfaces a mid-life fatal.
+    //
+    // BEFORE the teardown below, and that order is load-bearing: `dispose()`
+    // rejects an unsettled `ready` with its own "disposed before it was
+    // ready", so tearing down first would replace the cause with the
+    // consequence and hand every awaiter the wrong reason.
     failReady?.(new Error(message));
+    // AND RELEASE THE TRANSPORT. Until this, the fatal path freed the books
+    // and presented Retry while `proxy` kept every real `IStreamSession` the
+    // worker had opened - so a user who neither retried nor reopened the epic
+    // left host subscriptions live indefinitely, forwarding frames toward a
+    // bridge nothing reads. Nothing else collected them: the provider marks
+    // the handle dead rather than disposing it (registry mutation belongs to
+    // the acquire effect), and that pass only runs if the user comes back.
+    // Cap-eviction cannot stand in either - `isClean()` requires
+    // `hostTransportStatus === "open"`, which a session whose runtime just
+    // died does not have.
+    //
+    // Through `dispose()` rather than a fatal-only teardown, for the reason
+    // `dispose()` itself gives about `detach()`: a second copy of the
+    // close-then-teardown ordering is what got it wrong the first time. It is
+    // idempotent, it is safe from inside a bridge event (the dispatch
+    // iterates a COPY of the listener set precisely so a listener may
+    // unsubscribe during it), and it touches no registry - this is the
+    // runtime worker handle, one level below the session handle the provider
+    // is talking about.
+    disposeHandle();
   };
 
   // The failure the bridge cannot carry. Subscribed BEFORE the bootstrap is
@@ -601,6 +626,47 @@ export function spawnEpicRuntimeWorker<TProjection>(
     detaching?.dispose();
   }
 
+  // A hoisted declaration rather than a method on the object below, because
+  // `surfaceFatal` calls it and is defined earlier: the fatal path now
+  // releases the transport, not just the books.
+  function disposeHandle(): void {
+    if (disposed) return;
+    disposed = true;
+    // Detach FIRST, and through the same function the detach-only path uses -
+    // one copy of the close-then-teardown ordering, because a second copy is
+    // what got it wrong the first time.
+    detach();
+    // Only then stop routing. Unsubscribing before the detach drops every
+    // report even on a live bridge.
+    unsubscribeEvents();
+    // The transport outlives this worker on the retained-buffer path, so a
+    // manifest listener left behind would emit onto a disposed bridge every
+    // time that connection re-handshakes. BOTH of them: the registry is
+    // module-scoped and process-wide, so a listener leaked there outlives not
+    // just the transport but every session on it.
+    unsubscribeMethodSupport();
+    unsubscribeNegotiatedManifests();
+    // The worker will not get to say `accounting/books registered: false` -
+    // it is about to be terminated - so main releases the holders itself.
+    accounting.dispose();
+    // Ask before killing. `shutdown` lets the worker dispose its own core -
+    // a durable store mid-write, a transport mid-close - whereas
+    // `terminate()` stops it between two machine instructions.
+    bridge.emit({ kind: "shutdown" }, NO_TRANSFER);
+    bridge.dispose();
+    // Nothing waits on the shutdown being observed: a worker that stopped
+    // answering is exactly the case `terminate()` is for, and holding the
+    // window open on it would make disposal depend on the health of the
+    // thing being disposed.
+    worker.terminate();
+    // A never-settled `ready` outlives the handle otherwise, and its awaiter
+    // hangs on a worker that no longer exists. A no-op when a fatal already
+    // rejected it with the real cause.
+    failReady?.(
+      new Error("The epic runtime worker was disposed before it was ready"),
+    );
+  }
+
   return {
     port: bridge,
     ready,
@@ -626,42 +692,7 @@ export function spawnEpicRuntimeWorker<TProjection>(
       bridge.emit({ kind: "runtime/command", command }, NO_TRANSFER);
     },
     detach,
-    dispose(): void {
-      if (disposed) return;
-      disposed = true;
-      // Detach FIRST, and through the same function the detach-only path uses -
-      // one copy of the close-then-teardown ordering, because a second copy is
-      // what got it wrong the first time.
-      detach();
-      // Only then stop routing. Unsubscribing before the detach drops every
-      // report even on a live bridge.
-      unsubscribeEvents();
-      // The transport outlives this worker on the retained-buffer path, so a
-      // manifest listener left behind would emit onto a disposed bridge every
-      // time that connection re-handshakes. BOTH of them: the registry is
-      // module-scoped and process-wide, so a listener leaked there outlives not
-      // just the transport but every session on it.
-      unsubscribeMethodSupport();
-      unsubscribeNegotiatedManifests();
-      // The worker will not get to say `accounting/books registered: false` -
-      // it is about to be terminated - so main releases the holders itself.
-      accounting.dispose();
-      // Ask before killing. `shutdown` lets the worker dispose its own core -
-      // a durable store mid-write, a transport mid-close - whereas
-      // `terminate()` stops it between two machine instructions.
-      bridge.emit({ kind: "shutdown" }, NO_TRANSFER);
-      bridge.dispose();
-      // Nothing waits on the shutdown being observed: a worker that stopped
-      // answering is exactly the case `terminate()` is for, and holding the
-      // window open on it would make disposal depend on the health of the
-      // thing being disposed.
-      worker.terminate();
-      // A never-settled `ready` outlives the handle otherwise, and its awaiter
-      // hangs on a worker that no longer exists.
-      failReady?.(
-        new Error("The epic runtime worker was disposed before it was ready"),
-      );
-    },
+    dispose: disposeHandle,
   };
 }
 

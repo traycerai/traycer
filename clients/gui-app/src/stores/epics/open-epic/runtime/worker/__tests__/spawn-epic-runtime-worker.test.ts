@@ -353,6 +353,54 @@ describe("spawnEpicRuntimeWorker", () => {
     );
   });
 
+  it("releases the transport when the worker fatals, without waiting for a retry", () => {
+    // THE LEAK THE FATAL PATH USED TO LEAVE BEHIND. `surfaceFatal` freed the
+    // accounting books and presented Retry, and stopped there - so `proxy`
+    // kept every real `IStreamSession` the worker had opened. Nothing else
+    // collected them: the provider MARKS the handle dead rather than
+    // disposing it (registry mutation belongs to the acquire effect), and
+    // that pass only runs if the user retries or reopens the epic. A user who
+    // does neither leaves host subscriptions live indefinitely, forwarding
+    // frames toward a bridge nothing reads.
+    //
+    // Cap-eviction cannot stand in for it either: the registry's
+    // `isEvictable` is `handle.isClean()`, which requires
+    // `hostTransportStatus === "open"` - not true of a session whose runtime
+    // just died.
+    const fixture = createFixture(false);
+    const recording = createRecordingStreamClient();
+    const relay = { log: vi.fn(), fatal: vi.fn() };
+    const handle = spawnEpicRuntimeWorker(
+      spawnOptions(
+        { createWorker: () => fixture.worker, projection: SILENT_PROJECTION },
+        { streams: recording.client, relay },
+      ),
+    );
+    openStreams(fixture, 3);
+    expect(recording.closedCount()).toBe(0);
+
+    fixture.pair.worker.post(
+      {
+        frame: "event",
+        event: { kind: "fatal", message: "runtime blew up", stack: null },
+      },
+      [],
+    );
+
+    // Every real session closed, and the thread stopped - no second gesture
+    // from the user required.
+    expect(recording.closedCount()).toBe(3);
+    expect(fixture.terminate).toHaveBeenCalledTimes(1);
+    // The relay still ran, and FIRST: the teardown must not cost the user the
+    // presentation that carries Retry.
+    expect(relay.fatal).toHaveBeenCalledWith("runtime blew up", null);
+    // And the handshake still rejects with the CAUSE. `dispose()` rejects an
+    // unsettled `ready` with its own "disposed before it was ready", so a
+    // teardown ordered before the rejection would replace the reason with the
+    // consequence.
+    return expect(handle.ready).rejects.toThrow("runtime blew up");
+  });
+
   it("closes every real session the worker opened when it disposes", () => {
     // Rule 3: a worker that is terminated mid-life never sends its own closes.
     // A real session left subscribed is a socket carrying frames nothing reads.
