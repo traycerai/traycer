@@ -103,18 +103,63 @@ describe("host-agent capability contracts", () => {
   it("represents same-host copy without a sentinel and defaults overwrite mode", () => {
     expect(
       hostFileCopyStartV10.requestSchema.parse({
+        epicId: "epic-1",
         sourceHostId: null,
         sourcePath: "/source",
         destinationPath: "/destination",
         exclude: [],
       }),
     ).toEqual({
+      epicId: "epic-1",
       sourceHostId: null,
       sourcePath: "/source",
       destinationPath: "/destination",
       exclude: [],
       overwrite: "overwrite",
     });
+  });
+
+  it("requires epic scope only at path authorization boundaries", () => {
+    expect(
+      hostFileCopyStartV10.requestSchema.safeParse({
+        sourceHostId: null,
+        sourcePath: "/source",
+        destinationPath: "/destination",
+        exclude: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      hostFileTransferEnumerateV10.requestSchema.safeParse({
+        sourcePath: "/source",
+        exclude: [],
+        cursor: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostFileTransferOpenV10.requestSchema.safeParse({
+        sourcePath: "/source",
+        relativePath: "src/index.ts",
+      }).success,
+    ).toBe(false);
+
+    expect(
+      hostFileCopyStatusV10.requestSchema.safeParse({ jobId: "job-1" }).success,
+    ).toBe(true);
+    expect(
+      hostFileCopyCancelV10.requestSchema.safeParse({ jobId: "job-1" }).success,
+    ).toBe(true);
+    expect(
+      hostFileTransferReadChunkV10.requestSchema.safeParse({
+        handleId: "handle-1",
+        offset: 0,
+        length: 1,
+      }).success,
+    ).toBe(true);
+    expect(
+      hostFileTransferCloseV10.requestSchema.safeParse({
+        handleId: "handle-1",
+      }).success,
+    ).toBe(true);
   });
 
   it("strips byte-carrying fields from enumeration entries", () => {

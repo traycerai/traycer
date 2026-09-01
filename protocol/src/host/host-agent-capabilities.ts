@@ -142,7 +142,8 @@ export const hostDirectoryListV10 = defineRpcContract({
  * request, then moves bytes directly from the source without ever returning
  * file content to the invoking agent. `sourceHostId: null` is the degenerate
  * same-host case; it means "this destination host" rather than an invented
- * sentinel id.
+ * sentinel id. `epicId` scopes destination path authorization when the job is
+ * created; status and cancel rely on that already-authorized job capability.
  */
 export const hostFileCopyOverwriteSchema = z.enum([
   "overwrite",
@@ -151,6 +152,7 @@ export const hostFileCopyOverwriteSchema = z.enum([
 export type HostFileCopyOverwrite = z.infer<typeof hostFileCopyOverwriteSchema>;
 
 export const hostFileCopyStartRequestSchema = z.object({
+  epicId: z.string().min(1),
   sourceHostId: z.string().min(1).nullable(),
   sourcePath: z.string().min(1),
   destinationPath: z.string().min(1),
@@ -369,7 +371,13 @@ export const hostFileTransferEntrySchema = z.discriminatedUnion("kind", [
 ]);
 export type HostFileTransferEntry = z.infer<typeof hostFileTransferEntrySchema>;
 
+/**
+ * Source paths are epic-scoped at enumeration and open. Once open succeeds,
+ * the handle pins the authorized descriptor: read and close intentionally do
+ * not re-authorize its epic scope or imply the descriptor is re-derivable.
+ */
 export const hostFileTransferEnumerateRequestSchema = z.object({
+  epicId: z.string().min(1),
   sourcePath: z.string().min(1),
   exclude: z.array(z.string().min(1)),
   cursor: z.string().min(1).nullable(),
@@ -396,6 +404,7 @@ export const hostFileTransferEnumerateV10 = defineRpcContract({
 });
 
 export const hostFileTransferOpenRequestSchema = z.object({
+  epicId: z.string().min(1),
   sourcePath: z.string().min(1),
   relativePath: z.string(),
 });
