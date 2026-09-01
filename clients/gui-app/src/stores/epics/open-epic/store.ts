@@ -4035,6 +4035,8 @@ export function createOpenEpicStore(
 
           retryTransport: () => {
             if (disposed || transportDetached) return;
+            const prior = get();
+            const priorHasFreshRootSnapshot = hasFreshRootSnapshotForOpenCycle;
             transportStatus = "connecting";
             currentStatus = deriveConnectionStatus(
               transportStatus,
@@ -4048,7 +4050,26 @@ export function createOpenEpicStore(
               snapshotFetchError: null,
               ...cycleDurabilityState,
             });
-            openStreamClient();
+            try {
+              openStreamClient();
+            } catch (cause) {
+              transportStatus = prior.hostTransportStatus;
+              cloudSyncStatus = prior.cloudSyncStatus;
+              hasFreshCloudSyncStatus = prior.hasFreshCloudSyncStatus;
+              hasConnectedOnce = prior.hasConnectedOnce;
+              currentStatus = prior.connectionStatus;
+              hasFreshRootSnapshotForOpenCycle = priorHasFreshRootSnapshot;
+              set({
+                ...connectionStateSlice(),
+                snapshotFetchError: prior.snapshotFetchError,
+                artifactRoomDirtyByArtifactRoomId:
+                  prior.artifactRoomDirtyByArtifactRoomId,
+                rootDirty: prior.rootDirty,
+                hasDirtySnapshotForOpenCycle:
+                  prior.hasDirtySnapshotForOpenCycle,
+              });
+              throw cause;
+            }
           },
 
           retryMigration: () => {
