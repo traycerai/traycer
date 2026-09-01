@@ -1753,6 +1753,7 @@ export function addAcceptedAction(
       [pending.clientActionId]: {
         clientActionId: pending.clientActionId,
         action: pending.action,
+        queueItemId: pending.queueItemId,
         interviewBlockId: pending.interviewBlockId,
         interviewDeliveryRetry: pending.interviewDeliveryRetry,
         messageId: pending.messageId,
@@ -1779,10 +1780,13 @@ export function addAcceptedAction(
  * record cap (64 records). Prioritizes send/editUserMessage actions and
  * recent entries. Returns the same object if no pruning is needed.
  *
- * An accepted-but-unresolved interview action (`interviewBlockId !== null`)
- * or delivery retry (`interviewDeliveryRetry !== null`) is a lifecycle lock,
+ * An accepted-but-unresolved interview action (`interviewBlockId !== null`),
+ * delivery retry (`interviewDeliveryRetry !== null`), or queue cancellation
+ * (`queueItemId !== null`) is a lifecycle lock,
  * not generic action history. Its duplicate-dispatch guard must survive until
- * the corresponding authoritative interview delivery transition retires it.
+ * the corresponding authoritative host transition retires it. A cancellation
+ * also carries the UI projection that keeps its queue row hidden between an
+ * accepted ack and the durable queue update.
  * Exempt it from the retention window and record cap below, or a
  * slow-to-resolve interview (or enough unrelated traffic to evict it from the
  * cap) would silently un-gate a duplicate submission before the host
@@ -1796,15 +1800,9 @@ export function pruneAcceptedActions(
   const MAX_RECORDS = 64;
 
   const all = Object.values(acceptedActions);
-  const interviewLocked = all.filter(
-    (action) =>
-      action.interviewBlockId !== null ||
-      action.interviewDeliveryRetry !== null,
-  );
+  const lifecycleLocked = all.filter(isAcceptedActionLifecycleLocked);
   const prunable = all.filter(
-    (action) =>
-      action.interviewBlockId === null &&
-      action.interviewDeliveryRetry === null,
+    (action) => !isAcceptedActionLifecycleLocked(action),
   );
 
   const unexpired = prunable.filter(
@@ -1816,7 +1814,7 @@ export function pruneAcceptedActions(
       : unexpired
           .toSorted(compareAcceptedActionForRetention)
           .slice(0, MAX_RECORDS);
-  const kept = [...interviewLocked, ...retained];
+  const kept = [...lifecycleLocked, ...retained];
   if (kept.length === all.length) {
     return acceptedActions;
   }
@@ -1824,6 +1822,39 @@ export function pruneAcceptedActions(
     next[action.clientActionId] = action;
     return next;
   }, {});
+}
+
+/**
+ * Retire accepted queue cancellations once an authoritative queue no longer
+ * contains their target. Until then the record carries the optimistic
+ * projection across the ack-to-queue-update gap.
+ */
+export function withoutResolvedAcceptedQueueCancellations(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  queue: ChatQueueState,
+): Readonly<Record<string, AcceptedChatAction>> {
+  const queueItemIds = new Set(queue.items.map((item) => item.queueItemId));
+  const retained = Object.values(acceptedActions).filter(
+    (action) =>
+      action.action !== "queueCancel" ||
+      action.queueItemId === null ||
+      queueItemIds.has(action.queueItemId),
+  );
+  if (retained.length === Object.keys(acceptedActions).length) {
+    return acceptedActions;
+  }
+  return retained.reduce<Record<string, AcceptedChatAction>>((next, action) => {
+    next[action.clientActionId] = action;
+    return next;
+  }, {});
+}
+
+function isAcceptedActionLifecycleLocked(action: AcceptedChatAction): boolean {
+  return (
+    action.interviewBlockId !== null ||
+    action.interviewDeliveryRetry !== null ||
+    (action.action === "queueCancel" && action.queueItemId !== null)
+  );
 }
 
 /**

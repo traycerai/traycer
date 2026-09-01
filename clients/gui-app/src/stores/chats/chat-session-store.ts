@@ -4,6 +4,7 @@ import {
   noticeCarriesOnlyCopy,
   unrecoverableSendNotice,
   pruneAcceptedActions,
+  withoutResolvedAcceptedQueueCancellations,
   reconcileQueueChange,
   reconcileSnapshotChange,
   reconcileTurnSettled,
@@ -325,6 +326,8 @@ export interface InterviewDeliveryRetryIdentity {
 export interface PendingChatAction {
   readonly clientActionId: string;
   readonly action: ChatOwnerActionFrame["kind"];
+  /** Queue row targeted by a queue mutation; populated for queueCancel. */
+  readonly queueItemId: string | null;
   // For `interviewAnswer` / `interviewError`, the interview block this action
   // targets; `null` for every other action. Lets the UI gate exactly the card
   // whose answer/skip is in flight (or accepted-but-unresolved) rather than all
@@ -451,6 +454,8 @@ export interface EditUserMessageInput {
 export interface AcceptedChatAction {
   readonly clientActionId: string;
   readonly action: ChatOwnerActionFrame["kind"];
+  /** Carries an accepted queueCancel projection until host queue truth lands. */
+  readonly queueItemId: string | null;
   // Carried over from the originating `PendingChatAction` so an accepted-but-
   // unresolved interview answer/skip keeps gating its card. `null` for every
   // non-interview action.
@@ -4482,15 +4487,18 @@ export function createChatSessionStoreWithNotificationDependencies(
               new Set(Object.keys(patch.pendingActions)),
             ),
             pendingActions: patch.pendingActions,
-            acceptedActions: pruneAcceptedActions(
-              {
-                ...state.acceptedActions,
-                // Confirmation stamps for records that were already accepted
-                // when this frame arrived, then this pass's own transitions.
-                ...patch.confirmedAcceptedActions,
-                ...patch.acceptedActions,
-              },
-              now,
+            acceptedActions: withoutResolvedAcceptedQueueCancellations(
+              pruneAcceptedActions(
+                {
+                  ...state.acceptedActions,
+                  // Confirmation stamps for records that were already accepted
+                  // when this frame arrived, then this pass's own transitions.
+                  ...patch.confirmedAcceptedActions,
+                  ...patch.acceptedActions,
+                },
+                now,
+              ),
+              frame.queue,
             ),
             pendingUserMessages: patch.pendingUserMessages,
           };
@@ -5445,6 +5453,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           pending: {
             clientActionId,
             action: "send",
+            queueItemId: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
@@ -5567,6 +5576,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           pending: {
             clientActionId: input.clientActionId,
             action: "send",
+            queueItemId: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: input.messageId,
@@ -5672,6 +5682,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           pending: {
             clientActionId,
             action: "editUserMessage",
+            queueItemId: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
@@ -5744,6 +5755,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           pending: {
             clientActionId,
             action: "stop",
+            queueItemId: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: null,
@@ -5929,7 +5941,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           set,
           get,
           frame,
-          pending: basicPending(clientActionId, "queueCancel"),
+          pending: {
+            ...basicPending(clientActionId, "queueCancel"),
+            queueItemId,
+          },
           pendingUserMessage: null,
         });
       },
@@ -6491,6 +6506,7 @@ function basicPending(
   return {
     clientActionId,
     action,
+    queueItemId: null,
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId: null,
@@ -6502,6 +6518,35 @@ function basicPending(
     deliveryPolicy: null,
     createdAt: Date.now(),
   };
+}
+
+/**
+ * View projection for queue cancels whose durable host disposition is still
+ * outstanding. The authoritative queue remains intact in store state, so a
+ * rejection or reconnect sweep restores the row simply by removing the
+ * pending action; an accepted action holds the projection across the
+ * ack-before-queueChanged window.
+ */
+export function projectQueueWithPendingCancellations(
+  queue: ChatQueueState,
+  pendingActions: Readonly<Record<string, PendingChatAction>>,
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+): ChatQueueState {
+  const hiddenQueueItemIds = new Set(
+    [
+      ...Object.values(pendingActions),
+      ...Object.values(acceptedActions),
+    ].flatMap((action) =>
+      action.action === "queueCancel" && action.queueItemId !== null
+        ? [action.queueItemId]
+        : [],
+    ),
+  );
+  if (hiddenQueueItemIds.size === 0) return queue;
+  const items = queue.items.filter(
+    (item) => !hiddenQueueItemIds.has(item.queueItemId),
+  );
+  return items.length === queue.items.length ? queue : { ...queue, items };
 }
 
 // The client action id of an in-flight (pending) or accepted-but-unresolved
