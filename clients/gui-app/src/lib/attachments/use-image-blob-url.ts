@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 
 import {
-  type ImageBytesFetcher,
+  buildScopedImageCacheKey,
   imageBlobCache,
+  type ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
 
 export type ImageBlobUrlState =
@@ -28,16 +29,17 @@ export const IMAGE_FETCH_MAX_ATTEMPTS = 4;
 /**
  * Resolve a chat image's content hash to a shared `blob:` URL, fetching its
  * bytes once via `fetcher` (the tab-scoped host's `attachments.read`). Every
- * component that renders the same hash shares one blob and one cache reference;
- * the URL is released on unmount and revoked once nothing holds it.
+ * component that renders the same hash UNDER THE SAME SUBJECT shares one blob
+ * and one cache reference; the URL is released on unmount and revoked once
+ * nothing holds it.
  *
- * `fetcher` must be referentially stable (wrap in `useCallback`) so the effect
- * does not re-acquire on every render.
+ * `fetcher` must be referentially stable (wrap in `useMemo`) so the effect does
+ * not re-acquire on every render.
  */
 export function useImageBlobUrl(
   hash: string | null,
   mediaType: string,
-  fetcher: ImageBytesFetcher,
+  fetcher: ScopedImageBytesFetcher,
 ): string | null {
   return useImageBlobUrlState(hash, mediaType, fetcher, null).url;
 }
@@ -56,16 +58,25 @@ export function useImageBlobUrl(
 export function useImageBlobUrlState(
   hash: string | null,
   mediaType: string,
-  fetcher: ImageBytesFetcher,
+  fetcher: ScopedImageBytesFetcher,
   unavailableAfterMs: number | null,
 ): ImageBlobUrlState {
+  // Keyed by the full cache identity, not the hash. The SUBJECT can change
+  // while the hash stays put - the same image referenced from a second
+  // artifact, or a tile rebound to another host - and a hash-keyed gate would
+  // keep painting the previous subject's resolved blob throughout the new
+  // one's fetch, which is the exact byte-for-byte disclosure the scoped key
+  // above exists to prevent, merely arriving through React state instead of
+  // the cache.
   const [resolved, setResolved] = useState<{
-    hash: string;
+    identity: string;
     state: ImageBlobUrlState;
   } | null>(null);
+  const identity =
+    hash === null ? null : buildScopedImageCacheKey(fetcher.scopeKey, hash);
 
   useEffect(() => {
-    if (hash === null) return;
+    if (hash === null || identity === null) return;
     let active = true;
     let attemptCount = 0;
     let cancelRetry: (() => void) | null = null;
@@ -81,7 +92,7 @@ export function useImageBlobUrlState(
       const unavailableTimer = window.setTimeout(() => {
         if (active) {
           setResolved({
-            hash,
+            identity,
             state: { status: "unavailable", url: null },
           });
         }
@@ -92,10 +103,14 @@ export function useImageBlobUrlState(
     const acquire = (): void => {
       attemptCount += 1;
       const lease = imageBlobCache.acquire(
-        hash,
+        // The SUBJECT is in the identity, not just the hash: `acquire` serves a
+        // resolved or in-flight entry without running this fetcher, so a
+        // bare-hash key would let the first acquirer's authorization stand in
+        // for every later one's (`ScopedImageBytesFetcher`).
+        identity,
         mediaType,
-        fetcher,
-        // Chat attachments are content-hash-keyed but not treated as
+        fetcher.fetch,
+        // Content-addressed within their subject, but not treated as
         // session-immutable here - unchanged grace-window behavior.
         "grace",
       );
@@ -106,7 +121,7 @@ export function useImageBlobUrlState(
           cancelUnavailable?.();
           cancelUnavailable = null;
           setResolved({
-            hash,
+            identity,
             state: {
               status: "ready",
               url: resolution.url,
@@ -120,7 +135,7 @@ export function useImageBlobUrlState(
             cancelUnavailable?.();
             cancelUnavailable = null;
             setResolved({
-              hash,
+              identity,
               state: { status: "unavailable", url: null },
             });
             return;
@@ -144,11 +159,12 @@ export function useImageBlobUrlState(
       cancelUnavailable?.();
       releaseLease?.();
     };
-  }, [hash, mediaType, fetcher, unavailableAfterMs]);
+  }, [hash, identity, mediaType, fetcher, unavailableAfterMs]);
 
-  // Only surface state that belongs to the current hash, so a hash change shows
-  // loading (not the previous image) until the new blob resolves.
-  return resolved !== null && resolved.hash === hash
+  // Only surface state that belongs to the current hash AND subject, so either
+  // changing shows loading (not the previous image) until the new blob
+  // resolves.
+  return resolved !== null && resolved.identity === identity
     ? resolved.state
     : { status: "loading", url: null };
 }

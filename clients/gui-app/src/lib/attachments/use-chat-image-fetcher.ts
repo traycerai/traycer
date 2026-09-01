@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
@@ -9,6 +9,7 @@ import {
 import type {
   ImageBytesFetcher,
   ImageBytesResult,
+  ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { base64ToBytes } from "@/lib/composer/image-base64";
@@ -186,10 +187,10 @@ async function readAttachmentFromEpicDoc(
  * Referentially stable per (scope, epic handle) so it can be handed to
  * `useImageBlobUrl` / `AttachmentStrip` without re-acquiring every render.
  */
-export function useChatImageFetcher(): ImageBytesFetcher {
+export function useChatImageFetcher(): ScopedImageBytesFetcher {
   const scope = useChatAttachmentScope();
   const handle = useMaybeOpenEpicHandle();
-  return useCallback<ImageBytesFetcher>(
+  const fetch = useCallback<ImageBytesFetcher>(
     async (hash, signal) => {
       const fromChatPlane = await readChatAttachmentFromHost(
         scope,
@@ -203,6 +204,40 @@ export function useChatImageFetcher(): ImageBytesFetcher {
     },
     [scope, handle],
   );
+  return useMemo<ScopedImageBytesFetcher>(
+    () => ({ scopeKey: chatAttachmentScopeKey(handle, scope), fetch }),
+    [handle, scope, fetch],
+  );
+}
+
+/**
+ * What a chat-plane byte read is authorized against, as a cache subject.
+ *
+ * `epic.readChatAttachment` takes `(epicId, chatId, hash)` and the server
+ * applies the CHAT's ACL behind it, so the chat id is the authorization
+ * subject and not a routing detail - the same argument
+ * `artifact-attachment-scope-context.ts` makes for the artifact id. Keyed on
+ * the bare hash, a hash learned from any other chat would be served from cache
+ * before that ACL ever ran.
+ *
+ * Deliberately a DIFFERENT namespace from the artifact leg's key even where
+ * both fall back to the same epic doc replica. The two subjects are only
+ * provably equivalent on that shared fallback, and which leg answers is decided
+ * per read inside the fetcher - so treating them as one subject would make the
+ * cache the thing that decides two authorizations are interchangeable, which is
+ * the class of judgment being taken away from it here. The cost is one extra
+ * fetch for an image referenced from both a chat and an artifact.
+ */
+function chatAttachmentScopeKey(
+  handle: OpenEpicStoreHandle | null,
+  scope: ChatAttachmentScopeValue | null,
+): string {
+  return JSON.stringify([
+    "chat-attachment",
+    scope?.hostId ?? "",
+    scope?.epicId ?? handle?.epicId ?? "",
+    scope?.chatId ?? "",
+  ]);
 }
 
 export type ChatAttachmentByteReader = (
@@ -239,7 +274,9 @@ export function useChatAttachmentByteReader(): ChatAttachmentByteReader {
         CHAT_ATTACHMENT_READ_TIMEOUT_MS,
       );
       try {
-        return (await fetcher(hash, controller.signal)).bytes;
+        // `.fetch` directly: this read never touches `imageBlobCache` (see the
+        // doc comment), so it needs the byte source, not the cache subject.
+        return (await fetcher.fetch(hash, controller.signal)).bytes;
       } catch {
         return null;
       } finally {

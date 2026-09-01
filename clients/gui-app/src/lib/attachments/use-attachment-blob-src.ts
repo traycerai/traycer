@@ -10,6 +10,7 @@ import { useEpicSnapshotLoaded } from "@/lib/epic-selectors";
 import {
   type ImageBytesFetcher,
   type ImageBytesResult,
+  type ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
 import {
   IMAGE_UNAVAILABLE_GRACE_MS,
@@ -25,6 +26,7 @@ import {
   readEpicAttachmentBytes,
   readHeldEpicAttachmentBytes,
 } from "@/lib/epic-replica-reads";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 
 export type AttachmentBlobSrcState =
   | { readonly status: "loading"; readonly src: null }
@@ -157,7 +159,7 @@ async function readArtifactAttachmentFromHost(
  * Referentially stable per (handle, scope) so it can be fed to
  * `useImageBlobUrl` / `AttachmentStrip` without re-acquiring on render.
  */
-export function useEpicImageFetcher(): ImageBytesFetcher {
+export function useEpicImageFetcher(): ScopedImageBytesFetcher {
   const handle = useMaybeOpenEpicHandle();
   const scope = useArtifactAttachmentScope();
   // SUBSCRIBED, not read imperatively at call time. The arm decides which of
@@ -175,9 +177,10 @@ export function useEpicImageFetcher(): ImageBytesFetcher {
     useCallback(() => handle?.store.getState().installedArm ?? null, [handle]),
   );
   // One controller per arm GENERATION. Identity alone does not free a parked
-  // read: `imageBlobCache` keys entries by hash and later acquirers reuse the
-  // first in-flight fetch, so a new fetcher would attach to the same stuck
-  // promise - and so would another mounted copy of the same image. Aborting
+  // read: `imageBlobCache` entries are keyed by subject AND hash, neither of
+  // which an arm change moves, so later acquirers still reuse the first
+  // in-flight fetch - a new fetcher would attach to the same stuck promise,
+  // and so would another mounted copy of the same image. Aborting
   // rejects it instead, which is the path the cache already handles by
   // dropping the poisoned entry, and the re-acquire below then runs on the
   // new arm.
@@ -199,7 +202,7 @@ export function useEpicImageFetcher(): ImageBytesFetcher {
     },
     [armGeneration],
   );
-  return useCallback<ImageBytesFetcher>(
+  const fetch = useCallback<ImageBytesFetcher>(
     async (h, callerSignal) => {
       if (handle === null) {
         throw new Error("No open-epic handle to fetch image attachment");
@@ -246,6 +249,42 @@ export function useEpicImageFetcher(): ImageBytesFetcher {
     },
     [handle, scope, installedArm, armGeneration],
   );
+  return useMemo<ScopedImageBytesFetcher>(
+    () => ({ scopeKey: epicAttachmentScopeKey(handle, scope), fetch }),
+    [handle, scope, fetch],
+  );
+}
+
+/**
+ * What an artifact-plane byte read is authorized against, as a cache subject.
+ *
+ * Both legs are covered by one key, and the installed ARM is deliberately not
+ * part of it. The lane leg proves `(epicId, artifactId)` to the host; the `@1`
+ * leg reads the epic doc replica, where - as this file's own contract says -
+ * "an artifact is epic-shared by nature, so doc replication IS its access
+ * model". Those are different checks, and the lane one is the stricter, so the
+ * case worth stating is a blob resolved under `@1` and then reused after an
+ * in-place upgrade flips the arm: it skips a stricter check than the one it
+ * passed. It discloses nothing even so, because the `@1` leg's bytes came out
+ * of the epic document this client already holds locally - the reuse hands
+ * back what the replica had already given the same user. Keying on the arm
+ * would evict every resolved image on an upgrade to buy exactly that nothing.
+ *
+ * With no artifact scope the artifact segment is empty rather than absent, so a
+ * scoped read can never collide with an unscoped one (the new-conversation
+ * modal's strip is the live unscoped caller). `null` for the epic is only
+ * reachable before a handle exists, where the fetcher throws anyway.
+ */
+function epicAttachmentScopeKey(
+  handle: OpenEpicStoreHandle | null,
+  scope: ArtifactAttachmentScopeValue | null,
+): string {
+  return JSON.stringify([
+    "epic-attachment",
+    scope?.hostId ?? "",
+    scope?.epicId ?? handle?.epicId ?? "",
+    scope?.artifactId ?? "",
+  ]);
 }
 
 /**
@@ -345,7 +384,7 @@ function useResolvedAttachmentBlobSrc(
   hash: string | null,
   mediaType: string,
   dataUrl: string | null,
-  fetcher: ImageBytesFetcher,
+  fetcher: ScopedImageBytesFetcher,
 ): AttachmentBlobSrcState {
   const blob = useImageBlobUrlState(
     hash,

@@ -908,6 +908,85 @@ describe("AuthService provisional boot session", () => {
       expect(useAuthStore.getState().profile?.userName).toBe("New Name");
     });
 
+    it("C19: the re-projection also moves the SERVICE's own profile copy, not just the store's", async () => {
+      // C16 pins the store; this pins the other half of the same write. The
+      // service keeps `currentProfile` beside `currentBearer` as one live
+      // credential pair, and `getCurrentSessionSnapshot()` - the persistence
+      // boundary the windows bridge projects to every other window - reads the
+      // profile from THERE, not from the store. Left behind, it is also
+      // self-perpetuating: the rotation path re-commits `this.currentProfile`
+      // verbatim, so every later refresh re-writes the stale name.
+      //
+      // Asserted through the snapshot rather than the store for the reason C18
+      // gives about its own read: the store says "New Name" under the bug, so
+      // an assertion there is green either way.
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(
+        host,
+        validSnapshotEnvelopeWithName("user-1", "FREE", "Old Name"),
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        okWithUserNamed("user-1", "FREE", "Old Name"),
+      );
+
+      await service.start();
+      expect(service.getCurrentSessionSnapshot().profile?.userName).toBe(
+        "Old Name",
+      );
+      const tokenBefore = service.getCurrentSessionSnapshot().token;
+
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        okWithUserNamed("user-1", "FREE", "New Name"),
+      );
+      const outcome = await service.revalidateCurrentContext();
+      expect(outcome?.kind).toBe("valid");
+
+      const snapshot = service.getCurrentSessionSnapshot();
+      expect(snapshot.profile?.userName).toBe("New Name");
+      // The pair is written TOGETHER: re-projecting an identity must not
+      // disturb the bearer, which this path never mints.
+      expect(snapshot.token).toBe(tokenBefore);
+    });
+
+    it("C20: the re-projection reaches session-snapshot subscribers, so other windows do not keep the old identity", async () => {
+      // The pushed half of C19. The windows bridge holds a copy delivered
+      // through `onSessionSnapshotChange`, so a fix that repaired only the
+      // pull-side read would leave every other window painting the old name
+      // until something unrelated emitted.
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(
+        host,
+        validSnapshotEnvelopeWithName("user-1", "FREE", "Old Name"),
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        okWithUserNamed("user-1", "FREE", "Old Name"),
+      );
+
+      await service.start();
+
+      const names: Array<string | undefined> = [];
+      service.onSessionSnapshotChange((snapshot) => {
+        names.push(snapshot.profile?.userName);
+      });
+      // The subscribe itself fires synchronously with the current value, so
+      // drop that one and watch only what the re-projection pushes.
+      names.length = 0;
+
+      restoreFetch();
+      restoreFetch = installFetch(() =>
+        okWithUserNamed("user-1", "FREE", "New Name"),
+      );
+      const outcome = await service.revalidateCurrentContext();
+      expect(outcome?.kind).toBe("valid");
+
+      expect(names).toContain("New Name");
+    });
+
     it("C18: a mid-session same-user re-projection also PERSISTS, so the next launch does not repaint the old identity", async () => {
       // C16 pins the projection; this pins the durable half, and the store
       // write alone is not it. `applySignedIn` is the only other writer of

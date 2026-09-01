@@ -26,13 +26,37 @@ const mocks = vi.hoisted(() => ({
   readHeldEpicAttachmentBytes: vi.fn(),
 }));
 
+/**
+ * The store surface `useEpicImageFetcher` actually consumes.
+ *
+ * `subscribe` is not decoration: the hook reads `installedArm` through
+ * `useSyncExternalStore`, so a double offering only `getState` throws on mount
+ * rather than failing an assertion - which is how four green-looking pins went
+ * red at once. `epicId` backs the cache subject the fetcher is bundled with.
+ * A no-op unsubscribe is honest here: `mocks.installedArm` is set before
+ * render and never changes mid-test.
+ */
+function fakeHandle(): {
+  readonly epicId: string;
+  readonly store: {
+    readonly getState: () => {
+      readonly installedArm: typeof mocks.installedArm;
+    };
+    readonly subscribe: (onStoreChange: () => void) => () => void;
+  };
+} {
+  return {
+    epicId: "epic-1",
+    store: {
+      getState: () => ({ installedArm: mocks.installedArm }),
+      subscribe: (_onStoreChange: () => void) => () => {},
+    },
+  };
+}
+
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  useMaybeOpenEpicHandle: () => ({
-    store: { getState: () => ({ installedArm: mocks.installedArm }) },
-  }),
-  useOpenEpicHandle: () => ({
-    store: { getState: () => ({ installedArm: mocks.installedArm }) },
-  }),
+  useMaybeOpenEpicHandle: () => fakeHandle(),
+  useOpenEpicHandle: () => fakeHandle(),
 }));
 
 vi.mock("@/lib/epic-replica-reads", () => ({
@@ -98,7 +122,10 @@ describe("useEpicImageFetcher - byte source per arm", () => {
       wrapper: wrapperFor(scopeWith(requestWithSignal)),
     });
 
-    const resolved = await result.current(HASH, new AbortController().signal);
+    const resolved = await result.current.fetch(
+      HASH,
+      new AbortController().signal,
+    );
 
     expect(requestWithSignal).toHaveBeenCalledWith(
       "epic.fetchArtifactAttachment",
@@ -130,7 +157,10 @@ describe("useEpicImageFetcher - byte source per arm", () => {
       wrapper: wrapperFor(scopeWith(requestWithSignal)),
     });
 
-    const resolved = await result.current(HASH, new AbortController().signal);
+    const resolved = await result.current.fetch(
+      HASH,
+      new AbortController().signal,
+    );
 
     expect(Array.from(resolved.bytes)).toEqual([9, 9]);
     // The doc map holds raw bytes with no sniffed header, so this leg has no
@@ -149,7 +179,7 @@ describe("useEpicImageFetcher - byte source per arm", () => {
     });
 
     await expect(
-      result.current(HASH, new AbortController().signal),
+      result.current.fetch(HASH, new AbortController().signal),
     ).rejects.toThrow(/unavailable/);
   });
 
@@ -167,7 +197,10 @@ describe("useEpicImageFetcher - byte source per arm", () => {
       wrapper: wrapperFor(scopeWith(requestWithSignal)),
     });
 
-    const resolved = await result.current(HASH, new AbortController().signal);
+    const resolved = await result.current.fetch(
+      HASH,
+      new AbortController().signal,
+    );
 
     // The COMPATIBILITY direction, and it is the half a lane-arm fix is most
     // likely to break: a legacy session's artifact images are byte-for-byte

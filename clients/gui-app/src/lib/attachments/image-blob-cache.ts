@@ -1,15 +1,26 @@
 /**
  * Content-addressed blob-URL cache, keyed on an opaque string identity.
  *
- * Chat image attachments key on content hash; their bytes are fetched once
- * per hash and exposed as a single shared `blob:` URL. Every message
- * generation, React fiber, and surface that renders the same image shares
- * that one URL instead of carrying its own base64 copy, so a given image
- * occupies the heap exactly once regardless of how many places reference it.
- * Workspace/git image assets (`useImageAsset`) key on a composite
- * `hostId + source + path + contentIdentity` string built by
- * `buildImageAssetCacheKey` instead - the cache itself is agnostic to what
- * the key encodes, so both callers share the same lifecycle unchanged.
+ * Image attachments key on their content hash TOGETHER with the subject that
+ * hash is authorized against (`buildScopedImageCacheKey`); their bytes are
+ * fetched once per subject-and-hash and exposed as a single shared `blob:`
+ * URL. Every message generation, React fiber, and surface that renders the
+ * same image within that subject shares that one URL instead of carrying its
+ * own base64 copy, so a given image occupies the heap exactly once regardless
+ * of how many places reference it. Workspace/git image assets
+ * (`useImageAsset`) key on a composite `hostId + source + path +
+ * contentIdentity` string built by `buildImageAssetCacheKey` instead - the
+ * cache itself is agnostic to what the key encodes, so both callers share the
+ * same lifecycle unchanged.
+ *
+ * The subject is in the key because the cache is REACHED BEFORE the fetcher:
+ * a hit (or a join onto an in-flight entry) returns bytes without the second
+ * acquirer's byte source ever running, so a bare-hash key would let one
+ * subject's authorization stand in for another's. See
+ * {@link ScopedImageBytesFetcher}. The cost is that two subjects referencing
+ * genuinely identical bytes now fetch and hold them twice, which is the right
+ * side of that trade: deduplication across an authorization boundary IS the
+ * boundary failing.
  *
  * Lifecycle is reference-counted: a `"grace"`-retention URL is revoked once
  * nothing holds it, after a short grace window so scroll/remount churn
@@ -85,6 +96,55 @@ export type ImageBytesFetcher = (
   signal: AbortSignal,
 ) => Promise<ImageBytesResult>;
 
+/**
+ * A byte source bundled with the SUBJECT its bytes are authorized against.
+ *
+ * The two are one value rather than two arguments because a content hash is an
+ * address, not a capability. Every hash-keyed source here authorizes against
+ * something wider than the hash - `epic.fetchArtifactAttachment` proves access
+ * to `(epicId, artifactId)`, `epic.readChatAttachment` to `(epicId, chatId)`
+ * with the chat's ACL applied server-side, and the landing store to nothing at
+ * all because it never leaves the device. Keyed on the bare hash, this cache
+ * hands a resolved (or in-flight) entry to the SECOND acquirer before that
+ * acquirer's fetcher runs, so the second subject's authorization never
+ * executes: a reference carrying a hash learned from any other artifact, chat
+ * or epic renders those bytes. `artifact-attachment-scope-context.ts` states
+ * the intended property - the artifact id "is what stops a cache key from
+ * becoming a capability" - and it was true of the RPC and false of the cache
+ * in front of it.
+ *
+ * Bundled rather than passed alongside because the failure mode is omission.
+ * A separate `scopeKey` argument threads through `AttachmentStrip` and
+ * `BrowserAnnotationCard` props to reach the three call sites, and any of them
+ * - or a fourth source added later - can leave it out and silently rejoin the
+ * shared namespace. As one value the compiler asks for it: a bare function is
+ * no longer assignable where a byte source is expected.
+ */
+export interface ScopedImageBytesFetcher {
+  /**
+   * Everything this source authorizes against, beyond the hash, as an opaque
+   * string. Two acquirers share a blob only when these are equal.
+   */
+  readonly scopeKey: string;
+  readonly fetch: ImageBytesFetcher;
+}
+
+/**
+ * The cache identity for one hash under one subject.
+ *
+ * JSON-encoded rather than delimiter-joined for the reason
+ * `buildImageAssetCacheKey` gives about its own key: an epic, chat or artifact
+ * id is `z.string()` on the wire, so any separator this picked could appear
+ * inside a component and alias two different subjects onto one entry - which
+ * is the bug this function exists to close, reintroduced through the escaping.
+ */
+export function buildScopedImageCacheKey(
+  scopeKey: string,
+  hash: string,
+): string {
+  return JSON.stringify([scopeKey, hash]);
+}
+
 /** Object-URL seam. Real impl uses the browser `URL`/`Blob`; tests inject fakes. */
 export interface ImageBlobOps {
   readonly create: (
@@ -117,7 +177,7 @@ export interface ImageBlobCache {
    * Acquire (and ref) the shared blob URL for `hash`, fetching bytes once via
    * `fetcher`. The fetcher is passed per call because the byte source is the
    * tab-scoped host; concurrent acquirers of the same hash reuse the first
-   * in-flight fetch, so only one fetcher actually runs per hash. `retention`
+   * in-flight fetch, so only one fetcher actually runs per key. `retention`
    * is read only when this call CREATES the entry - later acquirers of the
    * same hash must agree with the first caller (the key already encodes
    * whether the content is immutable), so it is not re-applied on a hit.

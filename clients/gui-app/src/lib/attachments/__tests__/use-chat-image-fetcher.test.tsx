@@ -126,7 +126,7 @@ function fetchOnce(
   const { result } = renderHook(() => useChatImageFetcher(), {
     wrapper: wrapperFor(scope),
   });
-  return result.current(HASH, new AbortController().signal);
+  return result.current.fetch(HASH, new AbortController().signal);
 }
 
 /** The bytes alone, for the many assertions that do not care about the type. */

@@ -2315,9 +2315,10 @@ export class AuthService {
         // Same argument as the subscription commit above, applied to the rest
         // of the person-facing identity: a display name, avatar or team
         // membership can change without a bearer rotation, and projecting only
-        // entitlement left every other field one launch stale. Store-only and
-        // gated on a real difference - see `reprojectSameUserIdentity` for why
-        // re-entering `applySignedIn` is not available here.
+        // entitlement left every other field one launch stale. Projection plus
+        // the service's own profile copy, gated on a real difference - see
+        // `reprojectSameUserIdentity` for why re-entering `applySignedIn` is
+        // not available here.
         this.reprojectSameUserIdentity(outcome.user);
         // ...and DURABLY, which the projection alone is not. `applySignedIn`
         // is the only other writer of this snapshot and this path deliberately
@@ -3805,17 +3806,18 @@ export class AuthService {
 
   /**
    * Re-projects a same-user verdict's person-facing identity into the auth
-   * store, and ONLY the store.
+   * store and the service's own live-credential copy - and nothing else.
    *
-   * Deliberately not `applySignedIn` / `applySessionProjection`. Those
-   * re-broadcast the session, restart the refresh scheduler, and - the part
-   * that is load-bearing rather than merely wasteful - would put the identity
-   * back through the context provider, where "same user => same context
-   * object" is an invariant the remote-session cache keys its auth epoch on.
-   * A fresh context here retires that epoch under every live session while its
-   * holders keep using it. So the profile, the context METADATA (a plain
-   * projected value, not the `RequestContext`) and the shareable teams are
-   * written straight to the store, and nothing else moves.
+   * Deliberately not `applySignedIn` / `applySessionProjection`. Those restart
+   * the refresh scheduler and - the part that is load-bearing rather than
+   * merely wasteful - would put the identity back through the context
+   * provider, where "same user => same context object" is an invariant the
+   * remote-session cache keys its auth epoch on. A fresh context here retires
+   * that epoch under every live session while its holders keep using it. So
+   * the profile, the context METADATA (a plain projected value, not the
+   * `RequestContext`) and the shareable teams are written to the store, the
+   * profile half of the credential pair is committed alongside them, and
+   * neither the provider nor the scheduler is touched.
    *
    * GATED on a real difference, which is what keeps the ordinary boot silent:
    * `setSignedIn` fires `Analytics.identify` (`auth-store.ts`), so an
@@ -3860,9 +3862,29 @@ export class AuthService {
         );
       });
     if (unchanged) return;
+    // The service's OWN copy moves too, through the single commit site and
+    // BEFORE the announcement, exactly as every other identity write does.
+    // What this method must not disturb is the context provider and the
+    // refresh scheduler, and `currentProfile` is neither: it is the other half
+    // of the live credential pair, which `commitLiveCredential` exists to keep
+    // from splitting. Left
+    // behind, it is not merely stale but SELF-PERPETUATING, because the
+    // rotation path re-commits `this.currentProfile` verbatim on every
+    // refresh; a renamed account would keep serving its old name to
+    // `getCurrentSessionSnapshot` until the process restarted.
+    //
+    // The bearer is passed through unchanged: this path re-projects an
+    // identity, it does not mint a token, and the pair must be written
+    // together rather than one field at a time.
+    this.commitLiveCredential(this.currentBearer, profile);
     useAuthStore
       .getState()
       .setSignedIn(profile, contextMetadata, shareableTeams);
+    // The windows bridge holds a PUSHED copy of the same snapshot, so fixing
+    // only the pull-side read would leave every other window on the old
+    // identity. Reached only past the gate above, so an unchanged identity
+    // still emits nothing.
+    this.emitSessionSnapshot();
   }
 
   private profileFromUser(user: AuthenticatedUser): AuthProfile {

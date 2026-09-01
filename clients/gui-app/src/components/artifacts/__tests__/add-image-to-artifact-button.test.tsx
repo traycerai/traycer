@@ -191,7 +191,14 @@ describe("AddImageToArtifactButton", () => {
     });
     expect(prepareBytes).toHaveBeenCalledTimes(1);
     expect(imageNodeCount()).toBe(1);
-    expect(acquireResidentArtifactBodyLease).toHaveBeenCalledWith("artifact-a");
+    // `"linger"` is asserted, not tolerated: this surface inserts an image the
+    // user is about to keep editing, so its lease must outlive the mutation by
+    // the linger window rather than ending the body's lifecycle at release.
+    // The export path is the other arm and passes `"immediate"`.
+    expect(acquireResidentArtifactBodyLease).toHaveBeenCalledWith(
+      "artifact-a",
+      "linger",
+    );
     expect(releaseArtifactBody).toHaveBeenCalledTimes(1);
   });
 
