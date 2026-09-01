@@ -18,6 +18,8 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   createRemoteHostTransport,
+  PLAN_RESTRICTED_FATAL_CODE,
+  planRestrictedReprobeAtForHost,
   type IRemoteSession,
   type RemoteHostTransport,
 } from "@traycer-clients/shared/host-transport/remote/index";
@@ -264,7 +266,9 @@ class RuntimeHostMessenger<
    * with it, `rejectIfTerminalVerdict`) makes the invalidation fired at close
    * time land on an honest non-retryable error instead of a redial. Entries
    * expire after {@link TERMINAL_VERDICT_TTL_MS} - terminal describes the
-   * SESSION, not the host, which may be updated/re-entitled any moment - and
+   * SESSION, not the host, which may be updated/re-entitled any moment. The
+   * one exception is PLAN_RESTRICTED, whose cache-controlled reprobe deadline
+   * keeps the query layer aligned with the transport's negative cache. They
    * are dropped early when a later session for the host reaches ready, or
    * when the host's transport identity moves off the recorded `key`: the key
    * folds in version/publicKey/relay URL, so e.g. the host update that
@@ -275,7 +279,7 @@ class RuntimeHostMessenger<
     string,
     {
       readonly fatal: FatalErrorDetails;
-      readonly at: number;
+      readonly expiresAt: number;
       readonly key: string;
     }
   >();
@@ -417,14 +421,27 @@ class RuntimeHostMessenger<
    */
   dispose(): void {
     this.disposed = true;
-    for (const detach of [...this.owedOrphanDetachByHost.values()]) {
-      detach();
-    }
+    this.currentBearer = null;
+    this.detachOrphanAvailability();
     this.teardownRemoteTransport();
   }
 
   reset(): void {
-    this.closeRemoteTransport();
+    // `reset` is invoked only for `auth-changed` (runtime-change-scope.ts).
+    // Both verdicts AND pending availability callbacks belong to the old
+    // credential context. Hard-detach every current/orphan listener before
+    // clearing verdicts: an old session closing synchronously or later must
+    // not repopulate the map after the new auth epoch starts requesting.
+    this.currentBearer = null;
+    this.detachOrphanAvailability();
+    this.teardownRemoteTransport();
+    this.terminalVerdictByHost.clear();
+  }
+
+  private detachOrphanAvailability(): void {
+    for (const detach of [...this.owedOrphanDetachByHost.values()]) {
+      detach();
+    }
   }
 
   private remoteMessengerFor(
@@ -584,9 +601,14 @@ class RuntimeHostMessenger<
         // superseded can, at worst, fail-fast the host for one TTL while
         // other consumers hold a working session under the new identity -
         // bounded, and cleared early by the next ready boundary heard.)
+        const at = Date.now();
+        const planRestrictedUntil =
+          fatal.code === PLAN_RESTRICTED_FATAL_CODE
+            ? planRestrictedReprobeAtForHost(hostId)
+            : null;
         this.terminalVerdictByHost.set(hostId, {
           fatal,
-          at: Date.now(),
+          expiresAt: planRestrictedUntil ?? at + TERMINAL_VERDICT_TTL_MS,
           key: transportKey,
         });
         this.onRemoteAvailabilityRecovered(hostId);
@@ -623,8 +645,8 @@ class RuntimeHostMessenger<
   /**
    * Release the binding for reuse: the physical session goes back to the
    * keep-warm cache and a still-owed availability listener stays attached as
-   * the host's orphan. This is the replacement/reset path - for terminal
-   * teardown see `teardownRemoteTransport`.
+   * the host's orphan. This is the ordinary target-replacement path; auth
+   * reset and terminal teardown use `teardownRemoteTransport` instead.
    */
   private closeRemoteTransport(): void {
     if (this.remoteBinding === null) {
@@ -691,10 +713,7 @@ class RuntimeHostMessenger<
     if (verdict === undefined) {
       return null;
     }
-    if (
-      verdict.key !== currentKey ||
-      Date.now() - verdict.at >= TERMINAL_VERDICT_TTL_MS
-    ) {
+    if (verdict.key !== currentKey || Date.now() >= verdict.expiresAt) {
       // Key mismatch: the host's transport identity moved (version bump, key
       // rotation, relay move) since the fatal - the very session the verdict
       // condemned can no longer be built, so waiting out the TTL would
