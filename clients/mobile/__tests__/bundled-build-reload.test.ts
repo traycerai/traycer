@@ -38,6 +38,16 @@ describe("bundled build reload", () => {
     expect(client).not.toContain("setInterval(");
   });
 
+  it("bounds a stalled build check before polling again", () => {
+    const client = bundledBuildReloadClient("build-one", "/build-revision");
+
+    expect(client).toContain("const controller = new AbortController();");
+    expect(client).toContain("signal: controller.signal");
+    expect(client).toContain("controller.abort()");
+    expect(client).toContain("clearTimeout(timeout);");
+    expect(client).toContain("Bundled build check failed; retrying");
+  });
+
   it("reads the build ID from the served HTML marker", () => {
     expect(
       bundledBuildIdFromHtml(

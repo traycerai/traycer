@@ -44,15 +44,20 @@ export function bundledBuildReloadClient(
 (() => {
   const activeBuild = ${JSON.stringify(buildId)};
   const checkForBuild = async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
       const response = await fetch(${JSON.stringify(buildPath)}, {
         cache: "no-store",
+        signal: controller.signal,
       });
       if (!response.ok) return;
       const nextBuild = await response.text();
       if (nextBuild !== activeBuild) location.reload();
-    } catch {
-      // A build can replace dist/web between polls. Retry on the next tick.
+    } catch (error) {
+      console.warn("Bundled build check failed; retrying", error);
+    } finally {
+      clearTimeout(timeout);
     }
   };
   const pollForBuild = async () => {
