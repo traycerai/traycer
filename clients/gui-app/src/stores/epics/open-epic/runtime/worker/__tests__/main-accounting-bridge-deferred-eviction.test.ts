@@ -216,4 +216,162 @@ describe("createMainAccountingBridge's demote proxy", () => {
     expect(plane?.evictionsRefused).toBe(1);
     expect(plane?.evictionsDeferred).toBe(0);
   });
+
+  it("stops deferring while its last demote is unanswered, so a later pass gets PAST it", () => {
+    // A deferral is a promise, and a tier holding only pinned documents cannot
+    // keep it: `worker-accounting-port`'s `demote` emits no settlement of its
+    // own, so a demotion that frees nothing produces no event at all - and the
+    // bridge would go on offering a fresh promise on every pass, dispatching a
+    // second and third demotion into a runtime that has answered none of them.
+    //
+    // Bounding the ask is what made that matter. `HotDocBudgetBook.evict`
+    // subtracts `deferredBytes`, so a tier claiming the whole overage ENDS the
+    // walk, and a tier that claims it every time it is reached is a wall.
+    //
+    // THREE passes, deliberately, because the rotating cursor is a partial
+    // mitigation and a two-pass stimulus cannot tell the two apart. Rotation
+    // moves the START by one per pass, so pass 2 begins at the cold tier and
+    // reaches it either way. Pass 3 begins at the bridge's tier again - and
+    // that is the pass where absorbing-versus-declining decides whether
+    // anything after it is asked at all.
+    const book = createHotDocBudgetBook();
+    const accountant = createMemoryAccountant({
+      environment: environmentStub(),
+      observedCeilingBytes: 100_000,
+    });
+    accountant.register({
+      planeId: BUDGET_PLANE_IDS.hotDocs,
+      softLimitBytes: SOFT_LIMIT_BYTES,
+      nearThresholdRatio: 0.8,
+      evict: (overBytes) => book.evict(overBytes),
+    });
+    const port = createTestPort(book, accountant);
+    const dispatched: number[] = [];
+    const bridge = createMainAccountingBridge({
+      port,
+      dispatchDemote: (overBytes) => {
+        dispatched.push(overBytes);
+      },
+    });
+
+    const snapshot = {
+      materializedRoomIds: [],
+      rootBytes: 0,
+      protectedBytesByKind: PROTECTED,
+      projectionCounts: null,
+    };
+    // ORDER MATTERS, and only because the walk rotates: the bridge's tier is
+    // registered first so it sits at index 0 and pass 1 starts on it. Attaching
+    // the cold tier first would put pass 1 on the cold tier and make the first
+    // assertion below trivially true.
+    bridge.handle({
+      kind: "accounting/books",
+      registered: true,
+      snapshot,
+    });
+
+    // The SECOND tier - a plain in-process one, reached only when something
+    // leaves part of the ask unclaimed.
+    const coldAsks: number[] = [];
+    book.attach({
+      key: "book-cold",
+      materializedIds: () => [],
+      demoteColdestUnpinned: (overBytes): HotDocEvictionOutcome => {
+        coldAsks.push(overBytes);
+        return {
+          reclaimedBytes: 0,
+          deferredBytes: 0,
+          protectedBytesByKind: [],
+        };
+      },
+    });
+
+    // Pass 1, starting at the bridge's tier. It defers the whole ask and the
+    // walk ends there - correct, the promise has not been broken yet.
+    bridge.handle({
+      kind: "accounting/settle",
+      settlement: {
+        kind: "hot-doc",
+        artifactRoomId: "room-1",
+        bytes: SOFT_LIMIT_BYTES * 2,
+      },
+      snapshot,
+    });
+    expect(dispatched.length).toBe(1);
+    expect(coldAsks.length).toBe(0);
+
+    // Passes 2 and 3, driven WITHOUT any settlement from the deferring runtime
+    // - the whole point, since a demote that freed nothing emits none. In
+    // production the driver is a settle from some other holder; here it is the
+    // same thing, straight through the port.
+    port.settleHotDocBytes("room-2", SOFT_LIMIT_BYTES * 2);
+    port.settleHotDocBytes("room-3", SOFT_LIMIT_BYTES * 2);
+
+    // THE REDDENING ASSERTIONS.
+    //
+    // Two asks, not one: pass 2 started at the cold tier (rotation), and pass 3
+    // started at the bridge's tier and got PAST it. Before the fix this is 1 -
+    // pass 3 was absorbed by a tier making its third unkept promise.
+    expect(coldAsks.length).toBe(2);
+    // And exactly one demotion was ever dispatched. Before the fix this is 3:
+    // one per pass that reached the tier, each into a runtime that had answered
+    // none of the previous ones.
+    expect(dispatched.length).toBe(1);
+  });
+
+  it("re-arms on any settlement from its runtime, not only on the demotion's own", () => {
+    // The control for the clause above. A latch that never lifted would pass
+    // the previous case and then refuse forever - a tier that freed documents,
+    // or simply changed shape, must be offered a deferral again, because
+    // "there is nothing here to free" was a fact about the tier as it WAS.
+    const book = createHotDocBudgetBook();
+    const accountant = createMemoryAccountant({
+      environment: environmentStub(),
+      observedCeilingBytes: 100_000,
+    });
+    accountant.register({
+      planeId: BUDGET_PLANE_IDS.hotDocs,
+      softLimitBytes: SOFT_LIMIT_BYTES,
+      nearThresholdRatio: 0.8,
+      evict: (overBytes) => book.evict(overBytes),
+    });
+    const port = createTestPort(book, accountant);
+    const dispatched: number[] = [];
+    const bridge = createMainAccountingBridge({
+      port,
+      dispatchDemote: (overBytes) => {
+        dispatched.push(overBytes);
+      },
+    });
+
+    const snapshot = {
+      materializedRoomIds: [],
+      rootBytes: 0,
+      protectedBytesByKind: PROTECTED,
+      projectionCounts: null,
+    };
+    bridge.handle({ kind: "accounting/books", registered: true, snapshot });
+    bridge.handle({
+      kind: "accounting/settle",
+      settlement: {
+        kind: "hot-doc",
+        artifactRoomId: "room-1",
+        bytes: SOFT_LIMIT_BYTES * 2,
+      },
+      snapshot,
+    });
+    expect(dispatched.length).toBe(1);
+
+    // A settlement arrives from this runtime - here a release, which is what a
+    // demotion that DID free something produces. That re-arms the deferral, and
+    // this event drives its own reconcile through the port.
+    bridge.handle({
+      kind: "accounting/settle",
+      settlement: { kind: "hot-doc-release", artifactRoomId: "room-1" },
+      snapshot,
+    });
+    port.settleHotDocBytes("room-3", SOFT_LIMIT_BYTES * 2);
+
+    expect(dispatched.length).toBe(2);
+  });
 });

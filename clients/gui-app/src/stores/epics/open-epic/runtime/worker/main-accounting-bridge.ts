@@ -20,7 +20,9 @@
  * - `demoteColdestUnpinned` cannot be cached because it DOES something. It is
  *   deferred: answer `reclaimedBytes: 0` with the last known protected
  *   breakdown, dispatch the request, and let what was actually freed arrive as
- *   the settlements that follow.
+ *   the settlements that follow. ONCE, though - a deferral is a promise, and
+ *   this seam offers only one at a time. See {@link demoteUnanswered} for what
+ *   a promise this tier cannot keep does to the pass that believed it.
  *
  * That zero is ambiguous on its own - it is the same answer a tier gives when
  * everything it holds is pinned - and the accountant does NOT read the
@@ -80,11 +82,45 @@ export function createMainAccountingBridge(options: {
 }): MainAccountingBridge {
   let cache: RuntimeAccountingSnapshot = NO_SNAPSHOT;
   let registered = false;
+  /**
+   * A demote was dispatched and this runtime has reported NOTHING since.
+   *
+   * The deferral above is a promise, and a tier holding only pinned documents
+   * cannot keep it: `worker-accounting-port`'s `demote` deliberately emits no
+   * settlement of its own ("what the eviction actually freed travels as the
+   * tier's own settles"), so a demotion that frees nothing is indistinguishable
+   * from one still in flight - and produces no event at all.
+   *
+   * That is only a stall because the deferral claims the WHOLE ask. Bounding
+   * the ask (`HotDocBudgetBook.evict` subtracts `deferredBytes`) means this
+   * tier ends the pass, so a promise it cannot keep also guarantees no tier
+   * after it is reached. And `reconcile` for this plane has exactly one driver
+   * - `settleHotDocBytes` - so the pass that dispatched an empty demote is also
+   * the pass with no successor: the plane sits over budget until some unrelated
+   * hot-doc settlement happens to drive another one.
+   *
+   * So a second deferral is not offered while the first is unanswered. The
+   * proxy DECLINES instead - `reclaimedBytes: 0, deferredBytes: 0` - which
+   * leaves `remaining` untouched and lets the walk reach a tier that may
+   * actually have cold documents. One dispatch per tier per answer, and the
+   * rotation only chooses where the walk starts; it cannot by itself get past a
+   * tier that keeps absorbing the ask.
+   *
+   * Cleared by ANY settlement from this runtime, not only by the demotion's
+   * own: a settle means this epic's composition moved, so the previous "there
+   * is nothing here to free" is no longer a fact about the tier as it now is.
+   */
+  let demoteUnanswered = false;
 
   return {
     handle(event): boolean {
       switch (event.kind) {
         case "accounting/books": {
+          // Both arms. A registration is a runtime that has answered nothing
+          // yet, and a deregistration retires the runtime the outstanding
+          // demote was sent to - carrying the flag across either one would
+          // decline the first ask a fresh source ever receives.
+          demoteUnanswered = false;
           if (event.registered) {
             cache = event.snapshot ?? NO_SNAPSHOT;
             registered = true;
@@ -94,6 +130,22 @@ export function createMainAccountingBridge(options: {
               projectionCounts: () =>
                 narrowProjectionCounts(cache.projectionCounts),
               demoteColdestUnpinned: (overBytes): HotDocEvictionOutcome => {
+                // A REFUSAL, not a deferral - see {@link demoteUnanswered}.
+                // Both zeros are load-bearing: `deferredBytes: 0` is what lets
+                // the book's `remaining` survive this tier and reach the next
+                // one, and NOT raising the deferral flag is what makes the
+                // accountant count this pass as `evictionsRefused`, which is
+                // now the accurate half of a distinction its own comment
+                // insists on ("exactly one of the two, never both") - nothing
+                // was dispatched to defer.
+                if (demoteUnanswered) {
+                  return {
+                    deferredBytes: 0,
+                    reclaimedBytes: 0,
+                    protectedBytesByKind: cache.protectedBytesByKind,
+                  };
+                }
+                demoteUnanswered = true;
                 // BEFORE the dispatch and INSIDE this closure, both required:
                 // `reconcile` clears the flag immediately before calling
                 // `evict`, so a call made anywhere earlier is erased, and this
@@ -137,6 +189,10 @@ export function createMainAccountingBridge(options: {
           // reconcile reading the pre-settlement snapshot would evict against
           // facts the runtime has already superseded.
           cache = event.snapshot;
+          // Re-armed here for the same reason and in the same window: the
+          // settle below can drive the reconcile that asks this tier again,
+          // and it must see a runtime that has answered.
+          demoteUnanswered = false;
           const settlement = event.settlement;
           switch (settlement.kind) {
             case "root":
